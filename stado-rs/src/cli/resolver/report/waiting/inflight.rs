@@ -7,19 +7,19 @@
 //! request, the registry authority's snapshot over SSH — then stood for as
 //! long as the route did: the command that diagnoses a held resolver stood
 //! held for hours with the czekam line as its only word. At every refresh
-//! interval this host's resolver declares, the published waits are read
-//! again; once the route has gone unanswered longer than that interval —
-//! this request's own connection among them — the request is dropped,
-//! which closes its connection, and refused with the held wait's sentence,
-//! naming the address or host it stood on. A request the far side accepted
-//! and answers nothing on stands in no list of this host's — the authority's
-//! `stado resolver snapshot` over SSH stood that way for hours while every
-//! registry reader on this machine stood behind it — so a request that
-//! outlasts the interval with nothing published held is abandoned too, with
-//! the interval named and where to ask. A route reached without a resolver
-//! adapter, or a host that declares no resolver, has no such reading and is
-//! waited on as before. No other bound exists: the one measure is the
-//! resolver's own.
+//! interval — the one this host's resolver publishes, or, with no resolver
+//! publishing one, the one this machine's registry record declares for it —
+//! the published waits are read again; once the route has gone unanswered
+//! longer than that interval — this request's own connection among them —
+//! the request is dropped, which closes its connection, and refused with
+//! the held wait's sentence, naming the address or host it stood on. A
+//! request the far side accepted and answers nothing on stands in no list of
+//! this host's — the authority's `stado resolver snapshot` over SSH stood
+//! that way for hours while every registry reader on this machine stood
+//! behind it — so a request that outlasts the interval with nothing
+//! published held is abandoned too, with the interval named and where to
+//! ask. Only a machine whose record declares no resolver has no measure and
+//! waits. No other bound exists: the one measure is the resolver's own.
 
 use std::future::Future;
 use std::time::Duration;

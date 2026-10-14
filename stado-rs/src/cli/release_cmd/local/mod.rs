@@ -66,7 +66,24 @@ async fn converge_service_local_stado_readers(
     executable: &Path,
     archive: &Path,
 ) -> Result<(), CmdError> {
-    let registry = crate::cli::registry::read_registry().await?;
+    // The readers to converge are this machine's, so their declaration is
+    // this machine's record: converge finishes an install, and an install is
+    // how the services that serve the registry authority's snapshot are
+    // repaired while that snapshot stands unanswered.
+    let (registry, notice) = crate::targets::registry_without_authority(&format!(
+        "{context}: converging this machine's service-local Stado readers"
+    ))
+    .await
+    .map_err(|error| {
+        CmdError::click(format!(
+            "{context}: this machine's readers are converged from its own registry record, and it \
+             holds none: {error}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    if let Some(notice) = notice {
+        eprintln!("{notice}");
+    }
     let hostname = crate::providers::vast::system_hostname();
     let target = registry
         .lookup_self(&hostname)

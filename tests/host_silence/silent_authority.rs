@@ -189,6 +189,42 @@ fn a_silent_authority_is_abandoned_after_the_declared_refresh_interval() {
     .unwrap();
 }
 
+/// A resolver state left on disk that names no refresh interval — the
+/// state a resolver that stopped, or one built before it published the
+/// interval, leaves behind — is no reason to wait without end: the read is
+/// measured by the interval this machine's registry copy declares, and an
+/// install's converge, which read the registry this way, stood behind the
+/// silent authority's snapshot for as long as the authority stood.
+#[test]
+fn a_resolver_state_naming_no_interval_still_bounds_the_read() {
+    let run = Run::new("stale-state");
+    let authority_ssh = run.silent_authority();
+    let refresh_seconds = run.write_last_good(&authority_ssh);
+    std::fs::write(
+        run.root.join(".stado/resolver-state.json"),
+        serde_json::to_vec(&json!({
+            "updated_at": "1970-01-01T00:00:00Z",
+            "target": hostname(),
+            "state": "serving",
+            "store_version": "last-known-good",
+            "listening": true,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = run.registry_self();
+    let said = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        said.contains(ABANDONED)
+            && said.contains(&format!("the {refresh_seconds}s refresh interval")),
+        "the read is abandoned at the interval the registry copy declares: {said}"
+    );
+    assert!(
+        said.contains("reading the last-known-good registry copy"),
+        "the reader goes on to its last-known-good copy: {said}"
+    );
+}
+
 /// `stado resolver status` says how long the authority's snapshot fetch
 /// took. It once printed the authority as reachable after a fetch that took
 /// hours and said nothing of the wait; against the silent authority the

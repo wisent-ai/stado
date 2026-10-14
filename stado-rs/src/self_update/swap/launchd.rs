@@ -16,9 +16,16 @@ pub(super) async fn recycle_launchd(
     ours: u32,
     log_fn: &mut dyn FnMut(&str),
 ) -> Result<usize, String> {
-    let registry = crate::cli::registry::read_registry()
-        .await
-        .map_err(|error| format!("{context}: cannot read registry unit ownership: {error}"))?;
+    // Which units are this machine's is this machine's record: the recycle
+    // runs inside an install, and an install is how the services serving the
+    // registry authority's snapshot are repaired while that snapshot stands.
+    let (registry, notice) =
+        crate::targets::registry_without_authority("recycling this machine's units")
+            .await
+            .map_err(|error| format!("{context}: cannot read registry unit ownership: {error}"))?;
+    if let Some(notice) = notice {
+        log_fn(&format!("{context}: {notice}"));
+    }
     let hostname = crate::providers::vast::system_hostname();
     let target = registry
         .lookup_self(&hostname)
