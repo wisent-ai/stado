@@ -85,8 +85,9 @@ pub fn probe_authority(base: &str) -> Result<(String, u16), String> {
 /// Resolution is asked for on its own, ahead of the request, so a name with no
 /// DNS answer is not reported as a refused connection — the client would
 /// collapse both into one transport error, and they are not the same problem.
-/// Only a 200 counts: a live server answering 404 knows nothing about invites,
-/// which is a release older than these routes, not a network fault.
+/// Only a success answer counts: a live server answering "not found" knows
+/// nothing about invites, which is a release older than these routes, not a
+/// network fault.
 pub async fn probe_checkpoint(base: &str) -> Checkpoint {
     if base.is_empty() {
         return Checkpoint {
@@ -110,22 +111,30 @@ pub async fn probe_checkpoint(base: &str) -> Checkpoint {
             );
         }
     };
+    // The lookup's own error is the reason a name does not resolve; counted
+    // as no addresses, a DNS failure and a name with no records read alike.
     let resolved = tokio::task::spawn_blocking({
         let host = host.clone();
         move || {
             std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port))
-                .map(|addresses| addresses.count())
-                .unwrap_or_default()
+                .map(|mut addresses| addresses.next().is_some())
+                .map_err(|error| error.to_string())
         }
     })
     .await
-    .unwrap_or_default();
-    if resolved == 0 {
+    .map_err(|error| format!("the lookup did not finish: {error}"))
+    .and_then(|looked_up| looked_up);
+    let unresolved = match resolved {
+        Ok(true) => None,
+        Ok(false) => Some("it has no address records".to_string()),
+        Err(cause) => Some(cause),
+    };
+    if let Some(cause) = unresolved {
         return Checkpoint::refused(
             base,
             REASON_UNRESOLVED,
             format!(
-                "control point '{host}' does not resolve to any address, so nothing can fetch /join.sh from it"
+                "control point '{host}' does not resolve to any address ({cause}), so nothing can fetch /join.sh from it"
             ),
         );
     }
@@ -144,23 +153,24 @@ pub async fn probe_checkpoint(base: &str) -> Checkpoint {
             base,
             REASON_CONNECTION_REFUSED,
             format!(
-                "nothing answered at {endpoint} (connection refused or timed out): {}",
+                "nothing answered at {endpoint} (connection refused or never answered): {}",
                 exc.without_url()
             ),
         ),
-        Ok(response) if response.status().as_u16() == 200 => Checkpoint {
+        Ok(response) if response.status() == reqwest::StatusCode::OK => Checkpoint {
             url: base.to_string(),
             probed: true,
             reachable: true,
             reason: REASON_OK,
-            detail: format!("{endpoint} answered 200"),
+            detail: format!("{endpoint} answered {}", response.status()),
         },
         Ok(response) => Checkpoint::refused(
             base,
             REASON_ROUTE_UNKNOWN,
             format!(
-                "{endpoint} answered HTTP {}, not 200: the release serving that host is older than the invite routes",
-                response.status().as_u16()
+                "{endpoint} answered HTTP {}, not {}: the release serving that host is older than the invite routes",
+                response.status(),
+                reqwest::StatusCode::OK
             ),
         ),
     }
