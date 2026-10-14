@@ -117,7 +117,13 @@ pub async fn provision_users(
             options.admin,
             options.require_password_change,
         );
-        let password = format!("{}\n", options.password.unwrap_or(""));
+        // Checked before the loop for every run that writes; an account is
+        // never created with an empty password standing in for a missing one.
+        let Some(password) = options.password else {
+            return Err(DeployError("initial password is required".to_string())
+                .stating(crate::primitives::failure::FailureCode::Refused));
+        };
+        let password = format!("{password}\n");
         let completed = match host_channel::run_program_with_stdin_and_connection(
             target,
             &["/bin/sh", "-c", command.as_str()],
