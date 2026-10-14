@@ -60,11 +60,14 @@ pub(crate) async fn standby_still_serving(service: &str, host: &str, unit: &str)
     else {
         return StandbyRecheck::Settled(format!("{host} is no longer a standby for {service}"));
     };
-    let me = registry
-        .lookup_self(&crate::providers::vast::system_hostname())
-        .ok()
-        .flatten()
-        .map(|target| target.name.clone());
+    let me = match registry.lookup_self(&crate::providers::vast::system_hostname()) {
+        Ok(found) => found.map(|target| target.name.clone()),
+        Err(error) => {
+            return StandbyRecheck::Unjudged(format!(
+                "{service} on {host} is not judged: this machine's registry entry cannot be told: {error}"
+            ))
+        }
+    };
     let target = Standby {
         service,
         host,
