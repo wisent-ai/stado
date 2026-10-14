@@ -58,12 +58,23 @@ impl ArtifactRef {
     pub(super) fn from_value(value: &Value) -> Result<Self, ArtifactError> {
         match value {
             Value::String(s) => Self::parse(s),
-            Value::Object(map) => Self::new(
-                map.get("type").and_then(Value::as_str).unwrap_or(""),
-                map.get("namespace").and_then(Value::as_str).unwrap_or(""),
-                map.get("name").and_then(Value::as_str).unwrap_or(""),
-                map.get("version").and_then(Value::as_str).unwrap_or(""),
-            ),
+            Value::Object(map) => {
+                // A field the object does not state is refused as missing,
+                // not validated as an empty segment it never was.
+                let field = |key: &str| {
+                    map.get(key).and_then(Value::as_str).ok_or_else(|| {
+                        ArtifactError::invalid_ref(format!(
+                            "artifact ref object states no {key} as text"
+                        ))
+                    })
+                };
+                Self::new(
+                    field("type")?,
+                    field("namespace")?,
+                    field("name")?,
+                    field("version")?,
+                )
+            }
             _ => Err(ArtifactError::invalid_ref(
                 "artifact ref must be <type>/<namespace>/<name>@<version>",
             )),
