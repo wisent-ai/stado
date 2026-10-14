@@ -31,15 +31,17 @@ pub(crate) struct RunFilter<'a> {
 
 impl RunFilter<'_> {
     fn admits(&self, run: &Value) -> bool {
-        let field = |key: &str| run[key].as_str().unwrap_or_default();
+        // A run without the field is not one the filter selects; read as ""
+        // it matched an empty --run prefix as if it carried that id.
+        let field = |key: &str| run[key].as_str();
         self.product
-            .is_none_or(|selected| field("product") == selected)
-            && self
-                .run
-                .is_none_or(|prefix| field("run_id").starts_with(prefix))
+            .is_none_or(|selected| field("product") == Some(selected))
+            && self.run.is_none_or(|prefix| {
+                field("run_id").is_some_and(|run_id| run_id.starts_with(prefix))
+            })
             && self
                 .version
-                .is_none_or(|selected| field("version") == selected)
+                .is_none_or(|selected| field("version") == Some(selected))
     }
 }
 

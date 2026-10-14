@@ -175,7 +175,11 @@ pub(super) async fn platform_required(
     run: &serde_json::Value,
     platform: &str,
 ) -> Result<bool, String> {
-    let product = run["product"].as_str().unwrap_or_default();
+    // Read as "", a run without its product looked for its manifest under an
+    // empty product and was told "build manifest is missing" for that path.
+    let Some(product) = run["product"].as_str() else {
+        return Err("the run names no product, so its manifest cannot be read".into());
+    };
     let Some(build_id) = run["build_id"].as_str() else {
         return Err("the run names no build, so its manifest cannot be read".into());
     };
