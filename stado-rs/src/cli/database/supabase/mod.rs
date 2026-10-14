@@ -23,8 +23,17 @@ fn provider() -> Value {
     serde_json::from_str(PROVIDER).expect("supabase-pricing.json is valid JSON")
 }
 
-fn text(key: &str) -> String {
-    provider()[key].as_str().unwrap_or_default().to_string()
+/// A text field of the provider declaration, refused by name when the
+/// declaration does not carry it: an empty text sent as the instance size or
+/// written as a port asked Supabase for nothing and built a URL to nowhere.
+fn text(key: &str) -> Result<String, CmdError> {
+    match provider()[key].as_str() {
+        Some(value) => Ok(value.to_string()),
+        None => Err(CmdError::click(format!(
+            "the Supabase provider declaration (provider/supabase-pricing.json) carries no text {key}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)),
+    }
 }
 
 /// One management API call: its HTTP status and body, whatever the status.
@@ -149,6 +158,9 @@ fn item_fields(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     };
+    // The fields are written after the project exists, so a port the provider
+    // declaration lacks is said in the item instead of refusing, which would
+    // lose the only copy of a generated password.
     let port = text("direct_port");
     let mut fields = json!({
         "project_ref": reference,
@@ -156,7 +168,7 @@ fn item_fields(
         "region": project["region"],
         "url": format!("https://{reference}.supabase.co"),
         "db_host": format!("db.{reference}.supabase.co"),
-        "db_port": port,
+        "db_port": port.as_ref().ok(),
         "db_name": "postgres",
         // The provider's root CA: Supabase signs its Postgres and pooler
         // certificates with its own root, which no public trust store holds,
@@ -171,9 +183,14 @@ fn item_fields(
     if let Some(password) = password {
         fields["db_password"] = json!(password);
         let secret = userinfo(password);
-        fields["direct_url"] = json!(format!(
-            "postgresql://postgres:{secret}@db.{reference}.supabase.co:{port}/postgres"
-        ));
+        match &port {
+            Ok(port) => {
+                fields["direct_url"] = json!(format!(
+                    "postgresql://postgres:{secret}@db.{reference}.supabase.co:{port}/postgres"
+                ))
+            }
+            Err(error) => fields["direct_unwritten"] = json!(error.to_string()),
+        }
         if let Some(pooler) = pooler {
             // A pooler without its user or host gives no connection URL: the
             // item keeps the password and says why it holds no pooler URL,
@@ -192,10 +209,14 @@ fn item_fields(
                     // `stado_database::connect` opens this one; the
                     // transaction-mode `pooler_url` collides on `prepared
                     // statement "sqlx_s_1" already exists`.
-                    fields["session_url"] = json!(format!(
-                        "postgresql://{user}:{secret}@{host}:{}/postgres",
-                        text("session_pooler_port")
-                    ));
+                    match text("session_pooler_port") {
+                        Ok(session_port) => {
+                            fields["session_url"] = json!(format!(
+                                "postgresql://{user}:{secret}@{host}:{session_port}/postgres"
+                            ))
+                        }
+                        Err(error) => fields["session_unwritten"] = json!(error.to_string()),
+                    }
                 }
                 _ => {
                     fields["pooler_unreported"] = json!(format!(

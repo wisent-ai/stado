@@ -133,15 +133,16 @@ async fn priced_creation(
         .filter(|p| p["status"] == RUNNING && organization_of(p).as_deref() == Some(slug.as_str()))
         .count();
     let added = cost(&plan, running);
+    let source = text("source")?;
+    let billing_page = text("billing_page")?.replace("{slug}", &slug);
     let report = json!({
         "organization": slug,
         "plan": plan,
         "running_projects": running,
         "added_monthly_compute_usd": added,
-        "pricing_source": text("source"),
+        "pricing_source": source,
         "credit_balance": format!(
-            "not exposed by the Supabase management API; read it at {}",
-            text("billing_page").replace("{slug}", &slug)
+            "not exposed by the Supabase management API; read it at {billing_page}"
         ),
     });
     if accepted.is_none_or(|accepted| accepted < added) {
@@ -149,14 +150,12 @@ async fn priced_creation(
         // not an unattributed failure: say what to accept and where the
         // credit balance can be read.
         return Err(CmdError::click(format!(
-            "one more project adds ${added}/month compute to {slug} (plan {plan}, {running} running; {}); \
-             {name} was not created. Report: {report}",
-            text("source")
+            "one more project adds ${added}/month compute to {slug} (plan {plan}, {running} running; {source}); \
+             {name} was not created. Report: {report}"
         ))
         .stating(crate::primitives::failure::FailureCode::Refused)
         .helping(format!(
-            "pass --accept-monthly-usd {added} to accept it; the credit balance is at {}",
-            text("billing_page").replace("{slug}", &slug)
+            "pass --accept-monthly-usd {added} to accept it; the credit balance is at {billing_page}"
         )));
     }
     Ok((slug, region, report))
@@ -222,7 +221,7 @@ pub(in crate::cli::database) async fn create(
                 "organization_slug": slug,
                 "db_pass": password,
                 "region_selection": { "type": "specific", "code": region },
-                "desired_instance_size": text("created_instance_size"),
+                "desired_instance_size": text("created_instance_size")?,
             });
             let created = call(reqwest::Method::POST, "/projects", &token, Some(&body)).await?;
             (created, Some(password), report)
