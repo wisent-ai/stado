@@ -43,10 +43,17 @@ extension BackendProvisioner {
     }
 
     /// Size of the service error log before launchd starts the service, so
-    /// readiness is read only from what this start writes.
-    func logOffset(_ log: URL) -> UInt64 {
-        let size = (try? fileManager.attributesOfItem(atPath: log.path)[.size] as? NSNumber)?.uint64Value
-        return size ?? 0
+    /// readiness is read only from what this start writes. A log whose size
+    /// cannot be read is refused: read from its start, an earlier start's
+    /// ready line would pass.
+    func logOffset(_ log: URL) throws -> UInt64 {
+        let attributes = try fileManager.attributesOfItem(atPath: log.path)
+        guard let size = (attributes[.size] as? NSNumber)?.uint64Value else {
+            throw BackendProvisioningError.commandFailed(
+                "the service log \(log.path) reports no size, so this start's output cannot be told apart"
+            )
+        }
+        return size
     }
 
     /// Returns when the service launchd holds as `target` writes its ready
@@ -94,12 +101,20 @@ extension BackendProvisioner {
         }
     }
 
+    /// What the service wrote to `log` after `offset`, or the sentence saying
+    /// why the log could not be read: never an empty answer standing in for a
+    /// failed read, which would read as a service that said nothing. The
+    /// handle closes itself when it goes, also after a failed seek or read.
     static func written(_ log: URL, from offset: UInt64) -> String {
-        guard let handle = try? FileHandle(forReadingFrom: log) else { return "" }
-        defer { try? handle.close() }
-        guard (try? handle.seek(toOffset: offset)) != nil,
-              let data = try? handle.readToEnd() else { return "" }
-        return String(decoding: data, as: UTF8.self)
+        do {
+            let handle = try FileHandle(forReadingFrom: log)
+            try handle.seek(toOffset: offset)
+            let data = try handle.readToEnd() ?? Data()
+            try handle.close()
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            return "(the service log \(log.path) could not be read: \(error.localizedDescription))"
+        }
     }
 
     static func launchdPID(_ state: String) -> pid_t? {

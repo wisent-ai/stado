@@ -77,10 +77,16 @@ extension BackendProvisioner {
         await onUpdate(.init(phase: "Starting Stado", detail: "Installing the per-user control-plane service", fraction:
             0.45))
         let errorLog = logs.appendingPathComponent("service-error.log")
-        let offset = logOffset(errorLog)
-        if !fileManager.fileExists(atPath: errorLog.path) {
-            fileManager.createFile(atPath: errorLog.path, contents: nil)
+        // The log exists before its size is measured, so the offset is always
+        // a measurement of this file, never a number assumed for a missing one.
+        if !fileManager.fileExists(atPath: errorLog.path),
+           !fileManager.createFile(atPath: errorLog.path, contents: nil)
+        {
+            throw BackendProvisioningError.commandFailed(
+                "the service log \(errorLog.path) could not be created"
+            )
         }
+        let offset = try logOffset(errorLog)
         let domain = "gui/\(getuid())"
         let target = "\(domain)/\(label)"
         do {
