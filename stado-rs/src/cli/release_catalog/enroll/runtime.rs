@@ -61,7 +61,11 @@ pub(super) async fn ensure_runtime_grant(
         .filter_map(|grant| grant.split_once(':'))
         .map(|(action, reference)| format!("{reference}:{action}"))
         .collect();
-    let recorded: BTreeSet<String> = stado(&[
+    // What the vault records for this consumer, or why it could not be read.
+    // An unreadable record is not an empty one: the bearer is still minted,
+    // because a product enrolling for the first time has none to read, but
+    // the cause is said and returned instead of being read as "no grant".
+    let recorded: Result<BTreeSet<String>, String> = stado(&[
         "credentials",
         "grant",
         "show",
@@ -70,8 +74,10 @@ pub(super) async fn ensure_runtime_grant(
         product,
         "--json",
     ])
-    .ok()
-    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+    .and_then(|text| {
+        serde_json::from_str::<Value>(&text)
+            .map_err(|error| format!("its grant record is not JSON: {error}"))
+    })
     .and_then(|record| {
         record
             .get("capabilities")
@@ -83,11 +89,17 @@ pub(super) async fn ensure_runtime_grant(
                     .map(str::to_owned)
                     .collect()
             })
-    })
-    .unwrap_or_default();
+            .ok_or_else(|| format!("its grant record names no capabilities list: {record}"))
+    });
     let token_file = runtime_token_file(product);
-    let minted = recorded != wanted;
+    let minted = recorded.as_ref() != Ok(&wanted);
+    let unread = recorded.as_ref().err().cloned();
     if minted {
+        if let Some(cause) = &unread {
+            eprintln!(
+                "{product}: the grant on {owner} could not be read, so it is minted: {cause}"
+            );
+        }
         let capabilities = grants.join(",");
         stado(&[
             "credentials", "token", "mint", product, "--host", &owner, "--capabilities",
@@ -135,6 +147,7 @@ pub(super) async fn ensure_runtime_grant(
         "granted_on": owner,
         "capabilities": grants,
         "minted": minted,
+        "recorded_grant_unread": unread,
         "delivered_to": delivered,
         "rollout_targets": targets,
     }))
