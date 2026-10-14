@@ -82,27 +82,55 @@ pub async fn pending(as_json: bool) -> Result<bool, CmdError> {
     let store = JobStorage::new().await?;
     let blobs = store.list_blobs_with_meta(REQUESTS_PREFIX).await?;
     let mut shown = Vec::new();
+    // A request that cannot be read, or that is pending but names no
+    // hostname, was skipped, and the listing could say "no pending join
+    // requests" over a machine waiting to join. Each is listed with its reason;
+    // only a request that records another decision is left out.
+    let mut unreadable = Vec::new();
     for blob in &blobs {
         let Some(text) = store.download_text(&blob.name).await? else {
             continue;
         };
-        let Ok(document) = serde_json::from_str::<Value>(&text) else {
-            continue;
+        let document = match serde_json::from_str::<Value>(&text) {
+            Ok(document) => document,
+            Err(error) => {
+                unreadable
+                    .push(json!({"request": blob.name, "reason": format!("not JSON: {error}")}));
+                continue;
+            }
         };
-        if pending_request(&document).is_ok() {
-            shown.push(pending_row(&document));
+        match pending_request(&document) {
+            Ok(_) => shown.push(pending_row(&document)),
+            Err(reason) => {
+                let decided = document
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .is_some_and(|status| status != STATUS_PENDING);
+                if !decided {
+                    unreadable.push(json!({"request": blob.name, "reason": reason}));
+                }
+            }
         }
     }
     if as_json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&json!({ "pending": shown }))?
+            serde_json::to_string_pretty(&json!({ "pending": shown, "unreadable": unreadable }))?
         );
-        return Ok(true);
+        return Ok(unreadable.is_empty());
+    }
+    for entry in &unreadable {
+        println!(
+            "unreadable request {}: {}",
+            entry["request"].as_str().map_or("(unnamed)", |name| name),
+            entry["reason"]
+                .as_str()
+                .map_or("(no reason)", |reason| reason)
+        );
     }
     if shown.is_empty() {
         println!("no pending join requests");
-        return Ok(true);
+        return Ok(unreadable.is_empty());
     }
     for row in &shown {
         let text = |name: &str| match row.get(name).and_then(Value::as_str) {
@@ -127,5 +155,5 @@ pub async fn pending(as_json: bool) -> Result<bool, CmdError> {
             println!("  warning:  the machine reported that nothing answers on its ssh port yet");
         }
     }
-    Ok(true)
+    Ok(unreadable.is_empty())
 }
