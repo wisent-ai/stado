@@ -77,13 +77,8 @@ fn collect_exit(queue: &OwnedFd, pid: u32) {
 
 const CLIENT: &str = "sourcekit::lifetime::client_process";
 const READY: &str = "editor-client-ready ";
-/// How the journey hands its isolated package and workspace to the client
-/// process it starts; nothing outside the journey sets them.
 const PACKAGE: &str = "STADO_EDITOR_TEST_PACKAGE";
 const WORKSPACE: &str = "STADO_EDITOR_TEST_WORKSPACE";
-/// The repository identity the isolated checkout's origin names, so the
-/// editor finds it as that repository's canonical checkout in the isolated
-/// workspace; nothing is fetched from it.
 const ORIGIN: &str = "https://github.com/wisent-ai/editor-lifetime-fixture";
 const MANIFEST: &str = "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(name: \"EditorLifetimeFixture\")\n";
 
@@ -107,9 +102,6 @@ fn git(native: &Native, directory: &std::path::Path, args: &[&str]) {
     );
 }
 
-/// A canonical checkout on `main` holding a committed Swift package, in a
-/// workspace of its own under the isolated home: the workspace and the
-/// package's physical paths.
 fn canonical_package(native: &Native) -> (String, String) {
     let workspace = native.home.join("workspace");
     let checkout = workspace.join("editor-lifetime-fixture");
