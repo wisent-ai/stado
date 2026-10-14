@@ -34,9 +34,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 /// What the commit field says when there is no commit to name.
 ///
@@ -44,13 +42,6 @@ use sha2::{Digest, Sha256};
 /// have not got to it yet" and this is a settled finding: there is no producer
 /// for these bytes. Readers compare against this exact string.
 pub const UNPROVENANCED: &str = "unprovenanced";
-
-/// What the digest field says when the artifact could not be read.
-///
-/// `describe` cannot fail -- an installation must not be blocked by the
-/// bookkeeping around it -- so an unreadable file becomes a stated gap in the
-/// record rather than an empty string that reads as a zero-length file.
-const UNHASHED: &str = "unhashed";
 
 /// The branch that decides whether a commit is real for this fleet.
 ///
@@ -76,7 +67,7 @@ const COMMIT_ID_LENGTH: usize = 40;
 pub struct Provenance {
     /// Basename the artifact was installed under, e.g. `stado`.
     pub artifact: String,
-    /// Digest of the exact bytes delivered, lowercase hex, or [`UNHASHED`].
+    /// Digest of the exact bytes delivered, lowercase hex.
     pub sha256: String,
     /// Source commit, 40 lowercase hex digits, or [`UNPROVENANCED`].
     pub commit: String,
@@ -99,57 +90,6 @@ impl Provenance {
 /// Is this string a full git object id, rather than a sentinel or a fragment?
 pub fn is_commit_id(value: &str) -> bool {
     value.len() == COMMIT_ID_LENGTH && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-/// Record what is known about `path` at the moment it is about to be shipped.
-///
-/// Infallible by design. Every failure mode -- unreadable file, no checkout,
-/// no `git`, no hostname -- becomes a stated value in the record, because the
-/// alternative is an install that refuses over its own paperwork and an
-/// operator who then reaches for `scp`. That is precisely how the untraceable
-/// binaries reached these hosts in the first place.
-pub fn describe(path: &Path, artifact: &str) -> Provenance {
-    Provenance {
-        artifact: artifact.to_string(),
-        sha256: file_sha256(path).unwrap_or_else(|| UNHASHED.to_string()),
-        commit: commit_for(path),
-        builder: crate::providers::vast::system_hostname(),
-        at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-    }
-}
-
-/// Stream the artifact's SHA-256, or `None` if it cannot be read.
-///
-/// Streamed rather than slurped: these are release binaries, and reading one
-/// wholly into memory to hash it is a cost paid on every install for nothing.
-pub fn file_sha256(path: &Path) -> Option<String> {
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher).ok()?;
-    Some(hex::encode(hasher.finalize()))
-}
-
-/// The commit whose tree produced `path`, or [`UNPROVENANCED`].
-///
-/// The rule is narrow on purpose: the artifact must sit inside a `target/`
-/// directory belonging to a git checkout, and the answer is that checkout's
-/// current `HEAD`. Anything looser -- guessing at the nearest repository, or
-/// at whichever one the operator happens to be standing in -- would attach a
-/// real commit to a binary that commit did not build, which is worse than
-/// admitting ignorance because it is believed.
-///
-/// A dirty worktree is not detected here and cannot be: `HEAD` is what the
-/// build was based on, and whether uncommitted edits went into it is a
-/// question for the builder, not for a file digest. What this does catch is
-/// the whole 0.7.1 class -- a build whose `HEAD` no one else can resolve.
-pub fn commit_for(path: &Path) -> String {
-    let Some(repo) = source_repo(path) else {
-        return UNPROVENANCED.to_string();
-    };
-    match git(&repo, &["rev-parse", "HEAD"]) {
-        Some(id) if is_commit_id(&id) => id,
-        _ => UNPROVENANCED.to_string(),
-    }
 }
 
 /// Is `commit` an ancestor of `origin/main` in `repo`?
