@@ -135,24 +135,31 @@ pub(crate) async fn apply_agent_skarbiec_repair(target: &str) -> Result<Value, C
 
     let runner = crate::deploy::production_runner();
     let stdout = remote_config_output(&canonical, RemoteConfigAction::Show, &runner).await?;
-    let current = serde_json::from_str::<Value>(&stdout)
-        .ok()
-        .and_then(|config| {
-            config
-                .pointer("/resolved/agent_skarbiec_url")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_default();
+    // An answer that is not JSON says nothing about the host's setting; read
+    // as unset, the repair reported `previous: null` and rewrote it blind.
+    let config: Value = serde_json::from_str(&stdout).map_err(|error| {
+        CmdError::click(format!(
+            "{}: the host's configuration answer is not JSON, so its agent.skarbiec.url cannot \
+             be read: {error}",
+            canonical.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let current = config
+        .pointer("/resolved/agent_skarbiec_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
 
-    let changed = current.trim() != declared;
+    let changed = current.as_deref() != Some(declared.as_str());
     if changed {
         write_host_config(&canonical.name, "agent.skarbiec.url", &declared).await?;
     }
     Ok(json!({
         "target": canonical.name,
         "declared": declared,
-        "previous": if current.trim().is_empty() { Value::Null } else { Value::from(current.trim()) },
+        "previous": current,
         "changed": changed,
     }))
 }
