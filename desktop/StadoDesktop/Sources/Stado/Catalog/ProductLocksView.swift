@@ -19,6 +19,10 @@ struct ProductLocksView: View {
                         Text("\(lock.product)/\(lock.surface): \(state(lock))")
                             .font(WisentTypeScale.identifierSmall())
                         Text(lock.path).textSelection(.enabled)
+                        if let recorded = lock.recordedProduct {
+                            Text("Recorded product \(recorded); guarded product \(lock.product)")
+                        }
+                        if let command = lock.command { Text("Holder command \(command)") }
                         if let error = lock.error {
                             Text(error).textSelection(.enabled)
                         } else {

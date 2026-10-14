@@ -158,6 +158,8 @@ struct ProductLock: Decodable, Identifiable, Sendable {
     let product: String
     let surface: String
     let held: Bool?
+    let recordedProduct: String?
+    let command: String?
     let running: Bool?
     let pid: Int?
     let phase: String?
@@ -168,7 +170,8 @@ struct ProductLock: Decodable, Identifiable, Sendable {
     let error: String?
     var id: String { path }
     enum CodingKeys: String, CodingKey {
-        case path, product, surface, held, running, pid, phase, step, error
+        case path, product, surface, held, running, pid, phase, step, error, command
+        case recordedProduct = "recorded_product"
         case acquiredAt = "acquired_at"
         case startedAt = "started_at"
         case observedStart = "observed_start"
