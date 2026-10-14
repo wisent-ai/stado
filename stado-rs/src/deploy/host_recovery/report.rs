@@ -56,9 +56,17 @@ pub fn parse_output(stdout: &str, target: &ComputeTarget) -> Result<Value, Deplo
             report.insert("disk_free_kb_before".to_string(), json!(before));
             report.insert("disk_free_kb_after".to_string(), json!(after));
             report.insert("cleanup_status".to_string(), json!(fields[5]));
-        } else if fields.first() == Some(&"STADO_CLEANUP") && fields.len() == 2 {
-            let cleanup = serde_json::from_str(fields[1])
-                .unwrap_or_else(|_| json!({"outcome": "invalid_output"}));
+        } else if let ["STADO_CLEANUP", printed] = fields.as_slice() {
+            // An unreadable report keeps what the host printed and why it
+            // did not parse; a bare "invalid_output" told nobody either.
+            let cleanup = match serde_json::from_str::<Value>(printed) {
+                Ok(cleanup) => cleanup,
+                Err(error) => json!({
+                    "outcome": "invalid_output",
+                    "printed": printed,
+                    "error": error.to_string(),
+                }),
+            };
             report.insert("cleanup".to_string(), cleanup);
         } else if fields.first() == Some(&"STADO_RECOVER") {
             report.insert(
