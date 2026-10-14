@@ -62,11 +62,12 @@ pub(super) async fn retire_after_ensure(
     entry: Option<&crate::deploy::service_catalog::CatalogService>,
     running: &crate::deploy::service::ManagedService,
     runner: &crate::deploy::Runner,
+    already: &[service::PredecessorRetirement],
 ) -> Result<Vec<service::PredecessorRetirement>, CmdError> {
     let Some(entry) = entry else {
         return Ok(Vec::new());
     };
-    let found = service::predecessors_on(target, entry, Some(running), runner)
+    let mut found = service::predecessors_on(target, entry, Some(running), runner)
         .await
         .map_err(|error| {
             CmdError::from(error).within(format!(
@@ -80,6 +81,12 @@ pub(super) async fn retire_after_ensure(
         .filter(|role| service::listener_role(role))
         .map(|role| role.unit.clone())
         .collect();
+    found
+        .replaced
+        .retain(|unit| !already.iter().any(|row| &row.unit == unit));
+    found
+        .obsolete
+        .retain(|unit| !already.iter().any(|row| &row.unit == unit));
     let mut failed = Vec::new();
     let mut retirements = Vec::new();
     for retirement in service::retire_found(target, running, found, runner).await {
@@ -109,26 +116,27 @@ pub(super) async fn retire_after_ensure(
     )))
 }
 
-/// Retire the units on `target` that `entry`'s process replaces whole before
-/// its one unit is started, so a product renamed to `com.wisent.<product>`
-/// can bind the listener its old label held. A unit that could not be
-/// retired refuses the ensure: starting the replacement beside it is the
-/// second process this whole path exists to prevent, and whatever this call
-/// did retire is given back before the refusal, so the product keeps running
-/// under its old label. Role units are untouched here; they keep their work
-/// until the running replacement proves it runs it. Returns what was
-/// retired, for [`reinstate_after_failed_ensure`].
+/// Withdraw whole replacements and removed root-command units before the
+/// new process starts. The autostart scopes are retained for rollback if
+/// starting it fails; role units still wait for live proof. Return both the
+/// rollback handles and the observed per-unit outcomes for the receipt.
 pub(super) async fn retire_before_ensure(
     target: &crate::targets::ComputeTarget,
     entry: Option<&crate::deploy::service_catalog::CatalogService>,
     runner: &crate::deploy::Runner,
-) -> Result<Vec<service::Reversible>, CmdError> {
+) -> Result<
+    (
+        Vec<service::Reversible>,
+        Vec<service::PredecessorRetirement>,
+    ),
+    CmdError,
+> {
     let Some(entry) = entry else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let (retirements, reversible) = service::retire_units_reversibly(target, entry, runner).await;
     let mut failed = Vec::new();
-    for retirement in retirements {
+    for retirement in &retirements {
         if retirement.state == "absent" {
             continue;
         }
@@ -141,7 +149,7 @@ pub(super) async fn retire_before_ensure(
         }
     }
     if failed.is_empty() {
-        return Ok(reversible);
+        return Ok((reversible, retirements));
     }
     let given_back = service::reinstate_units(target, None, &reversible, runner).await;
     Err(CmdError::unreachable(format!(

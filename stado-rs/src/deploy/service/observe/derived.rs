@@ -14,7 +14,7 @@ use crate::deploy::service_catalog::{self, CatalogService, RoleUnit};
 pub struct Predecessors {
     /// Units the product's process replaces whole, wherever that process runs.
     pub replaced: Vec<String>,
-    /// Host Stado units whose root verb was removed: retired after start.
+    /// Host Stado units with a removed root verb: withdrawn before ensure.
     pub obsolete: Vec<String>,
     /// Host Stado roles, retired only when the new process runs them.
     pub roles: Vec<RoleUnit>,
@@ -23,7 +23,7 @@ pub struct Predecessors {
 }
 
 impl Predecessors {
-    /// Units to withdraw once the replacement has started and proved its roles.
+    /// Units eligible for withdrawal during ensure or a live reconcile pass.
     pub fn units(&self) -> impl Iterator<Item = &str> {
         self.replaced
             .iter()

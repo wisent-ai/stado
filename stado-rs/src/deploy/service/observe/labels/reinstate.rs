@@ -80,20 +80,17 @@ pub struct Reversible {
     pub scopes: Vec<String>,
 }
 
-/// Retire every unit on `target` that `replacement`'s process replaces
-/// whole ([`predecessors_on`]), remembering for each unit it touched the
-/// autostart scopes it is about to withdraw. A unit whose autostart cannot be
-/// read is not touched at all and reported `failed`: without its scopes it
-/// could not be given back. A unit that failed half way is still reversible,
-/// because it may already be booted out. A host whose units cannot be read
-/// answers one `failed` row and retires nothing.
+/// Retire whole replacements and removed-command units before starting the
+/// new process, remembering autostart scopes for rollback on refusal. Role
+/// units whose work needs live proof are untouched. An unreadable unit is
+/// reported failed rather than stopped without a way to give it back.
 pub async fn retire_units_reversibly(
     target: &ComputeTarget,
     replacement: &crate::deploy::service_catalog::CatalogService,
     runner: &Runner,
 ) -> (Vec<PredecessorRetirement>, Vec<Reversible>) {
-    let replaced = match predecessors_on(target, replacement, None, runner).await {
-        Ok(found) => found.replaced,
+    let (replaced, obsolete) = match predecessors_on(target, replacement, None, runner).await {
+        Ok(found) => (found.replaced, found.obsolete),
         Err(error) => {
             let failed = PredecessorRetirement {
                 unit: crate::deploy::service_catalog::unit_of(replacement).to_string(),
@@ -106,9 +103,13 @@ pub async fn retire_units_reversibly(
             return (vec![failed], Vec::new());
         }
     };
-    let mut retirements = Vec::with_capacity(replaced.len());
-    let mut reversible = Vec::with_capacity(replaced.len());
-    for unit in &replaced {
+    let mut retirements = Vec::with_capacity(replaced.len() + obsolete.len());
+    let mut reversible = Vec::with_capacity(replaced.len() + obsolete.len());
+    for (unit, removed) in replaced
+        .iter()
+        .map(|unit| (unit, false))
+        .chain(obsolete.iter().map(|unit| (unit, true)))
+    {
         let scopes = match label_autostart(target, unit, runner).await {
             Ok(states) => states
                 .into_iter()
@@ -138,7 +139,11 @@ pub async fn retire_units_reversibly(
         retirements.push(PredecessorRetirement {
             unit: unit.clone(),
             state,
-            detail,
+            detail: if removed {
+                format!("removed root command: {detail}")
+            } else {
+                detail
+            },
         });
     }
     (retirements, reversible)

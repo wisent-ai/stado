@@ -96,7 +96,7 @@ try {
   const keptResult = receipt.predecessors.find(unit => unit.unit === kept);
   assert.ok(keptResult, `JSON omitted kept result for ${kept}`);
   assert.equal(keptResult.state, 'kept');
-  assert.match(ensure.stderr, new RegExp(`${retired}: retired \\(removed root command:`),
+  assert.match(ensure.stderr, new RegExp(`retired ${retired} before starting: retired \\(removed root command:`),
     'Ensure must name the withdrawn unit and the cause');
   const gone = run('launchctl', ['print', `${domain}/${retired}`]);
   assert.ok(gone.status, 'The obsolete unit still runs or remains loaded');

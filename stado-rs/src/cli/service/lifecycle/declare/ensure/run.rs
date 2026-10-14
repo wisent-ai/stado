@@ -98,10 +98,8 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
             }
         }
     }
-    // The declarations this product's one process replaced on this host are
-    // withdrawn in the same write: every one that runs its program under
-    // another label. The host Stado process's role units keep theirs until
-    // their role is proven, and are never repaired meanwhile.
+    // Registry declarations replaced whole are withdrawn with the write;
+    // Stado role units wait for proof from the live process.
     let host_product =
         crate::deploy::service_catalog::host_process().map_err(CmdError::declaration)?;
     let replaced: Vec<String> = match catalog_entry.as_ref() {
@@ -238,16 +236,13 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         &runner,
     )
     .await?;
-    let retired =
+    let (retired, mut predecessors) =
         predecessors::retire_before_ensure(&target, catalog_entry.as_ref(), &runner).await?;
     let outcome =
         predecessors::ensure_or_reinstate(&target, options.name, &plan, &retired, &runner).await?;
-    // The write below goes through this process's registry route; when the
-    // unit just acted on carries that route, it is made after the restarted
-    // resolver publishes `serving`.
+    // The restarted resolver must serve before its registry route is written.
     route::await_route(&target, &plan, &outcome, options.name)
-        // The unit runs but the resolver it carries did not come to serve:
-        // the service is not up yet, its outage.
+        // A running unit with no serving route is still unavailable.
         .map_err(|cause| CmdError::unreachable(format!("{host}: {cause}")))?;
 
     let mut record = service::record_from_ensure(&host, options.name, &outcome, &now());
@@ -283,9 +278,15 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         error
     })?;
 
-    let predecessors =
-        predecessors::retire_after_ensure(&target, catalog_entry.as_ref(), &record, &runner)
-            .await?;
+    let after = predecessors::retire_after_ensure(
+        &target,
+        catalog_entry.as_ref(),
+        &record,
+        &runner,
+        &predecessors,
+    )
+    .await?;
+    predecessors.extend(after);
     Ok(EnsureReceipt {
         host,
         name: record.name.clone(),
