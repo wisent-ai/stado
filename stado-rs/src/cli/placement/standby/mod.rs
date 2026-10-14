@@ -157,7 +157,7 @@ pub(crate) async fn prepare(
     };
 
     let plan = template::plan(&profile, &placed, &target)?;
-    if template::already_declared(&profile, &target, &plan) {
+    if template::already_declared(&profile, &target, &plan)? {
         report.outcome = words::ALREADY_DECLARED.to_string();
         report.detail = format!(
             "{} declares every unit of {} and sits in the profile",

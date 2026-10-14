@@ -117,22 +117,30 @@ fn classify(program: &str) -> Option<ProgramKind> {
 }
 
 /// The unit the registry declares on `target` for one logical service, when
-/// it declares one from the registry's own source.
+/// it declares one from the registry's own source. A service catalog that
+/// cannot be read is the error: without its unit label a unit the registry
+/// declares under that label would be taken for none.
 fn declared_unit<'a>(
     declared: &'a [service::ManagedService],
     logical: &str,
-) -> Option<&'a service::ManagedService> {
-    let unit_label = crate::deploy::service_catalog::lookup(logical)
-        .ok()
-        .flatten()
-        .and_then(|entry| entry.unit);
-    declared.iter().find(|managed| {
+) -> Result<Option<&'a service::ManagedService>, CmdError> {
+    let unit_label = match crate::deploy::service_catalog::lookup(logical) {
+        Ok(entry) => entry.and_then(|entry| entry.unit),
+        Err(cause) => {
+            return Err(CmdError::click(format!(
+                "the service catalog could not be read for {logical}, so whether its unit is \
+                 declared is unknown: {cause}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config))
+        }
+    };
+    Ok(declared.iter().find(|managed| {
         managed.source == SOURCE_REGISTRY
             && (managed.matches(logical)
                 || unit_label
                     .as_deref()
                     .is_some_and(|label| managed.matches(label)))
-    })
+    }))
 }
 
 /// Whether the host already sits in the profile with every unit declared.
@@ -140,13 +148,17 @@ pub(super) fn already_declared(
     profile: &PlacementProfile,
     target: &ComputeTarget,
     plan: &Plan,
-) -> bool {
+) -> Result<bool, CmdError> {
+    if !profile.hosts.contains_key(&target.name) {
+        return Ok(false);
+    }
     let declared = service::declared_services(target);
-    profile.hosts.contains_key(&target.name)
-        && plan
-            .services
-            .iter()
-            .all(|service| declared_unit(&declared, &service.logical).is_some())
+    for service in &plan.services {
+        if declared_unit(&declared, &service.logical)?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Write `target` into the profile with the units the registry now declares
@@ -169,7 +181,7 @@ pub(super) async fn commit_host(
         let declared = service::declared_services(live_target);
         let mut units = Map::new();
         for logical in &logicals {
-            let managed = declared_unit(&declared, logical).ok_or_else(|| {
+            let managed = declared_unit(&declared, logical)?.ok_or_else(|| {
                 CmdError::declaration(format!(
                     "{target_name} no longer declares a unit for {logical}; the profile is not \
                      written half"
