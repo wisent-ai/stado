@@ -159,5 +159,12 @@ pub(crate) enum QualityCommands {
         /// pushed commit. Deletions have no source tree to check.
         #[arg(long, conflicts_with = "revision")]
         pre_push: bool,
+        /// Answer in JSON: the progress lines and each gate's own report go
+        /// to stderr, and stdout carries one document — the checked
+        /// revisions on a pass, or the failure envelope whose `details` name
+        /// the refused gate's argv, exit, report and every finding (file:line,
+        /// lint, message) on a refusal.
+        #[arg(long)]
+        json: bool,
     },
 }

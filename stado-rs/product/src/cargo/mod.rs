@@ -1,4 +1,6 @@
 mod checks;
+mod declared;
+pub mod findings;
 mod pinned;
 pub(crate) mod private_sources;
 mod sources;
@@ -30,8 +32,9 @@ pub(crate) fn execute(
 
 /// Run `operation` against the manifest's checkout, or, with `revision`,
 /// against that committed revision of it exported into the checkout's build
-/// area. `operation` is one the CLI's own value set admitted
-/// (`cli::native::cargo`); nothing here decides it again.
+/// area. `operation` is admitted here, once the tree is known: one of the
+/// command's own, or a Cargo subcommand that tree's quality gates declare
+/// ([`declared::admit`]).
 pub(crate) fn execute_revision(
     runtime: &Runtime,
     requested: &Path,
@@ -51,7 +54,12 @@ pub(crate) fn execute_revision(
             bail!("stado product cargo owns source resolution; conflicting argument: {argument}");
         }
     }
-    if std::env::var_os("WISENT_SOURCE_DIR").is_some() {
+    if let Some(source) = std::env::var_os("WISENT_SOURCE_DIR") {
+        declared::admit(
+            Path::new(&source),
+            operation,
+            &crate::cli::cargo_operations(),
+        )?;
         return private_sources::execute(runtime, requested, operation, arguments);
     }
     let version = checks::cargo_version()?;
@@ -77,6 +85,13 @@ pub(crate) fn execute_revision(
         }
         None => sources::manifest(runtime, requested)?,
     };
+    // The tree whose gates are read: the exported revision when one is
+    // pinned, so a gate the revision declares is admitted on it.
+    let tree = match &pinned {
+        Some(pinned) => pinned.exported.as_path(),
+        None => root.as_path(),
+    };
+    declared::admit(tree, operation, &crate::cli::cargo_operations())?;
     let invocation = uuid::Uuid::new_v4().to_string();
     // The release worker declares its output inside the job tree it sweeps
     // with the job, so its scratch stays in that tree too. Run by hand,
@@ -200,13 +215,31 @@ pub(crate) fn execute_revision(
         report["state"] = json!("executing");
         atomic_json(&evidence.join("result.json"), &report)?;
         let output = capture(&mut process)?;
+        let stdout_path = evidence.join("cargo.stdout");
+        let stderr_path = evidence.join("cargo.stderr");
+        fs::write(&stdout_path, &output.stdout)?;
+        fs::write(&stderr_path, &output.stderr)?;
+        report["stdout_path"] = json!(stdout_path);
+        report["stderr_path"] = json!(stderr_path);
         io::stderr().write_all(&output.stderr)?;
+        // Each diagnostic the compiler printed — file:line, lint or error
+        // code, message — so a refused lint is read from this record.
+        let found = findings::read(&String::from_utf8_lossy(&output.stderr));
+        report["findings"] = json!(found);
         stdout = output.stdout;
         report["exit_status"] = json!(output.status.code());
         report["process_status"] = json!(output.status.to_string());
         if !output.status.success() {
             code = output.status.code().unwrap_or(1);
-            bail!("Cargo {operation} failed ({})", output.status);
+            let named: Vec<String> = found.iter().map(ToString::to_string).collect();
+            bail!(
+                "Cargo {operation} failed ({}){}",
+                output.status,
+                match named.as_slice() {
+                    [] => String::new(),
+                    named => format!(" with {} finding(s):\n{}", named.len(), named.join("\n")),
+                }
+            );
         }
         report["state"] = json!("verifying_source_identity");
         atomic_json(&evidence.join("result.json"), &report)?;

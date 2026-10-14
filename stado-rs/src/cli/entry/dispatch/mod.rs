@@ -82,6 +82,7 @@ pub async fn main_entry() -> i32 {
                         "summary": code.operator_summary(),
                         "message": message,
                         "help": err.help,
+                        "details": err.details,
                     }))
                 );
             } else {

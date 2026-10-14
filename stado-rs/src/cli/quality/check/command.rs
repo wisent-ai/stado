@@ -6,12 +6,41 @@ use std::path::{Path, PathBuf};
 use super::{built_revision, export_check, git, Report, Selection};
 use crate::cli::CmdError;
 
+/// Check the selected revisions. With `json`, every progress line and gate
+/// report goes to stderr and stdout carries one document: the revisions
+/// checked, or the failure envelope whose `details` name the refused gate's
+/// findings.
 pub async fn check(
     root: Option<&str>,
     if_declared: bool,
     revision: Option<&str>,
     pre_push: bool,
+    json: bool,
 ) -> Result<(), CmdError> {
+    let report = if json { Report::Stderr } else { Report::Stdout };
+    checked(root, if_declared, revision, pre_push, report)
+        .await
+        .map(|revisions| {
+            if json {
+                println!(
+                    "{}",
+                    crate::deploy::host_recovery::to_sorted_pretty(&serde_json::json!({
+                        "status": "passed",
+                        "revisions": revisions,
+                    }))
+                );
+            }
+        })
+        .map_err(|error| error.machine_readable(json))
+}
+
+async fn checked(
+    root: Option<&str>,
+    if_declared: bool,
+    revision: Option<&str>,
+    pre_push: bool,
+    report: Report,
+) -> Result<BTreeSet<String>, CmdError> {
     let checkout = match root {
         Some(path) => PathBuf::from(path),
         None => std::env::current_dir().map_err(|error| {
@@ -24,7 +53,7 @@ pub async fn check(
     // task and defect is closed, and then one build over everything runs the
     // lint and test gates and records every refusal at once.
     let (revisions, selection) = if pre_push {
-        (pushed_revisions(&checkout)?, Selection::Formatting)
+        (pushed_revisions(&checkout, report)?, Selection::Formatting)
     } else {
         let revision = match revision {
             Some(revision) => resolve(&checkout, revision)?,
@@ -33,18 +62,18 @@ pub async fn check(
         (BTreeSet::from([revision]), Selection::Installation)
     };
     if revisions.is_empty() {
-        println!("stado quality check: no source revision is being pushed; nothing to check");
+        report.say("stado quality check: no source revision is being pushed; nothing to check");
     }
-    for revision in revisions {
-        println!(
+    for revision in &revisions {
+        report.say(&format!(
             "stado quality check: checking committed revision {revision} of {}",
             checkout.display()
-        );
-        export_check(&checkout, &revision, Report::Stdout, selection, if_declared)
+        ));
+        export_check(&checkout, revision, report, selection, if_declared)
             .await
             .map_err(|error| error.within(format!("quality of committed revision {revision}")))?;
     }
-    Ok(())
+    Ok(revisions)
 }
 
 fn resolve(checkout: &Path, revision: &str) -> Result<String, CmdError> {
@@ -59,7 +88,7 @@ fn resolve(checkout: &Path, revision: &str) -> Result<String, CmdError> {
     )
 }
 
-fn pushed_revisions(checkout: &Path) -> Result<BTreeSet<String>, CmdError> {
+fn pushed_revisions(checkout: &Path, report: Report) -> Result<BTreeSet<String>, CmdError> {
     let mut revisions = BTreeSet::new();
     // Git's pre-push stdin grammar is local-ref local-oid remote-ref remote-oid.
     // A deletion has the null local object ID. These are protocol identities:
@@ -86,11 +115,15 @@ fn pushed_revisions(checkout: &Path) -> Result<BTreeSet<String>, CmdError> {
             )));
         }
         if local_oid.bytes().all(|byte| byte == b'0') {
-            println!("stado quality check: deleting {remote_ref}; no source tree to check");
+            report.say(&format!(
+                "stado quality check: deleting {remote_ref}; no source tree to check"
+            ));
             continue;
         }
         let revision = resolve(checkout, local_oid)?;
-        println!("stado quality check: push {local_ref} -> {remote_ref} selects {revision}");
+        report.say(&format!(
+            "stado quality check: push {local_ref} -> {remote_ref} selects {revision}"
+        ));
         revisions.insert(revision);
     }
     Ok(revisions)

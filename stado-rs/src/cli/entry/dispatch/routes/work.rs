@@ -39,12 +39,14 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                 if_declared,
                 revision,
                 pre_push,
+                json,
             } => {
                 crate::cli::quality::check(
                     root.as_deref(),
                     if_declared,
                     revision.as_deref(),
                     pre_push,
+                    json,
                 )
                 .await
             }

@@ -181,6 +181,12 @@ pub(super) fn installed(program: &str) -> Result<std::path::PathBuf, CmdError> {
     })
 }
 
+/// Run one gate's argv in `root`. Its report is captured and then printed
+/// where the check's lines go, so a refusal names what the gate found —
+/// each compiler finding's file:line, lint and message
+/// ([`stado_product::findings`]), or, for a report that names none, the
+/// gate's own report — instead of only
+/// its argv and exit status.
 fn run(
     argv: &[String],
     root: &Path,
@@ -194,23 +200,46 @@ fn run(
     let mut command = Command::new(installed(program)?);
     command.args(args).current_dir(root);
     command.envs(env.iter().map(|(name, value)| (*name, value.as_str())));
-    // A gate's own report (a formatter's diff) follows the check's lines.
-    if let Report::Stderr = report {
-        command.stdout(std::process::Stdio::from(std::io::stderr()));
-    }
-    let status = crate::wait::status(&mut command).map_err(|error| {
+    let output = crate::wait::output(&mut command).map_err(|error| {
         CmdError::click(format!("cannot run {program}: {error}"))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
-    if status.success() {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // A gate's own report (a formatter's diff on stdout, a compiler's
+    // diagnostics on stderr), in the order the streams are read.
+    let said: Vec<&str> = [stdout.trim_end(), stderr.trim_end()]
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect();
+    let gate_report = said.join("\n");
+    // The report follows the check's lines.
+    if !gate_report.is_empty() {
+        report.say(&gate_report);
+    }
+    if output.status.success() {
         return Ok(());
     }
-    Err(CmdError::refused(format!(
-        "{} exited {}",
-        argv.join(" "),
-        status
-            .code()
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "on a signal".to_string())
-    )))
+    let exited = match output.status.code() {
+        Some(code) => code.to_string(),
+        None => "on a signal".to_string(),
+    };
+    let found = stado_product::findings::read(&gate_report);
+    let named = match found.as_slice() {
+        [] => format!("the gate's own report:\n{gate_report}"),
+        found => {
+            let named: Vec<String> = found.iter().map(ToString::to_string).collect();
+            format!("{} finding(s):\n{}", found.len(), named.join("\n"))
+        }
+    };
+    Err(
+        CmdError::refused(format!("{} exited {exited}; {named}", argv.join(" "))).detailing(
+            serde_json::json!({
+                "argv": argv,
+                "exit": exited,
+                "findings": found,
+                "report": gate_report,
+            }),
+        ),
+    )
 }

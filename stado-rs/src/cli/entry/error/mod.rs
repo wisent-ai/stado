@@ -37,6 +37,11 @@ pub struct CmdError {
     /// by eye. [`main_entry`](crate::cli::main_entry) prints one envelope for every command that
     /// sets this, so the shape is uniform rather than per-command.
     pub json: bool,
+    /// What the failure found, as data a caller acts on without parsing the
+    /// sentence — each finding of a refused quality gate, for instance.
+    /// Carried as `details` in the `--json` envelope; the sentence names the
+    /// same findings for a reader.
+    pub details: Option<serde_json::Value>,
 }
 
 /// click `ClickException`'s exit code: "it ran and failed", the C library's
@@ -115,6 +120,12 @@ impl CmdError {
     /// Attach operator help that is not part of the failure sentence.
     pub fn helping(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
+        self
+    }
+
+    /// Attach what the failure found as data, for the `--json` envelope.
+    pub fn detailing(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
         self
     }
 

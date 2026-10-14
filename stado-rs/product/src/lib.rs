@@ -9,6 +9,7 @@
 mod build_trees;
 pub mod callers;
 mod cargo;
+pub use cargo::findings;
 pub mod cargo_lock;
 pub mod catalog;
 pub mod changelog;
