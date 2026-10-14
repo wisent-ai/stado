@@ -6,10 +6,12 @@
 //! gate as it was, which refuses what its new build accepts. So `stado
 //! release newest --push --first P,…` delivers the `--first` products, installs
 //! each on this host (`stado product install`), and only then pushes every
-//! checkout of the workspace that holds commits its upstream does not, reads
-//! the CI of each pushed product at the pushed commit (`stado ci status`), and
-//! delivers the rest. The number of unpushed commits per checkout is measured
-//! before and after, so the pass shows what it moved and what still waits.
+//! checkout of the workspace that holds commits its upstream does not to its
+//! origin's delivery branch, which the delivery queue's builder gates before
+//! it moves `main` (`stado ci deliver`), reads the CI of each pushed product
+//! at the pushed commit (`stado ci status`), and delivers the rest. The
+//! number of commits `main` does not hold yet is measured per checkout before
+//! and after, so the pass shows what it moved and what still waits.
 
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -208,10 +210,17 @@ pub async fn push(
             });
             continue;
         }
-        let error = run("git", &["push"], Some(&checkout.checkout))
-            .await
-            .err()
-            .map(|error| error.to_string());
+        // `main` moves only through the delivery queue: the push names the
+        // delivery branch, and the queue's builder gates it and moves `main`.
+        let delivery = format!("HEAD:refs/heads/{}", crate::cli::ci::queue::DELIVERY_BRANCH);
+        let error = run(
+            "git",
+            &["push", "origin", &delivery],
+            Some(&checkout.checkout),
+        )
+        .await
+        .err()
+        .map(|error| error.to_string());
         let product = planned
             .iter()
             .find(|entry| root.join(&entry.checkout) == checkout.checkout);

@@ -4,8 +4,8 @@
 
 mod carried;
 mod deliver;
-pub(super) mod process;
+pub(crate) mod process;
 mod version;
 
-pub use carried::{open_repairs, unplaced, Unplaced};
+pub use carried::{open_repairs, repository_of, unplaced, Unplaced};
 pub use deliver::{pass, Mode};

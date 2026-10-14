@@ -9,7 +9,6 @@ pub use command::check;
 mod paths;
 pub(crate) use modules::check_source;
 use std::path::Path;
-use std::process::Command;
 
 use super::{declared_gates, inputs, lockfile, run, web, Declaration, Report, Selection};
 use crate::cli::CmdError;
@@ -18,7 +17,7 @@ use crate::release_pipeline::GateKind;
 /// Run the lock and the selected gates over `revision` of `checkout`,
 /// exported beside it, writing nothing to the checkout, with every release
 /// input the manifest pins staged beside the export as the release worker
-/// stages it.
+/// stages it. Every gate runs to its end; a refusal names all of them.
 pub(crate) async fn check_revision(
     checkout: &Path,
     revision: &str,
@@ -28,6 +27,29 @@ pub(crate) async fn check_revision(
     export_check(checkout, revision, report, selection, false).await
 }
 
+/// Every refusal of the selected checks over `revision` of `checkout`, each
+/// as its check or gate said it, with the gate's own output kept: an empty
+/// list is a pass. A check that could not run at all (the export, the
+/// manifest, a pinned input) is the error.
+pub(crate) async fn refusals(
+    checkout: &Path,
+    revision: &str,
+    selection: Selection,
+) -> Result<Vec<String>, CmdError> {
+    Ok(
+        match exported(checkout, revision, Report::Kept, selection, false).await? {
+            Some(checked) => checked.refusals.iter().map(ToString::to_string).collect(),
+            None => Vec::new(),
+        },
+    )
+}
+
+/// The product a check read and every refusal of its run.
+struct Checked {
+    product: String,
+    refusals: Vec<CmdError>,
+}
+
 async fn export_check(
     checkout: &Path,
     revision: &str,
@@ -35,6 +57,46 @@ async fn export_check(
     selection: Selection,
     if_declared: bool,
 ) -> Result<(), CmdError> {
+    let Some(checked) = exported(checkout, revision, report, selection, if_declared).await? else {
+        return Ok(());
+    };
+    // A lone refusal is returned as its check said it, with its class; more
+    // than one are said together, every one on its own line.
+    let mut refusals = checked.refusals.into_iter();
+    match (refusals.next(), refusals.next()) {
+        (None, _) => {
+            report.say(&format!(
+                "stado quality check: {} resolves its locks, passes its quality gates and finds \
+                 its release inputs stored at {revision} of {}",
+                checked.product,
+                checkout.display()
+            ));
+            Ok(())
+        }
+        (Some(only), None) => Err(only),
+        (Some(first), Some(second)) => {
+            let said: Vec<String> = [first, second]
+                .into_iter()
+                .chain(refusals)
+                .map(|refusal| refusal.to_string())
+                .collect();
+            Err(CmdError::refused(format!(
+                "{} refusals of {revision} of {}, every check run to its end:\n{}",
+                said.len(),
+                checkout.display(),
+                said.join("\n")
+            )))
+        }
+    }
+}
+
+async fn exported(
+    checkout: &Path,
+    revision: &str,
+    report: Report,
+    selection: Selection,
+    if_declared: bool,
+) -> Result<Option<Checked>, CmdError> {
     // The gates run in the exported tree with that tree as their working
     // directory, and a gate such as `stado web quality` reads the tree from
     // WISENT_SOURCE_DIR. A checkout named relatively (`--source .`) made that
@@ -89,15 +151,7 @@ async fn export_check(
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     }
-    let Some(product) = verdict? else {
-        return Ok(());
-    };
-    report.say(&format!(
-        "stado quality check: {product} resolves its locks, passes its quality gates and finds its \
-         release inputs stored at {revision} of {}",
-        checkout.display()
-    ));
-    Ok(())
+    verdict
 }
 
 /// Remove the run areas under `runs` whose process is gone: a check that was
@@ -151,7 +205,9 @@ fn remove_abandoned(runs: &Path) {
 }
 
 /// The gates of the tree at `tree`, with its pinned inputs staged under
-/// `inputs_area` first; answers the product.
+/// `inputs_area` first; answers the product and every refusal. Each check
+/// and gate runs to its end whatever the one before it said: stopping at the
+/// first refusal is what made every installation find the next one.
 async fn check_tree(
     tree: &Path,
     inputs_area: &Path,
@@ -160,7 +216,7 @@ async fn check_tree(
     report: Report,
     selection: Selection,
     if_declared: bool,
-) -> Result<Option<String>, CmdError> {
+) -> Result<Option<Checked>, CmdError> {
     let declared = match declared_gates(Some(&tree.to_string_lossy()), selection)? {
         Declaration::Gates(declared) => *declared,
         Declaration::Undeclared(reason) if if_declared => {
@@ -171,8 +227,13 @@ async fn check_tree(
         }
         Declaration::Undeclared(reason) => return Err(CmdError::refused(reason)),
     };
-    lockfile::check(tree, checkout, revision, report)?;
-    modules::check(tree, checkout, revision)?;
+    let mut refusals = Vec::new();
+    if let Err(refused) = lockfile::check(tree, checkout, revision, report) {
+        refusals.push(refused);
+    }
+    if let Err(refused) = modules::check(tree, checkout, revision) {
+        refusals.push(refused);
+    }
     // A pin whose object was never stored, or was stored for a lock the
     // product has since moved past, is refused here, while the session that
     // pushed it can still repair it, instead of by the build that fetches it;
@@ -193,7 +254,7 @@ async fn check_tree(
         .collect();
     for gate in &declared.gates {
         report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
-        run(&gate.argv, tree, &contract, report).map_err(|error| {
+        if let Err(error) = run(&gate.argv, tree, &contract, report) {
             let refused = error.within(format!(
                 "stado quality check: gate {:?} ({}) of {} refuses {revision} of {}",
                 gate.name,
@@ -203,15 +264,15 @@ async fn check_tree(
             ));
             // Only a format gate reads what `stado quality format` writes; a
             // lint or test gate's refusal is repaired in the source it names.
-            match gate.kind {
+            refusals.push(match gate.kind {
                 GateKind::Format => refused.also("`stado quality format` writes what it reads"),
                 GateKind::Lint | GateKind::Test => refused.also(format!(
                     "a {} gate's refusal is repaired in the source it names; `stado quality format` \
                      changes nothing for it",
                     gate.kind
                 )),
-            }
-        })?;
+            });
+        }
     }
     if matches!(selection, Selection::Installation) {
         let area = tree.parent().ok_or_else(|| {
@@ -220,48 +281,12 @@ async fn check_tree(
                 tree.display()
             ))
         })?;
-        commands::check(&declared, tree, area, revision, &contract, report)?;
+        if let Err(refused) = commands::check(&declared, tree, area, revision, &contract, report) {
+            refusals.push(refused);
+        }
     }
-    Ok(Some(declared.product))
-}
-
-/// The revision an install of `checkout` builds: `origin/main` after a fetch
-/// when the tracked tree is clean and `HEAD` is contained in it, else `HEAD`.
-fn built_revision(checkout: &Path) -> Result<String, CmdError> {
-    let head = git(checkout, &["rev-parse", "HEAD"])?;
-    let dirty = !git(checkout, &["status", "--porcelain", "--untracked-files=no"])?.is_empty();
-    if dirty {
-        return Ok(head);
-    }
-    git(checkout, &["fetch", "--quiet", "origin", "main"])?;
-    let main = git(checkout, &["rev-parse", "origin/main"])?;
-    let contained = crate::wait::status(
-        Command::new("git")
-            .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
-            .current_dir(checkout),
-    )
-    .map_err(|error| {
-        CmdError::click(format!("cannot run git merge-base: {error}"))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })?
-    .success();
-    Ok(if contained { main } else { head })
-}
-
-fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
-    let output = crate::wait::output(Command::new("git").args(args).current_dir(checkout))
-        .map_err(|error| {
-            CmdError::click(format!("cannot run git {}: {error}", args.join(" ")))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
-    if !output.status.success() {
-        return Err(CmdError::click(format!(
-            "git {} in {} failed: {}",
-            args.join(" "),
-            checkout.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-        .stating(crate::primitives::failure::FailureCode::Config));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    Ok(Some(Checked {
+        product: declared.product,
+        refusals,
+    }))
 }

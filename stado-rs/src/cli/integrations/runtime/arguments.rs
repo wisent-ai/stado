@@ -108,9 +108,13 @@ pub(crate) struct ServeArgs {
     /// runner's own account.
     #[arg(long, value_name = "ROOT")]
     pub precheck_runner: Option<std::path::PathBuf>,
-    /// Keep the delivery queue of the product checkouts under this directory
-    /// inside this process: a pass at start and on every branch move. It
-    /// queues and builds nothing; `stado release newest` delivers the queue.
+    /// Keep the delivery queues of the product checkouts under this
+    /// directory inside this process: a pass at start, on every branch move
+    /// and on every move of a checkout's view of its origin. The release
+    /// loop's commits are gated and queued (`stado release newest` delivers
+    /// them), and each checkout's delivery-branch candidate is gated by the
+    /// one serialized builder and moved onto `main` when it passes (`stado ci
+    /// deliver`): this host is the builder.
     #[arg(long, value_name = "DIR")]
     pub release_loop_root: Option<std::path::PathBuf>,
     /// Serve the public status page on this `host:port` inside this

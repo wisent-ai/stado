@@ -55,6 +55,12 @@ try {
 	assert.match(declared.repository, /^[^/]+\/[^/]+$/, "the repository is owner/name");
 	assert.equal(declared.finding, null, "a repository with workflows has no finding");
 	assert.ok(declared.workflows.length, `${declared.repository} declares workflows the forge lists`);
+	// The product's delivery queue rides on the same answer: the register it
+	// reads and every candidate it holds for the product, newest first.
+	assert.ok(declared.queue.register, JSON.stringify(declared.queue));
+	for (const entry of declared.queue.entries) {
+		assert.equal(entry.product, product, JSON.stringify(entry));
+	}
 	let concluded = null;
 	for (const row of declared.workflows) {
 		assert.ok(row.workflow, JSON.stringify(row));

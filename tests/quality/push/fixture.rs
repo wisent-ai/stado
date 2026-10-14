@@ -130,7 +130,7 @@ impl Fixture {
                 .arg("--git-dir")
                 .arg(&self.remote)
                 .arg("rev-parse")
-                .arg("refs/heads/main"),
+                .arg("refs/heads/delivery"),
         );
         String::from_utf8(output.stdout)
             .expect("remote identity")

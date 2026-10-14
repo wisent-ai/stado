@@ -39,7 +39,7 @@ use std::path::Path;
 use std::process::Command;
 
 pub use self::check::check;
-pub(crate) use self::check::{check_revision, check_source};
+pub(crate) use self::check::{check_revision, check_source, refusals};
 
 pub(crate) use self::gates::Selection;
 use self::gates::{declared_gates, selected_gates, Declaration};
@@ -125,18 +125,22 @@ fn converge(
 
 /// Where a check's progress and verdict lines go: stdout when they are the
 /// command's answer (`stado quality check`), stderr when another command's
-/// answer owns stdout (`stado release changes submit --json`).
+/// answer owns stdout (`stado release changes submit --json`). `Kept` is
+/// stderr too, and a refusing gate's own output (clippy's `file:line` lints,
+/// a formatter's diff) is kept in its refusal as well, so the delivery queue
+/// records what the gate said, not only that it exited.
 #[derive(Clone, Copy)]
 pub(crate) enum Report {
     Stdout,
     Stderr,
+    Kept,
 }
 
 impl Report {
     fn say(self, line: &str) {
         match self {
             Self::Stdout => println!("{line}"),
-            Self::Stderr => eprintln!("{line}"),
+            Self::Stderr | Self::Kept => eprintln!("{line}"),
         }
     }
 }
@@ -177,6 +181,31 @@ fn run(
     let mut command = Command::new(installed(program)?);
     command.args(args).current_dir(root);
     command.envs(env.iter().map(|(name, value)| (*name, value.as_str())));
+    let exited = |status: std::process::ExitStatus| match status.code() {
+        Some(code) => code.to_string(),
+        None => "on a signal".to_string(),
+    };
+    if let Report::Kept = report {
+        let output = crate::wait::output(&mut command).map_err(|error| {
+            CmdError::click(format!("cannot run {program}: {error}"))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        eprint!("{said}");
+        if output.status.success() {
+            return Ok(());
+        }
+        return Err(CmdError::refused(format!(
+            "{} exited {}:\n{}",
+            argv.join(" "),
+            exited(output.status),
+            said.trim_end()
+        )));
+    }
     // A gate's own report (a formatter's diff) follows the check's lines.
     if let Report::Stderr = report {
         command.stdout(std::process::Stdio::from(std::io::stderr()));
@@ -191,9 +220,6 @@ fn run(
     Err(CmdError::refused(format!(
         "{} exited {}",
         argv.join(" "),
-        status
-            .code()
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "on a signal".to_string())
+        exited(status)
     )))
 }

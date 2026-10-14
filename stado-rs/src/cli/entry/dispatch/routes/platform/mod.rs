@@ -71,6 +71,9 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
                 revision,
                 json,
             } => ci::status(&product, revision.as_deref(), json).await,
+            crate::cli::entry::spec::root::platform::CiCommands::Deliver { checkout, json } => {
+                ci::queue::command(&checkout, json).await
+            }
         },
         PlatformCommands::Cost(sub) => cost::dispatch(&sub).await,
         PlatformCommands::Market(sub) => vast::dispatch(&sub).await,

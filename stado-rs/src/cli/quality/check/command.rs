@@ -1,10 +1,29 @@
 //! Git pre-push protocol inputs select the tree, never checkout dirtiness.
-use std::collections::BTreeSet;
+//!
+//! `main` advances only through the delivery queue (`stado ci deliver`): a
+//! push names the delivery branch, the queue's one serialized builder runs
+//! every installation gate over the pushed commit and moves `main` when they
+//! all pass. So a push that names `main` is admitted only for a commit the
+//! queue's register records as admitted, and its gates are not run again; a
+//! push to any other branch runs the compile-free checks (locks, module
+//! declarations, format gates), so no executor builds to push.
+use std::collections::BTreeMap;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use super::{built_revision, export_check, git, Report, Selection};
+use super::{export_check, Report, Selection};
+use crate::cli::ci::queue::{register, DELIVERY_BRANCH, MAIN};
 use crate::cli::CmdError;
+
+/// What a push asks of one revision.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pushed {
+    /// To the delivery branch or any branch but `main`.
+    Candidate,
+    /// To `main`: only the queue moves it.
+    Main,
+}
 
 pub async fn check(
     root: Option<&str>,
@@ -19,34 +38,57 @@ pub async fn check(
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?,
     };
-    let revisions = if pre_push {
-        pushed_revisions(&checkout)?
-    } else {
+    if !pre_push {
         let revision = match revision {
             Some(revision) => resolve(&checkout, revision)?,
             None => built_revision(&checkout)?,
         };
-        BTreeSet::from([revision])
-    };
+        return checked(&checkout, &revision, Selection::Installation, if_declared).await;
+    }
+    let revisions = pushed_revisions(&checkout)?;
     if revisions.is_empty() {
         println!("stado quality check: no source revision is being pushed; nothing to check");
     }
-    for revision in revisions {
-        println!(
-            "stado quality check: checking committed revision {revision} of {}",
-            checkout.display()
-        );
-        export_check(
-            &checkout,
-            &revision,
-            Report::Stdout,
-            Selection::Installation,
-            if_declared,
-        )
-        .await
-        .map_err(|error| error.within(format!("quality of committed revision {revision}")))?;
+    for (revision, pushed) in revisions {
+        match pushed {
+            Pushed::Main => {
+                if !register::admitted(&revision)? {
+                    return Err(CmdError::refused(format!(
+                        "{revision} of {} is pushed to {MAIN}, and {MAIN} advances only through the \
+                         delivery queue: push it to {DELIVERY_BRANCH} (git push origin HEAD:{DELIVERY_BRANCH}); \
+                         the queue's builder runs every installation gate over it and moves {MAIN} when \
+                         they all pass (`stado ci deliver`, `stado ci status`). The queue register {} \
+                         records no admission of it",
+                        checkout.display(),
+                        register::path()?.display()
+                    )));
+                }
+                println!(
+                    "stado quality check: {revision} was admitted by the delivery queue, which ran \
+                     every installation gate over it; {MAIN} may move to it"
+                );
+            }
+            // The delivery builder runs the whole installation set; a
+            // manifest that declares no compile-free gate leaves the push to it.
+            Pushed::Candidate => checked(&checkout, &revision, Selection::Formatting, true).await?,
+        }
     }
     Ok(())
+}
+
+async fn checked(
+    checkout: &Path,
+    revision: &str,
+    selection: Selection,
+    if_declared: bool,
+) -> Result<(), CmdError> {
+    println!(
+        "stado quality check: checking committed revision {revision} of {}",
+        checkout.display()
+    );
+    export_check(checkout, revision, Report::Stdout, selection, if_declared)
+        .await
+        .map_err(|error| error.within(format!("quality of committed revision {revision}")))
 }
 
 fn resolve(checkout: &Path, revision: &str) -> Result<String, CmdError> {
@@ -61,8 +103,10 @@ fn resolve(checkout: &Path, revision: &str) -> Result<String, CmdError> {
     )
 }
 
-fn pushed_revisions(checkout: &Path) -> Result<BTreeSet<String>, CmdError> {
-    let mut revisions = BTreeSet::new();
+/// Every pushed revision and what its push asks: a revision pushed to `main`
+/// anywhere in the push is judged as a push to `main`.
+fn pushed_revisions(checkout: &Path) -> Result<BTreeMap<String, Pushed>, CmdError> {
+    let mut revisions = BTreeMap::new();
     // Git's pre-push stdin grammar is local-ref local-oid remote-ref remote-oid.
     // A deletion has the null local object ID. These are protocol identities:
     // https://git-scm.com/docs/githooks#_pre_push
@@ -93,7 +137,60 @@ fn pushed_revisions(checkout: &Path) -> Result<BTreeSet<String>, CmdError> {
         }
         let revision = resolve(checkout, local_oid)?;
         println!("stado quality check: push {local_ref} -> {remote_ref} selects {revision}");
-        revisions.insert(revision);
+        let pushed = match remote_ref.strip_prefix("refs/heads/") == Some(MAIN) {
+            true => Pushed::Main,
+            false => Pushed::Candidate,
+        };
+        let asked = revisions.entry(revision).or_insert(pushed);
+        if pushed == Pushed::Main {
+            *asked = Pushed::Main;
+        }
     }
     Ok(revisions)
+}
+
+/// The revision an install of `checkout` builds: `origin/main` after a fetch
+/// when the tracked tree is clean and `HEAD` is contained in it, else `HEAD`.
+fn built_revision(checkout: &Path) -> Result<String, CmdError> {
+    let head = git(checkout, &["rev-parse", "HEAD"])?;
+    let dirty = !git(checkout, &["status", "--porcelain", "--untracked-files=no"])?.is_empty();
+    if dirty {
+        return Ok(head);
+    }
+    git(checkout, &["fetch", "--quiet", "origin", MAIN])?;
+    let main = git(checkout, &["rev-parse", &format!("origin/{MAIN}")])?;
+    let contained = crate::wait::status(
+        Command::new("git")
+            .args([
+                "merge-base",
+                "--is-ancestor",
+                "HEAD",
+                &format!("origin/{MAIN}"),
+            ])
+            .current_dir(checkout),
+    )
+    .map_err(|error| {
+        CmdError::click(format!("cannot run git merge-base: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?
+    .success();
+    Ok(if contained { main } else { head })
+}
+
+fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
+    let output = crate::wait::output(Command::new("git").args(args).current_dir(checkout))
+        .map_err(|error| {
+            CmdError::click(format!("cannot run git {}: {error}", args.join(" ")))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
+    if !output.status.success() {
+        return Err(CmdError::click(format!(
+            "git {} in {} failed: {}",
+            args.join(" "),
+            checkout.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }

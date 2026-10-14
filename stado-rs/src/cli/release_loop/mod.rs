@@ -36,6 +36,7 @@ use crate::cli::CmdError;
 
 use register::{Entry, State};
 pub use steps::Unplaced;
+pub(crate) use steps::{open_repairs, process, repository_of};
 
 /// Queue every commit of `planned` that carries a repair; build nothing.
 pub async fn queue(root: &Path, planned: &[Planned]) -> Result<Vec<Entry>, CmdError> {
