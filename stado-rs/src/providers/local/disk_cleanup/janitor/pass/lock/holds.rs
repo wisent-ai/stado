@@ -66,7 +66,17 @@ pub(crate) fn live(state_dir: &Path) -> (Vec<WorkloadHold>, Vec<String>) {
             return (holds, unreadable);
         }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                unreadable.push(format!(
+                    "cannot enumerate a hold in {}: {error}",
+                    dir.display()
+                ));
+                continue;
+            }
+        };
         let path = entry.path();
         let hold = match std::fs::read(&path) {
             Ok(body) => match serde_json::from_slice::<WorkloadHold>(&body) {
