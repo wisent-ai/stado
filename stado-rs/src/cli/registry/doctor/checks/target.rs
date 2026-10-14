@@ -187,24 +187,42 @@ pub(in crate::cli::registry::doctor) async fn target_findings(
             // it as `unit-not-active` or `missing-plist` called the intended
             // state a failure and pointed at a repair Stado refuses. What is
             // left to fix is the declaration itself.
-            if let Some(replacement) = retired_replacement(target, &declared) {
-                findings.push(
+            match retired_replacement(target, &declared) {
+                Ok(Some(replacement)) => {
+                    findings.push(
+                        Finding::new(
+                            "retired-unit-declared",
+                            &target.name,
+                            format!(
+                                "registry still declares service {} ({}): {}; nothing may run it, \
+                                 so forget the declaration with `stado service retire {} --host {}`",
+                                declared.name,
+                                declared.id,
+                                service_catalog::retired_sentence(&declared.id, &replacement),
+                                declared.id,
+                                target.name
+                            ),
+                        )
+                        .about(declared.id.as_str()),
+                    );
+                    continue;
+                }
+                Ok(None) => {}
+                // Whether another product's process does this unit's work
+                // is unknown, so the unit's own state below is read as for
+                // any unit and this says why that may be the wrong question.
+                Err(unread) => findings.push(
                     Finding::new(
-                        "retired-unit-declared",
+                        "retired-unit-unjudged",
                         &target.name,
                         format!(
-                            "registry still declares service {} ({}): {}; nothing may run it, so \
-                             forget the declaration with `stado service retire {} --host {}`",
-                            declared.name,
-                            declared.id,
-                            service_catalog::retired_sentence(&declared.id, &replacement),
-                            declared.id,
-                            target.name
+                            "whether service {} ({}) is retired into another product's process \
+                             could not be told: {unread}",
+                            declared.name, declared.id
                         ),
                     )
                     .about(declared.id.as_str()),
-                );
-                continue;
+                ),
             }
             match beacon.unit_state(&declared.id) {
                 None => findings.push(

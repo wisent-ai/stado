@@ -56,16 +56,23 @@ pub(super) fn declared_units(
 /// although it is not that product's unit: the product whose program the
 /// declaration runs, as the service reconciler judges it before it declines
 /// to repair it. The host Stado process's units are judged role by role on
-/// the host, so they are not reported here.
+/// the host, so they are not reported here. An owner that cannot be read is
+/// the error saying why: read as "no other owner", a retired unit was
+/// reported as missing or inactive, the state it is meant to be in.
 pub(super) fn retired_replacement(
     target: &ComputeTarget,
     declared: &DeclaredUnit,
-) -> Option<service_catalog::CatalogService> {
+) -> Result<Option<service_catalog::CatalogService>, String> {
     let services = service::declared_services(target);
-    let service = services
+    let Some(service) = services
         .iter()
-        .find(|service| service.unit_id() == declared.id)?;
-    let owner = service::declared_owner(target, service).ok()??;
-    let host = service_catalog::host_process().ok()?;
-    (owner.name != host.name).then_some(owner)
+        .find(|service| service.unit_id() == declared.id)
+    else {
+        return Ok(None);
+    };
+    let Some(owner) = service::declared_owner(target, service)? else {
+        return Ok(None);
+    };
+    let host = service_catalog::host_process()?;
+    Ok((owner.name != host.name).then_some(owner))
 }
