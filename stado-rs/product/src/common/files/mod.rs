@@ -29,7 +29,11 @@ pub fn available_space(path: &Path) -> Result<u64> {
     }
     // SAFETY: a successful statvfs initialized the output structure.
     let state = unsafe { state.assume_init() };
-    Ok(state.f_bavail.saturating_mul(state.f_frsize))
+    // fsblkcnt_t is u32 on macOS and u64 on Linux, and f_frsize is c_ulong:
+    // the conversions are real on one and the identity on the other.
+    #[allow(clippy::useless_conversion)]
+    let (blocks, size) = (u64::from(state.f_bavail), u64::from(state.f_frsize));
+    Ok(blocks.saturating_mul(size))
 }
 
 pub(crate) fn read_lock_record(path: &Path) -> Result<Option<record::Recorded>> {
