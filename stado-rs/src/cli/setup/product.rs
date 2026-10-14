@@ -155,28 +155,25 @@ fn command_line_words(action: &str, arguments: &ArgMatches, host: &str) -> Vec<S
     positionals
 }
 
-/// The product operations that compile into a build directory the disk
-/// janitor may reclaim: an installation, an update, and the canonical Cargo
-/// and Swift builds.
-const BUILDING_ACTIONS: &[&str] = &["install", "update", "cargo", "swift"];
-
 /// The janitor's cleanup lock held in shared mode for the whole of a building
 /// operation run here, as every job the agent runs holds it, or `None` for an
-/// operation that builds nothing.
+/// operation that builds nothing. Which operations build is the product
+/// crate's declaration (`stado_product::cli::compiles`): a language server
+/// that only answers an editor holds nothing for its life.
 ///
 /// A product installation compiles into a per-workspace build directory the
 /// janitor finds tagged as a regenerable cache. Without the hold a pass under
 /// disk pressure deleted that directory mid-build, and the install failed
 /// copying a binary that no longer existed. A janitor that holds the lock or
-/// has asked for its turn refuses the operation naming that, before anything
-/// is exported or compiled.
+/// has asked for its turn refuses the operation naming the holds it waits
+/// on, before anything is exported or compiled.
 fn janitor_hold(
     matches: &ArgMatches,
 ) -> Result<Option<crate::providers::local::disk_cleanup::WorkloadLock>, CmdError> {
     let Some(action) = matches.subcommand_name() else {
         return Ok(None);
     };
-    if !BUILDING_ACTIONS.contains(&action) {
+    if !stado_product::cli::compiles(matches) {
         return Ok(None);
     }
     let holder = format!("stado product {action}");
@@ -185,7 +182,8 @@ fn janitor_hold(
         Ok(None) => Err(CmdError::refused(format!(
             "{holder} builds into a directory the disk janitor reclaims, and the janitor is \
              cleaning this machine or has asked for its turn; nothing was exported or built. \
-             `stado space report <this host>` names the pass and who holds the cleanup lock"
+             It waits on: {}",
+            crate::providers::local::disk_cleanup::workload_holders()
         ))),
         Err(error) => Err(CmdError::click(format!(
             "{holder} cannot take the disk janitor's cleanup lock, so a cleanup pass could \

@@ -88,6 +88,37 @@ pub fn acquire_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, Janit
     acquire_workload_lock_in(&crate::config_file::expand_tilde("~"), holder)
 }
 
+/// Who keeps the janitor from its turn on this machine: each live shared
+/// hold as `<work> (pid N, held S s)`, then whatever could not be read, so a
+/// refused workload names the processes to look at instead of only pointing
+/// at another command.
+pub fn workload_holders() -> String {
+    let state_dir = match secure_home(&crate::config_file::expand_tilde("~"))
+        .and_then(|home| ensure_state_dir(&home))
+    {
+        Ok(state_dir) => state_dir,
+        Err(error) => return format!("the cleanup lock's hold records cannot be read: {error}"),
+    };
+    let now = crate::providers::local::disk_cleanup::janitor::state::report::build::epoch_now();
+    let (holds, unread) = holds::live(&state_dir);
+    let mut named: Vec<String> = holds
+        .iter()
+        .map(|hold| {
+            format!(
+                "{} (pid {}, held {}s)",
+                hold.holder,
+                hold.pid,
+                (now - hold.acquired_at).round()
+            )
+        })
+        .collect();
+    named.extend(unread);
+    match named.is_empty() {
+        true => "no workload records a hold; the janitor itself holds the lock or has asked for its turn".to_string(),
+        false => named.join("; "),
+    }
+}
+
 /// Release a handle returned by [`acquire_workload_lock`]
 /// (Python `release_workload_lock`: flock UN, then close; Drop provides the
 /// same explicit unlock backstop when a caller releases by scope).
