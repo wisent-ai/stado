@@ -6,7 +6,7 @@
 //! for `--json`.
 
 use clap::Subcommand;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::cli::CmdError;
 
@@ -254,10 +254,10 @@ async fn set(
     } else {
         println!(
             "{name} {} {value}: {} ({} records in {})",
-            report["type"].as_str().unwrap_or_default(),
-            report["change"].as_str().unwrap_or_default(),
-            report["records_after"].as_u64().unwrap_or_default(),
-            report["zone"].as_str().unwrap_or_default(),
+            shown(&report["type"]),
+            shown(&report["change"]),
+            shown(&report["records_after"]),
+            shown(&report["zone"]),
         );
     }
     Ok(())
@@ -276,11 +276,21 @@ async fn remove(
     } else {
         println!(
             "{name} {}: removed {} record(s); {} remain in {}",
-            report["type"].as_str().unwrap_or_default(),
-            report["removed"].as_u64().unwrap_or_default(),
-            report["records_after"].as_u64().unwrap_or_default(),
-            report["zone"].as_str().unwrap_or_default(),
+            shown(&report["type"]),
+            shown(&report["removed"]),
+            shown(&report["records_after"]),
+            shown(&report["zone"]),
         );
     }
     Ok(())
+}
+
+/// One report field as text; a field the report lacks reads "not reported",
+/// not as an empty word or a zero count.
+fn shown(field: &Value) -> String {
+    match field {
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        _ => "not reported".to_string(),
+    }
 }
