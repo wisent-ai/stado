@@ -200,20 +200,8 @@ pub(super) fn print_human(report: &ResourcesReport) {
         );
     }
 
-    let targets = report
-        .host_registry
-        .data
-        .get("targets")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or_default();
-    let coordinators = report
-        .host_registry
-        .data
-        .get("coordinators")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or_default();
+    let targets = registry_count(report, "targets");
+    let coordinators = registry_count(report, "coordinators");
     println!(
         "\nHosts: {targets}; coordinators: {coordinators}; billing: {}; storage objects: {}; visible VMs: {}; confirmed orphans: {}.",
         report.billing.state,
@@ -235,6 +223,18 @@ fn text(value: &Value, key: &str) -> String {
         Some(Value::String(text)) => text.clone(),
         Some(Value::Null) | None => String::new(),
         Some(other) => other.to_string(),
+    }
+}
+
+/// How many `key` entries the host registry source read, or why it cannot be
+/// said: a registry that was not read is not a fleet of no hosts.
+fn registry_count(report: &ResourcesReport, key: &str) -> String {
+    match report.host_registry.data.get(key).and_then(Value::as_array) {
+        Some(entries) => entries.len().to_string(),
+        None => match &report.host_registry.error {
+            Some(error) => format!("not read ({error})"),
+            None => format!("not read (the host registry source carries no {key} list)"),
+        },
     }
 }
 
