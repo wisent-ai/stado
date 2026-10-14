@@ -43,9 +43,14 @@ pub(crate) async fn fetch_canonical_registry() -> Result<Value, JanitorError> {
 
 /// The identity set of one raw registry target (Python `_identities`).
 fn raw_identities(target: &Map<String, Value>) -> Vec<String> {
-    let mut values = vec![targets::normalize_hostname(
-        target.get("name").and_then(Value::as_str).unwrap_or(""),
-    )];
+    // A target without a name has no name identity; read as "", it matched a
+    // host whose own name normalized to nothing.
+    let mut values: Vec<String> = target
+        .get("name")
+        .and_then(Value::as_str)
+        .map(targets::normalize_hostname)
+        .into_iter()
+        .collect();
     if let Some(hostnames) = target.get("hostnames").and_then(Value::as_array) {
         for value in hostnames {
             if let Some(value) = value.as_str() {
