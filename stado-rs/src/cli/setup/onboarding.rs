@@ -136,18 +136,29 @@ fn ordered_screens(definition: &Value) -> Result<Vec<&Value>, CmdError> {
         }
         ordered.push(screen);
 
-        let Some(next) = screen
+        // The lowest priority wins, the first of equals as before. A
+        // transition without one was ranked as priority 0 and could win over
+        // every declared one, so which screen came next was decided by a
+        // missing value.
+        let mut chosen: Option<(i64, &Value)> = None;
+        for transition in screen
             .get("transitions")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .min_by_key(|transition| {
-                transition
-                    .get("priority")
-                    .and_then(Value::as_i64)
-                    .unwrap_or_default()
-            })
-        else {
+        {
+            let Some(priority) = transition.get("priority").and_then(Value::as_i64) else {
+                return Err(CmdError::click(format!(
+                    "onboarding screen `{next_id}` has a transition without an integer priority: \
+                     {transition}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config));
+            };
+            if chosen.is_none_or(|(best, _)| priority < best) {
+                chosen = Some((priority, transition));
+            }
+        }
+        let Some((_, next)) = chosen else {
             break;
         };
         next_id = next
