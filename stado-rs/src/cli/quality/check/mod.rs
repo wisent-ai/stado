@@ -70,14 +70,17 @@ async fn export_check(
         &revision[..12.min(revision.len())]
     ));
     let scratch = run_area.join("source");
-    stado_product::export_committed_source(checkout, revision, &scratch)
+    let sha256 = stado_product::export_committed_source(checkout, revision, &scratch)
         .map_err(|error| CmdError::unreachable(format!("cannot export {revision}: {error:#}")))?;
     let inputs_area = run_area.join("inputs");
     let verdict = check_tree(
         &scratch,
         &inputs_area,
         checkout,
-        revision,
+        &Exported {
+            revision,
+            sha256: &sha256,
+        },
         report,
         selection,
         if_declared,
@@ -150,17 +153,27 @@ fn remove_abandoned(runs: &Path) {
     }
 }
 
+/// The committed revision a check runs over and the SHA-256 of the archive it
+/// was exported from: the release worker states both to a build
+/// (`WISENT_SOURCE_COMMIT`, `WISENT_SOURCE_SHA256`), and a product's build
+/// reads them together.
+struct Exported<'a> {
+    revision: &'a str,
+    sha256: &'a str,
+}
+
 /// The gates of the tree at `tree`, with its pinned inputs staged under
 /// `inputs_area` first; answers the product.
 async fn check_tree(
     tree: &Path,
     inputs_area: &Path,
     checkout: &Path,
-    revision: &str,
+    exported: &Exported<'_>,
     report: Report,
     selection: Selection,
     if_declared: bool,
 ) -> Result<Option<String>, CmdError> {
+    let revision = exported.revision;
     let declared = match declared_gates(Some(&tree.to_string_lossy()), selection)? {
         Declaration::Gates(declared) => *declared,
         Declaration::Undeclared(reason) if if_declared => {
@@ -184,20 +197,24 @@ async fn check_tree(
     };
     // The exported tree has no Git checkout, so a gate that binds its
     // evidence to the commit (a real journey's report) reads it from here,
-    // as the release worker states it to a build.
-    let contract: Vec<(&str, String)> = [("WISENT_SOURCE_COMMIT", revision.to_owned())]
-        .into_iter()
-        .chain(
-            contract
-                .iter()
-                .map(|(name, value)| (&**name, value.clone())),
-        )
-        .chain(
-            staged
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.clone())),
-        )
-        .collect();
+    // and a build reads the archive digest beside it, as the release worker
+    // states both to a build.
+    let contract: Vec<(&str, String)> = [
+        ("WISENT_SOURCE_COMMIT", revision.to_owned()),
+        ("WISENT_SOURCE_SHA256", exported.sha256.to_owned()),
+    ]
+    .into_iter()
+    .chain(
+        contract
+            .iter()
+            .map(|(name, value)| (&**name, value.clone())),
+    )
+    .chain(
+        staged
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.clone())),
+    )
+    .collect();
     for gate in &declared.gates {
         report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
         run(&gate.argv, tree, &contract, report).map_err(|error| {
