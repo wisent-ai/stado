@@ -87,8 +87,7 @@ pub async fn assign_jobs_at(
     // lines eat most of a tick's budget, and serial assignment writes add
     // seconds more.
     let mut schedulable: Vec<(i64, f64, Job)> = Vec::new();
-    // Insertion-ordered (model, task) -> count, matching the Python dict's
-    // stable top-5 ordering (ties keep first-seen order).
+    // Insertion-ordered (model, task) -> count; ties keep first-seen order.
     let mut skip_by_key: Vec<((String, String), usize)> = Vec::new();
     let mut to_write: Vec<Job> = Vec::new();
     for mut job in store.list_jobs("queue", 0).await? {
@@ -100,27 +99,20 @@ pub async fn assign_jobs_at(
         let rt = match estimate_runtime(&job.command, job.runtime_seconds_estimate, history) {
             Some(rt) => rt,
             None => {
-                if job.priority <= 0 {
-                    let mt = extract_model_task(&job.command);
-                    if let Some(entry) = skip_by_key.iter_mut().find(|(k, _)| *k == mt) {
-                        entry.1 += 1;
-                    } else {
-                        skip_by_key.push((mt, 1));
-                    }
-                    // No history means makespan cannot order this job, not
-                    // that an obsolete assignment may keep it pinned.
-                    // Clear the derived assignment so any eligible agent
-                    // can claim it without changing history-backed ordering.
-                    if !job.assigned_to.is_empty() {
-                        job.assigned_to = String::new();
-                        to_write.push(job);
-                    }
-                    continue;
+                let mt = extract_model_task(&job.command);
+                if let Some(entry) = skip_by_key.iter_mut().find(|(k, _)| *k == mt) {
+                    entry.1 += 1;
+                } else {
+                    skip_by_key.push((mt, 1));
                 }
-                // A priority job without history still enters scheduling.
-                // A conservative runtime estimate lets the priority sort
-                // place it without requiring an earlier successful run.
-                6.0 * 3600.0
+                // Priority does not supply a runtime. Clear any obsolete
+                // derived assignment so eligible workers can claim this job
+                // without inventing a finish time for the makespan model.
+                if !job.assigned_to.is_empty() {
+                    job.assigned_to = String::new();
+                    to_write.push(job);
+                }
+                continue;
             }
         };
         schedulable.push((-job.priority, -rt, job));

@@ -12,6 +12,8 @@ use crate::deployment::{line_with, Deployment};
 use serde_json::json;
 use std::fs;
 
+mod runtime;
+
 const MODEL: &str = "sizing-journey/measured-model";
 const MEASURED_PEAK_GB: i64 = 11;
 const TICK: &str = "tick scheduled=";

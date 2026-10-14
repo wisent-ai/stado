@@ -91,7 +91,10 @@ impl Deployment {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        self.report["service"] = json!({"arguments": args, "pid": child.id()});
+        self.report["service"] = json!({
+            "arguments": args, "pid": child.id(),
+            "stdout": "service.stdout", "stderr": "service.stderr",
+        });
         let (sender, lines) = mpsc::channel();
         let streams: [(Box<dyn std::io::Read + Send>, &str); 2] = [
             (Box::new(child.stdout.take().unwrap()), "service.stdout"),
@@ -142,14 +145,25 @@ impl Deployment {
         .unwrap();
     }
 
+    fn stop_child(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let status = match child.try_wait().expect("inspect isolated service exit") {
+                Some(status) => status,
+                None => {
+                    child.kill().expect("stop isolated service");
+                    child.wait().expect("retain isolated service exit")
+                }
+            };
+            self.report["service"]["exit_status"] = json!(status.code());
+            self.report["service"]["termination"] = json!(status.to_string());
+        }
+    }
+
     /// End the running `stado serve` as a crash ends it — its workloads, in
     /// their own process groups, are left as they are — and keep its logs
     /// beside the next run's under `before-restart.`.
     pub fn stop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            child.kill().unwrap();
-            child.wait().unwrap();
-        }
+        self.stop_child();
         for log in self.logs.drain(..) {
             let _ = log.join();
         }
@@ -162,16 +176,16 @@ impl Deployment {
         };
         keep("service.stdout");
         keep("service.stderr");
+        self.report["service"]["stdout"] = json!("before-restart.service.stdout");
+        self.report["service"]["stderr"] = json!("before-restart.service.stderr");
+        self.report["previous_service"] = self.report["service"].take();
         self.save();
     }
 }
 
 impl Drop for Deployment {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            child.kill().unwrap();
-            child.wait().unwrap();
-        }
+        self.stop_child();
         for log in self.logs.drain(..) {
             let _ = log.join();
         }
