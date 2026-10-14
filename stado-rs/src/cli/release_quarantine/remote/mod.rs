@@ -58,7 +58,17 @@ async fn read_remote(
                     .ok_or_else(|| unreadable("its byte count line has no value".to_string()))?;
                 bytes = host_channel::marker_number(field, "byte count").map_err(unreadable)?;
             }
-            Some("STADO_QUARANTINE_BASE64") => encoded = Some(fields.get(1).copied().unwrap_or("")),
+            Some("STADO_QUARANTINE_BASE64") => {
+                // An empty file prints an empty field; a line without the
+                // field at all is not an answer about the content.
+                encoded = Some(*fields.get(1).ok_or_else(|| {
+                    CmdError::click(format!(
+                        "{}: {path}: its content line has no value",
+                        host.name
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+                })?);
+            }
             _ => {}
         }
     }
