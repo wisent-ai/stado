@@ -57,26 +57,36 @@ pub(crate) async fn recorded_runs(
     blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
     let bodies = futures::stream::iter(blobs.into_iter().map(|blob| {
         let store = &store;
-        async move { load_run_value(store, &blob.name).await }
+        async move { (load_run_value(store, &blob.name).await, blob.name) }
     }))
     .buffered(crate::queue::migrations::bulk_workers())
     .collect::<Vec<_>>()
     .await;
     let mut recorded = std::collections::BTreeMap::<_, Vec<RecordedRun>>::new();
-    for body in bodies {
+    for (body, path) in bodies {
         let Some(run) = body? else { continue };
-        let field = |key: &str| run[key].as_str().unwrap_or_default().to_string();
-        let (product, version) = (field("product"), field("version"));
-        if product.is_empty() || version.is_empty() {
-            continue;
-        }
+        // A run object that names no product, version, id or commit is
+        // refused with its path, as one that is not JSON is: skipped, its
+        // version read as never run; read as an empty commit, the version
+        // read as taken by a commit nobody named.
+        let field = |key: &str| -> Result<String, CmdError> {
+            run[key].as_str().map(str::to_string).ok_or_else(|| {
+                CmdError::refused(format!(
+                    "release run object {path} names no {key}, so the release it records \
+                     cannot be told: {run}"
+                ))
+            })
+        };
+        let (product, version) = (field("product")?, field("version")?);
         recorded
             .entry((product, version))
             .or_default()
             .push(RecordedRun {
-                run_id: field("run_id"),
-                state: crate::release_pipeline::ReleaseRunState::named(&field("state")),
-                source_commit: field("source_commit"),
+                run_id: field("run_id")?,
+                state: run["state"]
+                    .as_str()
+                    .and_then(crate::release_pipeline::ReleaseRunState::named),
+                source_commit: field("source_commit")?,
             });
     }
     Ok(recorded)

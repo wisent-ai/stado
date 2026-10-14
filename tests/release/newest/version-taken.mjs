@@ -19,6 +19,8 @@
 // 3. A failed run of another commit holds the version as well: a submission
 //    attested that commit as the version's source.
 // 4. A published run of the later commit itself: it stands `published` again.
+// 5. A run record that names no source commit: the plan is refused naming the
+//    record, instead of reading the version as taken by a commit nobody named.
 //
 // Needs STADO_BIN, OKO_BIN and STADO_TEST_SUCCESS_EXIT.
 import assert from 'node:assert/strict';
@@ -149,6 +151,17 @@ try {
   assert.equal(republished.standing, 'published', `a run of this commit did not settle it: ${JSON.stringify(republished)}`);
   assert.equal(republished.commit, fourth);
   assert.equal(republished.run, ownRun);
+
+  const garbledId = randomUUID();
+  const garbled = join(store, 'runs', 'release-pipeline', garbledId, 'run.json');
+  mkdirSync(dirname(garbled), { recursive: true });
+  const garbledBody = { run_id: garbledId, product, version, state: 'failed' };
+  writeFileSync(garbled, JSON.stringify(garbledBody, null, '  '));
+  report.runs.push({ path: garbled, body: garbledBody });
+  const refused = run(stadoBinary, ['release', 'newest', '--root', workspace, '--product', product, '--plan', '--json'], workspace);
+  assert.notEqual(refused.status, successExit, `a run without a commit was read: ${refused.stdout}`);
+  assert.ok(refused.stderr.includes(`runs/release-pipeline/${garbledId}/run.json`), refused.stderr);
+  assert.ok(refused.stderr.includes('names no source_commit'), refused.stderr);
   report.verdict = 'passed';
 } finally {
   report.finished_at = new Date().toISOString();
