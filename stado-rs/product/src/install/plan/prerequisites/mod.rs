@@ -105,7 +105,7 @@ fn green(runtime: &Runtime, product: &str, surface: &str) -> Result<String> {
         .and_then(|runs| runs.iter().rev().find(|run| run["green"] == true))
         .and_then(|run| run["revision"].as_str())
         .map(str::to_owned)
-        .with_context(|| format!("{key} has no qualified last-green revision in {}; stado ci main history --product {product} names why", path.display()))
+        .with_context(|| format!("{key} has no qualified last-green revision in {}; `stado ci delivery` names each step's last checked and last green commit and why", path.display()))
 }
 
 pub fn requirements(
@@ -196,7 +196,7 @@ pub fn requirements(
         } else {
             green(runtime, &required.product, &required.surface).with_context(|| {
                 format!(
-                    "{} {} needs verb {}; {installed_text}; run `stado ci main` to qualify a provider revision",
+                    "{} {} needs verb {}; {installed_text}; a pass of the delivery routine (`stado ci run`, with the provider's step in `stado ci plan`) qualifies a provider revision",
                     required.product, required.surface, required.verb
                 )
             })?

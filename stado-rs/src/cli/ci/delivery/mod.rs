@@ -123,7 +123,7 @@ async fn pass(plan: &Plan, current: &mut State, checked: &Record) -> Result<Outc
         let Some(green) = checked.last_green(&key) else {
             said.push(format!(
                 "{key} has no commit of {MAIN} the main check found green; it and every later \
-                 step wait (stado ci main history --product {} names why)",
+                 step wait (`stado ci delivery` names {}'s last checked commit and why)",
                 step.product
             ));
             return Ok(Outcome::NoGreen(said));

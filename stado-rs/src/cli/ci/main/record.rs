@@ -1,7 +1,7 @@
 //! What the main check found, commit by commit: for every step of the
 //! delivery plan, each commit of its checkout's `main` it checked, oldest
 //! first, green or red with every refusal and the Oko defects recorded for
-//! it. One file, read by `stado ci main status|history` and Stado Desktop,
+//! it. One file, read by `stado ci status`, `stado ci delivery`, the product installer's verb prerequisites and Stado Desktop,
 //! rewritten whole after each commit is checked.
 
 use std::collections::BTreeMap;
