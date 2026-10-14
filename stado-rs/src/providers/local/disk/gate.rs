@@ -182,10 +182,11 @@ pub fn gate_and_maybe_evict(log_fn: &mut dyn FnMut(&str)) -> (bool, DiskGateDiag
 pub(crate) fn observe(home: &Path) -> GateObservation {
     let home_free_gb = free_gb(home);
     let home_write_probe_ok = write_probe_ok(home);
-    let staging_root = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
-    let staging_free_gb = free_gb(Path::new(&staging_root));
-    let largest_pending_gb =
-        largest_child_dir_gb(&Path::new(&staging_root).join("wisent_raw_pending"));
+    // The system's temporary directory: TMPDIR when it names one, else the
+    // platform's own, as every other temporary file of this process is put.
+    let staging_root = std::env::temp_dir();
+    let staging_free_gb = free_gb(&staging_root);
+    let largest_pending_gb = largest_child_dir_gb(&staging_root.join("wisent_raw_pending"));
     GateObservation {
         home_free_gb,
         home_write_probe_ok,
