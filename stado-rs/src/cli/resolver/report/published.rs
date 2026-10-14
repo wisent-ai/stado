@@ -70,6 +70,11 @@ pub(crate) struct PublishedState {
     pub(super) attempt: u32,
     /// When the next upstream read is due, on the declared refresh interval.
     pub(super) next_attempt_at: Option<String>,
+    /// The refresh interval this process runs on, as the registry declared
+    /// it: the measure every reader on this host holds a wait against
+    /// (`waiting::held_at`, `waiting::inflight`), published by the process
+    /// whose waits they are. Absent before the first registry read names it.
+    pub(super) refresh_seconds: Option<u64>,
     /// Why this host last refused to refresh its last-known-good registry
     /// copy ([`targets::LastGoodRefusal::kind`]), absent while the copy is
     /// being kept current.
@@ -170,6 +175,12 @@ impl PublishedState {
     pub(crate) fn bound(mut self, adapters: Vec<PublishedAdapter>) -> Self {
         self.listening = true;
         self.adapters = adapters;
+        self
+    }
+
+    /// The same state, written by a process that refreshes on `seconds`.
+    pub(crate) fn refreshing(mut self, seconds: u64) -> Self {
+        self.refresh_seconds = Some(seconds);
         self
     }
 }

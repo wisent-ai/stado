@@ -78,8 +78,11 @@ async fn open(destination: &str, reverse: Option<reverse::Ports>) -> Result<Sess
         "invalid SSH destination {destination}"
     );
     if host.contains(':') {
-        host.parse::<std::net::Ipv6Addr>()
-            .with_context(|| format!("invalid SSH IPv6 destination {destination}"))?;
+        host.parse::<std::net::Ipv6Addr>().with_context(|| {
+            format!(
+                "invalid SSH destination {destination}: {host} is no IPv6 address; a destination names a port as user@[host]:port"
+            )
+        })?;
     }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)

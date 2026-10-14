@@ -25,10 +25,12 @@ const AUTHORITY: &str = "other-host";
 const AUTHORITY_STADO: &str = "/usr/local/bin/stado";
 const ANSWER: &str = "served from the registry store";
 
-/// A listener that accepts and never speaks, keeping every connection open.
+/// A listener that accepts and never speaks, keeping every connection open;
+/// its SSH destination, written `[host]:port` as a registry path names a
+/// server off SSH's own port.
 fn silent_authority(deployment: &mut Deployment) -> String {
     let listener = TcpListener::bind(deployment.free_bind()).unwrap();
-    let address = listener.local_addr().unwrap().to_string();
+    let address = listener.local_addr().unwrap();
     std::thread::spawn(move || {
         let mut held = Vec::new();
         for accepted in listener.incoming() {
@@ -36,7 +38,7 @@ fn silent_authority(deployment: &mut Deployment) -> String {
             held.push(stream);
         }
     });
-    address
+    format!("[{}]:{}", address.ip(), address.port())
 }
 
 /// A service that answers every request with `ANSWER` and closes.

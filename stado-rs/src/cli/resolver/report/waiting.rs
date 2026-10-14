@@ -243,18 +243,14 @@ pub(crate) fn declared_bound_seconds() -> Option<u64> {
     declared_refresh_seconds()
 }
 
-/// The refresh interval of the resolver that published these waits: the
-/// target its published state names (not the target this machine's hostname
-/// looks up, which a caller reading as another host does not find), read in
-/// the last-known-good registry copy without the store a held adapter keeps
-/// a caller from. `None` when no resolver published its state or the copy
-/// declares no resolver for it: then nothing here can be held.
+/// The refresh interval of the resolver that published these waits, as that
+/// resolver publishes it beside its state: the process that holds the waits
+/// is the one that knows the interval it measures them by, whether or not
+/// this host's last-known-good registry copy has been written or can be
+/// read. `None` when no resolver published its state, or the one that did
+/// names no interval in it: then nothing here can be held.
 fn declared_refresh_seconds() -> Option<u64> {
-    let target = super::published::published_state()?.target;
-    let document = crate::cli::resolver::last_good_document().ok()?;
-    crate::service_resolution::resolver_config(&document, &target)
-        .ok()
-        .map(|config| config.refresh_seconds)
+    super::published::published_state()?.refresh_seconds
 }
 
 /// The wait `key` has stood since `accepted`, when the client's connection

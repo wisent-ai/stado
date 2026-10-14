@@ -90,9 +90,9 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
     let own_address = client.local_addr().unwrap().to_string();
     assert!(
         said.contains(&format!(
-            "request from {own_address} sent to {service_bind}"
+            "request (`GET /never-answered HTTP/1.1`) from {own_address} sent to {service_bind}"
         )),
-        "the resolver names the request it relayed and the client it came from: {said}"
+        "the resolver names the request it relayed, its request line and the client it came from: {said}"
     );
 
     // A second client on the same adapter, before the first has waited past
@@ -112,7 +112,7 @@ fn a_relayed_request_the_service_never_answers_is_published_reported_and_refused
     later.flush().unwrap();
     let later_address = later.local_addr().unwrap().to_string();
     deployment.await_line(&format!(
-        "request from {later_address} sent to {service_bind}"
+        "request (`GET /never-answered-either HTTP/1.1`) from {later_address} sent to {service_bind}"
     ));
 
     let waits = deployment.published_waits();

@@ -242,16 +242,24 @@ impl ResolverState {
         published
     }
 
-    /// Publish what this process holds right now.
+    /// Publish what this process holds right now, with the refresh interval
+    /// it runs on.
     pub(super) async fn publish_serving(&self) {
+        let refresh_seconds = match self.config.read() {
+            Ok(config) => config.refresh_seconds,
+            Err(poisoned) => poisoned.into_inner().refresh_seconds,
+        };
         let current = self.snapshot.read().await;
-        publish(&PublishedState::serving(
-            &self.local_target,
-            current.directory_generation,
-            &current.store_version,
-            &current.loaded_at_iso,
-            *self.last_good_refusal.read().await,
-            self.published_adapters(),
-        ));
+        publish(
+            &PublishedState::serving(
+                &self.local_target,
+                current.directory_generation,
+                &current.store_version,
+                &current.loaded_at_iso,
+                *self.last_good_refusal.read().await,
+                self.published_adapters(),
+            )
+            .refreshing(refresh_seconds),
+        );
     }
 }

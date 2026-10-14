@@ -242,7 +242,8 @@ async fn watch_registry(
                 // The listeners stay bound through a failed refresh.
                 publish(
                     &PublishedState::backing_off(&state.local_target, attempt, &error, refresh)
-                        .bound(state.published_adapters()),
+                        .bound(state.published_adapters())
+                        .refreshing(refresh_seconds),
                 );
             }
         }
