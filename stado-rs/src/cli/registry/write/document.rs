@@ -55,21 +55,31 @@ where
 ///
 /// A fault in a scoped section (`inference`, `release_unit_image_revisit`)
 /// that this write does not touch is returned rather than
-/// raised: see [`crate::targets::validate_registry_for_write`]. Reading the
-/// current document is best-effort, because a store that cannot be read is
-/// reported by the write itself a moment later, and failing here would just
-/// move the same error earlier with a less useful sentence.
+/// raised: see [`crate::targets::validate_registry_for_write`]. The current
+/// document is what tells a pre-existing fault from one this write brings,
+/// so a store that cannot be opened or read, or a current document that is
+/// not JSON, refuses the write with that cause: read as "no current
+/// document", it made every pre-existing fault this write's own.
 pub(in crate::cli::registry) async fn validate_for_write(
     document: &Value,
 ) -> Result<Option<String>, CmdError> {
-    let current = match RegistryStore::open().await {
-        Ok(store) => store
-            .read_versioned()
-            .await
-            .ok()
-            .flatten()
-            .and_then(|blob| serde_json::from_str::<Value>(&blob.content).ok()),
-        Err(_) => None,
+    let store = RegistryStore::open().await.map_err(|error| {
+        CmdError::from(error).within(
+            "the registry write is not validated: the store holding the current registry cannot be opened",
+        )
+    })?;
+    let current = match store.read_versioned().await.map_err(|error| {
+        CmdError::from(error).within(
+            "the registry write is not validated: the current registry cannot be read from its store",
+        )
+    })? {
+        Some(blob) => Some(serde_json::from_str::<Value>(&blob.content).map_err(|error| {
+            CmdError::click(format!(
+                "the registry write is not validated: the current registry in its store is not JSON: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
+        })?),
+        None => None,
     };
     crate::targets::validate_registry_for_write(document, current.as_ref()).map_err(|exc| {
         CmdError::click(exc.to_string()).stating(crate::primitives::failure::FailureCode::Refused)
