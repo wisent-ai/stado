@@ -14,9 +14,13 @@ const MASK_MARKS: [char; 2] = ['·', '…'];
 
 /// The field name a named key is stored under: lowercase, runs of other
 /// characters as one `_`, or the key id's first characters when nothing is left.
-fn key_slug(key: &Value) -> String {
-    let id = key["id"].as_str().unwrap_or_default();
-    let name = key["name"].as_str().unwrap_or(id).to_lowercase();
+/// A key without a name is named by its id.
+fn key_slug(id: &str, name: Option<&str>) -> String {
+    let name = match name {
+        Some(name) => name,
+        None => id,
+    }
+    .to_lowercase();
     let mut slug = String::new();
     for character in name.chars() {
         if character.is_ascii_lowercase() || character.is_ascii_digit() {
@@ -72,7 +76,19 @@ async fn key_fields(reference: &str, token: &str) -> Result<Map<String, Value>, 
                 }
             }
             Some(kind @ ("publishable" | "secret")) => {
-                fields.insert(format!("{kind}_key_{}", key_slug(key)), json!(value));
+                // A key without an id was stored under `<kind>_key_`, where
+                // every other such key overwrote it; it is refused instead.
+                let Some(id) = key["id"].as_str() else {
+                    return Err(CmdError::click(format!(
+                        "project {reference}: {kind} key {} came back without its id, so it has no field to be stored under",
+                        key["name"]
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown));
+                };
+                fields.insert(
+                    format!("{kind}_key_{}", key_slug(id, key["name"].as_str())),
+                    json!(value),
+                );
             }
             _ => {}
         }
