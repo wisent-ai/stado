@@ -8,6 +8,15 @@ use super::directory::{directory, parsed_registry, service, target};
 use crate::cli::{placement, registry, CmdError};
 use crate::deploy::{host_access::resolver_key, host_capability};
 
+/// A text field of `report` as the report gives it, or which field the
+/// report left out: an empty word stood in the sentence where it was missing.
+fn reported(report: &serde_json::Value, field: &str) -> String {
+    match report[field].as_str() {
+        Some(value) => value.to_string(),
+        None => format!("(no {field} reported)"),
+    }
+}
+
 pub async fn capability(name: &str, as_json: bool) -> Result<(), CmdError> {
     let document = registry::fetch_document().await?;
     let directory = directory(&document)?;
@@ -77,11 +86,11 @@ pub async fn key(target: &str, as_json: bool) -> Result<(), CmdError> {
     } else {
         println!(
             "{}: resolver key {} ({}), authorized_keys on {} {}",
-            report["target"].as_str().unwrap_or_default(),
-            report["key_state"].as_str().unwrap_or_default(),
-            report["key_type"].as_str().unwrap_or_default(),
-            report["authority"].as_str().unwrap_or_default(),
-            report["authorized_keys"].as_str().unwrap_or_default(),
+            reported(&report, "target"),
+            reported(&report, "key_state"),
+            reported(&report, "key_type"),
+            reported(&report, "authority"),
+            reported(&report, "authorized_keys"),
         );
     }
     Ok(())
@@ -128,10 +137,13 @@ pub async fn publish_placement(mobile: bool, as_json: bool) -> Result<(), CmdErr
     } else {
         for report in &published {
             println!(
-                "{}: published {} actions at registry generation {}",
-                report["target"].as_str().unwrap_or_default(),
-                report["actions"].as_array().map_or(0, Vec::len),
-                report["registry_generation"].as_str().unwrap_or_default(),
+                "{}: published {} at registry generation {}",
+                reported(report, "target"),
+                match report["actions"].as_array() {
+                    Some(actions) => format!("{} actions", actions.len()),
+                    None => "(no actions list reported)".to_string(),
+                },
+                reported(report, "registry_generation"),
             );
         }
     }
