@@ -11,13 +11,23 @@ use crate::schedules::{
 
 use crate::cli::{CmdError, ScheduleCreateArgs};
 
-/// `$USER` or `$LOGNAME` (Python `os.environ.get("USER", "") or ...`).
-fn created_by() -> String {
-    let user = std::env::var("USER").unwrap_or_default();
-    if !user.is_empty() {
-        return user;
+/// `$USER`, else `$LOGNAME`: who declares the schedule. Neither naming
+/// anyone is refused, where the schedule was stored created by nobody.
+fn created_by() -> Result<String, CmdError> {
+    for variable in ["USER", "LOGNAME"] {
+        match std::env::var(variable) {
+            Ok(name) if !name.trim().is_empty() => return Ok(name),
+            Ok(_) | Err(std::env::VarError::NotPresent) => {}
+            Err(error) => {
+                return Err(CmdError::usage(format!(
+                    "{variable} cannot be read: {error}"
+                )))
+            }
+        }
     }
-    std::env::var("LOGNAME").unwrap_or_default()
+    Err(CmdError::usage(
+        "neither USER nor LOGNAME names who creates this schedule; set USER to the account declaring it",
+    ))
 }
 
 /// `schedule create COMMAND --cron EXPR [...]`: create a recurring schedule
@@ -82,7 +92,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.runtime_seconds_estimate = args.runtime_seconds_estimate;
     sched.secret_env = secret_env;
     sched.overlap_policy = args.overlap_policy;
-    sched.created_by = created_by();
+    sched.created_by = created_by()?;
     sched.next_due_at = isoformat_utc(next_due);
     let store = JobStorage::new().await?;
     if args.id.is_some() {
