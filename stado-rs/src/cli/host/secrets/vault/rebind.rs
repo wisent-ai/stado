@@ -31,13 +31,21 @@ fn capability(entry: &Value) -> Option<String> {
 
 /// Whether `token_file` on the owner opens the grant's first capability.
 async fn verifies(host: &str, first: &Value, token_file: &str) -> Result<(bool, Value), CmdError> {
+    // A capability without its item or action cannot be asked about: asked
+    // with empty words, the vault's "not allowed" read as a stale bearer.
+    let (Some(item), Some(action)) = (first["item"].as_str(), first["action"].as_str()) else {
+        return Err(CmdError::click(format!(
+            "{host}: the stado grant's first capability carries no item or action: {first}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    };
     let mut probe = vec![
         "grant".to_string(),
         "verify".into(),
         CONSUMER.into(),
-        first["item"].as_str().unwrap_or_default().into(),
+        item.into(),
         "--action".into(),
-        first["action"].as_str().unwrap_or_default().into(),
+        action.into(),
         "--token-file".into(),
         token_file.into(),
     ];
