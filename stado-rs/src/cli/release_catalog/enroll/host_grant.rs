@@ -21,14 +21,29 @@ const FIELDS_KEY: &str = "agent.skarbiec.secret_fields";
 const RESOLVED_ROLES: &str = "/resolved/agent_skarbiec_roles";
 const RESOLVED_FIELDS: &str = "/resolved/agent_skarbiec_secret_fields";
 
-fn strings(document: &Value, pointer: &str) -> BTreeSet<String> {
+/// The host's own list at `pointer` of its `stado config show`. A report
+/// without it, or with an entry that is not text, is refused: read as an
+/// empty list, the write that follows replaced every role and field the host
+/// already declared with only the ones being added.
+fn strings(host: &str, document: &Value, pointer: &str) -> Result<BTreeSet<String>, CmdError> {
+    let refused = |what: String| {
+        CmdError::click(format!(
+            "{host}: stado config show {what}, so its own list cannot be extended without \
+             replacing it; nothing was written"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
     document
         .pointer(pointer)
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
+        .ok_or_else(|| refused(format!("carries no list at {pointer}")))?
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| refused(format!("lists {entry} at {pointer}, which is not text")))
+        })
         .collect()
 }
 
@@ -50,8 +65,8 @@ pub(super) async fn declare_on_host(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
-    let mut roles = strings(&document, RESOLVED_ROLES);
-    let mut fields = strings(&document, RESOLVED_FIELDS);
+    let mut roles = strings(host, &document, RESOLVED_ROLES)?;
+    let mut fields = strings(host, &document, RESOLVED_FIELDS)?;
     let (before_roles, before_fields) = (roles.len(), fields.len());
     for (role, field) in missing {
         roles.insert(role.clone());
