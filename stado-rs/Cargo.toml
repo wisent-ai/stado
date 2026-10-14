@@ -272,6 +272,10 @@ name = "worker-start-held-store"
 path = "../tests/worker_start/held_store.rs"
 
 [[test]]
+name = "worker-start-release-marker"
+path = "../tests/worker_start/release_marker.rs"
+
+[[test]]
 name = "vault-authority-host-unreadable"
 path = "../tests/vault_authority/host_unreadable.rs"
 
