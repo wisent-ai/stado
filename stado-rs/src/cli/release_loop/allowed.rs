@@ -1,0 +1,35 @@
+//! Whether the operator's rulings let an action run now, asked of Oko's one
+//! authority (`oko rulings may`). Stado keeps no copy of any ruling: a
+//! forbidden action is refused with the ruling Oko quotes, and allowed once a
+//! later ruling of the operator lifts it.
+
+use super::steps::process::run;
+use crate::cli::CmdError;
+
+/// Oko's program; Stado reads rulings through its CLI only.
+const OKO: &str = "oko";
+
+/// The action class a ruling constrains that compiling a product is.
+pub const BUILD: &str = "build";
+/// The action class a ruling constrains that publishing a release is.
+pub const RELEASE: &str = "release";
+
+/// Ok when `action` may run now for `product` (every product when none is
+/// named); otherwise the refusal Oko gives, which names the ruling, its
+/// words and what it waits on.
+pub async fn require(action: &str, product: Option<&str>) -> Result<(), CmdError> {
+    let mut words = vec!["rulings", "may", action];
+    if let Some(product) = product {
+        words.extend(["--product", product]);
+    }
+    let scope = match product {
+        Some(product) => format!("{action} of {product}"),
+        None => action.to_string(),
+    };
+    run(OKO, &words, None).await.map(|_| ()).map_err(|refusal| {
+        CmdError::refused(format!(
+            "{scope} is not run: the operator's rulings do not allow it now ({refusal}); \
+             nothing was exported or built"
+        ))
+    })
+}

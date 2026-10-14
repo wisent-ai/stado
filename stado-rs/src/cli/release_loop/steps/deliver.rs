@@ -243,6 +243,16 @@ async fn deliver(
         }
         Mode::Deliver(channel) => channel,
     };
+    // A release runs only while the operator's rulings allow releasing this
+    // product, as Oko answers it; refused, the step fails quoting the ruling.
+    if let Err(error) = crate::cli::release_loop::allowed::require(
+        crate::cli::release_loop::allowed::RELEASE,
+        Some(product),
+    )
+    .await
+    {
+        return failed(current, error).await.map(Some);
+    }
     let mut released_commit = commit.clone();
     if bump {
         at(&mut current, Step::Version)?;

@@ -303,6 +303,10 @@ name = "delivery-repeated-stops"
 path = "../tests/delivery/repeated_stops.rs"
 
 [[test]]
+name = "rulings-build-refused"
+path = "../tests/rulings/build_refused.rs"
+
+[[test]]
 name = "fleet-flush-unlistable-staging"
 path = "../tests/fleet_flush/unlistable_staging.rs"
 

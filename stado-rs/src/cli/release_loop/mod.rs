@@ -23,6 +23,7 @@
 //! keeps its exact error on the commit and is noted on every carried defect,
 //! and the commit is not taken again; the product's next commit is.
 
+pub mod allowed;
 pub mod push;
 pub mod register;
 mod steps;

@@ -211,6 +211,20 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
         print!("{output}");
         return Ok(());
     }
+    // An operation that compiles runs only while the operator's rulings allow
+    // building this product, as Oko answers it; nothing here keeps the rule.
+    if stado_product::cli::compiles(&command.matches) {
+        let product = command
+            .matches
+            .subcommand()
+            .and_then(|(_, arguments)| arguments.try_get_one::<String>("positional").ok().flatten())
+            .map(String::as_str);
+        crate::cli::release_loop::allowed::require(
+            crate::cli::release_loop::allowed::BUILD,
+            product,
+        )
+        .await?;
+    }
     // Released when this function returns, after the operation has answered.
     let _hold = janitor_hold(&command.matches)?;
     // Product operations run compilers, codesign and `stado` subcommands and
