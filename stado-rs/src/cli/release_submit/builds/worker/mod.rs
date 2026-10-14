@@ -121,7 +121,22 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // A Node source on a builder with no Node would run its gates and stop
     // at the first `npx`; refuse it here, naming the missing program.
     require_node_toolchain(&source, &environment, &request.platform)?;
-    let job_id = std::env::var("WC_JOB_ID").unwrap_or_default();
+    // The receipt names the Stado job that built; a worker without one is
+    // refused, where the receipt was written for a job named "" that no
+    // release could trace back to its run.
+    let job_id = match std::env::var("WC_JOB_ID") {
+        Ok(job) if !job.trim().is_empty() => job,
+        Ok(_) | Err(std::env::VarError::NotPresent) => {
+            return Err(CmdError::click(
+                "WC_JOB_ID is not set: a release build runs as a Stado job and its receipt names that job",
+            )
+            .stating(crate::primitives::failure::FailureCode::Config))
+        }
+        Err(error) => {
+            return Err(CmdError::click(format!("WC_JOB_ID cannot be read: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config))
+        }
+    };
     let mut quality = Vec::new();
     for gate in &recipe.quality {
         let step = execute(&gate.name, &gate.argv, &source, &environment)?;
