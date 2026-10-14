@@ -72,11 +72,22 @@ pub struct Run {
 pub fn fresh_record(parent: &Path, name: &str) -> Result<Run> {
     for run in earlier(parent)? {
         if !in_use(&run) && succeeded(&run) {
-            fs::remove_dir_all(&run)
-                .with_context(|| format!("removing the earlier record {}", run.display()))?;
+            remove_superseded(&run, "record")?;
         }
     }
     create(parent, name)
+}
+
+/// Remove a superseded run. A run another process removed first, wholly or
+/// part way through, is the state this removal was for: every Stado that
+/// writes under one parent prunes it, so two of them reach the same run.
+fn remove_superseded(run: &Path, what: &str) -> Result<()> {
+    match fs::remove_dir_all(run) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error).with_context(|| format!("removing the earlier {what} {}", run.display()))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// A build run, after removing every earlier build but the previous attempt,
@@ -92,8 +103,7 @@ pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
         if in_use(&stale) || kept(&stale) {
             continue;
         }
-        fs::remove_dir_all(&stale)
-            .with_context(|| format!("removing the earlier run {}", stale.display()))?;
+        remove_superseded(&stale, "run")?;
     }
     if let Some(newest) = previous {
         if !in_use(&newest) && !kept(&newest) {
