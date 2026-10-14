@@ -103,11 +103,22 @@ fn text(entry: &Value, field: &str) -> String {
 fn drift_of(report: &Value) -> Result<(Vec<Standing>, Vec<String>), String> {
     let mut drift = Vec::new();
     let mut undeclared = Vec::new();
-    let Some(binaries) = report.get("managed_binaries").and_then(Value::as_array) else {
-        return Ok((drift, undeclared));
-    };
+    // A report without its binary list says nothing about drift; read as no
+    // binaries, the host was reported settled. A binary without its name
+    // names nothing to deliver.
+    let binaries = report
+        .get("managed_binaries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("host inventory reported no managed_binaries list: {report}"))?;
     for entry in binaries {
-        let name = text(entry, "name");
+        let name = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                format!("host inventory reported a managed binary without its name: {entry}")
+            })?;
         let raw = entry
             .get("version_verdict")
             .ok_or_else(|| format!("host inventory reported {name} without a version_verdict"))?;
