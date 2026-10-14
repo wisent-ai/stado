@@ -72,12 +72,13 @@ struct ProductCargoCache: Decodable, Sendable {
     }
 }
 
-struct ProductDependencyResult: Decodable, Sendable {
+struct ProductDependencyResult: Decodable, Identifiable, Sendable {
     let product: String
     let surface: String
     let installDecision: ProductInstallDecision?
     let reason: String?
     let alternative: String?
+    var id: String { "\(product)/\(surface)" }
     enum CodingKeys: String, CodingKey {
         case product, surface, reason, alternative
         case installDecision = "install_decision"

@@ -154,7 +154,7 @@ struct ProductsView: View {
                         .textSelection(.enabled)
                 }
                 if let dependencies = state?.dependencies {
-                    ForEach(dependencies, id: \.product) { dependency in
+                    ForEach(dependencies) { dependency in
                         if let decision = dependency.installDecision {
                             Text("\(dependency.product)/\(dependency.surface): \(decision.action) — \(decision.reason)")
                                 .textSelection(.enabled)

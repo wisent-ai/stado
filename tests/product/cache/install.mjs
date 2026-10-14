@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -64,8 +64,19 @@ function evidence(state, name) {
   for (const path of receipt.installed_paths) {
     assert.ok(path.startsWith(`${home}/`), `Install escaped its isolated home: ${path}`);
     fingerprints[path] = digest(readFileSync(path));
+    const recorded = receipt.placement_fingerprints[path];
+    if (recorded.sha256) assert.equal(fingerprints[path], recorded.sha256);
   }
-  return { steps, fingerprints, receipt };
+  const dependencies = join(state.cargo_cache.target, 'release/deps');
+  const artifacts = Object.fromEntries(readdirSync(dependencies)
+    .filter(name => name.endsWith('.rlib') || name.endsWith('.rmeta'))
+    .map(name => {
+      const path = join(dependencies, name);
+      return [name, { sha256: digest(readFileSync(path)), modified: statSync(path).mtimeMs }];
+    }));
+  assert.ok(Object.keys(artifacts).some(name => name.endsWith('.rlib')),
+    'The real Cargo build must produce dependency artifacts for the reuse check');
+  return { steps, fingerprints, receipt, artifacts };
 }
 let failure;
 try {
@@ -96,7 +107,8 @@ try {
   assert.equal(second.cargo_cache.reused, true);
   assert.equal(second.cargo_cache.target, first.cargo_cache.target);
   assert.equal(second.cargo_cache.lockfile_sha256, first.cargo_cache.lockfile_sha256);
-  assert.deepEqual(after.fingerprints, before.fingerprints, 'A repeated installation must place the same bytes');
+  assert.deepEqual(after.artifacts, before.artifacts,
+    'A repeated installation must not rewrite compiled dependency artifacts');
   const compiled = after.steps.flatMap(step => [...`${step.stdout}\n${step.stderr}`.matchAll(/^\s*Compiling\s+(.+)$/gm)]
     .map(([, crate]) => crate));
   report.second_compiled_crates = compiled;
