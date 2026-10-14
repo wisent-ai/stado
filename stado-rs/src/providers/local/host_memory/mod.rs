@@ -36,5 +36,8 @@ pub fn publication_fields(reading: &MemoryReading) -> Map<String, Value> {
     if let Some(pct) = reading.swap_used_pct() {
         fields.insert("memory_swap_used_pct".into(), Value::from(pct));
     }
+    if let Some(cause) = &reading.unread {
+        fields.insert("memory_unread".into(), Value::from(cause.clone()));
+    }
     fields
 }

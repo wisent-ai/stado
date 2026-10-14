@@ -39,6 +39,10 @@ pub struct MemoryReading {
     /// macOS only: the page size those page counts are in, so a reader can
     /// turn them into bytes without guessing it.
     pub page_size_bytes: Option<i64>,
+    /// Why the kernel's figures were not read at all, when they were not: a
+    /// reading with every field absent and no cause looked like a kernel that
+    /// answered nothing rather than a source this process could not open.
+    pub unread: Option<String>,
 }
 
 impl MemoryReading {
@@ -158,8 +162,12 @@ pub fn parse_suffixed_size(token: &str) -> Option<i64> {
 /// `/proc/meminfo` states every figure in kibibytes.
 fn read_linux() -> MemoryReading {
     let mut reading = MemoryReading::default();
-    let Ok(text) = std::fs::read_to_string("/proc/meminfo") else {
-        return reading;
+    let text = match std::fs::read_to_string("/proc/meminfo") {
+        Ok(text) => text,
+        Err(error) => {
+            reading.unread = Some(format!("/proc/meminfo cannot be read: {error}"));
+            return reading;
+        }
     };
     reading.available_bytes = meminfo_bytes(&text, "MemAvailable");
     reading.total_bytes = meminfo_bytes(&text, "MemTotal");
