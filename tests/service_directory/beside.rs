@@ -228,11 +228,14 @@ fn a_service_declared_beside_its_placement_is_answered_on_this_host_and_said_as_
     );
     assert_eq!(refused["details"]["service"], SERVICE, "{refused}");
     assert_eq!(refused["details"]["consumer"], CONSUMER, "{refused}");
-    assert_eq!(refused["details"]["machine"], hostname(), "{refused}");
+    let machine = nix::unistd::gethostname().unwrap();
+    assert_eq!(
+        refused["details"]["machine"],
+        machine.to_string_lossy().as_ref()
+    );
     std::fs::write(&registry, original).unwrap();
     deployment.cli(&["registry", "import", &registry.to_string_lossy()]);
     assert_eq!(deployment.connect()["url"], placed["url"]);
-
     let refused = deployment.run(&[
         "service",
         "directory",
