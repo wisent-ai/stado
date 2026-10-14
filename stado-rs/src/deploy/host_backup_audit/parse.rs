@@ -17,7 +17,7 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
         let mut fields = line.split('\t');
         match fields.next() {
             Some("STADO_BACKUP_AUDIT") => {
-                let (Some(class), Some(size), Some(path)) =
+                let (Some(class), Some(size), Some(_)) =
                     (fields.next(), fields.next(), fields.next())
                 else {
                     audit.unavailable = Some(format!(
@@ -43,10 +43,6 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                 let totals = audit.classes.entry(class.to_string()).or_default();
                 totals.objects += 1;
                 totals.bytes += bytes;
-                let examples = audit.examples.entry(class.to_string()).or_default();
-                examples.push((bytes, path.to_string()));
-                examples.sort_by_key(|(bytes, _)| std::cmp::Reverse(*bytes));
-                examples.truncate(5);
             }
             Some("STADO_BACKUP_OBJECT") => {
                 let (

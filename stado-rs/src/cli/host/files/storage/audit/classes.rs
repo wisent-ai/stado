@@ -18,9 +18,6 @@ pub(super) fn print_classes(
             totals.objects,
             gib(totals.bytes)
         );
-        for (bytes, path) in audit.examples.get(class).into_iter().flatten() {
-            println!("          {:>8.2} GiB  {path}", gib(*bytes));
-        }
     }
     println!(
         "reclaim:  {:.2} GiB proven present and identical in the primary; {:.2} GiB is data and stays",

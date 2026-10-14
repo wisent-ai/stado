@@ -33,9 +33,6 @@ pub struct BackupAudit {
     pub host: String,
     /// Per-class totals, keyed by [`TWIN`], [`DIFFERS`], [`ABSENT`].
     pub classes: BTreeMap<String, ClassTotals>,
-    /// The largest few of each class, for a report that names things rather
-    /// than only counting them.
-    pub examples: BTreeMap<String, Vec<(u64, String)>>,
     /// Exact primary/backup identities requested by the operator.
     pub objects: Vec<ObjectComparison>,
     /// Backup-visible paths and size metadata from explicitly selected
