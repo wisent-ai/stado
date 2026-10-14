@@ -18,6 +18,15 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
               host's own findings without treating an unread image as agreement",
     },
     ApprovedCommand {
+        argv: &[STADO_CLI, "waits", "--json"],
+        why: "lists what every Stado process on the host is waiting on right now, from the \
+              register each wait keeps there: a host whose command answers nothing (the \
+              registry authority's snapshot, a lock, its own object API) is diagnosed by \
+              the wait it stands in, which only that host's register holds. The fixed \
+              verb reads and prunes only that register; it opens, closes and signals \
+              nothing",
+    },
+    ApprovedCommand {
         argv: &[
             STADO_CLI, "release", "active", "binary", "skarbiec", "--json",
         ],
