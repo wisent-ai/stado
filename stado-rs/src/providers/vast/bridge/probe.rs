@@ -19,19 +19,23 @@ pub struct BusyState {
 /// Python `_is_stado_busy`: busy = queue not empty OR any running/ blob has
 /// instance_ref referencing this hostname. (The earlier impl read
 /// claimed_this_loop — a per-iter counter, ~always 0 — and missed in-flight
-/// work.) Corrupt or vanished blobs are skipped, like Python's blanket
-/// `except (NotFound, Exception): continue`.
+/// work.) A blob that vanished between the listing and the read is skipped;
+/// one that cannot be read or does not parse is the error, because skipped
+/// it counted as work running nowhere and could call a busy host idle, which
+/// hands it to the marketplace.
 pub async fn is_stado_busy(store: &JobStorage, hostname: &str) -> Result<BusyState, StorageError> {
     // Python list_blobs(prefix="queue/", max_results=2) — capped at 2.
     let queued = store.list_paths("queue/", 2).await?.len();
     let mut running_here = 0;
     for path in store.list_paths("running/", 0).await? {
-        let Ok(Some(text)) = store.download_text(&path).await else {
+        let Some(text) = store.download_text(&path).await? else {
             continue;
         };
-        let Ok(doc) = serde_json::from_str::<Value>(&text) else {
-            continue;
-        };
+        let doc = serde_json::from_str::<Value>(&text).map_err(|error| {
+            StorageError::Other(format!(
+                "{path} is not a job record, so whether it runs on {hostname} cannot be read: {error}"
+            ))
+        })?;
         let instance_ref = doc
             .get("instance_ref")
             .and_then(Value::as_str)
