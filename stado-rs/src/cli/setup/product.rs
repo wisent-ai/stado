@@ -69,12 +69,6 @@ pub fn build() -> stado_product::Build {
     }
 }
 
-/// The stack a product operation runs on. An installation walks the
-/// product's dependency graph by recursion, one `perform` frame per
-/// product, and those frames carry the whole plan; on the 2 MiB a tokio
-/// blocking thread offers, a debug build overflowed on the second level.
-const PRODUCT_OPERATION_STACK: usize = 256 << 20;
-
 /// The host and the `stado` arguments of a service-surface operation on
 /// another registry host, or `None` when it runs here.
 ///
@@ -92,8 +86,8 @@ async fn remote_service_operation(
     let Some((action, arguments)) = matches.subcommand() else {
         return Ok(None);
     };
-    let surface = arguments.try_get_one::<String>("surface").ok().flatten();
-    let host = arguments.try_get_one::<String>("host").ok().flatten();
+    let surface = given(arguments, "surface")?;
+    let host = given(arguments, "host")?;
     let (Some(surface), Some(host)) = (surface, host) else {
         return Ok(None);
     };
@@ -114,6 +108,19 @@ async fn remote_service_operation(
     let mut words = vec!["product".to_string(), action.to_string()];
     words.extend(command_line_words(action, arguments, &target.name));
     Ok(Some((target.name.clone(), words)))
+}
+
+/// The text `id` was given in `arguments`; `None` when it was not given or
+/// this verb declares no such argument. A value of another type is the
+/// product crate's definition disagreeing with this reader, said as such.
+fn given<'a>(arguments: &'a ArgMatches, id: &str) -> Result<Option<&'a String>, CmdError> {
+    match arguments.try_get_one::<String>(id) {
+        Ok(value) => Ok(value),
+        Err(clap::parser::MatchesError::UnknownArgument { .. }) => Ok(None),
+        Err(error) => Err(CmdError::click(format!(
+            "the product command's argument --{id} cannot be read as text: {error}"
+        ))),
+    }
 }
 
 /// The arguments the operator gave `action`, rebuilt from its own definition:
@@ -177,7 +184,7 @@ fn janitor_hold(
     if !stado_product::cli::compiles(matches) {
         return Ok(None);
     }
-    let operation = arguments.try_get_one::<String>("operation").ok().flatten();
+    let operation = given(arguments, "operation")?;
     let mut holder = match operation {
         Some(operation) => format!("stado product {action} {operation}"),
         None => format!("stado product {action}"),
@@ -211,44 +218,30 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
         print!("{output}");
         return Ok(());
     }
+    // Taken first and released when this function returns, after the
+    // operation has answered: a build the janitor's cleanup holds is refused
+    // for that reason before Oko is asked anything about it.
+    let _hold = janitor_hold(&command.matches)?;
     // An operation that compiles runs only while the operator's rulings allow
     // building this product, as Oko answers it; nothing here keeps the rule.
     if stado_product::cli::compiles(&command.matches) {
-        let product = command
-            .matches
-            .subcommand()
-            .and_then(|(_, arguments)| arguments.try_get_one::<String>("positional").ok().flatten())
-            .map(String::as_str);
+        let product = match command.matches.subcommand() {
+            Some((_, arguments)) => given(arguments, "positional")?.map(String::as_str),
+            None => None,
+        };
         crate::cli::release_loop::allowed::require(
             crate::cli::release_loop::allowed::BUILD,
             product,
         )
         .await?;
     }
-    // Released when this function returns, after the operation has answered.
-    let _hold = janitor_hold(&command.matches)?;
     // Product operations run compilers, codesign and `stado` subcommands and
-    // wait for them; they are blocking work, kept off the async workers, on a
-    // thread of their own with the stack the dependency walk needs.
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    std::thread::Builder::new()
-        .name("product-operation".into())
-        .stack_size(PRODUCT_OPERATION_STACK)
-        .spawn(move || {
-            let _ = sender.send(stado_product::cli::run(command.matches, build()));
-        })
-        .map_err(|error| {
-            CmdError::click(format!("product operation could not start: {error}"))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
-    let status = receiver
-        .await
-        .map_err(|_| {
-            CmdError::click(
-                "product operation stopped without an answer: its thread ended before sending one",
-            )
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?
+    // wait for them: blocking work, run in place on the thread the CLI runs
+    // on, whose stack the binary sizes for its deepest command. An install
+    // walks the dependency graph by recursion, one `perform` frame per
+    // product carrying the whole plan, and overflowed a runtime worker's
+    // stack on the second level of a debug build.
+    let status = tokio::task::block_in_place(|| stado_product::cli::run(command.matches, build()))
         .map_err(|error| {
             let message = match product_refusal(&error) {
                 Some(cause) => format!("{error:#}; {cause}"),
@@ -256,7 +249,7 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
             };
             CmdError::click(message).stating(product_failure_code(&error))
         })?;
-    if status == 0 {
+    if status == nix::libc::EXIT_SUCCESS {
         Ok(())
     } else {
         Err(CmdError::silent(status))
