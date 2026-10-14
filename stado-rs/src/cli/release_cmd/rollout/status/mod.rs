@@ -52,6 +52,8 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
     let records = crate::observations::load();
     let mut reports = Vec::new();
     let mut failures: usize = 0;
+    // Rollout targets the fleet registry does not declare; each is a failure.
+    let mut undeclared: Vec<&String> = Vec::new();
     for (product, policy) in &control.products {
         if args
             .product
@@ -66,14 +68,32 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
                 None => Value::Null,
             };
             let software = crate::host_software::load_in(&records, target);
-            let declared = registry
-                .targets
-                .iter()
-                .find(|entry| &entry.name == target)
-                .map(|entry| entry.managed_versions.clone())
-                .unwrap_or_default();
-            let finding =
-                crate::host_software::judge(&software, &declared, Some(&ProductBinary::of(policy)));
+            // A rollout target the registry does not declare has no managed
+            // versions to judge against; read as an empty declaration, its
+            // software was judged as if the fleet declared nothing for it.
+            let Some(entry) = registry.targets.iter().find(|entry| &entry.name == target) else {
+                undeclared.push(target);
+                reports.push(json!({
+                    "product": product,
+                    "target": target,
+                    "desired": policy.desired,
+                    "previous": policy.previous,
+                    "observed": observed,
+                    "software": {
+                        "verdict": "failed",
+                        "findings": [format!(
+                            "the rollout of {product} names target {target}, which the fleet \
+                             registry does not declare, so what it should run cannot be judged"
+                        )],
+                    },
+                }));
+                continue;
+            };
+            let finding = crate::host_software::judge(
+                &software,
+                &entry.managed_versions,
+                Some(&ProductBinary::of(policy)),
+            );
             if finding.failed {
                 failures = failures.saturating_add(1);
             }
@@ -89,6 +109,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
             }));
         }
     }
+    let failures = failures.saturating_add(undeclared.len());
     let runs = recent_runs(args.product.as_deref(), run_window(args)).await?;
     if reports.is_empty() && runs.is_empty() {
         // The request names nothing Stado holds: a refusal of the request,
