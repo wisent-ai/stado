@@ -47,15 +47,31 @@ impl Sizing {
         let now = Utc::now();
         let mut vrams: Vec<i64> = Vec::new();
         let paths = store.list_paths("capacity/", 0).await?;
-        for text in download_many(store, &paths).await?.into_iter().flatten() {
-            let doc: Value = serde_json::from_str(&text)?;
-            let Some(pub_at) = doc.get("published_at").and_then(Value::as_str) else {
+        let texts = download_many(store, &paths).await?;
+        for (path, text) in paths.iter().zip(texts) {
+            let Some(text) = text else {
                 continue;
             };
-            // Python `except Exception: continue` — an unparseable
-            // published_at just drops the broadcast.
-            let Ok(published) = DateTime::parse_from_rfc3339(pub_at) else {
-                continue;
+            let doc: Value = serde_json::from_str(&text)?;
+            // A broadcast that states no publication time, or one that is not
+            // RFC 3339, cannot be judged live; it is left out and said, so a
+            // GPU size missing from the sizing names the broadcast it came from.
+            let published = match doc.get("published_at").and_then(Value::as_str) {
+                Some(pub_at) => match DateTime::parse_from_rfc3339(pub_at) {
+                    Ok(published) => published,
+                    Err(error) => {
+                        eprintln!(
+                            "sizing: capacity broadcast {path} is left out: published_at {pub_at:?} is not RFC 3339: {error}"
+                        );
+                        continue;
+                    }
+                },
+                None => {
+                    eprintln!(
+                        "sizing: capacity broadcast {path} is left out: it states no published_at"
+                    );
+                    continue;
+                }
             };
             let stamp = Some(published.with_timezone(&Utc));
             if !crate::queue::capacity::publication_live(&doc, stamp, now) {
