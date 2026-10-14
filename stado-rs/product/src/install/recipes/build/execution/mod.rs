@@ -38,7 +38,7 @@ pub(super) fn step(
             "stdout": String::from_utf8_lossy(&output.stdout),
             "stderr": String::from_utf8_lossy(&output.stderr)}),
         );
-        atomic_json(&path, &steps)?;
+        atomic_json(&path, &Value::Array(steps))?;
     }
     Ok(())
 }
