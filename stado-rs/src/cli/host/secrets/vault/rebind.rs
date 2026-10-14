@@ -69,10 +69,23 @@ pub async fn rebind(host: &str, token_file: &str, json_output: bool) -> Result<(
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    let entries = grant["capabilities"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    // A grant whose listing carries no capability array is a listing this
+    // build cannot read, not a grant with no capabilities.
+    let entries = grant["capabilities"].as_array().cloned().ok_or_else(|| {
+        let fields: Vec<&str> = grant
+            .as_object()
+            .map(|object| object.keys().map(String::as_str).collect::<Vec<_>>())
+            .into_iter()
+            .flatten()
+            .collect();
+        CmdError::click(format!(
+            "{}: the vault's grant listing names no capabilities array for the stado grant \
+             (its fields: {})",
+            target.name,
+            fields.join(", ")
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let first = entries.first().cloned().ok_or_else(|| {
         CmdError::click(format!(
             "{}: the stado grant carries no capability",
