@@ -1,7 +1,7 @@
 //! One listing: which runs it is about, and each platform joined to its job.
 
 use futures::StreamExt;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;

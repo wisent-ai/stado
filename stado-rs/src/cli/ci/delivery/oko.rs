@@ -18,7 +18,6 @@ const OKO: &str = "oko";
 
 #[derive(Deserialize)]
 struct Listed {
-    id: String,
     #[serde(default)]
     repaired_in: Option<String>,
     #[serde(default)]
