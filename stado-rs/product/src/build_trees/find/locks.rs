@@ -73,7 +73,11 @@ fn held(path: &Path) -> io::Result<bool> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)
     {
-        Ok(file) => Ok(file.try_lock_shared().is_err()),
+        Ok(file) => match file.try_lock_shared() {
+            Ok(()) => Ok(false),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+            Err(std::fs::TryLockError::Error(error)) => Err(error),
+        },
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }

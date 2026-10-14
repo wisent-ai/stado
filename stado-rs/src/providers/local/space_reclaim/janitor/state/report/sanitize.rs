@@ -4,9 +4,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use crate::providers::local::space_reclaim::janitor::pass::lock::file::{
-    lock_contended, open_lock,
-};
+use crate::providers::local::space_reclaim::janitor::pass::lock::file::open_lock;
 use crate::providers::local::space_reclaim::janitor::pass::lock::{ensure_state_dir, secure_home};
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 use crate::providers::local::space_reclaim::janitor::state::read_state;
@@ -232,12 +230,12 @@ pub fn read_cleanup_state_in(home: &Path) -> Result<Value, JanitorError> {
     let home = secure_home(home)?;
     let state_dir = ensure_state_dir(&home)?;
     let lock = open_lock(&state_dir)?;
-    match fs2::FileExt::try_lock_shared(&lock) {
+    match lock.try_lock_shared() {
         Ok(()) => {}
-        Err(exc) if lock_contended(&exc) => {
+        Err(std::fs::TryLockError::WouldBlock) => {
             return Ok(sanitize_report(&Value::Object(Map::new()), true));
         }
-        Err(exc) => return Err(exc.into()),
+        Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
     }
     let state = read_state(&state_dir)?;
     let report = state.get("report").cloned().unwrap_or(Value::Null);

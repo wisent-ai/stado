@@ -7,8 +7,8 @@ use std::path::Path;
 
 use crate::providers::local::space_reclaim::janitor::pass::lock::euid;
 use crate::providers::local::space_reclaim::janitor::pass::lock::file::{
-    holder_inode_record_path, lock_contended, open_lock, read_lock_holder, write_lock_holder,
-    ExclusiveLock, LockState,
+    holder_inode_record_path, open_lock, read_lock_holder, write_lock_holder, ExclusiveLock,
+    LockState,
 };
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 use crate::providers::local::space_reclaim::janitor::state::report::build::epoch_now;
@@ -19,7 +19,7 @@ pub(crate) fn acquire_lock_state(
     writer: &str,
 ) -> Result<LockState, JanitorError> {
     let file = open_lock(state_dir)?;
-    match fs2::FileExt::try_lock_exclusive(&file) {
+    match file.try_lock() {
         Ok(()) => {
             let canonical = state_dir.join(LOCK_NAME);
             if !path_names_file(&canonical, &file)? {
@@ -35,10 +35,10 @@ pub(crate) fn acquire_lock_state(
                 holder_token: token,
             }))
         }
-        Err(error) if lock_contended(&error) => Ok(LockState::Busy {
+        Err(std::fs::TryLockError::WouldBlock) => Ok(LockState::Busy {
             holder: read_lock_holder(state_dir, &file),
         }),
-        Err(error) => Err(error.into()),
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
     }
 }
 
@@ -144,11 +144,11 @@ pub(crate) fn retired_locks_active(
             }
             continue;
         }
-        match fs2::FileExt::try_lock_exclusive(&file) {
+        match file.try_lock() {
             Ok(()) => {
                 let still_named = path_names_file(&path, &file)?;
                 let stale_holder = holder_inode_record_path(state_dir, &file)?;
-                fs2::FileExt::unlock(&file)?;
+                file.unlock()?;
                 if still_named {
                     std::fs::remove_file(path)?;
                     if let Some(left) = crate::primitives::staging::remove(&stale_holder) {
@@ -156,8 +156,10 @@ pub(crate) fn retired_locks_active(
                     }
                 }
             }
-            Err(error) if lock_contended(&error) => holders.push(holder_sentence(state_dir, &file)),
-            Err(error) => return Err(error.into()),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                holders.push(holder_sentence(state_dir, &file))
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
         }
     }
     Ok(holders)

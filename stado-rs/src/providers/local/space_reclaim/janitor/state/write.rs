@@ -31,7 +31,7 @@ pub(crate) fn write_state(
     attempted_at: f64,
 ) -> Result<(), JanitorError> {
     let state_lock = open_lock_at(&state_dir.join(STATE_LOCK_NAME))?;
-    fs2::FileExt::lock_exclusive(&state_lock)?;
+    state_lock.lock()?;
     let destination = state_dir.join(STATE_NAME);
     match std::fs::symlink_metadata(&destination) {
         Ok(existing) => {

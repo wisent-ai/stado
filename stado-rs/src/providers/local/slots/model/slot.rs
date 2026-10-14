@@ -120,8 +120,8 @@ impl ActiveSlot {
 ///
 /// # The defect this exists to make impossible
 ///
-/// [`super::space_reclaim::acquire_workload_lock_in`] takes a shared `fs2` hold
-/// on `~/.cache/wisent-compute/space-reclaim.lock` per live workload, and the
+/// [`super::space_reclaim::acquire_workload_lock_in`] takes a shared file lock
+/// on the workload's cleanup lock per live workload, and the
 /// reclaim pass needs that same file exclusively. One shared hold
 /// that is never released therefore makes every exclusive acquire fail
 /// forever — not for a while, forever — and a cleanup pass answers `lock_busy`

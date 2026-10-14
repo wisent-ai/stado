@@ -71,6 +71,32 @@ try {
   const reclaimed = JSON.parse(readFileSync(lock, 'utf8'));
   assert.equal(reclaimed.product, 'stado');
   assert.ok(reclaimed.started_at);
+  const fixture = join(output, 'lock-holder');
+  const compiled = spawnSync('rustc', ['--edition', '2021',
+    join(dirname(fileURLToPath(import.meta.url)), 'lock_holder.rs'), '-o', fixture],
+    { cwd: root, env: environment, encoding: 'utf8' });
+  report.commands.push({ executable: 'rustc', arguments: compiled.spawnargs,
+    exit_status: compiled.status, stdout: compiled.stdout, stderr: compiled.stderr });
+  succeeds(compiled);
+  const live = spawn(fixture, [lock], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const ready = await Promise.race([
+    once(live.stdout, 'data').then(([data]) => data.toString().trim()),
+    once(live, 'exit').then(([code]) => { throw new Error(`lock holder exited before ready: ${code}`); }),
+  ]);
+  assert.equal(ready, 'held');
+  const held = JSON.parse(succeeds(run(['product', 'locks', '--json'])));
+  assert.equal(held.locks.find(row => row.path === lock).held, true,
+    'the CLI must observe another process holding the OS file lock');
+  report.held = held;
+  const released = once(live, 'exit');
+  live.stdin.end('\n');
+  const [holderStatus] = await released;
+  assert.equal(holderStatus, installed.status, 'the real file lock holder released normally');
+  report.commands.push({ executable: fixture, arguments: [lock], exit_status: holderStatus });
+  const free = JSON.parse(succeeds(run(['product', 'locks', '--json'])));
+  assert.equal(free.locks.find(row => row.path === lock).held, false,
+    'the CLI must observe the released OS file lock');
+  report.free = free;
   record(lock, 'tama', former.pid, birth.stdout.trim());
   const refused = run(['product', 'install', 'stado', '--surface', 'cli',
     '--source-commit', revision, '--json']);

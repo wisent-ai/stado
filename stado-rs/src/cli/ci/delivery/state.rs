@@ -142,9 +142,8 @@ pub fn write(state: &State) -> Result<(), CmdError> {
 /// another pass holds it. The holder writes its pid and start beside the
 /// lock, so a reader that finds it held can name who holds it.
 pub fn lock() -> Result<Option<std::fs::File>, CmdError> {
-    use fs2::FileExt;
     let (path, file) = lock_file()?;
-    match file.try_lock_exclusive() {
+    match file.try_lock() {
         Ok(()) => {
             let holder = format!(
                 "pid {} since {}",
@@ -160,7 +159,7 @@ pub fn lock() -> Result<Option<std::fs::File>, CmdError> {
             })?;
             Ok(Some(file))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(error) => Err(CmdError::click(format!(
             "locking {}: {error}",
             path.display()
@@ -172,11 +171,9 @@ pub fn lock() -> Result<Option<std::fs::File>, CmdError> {
 /// no pass holds it.
 pub fn lock_holder() -> Result<Option<String>, CmdError> {
     let (path, file) = lock_file()?;
-    // `File` has an inherent `try_lock_shared` (std) that shadows fs2's and
-    // answers a `TryLockError`; the io::Error fs2 answers is what is read here.
-    match fs2::FileExt::try_lock_shared(&file) {
+    match file.try_lock_shared() {
         Ok(()) => Ok(None),
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+        Err(std::fs::TryLockError::WouldBlock) => {
             let named = path.with_extension("holder");
             let recorded = std::fs::read_to_string(&named).map_err(|error| {
                 CmdError::click(format!(

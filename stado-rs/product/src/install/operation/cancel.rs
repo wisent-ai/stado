@@ -4,7 +4,6 @@ use super::{children, holder, stop};
 use crate::common::{now, process::started_at, Runtime};
 use crate::state::{self, ProductState};
 use anyhow::{bail, Context, Result};
-use fs2::FileExt;
 use serde_json::{json, Value};
 use stado_wait as wait;
 use std::fs::{File, OpenOptions};
@@ -34,7 +33,7 @@ pub fn cancel(runtime: &Runtime, id: &str, surface: &str) -> Result<Value> {
         wait::blocking_on_lock(
             format!("the cancelled installation operation pid {pid} to let go of its lock"),
             &lock,
-            || file.lock_exclusive(),
+            || file.lock(),
         )
         .with_context(|| format!("waiting for {} was refused", lock.display()))?
         .with_context(|| {
@@ -68,12 +67,19 @@ fn cancel_after_install(runtime: &Runtime, id: &str, surface: &str, lock: &Path)
     let file = options
         .open(lock)
         .with_context(|| format!("{} cannot be opened", lock.display()))?;
-    file.try_lock_exclusive().with_context(|| {
-        format!(
-            "a new installation acquired {} before cancellation",
-            lock.display()
-        )
-    })?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            bail!(
+                "a new installation acquired {} before cancellation",
+                lock.display()
+            );
+        }
+        Err(std::fs::TryLockError::Error(error)) => {
+            return Err(error)
+                .with_context(|| format!("taking {} for cancellation", lock.display()));
+        }
+    }
     let mut receipt = ProductState::load(runtime, id, surface)?
         .with_context(|| format!("no installation operation holds {id}/{surface}"))?;
     let marker = receipt

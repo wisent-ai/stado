@@ -5,7 +5,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
-use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
@@ -105,7 +104,7 @@ impl LocalBackend {
             crate::wait::Kind::Lock,
             format!("exclusive lock on the local store's {path}"),
             lock_path.display(),
-            || file.lock_exclusive(),
+            || file.lock(),
         )?;
         let result = f();
         // Closing the descriptor releases the lock; there is no separate

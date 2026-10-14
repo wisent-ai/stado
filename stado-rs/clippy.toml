@@ -1,0 +1,12 @@
+# File::try_lock reports contention as TryLockError::WouldBlock. A second
+# extension-trait error contract would make lock refusals ambiguous.
+disallowed-types = [
+  { path = "fs2::FileExt", reason = "Use std::fs::File's inherent lock methods and match TryLockError variants" },
+]
+disallowed-methods = [
+  { path = "fs2::FileExt::lock_exclusive", reason = "Use File::lock" },
+  { path = "fs2::FileExt::lock_shared", reason = "Use File::lock_shared" },
+  { path = "fs2::FileExt::try_lock_exclusive", reason = "Use File::try_lock and match TryLockError" },
+  { path = "fs2::FileExt::try_lock_shared", reason = "Use File::try_lock_shared and match TryLockError" },
+  { path = "fs2::FileExt::unlock", reason = "Use File::unlock" },
+]

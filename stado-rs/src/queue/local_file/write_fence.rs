@@ -107,12 +107,14 @@ impl WriteFencePaths {
 
     pub(super) fn mutation_guard(&self) -> Result<File, StorageError> {
         let file = self.open_lock()?;
-        match fs2::FileExt::try_lock_shared(&file) {
+        match file.try_lock_shared() {
             Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(std::fs::TryLockError::WouldBlock) => {
                 return Err(self.refused(self.read_intent()?.as_ref()));
             }
-            Err(error) => return Err(local_io("acquire shared write fence", &self.lock, error)),
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(local_io("acquire shared write fence", &self.lock, error));
+            }
         }
         // The durable intent also refuses writes after an interrupted owner
         // has lost its descriptor. An in-flight writer holding this shared

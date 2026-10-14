@@ -3,9 +3,7 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use crate::providers::local::space_reclaim::janitor::pass::lock::file::{
-    io_code, lock_contended, open_lock,
-};
+use crate::providers::local::space_reclaim::janitor::pass::lock::file::{io_code, open_lock};
 use crate::providers::local::space_reclaim::janitor::pass::lock::holds;
 use crate::providers::local::space_reclaim::janitor::pass::lock::{ensure_state_dir, secure_home};
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
@@ -46,7 +44,7 @@ impl WorkloadLock {
 impl Drop for WorkloadLock {
     fn drop(&mut self) {
         if let Some(file) = self.settle() {
-            let _ = fs2::FileExt::unlock(&file);
+            let _ = file.unlock();
         }
     }
 }
@@ -64,7 +62,7 @@ pub fn acquire_workload_lock_in(
         return Ok(None);
     }
     let file = open_lock(&state_dir)?;
-    match fs2::FileExt::try_lock_shared(&file) {
+    match file.try_lock_shared() {
         Ok(()) => {
             let mut lock = WorkloadLock {
                 file: Some(file),
@@ -73,8 +71,8 @@ pub fn acquire_workload_lock_in(
             lock.record = Some(holds::record(&state_dir, holder)?);
             Ok(Some(lock))
         }
-        Err(exc) if lock_contended(&exc) => Ok(None),
-        Err(exc) => Err(exc.into()),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
     }
 }
 
@@ -146,7 +144,7 @@ pub fn release_workload_lock(mut lock: WorkloadLock, log_fn: &mut dyn FnMut(&str
     let Some(file) = lock.settle() else {
         return;
     };
-    if let Err(exc) = fs2::FileExt::unlock(&file) {
+    if let Err(exc) = file.unlock() {
         log_fn(&format!(
             "disk cleanup workload lock release failed: {}",
             io_code(&exc)

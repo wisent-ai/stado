@@ -9,8 +9,6 @@ pub async fn reconcile_host_worker(
     runner_gate: Option<Value>,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    use fs2::FileExt;
-
     validate_transaction(transaction)?;
     if let Err(reason) = ResidentAction::parse(phase) {
         return Err(DeployError(reason).stating(crate::primitives::failure::FailureCode::Refused));
@@ -62,16 +60,17 @@ pub async fn reconcile_host_worker(
         .map_err(DeployError::io(
             "cannot open native transaction lock".to_string(),
         ))?;
-    operation_lock.try_lock_exclusive().map_err(|error| {
-        let held = error.kind() == std::io::ErrorKind::WouldBlock;
+    operation_lock.try_lock().map_err(|error| {
+        let failure = match &error {
+            std::fs::TryLockError::WouldBlock => crate::primitives::failure::FailureCode::Refused,
+            std::fs::TryLockError::Error(cause) => {
+                crate::cli::entry::error::io_failure_code(cause.kind())
+            }
+        };
         DeployError(format!(
             "another reconciliation owns the native lock: {error}"
         ))
-        .stating(if held {
-            crate::primitives::failure::FailureCode::Refused
-        } else {
-            crate::cli::entry::error::io_failure_code(error.kind())
-        })
+        .stating(failure)
     })?;
     let descriptor = operation_lock.as_raw_fd();
     // SAFETY: `descriptor` is owned by `operation_lock`; F_GETFD/F_SETFD do

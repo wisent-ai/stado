@@ -13,7 +13,7 @@ use crate::providers::local::space_reclaim::hf::{
     check_info, identity, os_error, stable_identity, Identity, LockScan, Parts, StableId,
 };
 use crate::providers::local::space_reclaim::{
-    ifmt, lock_contended, safefs, CleanupReport, JanitorError, ScanCount, IFDIR, IFREG,
+    ifmt, safefs, CleanupReport, JanitorError, ScanCount, IFDIR, IFREG,
 };
 
 /// Walk the `.locks` tree, recording identities and (when `acquire`) taking
@@ -74,12 +74,12 @@ pub(in crate::providers::local::space_reclaim::hf) fn scan_lock_state(
                     state.insert(relative, identity(&opened));
                     if acquire && !already_held.contains(&stable_identity(&opened)) {
                         let file = File::from(descriptor);
-                        match fs2::FileExt::try_lock_exclusive(&file) {
+                        match file.try_lock() {
                             Ok(()) => held.push(file),
-                            Err(exc) if lock_contended(&exc) => {
+                            Err(std::fs::TryLockError::WouldBlock) => {
                                 return Err(JanitorError::blocking("cache lock held"));
                             }
-                            Err(exc) => return Err(exc.into()),
+                            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
                         }
                     }
                 } else {

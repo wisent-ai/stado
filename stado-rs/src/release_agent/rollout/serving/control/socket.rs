@@ -156,10 +156,21 @@ pub(crate) fn prepare() -> Result<Prepared, ControlSocketError> {
             lock_path.display()
         )));
     }
-    fs2::FileExt::try_lock_exclusive(&lock).map_err(io(format!(
-        "cannot acquire proxy owner lock {}",
-        lock_path.display()
-    )))?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            return Err(ControlSocketError::Refused(format!(
+                "proxy owner lock {} is held by another process",
+                lock_path.display()
+            )));
+        }
+        Err(std::fs::TryLockError::Error(error)) => {
+            return Err(io(format!(
+                "cannot acquire proxy owner lock {}",
+                lock_path.display()
+            ))(error));
+        }
+    }
     retire_stale_socket(&path, uid)?;
     let listener = UnixListener::bind(&path).map_err(io(format!(
         "cannot bind proxy control socket {}",

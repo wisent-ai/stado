@@ -145,8 +145,7 @@ pub fn run(operation: &str, json_output: bool, runtime: &Runtime) -> Result<i32>
 
 /// The free bytes of the volume holding `path`.
 fn free(path: &Path) -> Result<u64> {
-    fs2::available_space(path)
-        .with_context(|| format!("reading the free space under {}", path.display()))
+    crate::common::files::available_space(path)
 }
 
 /// The git checkouts directly in the workspace, in name order.

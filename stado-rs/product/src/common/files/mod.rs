@@ -16,6 +16,22 @@ use std::{
     path::Path,
 };
 
+/// Free bytes the filesystem reports at `path`, shared by the installer and
+/// its build-tree reclaimer.
+pub fn available_space(path: &Path) -> Result<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    let mut state = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `name` is NUL-terminated and `state` has room for statvfs.
+    if unsafe { libc::statvfs(name.as_ptr(), state.as_mut_ptr()) } != libc::EXIT_SUCCESS {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("reading free space under {}", path.display()));
+    }
+    // SAFETY: a successful statvfs initialized the output structure.
+    let state = unsafe { state.assume_init() };
+    Ok(state.f_bavail.saturating_mul(state.f_frsize))
+}
+
 pub(crate) fn read_lock_record(path: &Path) -> Result<Option<record::Recorded>> {
     record::read(path, Some(record::product(path)?))
 }

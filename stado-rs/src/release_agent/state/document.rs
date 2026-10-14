@@ -3,7 +3,7 @@
 //! it carries.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
@@ -44,21 +44,15 @@ pub(crate) fn proxy_state_path(target: &ReleaseTargetPolicy, product: &str) -> P
 }
 
 /// A non-blocking exclusive advisory lock on one file in a release state
-/// directory.
-///
-/// Crate-visible with a caller-supplied stem because the unit-image revisit
-/// pass needs one lock per HOST over its whole observe -> restart -> record
-/// sequence, and this is already the shape of that lock: same `fs2` advisory
-/// mode, same `O_NOFOLLOW`, same `WouldBlock` means another holder rather than
-/// a failure. A second implementation beside it would be a second answer to
-/// "is somebody already doing this".
+/// directory. The unit-image revisit pass needs one lock per target over its
+/// observe -> restart -> record sequence. `WouldBlock` names another holder.
 pub(crate) struct StateLock {
     file: File,
 }
 
 impl Drop for StateLock {
     fn drop(&mut self) {
-        let _ = fs2::FileExt::unlock(&self.file);
+        let _ = self.file.unlock();
     }
 }
 
@@ -91,18 +85,9 @@ pub(crate) fn acquire_state_lock(state_dir: &str, stem: &str) -> Result<Option<S
             path.display()
         ));
     }
-    match fs2::FileExt::try_lock_exclusive(&file) {
+    match file.try_lock() {
         Ok(()) => Ok(Some(StateLock { file })),
-        Err(error)
-            if error.kind() == io::ErrorKind::WouldBlock
-                || matches!(
-                    error.raw_os_error(),
-                    Some(code)
-                        if code == nix::libc::EACCES || code == nix::libc::EAGAIN
-                ) =>
-        {
-            Ok(None)
-        }
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(error) => Err(format!(
             "cannot acquire release lock {}: {error}",
             path.display()

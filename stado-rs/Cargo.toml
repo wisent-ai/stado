@@ -52,7 +52,6 @@ url = "2"
 futures = "0.3"
 gcp_auth = "0.12"
 ring = "*"
-fs2 = "0.4"
 # "dir" provides dir-fd-relative enumeration for the local space-reclaim
 # sandbox in providers/local/space_reclaim. "hostname" supplies the kernel's
 # host identity for service reports.

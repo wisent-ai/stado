@@ -2,7 +2,6 @@
 use crate::common::{atomic_json, Runtime};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -43,12 +42,12 @@ impl Instance {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("open editor workspace lock {}", path.display()))?;
-        match lock.try_lock_exclusive() {
+        match lock.try_lock() {
             Ok(()) => {}
-            Err(cause) if cause.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(std::fs::TryLockError::WouldBlock) => {
                 bail!("editor workspace {} already has an instance holding {}; inspect stado product editor status", workspace.display(), path.display());
             }
-            Err(cause) => {
+            Err(std::fs::TryLockError::Error(cause)) => {
                 return Err(cause)
                     .with_context(|| format!("acquire editor workspace lock {}", path.display()))
             }
@@ -64,9 +63,20 @@ impl Instance {
             .create_new(true)
             .open(&live_path)
             .with_context(|| format!("create editor instance lock {}", live_path.display()))?;
-        instance_lock
-            .try_lock_exclusive()
-            .with_context(|| format!("acquire editor instance lock {}", live_path.display()))?;
+        match instance_lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                bail!(
+                    "new editor instance lock {} is already held",
+                    live_path.display()
+                );
+            }
+            Err(std::fs::TryLockError::Error(cause)) => {
+                return Err(cause).with_context(|| {
+                    format!("acquire editor instance lock {}", live_path.display())
+                });
+            }
+        }
         let receipt = live_path.with_extension("json");
         let record = Record {
             workspace: workspace.to_path_buf(),
@@ -104,10 +114,10 @@ pub(super) fn status(runtime: &Runtime, workspace: Option<&Path>) -> Result<Valu
         }
         let lock = File::open(&path)
             .with_context(|| format!("open editor instance lock {}", path.display()))?;
-        match FileExt::try_lock_shared(&lock) {
+        match lock.try_lock_shared() {
             Ok(()) => continue,
-            Err(cause) if cause.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(cause) => {
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(std::fs::TryLockError::Error(cause)) => {
                 return Err(cause)
                     .with_context(|| format!("observe editor instance lock {}", path.display()))
             }

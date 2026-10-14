@@ -20,12 +20,14 @@
 //! `CACHEDIR.TAG`, so the janitor's build-cache cleaner takes it under disk
 //! pressure; a run still being written is not tagged and is never taken.
 
+mod probes;
+pub(crate) use probes::gib;
+use probes::{bytes, create, earlier, in_use, measured, succeeded};
+
 use anyhow::{bail, Context, Result};
-use fs2::FileExt;
 use std::{
     fs::{self, File},
     path::{Component, Path, PathBuf},
-    time::SystemTime,
 };
 
 /// The directory under `~/.stado/products/builds` holding the build areas of
@@ -110,8 +112,7 @@ pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
             shed(&newest)?;
         }
         let needed = measured(&newest)?;
-        let free = fs2::available_space(parent)
-            .with_context(|| format!("reading the free space under {}", parent.display()))?;
+        let free = super::files::available_space(parent)?;
         if free < needed {
             bail!(
                 "{:.1} GiB are free under {} and the previous run there, {}, took {:.1} GiB; \
@@ -192,121 +193,4 @@ pub fn shed(run: &Path) -> Result<()> {
         }
     }
     super::tag_cache(run, "stado, once the run ended")
-}
-
-/// The size `run` took: the one it recorded when it was shed, else its own.
-/// Only a missing record is measured afresh: a record that cannot be read,
-/// measured afresh after the trees were shed, read as a few bytes and let a
-/// build start that the volume could not hold.
-fn measured(run: &Path) -> Result<u64> {
-    match fs::read_to_string(run.join(MEASURED)) {
-        Ok(text) => text
-            .trim()
-            .parse()
-            .with_context(|| format!("{} is not a byte count", run.join(MEASURED).display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => bytes(run),
-        Err(error) => {
-            Err(error).with_context(|| format!("reading {}", run.join(MEASURED).display()))
-        }
-    }
-}
-
-fn create(parent: &Path, name: &str) -> Result<Run> {
-    let path = parent.join(name);
-    fs::create_dir_all(&path).with_context(|| format!("creating the run {}", path.display()))?;
-    let in_use = File::create(path.join(IN_USE))
-        .with_context(|| format!("marking the run {} in use", path.display()))?;
-    in_use
-        .try_lock_exclusive()
-        .with_context(|| format!("marking the run {} in use", path.display()))?;
-    Ok(Run {
-        path,
-        _in_use: in_use,
-    })
-}
-
-/// The earlier runs under `parent`, newest first. A parent not created yet
-/// holds none; one that cannot be listed, or a run whose time cannot be read,
-/// is an error: dropped, the build skipped its free-space check or kept a run
-/// it should have superseded, with nothing said. A run another process
-/// removed between the listing and the read is no longer a run: every
-/// command Stado runs writes its own record here, so the installation that
-/// hands off to a second Stado lists the directory while the first prunes it.
-fn earlier(parent: &Path) -> Result<Vec<PathBuf>> {
-    let entries = match fs::read_dir(parent) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("listing the runs in {}", parent.display()))
-        }
-    };
-    let mut runs: Vec<(SystemTime, PathBuf)> = Vec::new();
-    for entry in entries {
-        let entry = entry.with_context(|| format!("listing the runs in {}", parent.display()))?;
-        let path = entry.path();
-        let kind = entry
-            .file_type()
-            .with_context(|| format!("reading the type of {}", path.display()))?;
-        if !kind.is_dir() {
-            continue;
-        }
-        let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
-            Ok(modified) => modified,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("reading when {} was written", path.display()))
-            }
-        };
-        runs.push((modified, path));
-    }
-    runs.sort_by_key(|run| std::cmp::Reverse(run.0));
-    Ok(runs.into_iter().map(|(_, path)| path).collect())
-}
-
-/// Whether a command record says its command succeeded. An unreadable record
-/// is kept: it is not evidence that nothing failed.
-fn succeeded(run: &Path) -> bool {
-    fs::read(run.join(COMMAND_RECORD))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .is_some_and(|record| record["state"] == "succeeded")
-}
-
-/// Bytes of the regular files under `path`, symbolic links not followed. A
-/// directory or file that cannot be read is an error naming it: counted as
-/// nothing, the size recorded for the free-space check was too small.
-fn bytes(path: &Path) -> Result<u64> {
-    let mut total = 0;
-    for entry in fs::read_dir(path).with_context(|| format!("measuring {}", path.display()))? {
-        let entry = entry.with_context(|| format!("measuring {}", path.display()))?;
-        let entry_path = entry.path();
-        let kind = entry
-            .file_type()
-            .with_context(|| format!("measuring {}", entry_path.display()))?;
-        if kind.is_dir() {
-            total += bytes(&entry_path)?;
-        } else if kind.is_file() {
-            total += entry
-                .metadata()
-                .with_context(|| format!("measuring {}", entry_path.display()))?
-                .len();
-        }
-    }
-    Ok(total)
-}
-
-pub(crate) fn gib(bytes: u64) -> f64 {
-    bytes as f64 / f64::from(1u32 << 30)
-}
-
-/// Whether the run's creator still holds its marker. A run without a marker
-/// was written by a Stado that did not mark runs, and is not in use. A marker
-/// that exists and cannot be opened is counted as in use: read as free, a run
-/// its creator was still writing was removed from under it.
-fn in_use(run: &Path) -> bool {
-    match File::open(run.join(IN_USE)) {
-        Ok(marker) => marker.try_lock_shared().is_err(),
-        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
-    }
 }

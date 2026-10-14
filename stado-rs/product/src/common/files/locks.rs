@@ -1,6 +1,5 @@
 use super::record;
 use anyhow::{Context, Result};
-use fs2::FileExt;
 use stado_wait as wait;
 use std::{
     fs::{self, File, OpenOptions},
@@ -73,17 +72,19 @@ fn take(path: &Path, mode: Take, product_scope: bool) -> Result<File> {
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     let mut file = options.open(path)?;
-    if let Err(error) = file.try_lock_exclusive() {
-        if error.kind() != std::io::ErrorKind::WouldBlock {
-            return Err(error).with_context(|| format!("taking {}", path.display()));
+    if let Err(error) = file.try_lock() {
+        match error {
+            std::fs::TryLockError::WouldBlock => {}
+            std::fs::TryLockError::Error(error) => {
+                return Err(error).with_context(|| format!("taking {}", path.display()));
+            }
         }
         let recorded = record::read(path, expected)?
             .with_context(|| format!("{} is held but records no holder", path.display()))?;
         let holder = crate::install::operation::clause(path);
         let held_by = match mode {
             Take::Refuse => {
-                return Err(anyhow::Error::new(error)
-                    .context(format!("another writer owns {}; {holder}", path.display())));
+                anyhow::bail!("another writer owns {}; {holder}", path.display());
             }
             Take::Wait => holder,
             Take::Supersede if same_request(&recorded.command) => {
@@ -111,11 +112,9 @@ fn take(path: &Path, mode: Take, product_scope: bool) -> Result<File> {
                 format!("{holder} (it is placing files or its process identity is unverified)")
             }
         };
-        wait::blocking_on_lock(format!("the lock held by {held_by}"), path, || {
-            file.lock_exclusive()
-        })
-        .with_context(|| format!("waiting for {} was refused", path.display()))?
-        .with_context(|| format!("waiting for {} failed", path.display()))?;
+        wait::blocking_on_lock(format!("the lock held by {held_by}"), path, || file.lock())
+            .with_context(|| format!("waiting for {} was refused", path.display()))?
+            .with_context(|| format!("waiting for {} failed", path.display()))?;
     }
     if let Some(previous) = record::read(path, expected)? {
         let observed = previous.observed_start()?;

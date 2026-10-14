@@ -37,14 +37,6 @@ pub(crate) fn open_lock_at(path: &Path) -> Result<File, JanitorError> {
     Ok(file)
 }
 
-/// Python's `exc.errno in (errno.EACCES, errno.EAGAIN)` busy test (fs2
-/// reports flock contention as WouldBlock; the raw-code check keeps the
-/// Python errno set exactly).
-pub(crate) fn lock_contended(exc: &io::Error) -> bool {
-    exc.kind() == io::ErrorKind::WouldBlock
-        || matches!(exc.raw_os_error(), Some(c) if c == nix::libc::EACCES || c == nix::libc::EAGAIN)
-}
-
 /// An exclusive cleanup-run lock that always issues `LOCK_UN` before close.
 ///
 /// The holder token makes record removal conditional. Without it, a process
@@ -70,7 +62,7 @@ impl Drop for ExclusiveLock {
                 discard(path);
             }
         }
-        if let Err(error) = fs2::FileExt::unlock(&self.file) {
+        if let Err(error) = self.file.unlock() {
             eprintln!("janitor: the cleanup lock could not be unlocked: {error}");
         }
     }

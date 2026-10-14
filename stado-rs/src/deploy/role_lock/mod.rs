@@ -21,7 +21,6 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::CmdError;
@@ -109,9 +108,9 @@ pub fn take(home: &Path, role: &str, program: &Path) -> Result<Held, CmdError> {
                 path.display()
             ))
         })?;
-    match file.try_lock_exclusive() {
+    match file.try_lock() {
         Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+        Err(std::fs::TryLockError::WouldBlock) => {
             return Err(refusal(role, &path));
         }
         Err(error) => {
