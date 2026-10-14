@@ -256,6 +256,10 @@ name = "host-silence-silent-store-startup"
 path = "../tests/host_silence/silent_store_startup/main.rs"
 
 [[test]]
+name = "mcp-killed-child"
+path = "../tests/mcp/killed_child.rs"
+
+[[test]]
 name = "service-update-local-record"
 path = "../tests/service_update/local_record.rs"
 
