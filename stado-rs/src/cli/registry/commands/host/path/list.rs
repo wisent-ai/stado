@@ -23,18 +23,31 @@ pub async fn host_path_list(host: &str, json_output: bool) -> Result<(), CmdErro
                 .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     let target: ComputeTarget = serde_json::from_value(entry)?;
-    let connections = target
+    // The channel tries the paths in this order, so the first one listed is
+    // the preferred path and every later one a fallback.
+    let paths: Vec<(String, String)> = target
         .ssh_connections()
-        .enumerate()
-        .map(|(order, (path, destination))| {
-            json!({
-                "name": path,
-                "destination": destination,
-                "order": order,
-                "preferred": order == 0,
-            })
-        })
-        .collect::<Vec<_>>();
+        .map(|(path, destination)| (path.to_string(), destination.to_string()))
+        .collect();
+    let mut preferred = true;
+    let mut connections = Vec::with_capacity(paths.len());
+    let mut lines = Vec::with_capacity(paths.len());
+    for (order, (path, destination)) in paths.iter().enumerate() {
+        connections.push(json!({
+            "name": path,
+            "destination": destination,
+            "order": order,
+            "preferred": preferred,
+        }));
+        let role = if preferred { "preferred" } else { "fallback" };
+        let known = if targets::connection_provider_declared(path) {
+            "declared"
+        } else {
+            "fleet-specific"
+        };
+        lines.push(format!("{name}\t{path}\t{role}\t{known}\t{destination}"));
+        preferred = false;
+    }
     // The vocabulary travels with the listing because this is where a choice
     // is made: an operator or Stado Desktop reading which routes a host has
     // is the same reader that needs to know which networks the product can
@@ -55,24 +68,11 @@ pub async fn host_path_list(host: &str, json_output: bool) -> Result<(), CmdErro
         );
         return Ok(());
     }
-    if connections.is_empty() {
+    if lines.is_empty() {
         println!("{name}: no SSH connection paths");
-    } else {
-        for connection in &connections {
-            let path = connection["name"].as_str().unwrap_or_default();
-            let destination = connection["destination"].as_str().unwrap_or_default();
-            let role = if connection["preferred"].as_bool().unwrap_or(false) {
-                "preferred"
-            } else {
-                "fallback"
-            };
-            let known = if targets::connection_provider_declared(path) {
-                "declared"
-            } else {
-                "fleet-specific"
-            };
-            println!("{name}\t{path}\t{role}\t{known}\t{destination}");
-        }
+    }
+    for line in &lines {
+        println!("{line}");
     }
     let names = targets::declared_connection_providers()
         .iter()
