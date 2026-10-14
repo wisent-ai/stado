@@ -34,7 +34,9 @@ impl Dashboard {
                 let (exit_code, refusal) = match result.outcome {
                     Ok(()) => (0, None),
                     Err(error) => {
-                        let message = error.message.unwrap_or_default();
+                        // The error's own sentence, which names its exit code
+                        // when it carries no message, never an empty refusal.
+                        let message = error.to_string();
                         let failure = error
                             .failure
                             .unwrap_or(crate::primitives::failure::FailureCode::Unknown);
