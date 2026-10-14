@@ -36,6 +36,18 @@ pub async fn send_built(
     until(kind, what, place, client.execute(request)).await
 }
 
+/// The cause, when a request's error says the dependency refused it before
+/// any answer could begin: nothing listens at the address, or the connection
+/// was turned away. That is the dependency's answer, not a wait still
+/// standing, so a caller ends at once with this cause (the failed wait has
+/// already written its `blad czekania` line naming what and where) instead
+/// of sending the same request again into the same refusal. `None` for every
+/// other error — one that arose after the connection was made — which the
+/// caller judges by its own contract.
+pub fn refusal(error: &reqwest::Error) -> Option<String> {
+    error.is_connect().then(|| crate::chain(error))
+}
+
 /// Send one HTTP request to any other service and wait for its answer to
 /// begin, saying so at both ends. What is waited for is the method and the
 /// path — never the query, which may carry a credential a service takes

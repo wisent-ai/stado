@@ -7,8 +7,11 @@ impl RemoteObjectApi {
         &self,
         origin: url::Url,
     ) -> Result<Vec<u8>, CmdError> {
+        // Every error the release channel answers with ends the download at
+        // once with that cause: a range sent again after a refused
+        // connection, a cut body or a failed read only waited on the same
+        // answer again.
         let mut body = Vec::new();
-        let mut failures = 0usize;
 
         'download: loop {
             let start = body.len();
@@ -25,15 +28,15 @@ impl RemoteObjectApi {
                 let response = match sent(request).await {
                     Ok(response) => response,
                     Err(error) => {
-                        failures = failures.saturating_add(1);
-                        if failures > 3 {
-                            return Err(CmdError::click(format!(
-                                "public release GET exhausted its byte-range retries after \
-                                 {start} bytes: {error}"
-                            ))
-                            .stating(crate::primitives::failure::FailureCode::InfraDown));
-                        }
-                        continue 'download;
+                        let cause = match crate::wait::refusal(&error) {
+                            Some(cause) => {
+                                format!("the release channel refused the connection: {cause}")
+                            }
+                            None => crate::cli::http_failure(&error),
+                        };
+                        return Err(CmdError::unreachable(format!(
+                            "public release GET of the range beginning at {start} failed: {cause}"
+                        )));
                     }
                 };
                 if response.status().is_redirection() {
@@ -84,33 +87,20 @@ impl RemoteObjectApi {
                         body.extend_from_slice(&chunk);
                     }
                     Ok(None) if body.len() != end_exclusive => {
-                        failures = failures.saturating_add(1);
-                        if failures > 3 {
-                            return Err(CmdError::click(format!(
-                                "public release GET exhausted its byte-range retries after {} of \
-                                 {end_exclusive} bytes",
-                                body.len()
-                            ))
-                            .stating(crate::primitives::failure::FailureCode::InfraDown));
-                        }
-                        continue 'download;
+                        return Err(CmdError::click(format!(
+                            "public release GET range ended after {} of {end_exclusive} bytes",
+                            body.len()
+                        ))
+                        .stating(crate::primitives::failure::FailureCode::InfraDown));
                     }
                     Ok(None) if body.len() == total => return Ok(body),
-                    Ok(None) => {
-                        failures = 0;
-                        continue 'download;
-                    }
+                    Ok(None) => continue 'download,
                     Err(error) => {
-                        failures = failures.saturating_add(1);
-                        if failures > 3 {
-                            return Err(CmdError::click(format!(
-                                "public release GET exhausted its byte-range retries after {} \
-                                 bytes: {error}",
-                                body.len()
-                            ))
-                            .stating(crate::primitives::failure::FailureCode::InfraDown));
-                        }
-                        continue 'download;
+                        return Err(CmdError::click(format!(
+                            "public release GET range connection closed after {} bytes: {error}",
+                            body.len()
+                        ))
+                        .stating(crate::primitives::failure::FailureCode::InfraDown));
                     }
                 }
             }

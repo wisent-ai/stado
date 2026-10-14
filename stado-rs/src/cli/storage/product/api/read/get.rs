@@ -1,4 +1,5 @@
-//! One object body, resumed after a truncated read and then ranged.
+//! One object body, resumed after a truncated read and then ranged. A
+//! connection the object API refuses ends the read at once with that cause.
 
 use crate::cli::storage::*;
 
@@ -23,8 +24,10 @@ impl RemoteObjectApi {
         bearer: Option<&str>,
         optional: bool,
     ) -> Result<Option<Vec<u8>>, CmdError> {
+        // Every error the object API answers with ends the read at once with
+        // that cause: a range sent again after a refused connection, a cut
+        // body or a failed read only waited on the same answer again.
         let mut body = Vec::new();
-        let mut failures = 0usize;
 
         'download: loop {
             let start = body.len();
@@ -37,15 +40,13 @@ impl RemoteObjectApi {
             {
                 Ok(response) => response,
                 Err(error) => {
-                    failures = failures.saturating_add(1);
-                    if failures > 3 {
-                        return Err(CmdError::click(format!(
-                            "authenticated object GET exhausted its byte-range retries after \
-                             {start} bytes: {error}"
-                        ))
-                        .stating(crate::primitives::failure::FailureCode::InfraDown));
-                    }
-                    continue;
+                    let cause = match crate::wait::refusal(&error) {
+                        Some(cause) => format!("the object API refused the connection: {cause}"),
+                        None => crate::cli::http_failure(&error),
+                    };
+                    return Err(CmdError::unreachable(format!(
+                        "authenticated object GET of the range beginning at {start} failed: {cause}"
+                    )));
                 }
             };
             if response.status() == reqwest::StatusCode::NOT_FOUND && body.is_empty() && optional {
@@ -77,33 +78,20 @@ impl RemoteObjectApi {
                         body.extend_from_slice(&chunk);
                     }
                     Ok(None) if body.len() != end_exclusive => {
-                        failures = failures.saturating_add(1);
-                        if failures > 3 {
-                            return Err(CmdError::click(format!(
-                                "authenticated object GET exhausted its byte-range retries after \
-                                 {} of {end_exclusive} bytes",
-                                body.len()
-                            ))
-                            .stating(crate::primitives::failure::FailureCode::InfraDown));
-                        }
-                        continue 'download;
+                        return Err(CmdError::click(format!(
+                            "authenticated object GET range ended after {} of {end_exclusive} bytes",
+                            body.len()
+                        ))
+                        .stating(crate::primitives::failure::FailureCode::InfraDown));
                     }
                     Ok(None) if body.len() == total => return Ok(Some(body)),
-                    Ok(None) => {
-                        failures = 0;
-                        continue 'download;
-                    }
+                    Ok(None) => continue 'download,
                     Err(error) => {
-                        failures = failures.saturating_add(1);
-                        if failures > 3 {
-                            return Err(CmdError::click(format!(
-                                "authenticated object GET exhausted its byte-range retries after \
-                                 {} bytes: {error}",
-                                body.len()
-                            ))
-                            .stating(crate::primitives::failure::FailureCode::InfraDown));
-                        }
-                        continue 'download;
+                        return Err(CmdError::click(format!(
+                            "authenticated object GET range connection closed after {} bytes: {error}",
+                            body.len()
+                        ))
+                        .stating(crate::primitives::failure::FailureCode::InfraDown));
                     }
                 }
             }
@@ -129,6 +117,14 @@ impl RemoteObjectApi {
             let response = match sent(request).await {
                 Ok(response) => response,
                 Err(error) => {
+                    // A refused connection ends the read at once: sending the
+                    // same GET again only waits on the same refusal.
+                    if let Some(cause) = crate::wait::refusal(&error) {
+                        return Err(CmdError::unreachable(format!(
+                            "the object API refused the object GET after {} bytes: {cause}",
+                            body.len()
+                        )));
+                    }
                     last_read_error = Some(format!(
                         "error sending authenticated object GET after {} bytes: {}",
                         body.len(),

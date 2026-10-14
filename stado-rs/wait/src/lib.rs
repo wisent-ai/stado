@@ -36,7 +36,7 @@ pub mod open;
 mod process;
 
 pub use cancel::{Cancellation, CANCELLED};
-pub use http::{request, request_blocking, sdk, send, send_built};
+pub use http::{refusal, request, request_blocking, sdk, send, send_built};
 pub use process::{
     child_output, child_output_async, output, output_async, output_cancellable, status,
     status_async,
