@@ -41,8 +41,8 @@ enum CatalogCommands {
     /// route called by the manifest's runtime.consumers, its own consumer
     /// with exactly `runtime.grants` and its bearer on every rollout target,
     /// and the product's entry in the release catalog the daily batch builds
-    /// from. `build submit` and `release submit` run the same steps before
-    /// their first write.
+    /// from; a required platform declaring no post-build tests is refused.
+    /// `build submit` and `release submit` run the same steps (and name it).
     Enroll {
         /// The product checkout whose `.wisent-release.json` is read.
         checkout: PathBuf,
@@ -59,8 +59,8 @@ enum CatalogCommands {
         json: bool,
     },
     /// Audit Stado's catalog without contacting repository hosts: every declared
-    /// publisher must have a catalog entry. Exits nonzero and names each
-    /// finding on any refusal.
+    /// publisher must have a catalog entry and every required platform tests.
+    /// Exits nonzero and names each finding on any refusal.
     Audit {
         #[arg(long)]
         json: bool,
@@ -215,6 +215,9 @@ async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), C
         &manifest.product,
         &enroll::missing_step_programs(&manifest, checkout),
     )?;
+    if let Some(refusal) = manifest.unqualifiable_refusal() {
+        return Err(CmdError::declaration(refusal));
+    }
     let enrollment = enroll(&manifest).await?;
     if json {
         println!(

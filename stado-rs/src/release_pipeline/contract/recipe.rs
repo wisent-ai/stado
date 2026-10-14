@@ -132,6 +132,18 @@ impl PlatformRecipe {
                     .map(|test| (test.name.as_str(), test.argv.as_slice())),
             )
     }
+
+    /// Why no build of this platform can qualify a task, when none can: a
+    /// passing build proves no behavior, so a platform that declares no
+    /// post-build tests leaves every task it carries `awaiting_tests`.
+    pub fn unqualifiable(&self) -> Option<&'static str> {
+        match self.tests.as_slice() {
+            [] => Some(
+                "declares no post-build tests; a passing build is not behavioral qualification",
+            ),
+            _ => None,
+        }
+    }
 }
 
 /// One product surface a platform's post-build tests need installed.

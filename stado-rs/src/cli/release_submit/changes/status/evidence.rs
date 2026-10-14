@@ -11,8 +11,8 @@ pub(super) fn incomplete(recipe: &PlatformRecipe, receipt: &BuildReceipt) -> Opt
             receipt.build.argv, receipt.build.status, receipt.build.exit_code
         ));
     }
-    if recipe.tests.is_empty() {
-        return Some("manifest declares no post-build tests; a passing build is not behavioral qualification".into());
+    if let Some(reason) = recipe.unqualifiable() {
+        return Some(format!("manifest {reason}"));
     }
     for test in &recipe.tests {
         let matches = |step: &&crate::release_pipeline::StepReceipt| {

@@ -44,6 +44,28 @@ pub struct ReleasePipelineManifest {
     pub deliveries: Vec<Delivery>,
 }
 
+impl ReleasePipelineManifest {
+    /// The refusal naming every required platform no build of which can
+    /// qualify a task ([`PlatformRecipe::unqualifiable`]); none when each can.
+    pub fn unqualifiable_refusal(&self) -> Option<String> {
+        let named: Vec<String> = self
+            .platforms
+            .iter()
+            .filter(|(_, recipe)| recipe.required)
+            .filter_map(|(name, recipe)| Some(format!("{name} {}", recipe.unqualifiable()?)))
+            .collect();
+        if named.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "{}: required platform {}; every task it carries stays awaiting_tests: add a `tests` \
+             list of real product journeys to each in .wisent-release.json",
+            self.product,
+            named.join("; ")
+        ))
+    }
+}
+
 /// What a build worker reads of a release manifest: the product and the
 /// platform recipes. A builder runs the Stado its host already has, so the
 /// sections it does not act on — deliveries, promotion, inputs, runtime — are

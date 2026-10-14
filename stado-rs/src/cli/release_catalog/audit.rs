@@ -1,9 +1,11 @@
 //! `stado release catalog audit`: every declared publisher checked against
-//! the release catalog, without contacting repository hosts.
+//! the release catalog, and every catalogued release manifest checked for
+//! required platforms none of whose builds can qualify a task, without
+//! contacting repository hosts.
 
 use std::collections::BTreeSet;
 
-use crate::release_pipeline::{self, ReleaseCatalogEntry};
+use crate::release_pipeline::{self, ProductManifest, ReleaseCatalogEntry};
 
 use super::catalog_uri;
 use crate::cli::CmdError;
@@ -61,7 +63,12 @@ pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
                 }
                 Ok(entry)
             }) {
-            Ok(entry) if products.insert(entry.product.clone()) => entries.push(entry),
+            Ok(entry) if products.insert(entry.product.clone()) => {
+                if let ProductManifest::Release(manifest) = &entry.manifest {
+                    failures.extend(manifest.unqualifiable_refusal());
+                }
+                entries.push(entry)
+            }
             Ok(entry) => failures.push(format!("duplicate catalog product {}", entry.product)),
             Err(error) => failures.push(format!("{uri}: {error}")),
         }
@@ -83,7 +90,7 @@ pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
         Ok(())
     } else {
         Err(CmdError::declaration(
-            "release catalog audit refused malformed, duplicate or silent entries",
+            "release catalog audit refused malformed, duplicate, silent or unqualifiable entries",
         ))
     }
 }

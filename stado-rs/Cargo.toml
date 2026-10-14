@@ -211,6 +211,10 @@ name = "wait-cycle-install-lock"
 path = "../tests/wait/cycle/install_lock.rs"
 
 [[test]]
+name = "release-untested-enroll"
+path = "../tests/release/untested/enroll.rs"
+
+[[test]]
 name = "quality-release-inputs"
 path = "../tests/quality/release_inputs.rs"
 

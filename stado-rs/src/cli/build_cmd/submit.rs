@@ -154,6 +154,12 @@ pub(crate) async fn enroll_source(reading: &SourceReading) -> Result<(), CmdErro
         &release_catalog::missing_step_programs(&reading.manifest, &reading.root),
     )?;
     release_catalog::enroll(&reading.manifest).await?;
+    // Such a platform still builds and publishes; it is named here because no
+    // build of it can qualify a task, which would otherwise surface only as
+    // `awaiting_tests` after the build.
+    if let Some(refusal) = reading.manifest.unqualifiable_refusal() {
+        eprintln!("warning: {refusal}");
+    }
     Ok(())
 }
 
