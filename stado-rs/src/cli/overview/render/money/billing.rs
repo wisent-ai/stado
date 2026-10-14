@@ -6,57 +6,63 @@
 
 use serde_json::Value;
 
-use super::amounts::number;
+use super::amounts::{amount, dollars};
 
 pub(super) fn print_billing(document: &Value) {
     println!("billing:");
     let billing = &document["billing"];
     println!(
         "  reported: {}",
-        billing
-            .get("reported_at")
-            .and_then(Value::as_str)
-            .unwrap_or("unavailable")
+        match billing.get("reported_at").and_then(Value::as_str) {
+            Some(at) => at,
+            None => "not reported",
+        }
     );
     let gcp = &billing[crate::capabilities::ProviderId::Gcp.as_str()];
+    let credit = |value: Option<&Value>| amount(value).map(|credit| -credit);
     if gcp.get("status").and_then(Value::as_str) == Some("ok") {
+        // A figure the report does not carry is said as not reported; 0.00
+        // and the word "current" stood in for a bill and a month nobody read.
         if let Some(month) = gcp
             .get("monthly")
             .and_then(Value::as_array)
             .and_then(|rows| rows.last())
         {
             println!(
-                "  GCP {}: gross=${:.2} credits=${:.2} net=${:.2}",
-                month
-                    .get("month")
-                    .and_then(Value::as_str)
-                    .unwrap_or("current"),
-                number(month.get("gross")),
-                -number(month.get("credits")),
-                number(month.get("net")),
+                "  GCP {}: gross={} credits={} net={}",
+                match month.get("month").and_then(Value::as_str) {
+                    Some(month) => month,
+                    None => "(month not reported)",
+                },
+                dollars(amount(month.get("gross"))),
+                dollars(credit(month.get("credits"))),
+                dollars(amount(month.get("net"))),
             );
         }
         println!(
-            "  GCP credit burn (7d avg): ${:.2}/day",
-            -number(gcp.get("avg_daily_credit_applied_7d"))
+            "  GCP credit burn (7d avg): {}/day",
+            dollars(credit(gcp.get("avg_daily_credit_applied_7d")))
         );
-        let promotion_used: f64 = gcp
+        let promotion_used = gcp
             .get("credits")
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|credit| credit.get("type").and_then(Value::as_str) == Some("PROMOTION"))
-            .map(|credit| -number(credit.get("cumulative")))
-            .sum();
-        println!("  GCP promotion credits applied: ${promotion_used:.2}");
+            .and_then(|credits| {
+                credits
+                    .iter()
+                    .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("PROMOTION"))
+                    .map(|entry| credit(entry.get("cumulative")))
+                    .sum::<Option<f64>>()
+            });
+        println!(
+            "  GCP promotion credits applied: {}",
+            dollars(promotion_used)
+        );
         println!("  GCP promotion remaining: unavailable (grant ceiling is not exposed by GCP)");
     } else {
-        println!(
-            "  GCP: {}",
-            gcp.get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or("unavailable")
-        );
+        match gcp.get("detail").and_then(Value::as_str) {
+            Some(detail) => println!("  GCP: {detail}"),
+            None => println!("  GCP: unavailable, and the report gives no reason: {gcp}"),
+        }
     }
     let azure = &billing[crate::capabilities::ProviderId::Azure.as_str()];
     if azure.get("status").and_then(Value::as_str) == Some("ok") {

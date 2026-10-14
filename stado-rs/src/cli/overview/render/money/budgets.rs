@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use super::amounts::{money, number};
+use super::amounts::{amount, money};
 
 pub(super) fn print_budgets(document: &Value) {
     println!("budgets:");
@@ -22,10 +22,14 @@ pub(super) fn print_budgets(document: &Value) {
             limit("daily_usd"),
             limit("monthly_usd"),
         );
+        let usd = |key: &str| match amount(policy.get(key)) {
+            Some(value) => format!("{value} USD"),
+            None => "not reported".to_string(),
+        };
         println!(
-            "  burn: {} USD/h now, {} USD projected at month end, budget exceeded={}",
-            number(policy.get("current_hourly_usd")),
-            number(policy.get("end_of_month_usd")),
+            "  burn: {}/h now, {} projected at month end, budget exceeded={}",
+            usd("current_hourly_usd"),
+            usd("end_of_month_usd"),
             match policy.get("budget_exceeded").and_then(Value::as_bool) {
                 Some(exceeded) => exceeded.to_string(),
                 None => "not reported".to_string(),
