@@ -26,32 +26,15 @@ use crate::cli::CmdError;
 
 mod unpushed;
 
-/// The Cargo workspaces an install of `tree` could build: a `Cargo.toml` with
-/// a `Cargo.lock` beside it, at the root or one directory down (`<product>-rs`
-/// layouts), in path order. A tree that cannot be listed is refused: read as
-/// holding no workspace, every lock in it passed the check unasked.
+/// The Cargo workspaces an install of `tree` could build
+/// ([`stado_product::cargo_lock::workspaces`], the reader a failed install
+/// build uses too). A tree that cannot be listed is refused: read as holding
+/// no workspace, every lock in it passed the check unasked.
 fn workspaces(tree: &Path) -> Result<Vec<PathBuf>, CmdError> {
-    let mut found = Vec::new();
-    let mut consider = |dir: &Path| {
-        if dir.join("Cargo.toml").is_file() && dir.join("Cargo.lock").is_file() {
-            found.push(dir.to_path_buf());
-        }
-    };
-    consider(tree);
-    let unlisted =
-        |error: std::io::Error| CmdError::click(format!("cannot list {}: {error}", tree.display()));
-    let mut children = Vec::new();
-    for entry in std::fs::read_dir(tree).map_err(unlisted)? {
-        let path = entry.map_err(unlisted)?.path();
-        if path.is_dir() {
-            children.push(path);
-        }
-    }
-    children.sort();
-    for child in children {
-        consider(&child);
-    }
-    Ok(found)
+    stado_product::cargo_lock::workspaces(tree).map_err(|error| {
+        CmdError::click(format!("cannot list {}: {error}", tree.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })
 }
 
 /// Every path dependency of the workspace at `manifest` whose declared path

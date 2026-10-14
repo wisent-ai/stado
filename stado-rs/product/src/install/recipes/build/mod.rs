@@ -188,6 +188,7 @@ pub fn release(
             })?;
         }
         step(&spec["build"], root, &environment)
+            .map_err(|failure| crate::cargo_lock::explain(failure, root, id, &revision))
             .with_context(|| format!("{id} build failed; evidence: {}", evidence.display()))?;
         // The build passed: a failure from here on costs no rebuild.
         evidence::retained::keep(&area, &key, &evidence, id, &revision)?;

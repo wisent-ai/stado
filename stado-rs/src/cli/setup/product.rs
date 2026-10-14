@@ -240,13 +240,18 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
 }
 
 /// Product failures carry their classification in the cause chain. A retained
-/// installation bound to another host is a refused lifecycle transition.
+/// installation bound to another host is a refused lifecycle transition; a
+/// build of a committed manifest its own Cargo.lock does not cover is the
+/// committed source refusing, which no retry changes.
 /// Otherwise the first IO or JSON cause decides; wording is never classified.
 fn product_failure_code(error: &anyhow::Error) -> crate::primitives::failure::FailureCode {
     for cause in error.chain() {
         if cause
             .downcast_ref::<stado_product::InstallationHostConflict>()
             .is_some()
+            || cause
+                .downcast_ref::<stado_product::cargo_lock::UnlockedManifest>()
+                .is_some()
         {
             return crate::primitives::failure::FailureCode::Refused;
         }
