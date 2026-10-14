@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,6 +24,16 @@ const environment = { ...process.env, HOME: home, WISENT_WORKSPACE: dirname(root
   STADO_CI_MAIN_RECORD: ciRecord };
 const report = { result: 'failed', source_revision: revision, host, ci_record: ciRecord, commands: [] };
 const digest = path => createHash('sha256').update(readFileSync(path)).digest('hex');
+function fingerprint(path) {
+  const metadata = lstatSync(path);
+  if (metadata.isSymbolicLink()) return { link: readlinkSync(path) };
+  if (metadata.isDirectory()) {
+    return Object.fromEntries(readdirSync(path).sort()
+      .map(name => [name, fingerprint(join(path, name))]));
+  }
+  assert.ok(metadata.isFile(), `unsupported installed node: ${path}`);
+  return { sha256: digest(path), mode: metadata.mode, modified: metadata.mtimeMs };
+}
 function execute(executable, arguments_, env = environment, cwd = root) {
   const result = spawnSync(executable, arguments_, { cwd, env, encoding: 'utf8' });
   report.commands.push({ executable, arguments: arguments_, exit_status: result.status,
@@ -113,6 +123,31 @@ try {
   assert.equal(installedConsumer.source_revision, revision);
   assert.ok(installedConsumer.installed_paths?.length, 'consumer files must be recorded');
   report.after = { provider, consumer: installedConsumer };
+  const providerReceipt = join(home, '.stado', 'products', required.product,
+    `${required.surface}.json`);
+  const retainedReceipt = readFileSync(providerReceipt);
+  const retainedFiles = Object.fromEntries(provider.installed_paths
+    .map(path => [path, fingerprint(path)]));
+  const reusePlan = JSON.parse(succeeds(stado(['product', 'install', consumer.product,
+    '--surface', 'cli', '--source-commit', revision, '--plan', '--json'])));
+  const reuseStep = reusePlan.chain.find(item =>
+    item.product === required.product && item.verb === required.verb);
+  assert.ok(reuseStep, 'repeat plan must retain the prerequisite decision');
+  assert.equal(reuseStep.action, 'reuse');
+  assert.equal(reuseStep.installed_revision, green);
+  report.reuse_plan = reusePlan;
+  // Omit --with-prerequisites: the installed provider must already satisfy the verb.
+  const repeated = JSON.parse(succeeds(stado(['product', 'install', consumer.product,
+    '--surface', 'cli', '--source-commit', revision, '--json'])));
+  assert.equal(repeated.status, 'installed');
+  assert.equal(repeated.source_revision, revision);
+  assert.deepEqual(readFileSync(providerReceipt), retainedReceipt,
+    'reinstalling the consumer must not replace the satisfied provider receipt');
+  assert.deepEqual(Object.fromEntries(provider.installed_paths
+    .map(path => [path, fingerprint(path)])), retainedFiles,
+  'reinstalling the consumer must preserve provider bytes, modes and modification times');
+  report.repeated = { consumer: repeated, provider: JSON.parse(retainedReceipt.toString()),
+    files: retainedFiles };
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);
