@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use crate::config;
-use crate::providers::{get_provider, Provider};
+use crate::providers::{get_provider, Provider, ProviderError};
 use crate::queue::JobStorage;
 use crate::scheduler::quota::scalar::py_int;
 use crate::scheduler::quota::QuotaError;
@@ -45,14 +45,11 @@ pub async fn summarize_quotas(
     store: &JobStorage,
 ) -> Result<BTreeMap<String, BTreeMap<String, QuotaRow>>, QuotaError> {
     let provider_names = config::wc_providers().to_vec();
-    let mut providers: BTreeMap<String, Arc<dyn Provider>> = BTreeMap::new();
+    // A provider whose constructor fails keeps its failure: with quota rows
+    // and no running count, every accelerator read as wholly available.
+    let mut providers: BTreeMap<String, Result<Arc<dyn Provider>, ProviderError>> = BTreeMap::new();
     for name in &provider_names {
-        // A provider whose constructor throws (creds missing) is skipped
-        // here; its running count then defaults to {} below, like Python's
-        // `except Exception: running = {}`.
-        if let Ok(provider) = get_provider(name) {
-            providers.insert(name.clone(), provider);
-        }
+        providers.insert(name.clone(), get_provider(name));
     }
     summarize_quotas_with(store, &provider_names, None, &providers).await
 }
@@ -65,7 +62,7 @@ async fn summarize_quotas_with(
     store: &JobStorage,
     provider_names: &[String],
     live_by_provider: Option<&BTreeMap<String, BTreeMap<String, i64>>>,
-    providers: &BTreeMap<String, Arc<dyn Provider>>,
+    providers: &BTreeMap<String, Result<Arc<dyn Provider>, ProviderError>>,
 ) -> Result<BTreeMap<String, BTreeMap<String, QuotaRow>>, QuotaError> {
     let mut out: BTreeMap<String, BTreeMap<String, QuotaRow>> = BTreeMap::new();
     for provider_name in provider_names {
@@ -93,9 +90,16 @@ async fn summarize_quotas_with(
             continue;
         }
         // A running count that cannot be read is refused: read as none, every
-        // accelerator showed its whole quota as available.
+        // accelerator showed its whole quota as available. That includes a
+        // provider that could not be constructed to be asked.
         let running = match providers.get(provider_name) {
-            Some(provider) => provider.list_running_instances().await?,
+            Some(Ok(provider)) => provider.list_running_instances().await?,
+            Some(Err(error)) => {
+                return Err(QuotaError::Provider(ProviderError::Value(format!(
+                    "{provider_name} declares quota but its running instances cannot be read: \
+                     {error}"
+                ))))
+            }
             None => BTreeMap::new(),
         };
         let mut summary_rows = BTreeMap::new();
