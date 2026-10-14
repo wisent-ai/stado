@@ -18,12 +18,6 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
         WorkCommands::Job(sub) => job::dispatch(sub).await,
         WorkCommands::Results { job_id, output_dir } => results::run(&job_id, &output_dir).await,
         WorkCommands::Quality(sub) => match sub {
-            QualityCommands::Parse { argv } => crate::cli::quality::parse(&argv),
-            QualityCommands::Units {
-                candidate,
-                program,
-                host,
-            } => crate::cli::quality::units(&candidate, &program, host.as_deref()).await,
             QualityCommands::Format { root } => crate::cli::quality::format(root.as_deref()).await,
             QualityCommands::Check {
                 root,
