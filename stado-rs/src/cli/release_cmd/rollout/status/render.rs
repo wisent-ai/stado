@@ -10,8 +10,7 @@ pub(super) fn print_runs(runs: &[Value]) {
     for run in runs {
         println!(
             "run {} {} {} {} {} {}{}",
-            &run["run_id"].as_str().unwrap_or("-")
-                [..8.min(run["run_id"].as_str().unwrap_or("-").len())],
+            recorded(run, "run_id"),
             recorded(run, "product"),
             recorded(run, "version"),
             recorded(run, "channel"),
@@ -31,8 +30,7 @@ pub(super) fn print_runs(runs: &[Value]) {
             let mut line = format!(
                 "  {platform} {} job={}",
                 recorded(record, "state"),
-                &record["job_id"].as_str().unwrap_or("-")
-                    [..8.min(record["job_id"].as_str().unwrap_or("-").len())],
+                recorded(record, "job_id"),
             );
             if let Some(job_state) = record["job_state"].as_str() {
                 line.push_str(&format!(" [{job_state}]"));
