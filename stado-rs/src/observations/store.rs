@@ -33,8 +33,12 @@ fn path() -> io::Result<PathBuf> {
 /// evidence, and dropping all of them to punish one is how a fleet loses the
 /// record it is about to need.
 pub fn load() -> Vec<Observation> {
-    let Ok(path) = path() else {
-        return Vec::new();
+    let path = match path() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("observations: {error}, so every observation reads as never");
+            return Vec::new();
+        }
     };
     // Never observed is the answer only for a file that is not there. An
     // unreadable or malformed one still answers no rows -- every reader
