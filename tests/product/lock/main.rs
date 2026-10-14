@@ -86,10 +86,23 @@ impl Journey {
     }
 
     fn exercise(&mut self, repository: &Path) -> Result<()> {
-        self.report["source_revision"] =
-            json!(self.run(repository, "git", &["rev-parse", "HEAD"])?);
-        self.report["source_diff"] =
-            json!(self.run(repository, "git", &["diff", "--binary", "HEAD"])?);
+        // The quality gate runs this journey in an exported tree with no Git
+        // checkout and states the commit it exported (`WISENT_SOURCE_COMMIT`):
+        // that tree is the commit, with nothing uncommitted. Run from the
+        // checkout, its own HEAD and working-tree diff are recorded.
+        match std::env::var("WISENT_SOURCE_COMMIT") {
+            Ok(commit) => {
+                self.report["source_revision"] = json!(commit);
+                self.report["source_diff"] = json!("");
+            }
+            Err(std::env::VarError::NotPresent) => {
+                self.report["source_revision"] =
+                    json!(self.run(repository, "git", &["rev-parse", "HEAD"])?);
+                self.report["source_diff"] =
+                    json!(self.run(repository, "git", &["diff", "--binary", "HEAD"])?);
+            }
+            Err(error) => anyhow::bail!("WISENT_SOURCE_COMMIT is set but cannot be read: {error}"),
+        }
         let checkout = self.root.join("source");
         fs::create_dir_all(checkout.join("src"))?;
         self.run(
