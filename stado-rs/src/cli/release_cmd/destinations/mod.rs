@@ -105,24 +105,31 @@ pub async fn dispatch(args: DestinationArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// A field of the answer as it was given — text bare, any other value as
+/// JSON — or `not reported`: read as text only, a generation the registry
+/// gave as a number printed as nothing.
+fn field(value: &Value) -> String {
+    match value {
+        Value::Null => "not reported".to_string(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
 fn print(answer: &Value) {
     println!(
         "registry generation {}",
-        answer["registry_generation"].as_str().unwrap_or_default()
+        field(&answer["registry_generation"])
     );
     if let Some(products) = answer["products"].as_array() {
         for product in products {
             println!(
                 "{}: {}",
-                product["product"].as_str().unwrap_or_default(),
+                field(&product["product"]),
                 product["destinations"]
             );
         }
     } else {
-        println!(
-            "{}: {}",
-            answer["product"].as_str().unwrap_or_default(),
-            answer
-        );
+        println!("{}: {}", field(&answer["product"]), answer);
     }
 }
