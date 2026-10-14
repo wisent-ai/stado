@@ -38,27 +38,32 @@ async fn authorized_json(
 /// project's billing is detached on purpose, and asking it for budgets from
 /// every overview turned the whole section into "token request failed".
 pub(super) async fn read_budgets(store: &JobStorage) -> Value {
-    let forecast: Option<Value> =
+    let forecast =
         crate::autonomy::storage::read_json::<Value>(store, "state/autonomy/cost/forecast.json")
-            .await
-            .ok()
-            .flatten();
+            .await;
+    // A field the forecast does not carry is JSON null: not reported.
     let policy = match &forecast {
-        Some(forecast) => json!({
+        Ok(Some(forecast)) => json!({
             "status": "ok",
             "source": "autonomy policy, via state/autonomy/cost/forecast.json",
-            "created_at": forecast.get("created_at").cloned().unwrap_or(Value::Null),
-            "hourly_usd": forecast.get("hourly_budget_usd").cloned().unwrap_or(Value::Null),
-            "daily_usd": forecast.get("daily_budget_usd").cloned().unwrap_or(Value::Null),
-            "monthly_usd": forecast.get("monthly_budget_usd").cloned().unwrap_or(Value::Null),
-            "current_hourly_usd": forecast.get("current_hourly_usd").cloned().unwrap_or(Value::Null),
-            "end_of_month_usd": forecast.get("end_of_month_usd").cloned().unwrap_or(Value::Null),
-            "budget_exceeded": forecast.get("budget_exceeded").cloned().unwrap_or(Value::Null),
-            "credit_runway_days": forecast.get("credit_runway_days").cloned().unwrap_or(Value::Null),
+            "created_at": forecast["created_at"].clone(),
+            "hourly_usd": forecast["hourly_budget_usd"].clone(),
+            "daily_usd": forecast["daily_budget_usd"].clone(),
+            "monthly_usd": forecast["monthly_budget_usd"].clone(),
+            "current_hourly_usd": forecast["current_hourly_usd"].clone(),
+            "end_of_month_usd": forecast["end_of_month_usd"].clone(),
+            "budget_exceeded": forecast["budget_exceeded"].clone(),
+            "credit_runway_days": forecast["credit_runway_days"].clone(),
         }),
-        None => json!({
+        Ok(None) => json!({
             "status": "unavailable",
             "detail": "no cost forecast persisted yet; run `stado optimize run`",
+        }),
+        // A forecast the store could not give is not one never written: the
+        // policy budgets are unknown, and the cause is what to repair.
+        Err(error) => json!({
+            "status": "error",
+            "detail": format!("state/autonomy/cost/forecast.json could not be read: {error}"),
         }),
     };
     let gcp = if crate::config::billing_providers()
