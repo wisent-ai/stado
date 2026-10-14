@@ -42,7 +42,8 @@ pub(super) async fn list(
         };
         // The whole ref: a cut one cannot be copied into `stado artifact show`.
         let ref_str = manifest.ref_.to_string();
-        let created: String = manifest.created_at.chars().take(19).collect();
+        // The creation time whole, with its zone; a cut one reads as local.
+        let created = &manifest.created_at;
         let result = if manifest.verification.result.is_empty() {
             "unverified"
         } else {
