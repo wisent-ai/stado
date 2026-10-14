@@ -8,10 +8,18 @@ use super::*;
 /// chosen path, or None when nothing was changed.
 /// Python `setup_agent_staging`.
 pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String> {
-    let explicit = std::env::var("TMPDIR")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    // A TMPDIR that is not text is left alone and said: read as unset, it
+    // was replaced by a staging directory of our choosing.
+    let explicit = match crate::config_file::variable("TMPDIR") {
+        Ok(Some(explicit)) => explicit.trim().to_string(),
+        Ok(None) => String::new(),
+        Err(cause) => {
+            log_fn(&format!(
+                "staging: {cause}; staging stays where TMPDIR points"
+            ));
+            return None;
+        }
+    };
     if !explicit.is_empty() && !explicit.starts_with("/tmp") {
         log_fn(&format!(
             "staging: TMPDIR already set to {explicit}; keeping it"
@@ -38,7 +46,15 @@ pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String>
             return None;
         }
     };
-    let user = agent_user();
+    let user = match agent_user() {
+        Ok(user) => user,
+        Err(cause) => {
+            log_fn(&format!(
+                "staging: the agent user cannot be named ({cause}); staging stays on /tmp (RAM)"
+            ));
+            return None;
+        }
+    };
     let mut best: Option<(String, f64, bool)> = None;
     let mounts = match candidate_mounts() {
         Ok(mounts) => mounts,
@@ -58,7 +74,10 @@ pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String>
             ));
             continue;
         }
-        chown_if_root(&target, &user);
+        if let Err(cause) = chown_if_root(&target, &user) {
+            log_fn(&format!("staging: {cause}; skipping"));
+            continue;
+        }
         if !writable_for_self(&target) {
             if euid() == 0 {
                 try_repair_traversal(&target, log_fn);

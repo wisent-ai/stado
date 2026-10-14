@@ -39,46 +39,51 @@ pub fn parse_passwd(text: &str) -> Vec<PasswdEntry> {
         .collect()
 }
 
-fn read_passwd() -> Vec<PasswdEntry> {
+/// The passwd rows, or why /etc/passwd cannot be read: read as no rows, the
+/// agent user became its bare uid and no staging directory was handed over.
+fn read_passwd() -> Result<Vec<PasswdEntry>, String> {
     std::fs::read_to_string("/etc/passwd")
         .map(|text| parse_passwd(&text))
-        .unwrap_or_default()
+        .map_err(|error| format!("cannot read /etc/passwd: {error}"))
 }
 
 /// Python `_agent_user`: WISENT_STAGING_USER override, else the passwd
-/// name for the euid, else the numeric euid (Python's KeyError branch).
-pub fn agent_user() -> String {
-    if let Ok(explicit) = std::env::var("WISENT_STAGING_USER") {
+/// name for the euid, else the numeric euid (Python's KeyError branch). An
+/// override that is not text, or a passwd file that cannot be read, is the
+/// error.
+pub fn agent_user() -> Result<String, String> {
+    if let Some(explicit) = crate::config_file::variable("WISENT_STAGING_USER")? {
         let explicit = explicit.trim();
         if !explicit.is_empty() {
-            return explicit.to_string();
+            return Ok(explicit.to_string());
         }
     }
     let uid = euid();
-    read_passwd()
-        .into_iter()
-        .find(|entry| entry.uid == uid)
-        .map(|entry| entry.name)
-        .unwrap_or_else(|| uid.to_string())
+    match read_passwd()?.into_iter().find(|entry| entry.uid == uid) {
+        Some(entry) => Ok(entry.name),
+        None => Ok(uid.to_string()),
+    }
 }
 
-/// Python `_chown_if_root`: hand the staging dir to the agent user.
-pub(super) fn chown_if_root(path: &Path, user: &str) {
+/// Python `_chown_if_root`: hand the staging dir to the agent user. Every
+/// failure is said: Python's bare `except OSError: pass` left a root-owned
+/// staging directory the agent user then could not write, with no word why.
+pub(super) fn chown_if_root(path: &Path, user: &str) -> Result<(), String> {
     if euid() != 0 {
-        return;
+        return Ok(());
     }
-    let Some(entry) = read_passwd().into_iter().find(|entry| entry.name == user) else {
-        return;
+    let Some(entry) = read_passwd()?.into_iter().find(|entry| entry.name == user) else {
+        return Err(format!(
+            "{} cannot be handed to {user}: /etc/passwd has no such user",
+            path.display()
+        ));
     };
     use std::os::unix::fs::MetadataExt;
-    let Ok(md) = std::fs::metadata(path) else {
-        return;
-    };
+    let md = std::fs::metadata(path)
+        .map_err(|error| format!("{} cannot be examined: {error}", path.display()))?;
     if md.uid() != entry.uid {
-        if let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) {
-            // SAFETY: c_path is a valid NUL-terminated path; errors are
-            // deliberately ignored (Python's bare `except OSError: pass`).
-            unsafe { nix::libc::chown(c_path.as_ptr(), entry.uid, entry.gid) };
-        }
+        std::os::unix::fs::chown(path, Some(entry.uid), Some(entry.gid))
+            .map_err(|error| format!("{} cannot be handed to {user}: {error}", path.display()))?;
     }
+    Ok(())
 }
