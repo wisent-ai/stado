@@ -29,8 +29,19 @@ struct Unanswered {
     cause: String,
 }
 
+/// Where the record lives; a HOME that is not set is said, since without the
+/// record every reader waits the whole interval again.
 fn path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".stado").join(FILE))
+    match std::env::var_os("HOME") {
+        Some(home) => Some(PathBuf::from(home).join(".stado").join(FILE)),
+        None => {
+            eprintln!(
+                "stado: HOME is not set, so an unanswered read of the registry authority is not \
+                 kept for the next reader"
+            );
+            None
+        }
+    }
 }
 
 /// Keep `cause`, the sentence a read of `host` was abandoned with after
@@ -103,7 +114,16 @@ fn standing_record(path: &std::path::Path) -> Option<Unanswered> {
 /// one interval ago: that read's sentence and when it was given up.
 pub(in crate::cli::resolver) fn standing(host: &str) -> Option<String> {
     let record = standing_record(&path()?).filter(|record| record.host == host)?;
-    let interval = chrono::Duration::seconds(i64::try_from(record.seconds).ok()?);
+    let interval = match i64::try_from(record.seconds) {
+        Ok(seconds) => chrono::Duration::seconds(seconds),
+        Err(error) => {
+            eprintln!(
+                "stado: the unanswered read of {host} records {}s, which is no interval: {error}",
+                record.seconds
+            );
+            return None;
+        }
+    };
     let retry_at = record.abandoned_at + interval;
     (Utc::now() < retry_at).then(|| {
         format!(
