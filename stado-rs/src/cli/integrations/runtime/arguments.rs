@@ -125,7 +125,8 @@ pub(crate) struct ServeArgs {
     /// Collect workstation diagnostics inside this host process.
     #[arg(long)]
     pub watchdog: bool,
-    /// Diagnostics destination; the standalone watchdog's default applies when omitted.
+    /// Diagnostics destination; the declared queue bucket (WC_BUCKET) when
+    /// omitted, and the role is refused when neither names one.
     #[arg(long, requires = "watchdog")]
     pub watchdog_bucket: Option<String>,
     /// Seconds between workstation diagnostics collections; required with

@@ -202,10 +202,14 @@ async fn start_roles(
         })?;
     }
     if args.watchdog {
+        let bucket = match args.watchdog_bucket {
+            Some(bucket) => bucket,
+            None => crate::watchdog::configured_bucket().map_err(|reason| {
+                CmdError::click(reason).stating(crate::primitives::failure::FailureCode::Config)
+            })?,
+        };
         let diagnostics = crate::watchdog::ParsedArgs {
-            bucket: args
-                .watchdog_bucket
-                .unwrap_or_else(crate::watchdog::configured_bucket),
+            bucket,
             interval_s: args.watchdog_interval_seconds,
             once: false,
         };

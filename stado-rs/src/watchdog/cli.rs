@@ -3,7 +3,6 @@
 use std::time::Duration;
 
 use super::upload::once;
-use super::DEFAULT_BUCKET;
 
 /// Where diagnostics go, and how often they are collected.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,14 +14,17 @@ pub struct ParsedArgs {
     pub once: bool,
 }
 
-pub(crate) fn configured_bucket() -> String {
-    let bucket_env = crate::capabilities::config_env(
-        crate::capabilities::RuntimeFacet::Storage,
-        crate::capabilities::StorageAdapter::Gcs.id(),
-        "bucket",
-    )
-    .expect("GCS bucket binding is missing from the capability catalog");
-    std::env::var(bucket_env).unwrap_or_else(|_| DEFAULT_BUCKET.to_string())
+/// The declared queue bucket (`crate::config::bucket`, its `WC_BUCKET`
+/// binding or `config.json`). No bucket is built in: one used to be, so a
+/// deployment that declared none uploaded its diagnostics to a bucket that
+/// was not its own. An undeclared bucket is refused by name.
+pub(crate) fn configured_bucket() -> Result<String, String> {
+    match crate::config::bucket() {
+        "" => Err(
+            "the watchdog has no bucket: pass --watchdog-bucket or declare WC_BUCKET".to_string(),
+        ),
+        bucket => Ok(bucket.to_string()),
+    }
 }
 
 /// Run the declared diagnostics schedule in the caller's process. It returns

@@ -21,8 +21,6 @@ pub use upload::{once, once_with, upload_with};
 
 pub(crate) use collect::hostname;
 
-/// Python `DEFAULT_BUCKET` (the watchdog's own default, NOT config BUCKET).
-pub const DEFAULT_BUCKET: &str = "wisent-compute";
 /// Python `OUT_PREFIX`.
 pub const OUT_PREFIX: &str = "box_diagnostics";
 /// Local standby path when the upload fails (Python `_write_local`).
