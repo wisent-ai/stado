@@ -39,7 +39,7 @@ impl From<QuotaError> for CmdError {
         let code = match error {
             QuotaError::Storage(storage) => return Self::from(storage),
             QuotaError::Provider(provider) => return Self::from(provider),
-            QuotaError::Json(_) => FailureCode::Config,
+            QuotaError::Json(_) | QuotaError::Gcp(GceError::Project) => FailureCode::Config,
             QuotaError::Gcp(GceError::Auth(_)) | QuotaError::Azure(AzureError::Auth(_)) => {
                 FailureCode::Auth
             }
@@ -154,8 +154,8 @@ pub(super) fn contact_email(flag: &str) -> String {
 /// project (`crate::config::project`, its env binding or `config.json`).
 /// No project is built in. One used to be, so a deployment that declared none
 /// read and requested GPU quota against a project that was not its own; an
-/// undeclared project is now the empty name, which the Cloud Quotas API
-/// refuses with its own answer.
+/// undeclared project is refused by the Cloud Quotas client naming
+/// `GCP_PROJECT`.
 pub(super) fn gcp_project_env() -> String {
     crate::config::project().to_string()
 }

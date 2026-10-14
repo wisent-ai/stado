@@ -59,16 +59,9 @@ pub async fn fetch_quotas_gcp(
     Ok(out)
 }
 
-/// The GCP project the quota read targets. Python quota.py resolves
-/// `os.environ.get("GCP_PROJECT", "wisent-480400")` — env only, NOT
-/// config.PROJECT (which also reads the config file). Kept env-only for
-/// parity.
+/// The GCP project the quota read targets: the deployment's declared project
+/// (`crate::config::project`). No project is built in; an undeclared one is
+/// refused by `GceClient::new` naming `GCP_PROJECT`.
 pub(in crate::scheduler::quota) fn gcp_project_env() -> String {
-    let env = crate::capabilities::config_env(
-        crate::capabilities::RuntimeFacet::Compute,
-        crate::capabilities::ProviderId::Gcp.as_str(),
-        "project",
-    )
-    .expect("GCP project binding is missing from the capability catalog");
-    std::env::var(env).unwrap_or_else(|_| "wisent-480400".to_string())
+    crate::config::project().to_string()
 }

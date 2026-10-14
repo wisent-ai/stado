@@ -287,5 +287,6 @@ fn gce_error_kind(exc: &GceError) -> &'static str {
         GceError::Auth(_) => "DefaultCredentialsError",
         GceError::Http(_) => "RetryError",
         GceError::Api(_) => "GoogleAPICallError",
+        GceError::Project => "ValueError",
     }
 }

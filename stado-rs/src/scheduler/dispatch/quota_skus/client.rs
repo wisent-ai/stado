@@ -23,6 +23,9 @@ pub enum CatalogError {
     /// (`status` unset); the detail carries status + body head.
     #[error("{detail}")]
     Api { status: Option<u16>, detail: String },
+    /// No GCP project is declared, so there is no project to read.
+    #[error("no GCP project is declared: set GCP_PROJECT")]
+    Project,
 }
 
 impl CatalogError {
@@ -35,6 +38,7 @@ impl CatalogError {
         use crate::primitives::failure::FailureCode;
         match self {
             Self::Auth(_) => FailureCode::Auth,
+            Self::Project => FailureCode::Config,
             Self::Http(error) if error.is_timeout() => FailureCode::Timeout,
             Self::Http(_) | Self::Api { status: None, .. } => FailureCode::InfraDown,
             Self::Api {
@@ -64,6 +68,9 @@ struct Inner {
 impl CloudQuotasClient {
     /// Bind to the public Cloud Quotas API, resolving GCP credentials.
     pub async fn new(project: &str) -> Result<Self, CatalogError> {
+        if project.trim().is_empty() {
+            return Err(CatalogError::Project);
+        }
         let auth = crate::skarbiec::gcp_provider()
             .await
             .map_err(|err| CatalogError::Auth(err.to_string()))?;

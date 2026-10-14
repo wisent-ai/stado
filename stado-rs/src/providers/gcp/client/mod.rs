@@ -34,6 +34,9 @@ pub enum GceError {
     /// Non-2xx response or failed LRO; message carries codes + body text.
     #[error("{0}")]
     Api(String),
+    /// No GCP project is declared, so there is no project to address.
+    #[error("no GCP project is declared: set GCP_PROJECT")]
+    Project,
 }
 
 /// Bearer-authenticated GCE REST v1 client. Cheap to clone.
@@ -54,6 +57,9 @@ impl GceClient {
     /// (cloud-platform scope). No credentials is a hard error (same as the
     /// Python SDK client construction).
     pub async fn new(project: &str) -> Result<Self, GceError> {
+        if project.trim().is_empty() {
+            return Err(GceError::Project);
+        }
         let auth = crate::skarbiec::gcp_provider()
             .await
             .map_err(|err| GceError::Auth(err.to_string()))?;

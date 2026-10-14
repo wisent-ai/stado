@@ -16,17 +16,11 @@ fn legacy_gpu_quota_re() -> &'static regex::Regex {
     &RE
 }
 
-/// The GCP project the catalog read targets. Python quota_skus.py resolves
-/// `os.environ.get("GCP_PROJECT", "wisent-480400")` — env only, NOT
-/// config.PROJECT. Kept env-only for parity.
+/// The GCP project the catalog read targets: the deployment's declared
+/// project (`crate::config::project`). No project is built in; an undeclared
+/// one is refused by [`CloudQuotasClient::new`] naming `GCP_PROJECT`.
 pub(crate) fn gcp_project_env() -> String {
-    let env = crate::capabilities::config_env(
-        crate::capabilities::RuntimeFacet::Compute,
-        crate::capabilities::ProviderId::Gcp.as_str(),
-        "project",
-    )
-    .expect("GCP project binding is missing from the capability catalog");
-    std::env::var(env).unwrap_or_else(|_| "wisent-480400".to_string())
+    crate::config::project().to_string()
 }
 
 /// Enumerate every GPU-related compute.googleapis.com QuotaInfo in the
@@ -142,14 +136,14 @@ pub async fn gcp_request_status(client: &CloudQuotasClient) -> Result<Vec<Value>
         };
         let dims = pref.get("dimensions").cloned().unwrap_or(json!({}));
         // Python `qc.granted_value if qc and qc.granted_value else None`:
-        // a missing/zero granted value is null in the row.
-        let granted = json_i64(config.get("grantedValue")).filter(|v| *v != 0);
+        // a missing or nothing-granted value is null in the row.
+        let granted = json_i64(config.get("grantedValue")).filter(|v| v.is_positive());
         out.push(json!({
             "name": pref.get("name").and_then(Value::as_str).unwrap_or(""),
             "quota_id": pref.get("quotaId").and_then(Value::as_str).unwrap_or(""),
             "gpu_family": dims.get("gpu_family").and_then(Value::as_str).unwrap_or(""),
             "region": dims.get("region").and_then(Value::as_str).unwrap_or(""),
-            "preferred_value": json_i64(config.get("preferredValue")).unwrap_or(0),
+            "preferred_value": json_i64(config.get("preferredValue")),
             "granted_value": granted,
             "state": state,
             "state_detail": config.get("stateDetail").and_then(Value::as_str).unwrap_or(""),
