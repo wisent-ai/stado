@@ -164,9 +164,10 @@ pub(super) async fn seed_running_jobs(
             // Running job points to an agent we no longer track as live.
             // Leave its VRAM out of the projection; the reaper will move
             // the running blob to failed on its own pass. Logging only.
+            // Named by its running blob, which every job has; its job_id
+            // field read as "" printed a job named nothing.
             log_fn(&format!(
-                "makespan: running {} on dead host {host}; skipping projection",
-                doc.get("job_id").and_then(Value::as_str).unwrap_or("")
+                "makespan: running {path} on dead host {host}; skipping projection"
             ));
             continue;
         };
@@ -190,10 +191,7 @@ pub(super) async fn seed_running_jobs(
             // Admin/maintenance commands have no parseable (model, task); the
             // matcher can't predict their finish time. Agent-side smi_free
             // enforces actual VRAM at claim time.
-            log_fn(&format!(
-                "makespan: skip running {} for seeding",
-                doc.get("job_id").and_then(Value::as_str).unwrap_or("")
-            ));
+            log_fn(&format!("makespan: skip running {path} for seeding"));
             continue;
         };
         let remaining = (est - elapsed.max(0.0)).max(0.0);
