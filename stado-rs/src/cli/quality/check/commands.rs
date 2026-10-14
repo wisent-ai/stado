@@ -89,6 +89,8 @@ fn clap_children(help: &str) -> Option<BTreeSet<&str>> {
     if !lines.by_ref().any(|line| line == "Commands:") {
         return None;
     }
+    let first = lines.clone().find(|line| !line.trim().is_empty())?;
+    let indentation = first.len() - first.trim_start().len();
     let mut children = BTreeSet::new();
     for line in lines {
         if line.is_empty() {
@@ -97,10 +99,12 @@ fn clap_children(help: &str) -> Option<BTreeSet<&str>> {
         if !line.starts_with(' ') {
             break;
         }
-        if let Some((name, description)) = line.trim_start().split_once("  ") {
-            if name != "help" && !description.trim().is_empty() {
-                children.insert(name);
-            }
+        if line.len() - line.trim_start().len() == indentation {
+            children.extend(
+                line.split_whitespace()
+                    .next()
+                    .filter(|name| *name != "help"),
+            );
         }
     }
     Some(children)
