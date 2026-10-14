@@ -145,6 +145,11 @@ enum NativeReleaseSourceOperations {
             .init(id: "root", label: "Workspace holding the product checkouts (blank reads the checkout's own workspace)", option: "--root"),
             .init(id: "product", label: "One product (blank builds every product)", option: "--product"),
         ]),
+        // The daily batch: only the products whose handed-off work no build
+        // has taken yet (`stado release changes list` state `queued`).
+        .init(id: "build-newest-queued", title: "Build only the products with handed-off work no build has taken yet", path: ["build", "newest"], hostPlacement: .none, fields: [
+            .init(id: "root", label: "Workspace holding the product checkouts (blank reads the checkout's own workspace)", option: "--root"),
+        ], fixedArguments: ["--queued"]),
         .init(id: "build-submit", title: "Build a source (queues the platform builds; publishes nothing)", path: ["build", "submit"], hostPlacement: .none, fields: [
             .init(id: "source", label: "Git repository path on the selected Stado API host", option: "--source", required: true),
             .init(id: "commit", label: "Full Git commit (blank requires a clean HEAD)", option: "--commit"),
