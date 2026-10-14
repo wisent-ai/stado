@@ -78,7 +78,21 @@ pub(in crate::cli::directory) async fn connect(
     // Consumer admission and placement fencing are the same as the fleet
     // resolver's, including when the caller asks for an unverified address.
     if let Some(consumer) = consumer.as_deref() {
-        crate::service_resolution::resolve(&document, name, consumer).map_err(CmdError::from)?;
+        crate::service_resolution::resolve(&document, name, consumer).map_err(|error| {
+            use crate::service_resolution::ResolveError;
+            let state = match &error {
+                ResolveError::UnknownService(_) => "undeclared",
+                ResolveError::Declaration(_) => "invalid_declaration",
+                ResolveError::Unauthorized { .. } => "refused",
+                ResolveError::Moving { .. } => "unavailable",
+            };
+            CmdError::from(error).detailing(json!({
+                "service": name,
+                "consumer": consumer,
+                "machine": crate::providers::vast::system_hostname(),
+                "route_state": state,
+            }))
+        })?;
     }
     let block = directory(&document)?;
     let entry = service(block, name)?;
