@@ -35,7 +35,7 @@ fn rows(waits: &[Open]) -> Value {
 }
 
 /// `stado waits [open|close]`.
-pub fn dispatch(action: Option<WaitsAction>, as_json: bool) -> Result<(), CmdError> {
+pub(crate) fn dispatch(action: Option<WaitsAction>, as_json: bool) -> Result<(), CmdError> {
     match action {
         None => run(as_json),
         Some(WaitsAction::Open {

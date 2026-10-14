@@ -156,7 +156,7 @@ pub fn read() -> Result<Document, CmdError> {
     })?;
     document
         .entries
-        .sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        .sort_by_key(|entry| std::cmp::Reverse(entry.updated_at));
     Ok(document)
 }
 
