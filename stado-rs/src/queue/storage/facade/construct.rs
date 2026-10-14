@@ -150,6 +150,20 @@ impl JobStorage {
             .then(|| LocalBackend::resolved_root(config::wc_local_storage_path()))
             .transpose()?
             .map(|path| root.queue_root(&path).to_string_lossy().into_owned());
+        // The store this opening addresses, as the layout check keys it:
+        // every locator the backend below is built from, and the object API
+        // URL and namespace a `stado` backend reads from the configuration.
+        let store = format!(
+            "{} bucket={endpoint_bucket} account={} container={} region={} root={:?} path={} url={} namespace={}",
+            variant.id,
+            config::wc_azure_storage_account(),
+            config::wc_azure_container(),
+            config::wc_s3_region(),
+            local_path,
+            config::wc_local_storage_path(),
+            config::wc_stado_storage_url_configured(),
+            config::wc_stado_storage_namespace(),
+        );
         let backend = construct_backend(
             adapter,
             BackendLocator {
@@ -166,7 +180,7 @@ impl JobStorage {
 
         let mut storage = Self::with_backend_and_bucket(backend, variant.id, bucket);
         storage.local_path = local_path.map(Arc::from);
-        storage.ensure_layout().await?;
+        storage.ensure_layout_once(&store).await?;
         storage.with_configured_read_failover(read_mode).await
     }
 
