@@ -143,6 +143,16 @@ pub enum DirectoryCommands {
         json: bool,
     },
 
+    /// Diagnose this host's admitted route and require an actual HTTP answer.
+    /// HTTP reachability does not prove application authorization or inference.
+    Doctor {
+        name: String,
+        #[arg(long)]
+        consumer: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// The address this machine should use for one service.
     ///
     /// Resolves against the asking target rather than the active host,
@@ -160,24 +170,8 @@ pub enum DirectoryCommands {
 
     /// Write this machine's forward markers from the directory.
     ///
-    /// Several products resolve a service's address from an owner-only file
-    /// under `~/.stado/forwards/<service>.local` rather than an environment
-    /// variable - Skarbiec's credential bridge reads `skarbiec.local`, and
-    /// `weles-admission.local` the same way. Nothing wrote those files. They
-    /// were produced by hand, which is why one on this fleet named a port no
-    /// service has ever bound while the directory held the right answer for
-    /// the same host all along.
-    ///
-    /// The address is per-caller, so this resolves for the asking target and
-    /// writes only what the directory declares. A service with no endpoint
-    /// for this machine is reported and skipped, never guessed.
-    ///
-    /// Markers the directory does not declare are reported as `fossil` on
-    /// every run and removed only under `--prune`. Nothing has ever removed
-    /// one: operator-host carries 11 markers of which the directory declares
-    /// 3, including three different names for one endpoint and two different
-    /// ports for one relationship, and a consumer holding an old name resolves
-    /// it forever.
+    /// Publishes declared per-caller endpoints for consumers of forward markers.
+    /// Undeclared markers are reported, and removed only with `--prune`.
     Publish {
         /// Publish one service instead of every declared endpoint.
         #[arg(long)]
@@ -267,6 +261,13 @@ pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
             no_verify,
             json,
         } => connect(&name, target, consumer, no_verify, json)
+            .await
+            .map_err(|error| error.machine_readable(json)),
+        DirectoryCommands::Doctor {
+            name,
+            consumer,
+            json,
+        } => connect(&name, None, Some(consumer), false, json)
             .await
             .map_err(|error| error.machine_readable(json)),
         DirectoryCommands::Endpoint { name, target, json } => endpoint(&name, target, json).await,

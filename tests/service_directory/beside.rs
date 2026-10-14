@@ -170,11 +170,10 @@ fn a_service_declared_beside_its_placement_is_answered_on_this_host_and_said_as_
     let missing = deployment.run(&[
         "service",
         "directory",
-        "connect",
+        "doctor",
         &missing_service,
         "--consumer",
         CONSUMER,
-        "--no-verify",
         "--json",
     ]);
     assert!(

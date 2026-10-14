@@ -20,6 +20,10 @@ enum NativeRouteOperations {
             .init(id: "target", label: "Caller host (blank uses the selected API host; other hosts are not probed)", option: "--target"),
             .init(id: "no-verify", label: "Read routing declaration only, without proving a connection", option: "--no-verify", flag: true),
         ], mutates: false),
+        .init(id: "directory-doctor", title: "Diagnose this host's admitted service connection", path: ["service", "directory", "doctor"], hostPlacement: .none, fields: [
+            .init(id: "service", label: "Declared service", required: true),
+            .init(id: "consumer", label: "Consumer identity", option: "--consumer", required: true),
+        ], mutates: false),
         .init(id: "consumer-add", title: "Declare or update a consumer and its route", path: ["service", "directory", "consumer", "add"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),
             .init(id: "consumer", label: "Consumer", required: true),
