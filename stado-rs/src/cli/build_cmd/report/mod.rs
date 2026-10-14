@@ -22,21 +22,18 @@ pub(super) use list::{list, recent_builds};
 
 /// One line's worth of what the platforms did.
 pub(super) fn summary(build: &BuildRun) -> String {
-    let mut counts = [0usize; 4];
-    for platform in build.platforms.values() {
-        let slot = match platform.state {
-            PlatformRunState::Submitted => 0,
-            PlatformRunState::Qualified => 1,
-            PlatformRunState::Failed => 2,
-            PlatformRunState::Published => 3,
-        };
-        counts[slot] += 1;
-    }
+    let count = |states: &[PlatformRunState]| {
+        build
+            .platforms
+            .values()
+            .filter(|platform| states.contains(&platform.state))
+            .count()
+    };
     format!(
         "{} platform build(s) queued or running, {} passed, {} failed",
-        counts[0] + counts[3],
-        counts[1],
-        counts[2]
+        count(&[PlatformRunState::Submitted, PlatformRunState::Published]),
+        count(&[PlatformRunState::Qualified]),
+        count(&[PlatformRunState::Failed])
     )
 }
 
@@ -77,10 +74,23 @@ pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun
         return Err(CmdError::click("build manifest digest mismatch")
             .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    let ProductManifest::Release(manifest) =
-        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?
-    else {
-        return Err(CmdError::refused("build manifest disables releases"));
+    let manifest = match release_pipeline::parse_product_manifest(&bytes) {
+        Ok(ProductManifest::Release(manifest)) => manifest,
+        Ok(ProductManifest::NonRelease(_)) => {
+            return Err(CmdError::refused("build manifest disables releases"))
+        }
+        // The record was written under an earlier release contract: it can
+        // never be read against its jobs again, so the build ends failed,
+        // saying why, instead of failing every listing that reaches it.
+        Err(error) if build.state == BuildRunState::Waiting => {
+            build.state = BuildRunState::Failed;
+            build.failure = Some(format!(
+                "{manifest_path} no longer reads under this Stado's release contract: {error}"
+            ));
+            save_build(&mut build).await?;
+            return Ok(build);
+        }
+        Err(error) => return Err(CmdError::declaration(error)),
     };
     if let Some(mut armed) = watch.take() {
         // A build is recorded before its jobs are queued, so a wait read in
