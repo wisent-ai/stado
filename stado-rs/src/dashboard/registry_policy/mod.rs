@@ -138,11 +138,29 @@ pub(super) async fn get_policy() -> Response {
             )
         }
     };
-    let targets: Vec<Value> = document
-        .get("targets")
-        .and_then(Value::as_array)
-        .map(|entries| entries.iter().filter_map(project_target).collect())
-        .unwrap_or_default();
+    // Every target, or the registry is said not to project: read as empty, a
+    // registry without its targets list or with a nameless target showed
+    // Desktop a fleet missing those hosts.
+    let Some(entries) = document.get("targets").and_then(Value::as_array) else {
+        return send_json(
+            http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
+            &json!({"error": "canonical registry carries no targets list"}),
+        );
+    };
+    let mut targets: Vec<Value> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match project_target(entry) {
+            Some(projected) => targets.push(projected),
+            None => {
+                return send_json(
+                    http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
+                    &json!({"error": format!(
+                        "canonical registry holds a target that is not an object naming its name: {entry}"
+                    )}),
+                )
+            }
+        }
+    }
     // The public-origin declarations are a top-level block, and Desktop
     // renders them beside the report `stado web origin status` produces. An
     // absent key is an empty list: a fleet may publish nothing publicly, and
