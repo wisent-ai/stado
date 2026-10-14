@@ -73,9 +73,13 @@ pub(super) fn resolve(
     let backend = declared("WC_STORAGE_BACKEND")
         .or_else(|| configured("/storage/backend"))
         .unwrap_or_else(|| LOCAL_BACKEND.to_string());
-    let root = declared("WC_LOCAL_STORAGE_PATH")
-        .or_else(|| configured("/storage/local/path"))
-        .unwrap_or_else(|| "~/.stado/local-storage".to_string());
+    // The environment, then the config, then the product's declared default
+    // root (`config_file::LOCAL_STORAGE_ROOT`).
+    let root = match declared("WC_LOCAL_STORAGE_PATH").or_else(|| configured("/storage/local/path"))
+    {
+        Some(stated) => stated,
+        None => format!("~/{}", crate::config_file::LOCAL_STORAGE_ROOT),
+    };
     Ok(ServedRoot {
         backend,
         root: canonical(&expand(&root)),

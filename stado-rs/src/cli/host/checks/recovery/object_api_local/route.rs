@@ -170,7 +170,10 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
     };
     let primary_backend = canonical_backend(&resolve("WC_STORAGE_BACKEND", "/storage/backend"));
     let primary_setting = resolve("WC_LOCAL_STORAGE_PATH", "/storage/local/path");
-    let default_primary = home_path.join(".stado/local-storage").display().to_string();
+    let default_primary = home_path
+        .join(crate::config_file::LOCAL_STORAGE_ROOT)
+        .display()
+        .to_string();
     let primary_root = expand(if primary_setting.is_empty() {
         &default_primary
     } else {

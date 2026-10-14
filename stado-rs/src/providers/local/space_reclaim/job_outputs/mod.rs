@@ -48,8 +48,8 @@ pub(super) const OUTPUT_DIR: &str = "output";
 
 /// Every directory the queue store's `status/` prefix maps to on this host.
 ///
-/// The store root is the account's own, `~/.stado/local-storage`, the same
-/// path `backup_twins` compares its replica against — not the configured
+/// The store root is the account's own, the product's declared default
+/// [`crate::config_file::LOCAL_STORAGE_ROOT`] the replica cleaner compares against — not the configured
 /// `WC_LOCAL_STORAGE_PATH`, which the janitor's service process does not
 /// carry, so reading it would answer `root_absent` for bytes the replica
 /// cleaner walks in the same pass.
@@ -59,7 +59,7 @@ pub(super) const OUTPUT_DIR: &str = "output";
 /// queue keeps them flat. Both layouts are walked, whichever exist, so no
 /// namespace or backend setting has to be right for the bytes to be found.
 pub fn status_roots(home: &Path) -> Vec<PathBuf> {
-    let store = home.join(super::backup_twins::PRIMARY_ROOT);
+    let store = home.join(crate::config_file::LOCAL_STORAGE_ROOT);
     let mut roots = Vec::new();
     let flat = store.join(STATUS_PREFIX);
     if flat.is_dir() {

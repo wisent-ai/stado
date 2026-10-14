@@ -7,8 +7,11 @@ pub(in crate::cli::host) mod listing;
 
 use crate::cli::CmdError;
 
-use crate::cli::host::files::storage::{BACKUP_ROOT, PRIMARY_ROOT};
+// The replica roots every fleet host uses, relative to the managed home: the
+// product's declared defaults, which the service catalog gives the object API
+// unit, so this command reads the layout the fleet installs.
 use crate::cli::host::machine::users::credentials::credential_host;
+use crate::config_file::{LOCAL_BACKUP_ROOT, LOCAL_STORAGE_ROOT};
 
 /// Classify a host's local replica against the store it mirrors, and reclaim
 /// the twins when asked.
@@ -57,8 +60,8 @@ pub async fn backup_audit(
     let inventory_namespaces = inventory_namespaces.to_vec();
     let plan = crate::deploy::host_backup_audit::AuditPlan {
         namespace: namespace.to_string(),
-        backup_root: BACKUP_ROOT.to_string(),
-        primary_root: PRIMARY_ROOT.to_string(),
+        backup_root: LOCAL_BACKUP_ROOT.to_string(),
+        primary_root: LOCAL_STORAGE_ROOT.to_string(),
         objects,
         inventory_namespaces,
         reclaim: reclaim_twins,

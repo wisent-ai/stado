@@ -47,7 +47,7 @@ pub struct RelocatePlan {
     pub from: String,
     /// The key prefix the objects belong under; empty is the namespace root.
     pub to: String,
-    /// Store root on the host, or [`DEFAULT_STORE_ROOT`](super::DEFAULT_STORE_ROOT)
+    /// Store root on the host, or [`crate::config_file::LOCAL_STORAGE_ROOT`]
     /// under its `$HOME`.
     pub store_root: Option<String>,
     /// Change bytes. False previews.

@@ -61,6 +61,15 @@ pub enum ConfigError {
     },
 }
 
+/// The account's local object store, below its home, when neither the
+/// environment nor a config names another: `storage.local.path` of
+/// [`template`]. Every reader of the default store root reads this one.
+pub const LOCAL_STORAGE_ROOT: &str = ".stado/local-storage";
+
+/// The local replica of [`LOCAL_STORAGE_ROOT`], below the home:
+/// `storage.backup.local.path` of [`template`].
+pub const LOCAL_BACKUP_ROOT: &str = ".stado/local-backup";
+
 /// A commented starting-point config, mirroring Python `template()`.
 pub fn template() -> Value {
     let local = crate::capabilities::ProviderId::Local.as_str();
@@ -76,10 +85,10 @@ pub fn template() -> Value {
         },
         "storage": {
             "backend": "local",
-            "local": {"path": "~/.stado/local-storage"},
+            "local": {"path": format!("~/{LOCAL_STORAGE_ROOT}")},
             "backup": {
                 "backend": "local",
-                "local": {"path": "~/.stado/local-backup"}
+                "local": {"path": format!("~/{LOCAL_BACKUP_ROOT}")}
             }
         },
         "deployment": {"id": ""},

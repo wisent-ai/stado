@@ -72,7 +72,7 @@ static WC_STADO_STORAGE_CA_FILE: LazyLock<String> = LazyLock::new(|| {
     )
 });
 static WC_LOCAL_STORAGE_PATH: LazyLock<String> = LazyLock::new(|| {
-    let default = expand_tilde("~/.stado/local-storage");
+    let default = expand_tilde(&format!("~/{}", crate::config_file::LOCAL_STORAGE_ROOT));
     resolve_storage_binding(
         crate::capabilities::StorageAdapter::Local,
         "path",

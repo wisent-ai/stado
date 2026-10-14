@@ -57,7 +57,7 @@ pub const CLEANERS: &[Cleaner] = &[
     },
     Cleaner {
         name: super::backup_twins::CLEANER,
-        root: super::backup_twins::BACKUP_ROOT,
+        root: crate::config_file::LOCAL_BACKUP_ROOT,
         sweeps: "same-disk replica objects whose primary copy is intact",
     },
     Cleaner {
@@ -92,7 +92,7 @@ pub const CLEANERS: &[Cleaner] = &[
     },
     Cleaner {
         name: super::job_outputs::CLEANER,
-        root: super::backup_twins::PRIMARY_ROOT,
+        root: crate::config_file::LOCAL_STORAGE_ROOT,
         sweeps: "payload outputs of jobs the queue lists as terminal; receipts and logs stay",
     },
     Cleaner {

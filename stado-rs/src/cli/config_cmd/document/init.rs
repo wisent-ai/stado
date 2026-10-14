@@ -6,7 +6,7 @@ use crate::config_file;
 use crate::cli::CmdError;
 
 fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
-    let storage_root = home.join(".stado").join("local-storage");
+    let storage_root = home.join(config_file::LOCAL_STORAGE_ROOT);
     std::fs::create_dir_all(&storage_root)?;
     let registry_path = storage_root.join(crate::targets::REGISTRY_BLOB);
     if registry_path.exists() {

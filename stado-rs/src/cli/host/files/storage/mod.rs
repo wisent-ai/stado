@@ -9,14 +9,6 @@ use crate::cli::CmdError;
 
 use crate::cli::host::checks::probes::report_outcome;
 
-/// The replica roots every fleet host uses, relative to the managed home. Both
-/// are the values the service catalog declares for the object API unit
-/// (`WC_LOCAL_STORAGE_PATH`) and its replica, so this command reads the same
-/// layout the fleet installs rather than asking an operator to name a path.
-const BACKUP_ROOT: &str = ".stado/local-backup";
-
-const PRIMARY_ROOT: &str = ".stado/local-storage";
-
 pub struct StorageRootReconciliationResult {
     pub report: Value,
     pub outcome: Result<(), CmdError>,

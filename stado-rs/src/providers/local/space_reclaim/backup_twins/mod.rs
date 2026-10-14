@@ -16,14 +16,6 @@ use super::{euid, free_bytes, CleanupReport, JanitorError};
 /// The name this cleaner's report is filed under.
 pub const CLEANER: &str = "backup_twins";
 
-/// The replica root this cleaner walks, relative to `$HOME`. Same default as
-/// `storage.backup.local.path`.
-pub const BACKUP_ROOT: &str = ".stado/local-backup";
-
-/// The primary store root the replica is compared against, relative to `$HOME`.
-/// Same default as `storage.local.path`.
-pub const PRIMARY_ROOT: &str = ".stado/local-storage";
-
 /// Read size for hashing. One MiB, matching the audit command's remote pass, so
 /// the two implementations of this comparison read the same way.
 const HASH_CHUNK: usize = 1024 * 1024;
@@ -65,8 +57,9 @@ pub fn scan_backup_twins(
     report: &mut CleanupReport,
 ) {
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
-        let backup = home.join(BACKUP_ROOT);
-        let primary = home.join(PRIMARY_ROOT);
+        // The product's declared default roots, below the account's home.
+        let backup = home.join(crate::config_file::LOCAL_BACKUP_ROOT);
+        let primary = home.join(crate::config_file::LOCAL_STORAGE_ROOT);
         if !backup.is_dir() {
             report.skip_backup_twins("replica_absent", 1);
             return Ok(());

@@ -70,15 +70,6 @@ pub use report::to_report;
 /// `status` for a run whose every object reached a decided outcome.
 pub const OK_STATUS: &str = "ok";
 
-/// The store root, relative to the remote login user's `$HOME`, when the
-/// operator names none.
-///
-/// The same default `storage.local.path` carries
-/// ([`crate::config::wc_local_storage_path`]), written relative because
-/// `$HOME` expands only on the far side. It is the object API's own backing
-/// directory on the always-on mac.
-pub const DEFAULT_STORE_ROOT: &str = ".stado/local-storage";
-
 /// Relocate one key prefix to another inside one canonical registry host's
 /// store, or report what a pass would move.
 pub async fn relocate_host(
@@ -118,13 +109,15 @@ pub async fn relocate_host(
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let target = host_channel::canonical_target(target_name).await?;
-    // `$HOME` expands only on the far side, so an unnamed root is composed
-    // there rather than guessed from this machine's own configuration.
+    // `$HOME` expands only on the far side, so an unnamed root is the
+    // product's declared default store root composed there, never guessed
+    // from this machine's own configuration.
     let root = match store_root {
         Some(named) => named.to_string(),
         None => format!(
-            "{}/{DEFAULT_STORE_ROOT}",
-            host_channel::remote_home(&target, runner).await?
+            "{}/{}",
+            host_channel::remote_home(&target, runner).await?,
+            crate::config_file::LOCAL_STORAGE_ROOT
         ),
     };
     let script = remote_script(&root, namespace, from, to, apply, limit);
