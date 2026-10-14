@@ -51,30 +51,32 @@ pub async fn self_target(name_only: bool, local: bool, json: bool) -> Result<(),
     Ok(())
 }
 
-/// This machine's own registry record and where it was read: the store
-/// itself when it is a local directory (a file read, no other host is
-/// asked), otherwise the last-known-good copy the last authority read left.
-/// Refused naming the copy when there is none.
+/// This machine's own registry record and where it was read, through
+/// [`targets::registry_without_authority`]: the store itself when it is a
+/// local directory, otherwise the last-known-good copy the last authority
+/// read left. Refused naming the copy and what writes it when there is none.
 async fn local_registry() -> Result<(targets::Registry, String), CmdError> {
-    if targets::store_is_local_filesystem() {
-        return Ok((read_registry().await?, targets::registry_location()));
+    match targets::registry_without_authority("naming this machine").await {
+        Ok((registry, None)) => Ok((registry, targets::registry_location())),
+        Ok((registry, Some(notice))) => {
+            eprintln!("{notice}");
+            let copy = targets::registry_last_good_path().ok_or_else(|| {
+                CmdError::click("a registry copy was read and HOME no longer names where it is")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
+            Ok((registry, copy.display().to_string()))
+        }
+        Err(targets::RegistryFetchError::Absent { location })
+            if !targets::store_is_local_filesystem() =>
+        {
+            Err(CmdError::click(format!(
+                "this machine keeps no usable local registry record: {location} and its \
+                 .meta.json sidecar are not both there and readable; this host's resolver writes \
+                 them on every refresh, and `stado registry self` without --local writes them \
+                 once the registry authority answers"
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound))
+        }
+        Err(other) => Err(CmdError::from(other)),
     }
-    let copy = targets::registry_last_good_path().ok_or_else(|| {
-        CmdError::click(
-            "HOME is not set, so this machine's local registry record \
-             (~/.stado/cache/registry-last-good.json) has no location",
-        )
-        .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
-    let copy = copy.display().to_string();
-    let (registry, _) = targets::last_good_for_this_host().ok_or_else(|| {
-        CmdError::click(format!(
-            "this machine keeps no usable local registry record: {copy} and its .meta.json \
-             sidecar are not both there and readable; this host's resolver writes them on every \
-             refresh, and `stado registry self` without --local writes them once the registry \
-             authority answers"
-        ))
-        .stating(crate::primitives::failure::FailureCode::NotFound)
-    })?;
-    Ok((registry, copy))
 }

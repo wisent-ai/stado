@@ -241,14 +241,22 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
     write_key(private_key)
 }
 
-/// Whether the registry's service directory names `target` as the host
-/// Skarbiec is active on. An unreadable directory answers no, and the key is
-/// asked of the vault as for any other host.
+/// Whether the service directory this machine already holds names `target`
+/// as the host Skarbiec is active on. Read without the registry authority:
+/// the authority's snapshot is served through the same hosts this question
+/// protects, and asking it here held every channel command for the vault's
+/// host (the scp of a repair archive included) on a snapshot that never
+/// came. An unreadable record answers no, and the key is asked of the vault
+/// as for any other host.
 async fn serves_vault(target: &str) -> bool {
-    matches!(
-        crate::cli::directory::active_host("skarbiec").await,
-        Ok(Some(host)) if host == target
-    )
+    let Ok((registry, _)) =
+        crate::targets::registry_without_authority("choosing the key for the vault's host").await
+    else {
+        return false;
+    };
+    registry
+        .service("skarbiec")
+        .is_some_and(|service| service.active_host == target)
 }
 
 /// Force OpenSSH to use only the target-scoped key: `-i <key>` and

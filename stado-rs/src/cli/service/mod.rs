@@ -155,6 +155,17 @@ pub(crate) async fn declared_matching(
             registry::read_registry().await?
         }
     };
+    declared_in(&registry, name, host)
+}
+
+/// The declared managed set matching NAME in `registry`, as
+/// [`declared_matching`] answers it, for a caller that already holds the
+/// registry it must act from.
+pub(crate) fn declared_in(
+    registry: &targets::Registry,
+    name: &str,
+    host: Option<&str>,
+) -> Result<Vec<ManagedService>, CmdError> {
     let mut found: Vec<ManagedService> = Vec::new();
     for target in registry.local_targets() {
         if host.is_some_and(|host| target.name != host) {
@@ -172,7 +183,7 @@ pub(crate) async fn declared_matching(
         // record lands: the unit a product declares is known from the
         // catalog, and a unit that came up with no main pid is exactly the
         // one whose log is needed.
-        if let Some(unit) = host.and_then(|host| catalog_unit(name, host, &registry).transpose()) {
+        if let Some(unit) = host.and_then(|host| catalog_unit(name, host, registry).transpose()) {
             return Ok(vec![unit?]);
         }
         return Err(unmanaged(name, host));

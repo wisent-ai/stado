@@ -12,11 +12,40 @@ pub(crate) async fn update(
     refresh_image: bool,
     json: bool,
 ) -> Result<(), CmdError> {
-    let target = crate::cli::canonical_host(host).await?;
-    // The service must already be managed here: this moves a unit forward, and
-    // silently installing a version for a unit nobody runs would look like a
-    // deployment while changing nothing.
-    let services = declared_matching(name, Some(host)).await?;
+    // A local archive and a rollback act on bytes this machine or the host
+    // already holds, and they are how a service the registry authority's
+    // snapshot depends on (the vault, the resolver) is repaired while that
+    // snapshot stands unanswered. Their host, its SSH destination and the
+    // unit come from the registry this machine already holds; a published
+    // artifact is read from the fleet's store anyway, so it asks the
+    // authority as every fleet command does.
+    let (target, services) = if archive.is_some() || rollback_to.is_some() {
+        let (registry, notice) = crate::targets::registry_without_authority(&format!(
+            "installing onto {host} from this machine's record"
+        ))
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "a local install resolves {host} without the registry authority, and this \
+                 machine holds no registry to resolve it from: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
+        if let Some(notice) = notice {
+            eprintln!("stado: {notice}");
+        }
+        let target = crate::cli::resolved_host(&registry, host)?.clone();
+        let services = crate::cli::service::declared_in(&registry, name, Some(host))?;
+        (target, services)
+    } else {
+        // The service must already be managed here: this moves a unit forward,
+        // and silently installing a version for a unit nobody runs would look
+        // like a deployment while changing nothing.
+        (
+            crate::cli::canonical_host(host).await?,
+            declared_matching(name, Some(host)).await?,
+        )
+    };
     if services.is_empty() {
         return Err(CmdError::refused(format!(
             "{host} does not manage {name}; deploy it first"
