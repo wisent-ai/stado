@@ -187,6 +187,26 @@ pub fn kept(product: &str, commit: &str) -> Result<Option<Entry>, CmdError> {
         .find(|entry| entry.product == product && entry.commit == commit))
 }
 
+/// Refuses building `product` at `commit` when the delivery queue failed that
+/// commit at a step: the queue ran the gates every installation runs, so an
+/// installation of it would meet the same refusal after exporting and
+/// compiling. Said before anything is exported or built.
+pub fn refuse_failed(product: &str, commit: &str) -> Result<(), CmdError> {
+    let Some(entry) = kept(product, commit)?.filter(|entry| entry.state == State::Failed) else {
+        return Ok(());
+    };
+    let error = match &entry.error {
+        Some(error) => error.as_str(),
+        None => "the register kept no error for it",
+    };
+    Err(CmdError::refused(format!(
+        "{product} at {commit} failed the delivery queue's {} step, which runs the gates every \
+         installation runs: {error}. Nothing was exported or built; install a commit the queue \
+         passed (`stado release newest --plan` lists them)",
+        entry.step.name()
+    )))
+}
+
 /// One line per entry as `stado release newest` prints the queue: product,
 /// commit, state, step, version, the defects carried and closed, and a
 /// failure's error.
