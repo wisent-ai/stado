@@ -148,8 +148,15 @@ pub(in crate::deploy::host_storage_reconcile_program) fn checkpoint_tree(
     }
     let building = format!("{destination}.building");
     make_private_dirs(&building)?;
+    // An inventory entry without its relative path is refused: read as an
+    // empty path it named the checkpoint directory itself, which the copy
+    // below would then replace or clone over.
     for relative in list(snapshot, "directories", "physical checkpoint")? {
-        let relative = relative.as_str().unwrap_or_default();
+        let Some(relative) = relative.as_str() else {
+            return Err(format!(
+                "the physical checkpoint inventory lists a directory that is not a path: {relative}"
+            ));
+        };
         let directory = join(&building, relative);
         if fs::symlink_metadata(&directory).is_ok() && !Path::new(&directory).is_dir() {
             return Err(format!(
@@ -159,7 +166,11 @@ pub(in crate::deploy::host_storage_reconcile_program) fn checkpoint_tree(
         make_private_dirs(&directory)?;
     }
     for item in list(snapshot, "files", "physical checkpoint")? {
-        let relative = item.get("path").and_then(Value::as_str).unwrap_or_default();
+        let Some(relative) = item.get("path").and_then(Value::as_str) else {
+            return Err(format!(
+                "the physical checkpoint inventory lists a file without its path: {item}"
+            ));
+        };
         let target = join(&building, relative);
         if Some(&regular_identity(context, &target)?) != item.get("body") {
             if fs::symlink_metadata(&target).is_ok() {
