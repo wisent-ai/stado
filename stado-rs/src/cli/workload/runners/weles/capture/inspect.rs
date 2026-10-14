@@ -77,7 +77,9 @@ pub(crate) async fn run_weles_image_inspect(
         "admission_token": channel.token_state(),
         "browser_run": {
             "run_id": run_id,
-            "trajectory_ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false),
+            // Weles's own verdict, or null when its answer names none: a
+            // missing `ok` is not a failed trajectory, and not a passed one.
+            "trajectory_ok": result.get("ok").and_then(Value::as_bool),
             "exit_code": result.get("exitCode"),
             "final_url": task_result.get("final_url"),
             "trajectory_error": task_result.get("error"),
