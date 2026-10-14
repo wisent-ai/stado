@@ -116,7 +116,7 @@ fn hostname() -> String {
 /// a login environment still names its account. A variable that is not text,
 /// or an account the database does not hold, is refused: read as empty, the
 /// job was stored as submitted by nobody.
-fn submitter() -> Result<String, SubmitError> {
+pub(crate) fn submitter() -> Result<String, SubmitError> {
     for variable in ["USER", "LOGNAME"] {
         match std::env::var(variable) {
             Ok(name) if !name.trim().is_empty() => return Ok(name),

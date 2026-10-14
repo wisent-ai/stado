@@ -11,23 +11,12 @@ use crate::schedules::{
 
 use crate::cli::{CmdError, ScheduleCreateArgs};
 
-/// `$USER`, else `$LOGNAME`: who declares the schedule. Neither naming
-/// anyone is refused, where the schedule was stored created by nobody.
+/// Who declares the schedule, read as a job submission reads its submitter
+/// (`USER`, `LOGNAME`, then the account in the user database); an account
+/// none of them names is refused, where the schedule was stored created by
+/// nobody.
 fn created_by() -> Result<String, CmdError> {
-    for variable in ["USER", "LOGNAME"] {
-        match std::env::var(variable) {
-            Ok(name) if !name.trim().is_empty() => return Ok(name),
-            Ok(_) | Err(std::env::VarError::NotPresent) => {}
-            Err(error) => {
-                return Err(CmdError::usage(format!(
-                    "{variable} cannot be read: {error}"
-                )))
-            }
-        }
-    }
-    Err(CmdError::usage(
-        "neither USER nor LOGNAME names who creates this schedule; set USER to the account declaring it",
-    ))
+    crate::queue::submit::submitter().map_err(|error| CmdError::usage(error.to_string()))
 }
 
 /// `schedule create COMMAND --cron EXPR [...]`: create a recurring schedule
