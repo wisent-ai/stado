@@ -166,7 +166,18 @@ pub async fn submit_batch(
                     "planned_job": job,
                 }));
             }
-            let explicit_name = std::env::var("WC_RUN_NAME").unwrap_or_default();
+            // Unset names the run from its commands; a name that is not text
+            // is refused, where it was read as unset and the run was stored
+            // under a derived name the submitter did not give.
+            let explicit_name = match std::env::var("WC_RUN_NAME") {
+                Ok(name) => name,
+                Err(std::env::VarError::NotPresent) => String::new(),
+                Err(error) => {
+                    return Err(SubmitError::Validation(format!(
+                        "WC_RUN_NAME cannot be read: {error}"
+                    )))
+                }
+            };
             let candidate = serde_json::json!({
                 "schema": "stado.run-submission.v3",
                 "run_id": run_id,
