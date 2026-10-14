@@ -178,18 +178,20 @@ pub(in crate::cli::web::edge) async fn hostnames(json_output: bool) -> Result<()
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        let names = |key: &str| {
-            report[key]
-                .as_array()
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(", ")
+        // A list the report carries empty is "none"; one it does not carry,
+        // or an entry that is not a name, is said as that — read as "none",
+        // a hostname the edge never reported looked terminated.
+        let names = |key: &str| match report[key].as_array() {
+            None => format!("not reported (the edge report carries no {key} list)"),
+            Some(values) if values.is_empty() => "none".to_string(),
+            Some(values) => values
+                .iter()
+                .map(|value| match value.as_str() {
+                    Some(name) => name.to_string(),
+                    None => format!("(not a name: {value})"),
                 })
-                .filter(|joined| !joined.is_empty())
-                .unwrap_or_else(|| "none".to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
         };
         println!("must terminate: {}", names("hostnames"));
         println!("terminates now: {}", names("terminated"));
