@@ -64,26 +64,39 @@ fn live_entry<'a>(target: &ComputeTarget, capacity: &'a [Value]) -> Option<&'a V
 /// A detached session is pinned to the host its placement chose, so a host
 /// that publishes `accepting_jobs: false` (disk pressure, say) would hold
 /// the session queued until that clears; refusing here moves the placement
-/// to a host that can claim it.
+/// to a host that can claim it. A host with no capacity broadcast, or one
+/// that does not say whether it accepts, is not known to accept: it was
+/// placed on as if it did, and the session waited on a host nobody heard.
 pub(super) fn admission_refusal(target: &ComputeTarget, capacity: &[Value]) -> Option<String> {
-    let live = live_entry(target, capacity)?;
-    if live
-        .get("accepting_jobs")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return None;
+    let Some(live) = live_entry(target, capacity) else {
+        return Some(format!(
+            "{} publishes no capacity broadcast, so whether it accepts placements is not known",
+            target.name
+        ));
+    };
+    match live.get("accepting_jobs").and_then(Value::as_bool) {
+        Some(true) => None,
+        Some(false) => {
+            let reason = match live
+                .get("diag")
+                .and_then(|diag| diag.get("admission_reason"))
+                .and_then(Value::as_str)
+                .filter(|reason| !reason.is_empty())
+            {
+                Some(reason) => reason.to_string(),
+                None => "its agent published no reason".to_string(),
+            };
+            Some(format!(
+                "{} is not accepting placements ({reason})",
+                target.name
+            ))
+        }
+        None => Some(format!(
+            "{}'s capacity broadcast names no accepting_jobs, so whether it accepts \
+             placements is not known",
+            target.name
+        )),
     }
-    let reason = live
-        .get("diag")
-        .and_then(|diag| diag.get("admission_reason"))
-        .and_then(Value::as_str)
-        .filter(|reason| !reason.is_empty())
-        .unwrap_or("its agent published no reason");
-    Some(format!(
-        "{} is not accepting placements ({reason})",
-        target.name
-    ))
 }
 
 pub(super) fn target_score(target: &ComputeTarget, capacity: &[Value]) -> i64 {
