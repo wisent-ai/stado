@@ -82,10 +82,14 @@ pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
             .iter()
             .filter(|row| row["twin_declared"] == json!(false))
         {
+            let named = |field: &str| match row[field].as_str() {
+                Some(name) => name.to_string(),
+                None => format!("(no {field} in the row)"),
+            };
             println!(
                 "missing twin: {} has no declaration for {}",
-                row["hostname"].as_str().unwrap_or_default(),
-                row["twin"].as_str().unwrap_or_default()
+                named("hostname"),
+                named("twin")
             );
         }
     }
