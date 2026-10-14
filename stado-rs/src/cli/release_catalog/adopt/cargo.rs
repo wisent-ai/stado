@@ -148,7 +148,21 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
                 manifest.display()
             ))
         })?;
-    let text = |key: &str| package[key].as_str().unwrap_or_default().to_string();
+    // A package without its name or version cannot be adopted: read as "",
+    // it was catalogued as a product with no name or version.
+    let text = |key: &str| {
+        package[key]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "cargo metadata for {} names no package {key}",
+                    manifest.display()
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })
+    };
     let binaries: Vec<String> = package["targets"]
         .as_array()
         .into_iter()
@@ -160,7 +174,7 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
         })
         .filter_map(|target| target["name"].as_str().map(str::to_string))
         .collect();
-    let name = text("name");
+    let name = text("name")?;
     if binaries.is_empty() {
         return Err(CmdError::refused(format!(
             "{name} declares no binary target; a release ships programs"
@@ -168,7 +182,7 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
     }
     Ok(Package {
         name,
-        version: text("version"),
+        version: text("version")?,
         binaries,
     })
 }
