@@ -60,11 +60,14 @@ async fn failure_evidence(
         Ok(report)
             if report.get("status").and_then(Value::as_str) == Some(host_exec::OK_STATUS) =>
         {
-            let stdout = report
-                .get("stdout")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            evidence.last_exit = launchctl_last_exit(stdout, &unit);
+            // An ok answer without its listing names no exit; read as empty
+            // text it read as a unit launchctl does not list.
+            match report.get("stdout").and_then(Value::as_str) {
+                Some(stdout) => evidence.last_exit = launchctl_last_exit(stdout, &unit),
+                None => evidence.push_note(format!(
+                    "last exit unreadable: the host answered ok without the listing: {report}"
+                )),
+            }
         }
         // The host answered without an ok status: its whole answer is the
         // evidence, since no field of it was promised.
