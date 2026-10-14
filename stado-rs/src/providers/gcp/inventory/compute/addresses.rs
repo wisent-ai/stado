@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 
-use crate::providers::gcp::inventory::fields::{aggregated, tail, text};
+use crate::providers::gcp::inventory::fields::{aggregated, tail_of};
 use crate::providers::gcp::inventory::{Detail, ProbeState};
 
 pub(in crate::providers::gcp::inventory) fn addresses_detail(value: &Value) -> Detail {
@@ -12,7 +12,7 @@ pub(in crate::providers::gcp::inventory) fn addresses_detail(value: &Value) -> D
             json!({
                 "name": address.get("name"),
                 "id": address.get("id"),
-                "region": tail(text(address.get("region"))),
+                "region": tail_of(address.get("region")),
                 "status": address.get("status"),
                 "address_type": address.get("addressType"),
                 "ip_version": address.get("ipVersion"),

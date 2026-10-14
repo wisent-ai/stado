@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use crate::providers::gcp::inventory::fields::{aggregated, number_u64, tail, text};
+use crate::providers::gcp::inventory::fields::{aggregated, number_u64, tail_of};
 use crate::providers::gcp::inventory::{Detail, ProbeState};
 
 use super::instances::stado_agent;
@@ -16,12 +16,12 @@ pub(in crate::providers::gcp::inventory) fn disks_detail(value: &Value) -> Detai
             json!({
                 "name": disk.get("name"),
                 "id": disk.get("id"),
-                "zone": tail(text(disk.get("zone"))),
-                "region": tail(text(disk.get("region"))),
+                "zone": tail_of(disk.get("zone")),
+                "region": tail_of(disk.get("region")),
                 "status": disk.get("status"),
                 "size_gb": disk.get("sizeGb"),
                     "type_url": disk.get("type"),
-                "type": tail(text(disk.get("type"))),
+                "type": tail_of(disk.get("type")),
                 "users": users.into_iter().flatten().count(),
                 "unattached": users.is_none_or(Vec::is_empty),
                 "creation_timestamp": disk.get("creationTimestamp"),

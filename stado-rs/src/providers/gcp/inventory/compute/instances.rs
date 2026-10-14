@@ -4,18 +4,24 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use crate::providers::gcp::inventory::fields::{aggregated, number_u64, tail, text};
+use crate::providers::gcp::inventory::fields::{aggregated, number_u64, tail, tail_of};
 use crate::providers::gcp::inventory::{Detail, ProbeState};
 
 pub(in crate::providers::gcp::inventory) fn instances_detail(value: &Value) -> Detail {
     let mut instances = Vec::new();
     let mut by_status = BTreeMap::<String, Vec<String>>::new();
     for item in aggregated(value, "instances") {
-        let status = text(item.get("status"));
+        // An instance listed without its status or name is grouped and
+        // named as that, not under "" as an instance with an empty status.
+        let status = item.get("status").and_then(Value::as_str);
+        let named = |field: &str| match item.get(field).and_then(Value::as_str) {
+            Some(text) => text.to_string(),
+            None => format!("(no {field} listed)"),
+        };
         by_status
-            .entry(status.clone())
+            .entry(named("status"))
             .or_default()
-            .push(text(item.get("name")));
+            .push(named("name"));
         let accelerators: Vec<Value> = item
             .get("guestAccelerators")
             .and_then(Value::as_array)
@@ -23,7 +29,7 @@ pub(in crate::providers::gcp::inventory) fn instances_detail(value: &Value) -> D
             .flatten()
             .map(|accelerator| {
                 json!({
-                    "type": tail(text(accelerator.get("acceleratorType"))),
+                    "type": tail_of(accelerator.get("acceleratorType")),
                     "count": accelerator.get("acceleratorCount"),
                 })
             })
@@ -48,9 +54,9 @@ pub(in crate::providers::gcp::inventory) fn instances_detail(value: &Value) -> D
         instances.push(json!({
             "name": item.get("name"),
             "instance_id": item.get("id"),
-            "zone": tail(text(item.get("zone"))),
+            "zone": tail_of(item.get("zone")),
             "status": status,
-            "machine_type": tail(text(item.get("machineType"))),
+            "machine_type": tail_of(item.get("machineType")),
             "accelerators": accelerators,
             "provisioning_model": item.pointer("/scheduling/provisioningModel"),
             "preemptible": item.pointer("/scheduling/preemptible"),
@@ -84,10 +90,10 @@ pub(in crate::providers::gcp::inventory) fn instance_groups_detail(value: &Value
             json!({
                 "name": group.get("name"),
                 "id": group.get("id"),
-                "zone": tail(text(group.get("zone"))),
-                "region": tail(text(group.get("region"))),
+                "zone": tail_of(group.get("zone")),
+                "region": tail_of(group.get("region")),
                 "target_size": group.get("targetSize"),
-                "instance_template": tail(text(group.get("instanceTemplate"))),
+                "instance_template": tail_of(group.get("instanceTemplate")),
                 "stable": group.pointer("/status/isStable"),
                 "version_target_reached": group.pointer("/status/versionTarget/isReached"),
                 "creation_timestamp": group.get("creationTimestamp"),
@@ -114,7 +120,7 @@ pub(in crate::providers::gcp::inventory) fn reservations_detail(value: &Value) -
             json!({
                 "name": reservation.get("name"),
                 "id": reservation.get("id"),
-                "zone": tail(text(reservation.get("zone"))),
+                "zone": tail_of(reservation.get("zone")),
                 "status": reservation.get("status"),
                 "specific_reservation": reservation.get("specificReservation"),
                 "in_use_count": reservation

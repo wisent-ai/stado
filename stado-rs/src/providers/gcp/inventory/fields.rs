@@ -41,11 +41,15 @@ pub(super) fn aggregated<'a>(value: &'a Value, key: &str) -> Vec<&'a Value> {
         .collect()
 }
 
-pub(super) fn text(value: Option<&Value>) -> String {
-    value
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+/// The last path segment of a resource URL field (`zones/us-central1-a` ->
+/// `us-central1-a`), or `null` when the resource does not carry the field:
+/// read as "", a disk with a zone reported an empty region beside it and a
+/// field Google left out read as one it sent empty.
+pub(super) fn tail_of(value: Option<&Value>) -> Value {
+    match value.and_then(Value::as_str) {
+        Some(text) => Value::from(tail(text)),
+        None => Value::Null,
+    }
 }
 
 pub(super) fn tail(value: impl AsRef<str>) -> String {
