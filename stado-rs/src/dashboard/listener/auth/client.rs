@@ -10,7 +10,7 @@ use crate::config;
 use crate::dashboard::listener::http::Request;
 use crate::dashboard::listener::Dashboard;
 
-use super::{constant_time_eq, AuthorityUnavailable};
+use super::{constant_time_eq, presented_bearer, AuthorityUnavailable};
 
 pub(crate) async fn authorize_service(
     dashboard: &Dashboard,
@@ -27,6 +27,9 @@ pub(crate) async fn authorize_service(
     let Some(policy) = config::service_deployer_for(service, action) else {
         return Ok(false);
     };
+    let Some(supplied) = presented_bearer(request) else {
+        return Ok(false);
+    };
     let item = policy.item();
     let expected = dashboard
         .consult_vault(
@@ -40,8 +43,6 @@ pub(crate) async fn authorize_service(
         .ok_or_else(|| {
             AuthorityUnavailable::new(format!("service deployer item {item} holds no token"))
         })?;
-    let authorization = request.header("authorization").unwrap_or("").trim();
-    let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
 }
 
@@ -59,11 +60,7 @@ pub(crate) async fn authenticate_machine_client(
     request: &Request,
     action: &str,
 ) -> Result<Option<&'static config::MachineApiClient>, AuthorityUnavailable> {
-    let Some(supplied) = request
-        .header("authorization")
-        .and_then(|value| value.trim().strip_prefix("Bearer "))
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(supplied) = presented_bearer(request) else {
         return Ok(None);
     };
     let clients = config::machine_api_clients().map_err(|refusals| {

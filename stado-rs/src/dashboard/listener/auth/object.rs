@@ -6,7 +6,7 @@ use crate::config;
 use crate::dashboard::listener::http::Request;
 use crate::dashboard::listener::Dashboard;
 
-use super::{constant_time_eq, AuthorityUnavailable};
+use super::{constant_time_eq, presented_bearer, AuthorityUnavailable};
 
 /// Accept a bearer only after the request has resolved to one canonical
 /// namespace and key boundary. Out-of-scope requests and bearer mismatches are
@@ -54,9 +54,10 @@ pub(crate) async fn authorize_host_health(
     dashboard: &Dashboard,
     request: &Request,
 ) -> Result<bool, AuthorityUnavailable> {
+    let Some(supplied) = presented_bearer(request) else {
+        return Ok(false);
+    };
     let expected = dashboard.host_health_token().await?;
-    let authorization = request.header("authorization").unwrap_or("").trim();
-    let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
 }
 
@@ -90,11 +91,10 @@ pub(crate) async fn authorize_object(
     if !in_scope {
         return Ok(Some("object_grant_does_not_cover_key"));
     }
-    let expected = dashboard.object_token(namespace, policy.item()).await?;
-    let authorization = request.header("authorization").unwrap_or("").trim();
-    let Some(supplied) = authorization.strip_prefix("Bearer ") else {
+    let Some(supplied) = presented_bearer(request) else {
         return Ok(Some("no_bearer_presented"));
     };
+    let expected = dashboard.object_token(namespace, policy.item()).await?;
     if constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
         Ok(None)
     } else {
@@ -163,10 +163,7 @@ pub(crate) async fn authorize_release(
         );
         return Ok(Some(ReleaseRefusal::NoPublisher.code()));
     };
-    let expected = dashboard.release_token(policy.item()).await?;
-    let authorization = request.header("authorization").unwrap_or("").trim();
-    let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
-    if supplied.is_empty() {
+    let Some(supplied) = presented_bearer(request) else {
         tracing::warn!(
             key = key_or_prefix,
             list,
@@ -175,7 +172,8 @@ pub(crate) async fn authorize_release(
             "release request refused: no bearer presented for this publisher item"
         );
         return Ok(Some(ReleaseRefusal::NoBearer.code()));
-    }
+    };
+    let expected = dashboard.release_token(policy.item()).await?;
     if constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
         return Ok(None);
     }
