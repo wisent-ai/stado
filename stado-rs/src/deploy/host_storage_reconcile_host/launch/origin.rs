@@ -47,16 +47,27 @@ fn native_object_arguments(service: &Value) -> Result<Vec<String>, String> {
             .and_then(plist::Value::as_array)
             .filter(|values| !values.is_empty())
             .ok_or_else(|| "captured object API unit has no ProgramArguments".to_string())?;
-        return Ok(values
+        // An argument that is not text is not one this reader can match the
+        // listen option against; as an empty word it hid the option's value.
+        return values
             .iter()
             .skip(1)
-            .map(|value| value.as_string().unwrap_or_default().to_string())
-            .collect());
+            .map(|value| {
+                value.as_string().map(str::to_string).ok_or_else(|| {
+                    format!("captured object API unit {path} has a ProgramArguments entry that is not text: {value:?}")
+                })
+            })
+            .collect();
     }
+    // Asked about an empty unit name, systemctl answered for no unit and the
+    // reader reported "no single observed ExecStart" instead of the missing name.
     let unit = service["unit"]
         .as_str()
         .or_else(|| service["label"].as_str())
-        .unwrap_or_default();
+        .filter(|unit| !unit.is_empty())
+        .ok_or_else(|| {
+            "captured object API declares no unit or label to ask systemd about".to_string()
+        })?;
     let shown = checked(
         &[
             "/bin/systemctl",
