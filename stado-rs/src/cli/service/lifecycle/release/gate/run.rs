@@ -123,6 +123,7 @@ pub(crate) async fn release(
     if let Err(error) = update(
         options.name,
         options.host,
+        false,
         None,
         archive_path.to_str(),
         None,

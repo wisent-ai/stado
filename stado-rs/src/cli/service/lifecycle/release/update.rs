@@ -3,6 +3,9 @@
 
 use super::*;
 
+// One parameter per `service update` option, as the CLI and the release
+// gate pass them.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn update(
     name: &str,
     host: &str,

@@ -22,6 +22,7 @@ pub(super) async fn rollback_service_release(
     update(
         options.name,
         options.host,
+        false,
         None,
         None,
         Some(previous),
