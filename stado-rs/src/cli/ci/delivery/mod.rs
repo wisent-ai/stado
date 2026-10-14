@@ -1,22 +1,23 @@
-//! The delivery routine: Stado installs the declared plan's products from the
-//! `main` HEAD of their checkouts, in order, then pushes every repository when
-//! the plan declares it, so delivering a repair waits on no agent's turn.
+//! The delivery routine: Stado installs the declared plan's products, in
+//! order, each at the newest commit of its checkout's `main` the main check
+//! found green, never `main` HEAD, then pushes every repository when the
+//! plan declares it, so delivering a repair waits on no agent's turn.
 //!
 //! `stado ci run` is one pass, run by Stado's scheduler on the operator's
-//! cadence (`stado schedule create --cron … 'stado ci run'`), never per
-//! commit. `main` HEAD holds the commits the compile-free push checks passed,
-//! pushed or not: the repairs of the push gates wait there until the products
-//! running those gates are installed. A pass installs every step whose `main`
-//! it has not installed (`stado product install … --source-commit <main>
-//! --wait`, every quality gate run to its end). A refused step stops the pass,
-//! is kept with every refusal and recorded in Oko as one defect per session
-//! whose repair the revision brought, and waits until its `main` moves: the
-//! next pass resumes there, notes a refusal that remains on the same defects
-//! and records the revision that installs as their repair. Then, with
-//! `--push` declared, the pass pushes `main` of every checkout through the
-//! gates just installed and keeps each outcome. One pass runs at a time.
+//! cadence (`stado schedule create --cron … 'stado ci run'`). It first runs
+//! the main check ([`crate::cli::ci::main`]) over every new commit of each
+//! step's `main`, then installs every step whose last green commit it has
+//! not installed (`stado product install … --source-commit <green> --wait`,
+//! every quality gate run to its end). A step with no green commit waits
+//! and the pass stops there. A refused install stops the pass, is kept with
+//! every refusal and recorded in Oko as one defect per session whose repair
+//! the revision brought, and waits until a newer commit is green: the next
+//! pass resumes there, notes a refusal that remains on the same defects and
+//! records the revision that installs as their repair. Then, with `--push`
+//! declared, the pass pushes `main` of every checkout through the gates just
+//! installed and keeps each outcome. One pass runs at a time.
 
-mod oko;
+pub(in crate::cli::ci) mod oko;
 pub mod plan;
 pub mod state;
 mod status;
@@ -27,18 +28,19 @@ use std::path::Path;
 
 use chrono::Utc;
 
+use crate::cli::ci::main::record::Record;
 use crate::cli::release_loop::process::{run as process, succeeds};
 use crate::cli::CmdError;
 use plan::{Plan, Step};
-use state::{Delivered, Pass, Pushed, Refused, Running, State};
+use state::{Delivered, Pass, Refused, Running, State};
 
-/// The branch the routine installs and pushes. A git ref name: the protocol
-/// between the checkout, its origin and the install.
+/// The branch the routine checks, installs and pushes. A git ref name: the
+/// protocol between the checkout, its origin and the install.
 const MAIN: &str = "main";
 
 /// The commit the checkout's `main` stands on: the work committed there,
 /// pushed or not.
-async fn main_tip(checkout: &Path) -> Result<String, CmdError> {
+pub(in crate::cli::ci) async fn main_tip(checkout: &Path) -> Result<String, CmdError> {
     let head = format!("refs/heads/{MAIN}");
     let tip = process("git", &["rev-parse", "--verify", &head], Some(checkout))
         .await
@@ -49,36 +51,6 @@ async fn main_tip(checkout: &Path) -> Result<String, CmdError> {
             ))
         })?;
     Ok(tip.trim().to_string())
-}
-
-/// Push `main` of every checkout of the plan, each once, through the push
-/// gates the pass installed; every push's outcome, refused ones named.
-async fn push(plan: &Plan, current: &mut State) -> Result<Vec<String>, CmdError> {
-    let mut refusals = Vec::new();
-    let mut pushed: Vec<&Path> = Vec::new();
-    for step in &plan.steps {
-        if pushed.contains(&step.checkout.as_path()) {
-            continue;
-        }
-        pushed.push(&step.checkout);
-        let revision = main_tip(&step.checkout).await?;
-        let refspec = format!("refs/heads/{MAIN}:refs/heads/{MAIN}");
-        let outcome = process("git", &["push", "origin", &refspec], Some(&step.checkout)).await;
-        let refusal = outcome.err().map(|error| error.to_string());
-        if let Some(refusal) = &refusal {
-            refusals.push(format!("{}: {refusal}", step.checkout.display()));
-        }
-        current.pushed.insert(
-            step.checkout.display().to_string(),
-            Pushed {
-                revision,
-                at: Utc::now(),
-                refusal,
-            },
-        );
-        state::write(current)?;
-    }
-    Ok(refusals)
 }
 
 /// Install `step` at `revision` through this Stado's own product install;
@@ -112,13 +84,17 @@ enum Outcome {
     Delivered(Vec<String>, Vec<String>),
     Waiting(Refused),
     Refused(Refused),
+    /// A step none of whose commits of `main` the main check found green:
+    /// what the pass said up to it.
+    NoGreen(Vec<String>),
 }
 
-/// The index the pass starts at: the refused step once its `main` moved, the
-/// first step otherwise; `Err` with the refusal while its `main` has not moved.
-async fn start(plan: &Plan, current: &mut State) -> Result<Result<usize, Refused>, CmdError> {
+/// The index the pass starts at: the refused step once a newer commit than
+/// the refused one is green, the first step otherwise; `Err` with the
+/// refusal while none is.
+fn start(plan: &Plan, current: &mut State, checked: &Record) -> Result<usize, Refused> {
     let Some(refused) = current.refused.clone() else {
-        return Ok(Ok(Default::default()));
+        return Ok(Default::default());
     };
     let Some(index) = plan
         .steps
@@ -128,23 +104,31 @@ async fn start(plan: &Plan, current: &mut State) -> Result<Result<usize, Refused
         // The plan no longer holds the refused step: its refusal stands in
         // Oko, and the pass starts over the plan as declared.
         current.refused = None;
-        return Ok(Ok(Default::default()));
+        return Ok(Default::default());
     };
-    if main_tip(&plan.steps[index].checkout).await? == refused.revision {
-        return Ok(Err(refused));
+    match checked.last_green(&refused.step) {
+        Some(green) if green.revision != refused.revision => Ok(index),
+        _ => Err(refused),
     }
-    Ok(Ok(index))
 }
 
-async fn pass(plan: &Plan, current: &mut State) -> Result<Outcome, CmdError> {
-    let first = match start(plan, current).await? {
+async fn pass(plan: &Plan, current: &mut State, checked: &Record) -> Result<Outcome, CmdError> {
+    let first = match start(plan, current, checked) {
         Ok(first) => first,
         Err(refused) => return Ok(Outcome::Waiting(refused)),
     };
     let mut said = Vec::new();
     for step in &plan.steps[first..] {
         let key = step.key();
-        let revision = main_tip(&step.checkout).await?;
+        let Some(green) = checked.last_green(&key) else {
+            said.push(format!(
+                "{key} has no commit of {MAIN} the main check found green; it and every later \
+                 step wait (stado ci main history --product {} names why)",
+                step.product
+            ));
+            return Ok(Outcome::NoGreen(said));
+        };
+        let revision = green.revision.clone();
         let since = current
             .delivered
             .get(&key)
@@ -163,6 +147,7 @@ async fn pass(plan: &Plan, current: &mut State) -> Result<Outcome, CmdError> {
         current.running = None;
         let repository = step.repository()?;
         let earlier = current.refused.take().filter(|refused| refused.step == key);
+        let doing = format!("The delivery routine's install of {key}");
         if let Err(error) = installed {
             let mut refused = Refused {
                 step: key,
@@ -173,7 +158,7 @@ async fn pass(plan: &Plan, current: &mut State) -> Result<Outcome, CmdError> {
             };
             refused.defects = match earlier {
                 Some(earlier) => {
-                    oko::refused_again(&earlier.defects, &refused).await?;
+                    oko::refused_again(&earlier.defects, &doing, &refused).await?;
                     earlier.defects
                 }
                 None => {
@@ -184,7 +169,8 @@ async fn pass(plan: &Plan, current: &mut State) -> Result<Outcome, CmdError> {
                         &refused.revision,
                     )
                     .await?;
-                    oko::record(&step.product, repository, &refused, &authors).await?
+                    let finding = oko::install_refused(repository, &refused);
+                    oko::record(&step.product, repository, &finding, &refused, &authors).await?
                 }
             };
             current.refused = Some(refused.clone());
@@ -192,7 +178,8 @@ async fn pass(plan: &Plan, current: &mut State) -> Result<Outcome, CmdError> {
             return Ok(Outcome::Refused(refused));
         }
         if let Some(earlier) = earlier {
-            oko::repaired(&earlier.defects, &key, repository, &revision).await?;
+            let passed = format!("The delivery routine installed {key} from");
+            oko::repaired(&earlier.defects, &passed, repository, &revision).await?;
         }
         said.push(format!("{key} installed at {revision}"));
         current.delivered.insert(
@@ -208,48 +195,19 @@ async fn pass(plan: &Plan, current: &mut State) -> Result<Outcome, CmdError> {
         said.push("the plan declares no push".to_string());
         return Ok(Outcome::Delivered(said, Vec::new()));
     }
-    let refused_pushes = push(plan, current).await?;
+    let refused_pushes = plan.push(current).await?;
     said.push("pushed main of every checkout its push gates admitted".to_string());
     Ok(Outcome::Delivered(said, refused_pushes))
 }
 
-/// Every step's install asked of Oko's admission decision (`oko admit
-/// install --product P --purpose DEFECT`) before anything is planned or run.
-/// The routine installs and builds: the operator forbade both until every
-/// task and defect is closed, and consented to them only to repair CI/CD.
-/// The plan's purpose names the open defect it repairs; a consent he limited
-/// to that purpose admits it while the defect is open, and every other
-/// purpose, or the same one once it closed, meets the withdrawal quoted.
-/// Stado keeps no copy of the rule; the answer is Oko's.
-pub(crate) async fn admitted(steps: &[Step], purpose: &str, doing: &str) -> Result<(), CmdError> {
-    let mut refusals = Vec::new();
-    for step in steps {
-        if let Err(refused) = crate::cli::release_loop::allowed::refusal(
-            crate::cli::release_loop::allowed::INSTALL,
-            Some(&step.product),
-            &[purpose],
-        )
-        .await
-        {
-            refusals.push(refused);
-        }
-    }
-    if refusals.is_empty() {
-        return Ok(());
-    }
-    Err(CmdError::refused(format!(
-        "{doing} is refused: {}",
-        refusals.join("; ")
-    )))
-}
-
-/// `stado ci run [--json]`: one pass of the routine. A refused step exits
-/// non-zero after the state and the defects are written. A pass the
-/// operator's rulings forbid ([`admitted`]) is refused before it takes the
-/// routine's lock, installs anything or writes the state.
+/// `stado ci run [--json]`: one pass of the routine: the main check over
+/// every new commit of each step's `main`, then the installs. A refused step
+/// exits non-zero after the state and the defects are written. A pass the
+/// operator's rulings forbid ([`plan::admitted`]) is refused before it takes
+/// the routine's lock, checks or installs anything or writes the state.
 pub async fn run(json: bool) -> Result<(), CmdError> {
     let plan = plan::declared()?;
-    admitted(&plan.steps, &plan.purpose, "stado ci run").await?;
+    plan::admitted(&plan.steps, &plan.purpose, "stado ci run").await?;
     let Some(_held) = state::lock()? else {
         let current = state::read()?;
         let said = match &current.running {
@@ -265,13 +223,18 @@ pub async fn run(json: bool) -> Result<(), CmdError> {
     };
     let mut current = state::read()?;
     let started_at = Utc::now();
-    let outcome = pass(&plan, &mut current).await;
+    let outcome = match crate::cli::ci::main::check(&plan).await {
+        Ok((checked, checks)) => pass(&plan, &mut current, &checked)
+            .await
+            .map(|outcome| (checks.join("; "), outcome)),
+        Err(error) => Err(error),
+    };
     let (said, refused) = match &outcome {
-        Ok(Outcome::Delivered(said, pushes)) => match pushes.is_empty() {
-            true => (said.join("; "), None),
+        Ok((checks, Outcome::Delivered(said, pushes))) => match pushes.is_empty() {
+            true => (format!("{checks}; {}", said.join("; ")), None),
             false => (
                 format!(
-                    "{}; {} push(es) refused: {}",
+                    "{checks}; {}; {} push(es) refused: {}",
                     said.join("; "),
                     pushes.len(),
                     pushes.join("; ")
@@ -279,18 +242,19 @@ pub async fn run(json: bool) -> Result<(), CmdError> {
                 None,
             ),
         },
-        Ok(Outcome::Waiting(refused)) => (
+        Ok((checks, Outcome::NoGreen(said))) => (format!("{checks}; {}", said.join("; ")), None),
+        Ok((checks, Outcome::Waiting(refused))) => (
             format!(
-                "{} refused at {} and its {MAIN} has not moved; waiting for a commit that repairs: {}",
+                "{checks}; {} refused at {} and no newer commit of its {MAIN} is green; waiting for a commit that repairs: {}",
                 refused.step,
                 refused.revision,
                 refused.defects.join(", ")
             ),
             None,
         ),
-        Ok(Outcome::Refused(refused)) => (
+        Ok((checks, Outcome::Refused(refused))) => (
             format!(
-                "{} refused at {}; recorded on {}",
+                "{checks}; {} refused at {}; recorded on {}",
                 refused.step,
                 refused.revision,
                 refused.defects.join(", ")
@@ -306,7 +270,7 @@ pub async fn run(json: bool) -> Result<(), CmdError> {
         said: said.clone(),
     });
     state::write(&current)?;
-    let outcome = outcome?;
+    let (_, outcome) = outcome?;
     if json {
         println!("{}", serde_json::to_string_pretty(&current)?);
     } else {

@@ -16,7 +16,7 @@ const STATE_FILE: &str = "delivery-state.json";
 
 /// `$<env>` when set, else `~/.stado/<file>`, refused by name when neither
 /// can be read.
-pub(super) fn home_file(env: &str, file: &str) -> Result<PathBuf, CmdError> {
+pub(in crate::cli::ci) fn home_file(env: &str, file: &str) -> Result<PathBuf, CmdError> {
     if let Some(explicit) = std::env::var_os(env).filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(explicit));
     }
@@ -31,7 +31,10 @@ pub(super) fn home_file(env: &str, file: &str) -> Result<PathBuf, CmdError> {
 }
 
 /// Write `value` to `path` whole: staged beside it, then renamed over it.
-pub(super) fn write_json(path: &PathBuf, value: &impl Serialize) -> Result<(), CmdError> {
+pub(in crate::cli::ci) fn write_json(
+    path: &PathBuf,
+    value: &impl Serialize,
+) -> Result<(), CmdError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| CmdError::click(format!("creating {}: {error}", parent.display())))?;

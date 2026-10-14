@@ -10,9 +10,9 @@
 // 2. A relative checkout, a checkout that holds no git checkout and a step
 //    named twice are refused, and no plan is written.
 // 3. The plan is declared without --push and read back.
-// 4. A pass installs the step from its checkout's main HEAD: the state names
-//    the step delivered at that revision with no push, or refused with its
-//    refusals and the defects recorded for them in Oko.
+// 4. A pass checks the step's main and installs its last green commit: the
+//    state names the step delivered at that revision with no push, or
+//    refused with its refusals and the defects recorded for them in Oko.
 // 5. A second pass installs nothing again: a delivered step is said as
 //    already installed, a refused one as waiting for a commit, and no defect
 //    is recorded twice.
@@ -50,6 +50,7 @@ const environment = {
   OKO_DEFECT_REGISTER: join(output, 'defects.json'),
   STADO_DELIVERY_PLAN: join(output, 'delivery-plan.json'),
   STADO_DELIVERY_STATE: join(output, 'delivery-state.json'),
+  STADO_CI_MAIN_RECORD: join(output, 'ci-main.json'),
 };
 const report = {
   started_at: new Date().toISOString(),
@@ -107,14 +108,18 @@ try {
   const first = run(['ci', 'run', '--json']);
   const afterFirst = state();
   assert.equal(afterFirst.running, null, 'a finished pass left a step running');
-  if (first.status === successExit) {
-    assert.equal(afterFirst.delivered[key].revision, main);
+  const checked = JSON.parse(readFileSync(environment.STADO_CI_MAIN_RECORD, 'utf8')).steps[key];
+  const [latest] = [...checked].reverse();
+  assert.equal(latest.revision, main, 'the main check did not check main HEAD');
+  const green = checked.findLast(commit => commit.green);
+  if (first.status === successExit && green) {
+    assert.equal(afterFirst.delivered[key].revision, green.revision, 'the routine installed other than the last green commit');
     assert.equal(afterFirst.refused, null);
     assert.deepEqual(afterFirst.pushed, {}, 'a plan declared without --push pushed');
     assert.ok(afterFirst.last_pass.said.includes('the plan declares no push'), afterFirst.last_pass.said);
-  } else {
+  } else if (afterFirst.refused) {
     assert.equal(afterFirst.refused.step, key);
-    assert.equal(afterFirst.refused.revision, main);
+    assert.equal(afterFirst.refused.revision, green.revision);
     const [firstRefusal] = afterFirst.refused.refusals;
     assert.ok(firstRefusal, 'a refused step kept no refusal');
     assert.ok(afterFirst.refused.defects.length, 'a refused step recorded no defect');
@@ -123,16 +128,19 @@ try {
       const [shown] = oko(['defects', 'show', id, '--json']);
       assert.ok(shown.evidence.includes(firstLine), shown.evidence);
     }
+  } else {
+    assert.ok(!green, 'a step with a green commit was neither installed nor refused');
+    assert.ok(afterFirst.last_pass.said.includes('no commit of main the main check found green'), afterFirst.last_pass.said);
   }
   const recorded = recordedIds();
 
   const second = run(['ci', 'run']);
   const said = state().last_pass.said;
-  if (first.status === successExit) {
+  if (first.status === successExit && green) {
     assert.equal(second.status, successExit, second.stderr);
-    assert.ok(said.includes(`${key} already installed at ${main}`), said);
-  } else {
-    assert.match(said, /has not moved; waiting for a commit that repairs/);
+    assert.ok(said.includes(`${key} already installed at ${green.revision}`), said);
+  } else if (afterFirst.refused) {
+    assert.match(said, /no newer commit of its main is green; waiting for a commit that repairs/);
   }
   assert.deepEqual(recordedIds(), recorded, 'a second pass recorded a defect');
   assert.equal(git(['rev-parse', 'refs/remotes/origin/main']), originBefore, 'the journey moved the checkout\'s origin');

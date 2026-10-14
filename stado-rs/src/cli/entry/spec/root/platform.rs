@@ -231,27 +231,23 @@ pub(crate) enum CiCommands {
     },
     /// One pass of the delivery routine, which Stado's scheduler runs on the
     /// cadence the operator declares (`stado schedule create --cron …
-    /// 'stado ci run'`): install each step of the declared plan from its
-    /// checkout's `main` HEAD, pushed or not, in order, with every quality
-    /// gate run to its end, then — when the plan declares `--push` — push
-    /// `main` of every checkout through the gates just installed. A refused
-    /// step stops the pass, is recorded in Oko as one defect per session whose
-    /// repair the revision brought, carrying every refusal, and exits
-    /// non-zero; the next pass resumes at it once its `main` moves and
-    /// records the revision that installs as the repair. A refused push
-    /// exits non-zero naming it. A pass that finds another running says
-    /// which step it is on and ends.
+    /// 'stado ci run'`): check every new commit of each step's `main` with the
+    /// product's declared gates, recording each green or red (a red one in
+    /// Oko, found in that commit), then install each step's last green commit,
+    /// never `main` HEAD, in order, then — with `--push` declared — push
+    /// `main` of every checkout. A refused install stops the pass, is recorded
+    /// in Oko, exits non-zero, and resumes once a newer commit is green.
     Run {
         /// Print the routine's state after the pass.
         #[arg(long)]
         json: bool,
     },
     /// Whether the path that delivers repairs stands on this machine: the
-    /// routine's running and refused steps, who holds its pass lock, which
-    /// product operations hold build trees, and this machine's Stado unit
-    /// (loaded, state, pid, runs, last exit code, why it fails). `stalled`
-    /// names every way the path is down, one sentence each; Oko orders work
-    /// by it. Reads only.
+    /// routine's running and refused steps, each step's main check (every
+    /// commit checked, its last green one), who holds the pass lock, which
+    /// product operations hold build trees, and this machine's Stado unit.
+    /// `stalled` names every way the path is down, a red `main` among them,
+    /// one sentence each; Oko orders work by it. Reads only.
     Delivery {
         /// Print the document instead of lines.
         #[arg(long)]

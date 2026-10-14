@@ -17,9 +17,11 @@
 //!
 //! The answer also carries the delivery routine ([`delivery`]): its declared
 //! plan, the step it is installing and for how long, the step that refused
-//! with every refusal and its defects, and what each step last delivered.
+//! with every refusal and its defects, what each step last delivered, and
+//! what the main check ([`main`]) found on each step's `main`.
 
 pub mod delivery;
+pub mod main;
 
 use serde_json::{json, Value};
 

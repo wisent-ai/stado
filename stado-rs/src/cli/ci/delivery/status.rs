@@ -7,7 +7,8 @@ use super::{plan, state};
 use crate::cli::CmdError;
 
 /// The plan, the step running and how long it has run, the refused step
-/// with every refusal and its defects, and what each step last delivered.
+/// with every refusal and its defects, what each step last delivered, and
+/// what the main check found on each step's `main`.
 pub fn status() -> Result<Value, CmdError> {
     let current = state::read()?;
     let running = current.running.as_ref().map(|running| {
@@ -27,6 +28,7 @@ pub fn status() -> Result<Value, CmdError> {
         "delivered": current.delivered,
         "pushed": current.pushed,
         "last_pass": current.last_pass,
+        "main": crate::cli::ci::main::document()?,
     }))
 }
 
@@ -63,6 +65,7 @@ pub async fn path() -> Result<Value, CmdError> {
             refused.refusals.join("; ")
         ));
     }
+    stalled.extend(crate::cli::ci::main::red(&routine["main"]));
     if let (Some(running), None) = (&current.running, &holder) {
         stalled.push(format!(
             "step {} at {} is recorded as installing since {}, but no pass holds the routine's lock: \
@@ -196,4 +199,5 @@ pub fn print_status(document: &Value) {
     if let Some(last) = document["last_pass"].as_object() {
         println!("  last pass {}: {}", last["ended_at"], last["said"]);
     }
+    crate::cli::ci::main::print(&document["main"]);
 }

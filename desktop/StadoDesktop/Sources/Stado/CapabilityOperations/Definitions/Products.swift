@@ -85,9 +85,14 @@ enum NativeProductOperations {
             .init(id: "product", label: "Product of the catalog", required: true),
             .init(id: "revision", label: "Full commit (blank reads the newest run of any revision)", option: "--revision"),
         ], mutates: false),
-        // The delivery routine installs these steps, in order, from each
-        // checkout's main HEAD, then pushes every checkout when declared;
-        // Stado's scheduler runs `ci run`.
+        // Whether the delivery path stands, and what the main check found on
+        // each step's main: every commit checked, green or red with every
+        // refusal and its Oko defects, and the last green commit, which is
+        // what the routine installs. A red main is named under `stalled`.
+        .init(id: "ci-delivery", title: "Read the delivery path and the main check of every step: each commit green or red, and the last green one installed", path: ["ci", "delivery"], hostPlacement: .none, mutates: false),
+        // The delivery routine checks every new commit of each step's main,
+        // installs each step's last green commit, in order, then pushes every
+        // checkout when declared; Stado's scheduler runs `ci run`.
         .init(id: "ci-plan-set", title: "Declare the products the delivery routine installs, in order", path: ["ci", "plan", "set"], hostPlacement: .none, fields: [
             .init(id: "purpose", label: "Open Oko defect the installs repair (the operator's rulings are asked for this purpose)", option: "--purpose", required: true),
             .init(id: "steps", label: "Steps, one PRODUCT:SURFACE:CHECKOUT per line, in install order", option: "--step", required: true, multiple: true),
@@ -95,9 +100,10 @@ enum NativeProductOperations {
         ]),
         .init(id: "ci-plan-show", title: "Read the delivery routine's declared plan", path: ["ci", "plan", "show"], hostPlacement: .none, mutates: false),
         .init(id: "ci-plan-clear", title: "Remove the delivery routine's plan", path: ["ci", "plan", "clear"], hostPlacement: .none, jsonOutput: false),
-        // One pass: a refused step ends the operation as refused with every
-        // refusal and the Oko defects recorded for it.
-        .init(id: "ci-run", title: "Run one pass of the delivery routine over the declared plan", path: ["ci", "run"], hostPlacement: .none),
+        // One pass: the main check over every new commit, then the installs.
+        // A refused step ends the operation as refused with every refusal
+        // and the Oko defects recorded for it.
+        .init(id: "ci-run", title: "Run one pass of the delivery routine: check every new commit of main, install each step's last green commit", path: ["ci", "run"], hostPlacement: .none),
         // The components each product declares under `public_status`, as the
         // status page reads them: state, since when and the last failed
         // check with the answer that failed it. `check` asks every component

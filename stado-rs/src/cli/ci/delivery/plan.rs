@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::state::{home_file, write_json};
+use super::state::{home_file, write_json, Pushed, State};
 use crate::cli::CmdError;
 
 const PLAN_ENV: &str = "STADO_DELIVERY_PLAN";
@@ -60,6 +60,40 @@ pub struct Plan {
     pub declared_at: DateTime<Utc>,
 }
 
+impl Plan {
+    /// Push `main` of every checkout of the plan, each once, through the push
+    /// gates the pass installed; every push's outcome, refused ones named.
+    pub(super) async fn push(&self, current: &mut State) -> Result<Vec<String>, CmdError> {
+        let mut refusals = Vec::new();
+        let mut pushed: Vec<&Path> = Vec::new();
+        for step in &self.steps {
+            if pushed.contains(&step.checkout.as_path()) {
+                continue;
+            }
+            pushed.push(&step.checkout);
+            let revision = super::main_tip(&step.checkout).await?;
+            let main = super::MAIN;
+            let refspec = format!("refs/heads/{main}:refs/heads/{main}");
+            let outcome =
+                super::process("git", &["push", "origin", &refspec], Some(&step.checkout)).await;
+            let refusal = outcome.err().map(|error| error.to_string());
+            if let Some(refusal) = &refusal {
+                refusals.push(format!("{}: {refusal}", step.checkout.display()));
+            }
+            current.pushed.insert(
+                step.checkout.display().to_string(),
+                Pushed {
+                    revision,
+                    at: Utc::now(),
+                    refusal,
+                },
+            );
+            super::state::write(current)?;
+        }
+        Ok(refusals)
+    }
+}
+
 /// The plan's path: `STADO_DELIVERY_PLAN`, else `~/.stado/delivery-plan.json`.
 pub fn path() -> Result<PathBuf, CmdError> {
     home_file(PLAN_ENV, PLAN_FILE)
@@ -97,6 +131,36 @@ pub fn declared() -> Result<Plan, CmdError> {
             path.display()
         ))
     })
+}
+
+/// Every step's install asked of Oko's admission decision (`oko admit
+/// install --product P --purpose DEFECT`) before anything is planned or run.
+/// The routine installs and builds: the operator forbade both until every
+/// task and defect is closed, and consented to them only to repair CI/CD.
+/// The plan's purpose names the open defect it repairs; a consent he limited
+/// to that purpose admits it while the defect is open, and every other
+/// purpose, or the same one once it closed, meets the withdrawal quoted.
+/// Stado keeps no copy of the rule; the answer is Oko's.
+pub(crate) async fn admitted(steps: &[Step], purpose: &str, doing: &str) -> Result<(), CmdError> {
+    let mut refusals = Vec::new();
+    for step in steps {
+        if let Err(refused) = crate::cli::release_loop::allowed::refusal(
+            crate::cli::release_loop::allowed::INSTALL,
+            Some(&step.product),
+            &[purpose],
+        )
+        .await
+        {
+            refusals.push(refused);
+        }
+    }
+    if refusals.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::refused(format!(
+        "{doing} is refused: {}",
+        refusals.join("; ")
+    )))
 }
 
 /// One `--step PRODUCT:SURFACE:CHECKOUT`, its checkout an existing git
@@ -152,7 +216,7 @@ fn print(plan: &Plan, json: bool) -> Result<(), CmdError> {
 /// `stado ci plan set --purpose DEFECT --step PRODUCT:SURFACE:CHECKOUT …
 /// [--push] [--json]`. A plan whose installs the operator's rulings forbid
 /// now for that purpose is refused before it is written, quoting the ruling
-/// (`super::admitted`): a declared plan is what a scheduled `stado ci run`
+/// ([`admitted`]): a declared plan is what a scheduled `stado ci run`
 /// installs.
 pub async fn set(purpose: &str, steps: &[String], push: bool, json: bool) -> Result<(), CmdError> {
     let purpose = purpose.trim();
@@ -181,7 +245,7 @@ pub async fn set(purpose: &str, steps: &[String], push: bool, json: bool) -> Res
             )));
         }
     }
-    super::admitted(&steps, purpose, "declaring the delivery plan").await?;
+    admitted(&steps, purpose, "declaring the delivery plan").await?;
     let plan = Plan {
         steps,
         push,

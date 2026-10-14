@@ -1,7 +1,9 @@
-//! What the delivery routine writes in Oko's defect register, through Oko's
-//! own CLI: one defect per authoring session for a refused step, carrying
-//! every refusal of the run; a note on those defects when the next revision
-//! still refuses; and the repair on them once a revision installs.
+//! What the delivery routine and the main check write in Oko's defect
+//! register, through Oko's own CLI: one defect per authoring session for a
+//! refused step or a red commit of main, carrying every refusal, its
+//! revision recorded as found-in so Oko attributes it to the commit; a note
+//! on those defects when the next revision still refuses; and the repair on
+//! them once a revision installs.
 
 use std::path::Path;
 
@@ -78,25 +80,43 @@ pub async fn authors(
     Ok(authors)
 }
 
-/// Record `refused` once per author (once with no owner when the revision
-/// carries no recorded repair), each defect carrying every refusal; their ids.
+/// The words of one refused finding as Oko records it.
+pub struct Finding {
+    pub title: String,
+    pub surface: String,
+    pub impact: &'static str,
+    pub repair: &'static str,
+}
+
+/// The finding a refused install of the delivery routine is.
+pub fn install_refused(repository: &str, refused: &Refused) -> Finding {
+    Finding {
+        title: format!(
+            "The delivery routine's install of {} at {}@{} refused, with {} refusal(s) in one run",
+            refused.step,
+            repository,
+            refused.revision,
+            refused.refusals.len()
+        ),
+        surface: format!(
+            "stado ci run, step {} (stado product install at {repository}@{})",
+            refused.step, refused.revision
+        ),
+        impact: "The delivery routine stops at this step: it and every later step of the plan stay uninstalled until a commit on main repairs every refusal",
+        repair: "Repair every refusal named in the evidence in the source it names and commit it to main; the next pass of stado ci run resumes at this step",
+    }
+}
+
+/// Record `refused` as `finding` once per author (once with no owner when
+/// the revision carries no recorded repair), each defect carrying every
+/// refusal and found in `repository`@ the refused revision; their ids.
 pub async fn record(
     product: &str,
     repository: &str,
+    finding: &Finding,
     refused: &Refused,
     authors: &[String],
 ) -> Result<Vec<String>, CmdError> {
-    let title = format!(
-        "The delivery routine's install of {} at {}@{} refused, with {} refusal(s) in one run",
-        refused.step,
-        repository,
-        refused.revision,
-        refused.refusals.len()
-    );
-    let surface = format!(
-        "stado ci run, step {} (stado product install at {repository}@{})",
-        refused.step, refused.revision
-    );
     let evidence = format!(
         "Every refusal of the run, each gate run to its end:\n{}",
         refused.refusals.join("\n")
@@ -116,15 +136,15 @@ pub async fn record(
                 "--product",
                 product,
                 "--title",
-                &title,
+                &finding.title,
                 "--surface",
-                &surface,
+                &finding.surface,
                 "--evidence",
                 &evidence,
                 "--impact",
-                "The delivery routine stops at this step: it and every later step of the plan stay uninstalled until a commit on main repairs every refusal",
+                finding.impact,
                 "--repair",
-                "Repair every refusal named in the evidence in the source it names and commit it to main; the next pass of stado ci run resumes at this step",
+                finding.repair,
                 "--found-in",
                 &found,
                 "--json",
@@ -160,11 +180,15 @@ pub async fn record(
     Ok(ids)
 }
 
-/// Note on `defects` that the step refused again at a later revision.
-pub async fn refused_again(defects: &[String], refused: &Refused) -> Result<(), CmdError> {
+/// Note on `defects` that what refused (`doing`, as "The delivery routine's
+/// install of P:S") still refused at a later revision.
+pub async fn refused_again(
+    defects: &[String],
+    doing: &str,
+    refused: &Refused,
+) -> Result<(), CmdError> {
     let text = format!(
-        "The delivery routine's install of {} still refused at {}, every gate run to its end:\n{}",
-        refused.step,
+        "{doing} still refused at {}, every gate run to its end:\n{}",
         refused.revision,
         refused.refusals.join("\n")
     );
@@ -174,15 +198,16 @@ pub async fn refused_again(defects: &[String], refused: &Refused) -> Result<(), 
     Ok(())
 }
 
-/// Record on `defects` that `repository`@`revision` installed the step.
+/// Record on `defects` that `repository`@`revision` repaired them, as
+/// `passed` says ("The delivery routine installed P:S from").
 pub async fn repaired(
     defects: &[String],
-    step: &str,
+    passed: &str,
     repository: &str,
     revision: &str,
 ) -> Result<(), CmdError> {
     let revision = format!("{repository}@{revision}");
-    let detail = format!("The delivery routine installed {step} from {revision}");
+    let detail = format!("{passed} {revision}");
     for defect in defects {
         process(
             OKO,
