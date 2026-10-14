@@ -37,7 +37,7 @@ pub enum SpaceCommands {
         /// Remove what the selected stages name. Requires --reason.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        /// Why the space is being reclaimed; recorded on the target beside its state.
+        /// Why the space is being reclaimed; fleet apply records it on the target.
         #[arg(long)]
         reason: Option<String>,
         #[arg(long)]

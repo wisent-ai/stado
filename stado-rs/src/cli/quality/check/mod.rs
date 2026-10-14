@@ -220,7 +220,7 @@ async fn check_tree(
                 tree.display()
             ))
         })?;
-        commands::check(&declared, tree, area, &contract, report)?;
+        commands::check(&declared, tree, area, revision, &contract, report)?;
     }
     Ok(Some(declared.product))
 }

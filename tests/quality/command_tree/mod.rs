@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 fn git(root: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -51,6 +52,10 @@ fn committed_cli_tree_and_historical_duplicate() {
         .join(".build/quality-command-tree")
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&home).expect("isolated quality run area");
+    let binary_sha256 = format!(
+        "{:x}",
+        Sha256::digest(fs::read(env!("CARGO_BIN_EXE_stado")).expect("read tested binary"))
+    );
     let current = git(&root, &["rev-parse", "HEAD"]);
     let change = git(
         &root,
@@ -68,7 +73,7 @@ fn committed_cli_tree_and_historical_duplicate() {
         !change.is_empty(),
         "history must contain the janitor verb cutover"
     );
-    let earlier = git(&root, &["rev-parse", &format!("{change}^{{commit}}^")]);
+    let earlier = git(&root, &["rev-parse", &format!("{change}^")]);
 
     let before = quality(&root, &home, &earlier);
     let after = quality(&root, &home, &current);
@@ -76,11 +81,14 @@ fn committed_cli_tree_and_historical_duplicate() {
         "source_revision": current,
         "historical_revision": earlier,
         "binary": env!("CARGO_BIN_EXE_stado"),
+        "binary_sha256": binary_sha256,
         "commands": [
             {"argv": ["stado", "quality", "check", "--root", root, "--revision", earlier],
-             "exit_status": before.status.code(), "stdout": String::from_utf8_lossy(&before.stdout), "stderr": String::from_utf8_lossy(&before.stderr)},
+             "exit_status": before.status.code(), "stdout": String::from_utf8_lossy(&before.stdout),
+             "stderr": String::from_utf8_lossy(&before.stderr)},
             {"argv": ["stado", "quality", "check", "--root", root, "--revision", current],
-             "exit_status": after.status.code(), "stdout": String::from_utf8_lossy(&after.stdout), "stderr": String::from_utf8_lossy(&after.stderr)}
+             "exit_status": after.status.code(), "stdout": String::from_utf8_lossy(&after.stdout),
+             "stderr": String::from_utf8_lossy(&after.stderr)}
         ]
     });
     let report_path = home.join("report.json");
