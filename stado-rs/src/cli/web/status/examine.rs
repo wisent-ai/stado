@@ -113,9 +113,9 @@ pub(super) async fn examine(
     let unit_state = managed
         .map(|row| row.state.clone())
         .unwrap_or_else(|| "undeclared".to_string());
-    let reported_at = managed
-        .map(|row| row.reported_at.clone())
-        .unwrap_or_default();
+    // A service no unit runs has no report time and no detail: said as null,
+    // not as empty text that reads like a report with nothing in it.
+    let reported_at = managed.map(|row| row.reported_at.clone());
 
     let mut word = if managed.is_none() {
         VERDICT_NOT_DEPLOYED
@@ -251,7 +251,7 @@ pub(super) async fn examine(
         "readyz": declared.readyz(),
         "unit_state": unit_state,
         "unit_reported_at": reported_at,
-        "unit_detail": managed.map(|row| row.detail.clone()).unwrap_or_default(),
+        "unit_detail": managed.map(|row| row.detail.clone()),
         "managed_unit": managed.map(|row| row.service.unit_id().to_string()),
         "port_state": port_state,
         "port_detail": port_detail,
