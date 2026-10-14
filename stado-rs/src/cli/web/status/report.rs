@@ -84,26 +84,26 @@ pub(crate) async fn status(name: Option<&str>, json: bool) -> Result<(), CmdErro
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
         for row in &rows {
-            // A row without a port says so; it was printed as port 0.
+            // A state or name the row does not carry is said as not reported:
+            // the word "unknown", an empty word or port 0 read as a value the
+            // probe had measured.
+            let reported = |field: &str| match row[field].as_str() {
+                Some(state) => state.to_string(),
+                None => "not reported".to_string(),
+            };
             let port = match row["port"].as_u64() {
                 Some(port) => port.to_string(),
                 None => "not reported".to_string(),
             };
             println!(
                 "{} {} host={} port={} unit={} hostname={}",
-                row["product"].as_str().unwrap_or_default(),
-                row["verdict"].as_str().unwrap_or_default(),
-                row["host"].as_str().unwrap_or_default(),
+                reported("product"),
+                reported("verdict"),
+                reported("host"),
                 port,
-                row["unit"].as_str().unwrap_or_default(),
-                row["hostname"].as_str().unwrap_or_default(),
+                reported("unit"),
+                reported("hostname"),
             );
-            // A state the row does not carry is said as not reported: the
-            // word "unknown" read as a state the probe had measured.
-            let reported = |field: &str| match row[field].as_str() {
-                Some(state) => state.to_string(),
-                None => "not reported".to_string(),
-            };
             println!(
                 "  unit: {} (reported {})",
                 reported("unit_state"),
