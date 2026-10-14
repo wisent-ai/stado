@@ -45,8 +45,10 @@ pub(crate) fn write_state(
     }
     // Merge while holding the state lock, so two writers finishing together
     // do not drop each other's stamps. Every writer's stamp is carried
-    // forward and only this one is updated.
-    let previous = read_state(state_dir).unwrap_or_else(|_| Value::Object(Map::new()));
+    // forward and only this one is updated. A state that cannot be read is
+    // the error: rewritten from this pass alone it lost every other writer's
+    // stamps and the promises it held, without a word.
+    let previous = read_state(state_dir)?;
     let mut by_writer = previous
         .get(WRITER_ATTEMPTS)
         .and_then(Value::as_object)

@@ -39,9 +39,11 @@ pub(crate) fn read_state(state_dir: &Path) -> Result<Value, JanitorError> {
     let mut text = String::new();
     (&file).read_to_string(&mut text)?;
     let value: Value = serde_json::from_str(&text)?;
-    Ok(if value.is_object() {
-        value
-    } else {
-        Value::Object(Map::new())
-    })
+    if !value.is_object() {
+        return Err(JanitorError::value(&format!(
+            "cleanup state {} is not a JSON object",
+            path.display()
+        )));
+    }
+    Ok(value)
 }

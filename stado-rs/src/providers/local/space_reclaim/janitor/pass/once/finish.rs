@@ -47,10 +47,15 @@ pub(crate) fn finish(
 }
 
 /// A pass prevented by the lock keeps the previous pass's success stamp and
-/// target name: it observed the lock, not the host.
+/// target name: it observed the lock, not the host. A previous state that
+/// cannot be read is said in the report, not taken for a host never cleaned.
 pub(crate) fn preserve_previous_report(state_dir: &Path, report: &mut CleanupReport) {
-    let Ok(previous) = read_state(state_dir) else {
-        return;
+    let previous = match read_state(state_dir) {
+        Ok(previous) => previous,
+        Err(exc) => {
+            report.add_error("state_read", &exc);
+            return;
+        }
     };
     let Some(previous) = previous.get("report").and_then(Value::as_object) else {
         return;
