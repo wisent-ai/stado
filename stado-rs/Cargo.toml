@@ -164,6 +164,10 @@ name = "host-capacity-promise"
 path = "../tests/host_health/capacity.rs"
 
 [[test]]
+name = "capability-unreadable"
+path = "../tests/capability/unreadable.rs"
+
+[[test]]
 name = "scheduler"
 path = "../tests/scheduler/main.rs"
 
