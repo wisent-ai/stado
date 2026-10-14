@@ -75,8 +75,14 @@ pub(crate) fn target_identities(
     location: &str,
 ) -> Result<Vec<(String, String)>, RegistryValidationError> {
     let mut identities: Vec<(String, String)> = Vec::new();
-    let name = target["name"].as_str().unwrap_or("");
-    identities.push((normalize_hostname(name), format!("{location}.name")));
+    // A target without a string name is refused as that: read as "", every
+    // such target claimed the identity "" and collided with the next.
+    let name_location = format!("{location}.name");
+    let name = target
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| verr(&name_location, "must be a string"))?;
+    identities.push((normalize_hostname(name), name_location));
 
     let hostnames_location = format!("{location}.hostnames");
     if let Some(hostnames) = target.get("hostnames") {
