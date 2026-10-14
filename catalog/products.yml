@@ -362,10 +362,13 @@ products:
     summary: The credential and authentication vault; one process serves the HTTP
       API, the capability socket every workload redeems through, and replication of
       every bond the vault pulls.
+    # The question a client of the vault is asking is whether an item opens:
+    # /readyz decrypts the vault's canary item, so a gpg run standing behind a
+    # held keyring lock or a silent agent leaves it unanswered, while
+    # /v1/items/list decrypts nothing and answers as fast as ever.
     answering:
-      method: POST
-      path: /v1/items/list
-      body: {}
+      method: GET
+      path: /readyz
       repair:
       - crypto
       - audit-lock
