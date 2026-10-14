@@ -156,48 +156,43 @@ pub(crate) fn doctor(json: bool) -> Result<(), CmdError> {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return verdict(&report);
     }
-    let rows: Vec<Vec<String>> = report
-        .get("recipients")
-        .and_then(Value::as_array)
-        .map(|recipients| {
-            recipients
-                .iter()
-                .map(|entry| {
-                    let field = |name: &str| {
-                        entry
-                            .get(name)
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string()
-                    };
-                    let flag = |name: &str| match entry
-                        .get(name)
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                    {
-                        true => "yes".to_string(),
-                        false => "no".to_string(),
-                    };
-                    // The encryption subkey file is the one a restore must
-                    // produce, and Skarbiec lists it last.
-                    let key_file = entry
-                        .get("key_files")
-                        .and_then(Value::as_array)
-                        .and_then(|files| files.last())
-                        .and_then(Value::as_str)
-                        .unwrap_or("(no keygrip)")
-                        .to_string();
-                    vec![
-                        field("uid"),
-                        field("role"),
-                        flag("is_owner"),
-                        flag("secret_half_present"),
-                        key_file,
-                    ]
-                })
-                .collect()
+    // A report without its recipients, or a recipient without a field or
+    // flag, said nothing about it: printed as an empty table, empty text or
+    // "no", a missing secret-half flag read as a key nobody can restore.
+    let Some(recipients) = report.get("recipients").and_then(Value::as_array) else {
+        println!("the doctor report lists no recipients: {report}");
+        return verdict(&report);
+    };
+    let rows: Vec<Vec<String>> = recipients
+        .iter()
+        .map(|entry| {
+            let field = |name: &str| match entry.get(name).and_then(Value::as_str) {
+                Some(text) => text.to_string(),
+                None => "not reported".to_string(),
+            };
+            let flag = |name: &str| match entry.get(name).and_then(Value::as_bool) {
+                Some(true) => "yes".to_string(),
+                Some(false) => "no".to_string(),
+                None => "not reported".to_string(),
+            };
+            // The encryption subkey file is the one a restore must
+            // produce, and Skarbiec lists it last.
+            let key_file = entry
+                .get("key_files")
+                .and_then(Value::as_array)
+                .and_then(|files| files.last())
+                .and_then(Value::as_str)
+                .unwrap_or("(no keygrip)")
+                .to_string();
+            vec![
+                field("uid"),
+                field("role"),
+                flag("is_owner"),
+                flag("secret_half_present"),
+                key_file,
+            ]
         })
-        .unwrap_or_default();
+        .collect();
     table::print(
         &["RECIPIENT", "ROLE", "DOC OWNER", "SECRET HALF", "KEY FILE"],
         &rows,
