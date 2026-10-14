@@ -264,7 +264,10 @@ pub(crate) async fn matching_runs(
         if !live {
             continue;
         }
-        let product_name = run["product"].as_str().unwrap_or("").to_owned();
+        // A run that names no product has no previous run of its own to be
+        // measured against; read as "", it was compared with runs of "" and
+        // shown without a denominator as though none had been built.
+        let product_name = run["product"].as_str().map(str::to_owned);
         let Some(platforms) = run["platforms"].as_object_mut() else {
             continue;
         };
@@ -281,9 +284,19 @@ pub(crate) async fn matching_runs(
                 if let Some(compiled) = compiling_count(&store, &job_id).await {
                     let mut progress = Map::new();
                     progress.insert("compiled".into(), Value::from(compiled));
-                    if let Some(total) =
-                        previous_compile_total(&store, &older, &product_name, platform_name).await
-                    {
+                    let previous = match &product_name {
+                        Some(product) => {
+                            previous_compile_total(&store, &older, product, platform_name).await
+                        }
+                        None => {
+                            progress.insert(
+                                "previous_run_unmeasured".into(),
+                                Value::from("the run names no product"),
+                            );
+                            None
+                        }
+                    };
+                    if let Some(total) = previous {
                         progress.insert("of_previous_run".into(), Value::from(total));
                         // The measured ratio, as it is: a run that compiles
                         // more crates than the last one reads past a hundred.
