@@ -107,6 +107,24 @@ struct HostSpaceReport: Decodable, Sendable {
         struct Pass: Decodable, Sendable {
             let cleaners: [String: CleanerResult]?
             let errors: [String]?
+            let workloadHolds: [WorkloadHold]?
+
+            enum CodingKeys: String, CodingKey {
+                case cleaners, errors
+                case workloadHolds = "workload_holds"
+            }
+        }
+
+        struct WorkloadHold: Decodable, Sendable {
+            let pid: Int
+            let holder: String
+            let acquiredAt: Double
+
+            enum CodingKeys: String, CodingKey {
+                case pid, holder
+                case acquiredAt = "acquired_at"
+            }
+
         }
 
         struct CleanerResult: Decodable, Sendable {

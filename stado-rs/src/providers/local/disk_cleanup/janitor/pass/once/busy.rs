@@ -32,9 +32,10 @@ pub(super) fn describe_workloads(
         .iter()
         .map(|hold| {
             format!(
-                "{} (pid {}, held {:.0}s)",
+                "{} (pid {}, acquired_at {} Unix seconds, held {:.0}s)",
                 hold.holder,
                 hold.pid,
+                hold.acquired_at,
                 (now - hold.acquired_at).max(0.0)
             )
         })
@@ -45,6 +46,7 @@ pub(super) fn describe_workloads(
         workloads.len()
     );
     report.active_job_count = report.active_job_count.max(workloads.len() as i64);
+    report.workload_holds = workloads;
     report.outcome = "lock_busy_workloads".to_string();
     if may_request_turn && report.pressure_active == Some(true) {
         match holds::request_turn(state_dir, &named) {

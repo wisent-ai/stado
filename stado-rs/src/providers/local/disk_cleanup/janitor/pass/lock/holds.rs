@@ -102,16 +102,26 @@ pub(crate) fn request_turn(state_dir: &Path, reason: &str) -> Result<(), Janitor
     Ok(())
 }
 
-/// Whether a turn request stands: its janitor process is still alive. A
-/// request without a process (written by an older Stado) or from a process
+/// The janitor's request for its turn as it was written: when, why, and by
+/// which process (none when an older Stado wrote it without one).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnRequest {
+    pub requested_at: f64,
+    pub reason: String,
+    #[serde(default)]
+    pub pid: Option<i32>,
+}
+
+/// The turn request that stands: one whose janitor process is still alive.
+/// A request without a process (written by an older Stado) or from a process
 /// that is gone stands for nothing and is removed. A request that exists and
 /// cannot be read is an error naming it: read as none, workloads kept taking
 /// holds while the janitor waited for its turn.
-pub(crate) fn turn_requested(state_dir: &Path) -> Result<bool, JanitorError> {
+pub(crate) fn turn_request(state_dir: &Path) -> Result<Option<TurnRequest>, JanitorError> {
     let path = state_dir.join(TURN_NAME);
     let body = match std::fs::read(&path) {
         Ok(body) => body,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(JanitorError::os(&format!(
                 "cannot read the janitor turn request {}: {error}",
@@ -119,17 +129,20 @@ pub(crate) fn turn_requested(state_dir: &Path) -> Result<bool, JanitorError> {
             )))
         }
     };
-    let standing = serde_json::from_slice::<serde_json::Value>(&body)
+    let request = serde_json::from_slice::<TurnRequest>(&body)
         .ok()
-        .and_then(|turn| turn.get("pid").and_then(serde_json::Value::as_i64))
-        .and_then(|pid| i32::try_from(pid).ok())
-        .is_some_and(pid_alive);
-    if !standing {
+        .filter(|request| request.pid.is_some_and(pid_alive));
+    if request.is_none() {
         if let Some(left) = crate::primitives::staging::remove(&path) {
             eprintln!("janitor: a turn request nobody stands behind stays: {left}");
         }
     }
-    Ok(standing)
+    Ok(request)
+}
+
+/// Whether a turn request stands.
+pub(crate) fn turn_requested(state_dir: &Path) -> Result<bool, JanitorError> {
+    Ok(turn_request(state_dir)?.is_some())
 }
 
 /// The janitor has its exclusive hold: the request is answered. A request

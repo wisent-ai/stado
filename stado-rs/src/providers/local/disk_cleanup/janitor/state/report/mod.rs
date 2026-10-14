@@ -88,6 +88,9 @@ pub struct CleanupReport {
     /// The compiler cache's store.
     pub compiler_cache: CleanerReport,
     pub lock_busy: bool,
+    /// Private operator evidence captured when shared holders prevent a pass.
+    /// The public beacon deliberately omits process and operation identities.
+    pub workload_holds: Vec<super::super::pass::lock::holds::WorkloadHold>,
     pub active_job_count: i64,
     pub last_success_at: Option<String>,
     /// Whether this pass reached its cleaners at all.

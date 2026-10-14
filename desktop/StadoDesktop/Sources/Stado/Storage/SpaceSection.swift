@@ -131,6 +131,16 @@ struct SpaceSection: View {
                     value: "\(coverage.janitor.outcome) — \(coverage.janitor.detail)"
                 )
                 if let pass = coverage.janitor.report {
+                    if let holds = pass.workloadHolds {
+                        ForEach(holds.indices, id: \.self) { index in
+                            let hold = holds[index]
+                            WisentField(
+                                label: "Recorded cleanup hold — PID \(hold.pid)",
+                                value: "\(hold.holder)\nAcquired \(Date(timeIntervalSince1970: hold.acquiredAt).formatted(date: .complete, time: .complete))",
+                                tone: .warning
+                            )
+                        }
+                    }
                     if let cleaners = pass.cleaners {
                         ForEach(cleaners.keys.sorted(), id: \.self) { name in
                             if let result = cleaners[name] {

@@ -11,6 +11,7 @@ mod native;
 mod product_hold;
 mod retirement;
 mod rollback_target;
+mod sourcekit;
 mod space;
 
 use std::fs;

@@ -89,9 +89,8 @@ pub fn acquire_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, Janit
 }
 
 /// Who keeps the janitor from its turn on this machine: each live shared
-/// hold as `<work> (pid N, held S s)`, then whatever could not be read, so a
-/// refused workload names the processes to look at instead of only pointing
-/// at another command.
+/// hold with its acquisition timestamp, then the turn request and unread
+/// records. This is a diagnostic observation, not permission to steal a lock.
 pub fn workload_holders() -> String {
     let state_dir = match secure_home(&crate::config_file::expand_tilde("~"))
         .and_then(|home| ensure_state_dir(&home))
@@ -105,16 +104,37 @@ pub fn workload_holders() -> String {
         .iter()
         .map(|hold| {
             format!(
-                "{} (pid {}, held {}s)",
+                "{} (pid {}, acquired_at {} Unix seconds, held {}s)",
                 hold.holder,
                 hold.pid,
+                hold.acquired_at,
                 (now - hold.acquired_at).round()
             )
         })
         .collect();
     named.extend(unread);
+    match holds::turn_request(&state_dir) {
+        Ok(Some(turn)) => named.push(format!(
+            "janitor turn requested_at {} Unix seconds, pid {:?}: {}",
+            turn.requested_at, turn.pid, turn.reason
+        )),
+        Ok(None) => {}
+        Err(error) => named.push(format!("cannot read janitor turn request: {error}")),
+    }
+    match open_lock(&state_dir) {
+        Ok(file) => match super::file::read_lock_holder(&state_dir, &file) {
+            Ok(Some(holder)) => named.push(format!(
+                "recorded janitor {} {} (pid {}, acquired_at {} Unix seconds)",
+                holder.writer, holder.writer_version, holder.pid, holder.acquired_at
+            )),
+            Ok(None) => {}
+            Err(error) => named.push(error),
+        },
+        Err(error) => named.push(format!("cannot read cleanup lock: {error}")),
+    }
     match named.is_empty() {
-        true => "no workload records a hold; the janitor itself holds the lock or has asked for its turn".to_string(),
+        true => "no holder or turn record identifies the refusal; ownership was not established"
+            .to_string(),
         false => named.join("; "),
     }
 }

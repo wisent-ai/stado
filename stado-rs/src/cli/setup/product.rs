@@ -176,7 +176,13 @@ fn janitor_hold(
     if !stado_product::cli::compiles(matches) {
         return Ok(None);
     }
-    let holder = format!("stado product {action}");
+    let operation = matches
+        .subcommand()
+        .and_then(|(_, arguments)| arguments.try_get_one::<String>("operation").ok().flatten());
+    let holder = match operation {
+        Some(operation) => format!("stado product {action} {operation}"),
+        None => format!("stado product {action}"),
+    };
     match crate::providers::local::disk_cleanup::acquire_workload_lock(&holder) {
         Ok(Some(lock)) => Ok(Some(lock)),
         Ok(None) => Err(CmdError::refused(format!(
