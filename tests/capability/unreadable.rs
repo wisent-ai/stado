@@ -6,7 +6,10 @@
 //! machine, the test publishes that host's `host_capabilities/<host>.json`
 //! object into the local store in two broken shapes, and the real
 //! `stado overview` reads it back, as JSON and as text.
+// This journey reads the deployment's store and CLI only; the beacon serving
+// the host-health journeys drive through it is unused here.
 #[path = "../host_health/beacon/deployment.rs"]
+#[allow(dead_code)]
 mod deployment;
 
 use deployment::Deployment;

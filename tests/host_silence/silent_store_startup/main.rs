@@ -14,7 +14,10 @@
 //! and serve, and relay a client through the adapter to the answering
 //! service. A resolver that never serves leaves this test waiting on its log,
 //! which is the defect this test reproduces.
+// This journey starts the resolver against a store that never answers; the
+// store waits the in-flight refusal journey reads through the run are unused.
 #[path = "../refusal_in_flight/run.rs"]
+#[allow(dead_code)]
 mod run;
 
 use std::io::{Read, Write};
