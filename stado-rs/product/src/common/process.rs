@@ -15,6 +15,28 @@ static EXECUTABLE_HASH: LazyLock<std::result::Result<String, String>> = LazyLock
         .and_then(|path| sha256(&path))
         .map_err(|error| format!("{error:#}"))
 });
+/// The operating system's birth time for a PID, or absence when it has
+/// exited. A PID alone can be reused before a later install reads its record.
+pub fn started_at(pid: i32) -> Result<Option<String>> {
+    let output =
+        wait::output(Command::new("/bin/ps").args(["-p", &pid.to_string(), "-o", "lstart="]))
+            .with_context(|| format!("reading the start time of pid {pid}"))?;
+    if !output.status.success() {
+        if !super::alive(pid) {
+            return Ok(None);
+        }
+        bail!(
+            "ps could not read the start time of live pid {pid} ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let started = String::from_utf8(output.stdout)?.trim().to_owned();
+    if started.is_empty() {
+        bail!("ps returned no start time for live pid {pid}");
+    }
+    Ok(Some(started))
+}
 
 fn recorded(command: &mut Command) -> Result<(Output, PathBuf)> {
     let runtime = Runtime::new(None)?;

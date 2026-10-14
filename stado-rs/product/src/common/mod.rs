@@ -1,6 +1,6 @@
 mod archive;
 mod files;
-mod process;
+pub(crate) mod process;
 pub mod runs;
 
 use anyhow::{bail, Context, Result};
@@ -21,8 +21,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-/// The authoritative catalog, relative to the workspace of canonical checkouts:
-/// the Stado repository's own `catalog/products.yml`.
+/// The Stado catalog in the workspace of canonical checkouts.
 pub const CATALOG: &str = "stado/catalog/products.yml";
 
 /// The workspace `--workspace` named for this process, which every runtime

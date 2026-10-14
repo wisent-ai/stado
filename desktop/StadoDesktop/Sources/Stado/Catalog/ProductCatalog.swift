@@ -44,15 +44,42 @@ struct ProductLifecycleState: Decodable, Sendable {
     let cargoCache: ProductCargoCache?
     let dependencies: [ProductDependencyResult]?
     let signing: ProductSigning?
+    let operation: ProductOperation?
 
     enum CodingKeys: String, CodingKey {
-        case product, surface, status, host, release, readiness, signing
+        case product, surface, status, host, release, readiness, signing, operation
         case sourceRevision = "source_revision"
         case installedAt = "installed_at"
         case installedPaths = "installed_paths"
         case installDecision = "install_decision"
         case cargoCache = "cargo_cache"
         case dependencies
+    }
+}
+
+struct ProductOperation: Decodable, Sendable {
+    let pid: Int
+    let running: Bool
+    let phase: String
+    let step: String?
+    let startedAt: String?
+    let acquiredAt: String?
+    let steps: [[String]]?
+    enum CodingKeys: String, CodingKey {
+        case pid, running, phase, step, steps
+        case startedAt = "started_at"
+        case acquiredAt = "acquired_at"
+    }
+}
+
+struct ProductCancellationReceipt: Decodable, Sendable {
+    let cancelled: ProductCancellation
+}
+
+struct ProductCancellation: Decodable, Sendable {
+    let runningAfterSignal: Bool?
+    enum CodingKeys: String, CodingKey {
+        case runningAfterSignal = "running_after_signal"
     }
 }
 
@@ -176,6 +203,19 @@ final class ProductsStore: ObservableObject {
         guard !mutation.isWorking else { return }
         mutation = .working("\(verb.capitalized) \(product) \(surface)")
         do {
+            if verb == "cancel" {
+                let receipt = try await cli.json(
+                    ProductCancellationReceipt.self,
+                    arguments: Self.lifecycleArguments(verb, product: product, surface: surface, host: host),
+                    confirmsMutation: true,
+                    destination: surface == "service" ? .selected : .localDevice
+                )
+                mutation = .succeeded(receipt.cancelled.runningAfterSignal == true
+                    ? "\(product)/\(surface): termination requested; process still running at read-back"
+                    : "\(product)/\(surface): cancellation signalled; reading current state")
+                await status(product: product, surface: surface, host: host)
+                return
+            }
             let state = try await cli.json(
                 ProductLifecycleState.self,
                 arguments: Self.lifecycleArguments(verb, product: product, surface: surface, host: host,

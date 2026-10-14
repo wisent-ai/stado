@@ -122,6 +122,11 @@ async fn converge_service_local_stado_readers(
             "{context}: converging service-local Stado reader {} on {}",
             reader, target.name
         );
+        let waiting = crate::wait::begin(
+            crate::wait::Kind::Host,
+            format!("{context}: service update of reader {reader}"),
+            format!("host {}", target.name),
+        );
         let output = crate::wait::output_async(
             tokio::process::Command::new(executable)
                 .args([
@@ -135,16 +140,30 @@ async fn converge_service_local_stado_readers(
                 .arg(archive)
                 .args(["--refresh-image", "--json"]),
         )
-        .await
-        .map_err(|error| {
-            CmdError::click(format!(
-                "{context}: cannot start service-local reader convergence for {reader}: {error}"
-            ))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+        .await;
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                waiting.failed(&error);
+                return Err(CmdError::click(format!(
+                    "{context}: cannot finish service-local reader convergence for {reader} on {}: {error}",
+                    target.name
+                ))
+                .stating(crate::cli::entry::error::io_failure_code(error.kind())));
+            }
+        };
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         print!("{stdout}");
+        if output.status.success() {
+            waiting.done();
+        } else {
+            waiting.failed(format!(
+                "service update exited {}: {}",
+                output.status,
+                stderr.trim()
+            ));
+        }
         eprint!("{stderr}");
         if !output.status.success() {
             let captured_stdout = serde_json::from_str::<Value>(stdout.trim())

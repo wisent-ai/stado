@@ -158,6 +158,20 @@ struct ProductsView: View {
                 if let readiness = state?.readiness {
                     Text(readiness.detail).textSelection(.enabled)
                 }
+                if let operation = state?.operation {
+                    Text("Installation \(operation.phase): pid \(operation.pid) is \(operation.running ? "running" : "no longer running")")
+                        .textSelection(.enabled)
+                    if let since = operation.startedAt ?? operation.acquiredAt {
+                        Text("Since \(since)").textSelection(.enabled)
+                    }
+                    if let step = operation.step {
+                        Text(step).textSelection(.enabled)
+                    }
+                    if let steps = operation.steps {
+                        Text(steps.map { $0.joined(separator: " ") }.joined(separator: "\n"))
+                            .textSelection(.enabled)
+                    }
+                }
                 if let decision = state?.installDecision {
                     Text("\(decision.action): \(decision.reason)")
                         .textSelection(.enabled)
@@ -190,6 +204,9 @@ struct ProductsView: View {
                     action("Update", symbol: "arrow.triangle.2.circlepath", product, installation, host)
                     action("Rollback", symbol: "arrow.uturn.backward", product, installation, host)
                     action("Remove", symbol: "trash", product, installation, host, destructive: true)
+                    if state?.operation?.running == true {
+                        action("Cancel", symbol: "xmark.circle", product, installation, host, destructive: true)
+                    }
                 }
             }
         }

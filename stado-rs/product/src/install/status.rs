@@ -1,4 +1,4 @@
-use super::{recipe, services, transaction};
+use super::{operation, recipe, services, transaction};
 use crate::{catalog::text, common::Runtime, paths, signing, source, state::ProductState};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -145,6 +145,7 @@ pub fn inspect(
         report["status"] = json!("blocked");
     }
     report["signatures"] = json!(signatures);
+    report["operation"] = operation::running(runtime, id, surface)?;
     report["readiness"] = json!({"ready": ready, "detail": detail, "blocked": blocked});
     Ok(report)
 }

@@ -57,14 +57,14 @@ enum NativeProductOperations {
             .init(id: "host", label: "Stado host for service surfaces", option: "--host"),
             .init(id: "fetch", label: "Fetch canonical origins first", option: "--fetch", flag: true),
         ]),
-        // The answer carries `operation`: the installation holding the
-        // surface's lock, its pid, command, phase, step and since when.
-        .init(id: "status", title: "Read one installation and the operation holding its lock", path: ["product", "status"], hostPlacement: .none, fields: [
+        // The answer carries the lock holder or its post-placement operation,
+        // including the recorded step, pid and observed process state.
+        .init(id: "status", title: "Read one installation and its active operation", path: ["product", "status"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),
             .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
             .init(id: "host", label: "Stado host for a service surface", option: "--host"),
         ], mutates: false),
-        .init(id: "cancel", title: "End the installation operation holding a product surface's lock", path: ["product", "cancel"], hostPlacement: .none, fields: [
+        .init(id: "cancel", title: "Stop the product surface's active installation operation", path: ["product", "cancel"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),
             .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
             .init(id: "host", label: "Stado host for a service surface", option: "--host"),
@@ -127,6 +127,9 @@ enum NativeProductOperations {
             .init(id: "package", label: "Release source directory with Package.resolved", option: "--package-path", required: true),
             .init(id: "archive", label: "Portable SwiftPM input archive", option: "--archive", required: true),
         ], fixedArguments: ["restore"], jsonOutput: false),
+        .init(id: "editor-status", title: "Inspect live editor instances, parent processes and connection age", path: ["product", "editor", "status"], hostPlacement: .none, fields: [
+            .init(id: "package", label: "Canonical package directory (blank lists every active workspace)", option: "--package-path"),
+        ], mutates: false),
         .init(id: "documentation-pages", title: "Verify the product websites' command pages", path: ["product", "documentation", "cli-pages"], hostPlacement: .none, fields: [
             .init(id: "origin", label: "Documentation origins, one per line (blank checks every one)", option: "--origin", multiple: true),
         ], mutates: false, jsonOutput: false),

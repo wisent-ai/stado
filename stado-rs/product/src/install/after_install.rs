@@ -132,7 +132,22 @@ pub(super) fn run(
                  runs one of the installation's own binaries, or stado"
             ),
         };
-        checked(command.args(arguments))?;
+        let place = match host {
+            Some(host) => host.to_owned(),
+            None => this_machine()?,
+        };
+        let waiting = wait::begin(
+            wait::Kind::Process,
+            format!("{id}/{surface}: after_install {argv:?}"),
+            format!("host {place}"),
+        );
+        match checked(command.args(arguments)) {
+            Ok(_) => waiting.done(),
+            Err(error) => {
+                waiting.failed(format!("{error:#}"));
+                return Err(error);
+            }
+        }
         outcomes.push(json!({"argv": argv, "ran": true}));
     }
     Ok(outcomes)
@@ -245,7 +260,7 @@ fn substitute(word: &str, id: &str, surface: &str, host: Option<&str>) -> Result
 /// pin match accepts with or without its `.local` suffix. A CLI installation
 /// can therefore declare state pinned to the machine it is installed on, such
 /// as Brama's hand-over of bought accounts to the harness on that machine.
-fn this_machine() -> Result<String> {
+pub(crate) fn this_machine() -> Result<String> {
     if let Ok(name) = std::env::var("STADO_WORKER_NAME") {
         if !name.trim().is_empty() {
             return Ok(name.trim().to_owned());

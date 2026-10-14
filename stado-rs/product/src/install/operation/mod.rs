@@ -16,19 +16,20 @@
 //! meanwhile.
 
 mod after;
+mod cancel;
 mod perform;
 pub(in crate::install) use after::{after_install, lock_surface};
+pub use cancel::cancel;
 pub use perform::perform;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use fs2::FileExt;
 use serde_json::{json, Value};
-use stado_wait as wait;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::process::Command;
 
-use crate::common::{alive, checked, now, Runtime};
+use crate::common::{alive, checked, process::started_at, Runtime};
 use crate::state::{self, ProductState};
 
 /// The record a held lock carries, with whether its holder still runs;
@@ -98,10 +99,33 @@ pub(crate) fn clause(path: &Path) -> String {
     )
 }
 
-/// The installation operation holding `id`'s `surface`, or null.
+/// The locked writer or the post-placement step it recorded before releasing
+/// the lock. A stale PID is not reported as a running installation.
 pub fn running(runtime: &Runtime, id: &str, surface: &str) -> Result<Value> {
     let lock = state::path(runtime, id, surface)?.with_extension("lock");
-    Ok(json!(holder(&lock)?))
+    if let Some(held) = holder(&lock)? {
+        return Ok(held);
+    }
+    let Some(receipt) = ProductState::load(runtime, id, surface)? else {
+        return Ok(Value::Null);
+    };
+    let Some(marker) = receipt.extra.get("after_install_running") else {
+        return Ok(Value::Null);
+    };
+    let pid = i32::try_from(
+        marker["pid"]
+            .as_i64()
+            .context("after-install operation names no pid")?,
+    )?;
+    let expected = marker["started_at"]
+        .as_str()
+        .context("after-install operation records no process birth time")?;
+    let observed = started_at(pid)?;
+    let mut report = marker.clone();
+    report["running"] = json!(observed.as_deref() == Some(expected));
+    report["phase"] = json!("after_install");
+    report["lock"] = json!(lock.display().to_string());
+    Ok(report)
 }
 
 /// The direct children of `pid` with their command lines, as the process
@@ -212,48 +236,4 @@ fn stop(pid: i32) -> Value {
     let refused = unsafe { libc::kill(pid, libc::SIGTERM) }.is_negative();
     json!({"pid": pid, "told_to_stop": !refused,
         "error": refused.then(|| std::io::Error::last_os_error().to_string())})
-}
-
-/// End the installation operation holding `id`'s `surface`: its owner and
-/// the step it runs are told to stop (SIGTERM), the lock is waited for until
-/// the owner has let it go, and the receipt records the cancelled operation
-/// with its step. A surface nothing holds is refused by name.
-pub fn cancel(runtime: &Runtime, id: &str, surface: &str) -> Result<Value> {
-    let lock = state::path(runtime, id, surface)?.with_extension("lock");
-    let Some(held) = holder(&lock)? else {
-        bail!(
-            "no installation operation holds {id}/{surface} ({}); nothing was cancelled",
-            lock.display()
-        );
-    };
-    let pid = i32::try_from(held["pid"].as_u64().context("the holder names no pid")?)?;
-    let signalled: Vec<Value> = children(pid)?
-        .into_iter()
-        .map(|(child, _)| child)
-        .chain([pid])
-        .map(stop)
-        .collect();
-    let file = File::open(&lock).with_context(|| format!("{} cannot be opened", lock.display()))?;
-    wait::blocking_on_lock(
-        format!("the cancelled installation operation pid {pid} to let go of its lock"),
-        &lock,
-        || file.lock_exclusive(),
-    )
-    .with_context(|| format!("waiting for {} was refused", lock.display()))?
-    .with_context(|| {
-        format!(
-            "waiting for {} after cancelling pid {pid} failed",
-            lock.display()
-        )
-    })?;
-    let cancelled = json!({"at": now(), "holder": held, "signalled": signalled});
-    if let Some(mut receipt) = ProductState::load(runtime, id, surface)? {
-        receipt
-            .extra
-            .insert("cancelled".to_owned(), cancelled.clone());
-        receipt.save(runtime)?;
-    }
-    file.unlock()
-        .with_context(|| format!("{} cannot be released", lock.display()))?;
-    Ok(json!({"product": id, "surface": surface, "cancelled": cancelled}))
 }

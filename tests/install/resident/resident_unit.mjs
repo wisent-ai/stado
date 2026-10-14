@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 // unit still carrying an argv the incoming parser rejects. This uses the real
 // CLI, canonical source checkout, launchd/systemd unit and registry, and leaves
 // the upgraded service running. Never point it at an operator's live account.
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const binary = process.env.STADO_BIN;
 const source = process.env.STADO_TEST_SOURCE;
 const commit = process.env.STADO_TEST_SOURCE_COMMIT;

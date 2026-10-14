@@ -42,12 +42,28 @@ pub(in crate::install) fn after_install(
     let Some(steps) = recipe.get("after_install") else {
         return Ok(writer);
     };
-    let recorded = serde_json::to_value(&*installed)?;
+    let pid = i32::try_from(std::process::id())?;
+    let started_at = crate::common::process::started_at(pid)?
+        .ok_or_else(|| anyhow::anyhow!("the installing process pid {pid} has already exited"))?;
+    installed.extra.insert(
+        "after_install_running".to_owned(),
+        json!({"pid": pid, "started_at": started_at, "steps": steps}),
+    );
+    installed.save(runtime)?;
     drop(writer);
     let outcomes = super::super::after_install::run(id, surface, host, steps, installed);
     let writer = runtime.surface_lock(lock)?;
     let current = ProductState::load(runtime, id, surface)?;
-    if serde_json::to_value(&current)? != recorded {
+    if let Some(cancelled) = current
+        .as_ref()
+        .and_then(|state| state.extra.get("cancelled"))
+        .filter(|value| value["operation"] == installed.extra["after_install_running"])
+    {
+        installed
+            .extra
+            .insert("cancelled".to_owned(), cancelled.clone());
+    }
+    if serde_json::to_value(&current)? != serde_json::to_value(&Some(&*installed))? {
         bail!(
             "another installation of {id}/{surface} recorded itself while this one's after-install steps \
              ran ({}); their outcome is not written over it",
@@ -57,6 +73,7 @@ pub(in crate::install) fn after_install(
             }
         );
     }
+    installed.extra.remove("after_install_running");
     match outcomes {
         Ok(outcomes) => {
             installed

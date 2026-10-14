@@ -271,5 +271,5 @@ pub fn perform(
         Ok(installed)
     })();
     stack.pop();
-    handoff::finished(result, runtime, id, surface)
+    handoff::finished(result, runtime, id, surface, host)
 }

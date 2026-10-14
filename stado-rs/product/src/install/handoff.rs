@@ -11,6 +11,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
+use stado_wait as wait;
 use std::{
     path::PathBuf,
     process::{Command, Stdio},
@@ -81,10 +82,11 @@ pub(crate) fn finished(
     runtime: &Runtime,
     id: &str,
     surface: &str,
+    host: Option<&str>,
 ) -> Result<ProductState> {
     match result {
         Err(error) => match error.downcast::<HandOff>() {
-            Ok(hand) => hand.finish(runtime, id, surface),
+            Ok(hand) => hand.finish(runtime, id, surface, host),
             Err(error) => Err(error),
         },
         installed => installed,
@@ -116,7 +118,13 @@ impl HandOff {
     /// Run `<binary> product finish` for `id` on `surface`, after this
     /// process let go of the surface's writer lock, and read the receipt it
     /// recorded.
-    pub fn finish(&self, runtime: &Runtime, id: &str, surface: &str) -> Result<ProductState> {
+    pub fn finish(
+        &self,
+        runtime: &Runtime,
+        id: &str,
+        surface: &str,
+        host: Option<&str>,
+    ) -> Result<ProductState> {
         let mut command = Command::new(&self.binary);
         command
             .args([
@@ -135,8 +143,33 @@ impl HandOff {
              (stado product {FINISH})",
             self.binary.display()
         );
-        let output = capture(&mut command)?;
+        let place = match host {
+            Some(host) => host.to_owned(),
+            None => super::after_install::this_machine()?,
+        };
+        let waiting = wait::begin(
+            wait::Kind::Process,
+            format!(
+                "{id}/{surface}: product finish with {}",
+                self.binary.display()
+            ),
+            format!("host {place}"),
+        );
+        let output = match capture(&mut command) {
+            Ok(output) => output,
+            Err(error) => {
+                waiting.failed(format!("{error:#}"));
+                return Err(error);
+            }
+        };
         if !output.status.success() {
+            waiting.failed(format!(
+                "{} exited {}; stdout: {}; stderr: {}",
+                self.binary.display(),
+                output.status,
+                String::from_utf8_lossy(&output.stdout).trim(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
             bail!(
                 "{} product {FINISH} {id} --surface {surface} --source-commit {} exited {}; the \
                  build stays retained, so repeating the installation resumes at the step that \
@@ -148,6 +181,7 @@ impl HandOff {
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
+        waiting.done();
         let mut state = ProductState::load(runtime, id, surface)?.with_context(|| {
             format!(
                 "{} product {FINISH} succeeded but recorded no installation of {id}",
