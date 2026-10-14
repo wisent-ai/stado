@@ -82,14 +82,20 @@ pub(super) fn compare(copy: &[Value], owner: &[Value]) -> Result<Comparison, Str
                 }
             },
         };
+        // The tags carry the item's roles onto the owner. A listing without
+        // them would copy the item over as one playing no role, so it is
+        // refused rather than read as untagged.
         let tags = item
             .get("tags")
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect();
+            .ok_or_else(|| format!("copy item {id} was listed without its tags list: {item}"))?
+            .iter()
+            .map(|tag| {
+                tag.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("copy item {id} lists a tag that is not text: {tag}"))
+            })
+            .collect::<Result<_, String>>()?;
         // The owner's own id when it holds the item (a rename changed it),
         // the copy's when the owner lacks it.
         let owner_id = match on_owner.and_then(|theirs| text(theirs, "id")) {
