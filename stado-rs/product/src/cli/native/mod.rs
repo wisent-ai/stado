@@ -45,10 +45,10 @@ pub fn cargo() -> Command {
         .arg(
             Arg::new("operation")
                 .required(true)
-                .value_parser(["build", "check", "test", "run", "metadata", "stage"])
+                .value_parser(["build", "check", "test", "run", "metadata", "stage", "results"])
                 .help(
                     "stage: a locked release build of the forwarded --bin targets, each \
-                     binary placed at $WISENT_OUTPUT_DIR/<name> for a release manifest to stage",
+                     binary placed at $WISENT_OUTPUT_DIR/<name>; results: retained Cargo receipts for this checkout, with --json",
                 ),
         )
         .arg(forwarded())
