@@ -89,7 +89,7 @@ pub fn sign(
         );
     }
     let observed = inspect(path)?;
-    let before = inspect(previous.filter(|p| p.exists()).unwrap_or(path))?;
+    let before = signer.previous(path, previous)?;
     if crate::signing::SignatureState::is_stable(&before) && before["identifier"] != code_identifier
     {
         bail!(

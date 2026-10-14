@@ -52,6 +52,16 @@ impl Signer {
         !self.require_signature && self.requested.is_none() && policy.preserves_metadata()
     }
 
+    /// A source recipe names its signer, not the signer already on build
+    /// output. Only an installed destination constrains the prior identity.
+    pub(super) fn previous(&self, candidate: &Path, installed: Option<&Path>) -> Result<Value> {
+        match installed.filter(|path| path.exists()) {
+            Some(path) => inspect(path),
+            None if self.require_signature => Ok(json!({"state": super::SignatureState::Missing})),
+            None => inspect(candidate),
+        }
+    }
+
     pub fn codesign(
         &self,
         path: &Path,
@@ -141,7 +151,7 @@ impl Signer {
         if !native(&path)? {
             bail!("signing target is not a Mach-O file: {}", path.display());
         }
-        let before = inspect(previous.filter(|p| p.exists()).unwrap_or(&path))?;
+        let before = self.previous(&path, previous)?;
         if crate::signing::SignatureState::is_stable(&before) {
             if before["identifier"] != identifier {
                 bail!(
