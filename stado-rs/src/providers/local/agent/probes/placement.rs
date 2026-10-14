@@ -58,17 +58,26 @@ pub(crate) async fn reconcile_placement_policy(
     }
 
     let path = placement_policy_path()?;
-    let held = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-    if let Some(held) = &held {
-        if crate::cli::placement::policy_effect(held) == desired {
-            return Ok((
-                format!("{} already carries the declaration", path.display()),
-                desired,
-            ));
-        }
-    }
+    // The policy the worker holds now. A file that cannot be read or parsed is
+    // replaced like an absent one, but the report says what was replaced, so
+    // a corrupted policy is not passed off as a first write.
+    let replaced = match std::fs::read_to_string(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => Some(format!("replaced unreadable {}: {error}; ", path.display())),
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Err(error) => Some(format!(
+                "replaced {}, which was not JSON: {error}; ",
+                path.display()
+            )),
+            Ok(held) if crate::cli::placement::policy_effect(&held) == desired => {
+                return Ok((
+                    format!("{} already carries the declaration", path.display()),
+                    desired,
+                ));
+            }
+            Ok(_) => None,
+        },
+    };
 
     let directory = path
         .parent()
@@ -94,7 +103,8 @@ pub(crate) async fn reconcile_placement_policy(
     })?;
     Ok((
         format!(
-            "wrote {} at registry generation {generation}",
+            "{}wrote {} at registry generation {generation}",
+            replaced.as_deref().map_or("", |note| note),
             path.display()
         ),
         desired,
