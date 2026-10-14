@@ -8,68 +8,76 @@ use crate::cli::seed_freshness::verdict::inputs::{Attempt, SEED_UNREADABLE};
 use crate::cli::seed_freshness::verdict::outcome::Verdict;
 
 /// Parse one host-side evidence document into attempts, keyed by login item.
-pub fn attempts_of(evidence: &Value, login_item: &str) -> Vec<Attempt> {
-    evidence
+///
+/// The evidence script always prints an `attempts` list, empty when nothing
+/// was attributed. A document without one is refused: read as no attempts,
+/// it would report every account as never tried.
+pub fn attempts_of(evidence: &Value, login_item: &str) -> Result<Vec<Attempt>, String> {
+    let rows = evidence
         .get("attempts")
         .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter(|row| row.get("login_item").and_then(Value::as_str) == Some(login_item))
-                .map(|row| {
-                    let flag = |name: &str| row.get(name).and_then(Value::as_bool).unwrap_or(false);
-                    Attempt {
-                        at: row
-                            .get("at")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        at_ms: row.get("at_ms").and_then(Value::as_i64).unwrap_or(0),
-                        result: row
-                            .get("result")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        code_submitted: flag("code_submitted"),
-                        code_rejected: flag("code_rejected"),
-                        locked_out: flag("locked_out"),
-                        authenticator_unreached: flag("authenticator_unreached"),
-                        markers: row
-                            .get("markers")
-                            .and_then(Value::as_array)
-                            .map(|names| {
-                                names
-                                    .iter()
-                                    .filter_map(Value::as_str)
-                                    .map(str::to_string)
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
-                    }
-                })
-                .collect()
+        .ok_or_else(|| "the sign-in evidence carries no attempts list".to_string())?;
+    Ok(rows
+        .iter()
+        .filter(|row| row.get("login_item").and_then(Value::as_str) == Some(login_item))
+        .map(|row| {
+            let flag = |name: &str| row.get(name).and_then(Value::as_bool).unwrap_or(false);
+            Attempt {
+                at: row
+                    .get("at")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                at_ms: row.get("at_ms").and_then(Value::as_i64).unwrap_or(0),
+                result: row
+                    .get("result")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                code_submitted: flag("code_submitted"),
+                code_rejected: flag("code_rejected"),
+                locked_out: flag("locked_out"),
+                authenticator_unreached: flag("authenticator_unreached"),
+                markers: row
+                    .get("markers")
+                    .and_then(Value::as_array)
+                    .map(|names| {
+                        names
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            }
         })
-        .unwrap_or_default()
+        .collect())
 }
 
 /// Join the vault sweep and the attempt evidence into one report.
-pub fn build_report(target: &str, vault: &Value, evidence: &Value) -> Value {
+///
+/// A vault half without a `rows` list, or a row naming no `item`, is refused
+/// rather than read as an account nobody holds: an empty join is a report
+/// that every seed is fine.
+pub fn build_report(target: &str, vault: &Value, evidence: &Value) -> Result<Value, String> {
     let rows = vault
         .get("rows")
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default();
+        .ok_or_else(|| format!("{target}: the vault's seed sweep carries no rows list"))?;
     let mut findings = Vec::new();
     for row in &rows {
         let item = row
             .get("item")
             .and_then(Value::as_str)
-            .unwrap_or_default()
+            .ok_or_else(|| format!("{target}: a vault seed row names no item: {row}"))?
             .to_string();
         let seed_state = row
             .get("seed_state")
             .and_then(Value::as_str)
             .unwrap_or(SEED_UNREADABLE);
-        let attempts = attempts_of(evidence, &item);
+        let attempts =
+            attempts_of(evidence, &item).map_err(|error| format!("{target}: {error}"))?;
         let verdict = classify(seed_state, &attempts);
         // A row with no seed field and no sign-in history is not evidence of
         // anything an operator has to act on today, and reporting every such
@@ -129,7 +137,7 @@ pub fn build_report(target: &str, vault: &Value, evidence: &Value) -> Value {
                 .to_string(),
         )
     });
-    json!({
+    Ok(json!({
         "schema_version":
             1,
         "target": target,
@@ -140,5 +148,5 @@ pub fn build_report(target: &str, vault: &Value, evidence: &Value) -> Value {
         },
         "login_rows_read": rows.len(),
         "findings": findings,
-    })
+    }))
 }

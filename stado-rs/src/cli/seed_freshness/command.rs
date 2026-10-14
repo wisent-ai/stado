@@ -98,6 +98,9 @@ pub async fn authenticator_seed_freshness(
     }
     let evidence = parse_marked_line(&output.stdout, SEED_EVIDENCE_MARKER, "sign-in evidence")?;
 
+    let refused = |error: String| {
+        CmdError::click(error).stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
     let vault = match &vault_unsupported {
         None => vault,
         Some(_) => {
@@ -106,13 +109,16 @@ pub async fn authenticator_seed_freshness(
             let mut items: Vec<String> = evidence
                 .get("attempts")
                 .and_then(Value::as_array)
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|row| row.get("login_item").and_then(Value::as_str))
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
+                .ok_or_else(|| {
+                    refused(format!(
+                        "{}: the sign-in evidence carries no attempts list",
+                        resolved.name
+                    ))
+                })?
+                .iter()
+                .filter_map(|row| row.get("login_item").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect();
             items.sort();
             items.dedup();
             json!({"rows": items
@@ -125,7 +131,7 @@ pub async fn authenticator_seed_freshness(
                 .collect::<Vec<Value>>()})
         }
     };
-    let mut report = build_report(&resolved.name, &vault, &evidence);
+    let mut report = build_report(&resolved.name, &vault, &evidence).map_err(refused)?;
     if let Some(detail) = vault_unsupported {
         report["vault_half_unavailable"] = json!(detail);
     }
