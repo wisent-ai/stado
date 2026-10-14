@@ -27,6 +27,38 @@ struct Defect {
     repaired_in: Option<String>,
 }
 
+/// One open defect's recorded repair: the defect, the repository the
+/// repair was committed in and the repair commit.
+pub struct Repair {
+    id: String,
+    repository: String,
+    commit: String,
+}
+
+/// Every open defect's recorded repair, read once for a whole pass: the
+/// register holds thousands of defects, and the workspace hundreds of
+/// checkouts.
+pub async fn open_repairs() -> Result<Vec<Repair>, CmdError> {
+    let listed = run(OKO, &["defects", "list", "--open", "--json"], None).await?;
+    let defects: Vec<Defect> = serde_json::from_str(&listed).map_err(|error| {
+        CmdError::click(format!(
+            "oko defects list --open --json answered no defect list: {error}"
+        ))
+    })?;
+    Ok(defects
+        .into_iter()
+        .filter_map(|defect| {
+            let revision = defect.repaired_in?;
+            let (repository, commit) = revision.rsplit_once('@')?;
+            Some(Repair {
+                id: defect.id,
+                repository: repository.to_string(),
+                commit: commit.to_string(),
+            })
+        })
+        .collect())
+}
+
 #[derive(Deserialize)]
 struct Released {
     #[serde(default)]
@@ -41,50 +73,55 @@ struct ReleasedDefect {
     closed: bool,
 }
 
-/// The ids of `product`'s open defects whose recorded repair `commit` of
-/// `checkout` carries: the repair commit is `commit` or one of its
-/// ancestors. A repair commit the checkout does not hold is not carried.
+/// The ids of the open defects in `repairs` whose recorded repair `commit`
+/// of `checkout` carries: the repair names this checkout's repository and
+/// its commit is `commit` or one of its ancestors. A repair is recorded
+/// against the repository it was committed in — the checkout's directory in
+/// the workspace, as Oko resolves it — which is not always the product the
+/// checkout releases (a repository can release a product of another name),
+/// so the defects are matched by repository, never by the release product.
 pub async fn carried(
-    product: &str,
+    repairs: &[Repair],
     checkout: &Path,
     commit: &str,
 ) -> Result<Vec<String>, CmdError> {
-    let listed = run(
-        OKO,
-        &["defects", "list", "--open", "--product", product, "--json"],
-        None,
-    )
-    .await?;
-    let defects: Vec<Defect> = serde_json::from_str(&listed).map_err(|error| {
-        CmdError::click(format!(
-            "oko defects list --open --product {product} --json answered no defect list: {error}"
-        ))
-    })?;
+    let repository = repository_of(checkout)?;
     let mut carried = Vec::new();
-    for defect in defects {
-        let Some(revision) = defect.repaired_in else {
-            continue;
-        };
-        let Some((repository, repair)) = revision.rsplit_once('@') else {
-            continue;
-        };
-        let held = repository == product
-            && succeeds(
-                "git",
-                &["merge-base", "--is-ancestor", repair, commit],
-                checkout,
-            )
-            .await?;
+    for repair in repairs
+        .iter()
+        .filter(|repair| repair.repository == repository)
+    {
+        let held = succeeds(
+            "git",
+            &["merge-base", "--is-ancestor", &repair.commit, commit],
+            checkout,
+        )
+        .await?;
         if held {
-            carried.push(defect.id);
+            carried.push(repair.id.clone());
         }
     }
     Ok(carried)
 }
 
-/// Close every open defect of `product` a published release now carries,
-/// and answer their ids.
-pub async fn record_released(product: &str) -> Result<Vec<String>, CmdError> {
+/// The repository `checkout` is, as Oko names it in a recorded repair.
+pub fn repository_of(checkout: &Path) -> Result<&str, CmdError> {
+    checkout
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{} names no repository directory to match recorded repairs against",
+                checkout.display()
+            ))
+        })
+}
+
+/// Close every open defect a published release of `product` now carries,
+/// and answer their ids. Oko names every repository or product whose
+/// releases it could not read; only one that is this checkout's repository
+/// or this product fails the step, since the others are not this release.
+pub async fn record_released(product: &str, repository: &str) -> Result<Vec<String>, CmdError> {
     let answer = run(
         OKO,
         &[
@@ -103,10 +140,23 @@ pub async fn record_released(product: &str) -> Result<Vec<String>, CmdError> {
             "oko defects released --product {product} --close --json answered no report: {error}"
         ))
     })?;
-    if !released.unreadable.is_empty() {
+    let ours: Vec<&String> = released
+        .unreadable
+        .iter()
+        .filter(|line| {
+            [product, repository].iter().any(|name| {
+                line.split_once(':')
+                    .is_some_and(|(named, _)| named == *name)
+            })
+        })
+        .collect();
+    if !ours.is_empty() {
         return Err(CmdError::click(format!(
-            "oko defects released --product {product} could not read the releases: {}",
-            released.unreadable.join("; ")
+            "oko defects released --product {product} could not read this release: {}",
+            ours.iter()
+                .map(|line| line.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
         )));
     }
     Ok(released

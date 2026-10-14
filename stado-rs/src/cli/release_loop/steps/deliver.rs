@@ -15,7 +15,7 @@ use std::path::Path;
 use chrono::Utc;
 
 use super::super::register::{self, Entry, State, Step};
-use super::carried::{carried, note_failure, record_released};
+use super::carried::{carried, note_failure, open_repairs, record_released, repository_of, Repair};
 use super::version::commit_next;
 use crate::cli::release_newest::{Planned, Standing};
 use crate::cli::release_submit::{submit, ReleaseSubmitArgs, SubmitChannel};
@@ -155,6 +155,7 @@ fn settled(kept: &Entry) -> bool {
 async fn deliver(
     product: &str,
     checkout: &Path,
+    repairs: &[Repair],
     owed: Owed,
     mode: Mode,
 ) -> Result<Option<Entry>, CmdError> {
@@ -183,7 +184,7 @@ async fn deliver(
         current.started_at = kept.started_at;
     }
     current.version = version.clone();
-    current.carried = match carried(product, checkout, &commit).await {
+    current.carried = match carried(repairs, checkout, &commit).await {
         Ok(carried) => carried,
         Err(error) => return failed(current, error).await.map(Some),
     };
@@ -233,7 +234,8 @@ async fn deliver(
         }
     }
     at(&mut current, Step::Record)?;
-    current.recorded = match record_released(product).await {
+    let repository = repository_of(checkout)?;
+    current.recorded = match record_released(product, repository).await {
         Ok(recorded) => recorded,
         Err(error) => return failed(current, error).await.map(Some),
     };
@@ -244,13 +246,23 @@ async fn deliver(
 }
 
 /// One pass over `planned`, the plan of `root`'s checkouts: the entry each
-/// releasing product ended with, in product order.
+/// releasing product ended with, in product order. Oko's open repairs are
+/// read once for the pass; when Oko cannot answer, the pass queues nothing
+/// and says why on stderr, so `release newest` still releases what its plan
+/// holds on a machine without Oko.
 pub async fn pass(root: &Path, planned: Vec<Planned>, mode: Mode) -> Result<Vec<Entry>, CmdError> {
+    let repairs = match open_repairs().await {
+        Ok(repairs) => repairs,
+        Err(error) => {
+            eprintln!("stado release queue: no commit is queued: Oko's open repairs could not be read: {error}");
+            return Ok(Vec::new());
+        }
+    };
     let mut entries = Vec::new();
     for planned in planned {
         let checkout = root.join(&planned.checkout);
         let owed = owed(planned.standing);
-        if let Some(entry) = deliver(&planned.product, &checkout, owed, mode).await? {
+        if let Some(entry) = deliver(&planned.product, &checkout, &repairs, owed, mode).await? {
             entries.push(entry);
         }
     }
