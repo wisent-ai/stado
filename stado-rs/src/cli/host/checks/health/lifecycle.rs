@@ -6,14 +6,15 @@ use crate::deploy::service::{SystemdActiveState, SystemdManager};
 
 /// Read a fixed set of non-secret systemd properties for one exact unit.
 ///
-/// The manager scope comes from the collector's own unit entry. A missing
-/// scope, command failure, or timeout is unread state and returns `None`.
+/// The manager scope comes from the collector's own unit entry. A command
+/// that could not run or failed is unread state, returned with its cause so
+/// the beacon can say why the collector's state was left as it was.
 async fn local_systemd_properties(
     manager: SystemdManager,
     unit: &str,
     properties: &str,
     runner: &crate::deploy::Runner,
-) -> Option<BTreeMap<String, String>> {
+) -> Result<BTreeMap<String, String>, String> {
     let mut argv = vec!["/usr/bin/systemctl".to_string()];
     if manager == SystemdManager::User {
         argv.push("--user".to_string());
@@ -25,18 +26,21 @@ async fn local_systemd_properties(
         unit.to_string(),
     ]);
     let spec = crate::deploy::CommandSpec::new(argv);
-    let output = runner(spec).await.ok()?;
+    let output = runner(spec)
+        .await
+        .map_err(|error| format!("systemctl show {unit} could not run: {error}"))?;
     if !output.ok() {
-        return None;
+        return Err(format!(
+            "systemctl show {unit} failed: {}",
+            output.stderr.trim()
+        ));
     }
-    Some(
-        output
-            .stdout
-            .lines()
-            .filter_map(|line| line.split_once('='))
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
-    )
+    Ok(output
+        .stdout
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect())
 }
 
 /// Reconcile a collector's non-active systemd sample with native lifecycle
@@ -70,15 +74,29 @@ pub(super) async fn refresh_local_unit_lifecycle(
         .collect();
 
     for (unit, collector_state, manager) in pending {
-        let Some(properties) = local_systemd_properties(
+        // An unread native state leaves the collector's state as it was, and
+        // now says so on the unit, instead of leaving no trace that the
+        // reconciliation was attempted and could not read systemd.
+        let properties = match local_systemd_properties(
             manager,
             &unit,
             "LoadState,ActiveState,Type,Result,ExecMainStatus,ExecMainStartTimestamp,TriggeredBy",
             runner,
         )
         .await
-        else {
-            continue;
+        {
+            Ok(properties) => properties,
+            Err(unread) => {
+                if let Some(fields) = document
+                    .get_mut("units")
+                    .and_then(Value::as_object_mut)
+                    .and_then(|units| units.get_mut(&unit))
+                    .and_then(Value::as_object_mut)
+                {
+                    fields.insert("lifecycle_unread".to_string(), json!(unread));
+                }
+                continue;
+            }
         };
         if properties.get("LoadState").map(String::as_str) != Some("loaded") {
             continue;
@@ -114,7 +132,7 @@ pub(super) async fn refresh_local_unit_lifecycle(
         let mut active_trigger = None;
         if scheduled_run.is_some() && !triggers.is_empty() {
             for trigger in &triggers {
-                let Some(trigger_properties) =
+                let Ok(trigger_properties) =
                     local_systemd_properties(manager, trigger, "LoadState,ActiveState", runner)
                         .await
                 else {
