@@ -19,14 +19,18 @@ pub async fn check(
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?,
     };
-    let revisions = if pre_push {
-        pushed_revisions(&checkout)?
+    // A push runs only what compiles nothing (locks, module declarations,
+    // the `format` gates): no session builds, compiles or tests before every
+    // task and defect is closed, and then one build over everything runs the
+    // lint and test gates and records every refusal at once.
+    let (revisions, selection) = if pre_push {
+        (pushed_revisions(&checkout)?, Selection::Formatting)
     } else {
         let revision = match revision {
             Some(revision) => resolve(&checkout, revision)?,
             None => built_revision(&checkout)?,
         };
-        BTreeSet::from([revision])
+        (BTreeSet::from([revision]), Selection::Installation)
     };
     if revisions.is_empty() {
         println!("stado quality check: no source revision is being pushed; nothing to check");
@@ -36,15 +40,9 @@ pub async fn check(
             "stado quality check: checking committed revision {revision} of {}",
             checkout.display()
         );
-        export_check(
-            &checkout,
-            &revision,
-            Report::Stdout,
-            Selection::Installation,
-            if_declared,
-        )
-        .await
-        .map_err(|error| error.within(format!("quality of committed revision {revision}")))?;
+        export_check(&checkout, &revision, Report::Stdout, selection, if_declared)
+            .await
+            .map_err(|error| error.within(format!("quality of committed revision {revision}")))?;
     }
     Ok(())
 }
