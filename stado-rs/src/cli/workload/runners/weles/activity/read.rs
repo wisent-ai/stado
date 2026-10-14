@@ -74,11 +74,25 @@ async fn read_weles_activity(
             ),
         ));
     }
-    let limit = environment
-        .stdout
-        .split_whitespace()
-        .next()
-        .unwrap_or_default();
+    // An unset limit lists every run. One the host sets that is not a
+    // positive whole number was handed on as its first word and read by the
+    // inventory as no limit at all; it is refused with its value.
+    let declared = environment.stdout.trim();
+    let limit = match declared {
+        "" => String::new(),
+        stated => stated
+            .parse::<std::num::NonZeroU64>()
+            .map(|limit| limit.to_string())
+            .map_err(|error| {
+                crate::deploy::DeployError(format!(
+                    "{}: WELES_ACTIVITY_RUN_LIMIT is {stated:?}, which is not a positive whole \
+                     number of runs: {error}",
+                    resolved.name
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })?,
+    };
+    let limit = limit.as_str();
     let port = port.as_str();
     let output = host_channel::run_program_with_stdin(
         resolved,
