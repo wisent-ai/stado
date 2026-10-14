@@ -53,8 +53,13 @@ pub(crate) async fn compiler_cache(
     let mut fields = Map::new();
     fields.insert("host".to_string(), json!(resolved.name));
     fields.insert("command".to_string(), json!(command));
-    let report = serde_json::from_str::<Value>(output.stdout.trim())
-        .unwrap_or_else(|_| json!(output.stdout.trim()));
+    let parsed = serde_json::from_str::<Value>(output.stdout.trim());
+    // A refused run is reported with whatever the host printed; a run that
+    // ended well and printed no JSON report is not a report of success.
+    let report = match &parsed {
+        Ok(report) => report.clone(),
+        Err(_) => json!(output.stdout.trim()),
+    };
     // The host's own report says what it found; a bare last line of its JSON
     // says nothing.
     let observed = report.get("state").and_then(Value::as_str).map(|state| {
@@ -81,6 +86,14 @@ pub(crate) async fn compiler_cache(
             "{}: the compiler cache operation was refused: {detail}",
             resolved.name
         )));
+    }
+    if let Err(error) = &parsed {
+        return Err(CmdError::click(format!(
+            "{}: `{command}` ended without error but printed no JSON report ({error}): {}",
+            resolved.name,
+            output.stdout.trim()
+        ))
+        .stating(crate::primitives::failure::FailureCode::Unknown));
     }
     fields.insert("status".to_string(), json!(OK_STATUS));
     let report = Value::Object(fields);
