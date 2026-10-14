@@ -8,11 +8,12 @@ use crate::cli::{CmdError, CLICK_ERROR_CODE};
 use crate::cli::resolver::directory::source::current_target;
 use crate::cli::resolver::report::probe::{age_seconds, bind_listening, probe_authority};
 use crate::cli::resolver::report::published::{
-    published_state, state_path, RESOLVER_SERVING, RESOLVER_UNPUBLISHED, STATE_FILE,
+    published_state, RESOLVER_SERVING, RESOLVER_UNPUBLISHED,
 };
 use crate::cli::resolver::report::vault;
 use crate::cli::resolver::report::waiting;
 
+mod state;
 mod text;
 
 /// `stado resolver status` — the four facts an operator needs about a local
@@ -103,35 +104,8 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
     let stale = held.is_none() || behind.is_some() || past_window;
 
     let mut blockers: Vec<String> = Vec::new();
-    match &published {
-        None => blockers.push(format!(
-            "no resolver has published state at {}: nothing has served here since that file was \
-             last removed",
-            state_path()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| STATE_FILE.to_string())
-        )),
-        Some(state) if !super::published::publisher_running(state) => blockers.push(format!(
-            "the resolver that published state {resolver_state} (pid {}) at {} is not running, \
-             and no resolver has published since: what the file says was true of a process \
-             that has exited",
-            state.pid, state.updated_at
-        )),
-        Some(state) if resolver_state != RESOLVER_SERVING => {
-            let mut sentence = format!("the resolver reports state {resolver_state}");
-            if let Some(reason) = state.reason.as_deref() {
-                sentence.push_str(": ");
-                sentence.push_str(reason);
-            }
-            if let Some(next) = state.next_attempt_at.as_deref() {
-                sentence.push_str(&format!(
-                    " (failed attempt {}, next read due {next})",
-                    state.attempt
-                ));
-            }
-            blockers.push(sentence);
-        }
-        Some(_) => {}
+    if let Some(blocker) = state::state_blocker(published.as_ref(), &resolver_state) {
+        blockers.push(blocker);
     }
     if api_listening == Some(false) {
         blockers.push(format!(
