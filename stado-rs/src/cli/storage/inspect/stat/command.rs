@@ -51,7 +51,7 @@ pub(in crate::cli::storage) async fn stat(args: &StorageStatArgs) -> Result<(), 
     let (state, size, version, detail) = (
         presence.state(),
         match &presence {
-            Presence::Present { size, .. } => Some(*size),
+            Presence::Present { size, .. } => *size,
             _ => None,
         },
         match &presence {

@@ -142,10 +142,12 @@ impl RemoteObjectApi {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() || status.is_redirection() {
+                    // A redirect names where the bytes live and need not say
+                    // how many there are; read as zero, a published archive
+                    // was handed to its target as a zero-byte download.
                     let size = response
                         .content_length()
-                        .and_then(|value| usize::try_from(value).ok())
-                        .unwrap_or_default();
+                        .and_then(|value| usize::try_from(value).ok());
                     Ok(Presence::Present {
                         size,
                         version: None,

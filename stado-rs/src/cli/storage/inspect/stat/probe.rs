@@ -15,7 +15,7 @@ use crate::cli::storage::*;
 pub(in crate::cli::storage) async fn probe(backend: &Arc<dyn BlobBackend>, path: &str) -> Presence {
     match backend.download_text_versioned(path).await {
         Ok(Some(found)) => Presence::Present {
-            size: found.content.len(),
+            size: Some(found.content.len()),
             version: Some(found.version),
             detail: None,
         },
@@ -27,7 +27,7 @@ pub(in crate::cli::storage) async fn probe(backend: &Arc<dyn BlobBackend>, path:
         // request.
         Err(err) => match backend.download_bytes(path).await {
             Ok(Some(bytes)) => Presence::Present {
-                size: bytes.len(),
+                size: Some(bytes.len()),
                 version: None,
                 detail: Some(format!("no version token: {err}")),
             },
@@ -192,7 +192,7 @@ fn listed(value: &Value, uri: &str) -> Result<Listed, CmdError> {
         .map(|stamp| stamp.with_timezone(&Utc));
     Ok((
         Presence::Present {
-            size,
+            size: Some(size),
             version: None,
             detail: Some(
                 "the list route reports size and metadata; it carries no CAS version".to_string(),

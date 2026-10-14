@@ -17,7 +17,9 @@ use crate::cli::storage::*;
 pub(in crate::cli::storage) enum Presence {
     /// The store answered and the object is there.
     Present {
-        size: usize,
+        /// The object's byte count; `None` when the answer carried none, as a
+        /// redirect without `Content-Length` does.
+        size: Option<usize>,
         /// Backend generation / ETag, when the versioned read produced one.
         version: Option<String>,
         /// Why the version is missing, when it is.

@@ -71,7 +71,14 @@ pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             return match presence {
-                Presence::Present { size, .. } => Ok(size as u64),
+                Presence::Present {
+                    size: Some(size), ..
+                } => Ok(size as u64),
+                Presence::Present { size: None, .. } => Err(CmdError::click(format!(
+                    "{uri} is published, but the release channel answered without its length, so \
+                     its size cannot be declared to the target"
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)),
                 _ => Err(CmdError::click(format!("{uri} is not published"))
                     .stating(crate::primitives::failure::FailureCode::NotFound)),
             };
