@@ -163,6 +163,9 @@ fn role_paths(args: &ServeArgs) -> Vec<(&'static str, String)> {
     if let Some(root) = &args.precheck_runner {
         paths.push(("--precheck-runner", root.display().to_string()));
     }
+    if let Some(root) = &args.release_loop_root {
+        paths.push(("--release-loop-root", root.display().to_string()));
+    }
     for program in [&args.edge_caddy, &args.edge_caddyfile]
         .into_iter()
         .flatten()
