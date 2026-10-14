@@ -105,16 +105,34 @@ pub enum ProfileError {
     Json(#[from] serde_json::Error),
 }
 
-/// Profile search path. Operator override first, package second.
-fn candidate_dirs() -> Vec<PathBuf> {
+/// Profile search path. Operator override first, package second. An
+/// override that is not text, or that names no directory, is refused: read
+/// as none or skipped, the package's profiles were used in place of the
+/// operator's under the same names.
+fn candidate_dirs() -> Result<Vec<PathBuf>, ProfileError> {
     let mut dirs = Vec::new();
-    let override_ = std::env::var("WC_PROFILES_DIR").unwrap_or_default();
+    let override_ = match std::env::var("WC_PROFILES_DIR") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => String::new(),
+        Err(error) => {
+            return Err(ProfileError::Invalid(format!(
+                "WC_PROFILES_DIR cannot be read: {error}"
+            )))
+        }
+    };
     let override_ = override_.trim();
     if !override_.is_empty() {
-        dirs.push(PathBuf::from(override_));
+        let dir = PathBuf::from(override_);
+        if !dir.is_dir() {
+            return Err(ProfileError::Invalid(format!(
+                "WC_PROFILES_DIR names {}, which is not a directory",
+                dir.display()
+            )));
+        }
+        dirs.push(dir);
     }
     dirs.push(package_profiles_dir());
-    dirs
+    Ok(dirs)
 }
 
 /// All profile names visible on the discovery path. De-duped, sorted
@@ -123,7 +141,7 @@ fn candidate_dirs() -> Vec<PathBuf> {
 /// refused naming it: read as empty, its profiles vanished from the list.
 pub fn list_profiles() -> Result<Vec<String>, ProfileError> {
     let mut seen: Vec<String> = Vec::new();
-    for dir in candidate_dirs() {
+    for dir in candidate_dirs()? {
         if !dir.is_dir() {
             continue;
         }
@@ -178,7 +196,7 @@ fn python_type_name(value: &Value) -> &'static str {
 /// The first match on the discovery path wins, so operator-local profiles
 /// in $WC_PROFILES_DIR override bundled ones with the same name.
 pub fn load_profile(name: &str) -> Result<Map<String, Value>, ProfileError> {
-    for dir in candidate_dirs() {
+    for dir in candidate_dirs()? {
         let path = dir.join(format!("{name}.json"));
         if path.is_file() {
             let text = std::fs::read_to_string(&path)?;
@@ -223,7 +241,7 @@ pub fn load_profile(name: &str) -> Result<Map<String, Value>, ProfileError> {
     };
     Err(ProfileError::NotFound(format!(
         "profile '{name}' not found. Searched: {}. Available: {available}",
-        candidate_dirs()
+        candidate_dirs()?
             .iter()
             .map(|d| d.display().to_string())
             .collect::<Vec<_>>()
