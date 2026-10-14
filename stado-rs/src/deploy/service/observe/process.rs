@@ -114,13 +114,13 @@ fn parse_process(stdout: &str) -> Result<RunningProgram, String> {
         if let ["STADO_PROCESS", pid, declared, resolved, running, started, declared_written, running_written] =
             host_channel::marker_fields(line).as_slice()
         {
-            program.pid = (*pid).to_string();
-            program.declared = (*declared).to_string();
-            program.resolved = (*resolved).to_string();
-            program.running = (*running).to_string();
-            program.started_epoch = epoch(*started, "start")?;
-            program.declared_written_epoch = epoch(*declared_written, "declared program's write")?;
-            program.running_written_epoch = epoch(*running_written, "running executable's write")?;
+            program.pid = pid.to_string();
+            program.declared = declared.to_string();
+            program.resolved = resolved.to_string();
+            program.running = running.to_string();
+            program.started_epoch = epoch(started, "start")?;
+            program.declared_written_epoch = epoch(declared_written, "declared program's write")?;
+            program.running_written_epoch = epoch(running_written, "running executable's write")?;
         }
         match host_channel::marker_fields(line).as_slice() {
             ["STADO_SERVE_ROLES", roles] => {
