@@ -35,8 +35,7 @@ pub(super) fn print_volumes(report: &Value) {
     let fleet_volume = report
         .get("usage")
         .and_then(|usage| usage.get("filesystem"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+        .and_then(Value::as_str);
     let work_root = report.get("work_root").and_then(Value::as_str);
     let work_root_mount = report.get("work_root_mount").and_then(Value::as_str);
     // A volume field the probe did not report is said as such, not as the
@@ -47,13 +46,13 @@ pub(super) fn print_volumes(report: &Value) {
             None => format!("<{key} not reported>"),
         }
     };
-    for volume in report
-        .get("volumes")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|volume| volume.get("filesystem").and_then(Value::as_str) != Some(fleet_volume))
-    {
+    let Some(volumes) = report.get("volumes").and_then(Value::as_array) else {
+        println!("volumes: not reported; the probe carries no volumes list");
+        return;
+    };
+    for volume in volumes.iter().filter(|volume| {
+        fleet_volume.is_none() || volume.get("filesystem").and_then(Value::as_str) != fleet_volume
+    }) {
         let whose = match (work_root, work_root_mount) {
             (Some(root), Some(mount))
                 if volume.get("mounted_on").and_then(Value::as_str) == Some(mount) =>
@@ -74,11 +73,12 @@ pub(super) fn print_volumes(report: &Value) {
     if devices.get("read").and_then(Value::as_bool) != Some(true) {
         return;
     }
-    for device in devices
-        .get("devices")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+    let Some(listed) = devices.get("devices").and_then(Value::as_array) else {
+        println!("block devices: read, but the probe carries no devices list");
+        return;
+    };
+    for device in listed
+        .iter()
         .filter(|device| device.get("unmounted").and_then(Value::as_bool) == Some(true))
     {
         let size_gib = device
