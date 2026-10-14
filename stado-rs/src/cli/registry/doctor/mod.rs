@@ -73,11 +73,20 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     // confronted with the file. A registry that names no target for this
     // machine leaves it `None`, and every unit is then reported unread
     // rather than empty.
-    let local_host = registry
-        .lookup_self(&crate::providers::vast::system_hostname())
-        .ok()
-        .flatten()
-        .map(|target| target.name.clone());
+    // An identity two targets claim is itself a registry finding: read as
+    // "no target", it left every unit unread and the cause unsaid.
+    let hostname = crate::providers::vast::system_hostname();
+    let local_host = match registry.lookup_self(&hostname) {
+        Ok(found) => found.map(|target| target.name.clone()),
+        Err(error) => {
+            findings.push(Finding::new(
+                "ambiguous-host-identity",
+                &hostname,
+                format!("this machine's registry entry cannot be told, so its unit files are not read: {error}"),
+            ));
+            None
+        }
+    };
 
     // The raw document from the same versioned read that produced `registry`
     // above. `service_directory`, `service_resolver`, and release/build checks
