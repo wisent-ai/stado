@@ -68,14 +68,21 @@ pub(super) async fn watch(job_id: &str, follow: bool, json: bool) -> Result<(), 
         });
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else {
+        // An absent value is named in its cell: a blank STARTED, ENDED or
+        // ERROR read the same for a job not yet started, one still running
+        // and one that failed without recording why.
+        let named = |value: Option<String>, absent: &str| match value {
+            Some(value) => value,
+            None => absent.to_string(),
+        };
         let ended = job.completed_at.clone().or_else(|| job.failed_at.clone());
         let row = vec![
             job.job_id.clone(),
             job.state.clone(),
             cursor.to_string(),
-            job.started_at.clone().unwrap_or_default(),
-            ended.unwrap_or_default(),
-            job.error.clone().unwrap_or_default(),
+            named(job.started_at.clone(), "(not started)"),
+            named(ended, "(not ended)"),
+            named(job.error.clone(), "(no error recorded)"),
         ];
         table::print(
             &["JOB", "STATE", "LOG BYTES", "STARTED", "ENDED", "ERROR"],
