@@ -198,29 +198,31 @@ pub async fn sync_vault(target: &str, check: bool, json_output: bool) -> Result<
     let (resolved, report) =
         remote_skarbiec_json(target, &[String::from("mirror"), String::from("pull")]).await?;
     if report.get("ok").and_then(Value::as_bool) != Some(true) {
-        let reason = report
-            .get("reason")
-            .and_then(Value::as_str)
-            .unwrap_or("sync_refused");
-        let detail = report
-            .get("detail")
-            .and_then(Value::as_str)
-            .unwrap_or("Skarbiec refused to replace the live vault");
-        let local_only = report
-            .get("local_only_items")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>()
-            .join(",");
-        let local_only = if local_only.is_empty() {
-            String::new()
-        } else {
-            format!("; local-only items: {local_only}")
+        // Skarbiec's own words, or its whole answer when it names no reason
+        // or detail: a sentence written here would read as Skarbiec's.
+        let said = match (
+            report.get("reason").and_then(Value::as_str),
+            report.get("detail").and_then(Value::as_str),
+        ) {
+            (Some(reason), Some(detail)) => format!("{reason}: {detail}"),
+            _ => format!("refused without naming its reason and detail: {report}"),
+        };
+        let local_only = match report.get("local_only_items").and_then(Value::as_array) {
+            Some(items) if !items.is_empty() => format!(
+                "; local-only items: {}",
+                items
+                    .iter()
+                    .map(|item| match item.as_str() {
+                        Some(name) => name.to_string(),
+                        None => item.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            _ => String::new(),
         };
         return Err(CmdError::refused(format!(
-            "{}: Skarbiec {reason}: {detail}{local_only}",
+            "{}: Skarbiec {said}{local_only}",
             resolved.name
         )));
     }
