@@ -43,7 +43,8 @@ use std::sync::LazyLock;
 
 use tokio::sync::Mutex;
 
-use crate::queue::{JobStorage, StorageError};
+// The one parallel blob read the scheduler's passes share.
+use crate::scheduler::makespan::download_many;
 
 mod escalate;
 mod fleet;
@@ -93,22 +94,4 @@ impl Sizing {
 pub fn global() -> &'static Sizing {
     static GLOBAL: LazyLock<Sizing> = LazyLock::new(Sizing::new);
     &GLOBAL
-}
-
-/// Parallel-download the given blob paths, as wide as the machine is, path
-/// order preserved. A missing blob (TOCTOU: moved between list and download)
-/// comes back as None and is skipped by the caller; any other error
-/// propagates so a real outage is visible.
-async fn download_many(
-    store: &JobStorage,
-    paths: &[String],
-) -> Result<Vec<Option<String>>, StorageError> {
-    use futures::StreamExt;
-    futures::stream::iter(paths)
-        .map(|path| store.download_text(path))
-        .buffered(crate::queue::migrations::bulk_workers()?)
-        .collect::<Vec<Result<Option<String>, StorageError>>>()
-        .await
-        .into_iter()
-        .collect()
 }

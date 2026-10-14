@@ -129,9 +129,21 @@ impl Sizing {
         let observed = self.observed_map(store).await?;
         let no_stored_size = Job::default().gpu_mem_gb;
         let mut corrected = Vec::new();
-        for text in download_many(store, &paths).await?.into_iter().flatten() {
-            let Ok(job) = Job::from_json(&text) else {
+        let texts = download_many(store, &paths).await?;
+        for (path, text) in paths.iter().zip(texts) {
+            let Some(text) = text else {
                 continue;
+            };
+            // A queued job that does not parse keeps whatever size it holds;
+            // said, so a job the pass never sized is not read as one it did.
+            let job = match Job::from_json(&text) {
+                Ok(job) => job,
+                Err(error) => {
+                    log_fn(&format!(
+                        "sizing: {path} is not a job, so its size is left as stored: {error}"
+                    ));
+                    continue;
+                }
             };
             let model = model_of(&job.command);
             if model.is_empty() {
