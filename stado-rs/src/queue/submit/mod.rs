@@ -111,13 +111,33 @@ fn hostname() -> String {
     crate::providers::vast::system_hostname()
 }
 
-/// `$USER` or `$LOGNAME` (Python `os.environ.get("USER", "") or ...`).
-fn submitter() -> String {
-    let user = std::env::var("USER").unwrap_or_default();
-    if !user.is_empty() {
-        return user;
+/// Who submits: `$USER`, else `$LOGNAME`, else the account this process runs
+/// as in the system's user database, so a submission from a service without
+/// a login environment still names its account. A variable that is not text,
+/// or an account the database does not hold, is refused: read as empty, the
+/// job was stored as submitted by nobody.
+fn submitter() -> Result<String, SubmitError> {
+    for variable in ["USER", "LOGNAME"] {
+        match std::env::var(variable) {
+            Ok(name) if !name.trim().is_empty() => return Ok(name),
+            Ok(_) | Err(std::env::VarError::NotPresent) => {}
+            Err(error) => {
+                return Err(SubmitError::Validation(format!(
+                    "{variable} cannot be read: {error}"
+                )))
+            }
+        }
     }
-    std::env::var("LOGNAME").unwrap_or_default()
+    let uid = nix::unistd::getuid();
+    match nix::unistd::User::from_uid(uid) {
+        Ok(Some(user)) => Ok(user.name),
+        Ok(None) => Err(SubmitError::Validation(format!(
+            "neither USER nor LOGNAME is set and the user database holds no account for uid {uid}"
+        ))),
+        Err(error) => Err(SubmitError::Validation(format!(
+            "neither USER nor LOGNAME is set and the account of uid {uid} cannot be read: {error}"
+        ))),
+    }
 }
 
 /// Submit directly to Stado queue storage (no API server needed).

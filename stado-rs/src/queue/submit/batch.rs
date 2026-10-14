@@ -141,7 +141,7 @@ pub async fn submit_batch(
                     .ok()
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| "manual".into()),
-                submitted_by: submitter(),
+                submitted_by: submitter()?,
                 submitted_from: hostname(),
             };
             let mut entries = Vec::with_capacity(commands.len());
