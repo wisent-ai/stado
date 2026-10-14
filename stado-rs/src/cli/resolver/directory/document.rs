@@ -72,9 +72,12 @@ fn verify_document_target(document: Value, local_target: &str) -> Result<Value, 
 /// program goes this way through one place.
 ///
 /// `Ok(None)` when this host keeps no copy, the copy declares no service
-/// directory, or this host is the authority: the caller reads its store.
+/// directory, or this host is the authority: the caller reads its store. A
+/// copy that cannot be read is the error, which the caller says before it
+/// reads its store; taken for no copy, a vault-dependent store read stood in
+/// for the authority without a word.
 pub(crate) async fn authority_snapshot() -> Result<Option<VersionedText>, CmdError> {
-    let Ok(copy) = last_good_document() else {
+    let Some(copy) = kept_last_good_document().map_err(CmdError::declaration)? else {
         return Ok(None);
     };
     let Some(directory) =
@@ -99,10 +102,29 @@ pub(crate) async fn authority_snapshot() -> Result<Option<VersionedText>, CmdErr
 /// One attempt at everything the resolver must read before it can bind.
 ///
 pub(crate) fn last_good_document() -> Result<Value, String> {
+    match kept_last_good_document()? {
+        Some(document) => Ok(document),
+        None => Err(match targets::registry_last_good_path() {
+            Some(path) => format!(
+                "this host keeps no last-known-good registry at {}",
+                path.display()
+            ),
+            None => "last-known-good registry path is unavailable".to_string(),
+        }),
+    }
+}
+
+/// This host's last-known-good registry copy; `None` when it keeps none. A
+/// copy that exists and cannot be read or parsed is the error naming it.
+pub(crate) fn kept_last_good_document() -> Result<Option<Value>, String> {
     let path = targets::registry_last_good_path()
         .ok_or_else(|| "last-known-good registry path is unavailable".to_string())?;
-    let bytes =
-        std::fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
     serde_json::from_slice(&bytes)
+        .map(Some)
         .map_err(|error| format!("{} is not valid registry JSON: {error}", path.display()))
 }

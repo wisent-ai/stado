@@ -15,20 +15,21 @@ use serde_json::Value;
 
 use crate::cli::registry::REGISTRY_CONFLICT_EXIT;
 use crate::cli::resolver::authority::execute::{execute_with_input, Output};
-use crate::cli::resolver::directory::document::last_good_document;
+use crate::cli::resolver::directory::document::kept_last_good_document;
 use crate::cli::resolver::directory::source::{current_target, snapshot_source, SnapshotSource};
 use crate::queue::StorageError;
 
 /// Replace the registry on the authority iff it is still at `expected`, and
 /// return the generation it now carries. `Ok(None)` when this host keeps no
 /// copy naming an authority, or is the authority: the caller swaps in its
-/// store. A lost condition is [`StorageError::StorageConflict`], as the
-/// store's own swap reports it.
+/// store. A copy that cannot be read is the error: taken for no copy, the
+/// write landed in the store instead of on the authority. A lost condition
+/// is [`StorageError::StorageConflict`], as the store's own swap reports it.
 pub(crate) async fn authority_compare_and_swap(
     expected: &str,
     content: &str,
 ) -> Result<Option<String>, StorageError> {
-    let Ok(copy) = last_good_document() else {
+    let Some(copy) = kept_last_good_document().map_err(StorageError::Other)? else {
         return Ok(None);
     };
     let Some(directory) =

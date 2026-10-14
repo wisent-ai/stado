@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -8,7 +9,7 @@ use crate::targets::RegistryStore;
 
 use crate::cli::CmdError;
 
-use crate::cli::resolver::directory::document::last_good_document;
+use crate::cli::resolver::directory::document::{kept_last_good_document, last_good_document};
 use crate::cli::resolver::directory::read_local_snapshot;
 use crate::cli::resolver::directory::source::current_target;
 use crate::cli::resolver::directory::source::snapshot_source;
@@ -119,17 +120,25 @@ async fn load_startup(
 /// as the resolver did, every consumer on the host without a route. Past
 /// the interval the resolver serves the last-known-good copy and binds; the
 /// refresh loop reads the store again. With no copy, or one that declares
-/// no resolver for `target`, there is no measure and the read is waited on.
-async fn within_declared<T>(
-    target: &str,
-    read: impl std::future::Future<Output = T>,
-) -> Result<T, String> {
-    let declared = last_good_document()
-        .ok()
-        .and_then(|document| service_resolution::resolver_config(&document, target).ok())
-        .map(|config| config.refresh_seconds);
-    let Some(seconds) = declared else {
-        return Ok(read.await);
+/// no resolver for `target`, there is no measure and the read is waited on;
+/// a copy or declaration that cannot be read leaves none either, and says
+/// why on stderr, where it used to pass for no copy.
+async fn within_declared<T>(target: &str, read: impl Future<Output = T>) -> Result<T, String> {
+    let declared = kept_last_good_document().and_then(|copy| match copy {
+        Some(document) => service_resolution::declared_resolver_config(&document, target),
+        None => Ok(None),
+    });
+    let seconds = match declared {
+        Ok(Some(config)) => config.refresh_seconds,
+        Ok(None) => return Ok(read.await),
+        Err(cause) => {
+            eprintln!(
+                "stado resolver: the first registry store read has no refresh interval to stand \
+                 within, because the last-known-good registry could not be read ({cause}); it is \
+                 waited on until it answers"
+            );
+            return Ok(read.await);
+        }
     };
     let period = std::time::Duration::from_secs(seconds);
     let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
