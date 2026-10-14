@@ -90,12 +90,13 @@ pub(in crate::cli::directory) async fn publish(
         }
         skipped.push(json!({ "service": name, "reason": reason }));
     }
-    if service.is_some() && published.is_empty() && skipped.is_empty() {
-        return Err(CmdError::click(format!(
-            "{DIRECTORY_KEY} declares no service named {}",
-            service.unwrap_or_default()
-        ))
-        .stating(crate::primitives::failure::FailureCode::NotFound));
+    if let Some(wanted) = service.as_deref() {
+        if published.is_empty() && skipped.is_empty() {
+            return Err(CmdError::click(format!(
+                "{DIRECTORY_KEY} declares no service named {wanted}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
+        }
     }
     // The whole declared set, never the filtered one. `--service` narrows what
     // this run writes; it cannot narrow what the directory says, and a sweep
@@ -172,20 +173,25 @@ pub(in crate::cli::directory) async fn publish(
     // asking again, so the line that announces writing one also says when
     // anyone last confirmed it answers.
     let seen = observations::load();
+    // A field a row lacks is said to be unreported, not printed as nothing.
+    let reported = |entry: &Value, key: &str| match entry.get(key).and_then(Value::as_str) {
+        Some(text) => text.to_string(),
+        None => "not reported".to_string(),
+    };
     for entry in &published {
-        let service = entry.get("service").and_then(Value::as_str).unwrap_or("");
+        let service = reported(entry, "service");
         println!(
             "{service} -> {} ({}) [observed {}]",
-            entry.get("url").and_then(Value::as_str).unwrap_or(""),
-            entry.get("marker").and_then(Value::as_str).unwrap_or(""),
-            observations::describe_in(&seen, &observations::service_fact(service, &target))
+            reported(entry, "url"),
+            reported(entry, "marker"),
+            observations::describe_in(&seen, &observations::service_fact(&service, &target))
         );
     }
     for entry in &skipped {
         println!(
             "{}: {}",
-            entry.get("service").and_then(Value::as_str).unwrap_or(""),
-            entry.get("reason").and_then(Value::as_str).unwrap_or("")
+            reported(entry, "service"),
+            reported(entry, "reason")
         );
     }
     // The value and the age are both printed because both are needed to
@@ -204,9 +210,9 @@ pub(in crate::cli::directory) async fn publish(
     for entry in &pruned {
         println!(
             "pruned {}: {} {}{}",
-            entry.get("service").and_then(Value::as_str).unwrap_or(""),
-            entry.get("status").and_then(Value::as_str).unwrap_or(""),
-            entry.get("marker").and_then(Value::as_str).unwrap_or(""),
+            reported(entry, "service"),
+            reported(entry, "status"),
+            reported(entry, "marker"),
             entry
                 .get("error")
                 .and_then(Value::as_str)
