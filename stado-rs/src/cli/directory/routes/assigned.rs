@@ -11,7 +11,7 @@
 
 use serde_json::{json, Value};
 
-use crate::cli::directory::document::DIRECTORY_KEY;
+use crate::cli::directory::document::{read_document, DIRECTORY_KEY};
 use crate::cli::directory::routes::service_port;
 use crate::cli::registry;
 use crate::cli::CmdError;
@@ -58,7 +58,11 @@ fn ports_on(document: &Value, target: &str) -> Vec<(String, u16)> {
 }
 
 /// The port the directory records for `entry` on `target`, without assigning
-/// one. A catalog entry that takes no port answers `None`.
+/// one. A catalog entry that takes no port answers `None`. Read as every
+/// read-only directory consumer reads it ([`read_document`]): the authority,
+/// then this host's last-known-good copy with its age, so the ensure that
+/// restarts the unit serving this machine's store does not stand on that
+/// store. Assigning a port (`record_port`) still writes through the authority.
 pub(crate) async fn recorded_listen_port(
     entry: &CatalogService,
     target: &str,
@@ -66,7 +70,7 @@ pub(crate) async fn recorded_listen_port(
     if !names_port(entry) {
         return Ok(None);
     }
-    let document = registry::fetch_document().await?;
+    let document = read_document().await?;
     let service = directory_name(entry);
     Ok(document
         .get(DIRECTORY_KEY)

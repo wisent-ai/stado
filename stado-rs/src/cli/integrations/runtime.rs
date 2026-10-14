@@ -13,6 +13,8 @@ mod delivery;
 mod precheck_runner;
 mod startup;
 use startup::{identity, own_route};
+mod recorded;
+pub(crate) use recorded::serve_line;
 pub(crate) mod roles;
 pub(crate) mod stops;
 mod supervisor;

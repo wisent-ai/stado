@@ -138,7 +138,12 @@ pub(crate) fn unit_program(
             env.extend(declared.env.clone());
             return Ok(UnitProgram {
                 program: entry.program,
-                args: entry.args,
+                args: crate::cli::integrations::runtime::serve_line(
+                    name,
+                    entry.args,
+                    &declared.args,
+                )
+                .map_err(CmdError::declaration)?,
                 source: "catalog",
                 unit: entry.unit,
                 env,
