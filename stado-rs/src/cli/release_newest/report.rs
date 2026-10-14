@@ -156,10 +156,22 @@ fn describe(standing: &Standing) -> String {
             version,
             run,
             taken_by,
-        } => format!(
-            "{version} belongs to commit {taken_by} (run {run}), and a version's \
-             source never changes; commit a new version before releasing {commit}"
-        ),
+            next,
+            unadvanceable,
+        } => {
+            let needed = match (next, unadvanceable) {
+                (Some(next), _) => format!(
+                    "it needs at least {next}, the versioning rule's step for an internal change \
+                     (a change to its surface takes what `stado release gate decide` answers)"
+                ),
+                (None, Some(cause)) => format!("its next version cannot be computed: {cause}"),
+                (None, None) => "its next version was not computed".to_string(),
+            };
+            format!(
+                "{version} belongs to commit {taken_by} (run {run}), and a version's source never \
+                 changes; {commit} is new source under it, so {needed} before it can be released"
+            )
+        }
         Standing::DeclaresNoReleases { reason } => format!("declares no releases: {reason}"),
         Standing::Unreadable { refusal } => format!("cannot be read: {refusal}"),
     }

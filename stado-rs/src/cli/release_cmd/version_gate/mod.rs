@@ -18,7 +18,7 @@ mod modules;
 mod rule;
 mod surface;
 
-pub(crate) use rule::semver_order;
+pub(crate) use rule::{least_next, semver_order};
 
 use std::path::PathBuf;
 

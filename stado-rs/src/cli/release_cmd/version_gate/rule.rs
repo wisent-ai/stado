@@ -231,3 +231,14 @@ pub(crate) fn semver_order(left: &str, right: &str) -> Result<Ordering, String> 
 pub(super) fn semver_at_least(actual: &str, minimum: &str) -> Result<bool, String> {
     Ok(semver_order(actual, minimum)? != Ordering::Less)
 }
+
+/// The least version the rule lets a release of new source take after
+/// `current`: the step of an internal change. A change to the product's
+/// surface takes more, as `decide` answers for that surface; no release of
+/// new source keeps `current`, because a published version attests its
+/// source for good.
+pub(crate) fn least_next(current: &str) -> Result<String, String> {
+    Version::parse(current)
+        .map(|version| version.advance(Change::Internal).to_string())
+        .map_err(|refusal| refusal.to_string())
+}

@@ -39,7 +39,8 @@ pub enum Standing {
         version: String,
         uncommitted: usize,
     },
-    /// A run published its declared version, so there is nothing to cut.
+    /// A run published this very commit at its declared version, so there
+    /// is nothing to cut.
     Published {
         commit: String,
         version: String,
@@ -52,14 +53,18 @@ pub enum Standing {
         version: String,
         run: String,
     },
-    /// A run of another commit holds the version: a submission attests its
-    /// source revision for good, whether the run published or not, so this
-    /// commit needs a version of its own before it can be released.
+    /// A run of another commit holds the version, published or not: a
+    /// submission attests its source revision for good, so this commit needs
+    /// a version of its own before it can be released. `next` is the least
+    /// version the versioning rule lets it take (an internal change's step);
+    /// `unadvanceable` says why the declared version has none.
     VersionTaken {
         commit: String,
         version: String,
         run: String,
         taken_by: String,
+        next: Option<String>,
+        unadvanceable: Option<String>,
     },
     /// The product declares that it does not release, and says why.
     DeclaresNoReleases { reason: String },
@@ -209,22 +214,23 @@ fn standing(checkout: &Path, published: &Recorded) -> Result<Standing, String> {
     Ok(standing_from_runs(commit, version, uncommitted.len(), runs))
 }
 
-/// A published run settles the version for good. A run of another commit
-/// holds it too: its submission attested that commit as the version's source,
-/// and the store refuses a second revision under one version (`stado/0.21.54
-/// already attests source revision …`). A run still moving on this commit is
-/// waited for; no run, or a failed or superseded run of this commit, leaves the
-/// commit to release. When a version's run fails its quality gate and the
-/// fix is committed at the same version, calling the version "already
-/// published" sends the operator to wait for a publication that can never
-/// come instead of to the version bump it needs.
+/// A run of this commit that published settles the version for good. A run
+/// of another commit holds it too, published or not: its submission attested
+/// that commit as the version's source (`stado/<version> already attests
+/// source revision …`), so a checkout that moved past a published commit
+/// without changing its declared version is new source under a spent
+/// version, not "already published". A run still moving on this commit is
+/// waited for; no run, or a failed or superseded run of it, leaves it to
+/// release.
 fn standing_from_runs(
     commit: String,
     version: String,
     uncommitted: usize,
     runs: &[RecordedRun],
 ) -> Standing {
-    let published = |run: &&RecordedRun| run.state.as_ref().is_some_and(|state| state.published());
+    let published = |run: &&RecordedRun| {
+        run.source_commit == commit && run.state.as_ref().is_some_and(|state| state.published())
+    };
     if let Some(run) = runs.iter().find(published) {
         return Standing::Published {
             commit,
@@ -233,11 +239,17 @@ fn standing_from_runs(
         };
     }
     if let Some(run) = runs.iter().find(|run| run.source_commit != commit) {
+        let (next, unadvanceable) = match crate::cli::release_cmd::least_next(&version) {
+            Ok(next) => (Some(next), None),
+            Err(cause) => (None, Some(cause)),
+        };
         return Standing::VersionTaken {
             commit,
             version,
             run: run.run_id.clone(),
             taken_by: run.source_commit.clone(),
+            next,
+            unadvanceable,
         };
     }
     let moving = |run: &&RecordedRun| run.state.as_ref().is_some_and(|state| !state.finished());
