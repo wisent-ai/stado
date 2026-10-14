@@ -1,12 +1,15 @@
 mod checks;
+mod cli;
 mod declared;
 pub mod findings;
 mod pinned;
 pub(crate) mod private_sources;
+mod results;
 mod sources;
 mod stage;
-use crate::common::{atomic_json, capture, checked, emit, now, toolchain_command, Runtime};
+use crate::common::{atomic_json, capture, checked, now, toolchain_command, Runtime};
 use anyhow::{bail, Context, Result};
+pub use cli::run;
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -274,50 +277,4 @@ pub(crate) fn execute_revision(
         stdout,
         code,
     })
-}
-
-pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
-    let manifest = arguments
-        .remove_one::<String>("manifest-path")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("Cargo.toml"));
-    let json_output = arguments.get_flag("json");
-    let revision = arguments.remove_one::<String>("revision");
-    let operation = arguments
-        .remove_one::<String>("operation")
-        .context("Cargo operation is missing")?;
-    let arguments: Vec<_> = arguments
-        .remove_many::<String>("forward")
-        .into_iter()
-        .flatten()
-        .collect();
-    if operation == "stage" {
-        return stage::stage(
-            runtime,
-            &manifest,
-            revision.as_deref(),
-            &arguments,
-            json_output,
-        );
-    }
-    let execution = execute_revision(
-        runtime,
-        &manifest,
-        revision.as_deref(),
-        &operation,
-        &arguments,
-    )?;
-    if json_output {
-        emit(&execution.report)?;
-    } else {
-        io::stdout().write_all(&execution.stdout)?;
-        if let Some(error) = execution.report["error"].as_str() {
-            eprintln!("{error}");
-        }
-        eprintln!(
-            "Cargo source and command records: {}",
-            execution.report["evidence"].as_str().unwrap()
-        );
-    }
-    Ok(execution.code)
 }

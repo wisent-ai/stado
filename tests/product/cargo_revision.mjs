@@ -100,6 +100,22 @@ try {
   assert.equal(said, COMMITTED, 'The binary was not built from the committed revision');
   assert.ok(!existsSync(join(checkout, '.build/stado-build')), 'The revision build wrote its export into the checkout');
 
+  const receipts = run(binary, [...cargo, '--json', 'results']);
+  success(receipts);
+  report.retained_results = JSON.parse(receipts.stdout);
+  const retained = report.retained_results.results;
+  assert.ok(retained.some(result => result.failedOperation && result.error),
+    'The failed working-tree build has no retained failure receipt');
+  assert.ok(retained.some(result => result.sources.some(source => source.pinned && source.commit === commit) && !result.error),
+    'The successful revision build has no source-cited receipt');
+  for (const result of retained) {
+    assert.equal(JSON.parse(readFileSync(result.path, 'utf8')).state, result.state,
+      'The result list disagrees with its persisted receipt');
+  }
+  const invalidRead = run(binary, [...cargo, '--revision', commit, 'results']);
+  assert.ok(!succeeded(invalidRead), 'Cargo results accepted revision selection');
+  assert.match(invalidRead.stderr, /--revision and forwarded Cargo arguments do not apply/);
+
   assert.equal(readFileSync(join(checkout, 'src/main.rs'), 'utf8'), edit,
     'The build changed the uncommitted edit in the working tree');
   report.result = 'passed';

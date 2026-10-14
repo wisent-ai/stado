@@ -33,6 +33,7 @@ fn main() -> Result<()> {
     holds(&["swift", "build"], true)?;
     holds(&["swift", "index"], true)?;
     holds(&["catalog"], false)?;
+    holds(&["cargo", "results"], false)?;
     println!("product compiles: editor serve holds nothing; swift build and index hold the cleanup lock; catalog holds nothing");
     Ok(())
 }
