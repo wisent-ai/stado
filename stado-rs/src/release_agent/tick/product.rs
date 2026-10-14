@@ -197,6 +197,17 @@ pub(crate) async fn reconcile_product(
             save_state(target, &mut state)?;
         }
         if state.phase == RolloutPhase::Monitoring {
+            // A record monitored without a cutover time read its elapsed
+            // time as zero on every pass, so its rollback window never
+            // closed and the previous release was retained for good. The
+            // window starts now and is said so.
+            if state.cutover_at.is_none() {
+                state.cutover_at = Some(Utc::now());
+                state.detail =
+                    "rollback window started now: the monitored record carried no cutover time"
+                        .to_string();
+                save_state(target, &mut state)?;
+            }
             let elapsed = seconds_since_cutover(&state);
             if elapsed >= policy.strategy.rollback_window_seconds {
                 if let Some(previous) = state.previous.take() {
