@@ -102,9 +102,8 @@ pub(super) fn validate_submission(
     }
     if !crate::queue::listing::priority_fits(options.priority) {
         return Err(SubmitError::Validation(format!(
-            "priority {} does not fit the queue's marker key; it must be between 0 and {}",
-            options.priority,
-            crate::queue::listing::PRIORITY_LIMIT
+            "priority {} must be nonnegative",
+            options.priority
         )));
     }
     if options.yieldable && options.yield_command.trim().is_empty() {

@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use futures::StreamExt;
 
 use crate::models::Job;
-use crate::queue::listing::{is_marker, MARKER_PREFIX};
+use crate::queue::listing::{is_marker, marker_path, MARKER_PREFIX};
 use crate::queue::storage::JobStorage;
 use crate::queue::StorageError;
 
@@ -179,7 +179,12 @@ pub(super) async fn collect_from_index(
             *scanned += 1;
             if let Some(data) = body? {
                 let job = Job::from_json(&data)?;
-                if scan.accepts(&job) && seen.insert(job.job_id.clone()) {
+                // A superseded key cannot give a job its former priority.
+                // Backfill removes it; only the current key admits the job.
+                if *marker == marker_path(&job)
+                    && scan.accepts(&job)
+                    && seen.insert(job.job_id.clone())
+                {
                     out.push(job);
                     if scan.window_full(out.len()) {
                         stopped_at = (*marker).to_string();

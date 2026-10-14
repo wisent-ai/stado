@@ -44,14 +44,8 @@ impl JobStorage {
         // caller retried admission under the same run id, which no other
         // participant can do on its behalf.
         //
-        // Every queued job is indexed, not just the prioritized ones.
-        // `priority_key` already sorts priority 0 correctly — it is the
-        // largest inverted key, so those jobs land after all prioritized
-        // work and FIFO among themselves — so this widens the index's
-        // coverage without changing one byte of its name shape. The
-        // listing walk can only be the ordered index if the index names
-        // everything; while it named a subset, the unindexed remainder
-        // needed a second, whole-prefix pass to be reachable at all.
+        // Every queued job has a full-width integer priority key, including
+        // unprioritized work. The ordered index must name the entire queue.
         self.write_priority_marker(job).await?;
         let created = self
             .backend

@@ -5,28 +5,21 @@ use crate::models::Job;
 
 use super::MARKER_PREFIX;
 
-/// The highest priority a marker key can order: the key spells the inverted
-/// priority in eight zero-padded digits, so a ninth digit would sort wrong.
-/// A submission or a priority change past it is refused, never clamped.
-pub const PRIORITY_LIMIT: i64 = 99_999_999;
-
-/// Sortable name component: lower = higher real priority + older.
+/// Sortable name component: descending signed priority, then creation time.
 ///
-/// Python `priority_key`: priority inverted against [`PRIORITY_LIMIT`] and
-/// zero-padded to eight digits, followed by the ISO created_at. Submission
-/// and `job priority` refuse a priority that does not fit
-/// ([`priority_fits`]); a record an older writer stored outside it is
-/// ordered at the nearer end.
-pub fn priority_key(job: &Job) -> String {
-    let prio = job.priority.clamp(0, PRIORITY_LIMIT);
-    let inv = PRIORITY_LIMIT - prio;
-    format!("{inv:>08}-{}", job.created_at)
+/// Distance from the model's maximum gives the full signed order without
+/// clamping older records. The hexadecimal encoder consumes every byte of
+/// the integer representation; no scheduling limit determines the width.
+fn priority_key(job: &Job) -> String {
+    let mut key = hex::encode(job.priority.abs_diff(i64::MAX).to_be_bytes());
+    key.push('-');
+    key.push_str(&job.created_at);
+    key
 }
 
-/// Whether `priority` fits the marker key: not below zero, not past
-/// [`PRIORITY_LIMIT`].
+/// New submissions and priority changes accept the model's nonnegative range.
 pub fn priority_fits(priority: i64) -> bool {
-    !priority.is_negative() && priority <= PRIORITY_LIMIT
+    !priority.is_negative()
 }
 
 /// The marker name for `job`.

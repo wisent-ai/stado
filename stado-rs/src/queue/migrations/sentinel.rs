@@ -10,15 +10,11 @@ pub const SENTINEL_PATH: &str = "queue_priority/.migration.json";
 
 /// The coverage a completed sentinel attests to.
 ///
-/// The backfill used to mean "every queued job with priority>0 has a marker",
-/// and a store that finished it recorded `done` forever. The index now has to
-/// name EVERY queued job, so that recorded `done` is an answer to a question
-/// nobody is asking any more: honouring it would leave every pre-existing
-/// priority-0 job unindexed and, since the listing walk is the index,
-/// invisible. Stamping the coverage into the sentinel makes a `done` from the
-/// narrower era simply not apply, so the pass runs again — once — and then
-/// reports complete under the new coverage.
-const COVERAGE: &str = "all-queued";
+/// Coverage includes every queued job under its full-width integer priority
+/// key. A sentinel for the former decimal encoding does not establish this
+/// order: the existing backfill must write current keys and prune superseded
+/// names before any index-only walk can use them.
+const COVERAGE: &str = "all-queued-integer-priority";
 
 /// Python sentinel dict `{"cursor": str, "done": bool}`, plus the coverage
 /// the `done` belongs to.
