@@ -25,13 +25,15 @@ impl Hasher {
         Ok((!path.is_empty()).then(|| Self::Sha256sum(path.to_string())))
     }
 
-    /// A file's SHA-256, or nothing when the read failed.
+    /// A file's digest, or `None` when the read failed or printed none. Never
+    /// an empty string: two failed reads would compare equal and an
+    /// unreadable program would match an unreadable release copy.
     pub(super) async fn digest(
         &self,
         target: &ComputeTarget,
         path: &str,
         runner: &Runner,
-    ) -> Result<String, DeployError> {
+    ) -> Result<Option<String>, DeployError> {
         let output = match self {
             Self::Shasum => {
                 host_channel::run_program(target, &["/usr/bin/shasum", "-a", "256", path], runner)
@@ -41,15 +43,9 @@ impl Hasher {
                 host_channel::run_program(target, &[program.as_str(), path], runner).await?
             }
         };
-        Ok(if output.ok() {
-            output
-                .stdout
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .to_string()
-        } else {
-            String::new()
-        })
+        if !output.ok() {
+            return Ok(None);
+        }
+        Ok(output.stdout.split_whitespace().next().map(str::to_string))
     }
 }

@@ -133,13 +133,21 @@ impl Reporter<'_> {
     /// under its own coordinate, and hashing every file beneath them to
     /// answer one question would turn a status read into a full-tree walk of
     /// every release ever delivered.
-    async fn provenance(&self, digest: &str, base: &str) -> Result<ReleaseMatch, DeployError> {
-        if digest.is_empty() || !self.releases_present {
+    async fn provenance(
+        &self,
+        digest: Option<&str>,
+        base: &str,
+    ) -> Result<ReleaseMatch, DeployError> {
+        // No hasher, or a program whose own digest could not be read, matches
+        // no release copy: provenance is decided by bytes, and unread bytes
+        // decide nothing.
+        let (Some(hasher), Some(digest), true) = (&self.hasher, digest, self.releases_present)
+        else {
             return Ok(ReleaseMatch {
                 provenance: UNMANAGED,
                 version: None,
             });
-        }
+        };
         let found = host_channel::run_command(
             self.target,
             &format!(
@@ -150,12 +158,6 @@ impl Reporter<'_> {
             self.runner,
         )
         .await?;
-        let Some(hasher) = &self.hasher else {
-            return Ok(ReleaseMatch {
-                provenance: UNMANAGED,
-                version: None,
-            });
-        };
         let mut matched = false;
         let mut matched_version: Option<String> = None;
         let mut ambiguous_version = false;
@@ -164,7 +166,12 @@ impl Reporter<'_> {
             .lines()
             .filter(|candidate| !candidate.is_empty())
         {
-            if hasher.digest(self.target, candidate, self.runner).await? != digest {
+            if hasher
+                .digest(self.target, candidate, self.runner)
+                .await?
+                .as_deref()
+                != Some(digest)
+            {
                 continue;
             }
             matched = true;
@@ -218,12 +225,12 @@ impl Reporter<'_> {
         let base = path.rsplit('/').next().unwrap_or(path);
         let digest = match &self.hasher {
             Some(hasher) => hasher.digest(self.target, path, self.runner).await?,
-            None => String::new(),
+            None => None,
         };
         let ReleaseMatch {
             provenance,
             version: release_version,
-        } = self.provenance(&digest, base).await?;
+        } = self.provenance(digest.as_deref(), base).await?;
         // A catalog query and release-coordinate metadata are disjoint safety
         // paths. If a declared query fails, `unknown` keeps that failure
         // visible; only a program we did not execute may take its version from
@@ -237,10 +244,9 @@ impl Reporter<'_> {
             name: base.to_string(),
             path: path.to_string(),
             version,
-            sha256: if digest.is_empty() {
-                UNKNOWN.to_string()
-            } else {
-                digest
+            sha256: match digest {
+                Some(digest) => digest,
+                None => UNKNOWN.to_string(),
             },
             provenance: provenance.to_string(),
         }))
