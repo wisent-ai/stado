@@ -56,14 +56,27 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
         // laptop config is not the answer for a machine the operator is
         // asking about. `None` means the field was not in the answer at all,
         // which a release older than the key produces.
-        let resolved_config = remote_config_output(&resolved, RemoteConfigAction::Show, &runner)
+        // A configuration that cannot be read is said as such: read as no
+        // configuration, the host was refused as declaring no vault authority.
+        let shown = remote_config_output(&resolved, RemoteConfigAction::Show, &runner)
             .await
-            .ok()
-            .and_then(|stdout| serde_json::from_str::<Value>(&stdout).ok());
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{name}: its Stado configuration could not be read, so its vault authority \
+                     is not known: {error}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
+        let resolved_config = serde_json::from_str::<Value>(&shown).map_err(|error| {
+            CmdError::click(format!(
+                "{name}: `stado config show` answered no readable JSON, so its vault authority \
+                 is not known: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
         let resolved_key = |key: &str| {
             resolved_config
-                .as_ref()
-                .and_then(|document| document.pointer(&format!("/resolved/{key}")))
+                .pointer(&format!("/resolved/{key}"))
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -129,7 +142,10 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             .to_string();
         println!("{name}: {} vault(s)", list.len());
         for vault in list {
-            let path = vault.get("path").and_then(Value::as_str).unwrap_or("");
+            let path = match vault.get("path").and_then(Value::as_str) {
+                Some(path) => path.to_string(),
+                None => "(path not reported)".to_string(),
+            };
             // The marked line is the one every owner write and authoritative
             // read on that host goes through. Reading a count without it told
             // an operator how much is held and nothing about which store
@@ -139,17 +155,16 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             } else {
                 " "
             };
+            // A count the inventory did not report is said so, not printed
+            // as an empty vault.
+            let count = |key: &str| match vault.get(key).and_then(Value::as_u64) {
+                Some(count) => count.to_string(),
+                None => format!("(no {key} count)"),
+            };
             println!(
-                "{marker} {:>5} items  {} recipients  {}",
-                vault
-                    .get("items")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default(),
-                vault
-                    .get("recipients")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default(),
-                path
+                "{marker} {} items  {} recipients  {path}",
+                count("items"),
+                count("recipients"),
             );
         }
         if let Some(verdict) = authority {
