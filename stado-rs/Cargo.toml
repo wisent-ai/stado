@@ -244,6 +244,10 @@ name = "host-silence-refusal-in-flight"
 path = "../tests/host_silence/refusal_in_flight/main.rs"
 
 [[test]]
+name = "worker-start-held-store"
+path = "../tests/worker_start/held_store.rs"
+
+[[test]]
 name = "vault-authority-host-unreadable"
 path = "../tests/vault_authority/host_unreadable.rs"
 

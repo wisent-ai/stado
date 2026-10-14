@@ -83,6 +83,15 @@ pub async fn run_agent(
         .map_err(|cause| anyhow::anyhow!("this host's VRAM cannot be read: {cause}"))?
         .max(1);
     let initial_gpu = gpu_type.clone();
+    // Binding the store at start reads the fleet's storage layout from the
+    // object API. A store that does not answer is the same condition a tick
+    // skips (`tick_phase!`), not a fault of this agent: ending the agent on
+    // it ended the host's one Stado process with the resolver and every
+    // service forward of the host, and launchd started it again into the
+    // same unanswered store, a restart loop that took every adapter down
+    // for as long as the store stood. The start is tried again at the
+    // declared poll until the store answers; any other error ends the agent
+    // visibly, as before.
     let prepare::Started {
         hostname,
         consumer_id,
@@ -95,7 +104,19 @@ pub async fn run_agent(
         janitor: _janitor,
         heartbeat,
         heartbeat_task: _heartbeat,
-    } = prepare::start(kind, &gpu_type, total_vram_gb, poll, log_fn).await?;
+    } = loop {
+        match prepare::start(kind, &gpu_type, total_vram_gb, poll, log_fn).await {
+            Ok(started) => break started,
+            Err(error) if store_unavailable(&error) => {
+                log_fn(&format!(
+                    "the agent did not start: the fleet store did not answer ({error:#}); the \
+                     next poll tries again"
+                ));
+                tokio::time::sleep(poll).await;
+            }
+            Err(error) => return Err(error),
+        }
+    };
     reap::release_left_behind(&store, &hostname, log_fn).await;
     let mut slots: Vec<ActiveSlot> = Vec::new();
     let mut agent_diag: Map<String, Value> = Map::new();
