@@ -105,20 +105,40 @@ fn json_float(value: &serde_json::Value) -> Option<f64> {
 async fn load(store: &JobStorage, blob: &str) -> Result<BTreeMap<String, f64>, StorageError> {
     Ok(match store.download_text(blob).await? {
         None => BTreeMap::new(),
+        // A map that is not a JSON object was read as empty, and the next
+        // update wrote that empty map over it: every mark it held was lost
+        // without a word. It is the read's error now.
         Some(text) => match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(serde_json::Value::Object(obj)) => obj
                 .iter()
                 .filter_map(|(k, v)| json_float(v).map(|f| (k.clone(), f)))
                 .collect(),
-            _ => BTreeMap::new(),
+            Ok(other) => {
+                return Err(StorageError::Other(format!(
+                    "{blob} is not a map of exhaustion marks: {other}"
+                )))
+            }
+            Err(error) => {
+                return Err(StorageError::Other(format!(
+                    "{blob} is not JSON, so its exhaustion marks cannot be read: {error}"
+                )))
+            }
         },
     })
 }
 
 /// Write one mark map. A failed write does not abort the create call; it is
-/// reported, and the next call simply does not see the mark.
+/// reported, and the next call simply does not see the mark. A map that does
+/// not serialize (a mark that is not a finite number) is reported and not
+/// written: written as `{}`, it erased every other mark.
 async fn save(store: &JobStorage, blob: &str, map: &BTreeMap<String, f64>) {
-    let json = serde_json::to_string(map).unwrap_or_else(|_| "{}".into());
+    let json = match serde_json::to_string(map) {
+        Ok(json) => json,
+        Err(err) => {
+            tracing::warn!(blob, %err, "gcp exhaustion marks do not serialize and were not written");
+            return;
+        }
+    };
     if let Err(err) = store.upload_text(blob, &json).await {
         tracing::warn!(blob, %err, "gcp exhaustion mark was not written");
     }
