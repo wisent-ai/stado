@@ -161,12 +161,22 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
                 Some(version) => version,
                 None => "(none declared)",
             };
+            // A row without its product or target says so: an empty word
+            // stood where the row's subject was.
+            let named = |field: &str| match report[field].as_str() {
+                Some(name) => name.to_string(),
+                None => format!("(no {field} reported)"),
+            };
+            let observed = match report["observed"]["phase"].as_str() {
+                Some(phase) => phase,
+                None => "unreported",
+            };
             println!(
                 "{} target={} desired={} observed={} software={}",
-                report["product"].as_str().unwrap_or_default(),
-                report["target"].as_str().unwrap_or_default(),
+                named("product"),
+                named("target"),
                 desired,
-                report["observed"]["phase"].as_str().unwrap_or("unreported"),
+                observed,
                 software_line,
             );
             // One sentence per row, on stdout beside the row it is about: an
