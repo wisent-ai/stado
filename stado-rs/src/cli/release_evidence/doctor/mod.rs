@@ -165,18 +165,18 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
         cell(&report["gates"]["used_percent"])
     );
     println!("verdict           {}", cell(&report["verdict"]));
-    let blockers: Vec<String> = report["blockers"]
-        .as_array()
-        .map(|blockers| blockers.iter().map(cell).collect())
-        .unwrap_or_default();
-    println!(
-        "blockers          {}",
-        if blockers.is_empty() {
-            "none".to_string()
-        } else {
-            blockers.join(", ")
-        }
-    );
+    // A report without its blocker list did not say there are none; it was
+    // printed as "none", the all-clear the doctor exists to give.
+    let blockers = match report["blockers"].as_array() {
+        None => "not reported".to_string(),
+        Some(blockers) if blockers.is_empty() => "none".to_string(),
+        Some(blockers) => blockers
+            .iter()
+            .map(cell)
+            .collect::<Vec<String>>()
+            .join(", "),
+    };
+    println!("blockers          {blockers}");
     // The refusal, spelled out where the operator is already looking. This is
     // the line that turns "the rollout is not moving" into "the rollout is
     // being held, on purpose, for this, and here is how to overrule it".
