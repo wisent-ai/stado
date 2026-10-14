@@ -58,7 +58,7 @@ pub(super) fn plan(registry: &Path, host: &str, account: &str) -> Result<String,
         .get("targets")
         .and_then(Value::as_object)
         .cloned()
-        .unwrap_or_default();
+        .ok_or_else(|| refuse("release policy declares no targets map"))?;
     let home = home_dir()?;
     let target_name = if targets.contains_key(host) {
         host.to_string()
@@ -67,10 +67,12 @@ pub(super) fn plan(registry: &Path, host: &str, account: &str) -> Result<String,
             .iter()
             .filter(|(_, target)| {
                 target.get("run_as_user").and_then(Value::as_str) == Some(account)
-                    && absolute(
-                        target.get("home").and_then(Value::as_str).unwrap_or(""),
-                        &home,
-                    ) == home
+                    // A target without its home is not one this host can be;
+                    // read as "", its home resolved against this one.
+                    && target
+                        .get("home")
+                        .and_then(Value::as_str)
+                        .is_some_and(|target_home| absolute(target_home, &home) == home)
             })
             .map(|(name, _)| name)
             .collect();
@@ -197,7 +199,11 @@ pub(super) fn ownership(state: &Path, target: &str) -> Result<String, String> {
 /// The proxy's upstream, refused unless it is one of the declared candidates.
 pub(super) fn upstream(state: &Path, ports: &str) -> Result<String, String> {
     let state = read(state)?;
-    let upstream = state.get("upstream").and_then(Value::as_str).unwrap_or("");
+    // A state without its upstream names no proxy target at all; read as "",
+    // it was refused as an undeclared candidate.
+    let Some(upstream) = state.get("upstream").and_then(Value::as_str) else {
+        return Err(refuse("release state names no proxy upstream"));
+    };
     if !ports
         .split(',')
         .any(|port| upstream == format!("127.0.0.1:{port}"))
