@@ -180,6 +180,14 @@ impl Native {
             .env("PATH", std::env::var_os("PATH").expect("PATH is set"))
             .env("HOME", &self.home)
             .env("STADO_CONFIG", self.home.join(".stado/config.json"));
+        // Run as a gate of an admitted build, the journey is part of that
+        // build and inherits its admission, so what it proves does not hang
+        // on which Oko this machine has installed.
+        let admitted =
+            stado::cli::release_loop::allowed::inherited(stado::cli::release_loop::allowed::BUILD);
+        if let Some(value) = std::env::var_os(&admitted) {
+            command.env(admitted, value);
+        }
         command
     }
 
