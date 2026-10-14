@@ -112,7 +112,7 @@ async fn read_loaded_units(
                 script_assigns,
                 launch,
             ] => {
-                let label = (*label).trim().to_string();
+                let label = label.trim().to_string();
                 // A count or time the host wrote but that is not a number is
                 // refused naming the unit, never read as unknown.
                 let refused = |cause: String| {
@@ -123,11 +123,11 @@ async fn read_loaded_units(
                 };
                 let numbers = (|| -> Result<_, DeployError> {
                     Ok((
-                        host_channel::marker_number(*runs, "run count").map_err(&refused)?,
-                        host_channel::marker_number(*last_exit, "last exit status")
+                        host_channel::marker_number(runs, "run count").map_err(&refused)?,
+                        host_channel::marker_number(last_exit, "last exit status")
                             .map_err(&refused)?,
-                        host_channel::marker_number(*started, "start time").map_err(&refused)?,
-                        host_channel::marker_number(*written, "executable's write time")
+                        host_channel::marker_number(started, "start time").map_err(&refused)?,
+                        host_channel::marker_number(written, "executable's write time")
                             .map_err(&refused)?,
                     ))
                 })();
@@ -139,12 +139,12 @@ async fn read_loaded_units(
                     host: target.name.clone(),
                     declared: declared.contains(&label),
                     label,
-                    pid: (*pid).trim().trim_matches('-').to_string(),
-                    status: (*status).trim().to_string(),
-                    path: (*path).trim().trim_matches('-').to_string(),
-                    path_source: (*path_source).trim().trim_matches('-').to_string(),
-                    program: (*program).trim().to_string(),
-                    declaring_paths: (*domains)
+                    pid: pid.trim().trim_matches('-').to_string(),
+                    status: status.trim().to_string(),
+                    path: path.trim().trim_matches('-').to_string(),
+                    path_source: path_source.trim().trim_matches('-').to_string(),
+                    program: program.trim().to_string(),
+                    declaring_paths: domains
                         .split_whitespace()
                         .filter(|path| *path != "-")
                         .map(str::to_string)
@@ -155,10 +155,10 @@ async fn read_loaded_units(
                     env_keys: split_marker_list(env_keys),
                     script_reads: split_marker_list(script_reads),
                     script_assigns: split_marker_list(script_assigns),
-                    running_program: (*running).trim().trim_matches('-').trim().to_string(),
+                    running_program: running.trim().trim_matches('-').trim().to_string(),
                     started_epoch,
                     binary_written_epoch,
-                    launch: (*launch).trim().to_string(),
+                    launch: launch.trim().to_string(),
                 }))
             }
             _ => None,
