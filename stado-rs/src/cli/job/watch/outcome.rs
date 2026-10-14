@@ -15,11 +15,12 @@ pub(super) fn outcome(job: &Job, terminal: bool) -> Result<(), CmdError> {
     }
     match job.state.as_str() {
         job_state::FAILED | job_state::CANCELLED => {
-            let detail = job
-                .error
-                .as_deref()
-                .map(|err| format!(": {err}"))
-                .unwrap_or_default();
+            // A job that ended without recording why says so, rather than
+            // ending the sentence where the cause would be.
+            let detail = match job.error.as_deref() {
+                Some(err) => format!(": {err}"),
+                None => ", and its record names no error".to_string(),
+            };
             Err(CmdError::unreachable(format!(
                 "job {} ended {}{detail}",
                 job.job_id, job.state
