@@ -28,10 +28,12 @@ struct Run {
 }
 
 impl Run {
-    fn new() -> Self {
+    /// A run of its own, named so two journeys of one test binary never
+    /// share a home.
+    fn new(name: &str) -> Self {
         let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("host-silence-silent-authority");
         std::fs::create_dir_all(&parent).expect("create the test output directory");
-        let root = parent.join(std::process::id().to_string());
+        let root = parent.join(format!("{name}-{}", std::process::id()));
         std::fs::create_dir_all(root.join(".stado/cache")).expect("create the run directory");
         std::fs::create_dir_all(root.join("tmp")).expect("create the run's scratch directory");
         Self {
@@ -149,7 +151,7 @@ fn hostname() -> String {
 
 #[test]
 fn a_silent_authority_is_abandoned_after_the_declared_refresh_interval() {
-    let run = Run::new();
+    let run = Run::new("registry-self");
     let authority_ssh = run.silent_authority();
     let refresh_seconds = run.write_last_good(&authority_ssh);
     let output = run.registry_self();
@@ -185,4 +187,77 @@ fn a_silent_authority_is_abandoned_after_the_declared_refresh_interval() {
         .unwrap(),
     )
     .unwrap();
+}
+
+/// `stado resolver status` says how long the authority's snapshot fetch
+/// took. It once printed the authority as reachable after a fetch that took
+/// hours and said nothing of the wait; against the silent authority the
+/// fetch is abandoned at the declared refresh interval, and the answer
+/// carries that wait in seconds, in JSON and on the text authority line.
+#[test]
+fn resolver_status_says_how_long_the_authority_took_to_answer() {
+    let run = Run::new("resolver-status");
+    let authority_ssh = run.silent_authority();
+    let refresh_seconds = run.write_last_good(&authority_ssh);
+    let json_answer = run
+        .stado()
+        .args(["resolver", "status", "--json"])
+        .output()
+        .expect("run the real stado");
+    let text_answer = run
+        .stado()
+        .args(["resolver", "status"])
+        .output()
+        .expect("run the real stado");
+    std::fs::write(
+        run.root.join("resolver-status-report.json"),
+        serde_json::to_vec_pretty(&json!({
+            "authority_ssh": authority_ssh,
+            "refresh_seconds": refresh_seconds,
+            "json": {
+                "exit_status": json_answer.status.to_string(),
+                "stdout": String::from_utf8_lossy(&json_answer.stdout),
+                "stderr": String::from_utf8_lossy(&json_answer.stderr),
+            },
+            "text": {
+                "exit_status": text_answer.status.to_string(),
+                "stdout": String::from_utf8_lossy(&text_answer.stdout),
+                "stderr": String::from_utf8_lossy(&text_answer.stderr),
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let status: Value = match serde_json::from_slice(&json_answer.stdout) {
+        Ok(status) => status,
+        Err(error) => panic!(
+            "stado resolver status --json answered no JSON ({error}): {}",
+            String::from_utf8_lossy(&json_answer.stderr)
+        ),
+    };
+    let authority = &status["authority"];
+    assert_eq!(authority["target"], AUTHORITY, "{status}");
+    assert_eq!(authority["source"], "ssh", "{status}");
+    assert_eq!(
+        authority["reachable"], false,
+        "a silent authority read as reachable: {status}"
+    );
+    let Some(waited) = authority["answered_after_seconds"].as_i64() else {
+        panic!("the answer does not say how long the authority's fetch took: {status}");
+    };
+    assert!(
+        waited >= refresh_seconds,
+        "the fetch was abandoned at the {refresh_seconds}s refresh interval, yet the answer says {waited}s: {status}"
+    );
+    let text = String::from_utf8_lossy(&text_answer.stdout);
+    let Some(line) = text
+        .lines()
+        .find(|line| line.starts_with(&format!("authority {AUTHORITY} source=ssh")))
+    else {
+        panic!("the text answer has no authority line: {text}");
+    };
+    assert!(
+        line.contains(" answered_after=") && line.ends_with('s'),
+        "the authority line does not say how long the fetch took: {line}"
+    );
 }
