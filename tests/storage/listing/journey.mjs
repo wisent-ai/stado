@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { snapshotSubject, verifyRevision } from '../../native/subject.mjs';
@@ -19,6 +20,8 @@ assert.match(limitInput, /^\d+$/, 'STADO_TEST_LIST_LIMIT must be an unsigned int
 const limit = Number(limitInput);
 assert.ok(Number.isSafeInteger(count) && Number.isSafeInteger(limit) && count > limit,
   'STADO_TEST_LIST_COUNT must exceed STADO_TEST_LIST_LIMIT');
+const parallelism = availableParallelism();
+assert.ok(count > parallelism, 'STADO_TEST_LIST_COUNT must exceed the measured host parallelism');
 const revision = required('STADO_TEST_SOURCE_REVISION');
 const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
 const explicitConcurrency = required('STADO_TEST_COPY_CONCURRENCY');
@@ -34,7 +37,7 @@ const environment = {
   STADO_CONFIG: join(home, '.stado', 'config.json'),
   WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: store,
 };
-const report = { source_revision: revision, count, limit,
+const report = { source_revision: revision, count, limit, parallelism,
   started_at: new Date().toISOString(), commands: [], verdict: 'failed' };
 const save = () => writeFileSync(join(output, 'report.json'), JSON.stringify(report, null, '  '));
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -68,6 +71,14 @@ try {
   assert.equal(before.length, count, 'every submission must persist a queued object');
   report.before = before;
   const expected = before.map(object => object.name);
+  const statuses = JSON.parse(command(['status', '--json']).stdout);
+  const persistedJobs = expected.map(name => JSON.parse(readFileSync(join(store, name), 'utf8')));
+  const byId = (left, right) => left.job_id.localeCompare(right.job_id);
+  assert.deepEqual(
+    statuses.sort(byId),
+    persistedJobs.map(job => ({ ...job, state: 'queue', reaped: false })).sort(byId),
+    'status must return every persisted job across measured read batches without changing its fields',
+  );
   const prefix = expected.filter((_, index) => index < limit);
   const listing = (...args) => JSON.parse(command(['storage', 'ls', 'queue/', '--json', ...args]).stdout);
   const complete = listing();

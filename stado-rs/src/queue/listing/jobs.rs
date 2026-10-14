@@ -9,10 +9,9 @@ use crate::queue::StorageError;
 
 /// Parallel-fetch job JSONs under `{prefix}/`.
 ///
-/// `oldest_first > 0` caps the answer to that many jobs picked by creation
-/// time — required for queue/ where 14k+ blobs would otherwise force the
-/// scheduler to download every JSON before slicing per_tick_cap and blow the
-/// 60s function timeout. Fetches fan out 10 ways.
+/// `oldest_first` limits the answer to jobs picked by creation time.
+/// Reads are grouped by the measured worker count so an early exit does not
+/// fetch the whole prefix before applying the requested window.
 ///
 /// The window is oldest-first, and the ordered path listing is taken EXACTLY
 /// ONCE: the scheduler's FIFO fairness is "the N oldest queued blobs", and a
@@ -47,7 +46,7 @@ pub async fn list_jobs(
         .collect();
     let mut jobs = Vec::new();
     let workers = crate::queue::migrations::bulk_workers()?;
-    for paths in paths.chunks(100) {
+    for paths in paths.chunks(workers) {
         let texts: Vec<Option<String>> = futures::stream::iter(paths)
             .map(|path| store.download_text(path))
             .buffered(workers)
