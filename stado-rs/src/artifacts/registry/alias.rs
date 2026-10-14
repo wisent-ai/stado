@@ -166,7 +166,8 @@ impl ArtifactRegistry {
     }
 
     /// Aliases (sorted) currently pointing at this exact version. Python
-    /// `ArtifactRegistry.aliases_for`.
+    /// `ArtifactRegistry.aliases_for`. An alias record that does not parse is
+    /// the error: skipped, the version read as carrying no alias it might.
     pub async fn aliases_for(&self, reference: &ArtifactRef) -> Result<Vec<String>, RegistryError> {
         let prefix = format!(
             "{ALIAS_PREFIX}/{}/{}/{}/",
@@ -177,9 +178,12 @@ impl ArtifactRegistry {
             let Some(raw) = self.store.download_text(&path).await? else {
                 continue;
             };
-            let Ok(value) = serde_json::from_str::<Value>(&raw) else {
-                continue;
-            };
+            let value = serde_json::from_str::<Value>(&raw).map_err(|error| {
+                ArtifactError::new(
+                    "ARTIFACT_CORRUPT_ALIAS",
+                    format!("invalid alias record {path}: {error}"),
+                )
+            })?;
             if value.get("target_version").and_then(Value::as_str)
                 == Some(reference.version.as_str())
             {

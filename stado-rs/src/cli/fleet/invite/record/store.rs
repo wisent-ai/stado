@@ -44,6 +44,9 @@ pub(in crate::cli::fleet::invite) async fn store_invite(
 }
 
 /// Every invite in the store, newest first, each with its effective status.
+/// A stored invite that does not parse is the refusal naming it: dropped
+/// from the shelf, a mint did not see the name it held and a redeem did not
+/// find the invite it closes.
 pub async fn list_invites(store: &JobStorage) -> Result<Vec<(Invite, &'static str)>, CmdError> {
     let blobs = store.list_blobs_with_meta(INVITES_PREFIX).await?;
     let now = Utc::now();
@@ -52,12 +55,9 @@ pub async fn list_invites(store: &JobStorage) -> Result<Vec<(Invite, &'static st
         let Some(text) = store.download_text(&blob.name).await? else {
             continue;
         };
-        let Ok(document) = serde_json::from_str::<Value>(&text) else {
-            continue;
-        };
-        let Ok(invite) = parse_invite(&document) else {
-            continue;
-        };
+        let document: Value =
+            serde_json::from_str(&text).map_err(|exc| damaged(&blob.name, exc))?;
+        let invite = parse_invite(&document).map_err(|exc| damaged(&blob.name, exc))?;
         let status = effective_status(&invite, now);
         found.push((invite, status));
     }

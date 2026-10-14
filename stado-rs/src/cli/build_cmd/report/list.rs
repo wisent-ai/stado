@@ -45,9 +45,15 @@ pub(in crate::cli::build_cmd) async fn recent_builds(
         else {
             continue;
         };
-        let Ok(build) = serde_json::from_str::<BuildRun>(&text) else {
-            continue;
-        };
+        // A record that does not parse is said, naming it: dropped, the
+        // listing showed fewer builds than ran with nothing to say so.
+        let build = serde_json::from_str::<BuildRun>(&text).map_err(|error| {
+            CmdError::click(format!(
+                "the build record {} does not parse: {error}",
+                blob.name
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
         if product.is_none_or(|selected| build.product == selected) {
             let unfinished = build.state == BuildRunState::Waiting
                 || build
