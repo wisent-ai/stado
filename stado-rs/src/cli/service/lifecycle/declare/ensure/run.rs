@@ -102,19 +102,22 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     // Stado role units wait for proof from the live process.
     let host_product =
         crate::deploy::service_catalog::host_process().map_err(CmdError::declaration)?;
-    let replaced: Vec<String> = match catalog_entry.as_ref() {
-        Some(entry) if entry.name != host_product.name => declared
-            .iter()
-            .filter(|candidate| {
-                service::declared_owner(&target, candidate)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|owner| owner.name == entry.name)
-            })
-            .map(|candidate| candidate.unit_id().to_string())
-            .collect(),
-        _ => Vec::new(),
-    };
+    // A unit whose owner cannot be read is not a unit this ensure leaves
+    // standing: read that way, it stayed declared beside the process that
+    // replaces it. The read fails the ensure as the named lookup above does.
+    let mut replaced: Vec<String> = Vec::new();
+    if let Some(entry) = catalog_entry
+        .as_ref()
+        .filter(|entry| entry.name != host_product.name)
+    {
+        for candidate in &declared {
+            let owner =
+                service::declared_owner(&target, candidate).map_err(CmdError::declaration)?;
+            if owner.is_some_and(|owner| owner.name == entry.name) {
+                replaced.push(candidate.unit_id().to_string());
+            }
+        }
+    }
     let existing = declared.iter().find(|candidate| {
         candidate.matches(options.name)
             || canonical_unit
