@@ -307,6 +307,10 @@ name = "delivery-repeated-stops"
 path = "../tests/delivery/repeated_stops.rs"
 
 [[test]]
+name = "delivery-path-stalled"
+path = "../tests/delivery/path_stalled.rs"
+
+[[test]]
 name = "rulings-build-refused"
 path = "../tests/rulings/build_refused.rs"
 

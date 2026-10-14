@@ -246,6 +246,17 @@ pub(crate) enum CiCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Whether the path that delivers repairs stands on this machine: the
+    /// routine's running and refused steps, who holds its pass lock, which
+    /// product operations hold build trees, and this machine's Stado unit
+    /// (loaded, state, pid, runs, last exit code, why it fails). `stalled`
+    /// names every way the path is down, one sentence each; Oko orders work
+    /// by it. Reads only.
+    Delivery {
+        /// Print the document instead of lines.
+        #[arg(long)]
+        json: bool,
+    },
     /// The delivery routine's declared plan.
     #[command(subcommand)]
     Plan(CiPlanCommands),

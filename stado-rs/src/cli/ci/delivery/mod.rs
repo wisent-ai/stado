@@ -21,7 +21,7 @@ pub mod plan;
 pub mod state;
 mod status;
 
-pub use status::{print_status, status};
+pub use status::{delivery, print_status, status};
 
 use std::path::Path;
 

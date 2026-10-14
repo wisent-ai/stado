@@ -74,6 +74,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
                     json,
                 } => ci::status(&product, revision.as_deref(), json).await,
                 CiCommands::Run { json } => ci::delivery::run(json).await,
+                CiCommands::Delivery { json } => ci::delivery::delivery(json).await,
                 CiCommands::Plan(CiPlanCommands::Set { steps, push, json }) => {
                     ci::delivery::plan::set(&steps, push, json)
                 }

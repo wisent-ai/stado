@@ -136,9 +136,60 @@ pub fn write(state: &State) -> Result<(), CmdError> {
 }
 
 /// The lock one pass holds for its whole run, beside the state: `None` when
-/// another pass holds it.
+/// another pass holds it. The holder writes its pid and start beside the
+/// lock, so a reader that finds it held can name who holds it.
 pub fn lock() -> Result<Option<std::fs::File>, CmdError> {
     use fs2::FileExt;
+    let (path, file) = lock_file()?;
+    match file.try_lock_exclusive() {
+        Ok(()) => {
+            let holder = format!(
+                "pid {} since {}",
+                std::process::id(),
+                Utc::now().to_rfc3339()
+            );
+            let named = path.with_extension("holder");
+            std::fs::write(&named, holder).map_err(|error| {
+                CmdError::click(format!(
+                    "recording the holder in {}: {error}",
+                    named.display()
+                ))
+            })?;
+            Ok(Some(file))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(error) => Err(CmdError::click(format!(
+            "locking {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+/// Who holds the pass lock now, as the holder recorded itself; `None` when
+/// no pass holds it.
+pub fn lock_holder() -> Result<Option<String>, CmdError> {
+    use fs2::FileExt;
+    let (path, file) = lock_file()?;
+    match file.try_lock_shared() {
+        Ok(()) => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            let named = path.with_extension("holder");
+            let recorded = std::fs::read_to_string(&named).map_err(|error| {
+                CmdError::click(format!(
+                    "reading the holder in {}: {error}",
+                    named.display()
+                ))
+            })?;
+            Ok(Some(recorded.trim().to_string()))
+        }
+        Err(error) => Err(CmdError::click(format!(
+            "locking {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+fn lock_file() -> Result<(PathBuf, std::fs::File), CmdError> {
     let path = path()?.with_extension("lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -150,12 +201,5 @@ pub fn lock() -> Result<Option<std::fs::File>, CmdError> {
         .write(true)
         .open(&path)
         .map_err(|error| CmdError::click(format!("opening {}: {error}", path.display())))?;
-    match file.try_lock_exclusive() {
-        Ok(()) => Ok(Some(file)),
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-        Err(error) => Err(CmdError::click(format!(
-            "locking {}: {error}",
-            path.display()
-        ))),
-    }
+    Ok((path, file))
 }
