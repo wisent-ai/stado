@@ -23,7 +23,6 @@ pub use cancel::cancel;
 pub use perform::perform;
 
 use anyhow::{Context, Result};
-use fs2::FileExt;
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::path::Path;

@@ -63,7 +63,7 @@ pub(in crate::install) fn after_install(
             .extra
             .insert("cancelled".to_owned(), cancelled.clone());
     }
-    if serde_json::to_value(&current)? != serde_json::to_value(&Some(&*installed))? {
+    if serde_json::to_value(&current)? != serde_json::to_value(Some(&*installed))? {
         bail!(
             "another installation of {id}/{surface} recorded itself while this one's after-install steps \
              ran ({}); their outcome is not written over it",
