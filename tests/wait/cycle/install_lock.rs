@@ -15,7 +15,6 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Output, Stdio};
 
-use fs2::FileExt;
 use serde_json::Value;
 
 struct Run {
@@ -73,7 +72,7 @@ impl Run {
             .truncate(false)
             .open(lock)
             .expect("open the surface lock");
-        file.try_lock_exclusive().expect("hold the surface lock");
+        file.try_lock().expect("hold the surface lock");
         self.held.push(file);
         record(lock, pid);
     }

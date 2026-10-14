@@ -97,6 +97,11 @@ nix = { version = "0.30", features = ["event"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.30", features = ["inotify"] }
 
+# The space-reclaim journeys measure the isolated volume's total and free
+# space; locks are taken through std's File in tests as in the product.
+[dev-dependencies]
+fs2 = "0.4"
+
 [[bin]]
 name = "stado"
 path = "src/bin/stado.rs"

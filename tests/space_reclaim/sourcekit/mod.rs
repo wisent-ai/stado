@@ -99,7 +99,7 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
         .truncate(false)
         .open(native.state_dir().join("space-reclaim.lock"))
         .expect("open actual lock");
-    fs2::FileExt::try_lock_exclusive(&lock)
+    lock.try_lock()
         .expect("an answering SourceKit server must not hold the cleanup lock");
     let mut build = native.command(&[]);
     build.arg("product").arg("swift").arg("build");
@@ -147,7 +147,7 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
     assert!(diagnostic.contains("cannot parse"), "{diagnostic}");
     assert_eq!(fs::read(&turn).expect("retain damaged turn evidence"), b"{");
     fs::remove_file(&turn).expect("remove only the test's damaged record");
-    fs2::FileExt::unlock(&lock).expect("release isolated cleanup hold");
+    lock.unlock().expect("release isolated cleanup hold");
     let cache = native.home.join("checkout/target");
     native.cache(&cache);
     let user_data = native.fill_with_user_data();

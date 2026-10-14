@@ -177,7 +177,7 @@ fn an_aged_live_kernel_lock_is_not_replaced_and_release_allows_cleanup() {
         .mode(0o600)
         .open(&path)
         .unwrap();
-    fs2::FileExt::try_lock_exclusive(&lock).unwrap();
+    lock.try_lock().unwrap();
     lock.set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
         .unwrap();
     let before = lock.metadata().unwrap();
@@ -225,7 +225,7 @@ fn an_already_retired_locked_inode_remains_protected_until_kernel_release() {
         .mode(0o600)
         .open(&path)
         .unwrap();
-    fs2::FileExt::try_lock_exclusive(&lock).unwrap();
+    lock.try_lock().unwrap();
     let held = native.cleanup();
     assert_eq!(held["outcome"], "lock_recovery_report_only");
     assert!(
