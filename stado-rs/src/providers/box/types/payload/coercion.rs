@@ -57,7 +57,15 @@ pub(crate) fn jint_or(value: Option<&Value>, default: i64) -> Result<i64, BoxErr
         return Ok(default);
     };
     match value {
-        Value::Number(n) => Ok(n.as_f64().unwrap_or(0.0) as i64),
+        // An integer is taken whole; a float truncates as Python's int()
+        // does; a number neither reads as is refused instead of read as 0.
+        Value::Number(n) => match (n.as_i64(), n.as_f64()) {
+            (Some(integer), _) => Ok(integer),
+            (None, Some(float)) => Ok(float as i64),
+            (None, None) => Err(BoxError::value(format!(
+                "int() argument is a number Box sent that reads as neither an integer nor a float: {n}"
+            ))),
+        },
         Value::String(s) => s.trim().parse::<i64>().map_err(|_| {
             BoxError::value(format!(
                 "invalid literal for int() with base 10: {:?}",
