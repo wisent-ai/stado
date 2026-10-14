@@ -65,9 +65,86 @@ pub(crate) async fn read_local_snapshot(
     .map_err(CmdError::declaration)
 }
 
+/// Print the registry generation this host's running resolver holds, as
+/// every other host reads the authority over SSH.
+///
+/// Asked of the resolver's API, never read from the registry store: on the
+/// authority that store is the object API, which authorizes each read
+/// through Skarbiec, and when Skarbiec stood the snapshot stood with it, so
+/// every registry read of every host waited on one command that never ended.
+/// The resolver reads the store on its own interval and holds the result;
+/// this command only asks for it, in one registered wait on a loopback
+/// address, and is refused at once with the reason when no live resolver
+/// publishes one or the one it holds is past its declared max-stale.
 pub(super) async fn emit_snapshot() -> Result<(), CmdError> {
-    let store = RegistryStore::open().await?;
-    let (document, store_version, _) = read_local_snapshot(&store).await?;
+    use crate::cli::resolver::report::published::{published_state, publisher_running, state_path};
+    use crate::primitives::failure::FailureCode;
+    let refused = |detail: String| CmdError::click(detail).stating(FailureCode::InfraDown);
+    let Some(published) = published_state() else {
+        return Err(refused(match state_path() {
+            Some(path) => format!(
+                "no resolver has published its state at {}, so no registry generation is held \
+                 here to answer from; stado serve runs the resolver",
+                path.display()
+            ),
+            None => "HOME is unset, so the resolver's published state cannot be found".to_string(),
+        }));
+    };
+    if !publisher_running(&published) {
+        return Err(refused(format!(
+            "the resolver that published its state (pid {}) is not running, so no registry \
+             generation is held here to answer from",
+            published.pid
+        )));
+    }
+    let Some(bind) = published.api_bind.as_deref() else {
+        return Err(refused(format!(
+            "the running resolver (pid {}) publishes no API address: it predates answering \
+             registry snapshots from memory",
+            published.pid
+        )));
+    };
+    let url = format!(
+        "http://{bind}{}",
+        crate::cli::resolver::serve::SNAPSHOT_PATH
+    );
+    let did_not_answer =
+        |error: reqwest::Error| refused(format!("the resolver at {url} did not answer: {error}"));
+    // A loopback address is this host's own resolver: no proxy a shell's
+    // environment names sits between them.
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(did_not_answer)?;
+    let response = crate::wait::send(
+        crate::wait::Kind::Network,
+        "the resolver's held registry generation",
+        client.get(&url),
+    )
+    .await
+    .map_err(did_not_answer)?;
+    let status = response.status();
+    let body = response.text().await.map_err(did_not_answer)?;
+    if !status.is_success() {
+        let detail = serde_json::from_str::<Value>(&body).ok().and_then(|value| {
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        return Err(refused(match detail {
+            Some(detail) => detail,
+            None => format!("the resolver at {url} answered {status}: {body}"),
+        }));
+    }
+    // Checked as every reader of the authority checks it, so this command
+    // never prints a document its readers would refuse.
+    let payload: SnapshotPayload = serde_json::from_str(&body).map_err(|error| {
+        refused(format!(
+            "the resolver at {url} answered no registry snapshot ({error}): {body}"
+        ))
+    })?;
+    let (document, store_version, _) = validate_snapshot(payload).map_err(CmdError::declaration)?;
     println!(
         "{}",
         serde_json::to_string(&SnapshotPayload {

@@ -53,7 +53,7 @@ pub(crate) struct PublishedState {
     /// Registry target whose `service_resolver` policy the process enforces.
     pub(super) target: String,
     /// The process that wrote it.
-    pub(super) pid: u32,
+    pub(in crate::cli::resolver) pid: u32,
     /// [`RESOLVER_SERVING`], [`RESOLVER_STARTING`], [`RESOLVER_BACKING_OFF`]
     /// or [`RESOLVER_FAILED`].
     pub(super) state: String,
@@ -92,6 +92,10 @@ pub(crate) struct PublishedState {
     /// keeping a copy of the port in its own configuration. A declared
     /// adapter this process does not serve is listed with its reason.
     pub(super) adapters: Vec<PublishedAdapter>,
+    /// Where this process answers its resolution API, so `stado resolver
+    /// snapshot` asks it for the generation it holds in memory instead of
+    /// reading the registry store, which can stand.
+    pub(in crate::cli::resolver) api_bind: Option<String>,
 }
 
 /// One adapter's listening address, for one service and one consumer.
@@ -183,9 +187,15 @@ impl PublishedState {
         self.refresh_seconds = Some(seconds);
         self
     }
+
+    /// The same state, written by a process answering its API at `bind`.
+    pub(crate) fn answering_at(mut self, bind: &str) -> Self {
+        self.api_bind = Some(bind.to_string());
+        self
+    }
 }
 
-pub(super) fn state_path() -> Option<std::path::PathBuf> {
+pub(in crate::cli::resolver) fn state_path() -> Option<std::path::PathBuf> {
     if let Some(explicit) = std::env::var_os(STATE_FILE_ENV) {
         let path = std::path::PathBuf::from(explicit);
         if !path.as_os_str().is_empty() {
@@ -236,7 +246,7 @@ pub(crate) fn publish(state: &PublishedState) {
 /// file that exists but cannot be read or parsed is named on stderr with its
 /// cause: answered as none, status reported that no resolver had published
 /// while one had, and every adapter lookup through it looked unserved.
-pub(super) fn published_state() -> Option<PublishedState> {
+pub(in crate::cli::resolver) fn published_state() -> Option<PublishedState> {
     let path = state_path()?;
     let body = match std::fs::read_to_string(&path) {
         Ok(body) => body,

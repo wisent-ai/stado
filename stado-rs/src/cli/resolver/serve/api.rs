@@ -7,6 +7,9 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::cli::resolver::serve::state::ResolverState;
 
+/// Where the resolver API answers the registry generation it holds.
+pub(in crate::cli::resolver) const SNAPSHOT_PATH: &str = "/v1/registry/snapshot";
+
 pub(super) async fn serve_api(
     listener: TcpListener,
     state: Arc<ResolverState>,
@@ -96,6 +99,16 @@ async fn handle_api_request(request: ApiRequest, state: &ResolverState) -> Vec<u
                 "generation": current.directory_generation,
             }),
         );
+    }
+    // The generation this process holds, for `stado resolver snapshot`.
+    if request.path == SNAPSHOT_PATH {
+        return match state.held_snapshot().await {
+            Ok(payload) => api_response(reqwest::StatusCode::OK.as_u16(), payload),
+            Err(error) => api_response(
+                reqwest::StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                json!({"error": error}),
+            ),
+        };
     }
     let Some(service) = request.path.strip_prefix("/v1/resolve/service/") else {
         return api_response(404, json!({"error": "not_found"}));

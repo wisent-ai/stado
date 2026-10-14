@@ -245,9 +245,12 @@ impl ResolverState {
     /// Publish what this process holds right now, with the refresh interval
     /// it runs on.
     pub(super) async fn publish_serving(&self) {
-        let refresh_seconds = match self.config.read() {
-            Ok(config) => config.refresh_seconds,
-            Err(poisoned) => poisoned.into_inner().refresh_seconds,
+        let (refresh_seconds, api_bind) = match self.config.read() {
+            Ok(config) => (config.refresh_seconds, config.api_bind.clone()),
+            Err(poisoned) => {
+                let config = poisoned.into_inner();
+                (config.refresh_seconds, config.api_bind.clone())
+            }
         };
         let current = self.snapshot.read().await;
         publish(
@@ -259,7 +262,38 @@ impl ResolverState {
                 *self.last_good_refusal.read().await,
                 self.published_adapters(),
             )
-            .refreshing(refresh_seconds),
+            .refreshing(refresh_seconds)
+            .answering_at(&api_bind),
         );
+    }
+
+    /// The registry generation this process holds, as `stado resolver
+    /// snapshot` prints it: from memory, never the store, so the authority
+    /// answers while its store stands. Only the authority answers, and only
+    /// within the declared max-stale; past it the refusal names the age.
+    pub(super) async fn held_snapshot(&self) -> Result<Value, String> {
+        if let SnapshotSource::Authority { target, .. } = &*self.source.read().await {
+            return Err(format!(
+                "{} is not the registry authority; its resolver holds a copy read from {target}",
+                self.local_target
+            ));
+        }
+        let current = self.snapshot.read().await;
+        let age = current.loaded_at.elapsed();
+        if age > self.max_stale {
+            return Err(format!(
+                "the registry generation {} this resolver holds was loaded at {} ({} s ago), \
+                 past the declared max-stale of {} s; every refresh since failed \
+                 (stado resolver status names why)",
+                current.directory_generation,
+                current.loaded_at_iso,
+                age.as_secs(),
+                self.max_stale.as_secs()
+            ));
+        }
+        Ok(serde_json::json!({
+            "store_version": current.store_version,
+            "document": current.document,
+        }))
     }
 }

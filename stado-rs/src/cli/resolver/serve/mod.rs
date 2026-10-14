@@ -22,6 +22,7 @@ use crate::cli::resolver::report::published::now_iso;
 use crate::cli::resolver::report::published::publish;
 use crate::cli::resolver::report::published::PublishedState;
 use crate::cli::resolver::serve::api::serve_api;
+pub(in crate::cli::resolver) use crate::cli::resolver::serve::api::SNAPSHOT_PATH;
 use crate::cli::resolver::serve::proxy::serve_adapter;
 use crate::cli::resolver::serve::startup::await_startup;
 use crate::cli::resolver::serve::startup::Startup;
@@ -239,12 +240,16 @@ async fn watch_registry(
                     "stado resolver refresh failed, attempt {attempt}, next on the declared \
                      {refresh_seconds}s interval: {error}"
                 );
-                // The listeners stay bound through a failed refresh.
-                publish(
-                    &PublishedState::backing_off(&state.local_target, attempt, &error, refresh)
+                // The listeners and the API stay bound through a failed
+                // refresh, and the API still answers the held generation.
+                let mut backing_off =
+                    PublishedState::backing_off(&state.local_target, attempt, &error, refresh)
                         .bound(state.published_adapters())
-                        .refreshing(refresh_seconds),
-                );
+                        .refreshing(refresh_seconds);
+                if let Ok(config) = state.config.read() {
+                    backing_off = backing_off.answering_at(&config.api_bind);
+                }
+                publish(&backing_off);
             }
         }
     }
