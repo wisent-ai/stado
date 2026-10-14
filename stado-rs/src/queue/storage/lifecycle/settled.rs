@@ -35,6 +35,10 @@ pub struct SettledSentinelSweep {
     pub retired: usize,
     /// Live jobs, or sentinels of jobs not yet terminal; left in place.
     pub kept: usize,
+    /// Objects that are not job records, each with why; left in place. They
+    /// were counted as kept, so a prefix full of unreadable records read as
+    /// one full of live jobs.
+    pub unreadable: Vec<String>,
 }
 
 impl JobStorage {
@@ -59,9 +63,12 @@ impl JobStorage {
             let Some(body) = self.download_text(&blob.name).await? else {
                 continue;
             };
-            let Ok(job) = Job::from_json(&body) else {
-                sweep.kept += 1;
-                continue;
+            let job = match Job::from_json(&body) {
+                Ok(job) => job,
+                Err(error) => {
+                    sweep.unreadable.push(format!("{}: {error}", blob.name));
+                    continue;
+                }
             };
             if cleaned_transition_id(&job.state).is_none() {
                 sweep.kept += 1;

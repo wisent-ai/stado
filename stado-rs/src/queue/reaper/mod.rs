@@ -167,6 +167,13 @@ async fn retire_sentinels(
             sweep.retired, sweep.kept, sweep.inspected,
         ));
     }
+    if !sweep.unreadable.is_empty() {
+        log(&format!(
+            "reaper: {prefix}/ holds {} object(s) that are not job records, left in place: {}",
+            sweep.unreadable.len(),
+            sweep.unreadable.join("; ")
+        ));
+    }
     Ok(sweep.retired)
 }
 
