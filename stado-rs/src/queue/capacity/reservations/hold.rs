@@ -18,15 +18,24 @@ use crate::queue::capacity::{publication_period, CAPACITY_PREFIX};
 use crate::queue::storage::JobStorage;
 use crate::queue::StorageError;
 
-/// The period at which `consumer_id`'s agent says it publishes, if its
-/// publication can be read and states one.
-pub async fn consumer_period(store: &JobStorage, consumer_id: &str) -> Option<Duration> {
-    let raw = store
-        .download_text(&format!("{CAPACITY_PREFIX}{consumer_id}.json"))
+/// The period at which `consumer_id`'s agent says it publishes: `None` while
+/// it has published nothing or states no period; a publication that cannot be
+/// read or parsed is the error saying which, not the same `None`.
+pub async fn consumer_period(
+    store: &JobStorage,
+    consumer_id: &str,
+) -> Result<Option<Duration>, String> {
+    let path = format!("{CAPACITY_PREFIX}{consumer_id}.json");
+    let Some(raw) = store
+        .download_text(&path)
         .await
-        .ok()??;
-    let payload: Value = serde_json::from_str(&raw).ok()?;
-    publication_period(&payload)
+        .map_err(|error| format!("{path} could not be read: {error}"))?
+    else {
+        return Ok(None);
+    };
+    let payload: Value = serde_json::from_str(&raw)
+        .map_err(|error| format!("{path} is not a capacity publication: {error}"))?;
+    Ok(publication_period(&payload))
 }
 
 /// Whole seconds covering `promise`, never less than it.
@@ -144,8 +153,14 @@ pub fn hold(lease: ReservationLease, store: JobStorage, period: Duration) -> Hel
         let mut last_round = Duration::ZERO;
         loop {
             let started = Instant::now();
-            if let Some(stated) = consumer_period(&beat_store, &consumer).await {
-                period = stated;
+            match consumer_period(&beat_store, &consumer).await {
+                Ok(Some(stated)) => period = stated,
+                Ok(None) => {}
+                Err(cause) => tracing::warn!(
+                    reservation = %beating.reservation().reservation_id,
+                    "the holder's publication period was not read, so this renewal keeps \
+                     {period:?}: {cause}"
+                ),
             }
             if let Err(error) = beating.heartbeat(&beat_store, period + last_round).await {
                 tracing::warn!(
