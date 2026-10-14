@@ -46,17 +46,34 @@ pub(super) async fn read_published(
         runner,
     )
     .await?;
-    Ok(output
+    // A state line that names no readable pid or time is not "no resolver
+    // published": it is refused with the line, so a handoff is never judged
+    // against a resolver it could not read.
+    let Some(line) = output
         .lines()
-        .find_map(|line| match host_channel::marker_fields(line).as_slice() {
-            ["STADO_RESOLVER_STATE", state, pid, written, listening] => Some(Published {
-                state: (*state).trim().to_string(),
-                pid: pid.trim().parse().ok()?,
-                written: written.trim().parse().ok()?,
-                listening: listening.trim() == "1",
-            }),
-            _ => None,
-        }))
+        .find(|line| line.starts_with("STADO_RESOLVER_STATE\t"))
+    else {
+        return Ok(None);
+    };
+    let unreadable = |cause: String| {
+        DeployError::unreachable(format!(
+            "{}: the resolver state {program} published cannot be read ({cause}): {line:?}",
+            target.name
+        ))
+    };
+    match host_channel::marker_fields(line).as_slice() {
+        ["STADO_RESOLVER_STATE", state, pid, written, listening] => Ok(Some(Published {
+            state: (*state).trim().to_string(),
+            pid: host_channel::marker_number(pid, "pid")
+                .map_err(unreadable)?
+                .ok_or_else(|| unreadable("it names no pid".to_string()))?,
+            written: host_channel::marker_number(written, "write time")
+                .map_err(unreadable)?
+                .ok_or_else(|| unreadable("it names no write time".to_string()))?,
+            listening: listening.trim() == "1",
+        })),
+        _ => Err(unreadable("it does not hold four fields".to_string())),
+    }
 }
 
 pub(super) async fn read_record(
