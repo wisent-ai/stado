@@ -257,16 +257,19 @@ fn parent_exit_closes_editor_with_live_stdin_and_releases_workspace_ownership() 
     native.observe("duplicate refusal preserves owner", unchanged);
 
     // Only the isolated client is killed. Keeping its stdin writer proves that
-    // EOF is not the mechanism that ends the editor in this scenario.
+    // EOF is not the mechanism that ends the editor in this scenario; the
+    // journey holds it itself, since `Child::wait` closes the one the child
+    // handle keeps before it waits.
+    let stdin_writer = server
+        .child
+        .stdin
+        .take()
+        .expect("the client's stdin writer");
     server
         .child
         .kill()
         .expect("terminate isolated editor client");
     let parent_exit = server.child.wait().expect("reap isolated client");
-    assert!(
-        server.child.stdin.is_some(),
-        "stdin writer must remain open"
-    );
     let mut remaining = String::new();
     server
         .output
@@ -284,7 +287,7 @@ fn parent_exit_closes_editor_with_live_stdin_and_releases_workspace_ownership() 
         json!({"parent_exit": parent_exit.code(), "editor_pid": editor_pid,
         "remaining_stdout": remaining, "status": ended, "stdin_writer_held": true}),
     );
-    drop(server.child.stdin.take());
+    drop(stdin_writer);
 
     let replacement = native.run(&args);
     assert!(
