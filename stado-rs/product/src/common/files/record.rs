@@ -34,17 +34,9 @@ pub(crate) fn read(path: &Path, expected: Option<&str>) -> Result<Option<Recorde
     let command = value["command"]
         .as_str()
         .with_context(|| format!("{} records no command", path.display()))?;
-    // A record written before records named their product is the lock's own:
-    // its holder's command does not name it, since an installation holds its
-    // dependencies' locks under its own command line.
-    let named = match (value["product"].as_str(), expected) {
-        (Some(named), Some(expected)) if named != expected => bail!(
-            "{} guards product {expected} but records product {named}; corrupt lock is not reclaimed",
-            path.display()
-        ),
-        (Some(named), _) => Some(named),
-        (None, expected) => expected,
-    };
+    // Older writers did not record the guarded product. The path, not the
+    // command line, names that product; a dependency shares its caller's argv.
+    let named = value["product"].as_str().or(expected);
     let pid = value["pid"]
         .as_u64()
         .with_context(|| format!("{} records no pid", path.display()))?;
@@ -68,6 +60,18 @@ pub(crate) fn read(path: &Path, expected: Option<&str>) -> Result<Option<Recorde
 }
 
 impl Recorded {
+    pub fn validate_product(&self, path: &Path, expected: &str) -> Result<()> {
+        if let Some(named) = &self.product {
+            if named != expected {
+                bail!(
+                    "{} guards product {expected} but records product {named}; held lock is corrupt",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn observed_start(&self) -> Result<Option<String>> {
         started_at(self.pid)
     }
@@ -128,6 +132,9 @@ pub fn locks_report(home: &Path) -> Result<Value> {
                 let Some(recorded) = recorded else {
                     return Ok(json!({"held": !free, "error": "lock records no holder"}));
                 };
+                if !free {
+                    recorded.validate_product(&path, product(&path)?)?;
+                }
                 let observed = recorded.observed_start()?;
                 let running = recorded
                     .started_at

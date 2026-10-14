@@ -1,6 +1,6 @@
 // A dedicated-host journey through the real product CLI and an isolated HOME.
-// It leaves lock records as a terminated installer and a mislabelled installer
-// would, then asks a real source install to acquire the surface and observes it.
+// It tests a released lock left by a dependency install and a held lock whose
+// guarded product disagrees with its record.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -36,7 +36,7 @@ function succeeds(result) {
 }
 function record(path, product, pid, started) {
   writeFileSync(path, `${JSON.stringify({ product, pid, started_at: started,
-    command: `${program} product install ${product} --surface cli`,
+    command: `${program} product install oko --surface cli`,
     acquired_at: new Date().toISOString(), phase: 'preparing', step: 'source build' })}\n`);
 }
 let failure;
@@ -57,14 +57,17 @@ try {
   const departed = once(former, 'exit');
   former.kill();
   await departed;
-  record(lock, 'stado', former.pid, birth.stdout.trim());
+  record(lock, 'oko', former.pid, birth.stdout.trim());
   const before = JSON.parse(succeeds(run(['product', 'locks', '--json'])));
-  assert.equal(before.locks.find(row => row.path === lock).running, false);
+  const stale = before.locks.find(row => row.path === lock);
+  assert.equal(stale.held, false);
+  assert.equal(stale.running, false);
+  assert.equal(stale.recorded_product, 'oko');
   report.before = before;
   const installed = run(['product', 'install', 'stado', '--surface', 'cli',
     '--source-commit', revision, '--json']);
   succeeds(installed);
-  assert.match(installed.stderr, /reclaiming stale lock .*stado.*recorded pid/);
+  assert.match(installed.stderr, /reclaiming released lock .*recorded product Some\("oko"\).*command/);
   const after = JSON.parse(succeeds(run(['product', 'status', 'stado', '--surface', 'cli', '--json'])));
   assert.equal(after.source_revision, revision);
   report.after = after;
@@ -84,10 +87,17 @@ try {
     once(live, 'exit').then(([code]) => { throw new Error(`lock holder exited before ready: ${code}`); }),
   ]);
   assert.equal(ready, 'held');
+  record(lock, 'oko', former.pid, birth.stdout.trim());
   const held = JSON.parse(succeeds(run(['product', 'locks', '--json'])));
-  assert.equal(held.locks.find(row => row.path === lock).held, true,
-    'the CLI must observe another process holding the OS file lock');
+  assert.equal(held.locks.find(row => row.path === lock).held, undefined);
+  assert.match(held.locks.find(row => row.path === lock).error,
+    /guards product stado but records product oko; held lock is corrupt/);
+  const refused = run(['product', 'install', 'stado', '--surface', 'cli',
+    '--source-commit', revision, '--json']);
+  assert.ok(refused.status || refused.signal || refused.error, 'held mislabelled lock must refuse');
+  assert.match(refused.stderr, /guards product stado but records product oko; held lock is corrupt/);
   report.held = held;
+  report.refusal = { exit_status: refused.status, stderr: refused.stderr };
   const released = once(live, 'exit');
   live.stdin.end('\n');
   const [holderStatus] = await released;
@@ -96,17 +106,15 @@ try {
   const free = JSON.parse(succeeds(run(['product', 'locks', '--json'])));
   assert.equal(free.locks.find(row => row.path === lock).held, false,
     'the CLI must observe the released OS file lock');
+  assert.equal(free.locks.find(row => row.path === lock).recorded_product, 'oko');
   report.free = free;
-  record(lock, 'tama', former.pid, birth.stdout.trim());
-  const refused = run(['product', 'install', 'stado', '--surface', 'cli',
+  const reclaimedAgain = run(['product', 'install', 'stado', '--surface', 'cli',
     '--source-commit', revision, '--json']);
-  assert.ok(refused.status || refused.signal || refused.error, 'mislabelled lock must refuse');
-  assert.match(refused.stderr, /guards product stado but records product tama; corrupt lock/);
-  const corrupt = JSON.parse(succeeds(run(['product', 'locks', '--json'])));
-  assert.match(corrupt.locks.find(row => row.path === lock).error,
-    /guards product stado but records product tama/);
-  report.refusal = { exit_status: refused.status, stderr: refused.stderr };
-  report.corrupt = corrupt;
+  succeeds(reclaimedAgain);
+  assert.match(reclaimedAgain.stderr, /reclaiming released lock .*recorded product Some\("oko"\)/);
+  const finalRecord = JSON.parse(readFileSync(lock, 'utf8'));
+  assert.equal(finalRecord.product, 'stado');
+  report.finalRecord = finalRecord;
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);

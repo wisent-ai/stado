@@ -37,7 +37,12 @@ pub fn available_space(path: &Path) -> Result<u64> {
 }
 
 pub(crate) fn read_lock_record(path: &Path) -> Result<Option<record::Recorded>> {
-    record::read(path, Some(record::product(path)?))
+    let expected = record::product(path)?;
+    let recorded = record::read(path, Some(expected))?;
+    if let Some(recorded) = &recorded {
+        recorded.validate_product(path, expected)?;
+    }
+    Ok(recorded)
 }
 
 /// The first line of a `CACHEDIR.TAG` that declares its directory

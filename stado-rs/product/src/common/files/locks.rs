@@ -81,6 +81,9 @@ fn take(path: &Path, mode: Take, product_scope: bool) -> Result<File> {
         }
         let recorded = record::read(path, expected)?
             .with_context(|| format!("{} is held but records no holder", path.display()))?;
+        if let Some(expected) = expected {
+            recorded.validate_product(path, expected)?;
+        }
         let holder = crate::install::operation::clause(path);
         let held_by = match mode {
             Take::Refuse => {
@@ -118,17 +121,11 @@ fn take(path: &Path, mode: Take, product_scope: bool) -> Result<File> {
     }
     if let Some(previous) = record::read(path, expected)? {
         let observed = previous.observed_start()?;
-        if previous.started_at.as_ref() != observed.as_ref() {
-            eprintln!(
-                "reclaiming stale lock {} for {:?}: recorded pid {} born {:?}, observed {:?}; no process was signalled",
-                path.display(), previous.product, previous.pid, previous.started_at, observed
-            );
-        } else {
-            eprintln!(
-                "{}: previous process pid {} no longer holds its lock; replacing its released record",
-                path.display(), previous.pid
-            );
-        }
+        eprintln!(
+            "reclaiming released lock {}: guarded product {:?}, recorded product {:?}, pid {} born {:?}, observed {:?}, command {:?}, phase {}, step {:?}; no process was signalled",
+            path.display(), expected, previous.product, previous.pid,
+            previous.started_at, observed, previous.command, previous.phase, previous.step
+        );
     }
     let taken = chrono::Utc::now().to_rfc3339();
     let pid = i32::try_from(std::process::id())?;
@@ -173,6 +170,7 @@ pub fn mark_step(path: &Path, step: &str) -> Result<()> {
 fn remark(path: &Path, phase: Option<&str>, step: Option<&str>) -> Result<()> {
     let held = record::read(path, Some(record::product(path)?))?
         .with_context(|| format!("{} holds no readable holder record", path.display()))?;
+    held.validate_product(path, record::product(path)?)?;
     if held.pid != i32::try_from(std::process::id())? || !held.verified_live()? {
         anyhow::bail!(
             "{} records pid {} with an unverified birth time, not this process; its step is not rewritten",
