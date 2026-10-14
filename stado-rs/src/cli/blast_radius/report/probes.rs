@@ -101,6 +101,9 @@ pub(super) fn print_probe_highlights(probe: &crate::providers::gcp::inventory::P
             if let Some(exhausted) = probe.detail.get("exhausted") {
                 println!("  exhausted quota: {exhausted}");
             }
+            if let Some(unread) = probe.detail.get("unread") {
+                println!("  unread quota: {unread}");
+            }
         }
         _ => {}
     }
