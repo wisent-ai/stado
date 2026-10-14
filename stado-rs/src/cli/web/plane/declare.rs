@@ -53,7 +53,13 @@ pub(crate) fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError> {
     let env = pairs(request.env, "env")?;
     let secrets = pairs(request.secrets, "secret")?;
     for (name, reference) in &secrets {
-        let reference = reference.as_str().unwrap_or("");
+        // `pairs` stores every value as the text after `=`; anything else is
+        // a value this check cannot read, refused as such.
+        let Some(reference) = reference.as_str() else {
+            return Err(CmdError::usage(format!(
+                "--secret {name}={reference} is not text"
+            )));
+        };
         if crate::config::parse_secret_reference(reference).is_none() {
             return Err(CmdError::usage(format!(
                 "--secret {name}={reference:?} must reference a Skarbiec item as \"item#field\""
@@ -215,11 +221,12 @@ fn mount_prefix<'a>(request: &DeclareRequest<'_>, prefix: &'a str) -> Result<&'a
 /// have no host, no port and no consumer, and printing an empty host on port 0
 /// as an empty consumer described a unit that does not exist.
 fn report(request: &DeclareRequest<'_>, existed: bool) -> Result<(), CmdError> {
+    let change = if existed { "replaced" } else { "declared" };
     let mut report = json!({
         "product": request.name,
         "hostname": request.hostname,
         "edge": request.edge,
-        "change": if existed { "replaced" } else { "declared" },
+        "change": change,
     });
     let object = report
         .as_object_mut()
@@ -247,10 +254,8 @@ fn report(request: &DeclareRequest<'_>, existed: bool) -> Result<(), CmdError> {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!(
-            "{} {} {summary} -> https://{}",
-            report["change"].as_str().unwrap_or(""),
-            request.name,
-            request.hostname,
+            "{change} {} {summary} -> https://{}",
+            request.name, request.hostname,
         );
     }
     Ok(())
