@@ -99,7 +99,7 @@ fn render_status(
                 row.service.unit_id().to_string(),
                 row.service.source.clone(),
                 row.state.clone(),
-                reported_cell(&row.reported_at),
+                optional_cell(row.reported_at.as_deref()),
                 observations::describe_in(&seen, &fact),
                 reported_cell(&row.detail),
             ];

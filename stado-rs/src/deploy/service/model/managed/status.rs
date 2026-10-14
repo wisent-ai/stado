@@ -14,8 +14,9 @@ pub struct ServiceStatus {
     /// "unknown".
     pub state: String,
     /// The beacon's `reported_at`, so a confident-looking `active` from a
-    /// five-day-old beacon is visibly five days old.
-    pub reported_at: String,
+    /// five-day-old beacon is visibly five days old. `None` when the host
+    /// published no beacon or its beacon names no report time; JSON `null`.
+    pub reported_at: Option<String>,
     /// Why the state is what it is, when that is not self-evident.
     pub detail: String,
     /// Set when this unit's declared launchd domain is one its host cannot
@@ -144,8 +145,7 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
         let reported_at = beacon
             .and_then(|beacon| beacon.get("reported_at"))
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+            .map(str::to_string);
         let stale = report
             .as_ref()
             .and_then(|report| stale_beacon_detail(report, Utc::now()));
