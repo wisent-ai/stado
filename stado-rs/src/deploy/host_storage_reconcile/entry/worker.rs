@@ -133,29 +133,34 @@ pub async fn reconcile_host_worker(
     // the record of the earlier operation was overwritten with a smaller
     // number. Only a missing record, or one written before records carried
     // a revision, starts the count.
-    match std::fs::read(&owner_path) {
-        Ok(bytes) => {
-            serde_json::from_slice::<Value>(&bytes).map_err(|error| {
-                DeployError(format!(
-                    "the operation owner record {} is not JSON: {error}",
-                    owner_path.display()
-                ))
-            })?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    let record: Option<Value> = match std::fs::read(&owner_path) {
+        Ok(bytes) => Some(serde_json::from_slice::<Value>(&bytes).map_err(|error| {
+            DeployError(format!(
+                "the operation owner record {} is not JSON: {error}",
+                owner_path.display()
+            ))
+        })?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
             return Err(DeployError(format!(
                 "the operation owner record {} cannot be read: {error}",
                 owner_path.display()
             )))
         }
-    }
-    let revision = std::fs::read(&owner_path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|owner| owner.get("revision").and_then(Value::as_u64))
-        .unwrap_or_default()
-        .saturating_add(1);
+    };
+    // A revision that is there but is not a count is refused: restarting
+    // the count would hand out a number an earlier owner already held.
+    let previous = match record.as_ref().and_then(|owner| owner.get("revision")) {
+        None => None,
+        Some(revision) => Some(revision.as_u64().ok_or_else(|| {
+            DeployError(format!(
+                "the operation owner record {} carries revision {revision}, which is not a \
+                 count",
+                owner_path.display()
+            ))
+        })?),
+    };
+    let revision = previous.unwrap_or_default().saturating_add(1);
     let mut owner = json!({
         "schema": "stado.storage-root-owner.v1",
         "transaction": transaction,
