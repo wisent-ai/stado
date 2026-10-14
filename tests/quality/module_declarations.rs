@@ -7,10 +7,12 @@
 //! that check. A tree whose code names `crate::hidden` while `hidden/mod.rs`
 //! is committed but declared by nothing is refused the same way, naming the
 //! using file, the path and the undeclared file, until `mod hidden;` is
-//! committed. The checkout is a real Git repository of this test's own
-//! under the repository's `.build`, with a tracked change left in it so the
-//! check reads `HEAD` rather than an origin; Stado's home and store are this
-//! run's own.
+//! committed. A path naming the item `crate::hidden::Item` beside the module
+//! file `hidden/item.rs` is not refused: on a case-insensitive filesystem
+//! `Item.rs` opens `item.rs`, which is a declared module, not the item. The
+//! checkout is a real Git repository of this test's own under the
+//! repository's `.build`, with a tracked change left in it so the check reads
+//! `HEAD` rather than an origin; Stado's home and store are this run's own.
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -188,11 +190,17 @@ fn a_module_declared_without_its_file_is_refused_before_anything_compiles() {
     );
 
     fs::write(
-        checkout.join("src/main.rs"),
-        "mod present;\nmod absent;\nmod hidden;\nfn main() {\n    crate::hidden::run();\n}\n",
+        checkout.join("src/hidden/mod.rs"),
+        "pub mod item;\npub use item::Item;\npub fn run() {}\n",
     )
     .unwrap();
-    git(&checkout, &["add", "src/main.rs"]);
+    fs::write(checkout.join("src/hidden/item.rs"), "pub struct Item;\n").unwrap();
+    fs::write(
+        checkout.join("src/main.rs"),
+        "mod present;\nmod absent;\nmod hidden;\nfn main() {\n    crate::hidden::run();\n    let _item = crate::hidden::Item;\n}\n",
+    )
+    .unwrap();
+    git(&checkout, &["add", "src"]);
     git(&checkout, &["commit", "--quiet", "-m", "declares hidden"]);
     let declared = stado(
         &root,

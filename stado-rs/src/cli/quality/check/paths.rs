@@ -8,7 +8,7 @@
 //! module the tree holds no file for, is left to the build.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -48,7 +48,7 @@ pub(super) fn unreached(crate_dir: &Path) -> Result<Vec<String>, String> {
                     directory = directory.join(segment);
                     continue;
                 }
-                if let Some(held) = candidates.iter().find(|candidate| candidate.is_file()) {
+                if let Some(held) = held_as_spelled(&source, &candidates)? {
                     found.insert(format!(
                         "{} uses `{named}`, and the tree holds {}, which no `mod {segment};` reaches",
                         file.display(),
@@ -60,4 +60,41 @@ pub(super) fn unreached(crate_dir: &Path) -> Result<Vec<String>, String> {
         }
     }
     Ok(found.into_iter().collect())
+}
+
+/// The first of `candidates` the tree holds under exactly that spelling, every
+/// component below `source` listed by its directory. On a case-insensitive
+/// filesystem `copy/Endpoint.rs` opens `copy/endpoint.rs`, which is the module
+/// `endpoint`, so a path naming the item `Endpoint` must not read as naming
+/// an undeclared module file.
+fn held_as_spelled<'a>(
+    source: &Path,
+    candidates: &'a [PathBuf],
+) -> Result<Option<&'a PathBuf>, String> {
+    for candidate in candidates.iter().filter(|candidate| candidate.is_file()) {
+        let Ok(relative) = candidate.strip_prefix(source) else {
+            continue;
+        };
+        let mut parent = source.to_path_buf();
+        let mut spelled = true;
+        for component in relative.components() {
+            let entries = std::fs::read_dir(&parent)
+                .map_err(|error| format!("error: cannot list {}: {error}", parent.display()))?;
+            let mut listed = false;
+            for entry in entries {
+                let entry = entry
+                    .map_err(|error| format!("error: cannot list {}: {error}", parent.display()))?;
+                listed |= entry.file_name() == component.as_os_str();
+            }
+            if !listed {
+                spelled = false;
+                break;
+            }
+            parent.push(component);
+        }
+        if spelled {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
 }
