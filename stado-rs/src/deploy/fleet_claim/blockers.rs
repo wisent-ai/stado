@@ -128,8 +128,13 @@ async fn agent_not_loaded(
             DeployError(format!("{path}: {exc}"))
                 .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
+        // A beacon that carries no units map says nothing about the agent:
+        // that is a blocker naming the beacon, not a loaded agent.
         let Some(units) = beacon.get("units").and_then(Value::as_object) else {
-            return Ok(None);
+            return Ok(Some(format!(
+                "{unit} is declared at {}; the latest beacon at {path} carries no units map",
+                agent.path
+            )));
         };
         let Some(entry) = units.get(unit) else {
             return Ok(Some(format!(
@@ -141,22 +146,23 @@ async fn agent_not_loaded(
         // wrote a bare string. Both shapes are in flight, so read both --
         // the same two shapes `service::beacon_state` reads.
         let state = match entry {
-            Value::String(state) => state.as_str(),
-            Value::Object(fields) => fields.get("state").and_then(Value::as_str).unwrap_or(""),
-            _ => "",
+            Value::String(state) => Some(state.as_str()),
+            Value::Object(fields) => fields.get("state").and_then(Value::as_str),
+            _ => None,
         };
-        if state == service::STATE_ACTIVE {
+        if state == Some(service::STATE_ACTIVE) {
             return Ok(None);
         }
-        return Ok(Some(format!(
-            "{unit} is declared at {}; the latest beacon reports it {}",
-            agent.path,
-            if state.is_empty() {
-                "with no state"
-            } else {
-                state
-            }
-        )));
+        return Ok(Some(match state {
+            Some(state) => format!(
+                "{unit} is declared at {}; the latest beacon reports it {state}",
+                agent.path
+            ),
+            None => format!(
+                "{unit} is declared at {}; the latest beacon reports it with no state: {entry}",
+                agent.path
+            ),
+        }));
     }
     Ok(None)
 }
