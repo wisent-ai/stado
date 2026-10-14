@@ -28,16 +28,32 @@ pub(in crate::monitor::billing) fn emit_alerts(document: &Value) {
                     ));
                 }
                 crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Gcp,
+                ) => {
+                    if let Some(reason) = section.get("net_alert_detail").and_then(Value::as_str) {
+                        log(&format!("BILLING: GCP credit is not judged: {reason}"));
+                    }
+                }
+                crate::capabilities::RuntimeAdapter::Billing(
                     crate::capabilities::BillingAdapter::Azure,
                 ) => {
-                    let threshold = config::billing_net_alert_usd();
-                    if let Some(balance) = section.get("available_balance").and_then(Value::as_f64)
-                    {
-                        if balance < threshold {
+                    match config::billing_net_alert_usd() {
+                        Ok(threshold) => {
+                            if let Some(balance) =
+                                section.get("available_balance").and_then(Value::as_f64)
+                            {
+                                if balance < threshold {
+                                    log(&format!(
+                                        "BILLING ALERT: Azure available credit balance {} below {}",
+                                        py_f64(balance),
+                                        py_f64(threshold),
+                                    ));
+                                }
+                            }
+                        }
+                        Err(reason) => {
                             log(&format!(
-                                "BILLING ALERT: Azure available credit balance {} below {}",
-                                py_f64(balance),
-                                py_f64(threshold),
+                                "BILLING: Azure credit balance is not judged: {reason}"
                             ));
                         }
                     }

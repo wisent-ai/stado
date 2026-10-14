@@ -169,7 +169,11 @@ pub(in crate::providers::gcp::inventory) fn probe_specs(
             format!("https://iam.googleapis.com/v1/projects/{encoded_project}/serviceAccounts?pageSize=100"),
             ProbeKind::ServiceAccounts,
         ),
-        get(
+    ];
+    // The billing export is the deployment's to declare; an undeclared one
+    // is not probed, as an undeclared alerts topic is not.
+    if !options.billing_dataset.is_empty() {
+        specs.push(get(
             "billing_export_dataset",
             "BigQuery",
             &format!("{}.{}", project, options.billing_dataset),
@@ -179,19 +183,23 @@ pub(in crate::providers::gcp::inventory) fn probe_specs(
                 encode(&options.billing_dataset)
             ),
             ProbeKind::Plain,
-        ),
-        get(
-            "billing_export_table",
-            "BigQuery",
-            &format!("{}.{}.{}", project, options.billing_dataset, options.billing_table),
-            "high",
-            format!(
-                "https://bigquery.googleapis.com/bigquery/v2/projects/{encoded_project}/datasets/{}/tables/{}",
-                encode(&options.billing_dataset),
-                encode(&options.billing_table)
-            ),
-            ProbeKind::Plain,
-        ),
+        ));
+        if !options.billing_table.is_empty() {
+            specs.push(get(
+                "billing_export_table",
+                "BigQuery",
+                &format!("{}.{}.{}", project, options.billing_dataset, options.billing_table),
+                "high",
+                format!(
+                    "https://bigquery.googleapis.com/bigquery/v2/projects/{encoded_project}/datasets/{}/tables/{}",
+                    encode(&options.billing_dataset),
+                    encode(&options.billing_table)
+                ),
+                ProbeKind::Plain,
+            ));
+        }
+    }
+    specs.extend([
         get(
             "artifact_registry",
             "Artifact Registry",
@@ -208,7 +216,7 @@ pub(in crate::providers::gcp::inventory) fn probe_specs(
             format!("https://cloudbuild.googleapis.com/v1/projects/{encoded_project}/builds?pageSize=10"),
             ProbeKind::Builds,
         ),
-    ];
+    ]);
 
     for region_name in &options.regions {
         specs.push(get(

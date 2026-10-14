@@ -41,6 +41,12 @@ async fn gcp_token() -> Result<String, String> {
 pub(super) async fn gcp_section() -> Value {
     let dataset = config::billing_dataset();
     let table = config::billing_table();
+    if dataset.is_empty() || table.is_empty() {
+        return json!({
+            "status": "config_error",
+            "detail": "the BigQuery billing export is not declared: set WC_BILLING_DATASET and WC_BILLING_TABLE",
+        });
+    }
     if !IDENT_RE.is_match(dataset) || !IDENT_RE.is_match(table) {
         return json!({
             "status": "config_error",
@@ -198,7 +204,10 @@ async fn gcp_section_with(
     let latest_net = monthly.last().map_or(Value::Null, |m| {
         m.get("net").cloned().unwrap_or(Value::Null)
     });
-    let depleted = latest_net.as_f64().is_some_and(|net| net > threshold);
+    let depleted = match threshold {
+        Ok(threshold) => json!(latest_net.as_f64().is_some_and(|net| net > threshold)),
+        Err(_) => Value::Null,
+    };
 
     json!({
         "status": "ok",
@@ -206,7 +215,8 @@ async fn gcp_section_with(
         "credits": credits,
         "avg_daily_credit_applied_7d": burn,
         "latest_month_net_usd": latest_net,
-        "net_alert_threshold_usd": threshold,
+        "net_alert_threshold_usd": threshold.ok(),
+        "net_alert_detail": threshold.err(),
         "credit_depleted": depleted,
     })
 }

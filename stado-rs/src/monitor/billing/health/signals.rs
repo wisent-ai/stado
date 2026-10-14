@@ -64,22 +64,46 @@ pub(super) fn signals(document: &Value, providers: &[ProviderHealth]) -> Vec<Sig
                     });
                 }
                 crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Gcp,
+                ) => {
+                    if let Some(reason) = section.get("net_alert_detail").and_then(Value::as_str) {
+                        firing.push(Signal {
+                            key: format!("net_alert_undeclared:{}", variant.id),
+                            subject: "stado billing: GCP credit is not judged".to_string(),
+                            message: format!("BILLING WARNING: GCP credit is not judged: {reason}"),
+                        });
+                    }
+                }
+                crate::capabilities::RuntimeAdapter::Billing(
                     crate::capabilities::BillingAdapter::Azure,
                 ) => {
-                    let threshold = config::billing_net_alert_usd();
-                    if let Some(balance) = section.get("available_balance").and_then(Value::as_f64)
-                    {
-                        if balance < threshold {
-                            firing.push(Signal {
-                                key: format!("balance_low:{}", variant.id),
-                                subject: "stado billing: Azure credit balance low".to_string(),
-                                message: format!(
-                                    "BILLING ALERT: Azure available credit balance {} below {}",
-                                    py_f64(balance),
-                                    py_f64(threshold),
-                                ),
-                            });
+                    match config::billing_net_alert_usd() {
+                        Ok(threshold) => {
+                            if let Some(balance) =
+                                section.get("available_balance").and_then(Value::as_f64)
+                            {
+                                if balance < threshold {
+                                    firing.push(Signal {
+                                        key: format!("balance_low:{}", variant.id),
+                                        subject: "stado billing: Azure credit balance low"
+                                            .to_string(),
+                                        message: format!(
+                                            "BILLING ALERT: Azure available credit balance {} below {}",
+                                            py_f64(balance),
+                                            py_f64(threshold),
+                                        ),
+                                    });
+                                }
+                            }
                         }
+                        Err(reason) => firing.push(Signal {
+                            key: format!("net_alert_undeclared:{}", variant.id),
+                            subject: "stado billing: Azure credit balance is not judged"
+                                .to_string(),
+                            message: format!(
+                                "BILLING WARNING: Azure credit balance is not judged: {reason}"
+                            ),
+                        }),
                     }
                     if section.get("overage_risk").and_then(Value::as_bool) == Some(true) {
                         firing.push(Signal {

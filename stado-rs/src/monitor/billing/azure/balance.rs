@@ -235,7 +235,11 @@ pub(super) async fn azure_section_with(
         "pending_eligible_charges": pending,
         "pending_credit_adjustments": props.pointer("/pendingCreditAdjustments/value").cloned().unwrap_or(Value::Null),
         "is_estimated_balance": props.get("isEstimatedBalance").cloned().unwrap_or(Value::Null),
-        "credit_depleted": extract_amount(&props).as_f64().is_some_and(|balance| balance <= config::billing_net_alert_usd()),
+        "credit_depleted": match config::billing_net_alert_usd() {
+            Ok(threshold) => json!(extract_amount(&props).as_f64().is_some_and(|balance| balance <= threshold)),
+            Err(_) => Value::Null,
+        },
+        "net_alert_detail": config::billing_net_alert_usd().err(),
         "grant_amount": grant_amount,
         "credit_used": credit_used,
         "grant_start_date": grant.and_then(|detail| detail.get("startDate")).cloned().unwrap_or(Value::Null),
