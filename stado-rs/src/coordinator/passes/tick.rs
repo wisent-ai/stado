@@ -176,7 +176,14 @@ pub async fn run_tick(
     for arm in providers {
         match arm {
             ResolvedProvider::Box { name, provider } => {
-                let owner = std::env::var("WC_COORDINATOR_ID").unwrap_or_else(|_| nodename());
+                let owner = match std::env::var("WC_COORDINATOR_ID") {
+                    Ok(id) => id,
+                    Err(std::env::VarError::NotPresent) => nodename(),
+                    Err(error) => {
+                        log(&format!("provider {name} tick skipped: WC_COORDINATOR_ID is set but cannot be read: {error}"));
+                        continue;
+                    }
+                };
                 match run_box_tick(store, provider, &owner).await {
                     Ok(n) => total += n,
                     Err(exc) => log(&format!("provider {name} tick failed: {exc}")),
