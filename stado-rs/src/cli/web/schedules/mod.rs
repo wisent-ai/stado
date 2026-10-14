@@ -177,6 +177,7 @@ async fn list(only: Option<&str>, json_output: bool) -> Result<(), CmdError> {
     }
     let store = JobStorage::new().await?;
     let mut rows = Vec::new();
+    let mut lines = Vec::new();
     for (name, declared) in products
         .iter()
         .filter(|(name, _)| only.is_none_or(|only| only == name.as_str()))
@@ -187,6 +188,34 @@ async fn list(only: Option<&str>, json_output: bool) -> Result<(), CmdError> {
             let sending = fleet
                 .iter()
                 .find(|item| item.schedule_id.starts_with(&prefix));
+            // The text line is written from the same typed values the JSON
+            // row carries, never read back out of the row with blanks for
+            // what it lacks.
+            let state = match sending {
+                None => "not sent yet: the product has not been routed".to_string(),
+                Some(item) => format!(
+                    "{} {}, next {}, last job {}",
+                    item.schedule_id,
+                    if item.enabled { "enabled" } else { "paused" },
+                    if item.next_due_at.is_empty() {
+                        "not scheduled"
+                    } else {
+                        item.next_due_at.as_str()
+                    },
+                    if item.last_job_id.is_empty() {
+                        "none"
+                    } else {
+                        item.last_job_id.as_str()
+                    },
+                ),
+            };
+            lines.push(format!(
+                "{name}/{schedule_name}: {} {} at {} ({}) — {state}",
+                schedule.method(),
+                schedule.path(),
+                schedule.cron(),
+                schedule.tz(),
+            ));
             rows.push(json!({
                 "product": name,
                 "schedule": schedule_name,
@@ -211,33 +240,8 @@ async fn list(only: Option<&str>, json_output: bool) -> Result<(), CmdError> {
     if rows.is_empty() {
         println!("no web product declares a schedule");
     }
-    for row in &rows {
-        let state = match &row["fleet_schedule"] {
-            Value::Null => "not sent yet: the product has not been routed".to_string(),
-            sending => format!(
-                "{} {}, next {}, last job {}",
-                sending["id"].as_str().unwrap_or_default(),
-                if sending["enabled"].as_bool() == Some(true) {
-                    "enabled"
-                } else {
-                    "paused"
-                },
-                sending["next_due_at"].as_str().unwrap_or_default(),
-                sending["last_job_id"]
-                    .as_str()
-                    .filter(|job| !job.is_empty())
-                    .unwrap_or("none"),
-            ),
-        };
-        println!(
-            "{}/{}: {} {} at {} ({}) — {state}",
-            row["product"].as_str().unwrap_or_default(),
-            row["schedule"].as_str().unwrap_or_default(),
-            row["method"].as_str().unwrap_or_default(),
-            row["path"].as_str().unwrap_or_default(),
-            row["cron"].as_str().unwrap_or_default(),
-            row["tz"].as_str().unwrap_or_default(),
-        );
+    for line in &lines {
+        println!("{line}");
     }
     Ok(())
 }
