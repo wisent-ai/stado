@@ -116,7 +116,8 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
             .git()
             .arg("push")
             .arg("origin")
-            .arg(format!("{good}:refs/heads/main")),
+            .arg(format!("{good}:refs/heads/main"))
+            .arg(format!("{good}:refs/heads/review")),
     );
     let transcript = format!(
         "{}{}",
@@ -156,6 +157,76 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
         fixture.published(),
         good,
         "refused push changed remote state"
+    );
+    // Git sends a null local object for a deleted ref. A bad HEAD must not
+    // turn deletion of an already-published branch into a source gate.
+    let review = fixture.success(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&fixture.remote)
+            .arg("rev-parse")
+            .arg("refs/heads/review"),
+    );
+    assert_eq!(
+        String::from_utf8(review.stdout)
+            .expect("published review ref")
+            .trim(),
+        good
+    );
+    fixture.success(
+        fixture
+            .git()
+            .arg("push")
+            .arg("origin")
+            .arg(":refs/heads/review"),
+    );
+    let deleted = fixture.success(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&fixture.remote)
+            .arg("for-each-ref")
+            .arg("--format=%(objectname)")
+            .arg("refs/heads/review"),
+    );
+    assert!(
+        deleted.stdout.is_empty(),
+        "the remote still holds the deleted ref"
+    );
+    assert_eq!(
+        fixture.published(),
+        good,
+        "deletion changed another remote ref"
+    );
+
+    // A real blob exists but is not a commit: explicit revision selection
+    // refuses it instead of quietly choosing HEAD or another source tree.
+    let blob = fixture.success(
+        fixture
+            .git()
+            .arg("rev-parse")
+            .arg(format!("{good}:source.rs")),
+    );
+    let blob = String::from_utf8(blob.stdout).expect("source blob identity");
+    let invalid = fixture.run(
+        fixture
+            .stado()
+            .arg("quality")
+            .arg("check")
+            .arg("--revision")
+            .arg(blob.trim()),
+    );
+    assert!(
+        !invalid.status.success(),
+        "a source blob is not a checkable commit"
+    );
+    let refusal = format!(
+        "{}{}",
+        String::from_utf8_lossy(&invalid.stdout),
+        String::from_utf8_lossy(&invalid.stderr)
+    );
+    assert!(
+        refusal.contains(blob.trim()),
+        "refusal loses the selected object: {refusal}"
     );
     assert_eq!(
         fs::read(&source_path).expect("read working source"),
