@@ -97,18 +97,21 @@ pub enum Take {
     /// Block until the holder releases it, whatever it is doing.
     Wait,
     /// A newer installation of the same surface replaces an older one that
-    /// has not started placing files: the holder is told to stop (SIGTERM)
-    /// and the lock is taken once it has gone. A holder already placing is
+    /// has not started placing files, or has placed and recorded them (what
+    /// it still does does not change the surface): the holder is told to stop
+    /// (SIGTERM) and the lock is taken once it has gone. A holder placing is
     /// waited for, because placement is short and a half-placed surface is
     /// worse than a late one. This is what `install` and `update` do, as a
     /// newer fleet build cancels the older builds it supersedes.
     Supersede,
 }
 
-/// The phase a lock holder records: `preparing` (building, nothing placed)
-/// or `placing` (files being replaced).
+/// The phase a lock holder records: `preparing` (building, nothing placed),
+/// `placing` (files being replaced) or `placed` (its files are in place and
+/// recorded; what remains does not change the surface).
 pub const PHASE_PREPARING: &str = "preparing";
 pub const PHASE_PLACING: &str = "placing";
+pub const PHASE_PLACED: &str = "placed";
 
 /// Take the exclusive lock at `path` and write who holds it into the file.
 ///
@@ -161,14 +164,23 @@ fn take(path: &Path, mode: Take) -> Result<File> {
                 Some(_) if recorded_command(path).is_some_and(|command| same_request(&command)) => {
                     format!("{holder} (the same installation, already under way)")
                 }
-                Some((pid, phase)) if phase == PHASE_PREPARING && alive(pid) => {
-                    eprintln!("superseding the installation {holder}: it has placed nothing yet");
+                // A holder still preparing has placed nothing, and one past
+                // placement has nothing left that changes the surface: either
+                // is stopped for the newer installation. Only placing waits.
+                Some((pid, phase))
+                    if (phase == PHASE_PREPARING || phase == PHASE_PLACED) && alive(pid) =>
+                {
+                    eprintln!(
+                        "superseding the installation {holder}: it is {phase}, not placing files"
+                    );
                     // SAFETY: a signal to a pid read from the lock record this
                     // process could not take; a pid that is gone answers ESRCH.
-                    let stopped = unsafe { libc::kill(pid, libc::SIGTERM) };
-                    match stopped {
-                        0 => format!("{holder} (told to stop)"),
-                        _ => format!("{holder} (pid {pid} could not be told to stop)"),
+                    match unsafe { libc::kill(pid, libc::SIGTERM) }.is_negative() {
+                        false => format!("{holder} (told to stop)"),
+                        true => format!(
+                            "{holder} (pid {pid} could not be told to stop: {})",
+                            std::io::Error::last_os_error()
+                        ),
                     }
                 }
                 _ => format!("{holder} (it is placing files)"),
@@ -191,6 +203,12 @@ fn take(path: &Path, mode: Take) -> Result<File> {
 /// files, so a newer installation waits for it instead of stopping it.
 pub fn mark_placing(path: &Path) -> Result<()> {
     remark(path, Some(PHASE_PLACING), None)
+}
+
+/// Record that the holder of `path` (this process) has placed and recorded
+/// its files, so a newer installation supersedes it instead of waiting.
+pub fn mark_placed(path: &Path) -> Result<()> {
+    remark(path, Some(PHASE_PLACED), None)
 }
 
 /// Record the step the holder of `path` (this process) is in, keeping its

@@ -94,7 +94,7 @@ pub fn perform(
     stack.push(node);
     let result = (|| {
         let lock = state::path(runtime, id, surface)?.with_extension("lock");
-        let writer = runtime.surface_lock(&lock)?;
+        let writer = operation::lock_surface(runtime, &lock, selected)?;
         let existing = ProductState::load(runtime, id, surface)?;
         let request = plan::planning::Request {
             runtime,
@@ -227,7 +227,9 @@ pub fn perform(
         let checkout = plan.source_directory.clone();
         let kept = plan.cache.clone();
         if surface == "cli" {
-            services::migrate_host_unit(product, &runtime.home)?;
+            if let Some(host) = services::migrate_host_unit(product, &runtime.home)? {
+                services::admit_units(&plan, id, &host)?;
+            }
         }
         let mut installed = transaction::commit(&installing, id, surface, host, selected, plan)?;
         installed
@@ -267,17 +269,14 @@ pub fn perform(
         installed.status = crate::state::InstallStatus::Installed;
         installed.installed_at = now();
         installed.save(runtime)?;
-        let _writer = match selected.get("after_install") {
-            Some(steps) => operation::after_install_unlocked(
-                runtime,
-                (id, surface, host),
-                steps,
-                &mut installed,
-                &lock,
-                writer,
-            )?,
-            None => writer,
-        };
+        let _writer = operation::after_install(
+            runtime,
+            (id, surface, host),
+            selected,
+            &mut installed,
+            &lock,
+            writer,
+        )?;
         settle::settle(
             &mut installed,
             scratch.as_deref(),

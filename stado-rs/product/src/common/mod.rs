@@ -6,8 +6,8 @@ pub mod runs;
 use anyhow::{bail, Context, Result};
 pub use archive::{copy_tree, file_members, platform, relative, unpack};
 pub use files::{
-    alive, atomic_json, atomic_write, lock, lock_superseding, lock_waiting, mark_placing,
-    mark_step, sha256, tag_cache, CACHEDIR_SIGNATURE,
+    alive, atomic_json, atomic_write, lock, lock_superseding, lock_waiting, mark_placed,
+    mark_placing, mark_step, sha256, tag_cache, CACHEDIR_SIGNATURE, PHASE_PLACING,
 };
 pub use process::{
     capture, checked, step_program, step_search_path, toolchain_command, CommandFailed,
@@ -135,10 +135,10 @@ impl Runtime {
     }
 
     /// The exclusive writer lock of one product surface. A holder still
-    /// preparing (building, nothing placed) is superseded by this process, as
-    /// a newer fleet build cancels the builds it supersedes; a holder already
-    /// placing files is waited for. With `--wait` the holder is kept whatever
-    /// it is doing and this process runs after it.
+    /// preparing (building, nothing placed) or past placement is superseded
+    /// by this process, as a newer fleet build cancels the builds it
+    /// supersedes; a holder placing files is waited for. With `--wait` the
+    /// holder is kept whatever it is doing and this process runs after it.
     pub fn surface_lock(&self, path: &std::path::Path) -> Result<std::fs::File> {
         if self.wait_for_writer {
             lock_waiting(path)

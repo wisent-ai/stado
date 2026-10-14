@@ -15,6 +15,9 @@
 //! outcome, which is not written over a newer installation that placed files
 //! meanwhile.
 
+mod after;
+pub(in crate::install) use after::{after_install, lock_surface};
+
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use serde_json::{json, Value};
@@ -99,28 +102,105 @@ pub fn running(runtime: &Runtime, id: &str, surface: &str) -> Result<Value> {
     Ok(json!(holder(&lock)?))
 }
 
-/// The direct children of `pid`, as the process table lists them now: the
-/// step an installation runs (a build, a dependency's installation).
-fn children(pid: i32) -> Result<Vec<i32>> {
-    let listed = checked(Command::new("/bin/ps").args(["-A", "-o", "pid=,ppid="]))
+/// The direct children of `pid` with their command lines, as the process
+/// table lists them now: the step an installation runs (a build, a
+/// dependency's installation, an after-install reconciler).
+fn children(pid: i32) -> Result<Vec<(i32, String)>> {
+    let listed = checked(Command::new("/bin/ps").args(["-A", "-o", "pid=,ppid=,command="]))
         .context("the process table could not be read to find the operation's steps")?;
     let mut found = Vec::new();
     for line in String::from_utf8_lossy(&listed.stdout).lines() {
-        let words: Vec<&str> = line.split_whitespace().collect();
-        if let [child, parent] = words[..] {
-            let parent: i32 = parent
+        let mut words = line.split_whitespace();
+        let (Some(child), Some(parent)) = (words.next(), words.next()) else {
+            continue;
+        };
+        let parent: i32 = parent
+            .parse()
+            .with_context(|| format!("ps printed a parent that is no pid: {line}"))?;
+        if parent == pid {
+            let child: i32 = child
                 .parse()
-                .with_context(|| format!("ps printed a parent that is no pid: {line}"))?;
-            if parent == pid {
-                found.push(
-                    child
-                        .parse()
-                        .with_context(|| format!("ps printed a pid that is no pid: {line}"))?,
-                );
-            }
+                .with_context(|| format!("ps printed a pid that is no pid: {line}"))?;
+            found.push((child, words.collect::<Vec<_>>().join(" ")));
         }
     }
     Ok(found)
+}
+
+/// Whether `command` runs the after-install step `step` (the recipe's argv):
+/// its program is the step's program, and every literal word of the step
+/// (not a placeholder, not an option, whose value may be one) follows in
+/// order. A source installation leaves out an option whose value is a
+/// release placeholder, so options are not required.
+fn runs_step(command: &str, step: &Value) -> bool {
+    let Some(words) = step.as_array() else {
+        return false;
+    };
+    let mut ran = command.split_whitespace();
+    let Some(program) = ran.next() else {
+        return false;
+    };
+    let wanted: Vec<&str> = words.iter().filter_map(Value::as_str).collect();
+    let Some((first, rest)) = wanted.split_first() else {
+        return false;
+    };
+    if Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some(first)
+    {
+        return false;
+    }
+    let mut ran = ran.peekable();
+    rest.iter()
+        .filter(|word| !word.contains('{') && !word.starts_with("--"))
+        .all(|word| {
+            while ran.peek().is_some_and(|seen| seen != word) {
+                ran.next();
+            }
+            ran.next().is_some()
+        })
+}
+
+/// A holder from a Stado that records no end of placement keeps `placing`
+/// while it runs its recipe's after-install steps, which do not change the
+/// surface, so a newer installation waited on it for as long as such a step
+/// stood (a converge reading another host). When the holder of `lock` says
+/// `placing` and one of its children runs one of `recipe`'s `after_install`
+/// steps, it is past placement: it and its children are told to stop, as a
+/// holder still preparing is, and the newer installation takes the lock once
+/// they let go. Each process told is said on stderr.
+pub(super) fn stop_past_placement(lock: &Path, recipe: &Value) -> Result<()> {
+    let Some(steps) = recipe["after_install"].as_array() else {
+        return Ok(());
+    };
+    let Some(held) = holder(lock)? else {
+        return Ok(());
+    };
+    if held["phase"].as_str() != Some(crate::common::PHASE_PLACING) || held["running"] != true {
+        return Ok(());
+    }
+    let pid = i32::try_from(held["pid"].as_u64().context("the holder names no pid")?)?;
+    let running = children(pid)?;
+    let Some((_, step)) = running
+        .iter()
+        .find(|(_, command)| steps.iter().any(|step| runs_step(command, step)))
+    else {
+        return Ok(());
+    };
+    eprintln!(
+        "superseding the installation {}: it is past placement, running its after-install step `{step}`",
+        clause(lock)
+    );
+    for told in running
+        .iter()
+        .map(|(child, _)| *child)
+        .chain([pid])
+        .map(stop)
+    {
+        eprintln!("  {told}");
+    }
+    Ok(())
 }
 
 /// Tell `pid` to stop; the answer names the error when it could not be told.
@@ -145,7 +225,12 @@ pub fn cancel(runtime: &Runtime, id: &str, surface: &str) -> Result<Value> {
         );
     };
     let pid = i32::try_from(held["pid"].as_u64().context("the holder names no pid")?)?;
-    let signalled: Vec<Value> = children(pid)?.into_iter().chain([pid]).map(stop).collect();
+    let signalled: Vec<Value> = children(pid)?
+        .into_iter()
+        .map(|(child, _)| child)
+        .chain([pid])
+        .map(stop)
+        .collect();
     let file = File::open(&lock).with_context(|| format!("{} cannot be opened", lock.display()))?;
     wait::blocking(
         wait::Kind::Lock,
@@ -169,50 +254,4 @@ pub fn cancel(runtime: &Runtime, id: &str, surface: &str) -> Result<Value> {
     file.unlock()
         .with_context(|| format!("{} cannot be released", lock.display()))?;
     Ok(json!({"product": id, "surface": surface, "cancelled": cancelled}))
-}
-
-/// Run `steps` for the installation recorded in `installed` without holding
-/// `writer`, then take the lock back and record their outcome; the lock is
-/// returned held. A newer installation that recorded itself in between is
-/// not overwritten: the outcome is refused, naming both.
-pub(super) fn after_install_unlocked(
-    runtime: &Runtime,
-    (id, surface, host): (&str, &str, Option<&str>),
-    steps: &Value,
-    installed: &mut ProductState,
-    lock: &Path,
-    writer: File,
-) -> Result<File> {
-    let recorded = serde_json::to_value(&*installed)?;
-    drop(writer);
-    let outcomes = super::after_install::run(id, surface, host, steps, installed);
-    let writer = runtime.surface_lock(lock)?;
-    let current = ProductState::load(runtime, id, surface)?;
-    if serde_json::to_value(&current)? != recorded {
-        bail!(
-            "another installation of {id}/{surface} recorded itself while this one's after-install steps \
-             ran ({}); their outcome is not written over it",
-            match &outcomes {
-                Ok(outcomes) => json!(outcomes).to_string(),
-                Err(error) => format!("they failed: {error:#}"),
-            }
-        );
-    }
-    match outcomes {
-        Ok(outcomes) => {
-            installed
-                .extra
-                .insert("after_install".to_owned(), json!(outcomes));
-            installed.save(runtime)?;
-            Ok(writer)
-        }
-        Err(error) => {
-            installed.extra.insert(
-                "after_install_failure".to_owned(),
-                json!(format!("{error:#}")),
-            );
-            installed.save(runtime)?;
-            Err(error)
-        }
-    }
 }
