@@ -71,7 +71,14 @@ pub(super) fn cache(
     let held = runs::hold(&directory)
         .with_context(|| format!("holding installation Cargo cache {}", directory.display()))?;
     let source = directory.join("source");
-    let reused = source.is_dir();
+    let reused = match node_type(&source)? {
+        Some(kind) if kind.is_dir() => true,
+        None => false,
+        Some(_) => anyhow::bail!(
+            "installation Cargo cache source {} is not a real directory; refusing to follow or replace it",
+            source.display()
+        ),
+    };
     if reused {
         refresh(exported, &source)?;
         fs::remove_dir_all(exported)?;
@@ -173,25 +180,61 @@ fn refresh(exported: &Path, source: &Path) -> Result<()> {
         let entry = entry?;
         let destination = source.join(entry.file_name());
         let kind = entry.file_type()?;
+        let retained = restore_type(&destination, &kind)?;
         if kind.is_dir() {
-            fs::create_dir_all(&destination)?;
+            if !retained {
+                fs::create_dir(&destination)?;
+            }
             refresh(&entry.path(), &destination)?;
         } else if kind.is_file() {
-            let same = destination.is_file() && sha256(&entry.path())? == sha256(&destination)?;
+            let same = retained && sha256(&entry.path())? == sha256(&destination)?;
             if !same {
                 fs::copy(entry.path(), &destination)?;
             }
             fs::set_permissions(&destination, entry.metadata()?.permissions())?;
         } else if kind.is_symlink() {
             let link = fs::read_link(entry.path())?;
-            if fs::read_link(&destination).ok().as_ref() != Some(&link) {
-                if destination.symlink_metadata().is_ok() {
-                    fs::remove_file(&destination)?;
-                }
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(link, destination)?;
+            if retained && fs::read_link(&destination)? == link {
+                continue;
             }
+            if retained {
+                fs::remove_file(&destination)?;
+            }
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(link, destination)?;
+        } else {
+            anyhow::bail!(
+                "unsupported committed source node {}",
+                entry.path().display()
+            );
         }
     }
     Ok(())
+}
+
+fn node_type(path: &Path) -> Result<Option<fs::FileType>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata.file_type())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("reading cached node {}", path.display())),
+    }
+}
+
+/// Restore the committed node type without traversing a build-created symlink.
+fn restore_type(path: &Path, expected: &fs::FileType) -> Result<bool> {
+    let Some(actual) = node_type(path)? else {
+        return Ok(false);
+    };
+    if (actual.is_dir() && expected.is_dir())
+        || (actual.is_file() && expected.is_file())
+        || (actual.is_symlink() && expected.is_symlink())
+    {
+        return Ok(true);
+    }
+    if actual.is_dir() {
+        fs::remove_dir_all(path)?;
+    } else {
+        fs::remove_file(path)?;
+    }
+    Ok(false)
 }

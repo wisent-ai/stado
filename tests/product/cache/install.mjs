@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync, readdirSync, statSync, lstatSync, renameSync, symlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -114,14 +114,48 @@ try {
   report.second_compiled_crates = compiled;
   assert.deepEqual(compiled, [], 'The second installation must compile no crate, including dependencies');
   success(await run(installedBinary, ['--help']));
+  const [lockfile] = Object.keys(second.cargo_cache.lockfiles);
+  assert.ok(lockfile, 'The real source cache must identify its committed lockfile');
+  const cachedLock = join(second.cargo_cache.source, lockfile);
+  const committedLock = readFileSync(cachedLock);
+  const sentinel = join(home, 'cache-link-target');
+  const sentinelBytes = Buffer.from('A cached input must not overwrite its symlink target.\n');
+  writeFileSync(sentinel, sentinelBytes);
+  rmSync(cachedLock);
+  symlinkSync(sentinel, cachedLock);
+  const restored = JSON.parse(success(await run(binary, install)));
+  report.restored = restored;
+  const restoration = evidence(restored, 'restored');
+  assert.equal(lstatSync(cachedLock).isSymbolicLink(), false,
+    'The next installation must restore the committed file type');
+  assert.deepEqual(readFileSync(cachedLock), committedLock,
+    'The next installation must restore the committed input');
+  assert.deepEqual(readFileSync(sentinel), sentinelBytes,
+    'Restoring the source cache must not follow a build-created symlink');
+  success(await run(installedBinary, ['--help']));
+  const cacheRoot = restored.cargo_cache.source;
+  const retainedRoot = `${cacheRoot}-retained`;
+  const beforeRootRefusal = readFileSync(join(home, '.stado/products', product, 'cli.json'));
+  renameSync(cacheRoot, retainedRoot);
+  symlinkSync(retainedRoot, cacheRoot);
+  const refusedRoot = await run(binary, install);
+  assert.ok(refusedRoot.exit_status && !refusedRoot.signal,
+    'A symlink replacing the cache source root must be refused normally');
+  assert.match(refusedRoot.stderr, /not a real directory/);
+  assert.deepEqual(readFileSync(join(home, '.stado/products', product, 'cli.json')), beforeRootRefusal,
+    'Refusing the cache source root must preserve the installed receipt');
+  assert.deepEqual(readFileSync(join(retainedRoot, lockfile)), committedLock,
+    'Refusing the cache source root must not mutate its target');
+  rmSync(cacheRoot);
+  renameSync(retainedRoot, cacheRoot);
   const receipt = join(home, '.stado/products', product, 'cli.json');
   const saved = readFileSync(receipt);
   const refused = await run(binary, [...base, 'install', product, '--surface', 'cli',
     '--source-commit', 'missing-install-cache-revision', '--json']);
   assert.ok(refused.exit_status && !refused.signal, 'An unknown revision must be refused normally');
   assert.deepEqual(readFileSync(receipt), saved, 'Refusing a revision must not change the installation');
-  assert.deepEqual(Object.fromEntries(Object.keys(after.fingerprints).map(path => [path, digest(readFileSync(path))])),
-    after.fingerprints, 'Refusing a revision must not replace installed bytes');
+  assert.deepEqual(Object.fromEntries(Object.keys(restoration.fingerprints).map(path => [path, digest(readFileSync(path))])),
+    restoration.fingerprints, 'Refusing a revision must not replace installed bytes');
   report.result = 'passed';
 } catch (error) {
   failure = error;
