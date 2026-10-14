@@ -130,7 +130,12 @@ fn with_twins(mut rows: Vec<Value>) -> Vec<Value> {
 }
 
 fn print_row(row: &Value) {
-    let text = |key: &str| row[key].as_str().unwrap_or("");
+    // A field the row does not carry says so, as the port does; it was
+    // printed as nothing after its `=`.
+    let text = |key: &str| match row[key].as_str() {
+        Some(value) => value.to_string(),
+        None => "not declared".to_string(),
+    };
     let product = text("product");
     let hostname = text("hostname");
     let edge = text("edge");
@@ -139,12 +144,12 @@ fn print_row(row: &Value) {
         Some(port) => port.to_string(),
         None => "not declared".to_string(),
     };
-    match text("kind") {
-        "redirect" => println!(
+    match row["kind"].as_str() {
+        Some("redirect") => println!(
             "{product} redirect hostname={hostname} to={} edge={edge}",
             text("redirect_to")
         ),
-        "upstream-service" => println!(
+        Some("upstream-service") => println!(
             "{product} upstream-service hostname={hostname} service={} edge={edge}",
             text("upstream_service")
         ),
