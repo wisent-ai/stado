@@ -12,10 +12,12 @@
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::process::{run, succeeds};
+use crate::cli::release_newest::{Planned, Standing};
 use crate::cli::CmdError;
+use crate::release_pipeline::PRODUCT_MANIFEST;
 
 /// Oko's program; the loop records in Oko through its CLI only.
 const OKO: &str = "oko";
@@ -115,6 +117,93 @@ pub fn repository_of(checkout: &Path) -> Result<&str, CmdError> {
                 checkout.display()
             ))
         })
+}
+
+/// An open defect's recorded repair that no checkout of the plan carries,
+/// and why: a repair the queue does not know is a release nobody will cut.
+#[derive(Debug, Clone, Serialize)]
+pub struct Unplaced {
+    pub defect: String,
+    pub revision: String,
+    pub why: String,
+}
+
+/// The commit a planned checkout stands on, or why it has none to release.
+fn standing_commit(standing: &Standing) -> Result<&str, String> {
+    match standing {
+        Standing::Releasable { commit, .. }
+        | Standing::Published { commit, .. }
+        | Standing::InFlight { commit, .. }
+        | Standing::VersionTaken { commit, .. } => Ok(commit),
+        Standing::DeclaresNoReleases { reason } => Err(format!("declares no releases: {reason}")),
+        Standing::Unreadable { refusal } => Err(format!("could not be read: {refusal}")),
+    }
+}
+
+/// Every repair in `repairs` that no checkout of `planned` (the plan of
+/// `root`) carries, each with why: the workspace holds no checkout of the
+/// repository, or one that declares no product release; the checkout
+/// declares no releases or cannot be read; it holds no such commit (the
+/// history the repair was recorded in was rewritten, or never reached it);
+/// or the commit is not in the history the checkout stands on.
+pub async fn unplaced(
+    root: &Path,
+    planned: &[Planned],
+    repairs: &[Repair],
+) -> Result<Vec<Unplaced>, CmdError> {
+    let mut unplaced = Vec::new();
+    for repair in repairs {
+        let revision = format!("{}@{}", repair.repository, repair.commit);
+        let checkout = planned.iter().find(|planned| {
+            root.join(&planned.checkout)
+                .file_name()
+                .and_then(|name| name.to_str())
+                == Some(repair.repository.as_str())
+        });
+        let why = match checkout {
+            None => match root.join(&repair.repository).is_dir() {
+                true => format!(
+                    "the workspace's checkout {} declares no product release ({PRODUCT_MANIFEST}), so no release carries it",
+                    repair.repository
+                ),
+                false => format!("{} holds no checkout of {}", root.display(), repair.repository),
+            },
+            Some(planned) => {
+                let directory = root.join(&planned.checkout);
+                match standing_commit(&planned.standing) {
+                    Err(why) => format!("{} {why}", repair.repository),
+                    Ok(stands) => {
+                        let object = format!("{}^{{commit}}", repair.commit);
+                        if !succeeds("git", &["cat-file", "-e", &object], &directory).await? {
+                            format!(
+                                "{} holds no commit {}: the history the repair was recorded in was rewritten or never reached this checkout",
+                                repair.repository, repair.commit
+                            )
+                        } else if !succeeds(
+                            "git",
+                            &["merge-base", "--is-ancestor", &repair.commit, stands],
+                            &directory,
+                        )
+                        .await?
+                        {
+                            format!(
+                                "{} is not in the history of {stands}, the commit {} stands on",
+                                repair.commit, repair.repository
+                            )
+                        } else {
+                            continue;
+                        }
+                    }
+                }
+            }
+        };
+        unplaced.push(Unplaced {
+            defect: repair.id.clone(),
+            revision,
+            why,
+        });
+    }
+    Ok(unplaced)
 }
 
 /// Close every open defect a published release of `product` now carries,

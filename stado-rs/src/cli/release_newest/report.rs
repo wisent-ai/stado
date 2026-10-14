@@ -13,6 +13,7 @@ use serde::Serialize;
 use chrono::{DateTime, Utc};
 
 use crate::cli::release_loop::register::{Entry, State};
+use crate::cli::release_loop::Unplaced;
 use crate::cli::release_submit::{submit, ReleaseSubmitArgs, SubmitChannel};
 use crate::cli::CmdError;
 
@@ -29,12 +30,19 @@ struct Outcome {
     refusal: Option<String>,
 }
 
-/// The workspace as it stands and the delivery queue kept from it, with
-/// nothing submitted.
-pub fn print_plan(root: &Path, planned: &[Planned], queued: &[Entry], json: bool) {
+/// The workspace as it stands, the delivery queue kept from it and every
+/// open repair no checkout carries, with nothing submitted.
+pub fn print_plan(
+    root: &Path,
+    planned: &[Planned],
+    queued: &[Entry],
+    unplaced: &[Unplaced],
+    json: bool,
+) {
     if json {
         let report = serde_json::json!({
             "workspace": root.display().to_string(), "products": planned, "queue": queued,
+            "unplaced": unplaced,
         });
         match serde_json::to_string_pretty(&report) {
             Ok(text) => println!("{text}"),
@@ -49,6 +57,12 @@ pub fn print_plan(root: &Path, planned: &[Planned], queued: &[Entry], json: bool
         println!("  {}  {}", entry.product, describe(&entry.standing));
     }
     crate::cli::release_loop::print(queued);
+    for repair in unplaced {
+        println!(
+            "  unplaced  {}  {}: {}",
+            repair.defect, repair.revision, repair.why
+        );
+    }
     let releasable = planned.iter().filter(|entry| entry.is_releasable()).count();
     println!(
         "{releasable} of {} product(s) would be released",
@@ -56,9 +70,10 @@ pub fn print_plan(root: &Path, planned: &[Planned], queued: &[Entry], json: bool
     );
 }
 
-/// Submit every releasable product, in name order, after the delivery
-/// queue's own deliveries in `delivered`; a queued commit that refused in
-/// this command, at or after `started`, fails it like a refused submission.
+/// Submit every releasable product, in the plan's order (`--first` ahead,
+/// then name order), after the delivery queue's own deliveries in
+/// `delivered`; a queued commit that refused in this command, at or after
+/// `started`, fails it like a refused submission.
 pub async fn submit_planned(
     root: &Path,
     planned: Vec<Planned>,

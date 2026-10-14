@@ -7,4 +7,5 @@ mod deliver;
 mod process;
 mod version;
 
+pub use carried::{open_repairs, unplaced, Unplaced};
 pub use deliver::{pass, Mode};

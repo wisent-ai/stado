@@ -34,10 +34,19 @@ use crate::cli::release_submit::SubmitChannel;
 use crate::cli::CmdError;
 
 use register::{Entry, State};
+pub use steps::Unplaced;
 
 /// Queue every commit of `planned` that carries a repair; build nothing.
 pub async fn queue(root: &Path, planned: &[Planned]) -> Result<Vec<Entry>, CmdError> {
     steps::pass(root, planned.to_vec(), steps::Mode::Queue).await
+}
+
+/// Every open defect's recorded repair that no checkout of `planned`
+/// carries, with why, read from Oko's open defects; a repair the queue
+/// does not know is a release nobody would cut.
+pub async fn unplaced(root: &Path, planned: &[Planned]) -> Result<Vec<Unplaced>, CmdError> {
+    let repairs = steps::open_repairs().await?;
+    steps::unplaced(root, planned, &repairs).await
 }
 
 /// Run the queued steps of every commit of `planned` on `channel`, and

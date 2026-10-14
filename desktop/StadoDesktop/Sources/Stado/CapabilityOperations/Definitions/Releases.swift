@@ -109,14 +109,18 @@ enum NativeReleaseSourceOperations {
         // carries a repair recorded in Oko, and submits nothing, which is why
         // it is the first operation an operator reaches for: the version and
         // the commit come from each checkout, never from a field on this
-        // screen. `newest` delivers that queue first, then the rest.
-        .init(id: "newest-plan", title: "Read what every product would release and the delivery queue of repaired commits (submits nothing)", path: ["release", "newest"], hostPlacement: .none, fields: [
+        // screen. `newest` delivers that queue first, then the rest. The plan
+        // also names every open repair no checkout carries (`unplaced`), and
+        // `--first` takes the delivery order, comma-separated.
+        .init(id: "newest-plan", title: "Read what every product would release, the delivery queue of repaired commits and the repairs no checkout carries (submits nothing)", path: ["release", "newest"], hostPlacement: .none, fields: [
             .init(id: "root", label: "Workspace holding the product checkouts (blank reads the checkout's own workspace)", option: "--root"),
             .init(id: "product", label: "One product (blank reads every product)", option: "--product"),
+            .init(id: "first", label: "Products delivered first, in order, comma-separated (blank keeps name order)", option: "--first"),
         ], fixedArguments: ["--plan"], mutates: false),
         .init(id: "newest", title: "Deliver the queue of repaired commits, then release every product from the commit and version it declares", path: ["release", "newest"], hostPlacement: .none, fields: [
             .init(id: "root", label: "Workspace holding the product checkouts (blank reads the checkout's own workspace)", option: "--root"),
             .init(id: "product", label: "One product (blank releases every product that is due)", option: "--product"),
+            .init(id: "first", label: "Products delivered first, in order, comma-separated (blank keeps name order)", option: "--first"),
             .init(id: "channel", label: "Release channel", option: "--channel", choices: ["candidate", "stable"], initial: "candidate"),
         ]),
         // A build is not a release. These queue and read builds and publish

@@ -41,6 +41,11 @@ pub struct ReleaseNewestArgs {
     /// product the workspace holds.
     #[arg(long = "product")]
     products: Vec<String>,
+    /// Deliver these products first, in the order given; repeat the flag or
+    /// separate names with commas. The rest follow in name order. Each must
+    /// be a product of the plan.
+    #[arg(long = "first", value_delimiter = ',')]
+    first: Vec<String>,
     #[arg(long, value_enum, default_value_t = SubmitChannel::Candidate)]
     channel: SubmitChannel,
     /// Read what would be released and why the rest is skipped, without
@@ -57,18 +62,54 @@ pub struct ReleaseNewestArgs {
 /// gate admits, and nowhere else: `--plan` and the serve role only queue.
 pub async fn newest(args: &ReleaseNewestArgs) -> Result<(), CmdError> {
     let root = workspace(args.root.clone())?;
-    let planned = plan(&root, &args.products).await?;
+    let planned = ordered(plan(&root, &args.products).await?, &args.first)?;
     if args.plan {
         let queued = crate::cli::release_loop::queue(&root, &planned).await?;
-        print_plan(&root, &planned, &queued, args.json);
+        // With products selected, the other repositories' repairs are not
+        // this plan's to place.
+        let unplaced = match args.products.is_empty() {
+            false => Vec::new(),
+            true => match crate::cli::release_loop::unplaced(&root, &planned).await {
+                Ok(unplaced) => unplaced,
+                Err(error) => {
+                    eprintln!("release newest: which repairs no checkout carries could not be read: {error}");
+                    Vec::new()
+                }
+            },
+        };
+        print_plan(&root, &planned, &queued, &unplaced, args.json);
         return Ok(());
     }
     let started = chrono::Utc::now();
     let delivered = crate::cli::release_loop::deliver(&root, &planned, args.channel).await?;
     let handled = crate::cli::release_loop::handled(&delivered);
-    let mut planned = plan(&root, &args.products).await?;
+    let mut planned = ordered(plan(&root, &args.products).await?, &args.first)?;
     planned.retain(|entry| !handled.contains(&entry.product));
     report::submit_planned(&root, planned, &delivered, started, args.channel, args.json).await
+}
+
+/// `planned` with the products `first` names moved to the front in that
+/// order, the rest after them in the plan's own order. A name the plan does
+/// not hold is refused: an order that silently skipped a product reads like
+/// one that delivered it.
+fn ordered(mut planned: Vec<Planned>, first: &[String]) -> Result<Vec<Planned>, CmdError> {
+    let mut front = Vec::new();
+    for wanted in first {
+        let Some(at) = planned.iter().position(|entry| &entry.product == wanted) else {
+            return Err(CmdError::click(format!(
+                "--first {wanted} names no product of this plan; it holds {}",
+                planned
+                    .iter()
+                    .map(|entry| entry.product.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound));
+        };
+        front.push(planned.remove(at));
+    }
+    front.extend(planned);
+    Ok(front)
 }
 
 /// Where the product checkouts are.
