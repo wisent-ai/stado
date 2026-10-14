@@ -23,7 +23,6 @@ pub use cancel::cancel;
 pub use perform::perform;
 
 use anyhow::{Context, Result};
-use fs2::FileExt;
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::path::Path;
@@ -55,8 +54,10 @@ fn holder(lock: &Path) -> Result<Option<Value>> {
                 .with_context(|| format!("{} cannot be released", lock.display()))?;
             return Ok(None);
         }
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-        Err(error) => return Err(error).with_context(|| format!("inspecting {}", lock.display())),
+        Err(std::fs::TryLockError::WouldBlock) => {}
+        Err(std::fs::TryLockError::Error(error)) => {
+            return Err(error).with_context(|| format!("inspecting {}", lock.display()))
+        }
     }
     let record = crate::common::files::read_lock_record(lock)?
         .with_context(|| format!("{} is held but records no holder", lock.display()))?;

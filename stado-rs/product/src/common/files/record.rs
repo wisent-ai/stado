@@ -1,6 +1,5 @@
 use super::super::process::started_at;
 use anyhow::{bail, Context, Result};
-use fs2::FileExt;
 use serde_json::{json, Value};
 use std::{
     fs::{self, OpenOptions},
@@ -139,8 +138,8 @@ pub fn locks_report(home: &Path) -> Result<Value> {
                         file.unlock()?;
                         true
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => false,
-                    Err(error) => return Err(error.into()),
+                    Err(std::fs::TryLockError::WouldBlock) => false,
+                    Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
                 };
                 let recorded = read(&path, Some(product(&path)?))?;
                 let Some(recorded) = recorded else {
