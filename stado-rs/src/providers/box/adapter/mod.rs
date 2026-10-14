@@ -13,4 +13,4 @@ mod states;
 /// again by `crate::providers`, constructed by `providers::get_provider`
 /// and `coordinator::passes::providers`, and taken by reference by the
 /// `scheduler::dispatch::box` admit, session and reconcile passes.
-pub use provider::BoxProvider;
+pub use provider::{BoxProvider, ReleaseMode};

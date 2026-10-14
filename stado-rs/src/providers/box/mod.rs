@@ -19,7 +19,7 @@ pub mod types;
 /// `scheduler::dispatch::box` admit, session and reconcile passes. It is
 /// also what the `super::BoxProvider::from_env` doc links in the `http`
 /// sibling resolve against.
-pub use adapter::BoxProvider;
+pub use adapter::{BoxProvider, ReleaseMode};
 pub use client::BoxClient;
 pub use client::TtlUpdate;
 pub use http::BoxHttpTransport;

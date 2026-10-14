@@ -13,42 +13,81 @@ use super::super::http;
 use super::super::types::{BoxError, BoxInfo, BoxState};
 use super::states::BOX_MACHINE_TYPES;
 
+/// What becomes of a box Stado releases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseMode {
+    Stop,
+    Delete,
+}
+
+/// One Box setting: none when unset or blank, refused by name when its value
+/// is not text.
+fn setting(name: &str) -> Result<Option<String>, BoxError> {
+    match std::env::var(name) {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(BoxError::configuration(format!(
+            "{name} cannot be read: {error}"
+        ))),
+    }
+}
+
 /// Python `BoxProvider`: lifecycle adapter; structured workload execution
 /// (box-command / box-prompt dispatch) is handled separately.
 #[derive(Debug, Clone)]
 pub struct BoxProvider {
     pub client: BoxClient,
     pub ttl_seconds: i64,
+    pub release_mode: ReleaseMode,
 }
 
 impl BoxProvider {
     /// Build an environment-configured client whose API key is resolved from
-    /// `stado-box/api_key` in Skarbiec at request time.
+    /// `stado-box/api_key` in Skarbiec at request time. `BOX_API_URL` names
+    /// another API base than Box's public one; `BOX_TTL_SECONDS` and
+    /// `BOX_RELEASE_MODE` are the deployment's to declare and the provider is
+    /// refused without them, before any box exists that it could not end.
     pub fn from_env() -> Result<Self, BoxError> {
-        let base_url =
-            std::env::var("BOX_API_URL").unwrap_or_else(|_| http::DEFAULT_BASE_URL.to_string());
+        let base_url = match setting("BOX_API_URL")? {
+            Some(base_url) => base_url,
+            None => http::DEFAULT_BASE_URL.to_string(),
+        };
         let client = BoxClient::from_skarbiec(&base_url)?;
-        Self::from_client_env_ttl(client)
-    }
-
-    /// The TTL half of [`BoxProvider::from_env`], split out so tests can
-    /// bind a mock-transport client without touching `BOX_API_*` env.
-    fn from_client_env_ttl(client: BoxClient) -> Result<Self, BoxError> {
-        let ttl: i64 = std::env::var("BOX_TTL_SECONDS")
-            .unwrap_or_else(|_| "7200".to_string())
+        let Some(ttl) = setting("BOX_TTL_SECONDS")? else {
+            return Err(BoxError::configuration(
+                "BOX_TTL_SECONDS is not declared: how long a box lives is the deployment's to say",
+            ));
+        };
+        let ttl: i64 = ttl
+            .trim()
             .parse()
             .map_err(|_| BoxError::configuration("BOX_TTL_SECONDS must be an integer"))?;
-        Self::new(client, ttl)
+        let release_mode = match setting("BOX_RELEASE_MODE")?.map(|mode| mode.trim().to_lowercase()) {
+            Some(mode) if mode == "stop" => ReleaseMode::Stop,
+            Some(mode) if mode == "delete" => ReleaseMode::Delete,
+            Some(_) => return Err(BoxError::configuration("BOX_RELEASE_MODE must be stop or delete")),
+            None => {
+                return Err(BoxError::configuration(
+                    "BOX_RELEASE_MODE is not declared: whether a released box is stopped or deleted is the deployment's to say",
+                ))
+            }
+        };
+        Self::new(client, ttl, release_mode)
     }
 
     /// Python `BoxProvider(client=..., ttl_seconds=...)`.
-    pub fn new(client: BoxClient, ttl_seconds: i64) -> Result<Self, BoxError> {
-        if ttl_seconds <= 0 {
+    pub fn new(
+        client: BoxClient,
+        ttl_seconds: i64,
+        release_mode: ReleaseMode,
+    ) -> Result<Self, BoxError> {
+        if !ttl_seconds.is_positive() {
             return Err(BoxError::configuration("BOX_TTL_SECONDS must be positive"));
         }
         Ok(BoxProvider {
             client,
             ttl_seconds,
+            release_mode,
         })
     }
 
@@ -101,15 +140,8 @@ impl BoxProvider {
     }
 
     /// Python `release_box`: archived/missing boxes are already released;
-    /// the mode comes from `BOX_RELEASE_MODE` (default "stop").
+    /// a live one is stopped or deleted as the declared release mode says.
     pub async fn release_box(&self, box_id: &str) -> Result<(), BoxError> {
-        let mode = std::env::var("BOX_RELEASE_MODE").unwrap_or_else(|_| "stop".to_string());
-        self.release_box_with_mode(box_id, &mode).await
-    }
-
-    /// [`BoxProvider::release_box`] with the mode passed explicitly (the
-    /// env lookup is split out so tests don't race on `BOX_RELEASE_MODE`).
-    pub async fn release_box_with_mode(&self, box_id: &str, mode: &str) -> Result<(), BoxError> {
         let info = match self.client.get_box(box_id).await {
             Ok(info) => info,
             Err(BoxError::Api(api)) if api.status == 404 => return Ok(()),
@@ -118,14 +150,9 @@ impl BoxProvider {
         if info.lifecycle() == BoxState::Archived {
             return Ok(());
         }
-        let result = match mode.trim().to_lowercase().as_str() {
-            "delete" => self.client.delete_box(box_id).await,
-            "stop" => self.client.stop_box(box_id).await.map(|_| ()),
-            _ => {
-                return Err(BoxError::configuration(
-                    "BOX_RELEASE_MODE must be stop or delete",
-                ));
-            }
+        let result = match self.release_mode {
+            ReleaseMode::Delete => self.client.delete_box(box_id).await,
+            ReleaseMode::Stop => self.client.stop_box(box_id).await.map(|_| ()),
         };
         match result {
             Ok(()) => Ok(()),
