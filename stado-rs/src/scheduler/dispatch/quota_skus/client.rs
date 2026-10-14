@@ -123,10 +123,10 @@ impl CloudQuotasClient {
                 format!("Bearer {}", token.as_str()),
             );
         }
+        // A body that cannot be serialized fails the request with its cause
+        // instead of sending `{}` in its place.
         if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(serde_json::to_string(body).unwrap_or_else(|_| "{}".into()));
+            request = request.json(body);
         }
         let response = crate::wait::request(request).await?;
         if !response.status().is_success() {

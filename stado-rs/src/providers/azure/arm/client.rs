@@ -104,10 +104,10 @@ impl ArmClient {
             let token = bearer_token(&self.inner.http).await?;
             request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
         }
+        // A body that cannot be serialized fails the request with its cause
+        // instead of sending `{}` in its place.
         if let Some(body) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(serde_json::to_string(body).unwrap_or_else(|_| "{}".into()));
+            request = request.json(body);
         }
         Ok(crate::wait::request(request).await?)
     }
