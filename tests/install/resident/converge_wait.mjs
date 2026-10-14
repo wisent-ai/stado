@@ -46,6 +46,7 @@ try {
   report.commands.push({ executable: 'git', arguments: ['-C', root, 'rev-parse', 'HEAD'],
     exit_status: source.status, signal: source.signal, stderr: source.stderr, stdout: source.stdout });
   report.source_revision = succeeded(source);
+  assert.equal(report.source_revision, revision, 'qualify the exact committed candidate');
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
   report.binary_sha256 = digest(readFileSync(program));
   assert.equal(succeeded(run(['registry', 'self', '--local', '--name-only'])), host,
@@ -93,6 +94,11 @@ try {
   assert.equal(operation.phase, 'after_install');
   assert.equal(operation.running, true);
   assert.ok(operation.steps.some(step => step.join(' ').includes('release local converge')));
+  const locks = JSON.parse(succeeded(run(['product', 'locks', '--json'])));
+  const surfaceLock = locks.locks.find(row => row.path === operation.lock);
+  assert.equal(surfaceLock?.held, false,
+    `after-install convergence must not hold the surface lock: ${JSON.stringify(surfaceLock)}`);
+  report.surfaceLock = surfaceLock;
   const cancelled = JSON.parse(succeeded(run(['product', 'cancel', 'stado', '--surface', 'cli', '--json'])));
   assert.equal(cancelled.cancelled.operation.pid, operation.pid);
   assert.ok(cancelled.cancelled.signalled.some(signal => signal.pid === operation.pid && signal.told_to_stop));
