@@ -1,11 +1,13 @@
 //! `stado runner` — declared GitHub runner profiles across the fleet.
 
 mod diagnostics;
+mod outcome;
 mod render;
 
 use clap::Subcommand;
 use serde_json::Value;
 
+use outcome::render_lifecycle;
 use render::{render_fleet, render_profiles, render_status_set};
 
 use super::CmdError;
@@ -138,56 +140,6 @@ pub(crate) fn connected(value: &Value) -> &str {
             None => "not reported by the host",
         },
     }
-}
-
-fn render_lifecycle(report: &Value, json: bool) -> Result<(), CmdError> {
-    if json {
-        print_json(report);
-    } else {
-        println!(
-            "{}: {} runner {}; scope {}; listener {}; host job slot {}",
-            text(report.get("target")),
-            text(report.get("profile")),
-            text(report.get("action")),
-            text(report.get("runner_scope")),
-            connected(report),
-            text(report.get("host_job_slot")),
-        );
-    }
-    lifecycle_outcome(report).map_err(|error| error.machine_readable(json))
-}
-
-fn lifecycle_outcome(report: &Value) -> Result<(), CmdError> {
-    if report.get("exit_code").and_then(Value::as_i64).unwrap_or(0) != 0 {
-        return Err(CmdError::click(
-            report
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("the runner status command failed"),
-        )
-        .stating(crate::primitives::failure::FailureCode::InfraDown));
-    }
-    route_outcome(report)
-}
-
-/// A runner whose Brama route differs from the fleet declaration is
-/// configuration drift, not an unknown failure.
-fn route_outcome(report: &Value) -> Result<(), CmdError> {
-    let Some(route) = report.get("brama_route") else {
-        return Ok(());
-    };
-    if route.get("matches").and_then(Value::as_bool) == Some(true) {
-        return Ok(());
-    }
-    Err(CmdError::click(format!(
-        "{}: {}",
-        text(report.get("target")),
-        route
-            .get("detail")
-            .and_then(Value::as_str)
-            .unwrap_or("the runner's Brama route does not match the fleet declaration")
-    ))
-    .stating(crate::primitives::failure::FailureCode::Config))
 }
 
 pub async fn run(command: RunnerCommands) -> Result<(), CmdError> {
