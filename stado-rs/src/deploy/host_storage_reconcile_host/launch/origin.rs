@@ -111,7 +111,15 @@ fn runs_object_api(service: &Value) -> bool {
     let Some(label) = service["label"].as_str().filter(|label| !label.is_empty()) else {
         return false;
     };
-    let program = service["program"].as_str().unwrap_or_default();
+    // A declaration that names no program runs nothing this reader can
+    // recognize; read as "", its bare arguments were matched as a command line
+    // that starts with an empty word.
+    let Some(program) = service["program"]
+        .as_str()
+        .filter(|program| !program.is_empty())
+    else {
+        return false;
+    };
     let args: Vec<&str> = service["args"]
         .as_array()
         .into_iter()
