@@ -1,0 +1,6 @@
+{
+  "product": "stado",
+  "requires": [
+    { "product": "oko", "surface": "cli", "verb": "admit" }
+  ]
+}

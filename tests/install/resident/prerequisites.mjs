@@ -62,16 +62,23 @@ let failure;
 try {
   report.binary_sha256 = digest(program);
   report.test_sha256 = digest(fileURLToPath(import.meta.url));
+  assert.equal(git(root, ['rev-parse', 'HEAD']), revision, 'qualify the exact committed consumer');
   assert.equal(succeeds(execute(program, ['registry', 'self', '--local', '--name-only'],
     process.env)), host, 'the dedicated host must be this machine');
   const consumer = JSON.parse(git(root, ['show', `${revision}:.wisent-release.json`]));
-  const [required] = consumer.requires;
-  assert.ok(required, 'consumer manifest must declare another product and verb');
+  assert.equal(consumer.requires, undefined, 'the predecessor installer must accept the strict release manifest');
+  const consumerVerbs = JSON.parse(git(root, ['show', `${revision}:contracts/verbs.json`]));
+  assert.equal(consumerVerbs.product, consumer.product);
+  const [required] = consumerVerbs.requires;
+  assert.ok(required, 'consumer contract must declare another product and verb');
   const providerRoot = join(dirname(root), required.product);
   const [introduced] = git(providerRoot, ['log', '--reverse', '--format=%H',
+    `-S${required.verb}`, 'HEAD', '--', 'contracts/verbs.json']).split('\n');
+  assert.ok(introduced, 'provider contract history has no declared required verb');
+  const [legacy] = git(providerRoot, ['log', '--reverse', '--format=%H',
     `-S${required.verb}`, 'HEAD', '--', '.wisent-release.json']).split('\n');
-  assert.ok(introduced, 'provider manifest history has no declared required verb');
-  const old = git(providerRoot, ['rev-parse', `${introduced}^`]);
+  assert.ok(legacy, 'the older provider must precede the strict-manifest declaration');
+  const old = git(providerRoot, ['rev-parse', `${legacy}^`]);
   const oldManifest = JSON.parse(git(providerRoot, ['show', `${old}:.wisent-release.json`]));
   assert.ok(!oldManifest.provides?.some(item => item.verb === required.verb),
     'the older provider must not declare the verb');

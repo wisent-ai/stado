@@ -1,6 +1,6 @@
-//! Cross-product CLI verbs promised by source manifests and qualified by CI.
-//! The provider's first manifest revision declaring a verb is the minimum
-//! source revision; no moving branch tip or handwritten commit pin defines it.
+//! Cross-product CLI verbs promised by revisioned sidecars and qualified by CI.
+//! The first provider revision declaring a verb is the minimum source
+//! revision; no moving branch tip or handwritten commit pin defines it.
 
 use crate::{
     catalog,
@@ -13,24 +13,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 mod chain;
+mod contract;
 pub use chain::chain;
+use contract::{first_provider, manifest, provides};
 
 const CI_RECORD: &str = "ci-main.json";
 const CI_RECORD_ENV: &str = "STADO_CI_MAIN_RECORD";
-
-#[derive(Deserialize)]
-struct Manifest {
-    product: String,
-    #[serde(default)]
-    provides: Vec<Provided>,
-    #[serde(default)]
-    requires: Vec<Requirement>,
-}
-
-#[derive(Deserialize)]
-struct Provided {
-    verb: String,
-}
 
 #[derive(Clone, Deserialize)]
 pub struct Requirement {
@@ -103,49 +91,6 @@ pub fn revision(
     }
 }
 
-fn manifest(root: &std::path::Path, revision: &str, path: &str) -> Result<Manifest> {
-    let reference = format!("{revision}:{path}");
-    let content = source::git(root, &["show", &reference])
-        .with_context(|| format!("reading release manifest {path} at {revision}"))?;
-    serde_json::from_str(&content)
-        .with_context(|| format!("parsing release manifest {path} at {revision}"))
-}
-
-fn provides(manifest: &Manifest, verb: &str) -> bool {
-    manifest
-        .provides
-        .iter()
-        .any(|provided| provided.verb == verb)
-}
-
-fn first_provider(
-    root: &std::path::Path,
-    revision: &str,
-    path: &str,
-    verb: &str,
-) -> Result<String> {
-    let pickaxe = format!("-S{verb}");
-    let history = source::git(
-        root,
-        &[
-            "log",
-            "--reverse",
-            "--format=%H",
-            &pickaxe,
-            revision,
-            "--",
-            path,
-        ],
-    )?;
-    for candidate in history.lines() {
-        let declared = manifest(root, candidate, path)?;
-        if provides(&declared, verb) {
-            return Ok(candidate.to_owned());
-        }
-    }
-    bail!("provider has no source revision declaring the verb {verb} at {revision}")
-}
-
 fn green(runtime: &Runtime, product: &str, surface: &str) -> Result<String> {
     let path = match std::env::var_os(CI_RECORD_ENV) {
         Some(path) => PathBuf::from(path),
@@ -198,17 +143,6 @@ pub fn requirements(
             )
         })?;
         let root = checkout(runtime, provider, &required.surface)?;
-        let provider_head = source::git(&root, &["rev-parse", "HEAD"])?;
-        let available = manifest(&root, &provider_head, provider_path)?;
-        if available.product != required.product || !provides(&available, &required.verb) {
-            bail!(
-                "{} {} at {provider_head} does not declare verb {}; no providing revision is known",
-                required.product,
-                required.surface,
-                required.verb
-            );
-        }
-        let minimum = first_provider(&root, &provider_head, provider_path, &required.verb)?;
         let installed = ProductState::load(runtime, &required.product, &required.surface)?;
         let source_revision = installed
             .as_ref()
@@ -251,6 +185,10 @@ pub fn requirements(
             ),
             (None, _) => (false, "not installed".to_owned()),
         };
+        let installed_text = match source_revision.as_deref() {
+            Some(revision) => format!("installed revision {revision}"),
+            None => "not installed".to_owned(),
+        };
         let qualified = if satisfied {
             source_revision
                 .clone()
@@ -258,16 +196,19 @@ pub fn requirements(
         } else {
             green(runtime, &required.product, &required.surface).with_context(|| {
                 format!(
-                    "{} {} needs verb {} from revision {}; installed revision {:?}",
-                    required.product, required.surface, required.verb, minimum, source_revision
+                    "{} {} needs verb {}; {installed_text}; run `stado ci main` to qualify a provider revision",
+                    required.product, required.surface, required.verb
                 )
             })?
         };
         let promised = manifest(&root, &qualified, provider_path)?;
         if promised.product != required.product || !provides(&promised, &required.verb) {
-            bail!("{} {} needs verb {} from revision {}; qualified last green {qualified} does not provide it; installed revision {:?}",
-                  required.product, required.surface, required.verb, minimum, source_revision);
+            bail!(
+                "{} {} needs verb {}; qualified last green {qualified} does not provide it; {installed_text}",
+                required.product, required.surface, required.verb
+            );
         }
+        let minimum = first_provider(&root, &qualified, provider_path, &required.verb)?;
         decisions.push(Decision {
             requirement: required,
             minimum,
