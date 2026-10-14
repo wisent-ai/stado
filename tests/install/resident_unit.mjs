@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,9 +23,9 @@ const output = mkdtempSync(join(realpathSync(join(root, '.build')), 'install-res
 const report = { source: checkout, commit, host, commands: [], cases: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
-function run(executable, arguments) {
-  const answer = spawnSync(executable, arguments, { cwd: root, encoding: 'utf8' });
-  report.commands.push({ executable, arguments, exit_status: answer.status, signal: answer.signal,
+function run(executable, args) {
+  const answer = spawnSync(executable, args, { cwd: root, encoding: 'utf8' });
+  report.commands.push({ executable, arguments: args, exit_status: answer.status, signal: answer.signal,
     error: answer.error?.message, stdout: answer.stdout, stderr: answer.stderr });
   return answer;
 }
@@ -77,7 +77,18 @@ try {
   assert.ok(service.some(row => row.host === host && row.name === 'stado'),
     'the product retains the real resident unit row, even before its next beacon');
   report.after_sha256 = digest(readFileSync(installed));
-  report.cases.push({ case: 'migrated-and-serving', status, serving, service });
+  // The resident unit runs the binary this install placed, not the image it
+  // was started on before: the inode its process executes is the installed
+  // file's.
+  const unitShown = JSON.parse(succeeded(run(program, ['service', 'unit', 'show',
+    'com.wisent.stado', '--host', host, '--json'])));
+  assert.ok(unitShown.pid, `the resident unit runs no process after the install: ${JSON.stringify(unitShown)}`);
+  const listed = succeeded(run('lsof', ['-a', '-p', String(unitShown.pid), '-d', 'txt', '-Fi']));
+  const [runningInode] = listed.split('\n').filter(line => line.startsWith('i')).map(line => line.slice('i'.length));
+  const installedInode = String(statSync(realpathSync(installed)).ino);
+  assert.equal(runningInode, installedInode,
+    'the resident unit still executes the image the install replaced');
+  report.cases.push({ case: 'migrated-and-serving', status, serving, service, unit: unitShown, image_inode: runningInode });
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);
