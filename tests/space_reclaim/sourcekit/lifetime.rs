@@ -1,5 +1,6 @@
 //! The client is a real process; its editor inherits a pipe whose writer stays alive.
 use super::{Native, Server};
+use nix::libc;
 use serde_json::{json, Value};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
