@@ -224,14 +224,14 @@ async fn run_once() -> Result<(), CmdError> {
 
 async fn pause(reason: String) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    let state = crate::autonomy::storage::set_control(&store, true, Some(reason), actor()).await?;
+    let state = crate::autonomy::storage::set_control(&store, true, Some(reason), actor()?).await?;
     println!("Autonomy paused at {}", state.changed_at);
     Ok(())
 }
 
 async fn resume() -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    let state = crate::autonomy::storage::set_control(&store, false, None, actor()).await?;
+    let state = crate::autonomy::storage::set_control(&store, false, None, actor()?).await?;
     println!("Autonomy resumed at {}", state.changed_at);
     Ok(())
 }
@@ -282,11 +282,13 @@ async fn report_value(store: &JobStorage, name: &str) -> Result<Option<Value>, C
     )
 }
 
-/// Who a recorded mutation is attributed to.
+/// Who a recorded mutation is attributed to: the account the submitter of a
+/// job is read as, refused when it cannot be read.
 ///
-/// Shared with `cli/service.rs`, which stamps the audit record of a
-/// `service ensure` pass: one spelling of "who did this" across everything in
-/// this binary that writes an operator's name into durable state.
-pub(crate) fn actor() -> String {
-    std::env::var("USER").unwrap_or_else(|_| "operator".to_string())
+/// Shared by every record in this binary that writes an operator's name into
+/// durable state: one spelling of "who did this". Read as a stand-in name, a
+/// mutation by a process without a login environment was attributed to an
+/// account that does not exist.
+pub(crate) fn actor() -> Result<String, CmdError> {
+    crate::queue::submit::submitter().map_err(|error| CmdError::refused(error.to_string()))
 }

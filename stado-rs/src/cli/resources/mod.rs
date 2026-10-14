@@ -202,7 +202,7 @@ async fn adopt(args: &AdoptArgs) -> Result<(), CmdError> {
     let adoption = crate::autonomy::model::AdoptionRecord {
         resource_id: resource.resource_id.clone(),
         adopted_at: chrono::Utc::now().to_rfc3339(),
-        adopted_by: std::env::var("USER").unwrap_or_else(|_| "operator".to_string()),
+        adopted_by: crate::cli::work::autonomy::actor()?,
         owner: args.owner.clone(),
         policy_ref: args.policy_ref.clone(),
         source_revision: resource.source_revision.clone(),

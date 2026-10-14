@@ -166,10 +166,17 @@ async fn record_no_eligible_target(
             ram_gb: 0.0,
             vram_gb: 0,
         });
+    let requester = match this_requester() {
+        Ok(requester) => requester,
+        Err(error) => {
+            eprintln!("the refusal could not be recorded for `stado fleet needs`: {error}");
+            return;
+        }
+    };
     let record = UnmetPlacement::new(
         &declaration.kind,
         &declaration.product,
-        this_requester(),
+        requester,
         Requirement {
             platform: required_platform(declaration).map(str::to_string),
             gpu_type: None,

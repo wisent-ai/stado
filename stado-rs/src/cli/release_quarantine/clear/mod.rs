@@ -17,7 +17,7 @@ use super::QuarantineClearArgs;
 mod record;
 mod script;
 
-use record::{actor, stamp};
+use record::stamp;
 use script::CLEAR_TEMPLATE;
 
 pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
@@ -72,7 +72,7 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
     // the entry deletes them from the state file, and an audit trail that
     // destroys the evidence for the change it documents is decoration.
     let mut line = serde_json::to_vec(&json!({
-        "actor": actor(),
+        "actor": crate::cli::work::autonomy::actor()?,
         "host": target_name,
         "product": args.product,
         "digest": digest,

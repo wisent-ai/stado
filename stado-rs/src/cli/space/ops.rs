@@ -51,7 +51,8 @@ pub(super) async fn reclaim(
                 &target,
                 &reclamation,
                 reason,
-                &crate::cli::work::autonomy::actor(),
+                &crate::cli::work::autonomy::actor()
+                    .map_err(|error| error.machine_readable(json_output))?,
                 &runner,
             )
             .await

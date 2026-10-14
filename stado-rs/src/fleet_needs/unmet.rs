@@ -115,11 +115,14 @@ impl UnmetPlacement {
     }
 }
 
-/// The operator identity a CLI-side refusal is recorded under.
-pub fn this_requester() -> String {
-    let user = std::env::var("USER").unwrap_or_else(|_| "operator".to_string());
+/// The operator identity a CLI-side refusal or hold is recorded under: the
+/// account a job submitter is read as, at this host. Refused when the account
+/// cannot be read: read as a stand-in name, holds and refusals were recorded
+/// under an account that does not exist.
+pub fn this_requester() -> Result<String, crate::queue::submit::SubmitError> {
+    let user = crate::queue::submit::submitter()?;
     let host = crate::targets::normalize_hostname(&crate::providers::vast::system_hostname());
-    format!("{user}@{host}")
+    Ok(format!("{user}@{host}"))
 }
 
 /// Write one record. The day folder keeps a listing over a window cheap:

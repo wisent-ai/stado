@@ -23,7 +23,7 @@ pub(super) async fn hold(kind: &str, target: &str, json_output: bool) -> Result<
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    let holder = format!("{} hold pid {}", this_requester(), std::process::id());
+    let holder = format!("{} hold pid {}", this_requester()?, std::process::id());
     let held = match reserve_for_workload(declaration, target, holder).await? {
         Ok(held) => held,
         Err(refusal) => return Err(refusal.into_error()),

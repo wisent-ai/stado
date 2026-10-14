@@ -47,7 +47,7 @@ pub(crate) async fn connect_jeden(
         // candidate exactly like a failed probe.
         let holder = format!(
             "{} jeden-session {workspace} pid {}",
-            crate::fleet_needs::this_requester(),
+            crate::fleet_needs::this_requester()?,
             std::process::id()
         );
         let held =

@@ -132,7 +132,7 @@ async fn record_ensure_audit(
         "reason": reason,
         "registry_generation": generation,
         "recorded_at": now.to_rfc3339(),
-        "actor": crate::cli::work::autonomy::actor(),
+        "actor": crate::cli::work::autonomy::actor()?,
     }))?;
     // Timestamp first so one host's records sort by when they happened, and
     // compact rather than RFC-3339 because the key is also a file name on the

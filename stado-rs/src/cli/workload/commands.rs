@@ -201,7 +201,7 @@ async fn run(
     }
     let holder = format!(
         "{} {kind} pid {}",
-        crate::fleet_needs::this_requester(),
+        crate::fleet_needs::this_requester()?,
         std::process::id()
     );
     let held =

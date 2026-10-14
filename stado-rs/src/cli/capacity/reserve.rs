@@ -191,10 +191,17 @@ async fn record_refusal(
     wanted: &WorkloadReservation,
     refusal: &ReservationRefusal,
 ) {
+    let requester = match this_requester() {
+        Ok(requester) => requester,
+        Err(error) => {
+            eprintln!("the refusal could not be recorded for `stado fleet needs`: {error}");
+            return;
+        }
+    };
     let record = UnmetPlacement::new(
         &kind.kind,
         &kind.product,
-        this_requester(),
+        requester,
         Requirement {
             platform: None,
             gpu_type: None,
