@@ -41,40 +41,47 @@ pub async fn request_yield(
     ));
 
     if !hook.is_empty() {
-        let secret_environment = match resolve_job_secret_environment(&job).await {
-            Ok(environment) => environment,
-            Err(_) => {
-                log_fn(&format!(
-                    "yield: workload secret resolution failed for {}",
-                    job.job_id
-                ));
-                BTreeMap::new()
-            }
+        // Secrets that cannot be resolved, or a work directory that cannot be
+        // examined, keep the hook from running with the cause: run anyway, it
+        // ran with an empty secret environment or outside its work directory.
+        let prepared = match resolve_job_secret_environment(&job).await {
+            Ok(environment) => crate::primitives::presence::present(&work_dir)
+                .map(|in_place| (environment, in_place))
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(format!("its workload secrets cannot be resolved: {error}")),
         };
-        let mut cmd = tokio::process::Command::new("/bin/sh");
-        inherit_safe_agent_environment(&mut cmd);
-        cmd.arg("-c")
-            .arg(&hook)
-            .env("WC_JOB_ID", &job.job_id)
-            .env("WC_JOB_PID", pgid.to_string())
-            .envs(secret_environment);
-        if work_dir.exists() {
-            cmd.current_dir(&work_dir);
-        }
-        match crate::wait::output_async(&mut cmd).await {
-            Ok(out) => {
-                let rc = python_returncode(out.status);
-                if rc != 0 {
-                    log_fn(&format!(
-                        "yield: on-yield hook {} failed with rc={rc}",
-                        job.job_id
-                    ));
-                }
-            }
-            Err(exc) => log_fn(&format!(
-                "yield: on-yield hook {} raised: {exc}",
+        match prepared {
+            Err(cause) => log_fn(&format!(
+                "yield: on-yield hook {} not run: {cause}",
                 job.job_id
             )),
+            Ok((secret_environment, in_place)) => {
+                let mut cmd = tokio::process::Command::new("/bin/sh");
+                inherit_safe_agent_environment(&mut cmd);
+                cmd.arg("-c")
+                    .arg(&hook)
+                    .env("WC_JOB_ID", &job.job_id)
+                    .env("WC_JOB_PID", pgid.to_string())
+                    .envs(secret_environment);
+                if in_place {
+                    cmd.current_dir(&work_dir);
+                }
+                match crate::wait::output_async(&mut cmd).await {
+                    Ok(out) => {
+                        let rc = python_returncode(out.status);
+                        if rc != 0 {
+                            log_fn(&format!(
+                                "yield: on-yield hook {} failed with rc={rc}",
+                                job.job_id
+                            ));
+                        }
+                    }
+                    Err(exc) => log_fn(&format!(
+                        "yield: on-yield hook {} raised: {exc}",
+                        job.job_id
+                    )),
+                }
+            }
         }
     }
 
@@ -115,13 +122,11 @@ pub async fn request_yield(
     )
     .await?;
     let output_dir = work_dir.join("output");
-    if output_dir.exists() {
-        if let Err(exc) = upload_output(store, &job, &output_dir).await {
-            log_fn(&format!(
-                "yield: output upload {} failed (non-fatal): {exc}",
-                job.job_id
-            ));
-        }
+    if let Err(exc) = upload_output(store, &job, &output_dir).await {
+        log_fn(&format!(
+            "yield: output upload {} failed (non-fatal): {exc}",
+            job.job_id
+        ));
     }
     // running -> queue (NOT a terminal state, so the tracking tombstone hook
     // is a no-op and the CF monitor leaves it alone once out of running/).

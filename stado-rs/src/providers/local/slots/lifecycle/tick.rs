@@ -38,26 +38,29 @@ pub(super) async fn running_tick(
         // persistent job tree on each heartbeat. An existing but empty log is
         // intentionally different from the missing-tree diagnostic above.
         let log_path = expected_work_dir.join("output/command_output.log");
-        if log_path.exists() {
-            let upload = async {
-                let mut bytes = tokio::fs::read(&log_path).await?;
-                let secrets = output_redactions(&slot.slot.job).await?;
-                redact_secret_bytes(&mut bytes, &secrets);
-                store
-                    .upload_bytes(
-                        &format!("status/{job_id}/output/command_output.log"),
-                        &bytes,
-                    )
-                    .await
-            };
-            // The upload finishes or the store refuses it; nothing bounds it
-            // by a clock, so a slow object store still receives the log.
-            if let Err(exc) = upload.await {
-                log_fn(&format!(
-                    "heartbeat log upload failed for {job_id}: {}",
-                    head_chars(&exc.to_string(), 160)
-                ));
+        let upload = async {
+            // A log that cannot be examined is the failure below, not a log
+            // that has not been written yet.
+            if !crate::primitives::presence::present(&log_path)? {
+                return Ok(());
             }
+            let mut bytes = tokio::fs::read(&log_path).await?;
+            let secrets = output_redactions(&slot.slot.job).await?;
+            redact_secret_bytes(&mut bytes, &secrets);
+            store
+                .upload_bytes(
+                    &format!("status/{job_id}/output/command_output.log"),
+                    &bytes,
+                )
+                .await
+        };
+        // The upload finishes or the store refuses it; nothing bounds it
+        // by a clock, so a slow object store still receives the log.
+        if let Err(exc) = upload.await {
+            log_fn(&format!(
+                "heartbeat log upload failed for {job_id}: {}",
+                head_chars(&exc.to_string(), 160)
+            ));
         }
     }
     Ok(())

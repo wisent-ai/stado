@@ -30,12 +30,10 @@ pub async fn advance_slot(
             terminate_cancelled_slot(&mut slot, log_fn).await?;
             slot.close_log();
             let output_dir = job_work_dir(&job_id)?.join("output");
-            if output_dir.exists() {
-                if let Err(error) = upload_output(store, &slot.slot.job, &output_dir).await {
-                    log_fn(&format!(
-                        "cancelled job artifact upload failed for {job_id}: {error}"
-                    ));
-                }
+            if let Err(error) = upload_output(store, &slot.slot.job, &output_dir).await {
+                log_fn(&format!(
+                    "cancelled job artifact upload failed for {job_id}: {error}"
+                ));
             }
             match store.delete_job("running", &job_id).await {
                 Ok(_) => log_fn(&format!(
@@ -210,18 +208,16 @@ pub async fn advance_slot(
         ));
         return Ok(SlotOutcome::Done);
     }
-    if output_dir.exists() {
-        if let Err(error) = upload_output(store, &job, &output_dir).await {
-            log_fn(&format!(
-                "terminal artifact upload failed for {job_id}; retaining running state for retry: {error}"
-            ));
-            // `Running` here means "finalize me again next tick", NOT "a
-            // workload is executing" — the process exited above. The retry is
-            // unbounded on purpose, so nothing scoped to a live workload may
-            // ride along with it; `reap` has already released the janitor
-            // hold. See [`release_hold_for_exited_workload`].
-            return Ok(SlotOutcome::Running(slot));
-        }
+    if let Err(error) = upload_output(store, &job, &output_dir).await {
+        log_fn(&format!(
+            "terminal artifact upload failed for {job_id}; retaining running state for retry: {error}"
+        ));
+        // `Running` here means "finalize me again next tick", NOT "a
+        // workload is executing" — the process exited above. The retry is
+        // unbounded on purpose, so nothing scoped to a live workload may
+        // ride along with it; `reap` has already released the janitor
+        // hold. See [`release_hold_for_exited_workload`].
+        return Ok(SlotOutcome::Running(slot));
     }
     // The terminal writes are retried the same way. Returning their storage
     // error ended the agent loop, and the restarted loop no longer held this

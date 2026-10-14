@@ -9,6 +9,7 @@ pub mod failure;
 pub mod file_mode;
 pub mod http;
 pub mod model_judgement;
+pub mod presence;
 pub mod procutil;
 pub mod removal;
 pub mod staging;

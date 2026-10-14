@@ -89,7 +89,7 @@ pub async fn upload_output(
     job: &Job,
     output_dir: &Path,
 ) -> Result<(), StorageError> {
-    if !output_dir.exists() {
+    if !crate::primitives::presence::present(output_dir)? {
         return Ok(());
     }
     let secrets = output_redactions(job).await?;

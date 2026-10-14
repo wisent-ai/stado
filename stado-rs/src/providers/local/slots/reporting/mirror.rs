@@ -57,8 +57,16 @@ pub async fn mirror_to_output_uri(store: &JobStorage, job: &Job, log_fn: &mut dy
             return;
         }
     };
-    if !output_dir.exists() {
-        return;
+    match crate::primitives::presence::present(&output_dir) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            log_fn(&format!(
+                "output_uri mirror refused for {}: {error}",
+                job.job_id
+            ));
+            return;
+        }
     }
     let files = match walk_files(&output_dir) {
         Ok(files) => files,
