@@ -153,20 +153,29 @@ async fn host_health(store: &JobStorage) -> HandlerResult {
         if explicit.contains(host) {
             continue;
         }
-        let reported_at = capacity
-            .get("published_at")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        // A capacity broadcast is proof of life only as of its own
+        // `published_at`. One without it says nothing about when the host was
+        // alive, so its unit is `unknown` with the reason and `reported_at` is
+        // null, instead of `active` beside an empty timestamp.
+        let published_at = capacity.get("published_at").and_then(Value::as_str);
+        let unit = match published_at {
+            Some(published_at) => json!({
+                "state": crate::deploy::service::STATE_ACTIVE,
+                "n_restarts": "?",
+                "active_since": published_at,
+            }),
+            None => json!({
+                "state": crate::deploy::service::STATE_UNKNOWN,
+                "detail": "the live Stado capacity broadcast carries no published_at",
+            }),
+        };
         let mut units = Map::new();
-        units.insert(
-            "wisent-agent".into(),
-            json!({"state": "active", "n_restarts": "?", "active_since": reported_at}),
-        );
+        units.insert("wisent-agent".into(), unit);
         // Capacity says the host is alive; it says nothing about its disk,
         // so no disk figures are made up for it.
         hosts.push(json!({
             "host": host,
-            "reported_at": reported_at,
+            "reported_at": published_at,
             "units": units,
             "last_log": "live Stado capacity broadcast",
         }));
