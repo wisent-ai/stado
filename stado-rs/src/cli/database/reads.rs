@@ -84,8 +84,9 @@ pub(super) async fn resolve(name: &str, consumer: &str, json_output: bool) -> Re
         .and_then(|services| services.get(name))
         .is_some();
 
+    let uri = format!("stado://database/{name}");
     let mut report = json!({
-        "database": format!("stado://database/{name}"),
+        "database": uri,
         "engine": database.engine(),
         "scopes": database.scopes(),
         "credential_item": database.item(),
@@ -104,7 +105,7 @@ pub(super) async fn resolve(name: &str, consumer: &str, json_output: bool) -> Re
     } else {
         println!(
             "{} engine={} item={} scopes={} placed={}",
-            report["database"].as_str().unwrap_or_default(),
+            uri,
             database.engine(),
             database.item(),
             database.scopes().join(","),
