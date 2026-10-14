@@ -49,7 +49,14 @@ async fn read_remote(
         match fields.first().copied() {
             Some("STADO_QUARANTINE_ABSENT") => return Ok(None),
             Some("STADO_QUARANTINE_BYTES") => {
-                bytes = fields.get(1).and_then(|value| value.parse().ok());
+                let unreadable = |detail: String| {
+                    CmdError::click(format!("{}: {path}: {detail}", host.name))
+                        .stating(crate::primitives::failure::FailureCode::InfraDown)
+                };
+                let field = fields
+                    .get(1)
+                    .ok_or_else(|| unreadable("its byte count line has no value".to_string()))?;
+                bytes = host_channel::marker_number(field, "byte count").map_err(unreadable)?;
             }
             Some("STADO_QUARANTINE_BASE64") => encoded = Some(fields.get(1).copied().unwrap_or("")),
             _ => {}
