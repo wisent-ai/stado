@@ -77,7 +77,8 @@ async fn the_census_preserves_a_real_directory_refusal_and_its_cache_bytes() {
     let permissions = fs::metadata(&project)
         .expect("read project metadata")
         .permissions();
-    let denied = permissions.mode() & !u32::from(libc::S_IRWXU | libc::S_IRWXG | libc::S_IRWXO);
+    let denied = permissions.mode()
+        & !u32::from(nix::libc::S_IRWXU | nix::libc::S_IRWXG | nix::libc::S_IRWXO);
     let target = local_target().expect("this host is a target");
     let declaration = BuildCacheDeclaration {
         root: native
