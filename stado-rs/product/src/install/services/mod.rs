@@ -12,14 +12,17 @@ use serde_json::{json, Value};
 /// from the directory after that, never written in the catalog.
 const SERVICE_URL_PLACEHOLDER: &str = "$STADO_SERVICE_URL";
 
-/// Reconcile a resident product's existing native unit while the predecessor
-/// binary still occupies its installed path. The new build runs this during
-/// `product finish`, so its catalog, not the replaced binary's catalog, owns
-/// the argv. A machine without that unit stays a CLI-only installation.
-pub fn migrate_host_unit(product: &Value, home: &std::path::Path) -> Result<()> {
+/// Reconcile a resident product's native unit through the prepared candidate
+/// while the predecessor still occupies its installed path. The candidate's
+/// own catalog, rather than the installed binary's old catalog, owns argv.
+pub fn migrate_host_unit(
+    product: &Value,
+    home: &std::path::Path,
+    plan: &crate::install::plan::Prepared,
+) -> Result<Option<String>> {
     let id = text(product, "id")?;
     if id != "stado" {
-        return Ok(());
+        return Ok(None);
     }
     let label = text(&product["service"], "unit")?;
     let native = [
@@ -37,15 +40,21 @@ pub fn migrate_host_unit(product: &Value, home: &std::path::Path) -> Result<()> 
             .with_context(|| format!("checking native unit {}", path.display()))?;
     }
     if !present {
-        return Ok(());
+        return Ok(None);
     }
-    let self_host = checked(stado().args(["registry", "self", "--local", "--name-only"]))?;
+    let candidate = prepared_binary(plan, id)?;
+    let self_host = checked(std::process::Command::new(candidate).args([
+        "registry",
+        "self",
+        "--local",
+        "--name-only",
+    ]))?;
     let host = String::from_utf8(self_host.stdout)?;
     let host = host.trim();
     if host.is_empty() {
         bail!("the installed {label} unit cannot be migrated: registry self --local named no host");
     }
-    let outcome = checked(stado().args([
+    let outcome = checked(std::process::Command::new(candidate).args([
         "service",
         "ensure",
         id,
@@ -58,6 +67,45 @@ pub fn migrate_host_unit(product: &Value, home: &std::path::Path) -> Result<()> 
     eprintln!(
         "{id}: migrated {label} on {host} before replacing its executable: {}",
         String::from_utf8_lossy(&outcome.stdout).trim()
+    );
+    Ok(Some(host.to_owned()))
+}
+
+fn prepared_binary<'a>(
+    plan: &'a crate::install::plan::Prepared,
+    product: &str,
+) -> Result<&'a std::path::Path> {
+    plan.placements
+        .iter()
+        .find(|placed| {
+            !placed.symbolic
+                && placed
+                    .destination
+                    .file_name()
+                    .is_some_and(|name| name == product)
+        })
+        .map(|placed| placed.source.as_path())
+        .with_context(|| {
+            format!(
+                "{product}: prepared installation has no executable to check against managed units"
+            )
+        })
+}
+
+/// Parse the native unit's actual arguments with the prepared executable
+/// before any installed bytes are replaced. Migration above has already
+/// rewritten a catalog-owned unit while the old executable still answers.
+pub fn admit_units(plan: &crate::install::plan::Prepared, product: &str, host: &str) -> Result<()> {
+    let candidate = prepared_binary(plan, product)?;
+    let output = checked(
+        std::process::Command::new(candidate)
+            .args(["quality", "units", "--candidate"])
+            .arg(candidate)
+            .args(["--program", product, "--host", host]),
+    )?;
+    eprintln!(
+        "{product}: {}",
+        String::from_utf8_lossy(&output.stdout).trim()
     );
     Ok(())
 }
