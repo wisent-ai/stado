@@ -63,19 +63,36 @@ pub async fn installed_version(
         runner,
     )
     .await?;
+    // A read the host refused or could not run said nothing about the
+    // version; its empty output read as "no version" and let an activation
+    // proceed against an unknown host state. A host without the package file
+    // still answers empty, through the pipeline's own status.
+    if !report.ok() {
+        return Err(DeployError::unreachable(format!(
+            "{}: the installed version could not be read: {}",
+            target.name,
+            host_channel::last_error_line(&report, "the version read failed")
+        )));
+    }
     Ok(report.stdout.trim().to_string())
 }
 
-/// Whether the worker API is answering on its port.
-pub async fn api_answering(target: &ComputeTarget, port: u16, runner: &Runner) -> bool {
-    host_channel::run_script(
+/// Whether the worker API is answering on its port. A channel that failed
+/// is an error, not a silent API: read as `false`, an unreachable host
+/// before activation passed as an API that was not serving, so a dead API
+/// after it was not reported as the failed activation it was.
+pub async fn api_answering(
+    target: &ComputeTarget,
+    port: u16,
+    runner: &Runner,
+) -> Result<bool, DeployError> {
+    let report = host_channel::run_script(
         target,
         &format!(
             "curl -s -o /dev/null -m 5 http://127.0.0.1:{port}/healthz && echo up || echo down\n"
         ),
         runner,
     )
-    .await
-    .map(|report| report.stdout.contains("up"))
-    .unwrap_or(false)
+    .await?;
+    Ok(report.stdout.contains("up"))
 }

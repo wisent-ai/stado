@@ -88,7 +88,9 @@ pub async fn activate_staged_release(
     let before = staged_release::installed_version(&resolved, &runner)
         .await
         .map_err(click)?;
-    let api_before = staged_release::api_answering(&resolved, port, &runner).await;
+    let api_before = staged_release::api_answering(&resolved, port, &runner)
+        .await
+        .map_err(click)?;
     if before == coordinate.version {
         if !json {
             println!(
@@ -110,7 +112,9 @@ pub async fn activate_staged_release(
     let after = staged_release::installed_version(&resolved, &runner)
         .await
         .map_err(click)?;
-    let api_after = staged_release::api_answering(&resolved, port, &runner).await;
+    let api_after = staged_release::api_answering(&resolved, port, &runner)
+        .await
+        .map_err(click)?;
     let log_tail = outcome
         .stdout
         .lines()
