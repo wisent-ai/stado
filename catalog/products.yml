@@ -417,6 +417,13 @@ products:
   approved_by: operator
   approved_at: '2026-09-02T19:53:04Z'
   approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  public_status:
+  - component: messaging
+    title: Messaging
+    method: GET
+    service: most
+    path: /healthz
+    expect_status: OK
 - id: stado
   name: Stado
   status: active
@@ -1392,6 +1399,75 @@ products:
     repository: wisent-ai/wisent-app
     binaries:
     - wisent-app
+  public_status:
+  - component: front-page
+    title: Front page
+    method: GET
+    url: https://app.wisent.com/
+    expect_status: OK
+  - component: guest-sign-in
+    title: Guest sign-in
+    method: GET
+    url_secret: wisent-app-database#url
+    path: /auth/v1/settings
+    headers:
+      apikey: wisent-app-database#anon_key
+    expect_status: OK
+    expect_body: '"anonymous_users":true'
+  - component: chat-api
+    title: Chat API
+    method: POST
+    url: https://bobloo.com/api/chat
+    body: {}
+    expect_status: Unauthorized
+    expect_body: Missing Authorization header
+  - component: backend-api
+    title: Backend API
+    method: GET
+    url: https://bobloo.com/readyz
+    expect_status: OK
+- id: wisent-status
+  name: Wisent Status
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/wisent-status
+  description: The public status page of Wisent's products, served apart from every
+    product it reports on, from the component status Stado publishes (stado public-status
+    show); when that cannot be read it says why.
+  roadmap: []
+  integrations:
+  - product: stado
+    description: The page reads the component status `stado public-status check` publishes,
+      through `stado public-status show --json`.
+    source: wisent-status/README.md
+  evidence:
+  - wisent-ai/wisent-status/README.md
+  surfaces:
+  - kind: service
+    repository: wisent-ai/wisent-status
+  installations:
+  - surface: service
+    kind: cargo
+    repository: wisent-ai/wisent-status
+    manifest: Cargo.toml
+    binaries:
+    - wisent-status
+  service:
+    installable: true
+    unit: com.wisent.wisent-status
+    program: $HOME/.local/bin/wisent-status
+    args:
+    - serve
+    - --bind
+    - localhost:$STADO_LISTEN_PORT
+    - --stado
+    - $HOME/.stado/bin/stado
+    env:
+      PATH: $HOME/.local/bin:$HOME/.stado/bin:/usr/bin:/bin
+    summary: The public status page, one process on a host other than the products it
+      reports on; each request reads `stado public-status show --json` and says why when
+      Stado cannot answer.
 - id: preferences
   name: Preferences
   status: active

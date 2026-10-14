@@ -106,6 +106,32 @@ pub(crate) enum InstallationCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Whether the components people rely on work: `check` asks every
+    /// component the catalog declares under `public_status` once and
+    /// publishes state, since when and the last failed check; `show` reads
+    /// what was published. A status page reads `show`.
+    #[command(name = "public-status", subcommand)]
+    PublicStatus(PublicStatusCommands),
+}
+
+/// The two halves of the published component status.
+#[derive(Subcommand)]
+pub(crate) enum PublicStatusCommands {
+    /// Ask every declared component once, from this machine, and publish
+    /// what each answered beside what the last check recorded.
+    Check {
+        /// Emit the published document as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// The published state of every declared component: since when, and the
+    /// last failed check with the answer that failed it.
+    Show {
+        /// Emit the published document as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Registering a wait a program does not perform in Rust itself.

@@ -71,6 +71,12 @@ enum NativeProductOperations {
             .init(id: "product", label: "Product of the catalog", required: true),
             .init(id: "revision", label: "Full commit (blank reads the newest run of any revision)", option: "--revision"),
         ], mutates: false),
+        // The components each product declares under `public_status`, as the
+        // status page reads them: state, since when and the last failed
+        // check with the answer that failed it. `check` asks every component
+        // once from the selected host and publishes the result.
+        .init(id: "public-status-show", title: "Read the published state of every component products declare for their public status", path: ["public-status", "show"], hostPlacement: .none, mutates: false),
+        .init(id: "public-status-check", title: "Ask every declared component once and publish its state, since when and the last failure", path: ["public-status", "check"], hostPlacement: .none),
         // `--json` belongs to the operation, before the arguments it forwards
         // to the compiler, so it is part of the path here.
         .init(id: "cargo", title: "Run Cargo against canonical checkouts or release inputs", path: ["product", "cargo", "--json"], hostPlacement: .none, fields: [

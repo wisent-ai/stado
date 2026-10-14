@@ -40,6 +40,7 @@ pub mod integrations;
 pub mod job;
 pub mod overview;
 pub mod placement;
+pub mod public_status;
 pub mod quality;
 pub mod quota;
 pub mod recovery;

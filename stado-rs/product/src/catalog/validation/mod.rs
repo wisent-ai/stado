@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashSet;
 
+mod public_status;
 mod service;
 
 /// The field parses as `T`, or the refusal names the field and the word.
@@ -217,6 +218,9 @@ pub fn validate(document: &Value) -> Result<()> {
         }
         if let Some(service) = product.get("service") {
             service::validate(id, service, &kinds)?;
+        }
+        if let Some(checks) = product.get("public_status") {
+            public_status::validate(id, checks)?;
         }
     }
     for (id, target) in targets {
