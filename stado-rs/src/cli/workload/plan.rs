@@ -40,15 +40,20 @@ pub(crate) fn read_plan<'a>(
             "workload plan {path} must be a JSON object"
         )));
     }
-    let observed = document
-        .get("schema")
-        .and_then(Value::as_str)
-        .unwrap_or("missing");
-    if observed != schema {
-        return Err(CmdError::usage(format!(
-            "{} plan declares schema {observed}, not {schema}; fix the whole plan before any work is enqueued",
-            declaration.kind
-        )));
+    match document.get("schema").and_then(Value::as_str) {
+        Some(observed) if observed == schema => {}
+        Some(observed) => {
+            return Err(CmdError::usage(format!(
+                "{} plan declares schema {observed}, not {schema}; fix the whole plan before any work is enqueued",
+                declaration.kind
+            )));
+        }
+        None => {
+            return Err(CmdError::usage(format!(
+                "{} plan declares no schema; it must declare {schema} before any work is enqueued",
+                declaration.kind
+            )));
+        }
     }
     Ok(Some((document, path)))
 }
