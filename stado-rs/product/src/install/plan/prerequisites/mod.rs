@@ -64,13 +64,13 @@ impl Decision {
 
     pub fn refusal(&self) -> String {
         let installed = match self.installed.as_deref() {
-            Some(revision) => revision,
-            None => "not installed",
+            Some(revision) => format!("installed revision {revision}"),
+            None => "it is not installed".to_owned(),
         };
         format!(
-            "{} {} needs verb {} from revision {}; installed revision {} ({}); qualified last green {}; use --with-prerequisites to install it first, or --plan to inspect the chain",
+            "{} {} needs verb {} from revision {}; {installed} ({}); qualified last green {}; use --with-prerequisites to install it first, or --plan to inspect the chain",
             self.requirement.product, self.requirement.surface,
-            self.requirement.verb, self.minimum, installed, self.reason, self.green,
+            self.requirement.verb, self.minimum, self.reason, self.green,
         )
     }
 }
