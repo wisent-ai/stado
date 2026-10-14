@@ -120,6 +120,65 @@ fn reachable(roots: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
     Ok(seen)
 }
 
+/// The file a `#[path = "…"]` attribute on the line before a declaration
+/// names, relative to the declaring file's directory, when there is one.
+static PATH_ATTRIBUTE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"#\[path\s*=\s*"(?P<path>[^"]+)"\s*\]"#).expect("static"));
+
+/// Every `mod name;` a module reachable from the crate at `crate_dir`
+/// declares that names no file in the tree — neither `<name>.rs` nor
+/// `<name>/mod.rs` where it resolves, nor the file a `#[path]` attribute
+/// gives it — one sentence each. Read from the files alone, compiling
+/// nothing: a commit that deleted a module file another still declares, or
+/// declared one it never added, fails here before anything builds on it.
+pub(crate) fn undeclared_files(crate_dir: &Path) -> Result<Vec<String>, String> {
+    let mut roots = crate_roots(crate_dir);
+    let main = crate_dir.join("src/main.rs");
+    if main.is_file() && !roots.contains(&main) {
+        roots.push(main);
+    }
+    let root_set: BTreeSet<PathBuf> = roots.iter().cloned().collect();
+    let mut missing = Vec::new();
+    for file in reachable(&roots)? {
+        let text = fs::read_to_string(&file)
+            .map_err(|error| format!("error: cannot read {}: {error}", file.display()))?;
+        let own_directory = file
+            .parent()
+            .ok_or_else(|| format!("error: {} has no directory", file.display()))?;
+        let directory = child_directory(&file, &root_set);
+        for found in MOD_DECLARATION.captures_iter(&text) {
+            let mut groups = found.iter().flatten();
+            let (Some(whole), Some(name)) = (groups.next(), groups.next()) else {
+                continue;
+            };
+            let line_before = text[..whole.start()].trim_end().lines().last();
+            let attributed = line_before
+                .and_then(|line| PATH_ATTRIBUTE.captures(line))
+                .and_then(|attribute| attribute.name("path").map(|path| path.as_str().to_string()));
+            let candidates: Vec<PathBuf> = match attributed {
+                Some(path) => vec![own_directory.join(path)],
+                None => vec![
+                    directory.join(format!("{}.rs", name.as_str())),
+                    directory.join(name.as_str()).join("mod.rs"),
+                ],
+            };
+            if !candidates.iter().any(|candidate| candidate.is_file()) {
+                missing.push(format!(
+                    "{} declares `mod {};`, and the tree holds none of {}",
+                    file.display(),
+                    name.as_str(),
+                    candidates
+                        .iter()
+                        .map(|candidate| candidate.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                ));
+            }
+        }
+    }
+    Ok(missing)
+}
+
 /// Every `.rs` file under `directory`. A directory that cannot be listed is
 /// the error, naming it: skipped, its files escaped the orphan check.
 fn every_rs(directory: &Path, into: &mut BTreeSet<PathBuf>) -> Result<(), String> {

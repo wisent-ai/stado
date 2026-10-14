@@ -17,7 +17,7 @@ use chrono::Utc;
 use super::super::register::{self, Entry, State, Step};
 use super::carried::{carried, note_failure, open_repairs, record_released, repository_of, Repair};
 use super::version::{commit_next, declares_format_gate};
-use crate::cli::quality::{check_revision, Report, Selection};
+use crate::cli::quality::{check_revision, check_source, Report, Selection};
 use crate::cli::release_newest::{Planned, Standing};
 use crate::cli::release_submit::{submit, ReleaseSubmitArgs, SubmitChannel};
 use crate::cli::CmdError;
@@ -205,11 +205,10 @@ async fn deliver(
         };
         return failed(current, CmdError::click(error)).await.map(Some);
     };
-    // The format gates and the lock check read the committed tree and
-    // compile nothing, so they run as soon as a commit carries a repair,
-    // not behind the build gate: a commit committed unformatted or with a
-    // lock its manifest outgrew is named on its defects before anyone builds
-    // on it. A commit kept queued has passed them.
+    // The format gates, the lock check and the module declarations read the
+    // committed tree and compile nothing, so they run as soon as a commit
+    // carries a repair, not behind the build gate. A commit kept queued has
+    // passed them.
     let checked = kept
         .as_ref()
         .is_some_and(|kept| kept.state == State::Queued);
@@ -219,11 +218,12 @@ async fn deliver(
             Ok(gated) => gated,
             Err(error) => return failed(current, error).await.map(Some),
         };
-        let gates = Selection::Formatting;
-        if gated {
-            if let Err(error) = check_revision(checkout, &commit, Report::Stderr, gates).await {
-                return failed(current, error).await.map(Some);
-            }
+        let source = match gated {
+            true => check_revision(checkout, &commit, Report::Stderr, Selection::Formatting).await,
+            false => check_source(checkout, &commit, Report::Stderr).await,
+        };
+        if let Err(error) = source {
+            return failed(current, error).await.map(Some);
         }
     }
     let first = match (bump, published) {

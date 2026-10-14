@@ -10,7 +10,7 @@ mod publication;
 mod rollout;
 mod version_gate;
 
-pub(crate) use version_gate::{least_next, semver_order};
+pub(crate) use version_gate::{least_next, semver_order, undeclared_files};
 
 pub use commands::dispatch::dispatch;
 pub use commands::{

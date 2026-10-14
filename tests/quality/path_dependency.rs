@@ -16,6 +16,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+/// The committed tree's module declarations, the check beside this one.
+mod module_declarations;
 const PRODUCT: &str = "quality-path-dependency-test";
 const SIBLING: &str = "sibling";
 const MANIFEST: &str = ".wisent-release.json";

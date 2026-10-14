@@ -2,6 +2,8 @@
 //! install would build, exported beside the checkout, so the checkout is not
 //! written and a refusal names the gate.
 
+mod modules;
+pub(crate) use modules::check_source;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -183,6 +185,7 @@ async fn check_tree(
     selection: Selection,
 ) -> Result<String, CmdError> {
     lockfile::check(tree, checkout, revision, report)?;
+    modules::check(tree, checkout, revision)?;
     let declared = selected_gates(Some(&tree.to_string_lossy()), selection)?;
     // A pin whose object was never stored, or was stored for a lock the
     // product has since moved past, is refused here, while the session that

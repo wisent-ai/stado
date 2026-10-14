@@ -37,7 +37,7 @@ use std::path::Path;
 use std::process::Command;
 
 pub use self::check::check;
-pub(crate) use self::check::check_revision;
+pub(crate) use self::check::{check_revision, check_source};
 
 pub(crate) use self::gates::Selection;
 use self::gates::{declared_gates, selected_gates, Declaration};
