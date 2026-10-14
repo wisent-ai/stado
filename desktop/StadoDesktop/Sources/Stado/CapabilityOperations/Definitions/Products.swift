@@ -89,6 +89,7 @@ enum NativeProductOperations {
         // checkout's main HEAD, then pushes every checkout when declared;
         // Stado's scheduler runs `ci run`.
         .init(id: "ci-plan-set", title: "Declare the products the delivery routine installs, in order", path: ["ci", "plan", "set"], hostPlacement: .none, fields: [
+            .init(id: "purpose", label: "Open Oko defect the installs repair (the operator's rulings are asked for this purpose)", option: "--purpose", required: true),
             .init(id: "steps", label: "Steps, one PRODUCT:SURFACE:CHECKOUT per line, in install order", option: "--step", required: true, multiple: true),
             .init(id: "push", label: "Push main of every checkout once every step is installed", option: "--push", flag: true),
         ]),

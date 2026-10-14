@@ -13,23 +13,35 @@ const OKO: &str = "oko";
 pub const BUILD: &str = "build";
 /// The action class a ruling constrains that publishing a release is.
 pub const RELEASE: &str = "release";
+/// The action class a ruling constrains that installing a product is.
+pub const INSTALL: &str = "install";
 
 /// Ok when `action` may run now for `product` (every product when none is
-/// named); otherwise the refusal Oko gives, which names the ruling, its
-/// words and what it waits on.
-pub async fn require(action: &str, product: Option<&str>) -> Result<(), CmdError> {
+/// named) as work serving the open defects `purposes` (`oko rulings may …
+/// --purpose <defect>`: a consent the operator limited to a purpose covers
+/// only work that names it); otherwise the refusal Oko gives, which names
+/// the ruling, its words and what it waits on, prefixed with what was asked.
+pub async fn refusal(action: &str, product: Option<&str>, purposes: &[&str]) -> Result<(), String> {
     let mut words = vec!["rulings", "may", action];
     if let Some(product) = product {
         words.extend(["--product", product]);
+    }
+    for purpose in purposes {
+        words.extend(["--purpose", *purpose]);
     }
     let scope = match product {
         Some(product) => format!("{action} of {product}"),
         None => action.to_string(),
     };
     run(OKO, &words, None).await.map(|_| ()).map_err(|refusal| {
-        CmdError::refused(format!(
-            "{scope} is not run: the operator's rulings do not allow it now ({refusal}); \
-             nothing was exported or built"
-        ))
+        format!("{scope} is not run: the operator's rulings do not allow it now ({refusal})")
     })
+}
+
+/// [`refusal`] for a product operation that compiles or publishes, serving
+/// no named purpose: refused, nothing was exported or built.
+pub async fn require(action: &str, product: Option<&str>) -> Result<(), CmdError> {
+    refusal(action, product, &[])
+        .await
+        .map_err(|refused| CmdError::refused(format!("{refused}; nothing was exported or built")))
 }

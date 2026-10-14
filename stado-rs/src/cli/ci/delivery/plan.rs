@@ -51,6 +51,12 @@ pub struct Plan {
     /// publishes the operator's commits.
     #[serde(default)]
     pub push: bool,
+    /// The open Oko defect the routine's installs serve (`--purpose`), asked
+    /// of the operator's rulings with every install: a consent he limited to
+    /// that purpose (to repair CI/CD) admits the routine while the defect is
+    /// open, and once it closes the routine is refused again. A plan declared
+    /// before purposes existed has none and is refused until declared anew.
+    pub purpose: String,
     pub declared_at: DateTime<Utc>,
 }
 
@@ -86,8 +92,8 @@ pub fn declared() -> Result<Plan, CmdError> {
     let path = path()?;
     read()?.ok_or_else(|| {
         CmdError::refused(format!(
-            "no delivery plan is declared at {}: `stado ci plan set --step PRODUCT:SURFACE:CHECKOUT …` \
-             declares the products the routine installs, in order",
+            "no delivery plan is declared at {}: `stado ci plan set --purpose DEFECT --step PRODUCT:SURFACE:CHECKOUT …` \
+             declares the products the routine installs, in order, and the defect it installs them to repair",
             path.display()
         ))
     })
@@ -129,7 +135,10 @@ fn print(plan: &Plan, json: bool) -> Result<(), CmdError> {
         println!("{}", serde_json::to_string_pretty(plan)?);
         return Ok(());
     }
-    println!("delivery plan declared at {}, in order:", plan.declared_at);
+    println!(
+        "delivery plan declared at {}, serving defect {}, in order:",
+        plan.declared_at, plan.purpose
+    );
     for step in &plan.steps {
         println!("  - {} from {}", step.key(), step.checkout.display());
     }
@@ -140,8 +149,18 @@ fn print(plan: &Plan, json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// `stado ci plan set --step PRODUCT:SURFACE:CHECKOUT … [--push] [--json]`.
-pub fn set(steps: &[String], push: bool, json: bool) -> Result<(), CmdError> {
+/// `stado ci plan set --purpose DEFECT --step PRODUCT:SURFACE:CHECKOUT …
+/// [--push] [--json]`. A plan whose installs the operator's rulings forbid
+/// now for that purpose is refused before it is written, quoting the ruling
+/// (`super::admitted`): a declared plan is what a scheduled `stado ci run`
+/// installs.
+pub async fn set(purpose: &str, steps: &[String], push: bool, json: bool) -> Result<(), CmdError> {
+    let purpose = purpose.trim();
+    if purpose.is_empty() {
+        return Err(CmdError::usage(
+            "--purpose names the open Oko defect the routine installs to repair; it is empty",
+        ));
+    }
     if steps.is_empty() {
         return Err(CmdError::usage(
             "a delivery plan names at least one --step PRODUCT:SURFACE:CHECKOUT",
@@ -162,9 +181,11 @@ pub fn set(steps: &[String], push: bool, json: bool) -> Result<(), CmdError> {
             )));
         }
     }
+    super::admitted(&steps, purpose, "declaring the delivery plan").await?;
     let plan = Plan {
         steps,
         push,
+        purpose: purpose.to_string(),
         declared_at: Utc::now(),
     };
     write_json(&path()?, &plan)?;

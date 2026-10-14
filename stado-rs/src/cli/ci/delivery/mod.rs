@@ -213,10 +213,43 @@ async fn pass(plan: &Plan, current: &mut State) -> Result<Outcome, CmdError> {
     Ok(Outcome::Delivered(said, refused_pushes))
 }
 
+/// Every step's install asked of Oko's rulings authority (`oko rulings may
+/// install --product P --purpose DEFECT`) before anything is planned or run.
+/// The routine installs and builds: the operator forbade both until every
+/// task and defect is closed, and consented to them only to repair CI/CD.
+/// The plan's purpose names the open defect it repairs; a consent he limited
+/// to that purpose admits it while the defect is open, and every other
+/// purpose, or the same one once it closed, meets the withdrawal quoted.
+/// Stado keeps no copy of the rule; the answer is Oko's.
+pub(crate) async fn admitted(steps: &[Step], purpose: &str, doing: &str) -> Result<(), CmdError> {
+    let mut refusals = Vec::new();
+    for step in steps {
+        if let Err(refused) = crate::cli::release_loop::allowed::refusal(
+            crate::cli::release_loop::allowed::INSTALL,
+            Some(&step.product),
+            &[purpose],
+        )
+        .await
+        {
+            refusals.push(refused);
+        }
+    }
+    if refusals.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::refused(format!(
+        "{doing} is refused: {}",
+        refusals.join("; ")
+    )))
+}
+
 /// `stado ci run [--json]`: one pass of the routine. A refused step exits
-/// non-zero after the state and the defects are written.
+/// non-zero after the state and the defects are written. A pass the
+/// operator's rulings forbid ([`admitted`]) is refused before it takes the
+/// routine's lock, installs anything or writes the state.
 pub async fn run(json: bool) -> Result<(), CmdError> {
     let plan = plan::declared()?;
+    admitted(&plan.steps, &plan.purpose, "stado ci run").await?;
     let Some(_held) = state::lock()? else {
         let current = state::read()?;
         let said = match &current.running {

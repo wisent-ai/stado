@@ -35,6 +35,9 @@ const okoBinary = realpathSync(required('OKO_BIN'));
 const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
 assert.ok(Number.isInteger(successExit));
 const step = required('STADO_DELIVERY_TEST_STEP');
+// The open Oko defect the journey's installs repair: the operator's rulings
+// are asked for it, so the journey runs only where they admit that purpose.
+const purpose = required('STADO_DELIVERY_TEST_PURPOSE');
 const [product, surface] = step.split(':');
 const checkout = step.slice(`${product}:${surface}:`.length);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -86,15 +89,16 @@ const key = `${product}:${surface}`;
 try {
   refused(['ci', 'run'], /no delivery plan is declared at .*stado ci plan set/);
 
-  refused(['ci', 'plan', 'set', '--step', `${key}:relative/checkout`], /names the checkout relative\/checkout relatively/);
+  refused(['ci', 'plan', 'set', '--purpose', purpose, '--step', `${key}:relative/checkout`], /names the checkout relative\/checkout relatively/);
   const empty = join(output, 'not-a-checkout');
   mkdirSync(empty);
-  refused(['ci', 'plan', 'set', '--step', `${key}:${empty}`], /holds no git checkout/);
-  refused(['ci', 'plan', 'set', '--step', step, '--step', step], /is named twice/);
+  refused(['ci', 'plan', 'set', '--purpose', purpose, '--step', `${key}:${empty}`], /holds no git checkout/);
+  refused(['ci', 'plan', 'set', '--purpose', purpose, '--step', step, '--step', step], /is named twice/);
   assert.ok(!existsSync(environment.STADO_DELIVERY_PLAN), 'a refused plan was written');
 
-  const declared = JSON.parse(ok(['ci', 'plan', 'set', '--step', step, '--json']));
+  const declared = JSON.parse(ok(['ci', 'plan', 'set', '--purpose', purpose, '--step', step, '--json']));
   assert.deepEqual(declared.steps, [{ product, surface, checkout }]);
+  assert.equal(declared.purpose, purpose, 'the plan does not keep its purpose');
   assert.equal(declared.push, false, 'a plan declared without --push pushes');
   assert.deepEqual(JSON.parse(ok(['ci', 'plan', 'show', '--json'])).steps, declared.steps);
 
