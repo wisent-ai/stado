@@ -31,7 +31,6 @@
 //! `crate::providers::local::disk_staging::<item>` still names every item
 //! it named before.
 
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
