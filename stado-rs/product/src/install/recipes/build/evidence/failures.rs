@@ -1,12 +1,15 @@
 //! Quality gate failures a source install records, so the same committed
-//! revision is refused with the recorded failure instead of being exported and
-//! checked again.
+//! revision is refused with the recorded failures instead of being exported
+//! and checked again.
 //!
 //! A quality gate (`fmt`, `clippy`) is a function of the committed tree, and
 //! the toolchain is part of that tree (`rust-toolchain.toml`), so a revision
 //! that failed one fails it again: repeating the install spends an export, a
 //! compile and a gigabyte of disk to print the same refusal. A build failure
 //! is not recorded, because a build can fail for a reason outside the tree.
+//! Every gate runs to its end whatever the one before it said, and every
+//! refusal is recorded and returned together: stopping at the first one made
+//! each installation find only the next refusal.
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
@@ -17,8 +20,6 @@ use crate::common::atomic_json;
 
 /// The quality gate that refused a revision, as the install saw it.
 pub(in crate::install::recipes::build) struct QualityFailure {
-    pub product: String,
-    pub revision: String,
     pub check: Value,
     pub error: String,
 }
@@ -54,7 +55,8 @@ pub(in crate::install::recipes::build) fn key(
 /// install, and an older record lets the gate run once more.
 const GATE_VERDICT: &str = "tree-verdict";
 
-/// Refuse an install whose revision already failed a quality gate.
+/// Refuse an install whose revision already failed its quality gates, naming
+/// every gate the recorded run saw refuse.
 pub(in crate::install::recipes::build) fn refuse_recorded(area: &Path, key: &str) -> Result<()> {
     let path = record_path(area, key);
     let body = match fs::read(&path) {
@@ -71,47 +73,64 @@ pub(in crate::install::recipes::build) fn refuse_recorded(area: &Path, key: &str
     if recorded["kind"].as_str() != Some(GATE_VERDICT) {
         return Ok(());
     }
+    let field = |name: &str| match recorded[name].as_str() {
+        Some(value) => value.to_string(),
+        None => format!("(the record {} names no {name})", path.display()),
+    };
+    // A record written before every gate ran to its end holds one `check`
+    // and its `error`; a later one holds all of them under `failures`.
+    let failures: Vec<String> = match recorded["failures"].as_array() {
+        Some(failures) => failures
+            .iter()
+            .map(|failure| format!("quality {}: {}", failure["check"], failure["error"]))
+            .collect(),
+        None => vec![format!("quality {}: {}", recorded["check"], field("error"))],
+    };
     bail!(
-        "{} {} already failed quality {} at {}: {}; build evidence: {}. The same revision fails \
-         the same gate; commit a repair and install that revision",
-        recorded["product"].as_str().unwrap_or_default(),
-        recorded["revision"].as_str().unwrap_or_default(),
-        recorded["check"],
-        recorded["recorded_at"].as_str().unwrap_or_default(),
-        recorded["error"].as_str().unwrap_or_default(),
-        recorded["evidence"].as_str().unwrap_or_default(),
+        "{} {} already failed its quality gates at {}, every gate run to its end:\n{}\nbuild \
+         evidence: {}. The same revision fails the same gates; commit a repair and install that \
+         revision",
+        field("product"),
+        field("revision"),
+        field("recorded_at"),
+        failures.join("\n"),
+        field("evidence"),
     )
 }
 
-/// Record the quality gate a revision failed.
+/// Record every quality gate a revision failed.
 pub(in crate::install::recipes::build) fn record(
     area: &Path,
     key: &str,
-    failure: &QualityFailure,
-    evidence: &Path,
+    install: (&str, &str, &Path),
+    failures: &[QualityFailure],
 ) -> Result<()> {
+    let (product, revision, evidence) = install;
     let path = record_path(area, key);
     let parent = path
         .parent()
         .context("install failure record has no parent")?;
     fs::create_dir_all(parent)?;
+    let failures: Vec<Value> = failures
+        .iter()
+        .map(|failure| json!({ "check": failure.check, "error": failure.error }))
+        .collect();
     atomic_json(
         &path,
         &json!({
             "kind": GATE_VERDICT,
-            "product": failure.product,
-            "revision": failure.revision,
-            "check": failure.check,
-            "error": failure.error,
+            "product": product,
+            "revision": revision,
+            "failures": failures,
             "evidence": evidence.display().to_string(),
             "recorded_at": chrono::Utc::now().to_rfc3339(),
         }),
     )
 }
 
-/// Run a release platform's quality checks in order; the first that fails is
-/// recorded against `key` in the checkout's build area and returned with its
-/// evidence.
+/// Run every quality check of a release platform to its end; the checks that
+/// refused the tree are recorded together against `key` in the checkout's
+/// build area and returned as one error naming each with its evidence.
 pub(in crate::install::recipes::build) fn gate(
     area: &Path,
     key: &str,
@@ -119,44 +138,64 @@ pub(in crate::install::recipes::build) fn gate(
     quality: &Value,
     mut run: impl FnMut(&Value) -> Result<()>,
 ) -> Result<()> {
-    let (product, revision, evidence) = install;
+    let (product, _, evidence) = install;
+    let mut failures = Vec::new();
+    let mut host_faults = Vec::new();
     for check in quality
         .as_array()
         .context("release quality must be an array")?
     {
-        if let Err(error) = run(check) {
-            let error = error.context(format!(
-                "{product} quality {} failed; build evidence: {}",
-                check["name"],
-                evidence.display()
-            ));
-            // A step whose program could not be started says nothing about
-            // the revision: the host lacked the program. Recording it would
-            // refuse every later attempt at the same revision with "the same
-            // revision fails the same gate" after the host is repaired. A
-            // script the shell ran but whose own program it could not find
-            // or run is the same host fault one level down: POSIX gives the
-            // shell's exit status for those as 127 and 126.
-            let host_lacked_program = error
+        let Err(error) = run(check) else {
+            continue;
+        };
+        // A step whose program could not be started says nothing about the
+        // revision: the host lacked the program. Recording it would refuse
+        // every later attempt at the same revision with "the same revision
+        // fails the same gates" after the host is repaired. A script the shell
+        // ran but whose own program it could not find or run is the same host
+        // fault one level down: POSIX gives the shell's exit status for those
+        // as 127 and 126.
+        let host_lacked_program = error
+            .root_cause()
+            .downcast_ref::<std::io::Error>()
+            .is_some()
+            || error
                 .root_cause()
-                .downcast_ref::<std::io::Error>()
-                .is_some()
-                || error
-                    .root_cause()
-                    .downcast_ref::<crate::common::CommandFailed>()
-                    .is_some_and(|failed| matches!(failed.code, Some(126 | 127)));
-            if host_lacked_program {
-                return Err(error);
-            }
-            let failure = QualityFailure {
-                product: product.to_owned(),
-                revision: revision.to_owned(),
-                check: check["name"].clone(),
-                error: format!("{error:#}"),
-            };
-            record(area, key, &failure, evidence)?;
-            return Err(error);
+                .downcast_ref::<crate::common::CommandFailed>()
+                .is_some_and(|failed| matches!(failed.code, Some(126 | 127)));
+        let failure = QualityFailure {
+            check: check["name"].clone(),
+            error: format!("{error:#}"),
+        };
+        match host_lacked_program {
+            true => host_faults.push(failure),
+            false => failures.push(failure),
         }
     }
-    Ok(())
+    if !failures.is_empty() {
+        record(area, key, install, &failures)?;
+    }
+    let said: Vec<String> = failures
+        .iter()
+        .map(|failure| {
+            format!(
+                "quality {} refused the revision: {}",
+                failure.check, failure.error
+            )
+        })
+        .chain(host_faults.iter().map(|failure| {
+            format!(
+                "quality {} could not run on this host: {}",
+                failure.check, failure.error
+            )
+        }))
+        .collect();
+    if said.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "{product} quality failed, every gate run to its end; build evidence: {}:\n{}",
+        evidence.display(),
+        said.join("\n")
+    )
 }
