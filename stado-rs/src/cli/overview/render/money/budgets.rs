@@ -43,11 +43,12 @@ pub(super) fn print_budgets(document: &Value) {
     let gcp = &document["budgets"]["gcp"];
     match gcp.get("status").and_then(Value::as_str) {
         Some("ok") => {
-            let rows = gcp
-                .get("budgets")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+            // `ok` with no budgets list is a report this reader cannot read,
+            // not a billing account with no budgets on it.
+            let Some(rows) = gcp.get("budgets").and_then(Value::as_array) else {
+                println!("  GCP: the report says ok but carries no budgets list: {gcp}");
+                return;
+            };
             if rows.is_empty() {
                 println!("  GCP: no budgets configured");
             }
