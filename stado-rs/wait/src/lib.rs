@@ -29,6 +29,7 @@
 //! Stdout is never written, so `--json` output is untouched.
 
 mod cancel;
+pub mod external;
 mod http;
 mod line;
 pub mod open;
@@ -43,43 +44,29 @@ pub use process::{
 
 use std::fmt::Display;
 use std::future::Future;
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 use std::time::Instant;
 
-/// What a wait is waiting on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    /// A request to a network service that is not one of the kinds below.
-    Network,
-    /// A read, write, listing or stat through Stado's object API or another
-    /// object store.
-    ObjectApi,
-    /// A channel to a fleet host: a connection, a remote command, a transfer.
-    Host,
-    /// A file lock or another lock held by a different process.
-    Lock,
-    /// A child process this program started and waits for.
-    Process,
-    /// A database connection or query.
-    Database,
-}
+/// What a wait waits on, written in each line's `rodzaj` field; the kinds
+/// and their words are declared in `kind/`. Three of them are waits nothing
+/// answers by itself: `terminal` (a key typed on the terminal the program
+/// runs on, which in an agent's shell nobody types), `zgoda` (the
+/// operator's answer to a grant) and `sesja` (another agent session's
+/// work). A reader of the register (Oko's wait watch) acts on each by its
+/// kind rather than by how long it has stood. A wait a program does not
+/// perform in Rust itself — a grant dialog in a harness, a terminal a
+/// supervisor sees standing — is registered for that program's pid with
+/// [`external::register_for`] or `stado waits open`, and ends when that
+/// process does or with [`external::unregister`].
+mod kind;
+pub use kind::Kind;
 
-impl Kind {
-    /// The word the `rodzaj` field carries.
-    pub fn word(self) -> &'static str {
-        match self {
-            Kind::Network => "siec",
-            Kind::ObjectApi => "object-api",
-            Kind::Host => "host",
-            Kind::Lock => "blokada",
-            Kind::Process => "proces",
-            Kind::Database => "baza",
-        }
-    }
-}
-
-/// The waits this process has started, so each gets its own id.
-static STARTED: AtomicU64 = AtomicU64::new(0);
+/// The waits this process has started, so each gets its own id: a count
+/// starting empty, and each wait's number is the count so far plus the
+/// least step, so the first is the least positive number.
+static STARTED: LazyLock<AtomicU64> = LazyLock::new(AtomicU64::default);
 
 /// An error and every source under it, outermost first: the cause a
 /// failed wait writes, for a caller that keeps that cause.
@@ -106,7 +93,7 @@ pub fn begin(kind: Kind, what: impl Display, place: impl Display) -> Waiting {
     let id = format!(
         "{}-{}",
         std::process::id(),
-        STARTED.fetch_add(1, Ordering::Relaxed) + 1
+        STARTED.fetch_add(NonZeroU64::MIN.get(), Ordering::Relaxed) + NonZeroU64::MIN.get()
     );
     let waiting = Waiting {
         id,

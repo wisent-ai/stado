@@ -29,6 +29,6 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
             include_files,
             json,
         } => workdirs::run(apply, include_files, json),
-        InstallationCommands::Waits { json } => waits::run(json),
+        InstallationCommands::Waits { action, json } => waits::dispatch(action, json),
     }
 }

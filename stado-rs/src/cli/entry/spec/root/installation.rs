@@ -97,9 +97,41 @@ pub(crate) enum InstallationCommands {
 
     /// List the waits open on this machine, from the register every Stado
     /// wait keeps (`$STADO_WAITS_DIR` or ~/.stado/waits); a wait whose
-    /// process no longer runs is reported ended and removed.
+    /// process no longer runs is reported ended and removed. `open`
+    /// registers a wait for another process; `close` removes one.
     Waits {
+        #[command(subcommand)]
+        action: Option<WaitsAction>,
         /// Emit the machine-readable listing.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Registering a wait a program does not perform in Rust itself.
+#[derive(Subcommand)]
+pub(crate) enum WaitsAction {
+    /// Register for process --pid a wait on --kind (one of the register's
+    /// `rodzaj` words: siec, object-api, host, blokada, proces, baza,
+    /// terminal, zgoda, sesja), for --what at --where. It ends when that
+    /// process does or with `stado waits close <id>`.
+    Open {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        what: String,
+        #[arg(long = "where")]
+        place: String,
+        #[arg(long)]
+        pid: u32,
+        /// Emit the registered wait as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the wait <id> from the register: it ended.
+    Close {
+        id: String,
+        /// Emit the answer as JSON.
         #[arg(long)]
         json: bool,
     },

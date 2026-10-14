@@ -26,6 +26,10 @@ path = "held_lock.rs"
 name = "wait-ended-process"
 path = "ended_process.rs"
 
+[[test]]
+name = "wait-registered"
+path = "registered.rs"
+
 [dependencies]
 stado = { path = "../../stado-rs" }
 tokio = { version = "1", features = ["full"] }
