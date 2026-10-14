@@ -12,7 +12,10 @@ use crate::cli::directory::document::{directory, read_document, service, this_ta
 use crate::cli::directory::routes::{answers, routable_address, service_port};
 
 /// The loopback address `asking` declares for reaching `service`, or `None` when
-/// that machine declares no adapter for it.
+/// that machine declares no resolver or no adapter for it. A resolver
+/// declaration that does not parse, or an asking machine the registry does
+/// not hold, is the error: read as no adapter, the caller was sent to the
+/// service's host directly past a resolver that was declared all along.
 ///
 /// Read from `registry.targets[<asking>].service_resolver.adapters`, the same
 /// declaration the resolver itself binds. A machine that consumes a service
@@ -28,7 +31,9 @@ fn adapter_route(
     consumer: Option<&str>,
     scheme: &str,
 ) -> Result<Option<String>, CmdError> {
-    let Ok(config) = crate::service_resolution::resolver_config(document, asking) else {
+    let Some(config) = crate::service_resolution::declared_resolver_config(document, asking)
+        .map_err(CmdError::declaration)?
+    else {
         return Ok(None);
     };
     let mut declared: Vec<&crate::service_resolution::ResolverAdapter> = config

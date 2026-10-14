@@ -59,13 +59,15 @@ use crate::cli::directory::routes::endpoints::{bind, endpoint};
 /// `None` means the fleet declares nothing about it — no directory block, no
 /// such service, or a service with no active host — and a caller deciding
 /// which host to ask a question of has to say so rather than guess a name.
-/// A directory whose services map is missing or not a map is the error: it
-/// read as "declares nothing", so a broken directory looked like an empty one.
+/// A directory block or services map that is present and not a map is the
+/// error: it read as "declares nothing", so a broken directory looked like
+/// an empty one.
 pub(crate) async fn active_host(service: &str) -> Result<Option<String>, CmdError> {
     let registry_document = document::read_document().await?;
-    let Ok(block) = document::directory(&registry_document) else {
+    if registry_document.get(document::DIRECTORY_KEY).is_none() {
         return Ok(None);
-    };
+    }
+    let block = document::directory(&registry_document)?;
     let Some(entry) = document::services(block)?.get(service) else {
         return Ok(None);
     };
