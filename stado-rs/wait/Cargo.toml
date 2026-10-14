@@ -7,11 +7,21 @@ license-file = "../../LICENSE"
 
 # Stado re-exports this crate as `stado::wait`; a product that waits depends
 # on it without linking the control plane.
+[features]
+# Both on by default, so every dependent waits as it did; a product that
+# waits only on blocking work names `default-features = false` and takes
+# neither client.
+default = ["http", "async"]
+# The HTTP and AWS SDK waits (`send`, `request`, `request_blocking`, `sdk`).
+http = ["dep:reqwest"]
+# The cancellable waits and the `tokio` process waits.
+async = ["dep:tokio"]
+
 [dependencies]
 chrono = "0.4"
 # `killpg`: a cancelled child's whole process group is ended before its pipes are drained.
 libc = "0.2"
-reqwest = { version = "0.12", default-features = false, features = ["blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking"], optional = true }
 # `sync` and `macros` carry the cancellation event (`Notify`, `select!`);
 # `io-util` the child pipe reads (`AsyncReadExt::read_to_end`).
-tokio = { version = "1", features = ["process", "sync", "macros", "io-util"] }
+tokio = { version = "1", features = ["process", "sync", "macros", "io-util"], optional = true }

@@ -28,20 +28,27 @@
 //! blocking work panics, ends with a `blad czekania` line that says so.
 //! Stdout is never written, so `--json` output is untouched.
 
+// The cancellable waits and the async process waits need `tokio`; the HTTP
+// waits need `reqwest`. A product that waits only on blocking work — child
+// processes, locks, its own calls — takes neither (`default-features =
+// false`), so the one wait mechanism reaches it without either client.
+#[cfg(feature = "async")]
 mod cancel;
 pub mod cycle;
 pub mod external;
+#[cfg(feature = "http")]
 mod http;
 mod line;
 pub mod open;
 mod process;
 
+#[cfg(feature = "async")]
 pub use cancel::{Cancellation, CANCELLED};
+#[cfg(feature = "http")]
 pub use http::{refusal, request, request_blocking, sdk, send, send_built};
-pub use process::{
-    child_output, child_output_async, output, output_async, output_cancellable, status,
-    status_async,
-};
+pub use process::{child_output, output, status};
+#[cfg(feature = "async")]
+pub use process::{child_output_async, output_async, output_cancellable, status_async};
 
 use std::fmt::Display;
 use std::future::Future;
@@ -234,6 +241,7 @@ where
 /// [`until`] that `cancellation` can end: `work` is raced against it, and
 /// when the cancellation fires first `work` is dropped where it stood and
 /// the wait ends with `przyczyna: czekanie odwolane`, answered as `None`.
+#[cfg(feature = "async")]
 pub async fn until_cancellable<T, E, F>(
     kind: Kind,
     what: impl Display,

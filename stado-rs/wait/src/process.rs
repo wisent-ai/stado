@@ -3,7 +3,9 @@
 
 use std::fmt::Display;
 
-use crate::{blocking, until, Kind};
+#[cfg(feature = "async")]
+use crate::until;
+use crate::{blocking, Kind};
 
 /// The program and arguments `command` runs, as a person would type them.
 fn command_line(command: &std::process::Command) -> String {
@@ -35,6 +37,7 @@ pub fn output(command: &mut std::process::Command) -> std::io::Result<std::proce
 
 /// The same for a `tokio` command: run it to its end and collect what it
 /// printed, saying so at both ends.
+#[cfg(feature = "async")]
 pub async fn output_async(
     command: &mut tokio::process::Command,
 ) -> std::io::Result<std::process::Output> {
@@ -46,6 +49,7 @@ pub async fn output_async(
 
 /// The waits this function makes, spelled as every product spells its
 /// mechanism: the race of the child's exit against the cancellation.
+#[cfg(feature = "async")]
 mod wait {
     use std::future::Future;
 
@@ -61,6 +65,7 @@ mod wait {
 
 /// Reap a killed child: wait for its exit, saying so at both ends. No
 /// cancellation ends this wait; a killed child exits.
+#[cfg(feature = "async")]
 async fn reap(child: &mut tokio::process::Child) -> std::io::Result<std::process::ExitStatus> {
     let place = match child.id() {
         Some(pid) => format!("pid {pid}"),
@@ -81,11 +86,13 @@ async fn reap(child: &mut tokio::process::Child) -> std::io::Result<std::process
 /// end open after the direct child is gone. Only Unix gives this crate a
 /// group to own; elsewhere a cancellable child is refused before it starts,
 /// never answered with a kill that stopped nothing.
+#[cfg(feature = "async")]
 struct OwnedGroup {
     leader: u32,
     killed: bool,
 }
 
+#[cfg(feature = "async")]
 impl OwnedGroup {
     /// Spawn the child as the leader of a group of its own.
     fn spawn(
@@ -180,6 +187,7 @@ impl OwnedGroup {
 /// (which the dead group lets happen), and only then does this return the
 /// `Interrupted` error naming the cancellation. Nothing of it is left to a
 /// drop; the wait line says the end it had (`czekanie odwolane`).
+#[cfg(feature = "async")]
 pub async fn output_cancellable(
     command: &mut tokio::process::Command,
     cancellation: &crate::Cancellation,
@@ -236,6 +244,7 @@ pub async fn output_cancellable(
     }
 }
 
+#[cfg(feature = "async")]
 async fn drain<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut Option<R>,
 ) -> std::io::Result<Vec<u8>> {
@@ -257,6 +266,7 @@ pub fn status(command: &mut std::process::Command) -> std::io::Result<std::proce
 }
 
 /// The same for a `tokio` command.
+#[cfg(feature = "async")]
 pub async fn status_async(
     command: &mut tokio::process::Command,
 ) -> std::io::Result<std::process::ExitStatus> {
@@ -278,6 +288,7 @@ pub fn child_output(
 
 /// The same for a `tokio` child already started: `what` names it, as its
 /// caller knows it.
+#[cfg(feature = "async")]
 pub async fn child_output_async(
     child: tokio::process::Child,
     what: impl Display,
