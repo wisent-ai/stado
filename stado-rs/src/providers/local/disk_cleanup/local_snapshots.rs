@@ -139,34 +139,35 @@ pub fn delete_all(home: &Path, enforcing: bool, report: &mut CleanupReport) {
         }
     };
     report.local_snapshot_volume = Some(volume.display().to_string());
-    let listed =
-        match crate::wait::output(Command::new(TMUTIL).arg("listlocalsnapshots").arg(&volume)) {
-            Ok(output) if output.status.success() => {
-                String::from_utf8_lossy(&output.stdout).to_string()
-            }
-            Ok(output) => {
-                bump(&mut record.skipped, "listing_refused");
-                report.add_error(
-                    CLEANER,
-                    &super::JanitorError::os(&format!(
-                        "tmutil listlocalsnapshots {} refused: {}",
-                        volume.display(),
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    )),
-                );
-                report.local_snapshots = record;
-                return;
-            }
-            Err(error) => {
-                bump(&mut record.skipped, "tmutil_unavailable");
-                report.add_error(
-                    CLEANER,
-                    &super::JanitorError::os(&format!("tmutil could not be run: {error}")),
-                );
-                report.local_snapshots = record;
-                return;
-            }
-        };
+    let mut listing = Command::new(TMUTIL);
+    listing.arg("listlocalsnapshots").arg(&volume);
+    let listed = match crate::wait::output(&mut listing) {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        }
+        Ok(output) => {
+            bump(&mut record.skipped, "listing_refused");
+            report.add_error(
+                CLEANER,
+                &super::JanitorError::os(&format!(
+                    "tmutil listlocalsnapshots {} refused: {}",
+                    volume.display(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )),
+            );
+            report.local_snapshots = record;
+            return;
+        }
+        Err(error) => {
+            bump(&mut record.skipped, "tmutil_unavailable");
+            report.add_error(
+                CLEANER,
+                &super::JanitorError::os(&format!("tmutil could not be run: {error}")),
+            );
+            report.local_snapshots = record;
+            return;
+        }
+    };
 
     for line in listed
         .lines()
