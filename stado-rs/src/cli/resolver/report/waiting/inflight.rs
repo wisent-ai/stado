@@ -80,13 +80,22 @@ impl Route<'_> {
 /// the interval it outlasted and where to ask, since a request the far side
 /// accepted and answers nothing on stands in no list of this host's (the
 /// authority's snapshot command over SSH stood for hours that way) — or
-/// when whether the route is held cannot be read, since then nobody can say.
+/// when whether the route is held cannot be read, since then nobody can say:
+/// the refresh interval that measures it included, which is a refusal before
+/// the request is sent, not a request sent unwatched.
 pub(crate) async fn unless_held<T, F>(route: Route<'_>, sent: F) -> Result<T, String>
 where
     F: Future<Output = T>,
 {
-    let Some(seconds) = declared_refresh_seconds() else {
-        return Ok(sent.await);
+    let seconds = match declared_refresh_seconds() {
+        Ok(Some(seconds)) => seconds,
+        Ok(None) => return Ok(sent.await),
+        Err(unreadable) => {
+            return Err(format!(
+                "{} request not sent: whether this host's resolver holds it cannot be measured: {unreadable}",
+                route.name()
+            ))
+        }
     };
     let period = Duration::from_secs(seconds);
     tokio::pin!(sent);

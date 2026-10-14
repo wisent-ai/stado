@@ -30,10 +30,16 @@ pub(crate) struct Standing {
 
 /// Every route this process holds unanswered past the declared refresh
 /// interval whose waits ride a session not yet replaced; none without a
-/// declared interval.
+/// declared interval. An interval that cannot be read is said on the
+/// resolver's log, since no route can be measured standing then.
 pub(crate) fn standing() -> Vec<Standing> {
-    let Some(refresh_seconds) = declared_refresh_seconds() else {
-        return Vec::new();
+    let refresh_seconds = match declared_refresh_seconds() {
+        Ok(Some(seconds)) => seconds,
+        Ok(None) => return Vec::new(),
+        Err(unreadable) => {
+            eprintln!("stado resolver: no standing session is renewed: {unreadable}");
+            return Vec::new();
+        }
     };
     let opens = match WAITING.lock() {
         Ok(opens) => opens.clone(),

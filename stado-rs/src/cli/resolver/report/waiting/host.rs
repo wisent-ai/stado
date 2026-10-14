@@ -31,7 +31,7 @@ pub(crate) fn held_on_host(host: &str) -> Result<Option<String>, String> {
     if waiting.is_empty() {
         return Ok(None);
     }
-    let Some(refresh_seconds) = declared_refresh_seconds() else {
+    let Some(refresh_seconds) = declared_refresh_seconds()? else {
         return Ok(None);
     };
     let held: Vec<&(WaitingOpen, i64)> = waiting
@@ -65,7 +65,7 @@ pub(crate) fn youngest_held_seconds(
     host: &str,
     endpoint: &str,
 ) -> Result<Option<i64>, String> {
-    let Some(refresh_seconds) = declared_refresh_seconds() else {
+    let Some(refresh_seconds) = declared_refresh_seconds()? else {
         return Ok(None);
     };
     Ok(published()?
@@ -99,7 +99,7 @@ pub(crate) fn held_at(url: &url::Url) -> Result<Option<String>, String> {
     if waiting.is_empty() {
         return Ok(None);
     }
-    let Some(refresh_seconds) = declared_refresh_seconds() else {
+    let Some(refresh_seconds) = declared_refresh_seconds()? else {
         return Ok(None);
     };
     let held: Vec<&(WaitingOpen, i64)> = waiting

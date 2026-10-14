@@ -261,3 +261,24 @@ pub fn resolver_config(document: &Value, target: &str) -> Result<ResolverConfig,
     serde_json::from_value(value.clone())
         .map_err(|error| format!("registry target service_resolver: {error}"))
 }
+
+/// [`resolver_config`] for a reader that may meet a target running no
+/// resolver: `None` when the registered target declares no
+/// `service_resolver`, the error when it is not registered or its
+/// declaration does not parse.
+pub fn declared_resolver_config(
+    document: &Value,
+    target: &str,
+) -> Result<Option<ResolverConfig>, String> {
+    let target_entries = targets(document)?;
+    let entry = target_entries
+        .get(target)
+        .copied()
+        .ok_or_else(|| format!("resolver target {target:?} is not registered"))?;
+    match entry.get("service_resolver") {
+        None => Ok(None),
+        Some(value) => serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| format!("registry target service_resolver: {error}")),
+    }
+}

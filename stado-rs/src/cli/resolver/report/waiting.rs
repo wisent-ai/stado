@@ -239,7 +239,7 @@ pub(crate) fn held_to_service(service: &str) -> Result<Vec<Value>, String> {
 
 /// The directory refresh interval this host's resolver declares: the one
 /// measure of a wait that stands. `None` without a resolver configuration.
-pub(crate) fn declared_bound_seconds() -> Option<u64> {
+pub(crate) fn declared_bound_seconds() -> Result<Option<u64>, String> {
     declared_refresh_seconds()
 }
 
@@ -253,25 +253,40 @@ pub(crate) fn declared_bound_seconds() -> Option<u64> {
 /// answers nothing, the authority's snapshot over SSH, was waited on without
 /// end by every registry reader, an install's converge among them. `None`
 /// only when neither names one.
-fn declared_refresh_seconds() -> Option<u64> {
+fn declared_refresh_seconds() -> Result<Option<u64>, String> {
     let published = super::published::published_state();
     if let Some(seconds) = published.and_then(|state| state.refresh_seconds) {
-        return Some(seconds);
+        return Ok(Some(seconds));
     }
-    let (registry, _) = crate::targets::last_good_for_this_host()?;
+    let Some((registry, _)) = crate::targets::last_good_for_this_host() else {
+        return Ok(None);
+    };
     let hostname = crate::providers::vast::system_hostname();
-    // A copy that names no record for this machine, or declares no
-    // resolver for it, declares no interval: nothing here can be measured.
-    let Ok(Some(target)) = registry.lookup_self(&hostname) else {
-        return None;
+    // A copy that names no record for this machine, or declares no resolver
+    // for it, declares no interval: nothing here can be measured. A copy
+    // that cannot be read, or a resolver declaration that does not parse,
+    // is that failure: read as "no interval", every wait went unmeasured
+    // and no held request was ever refused.
+    let target = match registry.lookup_self(&hostname) {
+        Ok(Some(target)) => target,
+        Ok(None) => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "the refresh interval cannot be read: this host ({hostname}) cannot be looked up in its last-known-good registry: {error}"
+            ))
+        }
     };
-    let Ok(document) = crate::cli::resolver::directory::document::last_good_document() else {
-        return None;
-    };
-    match crate::service_resolution::resolver_config(&document, &target.name) {
-        Ok(config) => Some(config.refresh_seconds),
-        Err(_) => None,
-    }
+    let document = crate::cli::resolver::directory::document::last_good_document().map_err(|error| {
+        format!("the refresh interval cannot be read: the last-known-good registry document: {error}")
+    })?;
+    crate::service_resolution::declared_resolver_config(&document, &target.name)
+        .map(|config| config.map(|config| config.refresh_seconds))
+        .map_err(|error| {
+            format!(
+                "the refresh interval cannot be read: the resolver declaration of {}: {error}",
+                target.name
+            )
+        })
 }
 
 /// The wait `key` has stood since `accepted`, when the client's connection

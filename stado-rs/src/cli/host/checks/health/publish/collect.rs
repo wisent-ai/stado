@@ -313,10 +313,14 @@ async fn answering_entry(
         }
         Err(error) => return Some(json!({ "unreadable": error.to_string() })),
     };
-    let Some(bound_seconds) = crate::cli::resolver::declared_bound_seconds() else {
-        return Some(json!({
-            "unreadable": "this host's resolver declares no directory refresh interval, the bound a standing question is judged by"
-        }));
+    let bound_seconds = match crate::cli::resolver::declared_bound_seconds() {
+        Ok(Some(seconds)) => seconds,
+        Ok(None) => {
+            return Some(json!({
+                "unreadable": "this host's resolver declares no directory refresh interval, the bound a standing question is judged by"
+            }))
+        }
+        Err(unreadable) => return Some(json!({ "unreadable": unreadable })),
     };
     let reading = crate::deploy::service_answering::ask_and_read(&entry, port, bound_seconds)?;
     let mut block = reading.document();

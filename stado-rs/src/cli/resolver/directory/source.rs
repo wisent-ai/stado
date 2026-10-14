@@ -100,8 +100,19 @@ impl SnapshotSource {
                         read
                     }
                     Err(held) => {
-                        if let Some(seconds) = crate::cli::resolver::declared_bound_seconds() {
-                            super::unanswered::remember(target, seconds, &held);
+                        // The interval measures how long the read stood; an
+                        // interval that cannot be read is added to the
+                        // refusal instead of the read being remembered.
+                        match crate::cli::resolver::declared_bound_seconds() {
+                            Ok(Some(seconds)) => {
+                                super::unanswered::remember(target, seconds, &held)
+                            }
+                            Ok(None) => {}
+                            Err(unreadable) => {
+                                return Err(CmdError::unreachable(format!(
+                                    "{held}; it is not remembered as unanswered: {unreadable}"
+                                )))
+                            }
                         }
                         Err(CmdError::unreachable(held))
                     }
