@@ -1,13 +1,12 @@
 //! Dir-fd-relative filesystem primitives for the disk cleaner.
 //!
-//! These are the Rust spellings of the `os.open(..., dir_fd=...)` /
-//! `os.unlink(..., dir_fd=...)` calls the Python janitor
-//! (`stado/providers/local/disk/cleanup.py`) builds its sandbox on. Every
-//! operation takes an already-open, already-validated directory descriptor
+//! The reclaim engine uses dir-fd-relative open and unlink operations as
+//! its filesystem sandbox.
+//! Every operation takes an already-open, already-validated directory descriptor
 //! plus a single path component, so a swapped or symlinked ancestor can
 //! never redirect the operation outside the validated tree.
 //!
-//! `unsafe` in the disk-cleanup port is confined to this file, in two
+//! `unsafe` in the space-reclaim engine is confined to this file, in two
 //! reviewed helpers: [`rename_exchange`] (the `renameat2`/`renameatx_np`
 //! syscall wrapper, mirroring Python's `ctypes` call in `_hf_exchange`)
 //! and [`borrowed`] (a `BorrowedFd::borrow_raw` adapter for the nix

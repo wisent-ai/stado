@@ -14,7 +14,7 @@ impl StadoObjectBackend {
     /// object is. The route answers every read with a `Content-Length` — 41,041
     /// bytes for the canonical registry — and `Accept-Ranges: bytes`, and
     /// nothing here compared the two. That matters because of where the body
-    /// goes next: `providers::local::disk_cleanup::fetch_canonical_registry`
+    /// goes next: `providers::local::space_reclaim::fetch_canonical_registry`
     /// hands it to `serde_json::from_str`, so a body that is not the whole
     /// object is journalled as a document that does not parse — `ValueError`,
     /// a finding about the registry's content — when what happened was a

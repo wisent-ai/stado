@@ -4,16 +4,10 @@ use serde_json::{json, Value};
 
 use super::native::Native;
 
-/// A registry generation written before the janitor's settings were retired,
-/// as it persisted in local storage.
+/// A registry generation written before the retired memory setting was
+/// removed, as persisted in local storage.
 fn stored_with_retired_settings(native: &Native) -> Value {
     let mut document: Value = serde_json::from_slice(&fs::read(&native.registry).unwrap()).unwrap();
-    document["targets"][0]["disk_cleanup"] = json!({
-        "mode": "enforce", "check_interval_seconds": 300, "low_free_gb": 8,
-        "target_free_gb": 20, "max_items_per_pass": 10000,
-        "max_bytes_per_pass": 21474836480_i64, "max_scan_items": 200000,
-        "cleaners": {"backup_twins": {"min_age_seconds": 0}}
-    });
     document["targets"][0]["memory_reclaim"] = json!({
         "mode": "enforce", "check_interval_seconds": 300, "low_free_mb": 2048,
         "target_free_mb": 4096, "high_swap_used_pct": 80, "max_repairs_per_pass": 4,
@@ -46,7 +40,6 @@ fn a_registry_write_drops_the_retired_janitor_settings() {
     let persisted: Value = serde_json::from_slice(&fs::read(&native.registry).unwrap()).unwrap();
     native.observe("persisted registry", persisted.clone());
     let target = expected["targets"][0].as_object_mut().unwrap();
-    target.remove("disk_cleanup");
     target.remove("memory_reclaim");
     target.insert("pinned_only".to_string(), json!(true));
     assert_eq!(persisted, expected);
@@ -100,7 +93,7 @@ fn a_pass_below_the_threshold_withdraws_the_turn_it_asked_for() {
     let native = Native::new("stale-turn");
     let state_dir = native.state_dir();
     fs::create_dir_all(&state_dir).unwrap();
-    let turn = state_dir.join("disk-cleanup-turn.json");
+    let turn = state_dir.join("space-reclaim-turn.json");
     let request = json!({
         "reason": "the volume was at the disk-full threshold",
         "pid": std::process::id(),

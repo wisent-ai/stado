@@ -61,10 +61,10 @@
           "kind": "lint"
         },
         {
-          "name": "sourcekit-cleanup",
+          "name": "editor-reclaim",
           "argv": [
             "cargo", "test", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
-            "--test", "disk-cleanup", "sourcekit::"
+            "--test", "space-reclaim", "sourcekit::"
           ],
           "kind": "test"
         },

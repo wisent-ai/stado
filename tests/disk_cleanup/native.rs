@@ -271,7 +271,7 @@ impl Native {
 impl Drop for Native {
     fn drop(&mut self) {
         let panicking = std::thread::panicking();
-        let state = self.state_dir().join("disk-cleanup-state.json");
+        let state = self.state_dir().join("space-reclaim-state.json");
         let persisted = match fs::read_to_string(&state) {
             Ok(body) => json!({"path": state, "body": body}),
             Err(error) => json!({"path": state, "read_error": error.to_string()}),

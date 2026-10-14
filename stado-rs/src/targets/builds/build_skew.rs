@@ -35,8 +35,8 @@ pub enum BuildVerdict {
 /// to accept it. Such a window opens without a restart or a binary
 /// replacement, so [`crate::deploy::service::StaleUnitImage`] fires nothing:
 /// the installed file and the running image agree and the REGISTRY is what
-/// moved — older builds refuse today's document over
-/// `disk_cleanup.cleaners` or the `disk_cleanup` key set.
+/// moved — an older build can refuse fields that the newer registry now
+/// declares, even while its installed file still matches its running image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildRegistrySkew {
     pub host: String,

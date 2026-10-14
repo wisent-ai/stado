@@ -96,7 +96,7 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
         .write(true)
         .create(true)
         .truncate(false)
-        .open(native.state_dir().join("disk-cleanup.lock"))
+        .open(native.state_dir().join("space-reclaim.lock"))
         .expect("open actual lock");
     fs2::FileExt::try_lock_exclusive(&lock)
         .expect("an answering SourceKit server must not hold the cleanup lock");
@@ -122,7 +122,7 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
         refusal.contains("ownership was not established"),
         "{refusal}"
     );
-    let turn = native.state_dir().join("disk-cleanup-turn.json");
+    let turn = native.state_dir().join("space-reclaim-turn.json");
     fs::write(&turn, b"{").expect("write interrupted turn record in isolated home");
     let damaged = build
         .output()

@@ -13,7 +13,7 @@ use crate::providers::local::space_reclaim::janitor::{
     LOCK_HOLDER_INODE_PREFIX, LOCK_HOLDER_NAME, LOCK_NAME,
 };
 
-/// Python `_open_lock`: open `disk-cleanup.lock` with O_RDWR|O_CREAT|
+/// Open `space-reclaim.lock` with O_RDWR|O_CREAT|
 /// O_NOFOLLOW, verify it is a regular file owned by us, force 0600.
 pub(crate) fn open_lock(state_dir: &Path) -> Result<File, JanitorError> {
     open_lock_at(&state_dir.join(LOCK_NAME))

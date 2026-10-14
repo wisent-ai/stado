@@ -52,13 +52,11 @@ pub(crate) struct RevisitTargetPolicy {
     ///
     /// Declared here, and NOT derived from a `release_control` target policy.
     /// Deriving it would have required every authorised product to appear in
-    /// `release_control` and declare this host — and the units that motivate
-    /// this whole feature fail that test. `com.wisent.compute.disk-cleanup.disk-cleanup`
-    /// and `com.wisent.stado-resolver` belong to the Stado release itself,
-    /// which has no blue-green rollout policy; `com.wisent.transcript-lake-stream`
-    /// is a real product that Stado's release-control catalogue does not carry
-    /// at all. A derivation that excluded all three motivating owners would be
-    /// a feature that cannot be turned on for anything it was built for.
+    /// `release_control` and declare this host — the host's resident
+    /// space-reclaim and resolver work belong to the Stado release itself,
+    /// which has no blue-green rollout policy. Other services may not appear
+    /// in that catalogue at all. Excluding those owners would make this
+    /// policy unusable for its own managed units.
     ///
     /// So the policy is the authorization, and it carries its own directory:
     /// one per host, so one ledger and one lock hold the

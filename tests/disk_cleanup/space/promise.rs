@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 use crate::native::Native;
 
-/// `stado serve --disk-cleanup --health-interval-seconds N` in the isolated
+/// `stado serve --health-interval-seconds N` in the isolated
 /// home, its reports read line by line as each pass prints one. Once the
 /// test has read the reports it needs, the rest are drained: the watch prints
 /// one report per pass to a pipe, and a pipe nobody reads fills, after which
@@ -27,12 +27,7 @@ struct Watch {
 impl Watch {
     fn start(native: &Native, interval: &str) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_stado"))
-            .args([
-                "serve",
-                "--disk-cleanup",
-                "--health-interval-seconds",
-                interval,
-            ])
+            .args(["serve", "--health-interval-seconds", interval])
             .env_clear()
             .env("PATH", std::env::var_os("PATH").expect("PATH is set"))
             .env("HOME", &native.home)
@@ -84,7 +79,7 @@ fn instant(value: &Value) -> DateTime<Utc> {
 }
 
 fn state(native: &Native) -> Value {
-    let body = fs::read_to_string(native.state_dir().join("disk-cleanup-state.json")).unwrap();
+    let body = fs::read_to_string(native.state_dir().join("space-reclaim-state.json")).unwrap();
     serde_json::from_str(&body).unwrap()
 }
 /// `host gates` exits non-zero while any blocker stands, and this isolated
@@ -95,12 +90,12 @@ fn gates(native: &Native) -> Value {
 }
 
 #[test]
-fn the_watch_reads_the_volume_at_the_hosts_health_period() {
+fn the_retired_watch_flag_is_refused() {
     let native = Native::new("watch-period-refusals");
-    let serve = native.run(&["serve", "--disk-cleanup"]);
-    assert_eq!(serve.status.code(), Some(2), "{serve:?}");
+    let serve = native.run(&["serve", "--disk-cleanup", "--health-interval-seconds", "2"]);
+    assert!(!serve.status.success(), "{serve:?}");
     assert!(
-        String::from_utf8_lossy(&serve.stderr).contains("--health-interval-seconds"),
+        String::from_utf8_lossy(&serve.stderr).contains("--disk-cleanup"),
         "{serve:?}"
     );
 }
@@ -110,14 +105,14 @@ fn a_watch_keeps_the_pass_it_promised_and_gates_read_the_promise() {
     let native = Native::new("watch-promise");
     let mut watch = Watch::start(&native, "2");
     let first = watch.next_report();
-    assert_eq!(first["writer"], "disk-cleanup-cli", "{first}");
+    assert_eq!(first["writer"], "space-reclaim-cli", "{first}");
     assert_eq!(first["every_seconds"], 2, "{first}");
     // The second pass is the first one this process can measure its
     // lateness from: the time between the first pass's end and its own start
     // beyond the period, spent writing the state file and printing.
     let second = watch.next_report();
     watch.drain();
-    let promised = state(&native)["promises"]["disk-cleanup-cli"].clone();
+    let promised = state(&native)["promises"]["space-reclaim-cli"].clone();
     native.observe("measured promise", promised.clone());
     assert_eq!(promised["every_seconds"], 2, "{promised}");
     assert_eq!(promised["pid"], second["writer_pid"], "{promised}");
@@ -139,7 +134,7 @@ fn a_watch_keeps_the_pass_it_promised_and_gates_read_the_promise() {
     let cleanup_state = &report["cleanup_state"];
     native.observe("space report", cleanup_state.clone());
     assert_eq!(
-        cleanup_state["promised_by"], "disk-cleanup-cli",
+        cleanup_state["promised_by"], "space-reclaim-cli",
         "{cleanup_state}"
     );
     assert_eq!(cleanup_state["prevented"], false, "{cleanup_state}");
@@ -157,7 +152,7 @@ fn a_watch_keeps_the_pass_it_promised_and_gates_read_the_promise() {
     let mut legacy = state(&native);
     legacy.as_object_mut().unwrap().remove("promises");
     fs::write(
-        native.state_dir().join("disk-cleanup-state.json"),
+        native.state_dir().join("space-reclaim-state.json"),
         serde_json::to_vec(&legacy).unwrap(),
     )
     .unwrap();
@@ -173,7 +168,7 @@ fn an_aged_live_kernel_lock_is_not_replaced_and_release_allows_cleanup() {
     native.fill_with_user_data();
     let state_dir = native.state_dir();
     fs::create_dir_all(&state_dir).unwrap();
-    let path = state_dir.join("disk-cleanup.lock");
+    let path = state_dir.join("space-reclaim.lock");
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -222,7 +217,7 @@ fn an_already_retired_locked_inode_remains_protected_until_kernel_release() {
     native.fill_with_user_data();
     let state_dir = native.state_dir();
     fs::create_dir_all(&state_dir).unwrap();
-    let path = state_dir.join("disk-cleanup.lock.retired.regression");
+    let path = state_dir.join("space-reclaim.lock.retired.regression");
     let lock = OpenOptions::new()
         .read(true)
         .write(true)

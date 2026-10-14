@@ -4,10 +4,8 @@
 //! used, a pass deletes everything the fleet put on the host — every
 //! candidate of every cleaner in [`CLEANERS`], with no age, count, byte or
 //! scan limit. Below it a pass deletes nothing. Nothing about cleanup is
-//! declared per host: the registry once carried `disk_cleanup` and
-//! `memory_reclaim` blocks with caps, ages, watermarks and repairs nobody had
-//! approved, and a cap of 10 000 items per pass left a vault host out of disk
-//! while its janitor counted what it was not allowed to delete.
+//! declared per host: the fleet policy alone supplies the threshold and
+//! the cleaner set, rather than per-target ages, caps or watermarks.
 //!
 //! What a pass keeps is what is not the fleet's to take: `~/.ssh` and
 //! anything outside a cleaner's fleet-owned area (the user's data), a backup

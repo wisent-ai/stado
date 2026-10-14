@@ -15,7 +15,7 @@ use super::systemd::recycle_systemd;
 /// as it lives, because neither launchd nor systemd has any reason to notice
 /// that the file underneath it changed.
 ///
-/// That is not theoretical. A long-running disk-cleanup janitor keeps
+/// A long-running space-reclaim watch keeps
 /// executing the previous image of `~/.stado/bin/stado` after the file at
 /// that exact path is replaced. Its reports then name fewer cleaners and
 /// carry no `writer_version`, and it keeps applying whatever rule the old

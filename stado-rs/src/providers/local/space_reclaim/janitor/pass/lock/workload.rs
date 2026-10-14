@@ -12,7 +12,7 @@ use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 
 /// The agent's word for "a standalone cleanup holds the exclusive lock, so
 /// no workload can take its shared hold": published as `admission_reason`
-/// in the capacity broadcast and as `disk_cleanup_admission` beside a claim
+/// in the capacity broadcast and as `space_reclaim_admission` beside a claim
 /// that stopped for it, and read back verbatim by `stado host gates`.
 pub const CLEANUP_IN_PROGRESS: &str = "cleanup_in_progress";
 
@@ -20,7 +20,7 @@ pub const CLEANUP_IN_PROGRESS: &str = "cleanup_in_progress";
 /// the state directory or the lock file refused the open. A claim stops for
 /// this exactly as it stops for [`CLEANUP_IN_PROGRESS`], so the publication
 /// carries it as the `admission_reason`, with the error code appended under
-/// `disk_cleanup_admission`.
+/// `space_reclaim_admission`.
 pub const CLEANUP_LOCK_ERROR: &str = "cleanup_lock_error";
 
 /// A shared-mode hold on the cleanup lock for one live workload
