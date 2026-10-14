@@ -149,13 +149,3 @@ pub(super) fn contact_email(flag: &str) -> String {
         .trim()
         .to_string()
 }
-
-/// The GCP project the write side targets: the deployment's declared GCP
-/// project (`crate::config::project`, its env binding or `config.json`).
-/// No project is built in. One used to be, so a deployment that declared none
-/// read and requested GPU quota against a project that was not its own; an
-/// undeclared project is refused by the Cloud Quotas client naming
-/// `GCP_PROJECT`.
-pub(super) fn gcp_project_env() -> String {
-    crate::config::project().to_string()
-}

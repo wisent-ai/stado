@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use crate::cli::quota::common::{
-    contact_email, echo_json, gcp_project_env, parse_providers, parse_regions, quota_adapter,
+    contact_email, echo_json, parse_providers, parse_regions, quota_adapter,
 };
 use crate::cli::CmdError;
 use crate::scheduler::dispatch::{quota_request, quota_skus};
@@ -112,7 +112,7 @@ pub(in crate::cli::quota) async fn request_all(
                 // against this only if explicit_regions is non-empty. Don't
                 // default to config::regions() — that's the dispatcher's
                 // current dispatch list, not a quota policy.
-                let client = quota_skus::CloudQuotasClient::new(&gcp_project_env())
+                let client = quota_skus::CloudQuotasClient::new(crate::config::project())
                     .await
                     .map_err(CmdError::from)?;
                 results.extend(

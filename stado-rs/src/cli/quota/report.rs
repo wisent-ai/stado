@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-use super::common::{echo_json, gcp_project_env, parse_providers, quota_adapter};
+use super::common::{echo_json, parse_providers, quota_adapter};
 use crate::cli::CmdError;
 use crate::scheduler::dispatch::{quota_replies, quota_skus};
 
@@ -24,7 +24,7 @@ pub(super) async fn requests(
     for provider in &providers {
         match quota_adapter(provider) {
             Some(crate::capabilities::QuotaAdapter::Gcp) => {
-                let client = quota_skus::CloudQuotasClient::new(&gcp_project_env())
+                let client = quota_skus::CloudQuotasClient::new(crate::config::project())
                     .await
                     .map_err(CmdError::from)?;
                 let mut rows = quota_skus::gcp_request_status(&client)
