@@ -12,7 +12,7 @@ use crate::native::Native;
 fn the_former_root_command_is_refused_as_unknown_and_a_held_job_tree_stays() {
     let native = Native::new("workdirs-cutover");
     let jobs = native.home.join(".stado/work/jobs");
-    let held = jobs.join("job-held");
+    let held = jobs.join("wc-job-0123456789abcdef01234567");
     fs::create_dir_all(&held).unwrap();
     fs::write(held.join("artifacts.json"), b"{}\n").unwrap();
     let mut holder = Command::new("/bin/cat")
