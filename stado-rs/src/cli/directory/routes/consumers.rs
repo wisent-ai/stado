@@ -115,11 +115,11 @@ fn bind_consumer(
         .iter()
         .find(|adapter| adapter["bind"] == bind.as_str())
     {
+        // The adapter is named as declared: one without its service or
+        // consumer was named "/", which pointed the operator at nothing.
         return Err(CmdError::refused(format!(
-            "{target} handed out {bind}, which its {}/{} adapter already declares and the \
-             resolver has not bound yet; run the declaration again for another port",
-            holder["service"].as_str().unwrap_or_default(),
-            holder["consumer"].as_str().unwrap_or_default()
+            "{target} handed out {bind}, which an adapter already declares and the resolver has \
+             not bound yet ({holder}); run the declaration again for another port"
         )));
     }
     match existing {
