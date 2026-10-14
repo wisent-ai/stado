@@ -34,16 +34,22 @@ const BAD_FS: &[&str] = &[
     "overlay",
 ];
 
-/// Python `_tmp_is_tmpfs` (`stat -f -c %T /tmp`).
-pub async fn tmp_is_tmpfs() -> bool {
-    match crate::wait::output_async(
+/// Python `_tmp_is_tmpfs` (`stat -f -c %T /tmp`); the failure to ask is the
+/// error, not an answer that /tmp is on disk.
+pub async fn tmp_is_tmpfs() -> Result<bool, String> {
+    let out = crate::wait::output_async(
         tokio::process::Command::new("stat").args(["-f", "-c", "%T", "/tmp"]),
     )
     .await
-    {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).trim() == "tmpfs",
-        Err(_) => false,
+    .map_err(|error| format!("the filesystem of /tmp cannot be read (stat -f): {error}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "the filesystem of /tmp cannot be read: stat -f exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
+    Ok(String::from_utf8_lossy(&out.stdout).trim() == "tmpfs")
 }
 
 /// Pure parser for /proc/mounts: disk-backed, read-write mount points.
@@ -70,12 +76,13 @@ pub fn parse_mounts(text: &str) -> Vec<String> {
     out
 }
 
-/// Disk-backed, read-write mount points (from /proc/mounts).
+/// Disk-backed, read-write mount points (from /proc/mounts); a table that
+/// cannot be read is the error, not a host with no disk mounts.
 /// Python `_candidate_mounts`.
-pub fn candidate_mounts() -> Vec<String> {
+pub fn candidate_mounts() -> Result<Vec<String>, String> {
     std::fs::read_to_string("/proc/mounts")
         .map(|text| parse_mounts(&text))
-        .unwrap_or_default()
+        .map_err(|error| format!("/proc/mounts cannot be read: {error}"))
 }
 
 /// Python `_writable_for_self`: create+remove a probe file in `path`.

@@ -18,8 +18,15 @@ pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String>
         ));
         return Some(explicit);
     }
-    if !tmp_is_tmpfs().await {
-        return None;
+    match tmp_is_tmpfs().await {
+        Ok(true) => {}
+        Ok(false) => return None,
+        Err(cause) => {
+            log_fn(&format!(
+                "staging: {cause}; staging stays where TMPDIR points"
+            ));
+            return None;
+        }
     }
     let tmp_free = match crate::providers::local::disk::gate::free_gb(Path::new("/tmp")) {
         Ok(free) => free,
@@ -33,9 +40,22 @@ pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String>
     };
     let user = agent_user();
     let mut best: Option<(String, f64, bool)> = None;
-    for mnt in candidate_mounts() {
+    let mounts = match candidate_mounts() {
+        Ok(mounts) => mounts,
+        Err(cause) => {
+            log_fn(&format!(
+                "staging: /tmp is tmpfs and {cause}; no disk-backed mount can be chosen, so staging stays on /tmp (RAM)"
+            ));
+            return None;
+        }
+    };
+    for mnt in mounts {
         let target: PathBuf = Path::new(&mnt).join("wisent-staging");
-        if std::fs::create_dir_all(&target).is_err() {
+        if let Err(error) = std::fs::create_dir_all(&target) {
+            log_fn(&format!(
+                "staging: candidate {} cannot be created ({error}); skipping",
+                target.display()
+            ));
             continue;
         }
         chown_if_root(&target, &user);
