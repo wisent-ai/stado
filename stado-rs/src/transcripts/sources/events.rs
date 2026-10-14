@@ -178,15 +178,25 @@ pub(in crate::transcripts) fn payloads(path: &Path) -> Vec<(String, Origin)> {
     }
     let mut calls: BTreeMap<String, bool> = BTreeMap::new();
     let mut out = Vec::new();
+    // Not an event stream we understand. Reading the schema is the point of
+    // this module, so an unparsable line is not pattern-matched on the off
+    // chance; it is counted and the file named on stderr, as an unreadable
+    // file is, so a credential in a line nobody parsed is not "never seen".
+    // The line itself is never printed: it may hold the credential.
+    let mut unparsed: Vec<String> = Vec::new();
     for line in lines {
-        let event: Value = match serde_json::from_str(&line) {
-            Ok(event) => event,
-            // Not an event stream we understand. Reading the schema is the
-            // point of this module, so an unparsable line is skipped rather
-            // than pattern-matched on the off chance.
-            Err(_) => continue,
-        };
-        out.extend(payloads_from_event(&event, &mut calls));
+        match serde_json::from_str::<Value>(&line) {
+            Ok(event) => out.extend(payloads_from_event(&event, &mut calls)),
+            Err(error) => unparsed.push(error.to_string()),
+        }
+    }
+    if let Some(error) = unparsed.first() {
+        eprintln!(
+            "transcripts: {} line(s) of {} are not JSON events and were not read; the first: \
+             {error}",
+            unparsed.len(),
+            path.display()
+        );
     }
     out
 }
