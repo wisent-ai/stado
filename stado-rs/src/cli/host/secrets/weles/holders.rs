@@ -116,11 +116,23 @@ pub(super) async fn settle_role_holders(
                         // and the other roles still deserve their holders.
                         match retagged {
                             Ok(()) => adopted.push(role),
-                            Err(reason) => unadopted.push(json!({
-                                "role": role,
-                                "item": item.id,
-                                "reason": reason.trim(),
-                            })),
+                            Err(reason) => {
+                                // Printed from the role, item and reason
+                                // themselves, not read back from the row
+                                // with empty-text defaults.
+                                let reason = reason.trim();
+                                eprintln!(
+                                    "{name}: no item plays role {role}, and its former item {} could not be given the tag {}: \
+                                     {reason}; until it carries the tag every read of role:{role} is refused",
+                                    item.id,
+                                    role_tag(&role),
+                                );
+                                unadopted.push(json!({
+                                    "role": role,
+                                    "item": item.id,
+                                    "reason": reason,
+                                }));
+                            }
                         }
                     }
                     None => unheld.push(role),
@@ -133,17 +145,6 @@ pub(super) async fn settle_role_holders(
         eprintln!(
             "{name}: no item plays role {role}, so every read of role:{role} is refused; store it \
              with `stado credentials item put --host {name} --role {role}`"
-        );
-    }
-    for refused in &unadopted {
-        eprintln!(
-            "{name}: no item plays role {}, and its former item {} could not be given the tag {}: \
-             {}; until it carries the tag every read of role:{} is refused",
-            refused["role"].as_str().unwrap_or_default(),
-            refused["item"].as_str().unwrap_or_default(),
-            role_tag(refused["role"].as_str().unwrap_or_default()),
-            refused["reason"].as_str().unwrap_or_default(),
-            refused["role"].as_str().unwrap_or_default(),
         );
     }
     for role in &contested {
