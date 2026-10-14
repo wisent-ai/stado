@@ -151,15 +151,16 @@ pub fn cron_is_valid(cron: &str) -> bool {
 /// datetime (Python `compute_next_due`).
 ///
 /// The cron is interpreted in `tz` (so "0 2 * * *" means 02:00 in that
-/// zone, DST included), then converted back to UTC for storage. An
-/// unparseable `tz` falls back to UTC, exactly like Python's blanket
-/// `except` around `ZoneInfo(tz)`.
+/// zone, DST included), then converted back to UTC for storage. A `tz` that
+/// names no time zone is refused, never read as UTC.
 pub fn compute_next_due(
     cron: &str,
     after_utc: DateTime<Utc>,
     tz: &str,
 ) -> Result<DateTime<Utc>, CronError> {
-    let zone: Tz = tz.parse().unwrap_or(Tz::UTC);
+    let zone: Tz = tz
+        .parse()
+        .map_err(|error| CronError(format!("{tz:?} is not a time zone: {error}")))?;
     let base_local = after_utc.with_timezone(&zone);
     let mut best: Option<DateTime<Tz>> = None;
     for schedule in compile(cron)? {
