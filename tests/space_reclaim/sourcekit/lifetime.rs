@@ -77,8 +77,68 @@ fn collect_exit(queue: &OwnedFd, pid: u32) {
 
 const CLIENT: &str = "sourcekit::lifetime::client_process";
 const READY: &str = "editor-client-ready ";
+/// How the journey hands its isolated package and workspace to the client
+/// process it starts; nothing outside the journey sets them.
 const PACKAGE: &str = "STADO_EDITOR_TEST_PACKAGE";
 const WORKSPACE: &str = "STADO_EDITOR_TEST_WORKSPACE";
+/// The repository identity the isolated checkout's origin names, so the
+/// editor finds it as that repository's canonical checkout in the isolated
+/// workspace; nothing is fetched from it.
+const ORIGIN: &str = "https://github.com/wisent-ai/editor-lifetime-fixture";
+const MANIFEST: &str = "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(name: \"EditorLifetimeFixture\")\n";
+
+/// `git args` in `directory`, recorded with the journey's evidence; refused
+/// with git's own words.
+fn git(native: &Native, directory: &std::path::Path, args: &[&str]) {
+    let output = match Command::new("git")
+        .args(args)
+        .current_dir(directory)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => panic!("cannot run git {args:?}: {error}"),
+    };
+    native.record("git", args, &output);
+    assert!(
+        output.status.success(),
+        "git {args:?} exited {:?}: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A canonical checkout on `main` holding a committed Swift package, in a
+/// workspace of its own under the isolated home: the workspace and the
+/// package's physical paths.
+fn canonical_package(native: &Native) -> (String, String) {
+    let workspace = native.home.join("workspace");
+    let checkout = workspace.join("editor-lifetime-fixture");
+    fs::create_dir_all(&checkout).expect("create the isolated canonical checkout");
+    fs::write(checkout.join("Package.swift"), MANIFEST).expect("write the package manifest");
+    git(native, &checkout, &["init", "--initial-branch", "main"]);
+    git(native, &checkout, &["remote", "add", "origin", ORIGIN]);
+    git(native, &checkout, &["add", "Package.swift"]);
+    git(
+        native,
+        &checkout,
+        &[
+            "-c",
+            "user.name=editor lifetime journey",
+            "-c",
+            "user.email=journey@invalid",
+            "commit",
+            "--message",
+            "isolated editor package",
+        ],
+    );
+    let physical = |path: &std::path::Path| {
+        path.canonicalize()
+            .expect("resolve the isolated path")
+            .to_string_lossy()
+            .into_owned()
+    };
+    (physical(&workspace), physical(&checkout))
+}
 
 #[test]
 #[ignore = "process helper invoked by the editor lifetime journey"]
@@ -126,14 +186,11 @@ fn status(native: &Native, workspace: &str, package: &str) -> Value {
 
 #[test]
 fn parent_exit_closes_editor_with_live_stdin_and_releases_workspace_ownership() {
-    let package = std::env::var(PACKAGE)
-        .expect("STADO_EDITOR_TEST_PACKAGE must name a real canonical Swift package");
-    let workspace = std::env::var(WORKSPACE)
-        .expect("STADO_EDITOR_TEST_WORKSPACE must name its existing canonical checkout workspace");
+    let native = Native::new("editor-parent-lifetime");
+    let (workspace, package) = canonical_package(&native);
     let physical = std::path::Path::new(&package)
         .canonicalize()
         .expect("resolve actual package");
-    let native = Native::new("editor-parent-lifetime");
     let template = native.command(&[]);
     let stderr_path = native.home.join("editor-client.stderr");
     let mut helper = Command::new(std::env::current_exe().expect("test executable"));
