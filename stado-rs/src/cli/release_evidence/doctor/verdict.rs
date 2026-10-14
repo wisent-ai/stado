@@ -33,9 +33,9 @@ pub(super) struct Facts<'a> {
     ///
     /// This command cannot ask the cause's condition: the check reads the
     /// release user's vault ON the host, and running it here would resolve this
-    /// operator's own store instead. So the run is reported, the count is
-    /// resolved into a certain hold where counting alone decides, and the check
-    /// the agent will run is named so an operator can run it themselves.
+    /// operator's own store instead. So the run is reported, a cause with no
+    /// condition is resolved into the certain hold the agent makes, and the
+    /// check the agent will run is named so an operator can run it themselves.
     pub(super) run: Option<CauseRun>,
     /// A candidate is recorded, or the phase says one is being staged.
     pub(super) in_flight: bool,
@@ -71,12 +71,16 @@ pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
     {
         blockers.push(BLOCKER_CANDIDATE_NOT_READY.to_string());
     }
-    // Only a hold that counting alone decides is asserted as a blocker. A
-    // shorter run whose cause has a checkable condition is reported as pending,
-    // not claimed: this command cannot reach the condition, and asserting a
-    // refusal it did not establish would be the same overreach as naming a
-    // cause from a symptom.
-    let held = facts.run.as_ref().is_some_and(CauseRun::repeats);
+    // Only a hold the agent makes without asking anything is asserted as a
+    // blocker: a retained quarantine whose cause holds the candidate and has
+    // no live condition stays until it is cleared (`recover::wall::hold_for`).
+    // A cause with a checkable condition is reported as pending, not claimed:
+    // this command cannot reach the condition, and asserting a refusal it did
+    // not establish would be the same overreach as naming a cause from a
+    // symptom.
+    let held = facts.run.as_ref().is_some_and(|run| {
+        run.cause.holds_the_candidate() && run.cause.predicate(&run.evidence).is_none()
+    });
     if held {
         blockers.push(BLOCKER_REPEATING_CAUSE.to_string());
     }
