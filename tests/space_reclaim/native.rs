@@ -29,7 +29,7 @@ impl Native {
             .unwrap()
             .to_path_buf();
         let run = root
-            .join("build/real-tests/disk-cleanup")
+            .join("build/real-tests/space-reclaim")
             .join(format!("{case}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&run).unwrap();
         let home = run.join("home");
@@ -92,13 +92,7 @@ impl Native {
             .storage_path(effective["wc_local_storage_path"].as_str().unwrap())
             .join("registry.json");
         this.observe("configuration", configuration);
-        // The journeys judge what a pass reclaims, not whether this machine
-        // is idle enough to admit the walk: under a build the one-minute load
-        // passes the core count, every build-cache walk was skipped for load,
-        // and each journey then failed as a lost reclamation. The isolated
-        // home declares its own ceiling, the largest load a host can report,
-        // through the same configuration key an operator would set; a skip
-        // for load is then a defect of the walk, not of the machine.
+        // The isolated scan ceiling keeps unrelated builds from skipping reclaim.
         let ceiling = f64::MAX.to_string();
         this.success(&["config", "set", "host.scan_load_ceiling", &ceiling]);
         this.observe(
@@ -213,7 +207,6 @@ impl Native {
             .push(json!({"operation": operation, "value": value}));
     }
 
-    /// Apply the local janitor and retain its real report.
     pub fn cleanup(&self) -> Value {
         let report = self.json(&[
             "space",

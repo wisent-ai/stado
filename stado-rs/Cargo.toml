@@ -184,7 +184,7 @@ path = "../tests/host_health/linux_link.rs"
 
 [[test]]
 name = "space-reclaim"
-path = "../tests/disk_cleanup/lifecycle.rs"
+path = "../tests/space_reclaim/lifecycle.rs"
 
 [[test]]
 name = "submission-removed-extractor"

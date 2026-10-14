@@ -1,16 +1,10 @@
 //! The units one catalog product's process replaced on one host, found from
 //! what each unit on that host runs.
 //!
-//! Every unit the host loads or holds a file for, and every unit the registry
-//! declares there, is matched against the product by its program
-//! ([`service_catalog::runs_program_of`]). A match that is not the product's
-//! own unit is work the product's one process does now. For any product but
-//! the host Stado process the whole unit is replaced. For the host Stado
-//! process the unit does one or more roles, read from the unit's own command
-//! line by Stado's own command definitions, or from the live process's role
-//! options that name the program, root or destination the unit runs; a unit
-//! running Stado's program with no role it can be matched to is reported and
-//! left alone. Nothing here names a unit.
+//! Every host unit and registry declaration is matched by the program it
+//! runs. Other products replace matching units whole. The host Stado process
+//! replaces proven role units and units invoking a removed root verb; valid
+//! one-pass commands with no resident role are reported and kept.
 
 use crate::deploy::service::*;
 use crate::deploy::service_catalog::{self, CatalogService, RoleUnit};
@@ -20,11 +14,11 @@ use crate::deploy::service_catalog::{self, CatalogService, RoleUnit};
 pub struct Predecessors {
     /// Units the product's process replaces whole, wherever that process runs.
     pub replaced: Vec<String>,
-    /// Units whose work is a role of the host Stado process: retired where
-    /// that process is proven to run the role.
+    /// Host Stado units whose root verb was removed: retired after start.
+    pub obsolete: Vec<String>,
+    /// Host Stado roles, retired only when the new process runs them.
     pub roles: Vec<RoleUnit>,
-    /// Units that run the host Stado program and do work no role of the one
-    /// process does: never retired, each reported `kept` with the reason.
+    /// Valid one-pass units with no resident role: reported and kept.
     pub uncovered: Vec<PredecessorRetirement>,
 }
 
@@ -35,6 +29,7 @@ impl Predecessors {
             .iter()
             .map(String::as_str)
             .chain(self.roles.iter().map(|role| role.unit.as_str()))
+            .chain(self.obsolete.iter().map(String::as_str))
     }
 }
 
@@ -150,6 +145,9 @@ pub fn derive_predecessors(
         roles.extend(path_role(unit, role_paths));
         match service_catalog::role_unit(&unit.label, &roles) {
             Some(role) => found.roles.push(role),
+            None if runs && !service_catalog::host_command_known(entry, line) => {
+                found.obsolete.push(unit.label.clone())
+            }
             None if runs => found.uncovered.push(PredecessorRetirement {
                 unit: unit.label.clone(),
                 state: "kept".to_string(),

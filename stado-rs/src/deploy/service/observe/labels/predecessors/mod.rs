@@ -35,8 +35,8 @@ pub struct PredecessorRetirement {
 /// unit's listener is not retired here at all: it is handed over by the
 /// reconciler, under the unit's lease, see [`handoff`]; the API listener's
 /// units are retired here only once the host Stado process recorded its
-/// takeover, and `kept` until then, see [`takeover`]. A unit that runs the
-/// host Stado program with no role is reported `kept` with the reason.
+/// takeover. A removed root command is retired after the replacement runs;
+/// a still-valid one-pass command without a resident role is reported `kept`.
 ///
 /// The unit file itself stays where it is: [`set_label_autostart`] records the
 /// init system's own disabled override, which outlives the file and is what
@@ -47,7 +47,8 @@ pub async fn retire_found(
     found: Predecessors,
     runner: &Runner,
 ) -> Vec<PredecessorRetirement> {
-    let mut retirements = Vec::with_capacity(found.replaced.len() + found.roles.len());
+    let mut retirements =
+        Vec::with_capacity(found.replaced.len() + found.roles.len() + found.obsolete.len());
     for unit in &found.replaced {
         retirements.push(retirement(target, unit, runner).await);
     }
@@ -87,6 +88,11 @@ pub async fn retire_found(
                 detail: format!("its role could not be checked: {error}"),
             },
         });
+    }
+    for unit in &found.obsolete {
+        let mut result = retirement(target, unit, runner).await;
+        result.detail = format!("removed root command: {}", result.detail);
+        retirements.push(result);
     }
     retirements.extend(found.uncovered);
     retirements

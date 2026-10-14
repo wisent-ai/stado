@@ -10,6 +10,7 @@
 //! program, and no unit name is listed anywhere.
 
 use super::{all, executable_name, resolve_word, CatalogService, RoleUnit, API_TAKEOVER};
+use clap::CommandFactory;
 
 /// The first words that only start another program: the program the unit
 /// really runs is the first operand after them.
@@ -147,6 +148,36 @@ pub fn host_roles(entry: &CatalogService, line: &str) -> Vec<&'static str> {
         }
     }
     Vec::new()
+}
+
+/// Whether the program's root command still exists in this release. Removed
+/// verbs have no work the current binary can perform, unlike valid one-pass
+/// commands and root options that deliberately have no resident serve role.
+pub fn host_command_known(entry: &CatalogService, line: &str) -> bool {
+    let Some(executable) = executable_name(&entry.program) else {
+        return false;
+    };
+    let mut words = line.split_whitespace();
+    if words
+        .find(|word| executable_name(word) == Some(executable))
+        .is_none()
+    {
+        return false;
+    }
+    let Some(verb) = words.next() else {
+        return false;
+    };
+    let command = crate::cli::entry::spec::Cli::command();
+    if command.find_subcommand(verb).is_some() {
+        return true;
+    }
+    match command.try_get_matches_from([executable, verb]) {
+        Ok(_) => true,
+        Err(error) => matches!(
+            error.kind(),
+            clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+        ),
+    }
 }
 
 /// The role unit `label` is when it does the work of `roles`: the API

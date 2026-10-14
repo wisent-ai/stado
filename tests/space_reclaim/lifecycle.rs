@@ -5,11 +5,15 @@
 //! `hdiutil`, which needs no privileges there.
 #![cfg(target_os = "macos")]
 
+#[path = "guards/build_lock.rs"]
 mod build_lock;
+#[path = "guards/failed_release.rs"]
 mod failed_release;
 mod native;
+#[path = "guards/product_hold.rs"]
 mod product_hold;
 mod retirement;
+#[path = "guards/rollback_target.rs"]
 mod rollback_target;
 mod sourcekit;
 mod space;
