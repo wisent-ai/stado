@@ -65,6 +65,10 @@ pub async fn open_repairs() -> Result<Vec<Repair>, CmdError> {
 struct Released {
     #[serde(default)]
     carried: Vec<ReleasedDefect>,
+    /// The tasks Oko closed on the same release: every acceptance check met
+    /// and their evidence commit carried.
+    #[serde(default)]
+    tasks: Vec<ReleasedTask>,
     #[serde(default)]
     unreadable: Vec<String>,
 }
@@ -72,6 +76,12 @@ struct Released {
 #[derive(Deserialize)]
 struct ReleasedDefect {
     id: String,
+    closed: bool,
+}
+
+#[derive(Deserialize)]
+struct ReleasedTask {
+    task: String,
     closed: bool,
 }
 
@@ -187,7 +197,7 @@ pub async fn unplaced(
                         .await?
                         {
                             format!(
-                                "{} is not in the history of {stands}, the commit {} stands on",
+                                "{} is not in the history of {stands}, the commit {} stands on; `oko defects rebased --apply` records the commit that carries the same patch",
                                 repair.commit, repair.repository
                             )
                         } else {
@@ -207,9 +217,10 @@ pub async fn unplaced(
 }
 
 /// Close every open defect a published release of `product` now carries,
-/// and answer their ids. Oko names every repository or product whose
-/// releases it could not read; only one that is this checkout's repository
-/// or this product fails the step, since the others are not this release.
+/// and every task it finishes, and answer their ids (the tasks' are
+/// `task-…`). Oko names every repository or product whose releases it could
+/// not read; only one that is this checkout's repository or this product
+/// fails the step, since the others are not this release.
 pub async fn record_released(product: &str, repository: &str) -> Result<Vec<String>, CmdError> {
     let answer = run(
         OKO,
@@ -219,6 +230,7 @@ pub async fn record_released(product: &str, repository: &str) -> Result<Vec<Stri
             "--product",
             product,
             "--close",
+            "--tasks",
             "--json",
         ],
         None,
@@ -226,7 +238,7 @@ pub async fn record_released(product: &str, repository: &str) -> Result<Vec<Stri
     .await?;
     let released: Released = serde_json::from_str(&answer).map_err(|error| {
         CmdError::click(format!(
-            "oko defects released --product {product} --close --json answered no report: {error}"
+            "oko defects released --product {product} --close --tasks --json answered no report: {error}"
         ))
     })?;
     let ours: Vec<&String> = released
@@ -248,12 +260,17 @@ pub async fn record_released(product: &str, repository: &str) -> Result<Vec<Stri
                 .join("; ")
         )));
     }
-    Ok(released
+    let defects = released
         .carried
         .into_iter()
         .filter(|defect| defect.closed)
-        .map(|defect| defect.id)
-        .collect())
+        .map(|defect| defect.id);
+    let tasks = released
+        .tasks
+        .into_iter()
+        .filter(|task| task.closed)
+        .map(|task| task.task);
+    Ok(defects.chain(tasks).collect())
 }
 
 /// Note on every carried defect that the loop's `step` refused at `commit`.

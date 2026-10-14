@@ -142,15 +142,15 @@ pub enum Mode {
 }
 
 /// Whether `kept` stands for good: delivered, or failed at a step that
-/// acted (committed a version, submitted, recorded). A failure before any
-/// action — an unreadable checkout, Oko not answering — is read again.
+/// acted (committed a version, submitted). A failure before any action — an
+/// unreadable checkout, Oko not answering — is read again, and so is a failed
+/// record: the release stands published, and recording it in Oko only closes
+/// what it carries, so the next pass records it once Oko answers (an Oko that
+/// predates `--tasks` refuses until it is delivered itself).
 fn settled(kept: &Entry) -> bool {
     match kept.state {
         State::Delivered => true,
-        State::Failed => matches!(
-            kept.step,
-            Step::Gates | Step::Version | Step::Release | Step::Record
-        ),
+        State::Failed => matches!(kept.step, Step::Gates | Step::Version | Step::Release),
         State::Running | State::Queued | State::NothingCarried => false,
     }
 }
