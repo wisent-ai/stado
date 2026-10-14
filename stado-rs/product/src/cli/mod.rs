@@ -70,21 +70,7 @@ pub fn augment(command: Command) -> Command {
              step; a revision with no retained build is refused",
             lifecycle::Shape::Builds,
         ))
-        .subcommand(lifecycle::installation(
-            "status",
-            "Inspect recorded installation, source, signatures and actual readiness",
-            lifecycle::Shape::Reads,
-        ))
-        .subcommand(lifecycle::installation(
-            "remove",
-            "Remove only owned paths and the declared service surface",
-            lifecycle::Shape::Changes,
-        ))
-        .subcommand(lifecycle::installation(
-            "rollback",
-            "Restore exact retained installation bytes without rebuilding",
-            lifecycle::Shape::Changes,
-        ))
+        .subcommands(lifecycle::changes())
         .subcommand(lifecycle::sync())
         .subcommand(lifecycle::signing())
         .subcommand(
@@ -161,6 +147,7 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
         "update" => crate::install::run(&action, arguments, &runtime),
         "finish" => crate::install::run(&action, arguments, &runtime),
         "status" => crate::install::run(&action, arguments, &runtime),
+        "cancel" => crate::install::run(&action, arguments, &runtime),
         "remove" => crate::install::run(&action, arguments, &runtime),
         "rollback" => crate::install::run(&action, arguments, &runtime),
         "sync" => crate::install::run(&action, arguments, &runtime),

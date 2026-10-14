@@ -143,7 +143,7 @@ fn take(path: &Path, mode: Take) -> Result<File> {
     }
     let mut file = options.open(path)?;
     if let Err(error) = file.try_lock_exclusive() {
-        let holder = holder(path);
+        let holder = crate::install::operation::clause(path);
         let held_by = match mode {
             Take::Refuse => {
                 // The io::Error stays the source, so a caller that treats
@@ -182,23 +182,49 @@ fn take(path: &Path, mode: Take) -> Result<File> {
         )
         .with_context(|| format!("waiting for {} failed", path.display()))?;
     }
-    write_record(&mut file, PHASE_PREPARING)?;
+    let taken = chrono::Utc::now().to_rfc3339();
+    write_record(&mut file, PHASE_PREPARING, None, &taken)?;
     Ok(file)
 }
 
 /// Record that the holder of `path` (this process) has started placing
 /// files, so a newer installation waits for it instead of stopping it.
 pub fn mark_placing(path: &Path) -> Result<()> {
-    let mut file = OpenOptions::new().write(true).open(path)?;
-    write_record(&mut file, PHASE_PLACING)
+    remark(path, Some(PHASE_PLACING), None)
 }
 
-fn write_record(file: &mut File, phase: &str) -> Result<()> {
+/// Record the step the holder of `path` (this process) is in, keeping its
+/// phase, so a waiter and `stado product status` name what the lock waits on.
+pub fn mark_step(path: &Path, step: &str) -> Result<()> {
+    remark(path, None, Some(step))
+}
+
+/// Rewrite this process's own record of `path`, keeping when it took it and,
+/// unless `phase` names a new one, its phase.
+fn remark(path: &Path, phase: Option<&str>, step: Option<&str>) -> Result<()> {
+    let held: Value = serde_json::from_str(fs::read_to_string(path)?.trim())
+        .with_context(|| format!("{} holds no readable holder record", path.display()))?;
+    let recorded = |name: &str| {
+        held[name]
+            .as_str()
+            .map(str::to_owned)
+            .with_context(|| format!("{} records no {name}", path.display()))
+    };
+    let phase = match phase {
+        Some(phase) => phase.to_owned(),
+        None => recorded("phase")?,
+    };
+    let mut file = OpenOptions::new().write(true).open(path)?;
+    write_record(&mut file, &phase, step, &recorded("acquired_at")?)
+}
+
+fn write_record(file: &mut File, phase: &str, step: Option<&str>, taken: &str) -> Result<()> {
     let record = serde_json::json!({
         "pid": std::process::id(),
         "command": std::env::args().collect::<Vec<_>>().join(" "),
-        "acquired_at": chrono::Utc::now().to_rfc3339(),
+        "acquired_at": taken,
         "phase": phase,
+        "step": step,
     });
     file.set_len(0)?;
     file.write_all(format!("{record}\n").as_bytes())?;
@@ -241,34 +267,7 @@ fn same_request(recorded: &str) -> bool {
         == request(std::env::args().collect())
 }
 
-fn alive(pid: i32) -> bool {
+pub fn alive(pid: i32) -> bool {
     // Signal 0 delivers nothing and only asks whether the pid exists.
     unsafe { libc::kill(pid, 0) == 0 }
-}
-
-/// The holder a lock file records, as one clause for a refusal.
-fn holder(path: &Path) -> String {
-    let Ok(text) = fs::read_to_string(path) else {
-        return "its holder record cannot be read".into();
-    };
-    let Ok(record) = serde_json::from_str::<Value>(text.trim()) else {
-        return "the holder recorded nothing (a Stado from before holders were recorded)".into();
-    };
-    let pid = record["pid"].as_u64().unwrap_or_default();
-    // Signal 0 delivers nothing and only asks whether the pid exists.
-    let alive = i32::try_from(pid).is_ok_and(|pid| unsafe { libc::kill(pid, 0) } == 0);
-    format!(
-        "held by pid {pid} ({}) since {}: {}",
-        if alive {
-            "running"
-        } else {
-            "no longer running"
-        },
-        record["acquired_at"]
-            .as_str()
-            .unwrap_or("an unrecorded time"),
-        record["command"]
-            .as_str()
-            .unwrap_or("an unrecorded command")
-    )
 }

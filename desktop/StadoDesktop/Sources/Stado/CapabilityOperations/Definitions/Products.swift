@@ -57,6 +57,18 @@ enum NativeProductOperations {
             .init(id: "host", label: "Stado host for service surfaces", option: "--host"),
             .init(id: "fetch", label: "Fetch canonical origins first", option: "--fetch", flag: true),
         ]),
+        // The answer carries `operation`: the installation holding the
+        // surface's lock, its pid, command, phase, step and since when.
+        .init(id: "status", title: "Read one installation and the operation holding its lock", path: ["product", "status"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+            .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
+            .init(id: "host", label: "Stado host for a service surface", option: "--host"),
+        ], mutates: false),
+        .init(id: "cancel", title: "End the installation operation holding a product surface's lock", path: ["product", "cancel"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+            .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
+            .init(id: "host", label: "Stado host for a service surface", option: "--host"),
+        ]),
         .init(id: "paths", title: "Inspect executable ownership and PATH collisions", path: ["product", "paths"], hostPlacement: .none, mutates: false),
         // The answer lists, per product, each product its code reaches, the
         // standing the catalog gives it and every line that reaches it; a

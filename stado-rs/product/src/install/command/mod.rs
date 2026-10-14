@@ -92,7 +92,12 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         )?)?)
     };
     let report = match action {
-        "status" => status::inspect(runtime, product, surface, host)?,
+        "status" => {
+            let mut report = status::inspect(runtime, product, surface, host)?;
+            report["operation"] = super::operation::running(runtime, id, surface)?;
+            report
+        }
+        "cancel" => super::operation::cancel(runtime, id, surface)?,
         "install" => build(runtime)?,
         "update" => build(runtime)?,
         "finish" => build(runtime)?,

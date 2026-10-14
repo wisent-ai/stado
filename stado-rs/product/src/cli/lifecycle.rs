@@ -80,6 +80,29 @@ pub fn installation(action: &'static str, about: &'static str, shape: Shape) -> 
     }
 }
 
+/// The verbs that read or change one installation without building it:
+/// `status` (with the operation holding its lock), `cancel` (ends that
+/// operation through its owner), `remove` and `rollback`.
+pub fn changes() -> Vec<Command> {
+    vec![
+        installation(
+            "status",
+            "Inspect recorded installation, source, signatures, actual readiness and the operation \
+             holding its lock, with its step",
+            Shape::Reads,
+        ),
+        installation(
+            "cancel",
+            "End the installation operation holding a product surface's lock: its owner and the \
+             step it runs are told to stop, the lock is waited for until it is let go, and the \
+             receipt records the cancelled operation and its step",
+            Shape::Changes,
+        ),
+        installation("remove", "Remove only owned paths and the declared service surface", Shape::Changes),
+        installation("rollback", "Restore exact retained installation bytes without rebuilding", Shape::Changes),
+    ]
+}
+
 pub fn sync() -> Command {
     Command::new("sync")
         .about("Reconcile installed surfaces against canonical origin/main")

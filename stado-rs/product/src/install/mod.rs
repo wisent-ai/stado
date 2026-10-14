@@ -3,6 +3,7 @@ mod command;
 pub use after_install::{declares, redeclare};
 pub use command::run;
 pub(crate) mod handoff;
+pub mod operation;
 pub mod plan;
 mod recipes;
 mod services;
@@ -92,8 +93,8 @@ pub fn perform(
     let is_dependency = !stack.is_empty();
     stack.push(node);
     let result = (|| {
-        let _writer =
-            runtime.surface_lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
+        let lock = state::path(runtime, id, surface)?.with_extension("lock");
+        let writer = runtime.surface_lock(&lock)?;
         let existing = ProductState::load(runtime, id, surface)?;
         let request = plan::planning::Request {
             runtime,
@@ -174,6 +175,10 @@ pub fn perform(
                     eprintln!("{id}: not checking {dependency_id}/{dependency_surface}: {reason}");
                     dependencies.push(json!({"product": dependency_id, "surface": dependency_surface, "checked": false, "reason": reason}));
                 } else {
+                    crate::common::mark_step(
+                        &lock,
+                        &format!("dependency {dependency_id}/{dependency_surface}"),
+                    )?;
                     let dependency_state = perform(
                         runtime,
                         document,
@@ -216,6 +221,7 @@ pub fn perform(
             source_commit,
             id,
         };
+        crate::common::mark_step(&lock, "build")?;
         let plan = plan::planning::select(&request, existing.as_ref())?;
         let scratch = plan.scratch.clone();
         let checkout = plan.source_directory.clone();
@@ -254,16 +260,21 @@ pub fn perform(
                 .extra
                 .insert("catalog".to_owned(), serde_json::to_value(read)?);
         }
-        if let Some(steps) = selected.get("after_install") {
-            let outcomes = after_install::run(id, surface, host, steps, &installed)?;
-            installed
-                .extra
-                .insert("after_install".to_owned(), json!(outcomes));
-        }
         transaction::ownership::verify(&installed)?;
         installed.status = crate::state::InstallStatus::Installed;
         installed.installed_at = now();
         installed.save(runtime)?;
+        let _writer = match selected.get("after_install") {
+            Some(steps) => operation::after_install_unlocked(
+                runtime,
+                (id, surface, host),
+                steps,
+                &mut installed,
+                &lock,
+                writer,
+            )?,
+            None => writer,
+        };
         settle::settle(
             &mut installed,
             scratch.as_deref(),

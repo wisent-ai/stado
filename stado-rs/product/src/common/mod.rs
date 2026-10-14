@@ -6,8 +6,8 @@ pub mod runs;
 use anyhow::{bail, Context, Result};
 pub use archive::{copy_tree, file_members, platform, relative, unpack};
 pub use files::{
-    atomic_json, atomic_write, lock, lock_superseding, lock_waiting, mark_placing, sha256,
-    tag_cache, CACHEDIR_SIGNATURE,
+    alive, atomic_json, atomic_write, lock, lock_superseding, lock_waiting, mark_placing,
+    mark_step, sha256, tag_cache, CACHEDIR_SIGNATURE,
 };
 pub use process::{
     capture, checked, step_program, step_search_path, toolchain_command, CommandFailed,
