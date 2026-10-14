@@ -20,9 +20,15 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                 let (Some(class), Some(size), Some(path)) =
                     (fields.next(), fields.next(), fields.next())
                 else {
+                    audit.unavailable = Some(format!(
+                        "the audit printed a class row that does not read: {line}"
+                    ));
                     continue;
                 };
                 if !matches!(class, TWIN | DIFFERS | ABSENT | SAME_SIZE_UNPROVEN) {
+                    audit.unavailable = Some(format!(
+                        "the audit printed a class this Stado does not know: {line}"
+                    ));
                     continue;
                 }
                 // A size that does not read was counted as zero bytes, so a
@@ -127,12 +133,21 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                     fields.next(),
                 )
                 else {
+                    // A row the audit printed and this reader cannot read
+                    // leaves the inventory incomplete; dropped, the audit
+                    // compared fewer objects and reported the rest matched.
+                    audit.unavailable = Some(format!(
+                        "the audit printed an object row that does not read: {line}"
+                    ));
                     continue;
                 };
-                let Ok(path_bytes) = hex::decode(encoded_path) else {
-                    continue;
-                };
-                let Ok(path) = String::from_utf8(path_bytes) else {
+                let Some(path) = hex::decode(encoded_path)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                else {
+                    audit.unavailable = Some(format!(
+                        "the audit printed an object path that is not hex-encoded UTF-8: {line}"
+                    ));
                     continue;
                 };
                 let identity = |state: &str, bytes: &str, sha256: &str| ObjectIdentity {
@@ -158,12 +173,18 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
             }
             Some("STADO_BACKUP_NAMESPACE") => {
                 let (Some(root), Some(encoded)) = (fields.next(), fields.next()) else {
+                    audit.unavailable = Some(format!(
+                        "the audit printed a namespace row that does not read: {line}"
+                    ));
                     continue;
                 };
-                let Ok(bytes) = hex::decode(encoded) else {
-                    continue;
-                };
-                let Ok(namespace) = String::from_utf8(bytes) else {
+                let Some(namespace) = hex::decode(encoded)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                else {
+                    audit.unavailable = Some(format!(
+                        "the audit printed a namespace that is not hex-encoded UTF-8: {line}"
+                    ));
                     continue;
                 };
                 audit
