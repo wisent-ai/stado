@@ -119,13 +119,6 @@ pub enum DirectoryCommands {
 
     /// A usable route to one service, derived from where it is placed.
     ///
-    /// `endpoint` reports what the directory was told; this works out what is
-    /// true. The service is placed on exactly one host, so the address is a
-    /// function of that placement and of who is asking: loopback when the
-    /// asker is the placed host, and the placed host's routable address
-    /// otherwise. Nothing per-caller is stored, so moving the service moves
-    /// every caller with it.
-    ///
     /// There is no other address. If the service is placed somewhere that does not
     /// answer, that is what this says -- resolving to something local instead
     /// is how a caller ends up talking to a process nobody placed. A route
@@ -273,7 +266,9 @@ pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
             consumer,
             no_verify,
             json,
-        } => connect(&name, target, consumer, no_verify, json).await,
+        } => connect(&name, target, consumer, no_verify, json)
+            .await
+            .map_err(|error| error.machine_readable(json)),
         DirectoryCommands::Endpoint { name, target, json } => endpoint(&name, target, json).await,
         DirectoryCommands::Consumer {
             command:

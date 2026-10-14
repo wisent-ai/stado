@@ -134,6 +134,32 @@ fn a_service_declared_beside_its_placement_is_answered_on_this_host_and_said_as_
     assert_eq!(placed["placement"], "placed", "{placed}");
     assert_eq!(placed["placed_on"], PLACED_ON, "{placed}");
     assert_eq!(placed["url"], format!("http://{adapter_bind}"), "{placed}");
+    // An unverified route still requires the fleet's consumer admission.
+    let refused_consumer = format!("{CONSUMER}-undeclared");
+    let refused = deployment.run(&[
+        "service",
+        "directory",
+        "connect",
+        SERVICE,
+        "--consumer",
+        &refused_consumer,
+        "--no-verify",
+        "--json",
+    ]);
+    assert!(
+        !refused.status.success(),
+        "connect handed an undeclared consumer a route"
+    );
+    let failure: Value = serde_json::from_slice(&refused.stdout)
+        .expect("a JSON command refusal must retain the structured cause");
+    assert_eq!(failure["error_code"], "refused", "{failure}");
+    assert!(
+        failure["message"]
+            .as_str()
+            .expect("a refusal carries its cause")
+            .contains(&refused_consumer),
+        "the refusal lost the denied consumer: {failure}"
+    );
 
     let refused = deployment.run(&[
         "service",

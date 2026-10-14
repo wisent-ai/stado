@@ -14,6 +14,12 @@ enum NativeRouteOperations {
         .init(id: "service-recoveries", title: "Read the services this host found standing and recovered", path: ["service", "recoveries"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Only this service (blank reads every recovery)", option: "--service"),
         ], mutates: false),
+        .init(id: "directory-connect", title: "Resolve a consumer's service route and diagnose its connection", path: ["service", "directory", "connect"], hostPlacement: .none, fields: [
+            .init(id: "service", label: "Declared service", required: true),
+            .init(id: "consumer", label: "Consumer identity", option: "--consumer", required: true),
+            .init(id: "target", label: "Caller host (blank uses the selected API host; other hosts are not probed)", option: "--target"),
+            .init(id: "no-verify", label: "Read routing declaration only, without proving a connection", option: "--no-verify", flag: true),
+        ], mutates: false),
         .init(id: "consumer-add", title: "Declare or update a consumer and its route", path: ["service", "directory", "consumer", "add"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),
             .init(id: "consumer", label: "Consumer", required: true),

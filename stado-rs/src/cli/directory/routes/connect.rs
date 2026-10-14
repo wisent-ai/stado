@@ -6,10 +6,11 @@ use serde_json::{json, Value};
 use crate::observations;
 
 use crate::cli::CmdError;
-use crate::targets;
 
-use crate::cli::directory::document::{directory, read_document, service, this_target_in};
-use crate::cli::directory::routes::{answers, routable_address, service_port};
+use crate::cli::directory::document::{
+    directory, endpoint_url, read_document, service, this_target_in,
+};
+use crate::cli::directory::routes::{answers, service_port};
 
 /// The loopback address `asking` declares for reaching `service`, or `None` when
 /// that machine declares no resolver or no adapter for it. A resolver
@@ -74,6 +75,11 @@ pub(in crate::cli::directory) async fn connect(
     as_json: bool,
 ) -> Result<(), CmdError> {
     let document = read_document().await?;
+    // Consumer admission and placement fencing are the same as the fleet
+    // resolver's, including when the caller asks for an unverified address.
+    if let Some(consumer) = consumer.as_deref() {
+        crate::service_resolution::resolve(&document, name, consumer).map_err(CmdError::from)?;
+    }
     let block = directory(&document)?;
     let entry = service(block, name)?;
     let asking = match target {
@@ -144,24 +150,17 @@ pub(in crate::cli::directory) async fn connect(
         match adapter_route(&document, &asking, name, consumer.as_deref(), scheme)? {
             Some(route) => route,
             None => {
-                let registry =
-                    targets::load_registry_from_value(&document).map_err(CmdError::from)?;
-                let placed = registry
-                    .targets
-                    .iter()
-                    .find(|candidate| candidate.name == active)
+                endpoint_url(entry, &asking)
+                    .filter(|url| !url.trim().is_empty())
                     .ok_or_else(|| {
                         CmdError::declaration(format!(
-                            "{name} is placed on {active}, which is not a host in the registry"
+                            "{name} is placed on {active}, but {asking} declares no caller endpoint \
+                             or resolver adapter for consumer {consumer:?}; declare the route with \
+                             `stado service directory consumer add {name} <consumer> --target {asking}`; \
+                             the serving host's address is not a caller route"
                         ))
-                    })?;
-                let address = routable_address(placed).ok_or_else(|| {
-                    CmdError::declaration(format!(
-                        "{name} is placed on {active}, and that host's record carries no address \
-                         reachable from {asking}"
-                    ))
-                })?;
-                format!("{scheme}://{address}:{port}")
+                    })?
+                    .to_string()
             }
         }
     };
