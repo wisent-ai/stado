@@ -225,6 +225,42 @@ fn a_resolver_state_naming_no_interval_still_bounds_the_read() {
     );
 }
 
+/// The next reader of an authority a read already gave up on is not made to
+/// wait that interval again: it is told at once, with the earlier read's
+/// sentence, and goes on to its copy. `stado host ping` and every agent's
+/// call stood the whole interval in turn before.
+#[test]
+fn a_second_reader_is_told_at_once_that_the_authority_went_unanswered() {
+    let run = Run::new("second-reader");
+    let authority_ssh = run.silent_authority();
+    run.write_last_good(&authority_ssh);
+    let first = run.registry_self();
+    let first_said = String::from_utf8_lossy(&first.stderr).into_owned();
+    assert!(
+        first_said.contains(ABANDONED),
+        "the first read waits and is abandoned: {first_said}"
+    );
+    let accepted_before = run.held.lock().unwrap().len();
+    let second = run.registry_self();
+    let said = String::from_utf8_lossy(&second.stderr).into_owned();
+    assert!(
+        said.contains(&format!(
+            "the registry authority {AUTHORITY} is not asked again before"
+        )) && said.contains(ABANDONED),
+        "the second read is refused at once with the first read's sentence: {said}"
+    );
+    assert!(
+        said.contains("reading the last-known-good registry copy"),
+        "the second reader goes on to its copy: {said}"
+    );
+    assert_eq!(
+        run.held.lock().unwrap().len(),
+        accepted_before,
+        "the second read opened no connection to the authority"
+    );
+    assert!(run.root.join(".stado/authority-unanswered.json").is_file());
+}
+
 /// `stado resolver status` says how long the authority's snapshot fetch
 /// took. It once printed the authority as reachable after a fetch that took
 /// hours and said nothing of the wait; against the silent authority the

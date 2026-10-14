@@ -56,6 +56,12 @@ impl SnapshotSource {
                 ssh,
                 command,
             } => {
+                // A read of this authority that another command already gave
+                // up on less than an interval ago is not sent again: the
+                // reader goes on to its copy at once.
+                if let Some(standing) = super::unanswered::standing(target) {
+                    return Err(CmdError::unreachable(standing));
+                }
                 match crate::cli::resolver::held_on_host(target) {
                     Ok(None) => {}
                     Ok(Some(held)) => return Err(CmdError::unreachable(held)),
@@ -87,8 +93,18 @@ impl SnapshotSource {
                 )
                 .await
                 {
-                    Ok(read) => read,
-                    Err(held) => Err(CmdError::unreachable(held)),
+                    Ok(read) => {
+                        if read.is_ok() {
+                            super::unanswered::forget(target);
+                        }
+                        read
+                    }
+                    Err(held) => {
+                        if let Some(seconds) = crate::cli::resolver::declared_bound_seconds() {
+                            super::unanswered::remember(target, seconds, &held);
+                        }
+                        Err(CmdError::unreachable(held))
+                    }
                 }
             }
         }
