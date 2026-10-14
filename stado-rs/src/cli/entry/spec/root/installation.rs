@@ -94,4 +94,13 @@ pub(crate) enum InstallationCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// List the waits open on this machine, from the register every Stado
+    /// wait keeps (`$STADO_WAITS_DIR` or ~/.stado/waits); a wait whose
+    /// process no longer runs is reported ended and removed.
+    Waits {
+        /// Emit the machine-readable listing.
+        #[arg(long)]
+        json: bool,
+    },
 }

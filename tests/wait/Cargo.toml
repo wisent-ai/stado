@@ -2,7 +2,7 @@
 name = "stado-wait-journeys"
 version = "0.1.0"
 edition = "2021"
-description = "Real tests of stado::wait: the built stado binary waiting on a really held resource says so on stderr before it blocks"
+description = "Real tests of stado::wait: the built stado binary waiting on a really held resource says so on stderr before it blocks, and stado waits reads the register of open waits"
 license-file = "../../LICENSE"
 publish = false
 autotests = false
@@ -22,6 +22,10 @@ path = "../../stado-rs/src/bin/stado.rs"
 name = "wait-held-lock"
 path = "held_lock.rs"
 
+[[test]]
+name = "wait-ended-process"
+path = "ended_process.rs"
+
 [dependencies]
 stado = { path = "../../stado-rs" }
 tokio = { version = "1", features = ["full"] }
@@ -31,3 +35,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 fs2 = "0.4"
 hex = "0.4"
 sha2 = "0.10"
+# The version stado itself resolves; this package's lock pins it.
+serde_json = "*"

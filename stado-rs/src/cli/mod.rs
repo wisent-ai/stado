@@ -69,6 +69,7 @@ pub mod space;
 pub mod storage;
 pub mod stream;
 pub mod submit;
+pub mod waits;
 pub mod web;
 pub mod work;
 pub mod workdirs;
