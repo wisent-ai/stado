@@ -56,10 +56,11 @@ pub(super) async fn collect_oldest_first(
     }
     ordered.sort();
     let paths: Vec<String> = ordered.into_iter().map(|(_, name)| name).collect();
+    let workers = crate::queue::migrations::bulk_workers()?;
     for paths in paths.chunks(32) {
         let texts: Vec<Option<String>> = futures::stream::iter(paths)
             .map(|path| store.download_text(path))
-            .buffered(crate::queue::migrations::bulk_workers())
+            .buffered(workers)
             .collect::<Vec<Result<Option<String>, StorageError>>>()
             .await
             .into_iter()
