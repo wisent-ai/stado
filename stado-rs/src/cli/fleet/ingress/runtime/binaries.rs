@@ -1,7 +1,7 @@
 //! Binaries: where the two programs an entrance is made of are found, and what
 //! a miss is allowed to say.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::cli::fleet::ingress::CLOUDFLARED_CANDIDATES;
 use crate::cli::CmdError;
@@ -60,11 +60,13 @@ pub fn stado_binary() -> Result<PathBuf, CmdError> {
             return Ok(sibling);
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
-        let installed = Path::new(&home).join(".stado").join("bin").join("stado");
-        if installed.is_file() {
-            return Ok(installed);
-        }
+    let installed = crate::config_file::home()
+        .map_err(CmdError::declaration)?
+        .join(".stado")
+        .join("bin")
+        .join("stado");
+    if installed.is_file() {
+        return Ok(installed);
     }
     search_path("stado").ok_or_else(|| {
         CmdError::declaration(

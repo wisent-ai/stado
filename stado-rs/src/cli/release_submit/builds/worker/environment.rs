@@ -182,10 +182,7 @@ pub(super) fn test_environment(
     if recipe.test_products.is_empty() {
         return Ok(tests);
     }
-    let home = std::env::var("HOME").map_err(|error| {
-        CmdError::click(format!("HOME is not set: {error}"))
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
+    let home = crate::config_file::home().map_err(CmdError::declaration)?;
     let inherited = std::env::var("PATH").map_err(|error| {
         CmdError::click(format!(
             "PATH is not set, so the post-build tests would find no program but the installed \
@@ -193,6 +190,9 @@ pub(super) fn test_environment(
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    tests.insert("PATH".into(), format!("{home}/.stado/bin:{inherited}"));
+    tests.insert(
+        "PATH".into(),
+        format!("{}/.stado/bin:{inherited}", home.display()),
+    );
     Ok(tests)
 }

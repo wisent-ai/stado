@@ -145,9 +145,7 @@ fn register(
             .stating(crate::primitives::failure::FailureCode::Config)
         })?
         .to_string();
-    let home = std::env::var("HOME").map_err(|_| {
-        CmdError::click("HOME is not set").stating(crate::primitives::failure::FailureCode::Config)
-    })?;
+    let home = crate::config_file::home().map_err(CmdError::declaration)?;
     let work = Path::new(&home).join(".stado/work/vault-token-mint");
     let scratch = work.join(format!("source-{}", std::process::id()));
     fs::DirBuilder::new()
