@@ -12,6 +12,15 @@ use crate::cli::directory::document::{
 };
 use crate::cli::directory::routes::{answers, service_port};
 
+fn route_failure(error: CmdError, service: &str, consumer: Option<&str>, state: &str) -> CmdError {
+    error.detailing(json!({
+        "service": service,
+        "consumer": consumer,
+        "machine": crate::providers::vast::system_hostname(),
+        "route_state": state,
+    }))
+}
+
 /// The loopback address `asking` declares for reaching `service`, or `None` when
 /// that machine declares no resolver or no adapter for it. A resolver
 /// declaration that does not parse, or an asking machine the registry does
@@ -32,8 +41,9 @@ fn adapter_route(
     consumer: Option<&str>,
     scheme: &str,
 ) -> Result<Option<String>, CmdError> {
+    let invalid = |error| route_failure(error, service, consumer, "invalid_declaration");
     let Some(config) = crate::service_resolution::declared_resolver_config(document, asking)
-        .map_err(CmdError::declaration)?
+        .map_err(|error| invalid(CmdError::declaration(error)))?
     else {
         return Ok(None);
     };
@@ -45,10 +55,10 @@ fn adapter_route(
     if let Some(consumer) = consumer {
         declared.retain(|adapter| adapter.consumer == consumer);
         if declared.is_empty() {
-            return Err(CmdError::missing(format!(
+            return Err(invalid(CmdError::missing(format!(
                 "{asking} declares no resolver adapter for {service} as consumer {consumer}; \
                  declare one in registry.targets[{asking}].service_resolver.adapters"
-            )));
+            ))));
         }
     }
     match declared.as_slice() {
@@ -86,12 +96,7 @@ pub(in crate::cli::directory) async fn connect(
                 ResolveError::Unauthorized { .. } => "refused",
                 ResolveError::Moving { .. } => "unavailable",
             };
-            CmdError::from(error).detailing(json!({
-                "service": name,
-                "consumer": consumer,
-                "machine": crate::providers::vast::system_hostname(),
-                "route_state": state,
-            }))
+            route_failure(CmdError::from(error), name, Some(consumer), state)
         })?;
     }
     let block = directory(&document)?;
@@ -100,6 +105,7 @@ pub(in crate::cli::directory) async fn connect(
         Some(value) => value,
         None => this_target_in(&document)?,
     };
+    let invalid = |error| route_failure(error, name, consumer.as_deref(), "invalid_declaration");
     let active = entry
         .get("active_host")
         .and_then(Value::as_str)
@@ -108,13 +114,16 @@ pub(in crate::cli::directory) async fn connect(
             CmdError::declaration(format!(
                 "{name} declares no active_host, so there is no placement to route to"
             ))
-        })?;
-    let port = service_port(entry, active).ok_or_else(|| {
-        CmdError::declaration(format!(
-            "{name} is placed on {active} but declares no port, and none can be read \
+        })
+        .map_err(invalid)?;
+    let port = service_port(entry, active)
+        .ok_or_else(|| {
+            CmdError::declaration(format!(
+                "{name} is placed on {active} but declares no port, and none can be read \
              back from an address for that host"
-        ))
-    })?;
+            ))
+        })
+        .map_err(invalid)?;
     let scheme = entry
         .get("scheme")
         .and_then(Value::as_str)
@@ -173,7 +182,7 @@ pub(in crate::cli::directory) async fn connect(
                              `stado service directory consumer add {name} <consumer> --target {asking}`; \
                              the serving host's address is not a caller route"
                         ))
-                    })?
+                    }).map_err(invalid)?
                     .to_string()
             }
         }

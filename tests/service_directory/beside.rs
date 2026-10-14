@@ -56,9 +56,19 @@ impl Deployment {
             .stdin(Stdio::null())
             .output()
             .unwrap();
-        let name = args.join("-").replace('/', "_");
-        std::fs::write(self.root.join(format!("{name}.stdout")), &output.stdout).unwrap();
-        std::fs::write(self.root.join(format!("{name}.stderr")), &output.stderr).unwrap();
+        let receipt = json!({
+            "source_revision": env!("STADO_SOURCE_REVISION"),
+            "binary_sha256": <sha2::Sha256 as sha2::Digest>::digest(
+                std::fs::read(env!("CARGO_BIN_EXE_stado")).unwrap()).to_vec(),
+            "arguments": args, "exit_status": output.status.code(),
+            "stdout": String::from_utf8_lossy(&output.stdout),
+            "stderr": String::from_utf8_lossy(&output.stderr),
+        });
+        std::fs::write(
+            self.root.join(format!("{}.json", uuid::Uuid::new_v4())),
+            serde_json::to_vec_pretty(&receipt).unwrap(),
+        )
+        .unwrap();
         output
     }
 
@@ -106,12 +116,6 @@ impl Deployment {
             "--json",
         ]);
         serde_json::from_str(&printed).unwrap()
-    }
-}
-
-impl Drop for Deployment {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
@@ -191,6 +195,43 @@ fn a_service_declared_beside_its_placement_is_answered_on_this_host_and_said_as_
         placed["url"],
         "refused discovery changed the admitted consumer's route"
     );
+
+    let registry = deployment.root.join("registry.json");
+    let original = std::fs::read(&registry).unwrap();
+    let mut document: Value = serde_json::from_slice(&original).unwrap();
+    let caller = document["targets"]
+        .as_array_mut()
+        .unwrap()
+        .first_mut()
+        .unwrap();
+    caller["service_resolver"]["adapters"] = json!([]);
+    std::fs::write(&registry, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+    deployment.cli(&["registry", "import", &registry.to_string_lossy()]);
+    let refused = deployment.run(&[
+        "service",
+        "directory",
+        "doctor",
+        SERVICE,
+        "--consumer",
+        CONSUMER,
+        "--json",
+    ]);
+    assert!(
+        !refused.status.success(),
+        "missing caller adapter was accepted"
+    );
+    let refused: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(refused["error_code"], "not_found", "{refused}");
+    assert_eq!(
+        refused["details"]["route_state"], "invalid_declaration",
+        "{refused}"
+    );
+    assert_eq!(refused["details"]["service"], SERVICE, "{refused}");
+    assert_eq!(refused["details"]["consumer"], CONSUMER, "{refused}");
+    assert_eq!(refused["details"]["machine"], hostname(), "{refused}");
+    std::fs::write(&registry, original).unwrap();
+    deployment.cli(&["registry", "import", &registry.to_string_lossy()]);
+    assert_eq!(deployment.connect()["url"], placed["url"]);
 
     let refused = deployment.run(&[
         "service",
