@@ -42,7 +42,7 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 - **`stado product install --source-commit` installs a commit on the canonical checkout's own `main`:** only commits `origin/main` carried were accepted, so a repair to the push gate could not be installed before it was pushed, nor pushed before it was installed. The installation says when it is ahead of origin and records `source_on_origin`; a commit on neither `main` is refused naming both.
 
-- **`stado workload weles activity` refuses a host run limit that is not a positive whole number** instead of listing every run; `stado fleet approve` names an enrollment request that records no status instead of calling its status `''`; the storage-root origin reader no longer takes a service declared without a program for the object API.
+- **`stado workload status weles-activity` refuses a host run limit that is not a positive whole number** instead of listing every run; `stado fleet approve` names an enrollment request that records no status instead of calling its status `''`; the storage-root origin reader no longer takes a service declared without a program for the object API.
 
 - **A source installation of Skarbiec signs with the keychain its catalog recipe declares:** the CLI, service and desktop recipes select the installing machine's local keychain before building. A missing keychain refuses by path without consulting the vault or placing bytes; a conflicting explicit signing source refuses. The installed receipt names the selected keychain and each native file's observed authority, team, identifier and CDHash, also shown in Desktop Products. Exact published releases remain verified rather than re-signed.
 
