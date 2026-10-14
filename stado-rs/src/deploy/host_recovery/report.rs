@@ -116,16 +116,34 @@ fn account_for_agents(report: &mut Map<String, Value>, target: &ComputeTarget) {
     let domain_reason = domain_field("reason");
     let mut skipped: Vec<Value> = Vec::new();
     let mut blockers: Vec<Value> = Vec::new();
+    // Only a pass that reached its last line owes a word for every planned
+    // unit; one that stopped earlier already says why in its own `status`.
+    let completed = report.get("status").and_then(Value::as_str) == Some(STATUS_OK);
     for plan in plan_agents(target) {
         let finding = report["agents"]
             .get(&plan.label)
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+            .map(str::to_string);
+        let Some(finding) = finding else {
+            // A completed pass that names no outcome for a planned unit was
+            // read as "nothing to account for", and the report said ok about
+            // a unit nobody saw.
+            if completed {
+                blockers.push(json!({
+                    "unit": plan.label,
+                    "finding": "unreported",
+                    "path": plan.plist,
+                    "reason": format!(
+                        "the recovery pass reached its last line and reported no outcome for {}, \
+                         so whether it runs is unknown",
+                        plan.label
+                    ),
+                }));
+            }
+            continue;
+        };
         match finding.as_str() {
-            // Nothing to account for: reloaded, or the pass stopped before it
-            // reached the units at all (its own `status` already says why).
-            "" | AGENT_RESTARTED => {}
+            AGENT_RESTARTED => {}
             AGENT_NEEDS_PRIVILEGE => skipped.push(json!({
                 "unit": plan.label,
                 "reason": format!(
