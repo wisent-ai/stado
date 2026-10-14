@@ -18,6 +18,12 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
         WorkCommands::Job(sub) => job::dispatch(sub).await,
         WorkCommands::Results { job_id, output_dir } => results::run(&job_id, &output_dir).await,
         WorkCommands::Quality(sub) => match sub {
+            QualityCommands::Parse { argv } => crate::cli::quality::parse(&argv),
+            QualityCommands::Units {
+                candidate,
+                program,
+                host,
+            } => crate::cli::quality::units(&candidate, &program, host.as_deref()).await,
             QualityCommands::Format { root } => crate::cli::quality::format(root.as_deref()).await,
             QualityCommands::Check {
                 root,
@@ -37,12 +43,19 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
         WorkCommands::Mcp => tokio::task::spawn_blocking(|| {
             let stdin = std::io::stdin();
             let mut stdout = std::io::stdout();
-            crate::mcp::serve(stdin.lock(), &mut stdout);
+            crate::mcp::serve(stdin.lock(), &mut stdout)
         })
         .await
         // The blocking task can only fail by panicking or being cancelled at
         // shutdown: the server stopped serving, its outage.
-        .map_err(|error| CmdError::unreachable(format!("the MCP server stopped: {error}"))),
+        .map_err(|error| CmdError::unreachable(format!("the MCP server stopped: {error}")))?
+        // A stdin it cannot read or a stdout it cannot write ends it with
+        // that cause, not as a client that hung up.
+        .map_err(|error| {
+            CmdError::unreachable(format!(
+                "the MCP server stopped: its stdio transport failed: {error}"
+            ))
+        }),
         WorkCommands::Machine(sub) => match sub {
             MachineCommands::Submit { request_file } => machine::submit(&request_file).await,
             MachineCommands::Status { job_id, until } => {
