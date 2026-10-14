@@ -36,19 +36,26 @@ pub(super) async fn handle_deny_assignments(
     };
     let mut reports = Vec::new();
     for assignment in assignments {
-        let name = assignment.get("name").and_then(Value::as_str).unwrap_or("");
+        // An assignment without its name cannot be addressed, and one whose
+        // protection Azure did not state cannot be judged deletable: both
+        // are reported with the entry and never deleted.
+        let Some(name) = assignment.get("name").and_then(Value::as_str) else {
+            reports.push(json!({
+                "outcome": "unreadable",
+                "error": format!("the deny assignment names no `name`: {assignment}"),
+            }));
+            continue;
+        };
         let display_name = assignment
             .pointer("/properties/denyAssignmentName")
             .or_else(|| assignment.pointer("/properties/name"))
-            .and_then(Value::as_str)
-            .unwrap_or(name);
+            .and_then(Value::as_str);
         let system_protected = assignment
             .pointer("/properties/isSystemProtected")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let selected = remove_name
-            .map(|needle| display_name.contains(needle) || name.contains(needle))
-            .unwrap_or(false);
+            .and_then(Value::as_bool);
+        let selected = remove_name.is_some_and(|needle| {
+            name.contains(needle) || display_name.is_some_and(|shown| shown.contains(needle))
+        });
         let mut report = json!({
             "name": name,
             "display_name": display_name,
@@ -56,8 +63,10 @@ pub(super) async fn handle_deny_assignments(
             "selected": selected,
             "outcome": "reported"
         });
-        if selected && system_protected {
+        if selected && system_protected == Some(true) {
             report["outcome"] = Value::String("microsoft_support_required".into());
+        } else if selected && system_protected.is_none() {
+            report["outcome"] = Value::String("protection_unreported".into());
         } else if selected {
             let scope = assignment
                 .pointer("/properties/scope")

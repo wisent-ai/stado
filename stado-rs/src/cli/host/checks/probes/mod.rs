@@ -28,14 +28,16 @@ pub(in crate::cli::host) fn print_json(report: &Value) {
 /// value that means "this command did what it was asked to do"; anything
 /// else is a failure the exit status has to reflect.
 pub(in crate::cli::host) fn report_outcome(report: &Value, expected: &str) -> Result<(), CmdError> {
-    let status = report.get("status").and_then(Value::as_str).unwrap_or("");
-    if status == expected {
+    let status = report.get("status").and_then(Value::as_str);
+    if status == Some(expected) {
         return Ok(());
     }
-    let detail = report.get("error").and_then(Value::as_str).map_or_else(
-        || format!("host reported status {status:?}"),
-        str::to_string,
-    );
+    // A report that names no status is said as such, not as status "".
+    let detail = match (report.get("error").and_then(Value::as_str), status) {
+        (Some(error), _) => error.to_string(),
+        (None, Some(status)) => format!("host reported status {status:?}"),
+        (None, None) => format!("host reported no status and no error: {report}"),
+    };
     Err(CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown))
 }
 
