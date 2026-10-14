@@ -6,7 +6,11 @@ use serde_json::{json, Value};
 
 use super::RepliesError;
 
-fn arg_value<'a>(args: &'a [&str], flag: &str) -> Option<&'a str> {
+/// The value after `flag` in the az argv this runner was handed, or a
+/// refusal naming the flag: read as "", a missing ticket name asked Azure
+/// for `supportTickets//communications` and a missing body posted an empty
+/// reply.
+fn arg_value<'a>(args: &'a [&str], flag: &str) -> Result<&'a str, RepliesError> {
     args.windows(
         std::iter::once(())
             .count()
@@ -14,6 +18,11 @@ fn arg_value<'a>(args: &'a [&str], flag: &str) -> Option<&'a str> {
     )
     .find(|pair| pair.first() == Some(&flag))
     .and_then(|pair| pair.get(std::iter::once(()).count()).copied())
+    .ok_or_else(|| {
+        RepliesError::Config(format!(
+            "the az argv {args:?} carries no value for {flag}, so the Azure Support request cannot be made"
+        ))
+    })
 }
 
 async fn azure_response(
@@ -111,7 +120,7 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
         args,
         ["support", "in-subscription", "communication", "list", ..]
     ) {
-        let ticket = arg_value(args, "--ticket-name").unwrap_or_default();
+        let ticket = arg_value(args, "--ticket-name")?;
         let value = azure_response(
             &http,
             &token,
@@ -144,10 +153,10 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
         args,
         ["support", "in-subscription", "communication", "create", ..]
     ) {
-        let ticket = arg_value(args, "--ticket-name").unwrap_or_default();
-        let name = arg_value(args, "--communication-name").unwrap_or_default();
-        let subject = arg_value(args, "--communication-subject").unwrap_or_default();
-        let body = arg_value(args, "--communication-body").unwrap_or_default();
+        let ticket = arg_value(args, "--ticket-name")?;
+        let name = arg_value(args, "--communication-name")?;
+        let subject = arg_value(args, "--communication-subject")?;
+        let body = arg_value(args, "--communication-body")?;
         let value = azure_response(
             &http,
             &token,
