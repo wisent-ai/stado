@@ -169,18 +169,15 @@ pub async fn assign_jobs_at(
     }
     let skipped: usize = skip_by_key.iter().map(|(_, n)| n).sum();
     if skipped > 0 {
-        let mut top = skip_by_key.clone();
-        // Python `sorted(..., key=lambda kv: -kv[1])` — stable, so ties keep
-        // first-seen order.
-        top.sort_by_key(|entry| std::cmp::Reverse(entry.1));
-        let top: Vec<String> = top
+        // Preserve first-seen order for groups with the same count.
+        skip_by_key.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+        let groups: Vec<String> = skip_by_key
             .into_iter()
-            .take(5)
             .map(|((m, t), n)| format!("({m},{t}):{n}"))
             .collect();
         log_fn(&format!(
-            "makespan: {skipped} skipped; top: {}",
-            top.join(", ")
+            "makespan: {skipped} skipped; by model/task: {}",
+            groups.join(", ")
         ));
     }
     if unassigned > 0 {
