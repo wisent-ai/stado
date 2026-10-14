@@ -105,6 +105,7 @@ try {
   const placed = join(home, '.stado', 'bin', 'skarbiec');
   const actual = JSON.parse(success(run(stado, ['product', 'signing', 'inspect', placed, '--json'])));
   assert.equal(actual.state, 'stable');
+  assert.equal(actual.authority, identity, 'the declared keychain identity did not sign the placed binary');
   assert.equal(installed.signing.signatures[placed].identity, actual.authority);
   assert.equal(installed.signing.signatures[placed].team, actual.team);
   assert.equal(installed.signing.signatures[placed].cdhash, actual.cdhash);

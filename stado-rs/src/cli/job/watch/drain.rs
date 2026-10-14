@@ -36,7 +36,20 @@ pub(super) async fn drain(
             }
             Err(exc) => return Err(cmd_error(exc)),
         };
-        let text = page["text"].as_str().unwrap_or_default();
+        // A page without its text, next cursor or end flag cannot be
+        // followed: read as "", the same cursor and "ended", it stopped the
+        // tail as if the log were complete.
+        let (Some(text), Some(next_cursor), Some(eof)) = (
+            page["text"].as_str(),
+            page["next_cursor"].as_i64(),
+            page["eof"].as_bool(),
+        ) else {
+            return Err(CmdError::click(format!(
+                "{job_id}: the log page at cursor {} names no text, next_cursor or eof: {page}",
+                *cursor
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
+        };
         if buffer {
             buffered.push_str(text);
         } else {
@@ -44,8 +57,8 @@ pub(super) async fn drain(
             // A tail that only flushes on newline stalls on a progress bar.
             let _ = std::io::stdout().flush();
         }
-        *cursor = page["next_cursor"].as_i64().unwrap_or(*cursor);
-        if page["eof"].as_bool().unwrap_or(true) {
+        *cursor = next_cursor;
+        if eof {
             return Ok(());
         }
     }

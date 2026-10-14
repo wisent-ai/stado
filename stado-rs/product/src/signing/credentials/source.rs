@@ -52,6 +52,7 @@ pub enum Source {
 pub struct Choice {
     keychain: Option<String>,
     identity: Option<String>,
+    require_signature: bool,
 }
 
 fn environment(variable: &str) -> Option<String> {
@@ -77,6 +78,7 @@ impl Choice {
         Ok(Self {
             keychain: keychain.map(str::to_owned),
             identity: identity.map(str::to_owned),
+            require_signature: false,
         })
     }
 
@@ -152,7 +154,8 @@ impl Choice {
                 bail!("signing_keychain {named} declares {selected}, but the invocation names {other}; no other signing source was tried");
             }
         }
-        let choice = Self::new(Some(&selected), self.identity.as_deref())?;
+        let mut choice = Self::new(Some(&selected), self.identity.as_deref())?;
+        choice.require_signature = true;
         match Source::resolve(&choice, None)? {
             Source::Keychain(_) => Ok(choice),
             _ => bail!("signing_keychain {named} did not select its keychain"),
@@ -163,6 +166,12 @@ impl Choice {
     /// catalog recipe. Receipts use this path, never credential bytes.
     pub fn keychain_path(&self) -> Option<String> {
         self.keychain()
+    }
+
+    /// A source recipe's declared keychain must sign its native output even
+    /// when that output arrived with a stable signature from its build.
+    pub fn requires_signature(&self) -> bool {
+        self.require_signature
     }
 }
 

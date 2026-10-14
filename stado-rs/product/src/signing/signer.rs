@@ -13,6 +13,7 @@ pub struct Signer {
     pub credentials: Credentials,
     /// The identity the caller or the operator named, by name or SHA-1.
     pub(super) requested: Option<String>,
+    require_signature: bool,
 }
 
 impl Signer {
@@ -43,11 +44,12 @@ impl Signer {
         Ok(Self {
             credentials,
             requested,
+            require_signature: choice.requires_signature(),
         })
     }
 
     pub fn preserves_existing(&self, policy: &Policy) -> bool {
-        self.requested.is_none() && policy.preserves_metadata()
+        !self.require_signature && self.requested.is_none() && policy.preserves_metadata()
     }
 
     pub fn codesign(
