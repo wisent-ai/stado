@@ -75,8 +75,8 @@ pub fn augment(command: Command) -> Command {
         .subcommand(lifecycle::signing())
         .subcommand(
             Command::new("paths")
-                .about("Inspect actual executable ownership and PATH collisions")
-                .arg(flag("json", "Print observed path collisions")),
+                .about("Inspect actual executable ownership: PATH collisions and executables in ~/.stado/bin and ~/.local/bin no installed product owns")
+                .arg(flag("json", "Print observed path collisions and unowned executables")),
         )
         .subcommand(native::cargo())
         .subcommand(native::compiler_cache())

@@ -183,11 +183,60 @@ pub fn residue(roots: &[PathBuf], runtime: &Runtime) -> Result<Vec<Value>> {
     Ok(rows)
 }
 
+/// The install roots every surface places its programs in: `~/.stado/bin`
+/// and `~/.local/bin`.
+fn install_roots(runtime: &Runtime) -> Vec<PathBuf> {
+    vec![
+        runtime.home.join(".stado/bin"),
+        runtime.home.join(".local/bin"),
+    ]
+}
+
+/// Every executable in the install roots that no installed product's receipt
+/// owns (`installed_paths`, and the backups of an interrupted installation):
+/// a launcher put there by hand or a program a retired surface left behind.
+/// Nothing a release delivers explains it, so nothing updates it, and a
+/// product that runs it runs bytes no repository holds. Each row names the
+/// file, its root and where a link resolves to; the files are read, never
+/// changed.
+pub fn unowned(runtime: &Runtime) -> Result<Vec<Value>> {
+    let owned = owners(runtime)?;
+    let mut rows = Vec::new();
+    for root in install_roots(runtime) {
+        if !root.exists() {
+            continue;
+        }
+        let entries = fs::read_dir(&root)
+            .with_context(|| format!("reading the install root {}", root.display()))?;
+        for entry in entries {
+            let path = entry
+                .with_context(|| format!("reading an entry of {}", root.display()))?
+                .path();
+            if !executable(&path) {
+                continue;
+            }
+            let resolved = path
+                .canonicalize()
+                .with_context(|| format!("resolving {}", path.display()))?;
+            if owned.contains_key(&resolved) {
+                continue;
+            }
+            rows.push(json!({
+                "name": path.file_name().map(|name| name.to_string_lossy().into_owned()),
+                "path": path,
+                "root": root,
+                "resolves_to": resolved,
+            }));
+        }
+    }
+    Ok(rows)
+}
+
 pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     let args = Arguments::from_matches(args);
     if !args.positional.is_empty() {
         anyhow::bail!("paths does not take positional arguments");
     }
-    emit(&json!({"collisions": collisions(runtime)?}))?;
+    emit(&json!({"collisions": collisions(runtime)?, "unowned": unowned(runtime)?}))?;
     Ok(0)
 }
