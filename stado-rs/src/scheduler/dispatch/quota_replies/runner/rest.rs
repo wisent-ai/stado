@@ -97,12 +97,11 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
                     return None;
                 }
                 Some(json!({
-                    "name": row.get("name").and_then(Value::as_str).unwrap_or(""),
-                    "title": properties.get("title").and_then(Value::as_str).unwrap_or(""),
-                    "serviceId": properties
-                        .get("serviceId")
-                        .and_then(Value::as_str)
-                        .unwrap_or(""),
+                    // As Azure sent them: a field it left out is null, as
+                    // `az` prints it, not "" read downstream as stated.
+                    "name": row.get("name"),
+                    "title": properties.get("title"),
+                    "serviceId": properties.get("serviceId"),
                 }))
             })
             .collect();
