@@ -25,8 +25,8 @@ import { fileURLToPath } from "node:url";
 //    is sent, and the refusal is that Skarbiec did not answer — not that it was
 //    not asked.
 // 4. A forward marker whose first line names no address: refused before
-//    anything is sent, naming the marker file, instead of read as an empty
-//    address.
+//    anything is sent as "this machine has no Skarbiec address", naming the
+//    marker file, instead of read as an empty address.
 //
 // Required: STADO_BIN, the Stado executable under test, and
 // STADO_CI_TEST_PRODUCT, a catalogued product. Evidence is kept under .build.
@@ -129,7 +129,8 @@ try {
 	const marker = join(blank, ".stado", "forwards", "skarbiec.local");
 	writeFileSync(marker, "\n");
 	const unaddressed = status("blank-marker", blank);
-	assert.match(unaddressed, /Skarbiec was not asked /, unaddressed);
+	assert.ok(unaddressed.includes("this machine has no Skarbiec address: "), unaddressed);
+	assert.doesNotMatch(unaddressed, /Skarbiec did not answer |invalid Skarbiec URL/, unaddressed);
 	assert.ok(unaddressed.includes(`forward marker ${marker} names no address on its first line`), unaddressed);
 
 	report.result = "passed";

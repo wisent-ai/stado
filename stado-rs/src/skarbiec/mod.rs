@@ -70,6 +70,19 @@ pub struct VersionedValue {
 
 pub(crate) fn checked_url(base_url: &str) -> Result<String, SkarbiecError> {
     let base_url = base_url.trim().trim_end_matches('/');
+    // An empty address is no address, not an invalid one: say why this
+    // machine has none, as its configuration resolved it.
+    if base_url.is_empty() {
+        return Err(SkarbiecError::Deployment(
+            match crate::config::skarbiec_url_absent() {
+                Some(why) => format!("this machine has no Skarbiec address: {why}"),
+                None => format!(
+                "an empty Skarbiec address was given while this machine's configuration names {}",
+                crate::config::skarbiec_url()
+            ),
+            },
+        ));
+    }
     let parsed =
         url::Url::parse(base_url).map_err(|_| SkarbiecError::InvalidUrl(base_url.to_string()))?;
     let loopback = match parsed.host() {

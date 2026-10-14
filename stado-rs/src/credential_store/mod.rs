@@ -69,6 +69,11 @@ pub fn admin_credentials() -> Result<AdminCredentials, SkarbiecError> {
             "secrets.skarbiec.consumer must be stado and token_file must be non-empty".to_string(),
         ));
     }
+    if let Some(why) = crate::config::skarbiec_url_absent() {
+        return Err(SkarbiecError::Deployment(format!(
+            "this machine has no Skarbiec address: {why}"
+        )));
+    }
     Ok(AdminCredentials {
         url: crate::config::skarbiec_url().to_string(),
         consumer: consumer.to_string(),

@@ -13,23 +13,29 @@ use crate::config_file::{expand_tilde, resolve as cfg};
 /// publish` wrote for this host into `~/.stado/forwards/skarbiec.local`. A
 /// configured `stado://service/skarbiec?consumer=<consumer>` is that
 /// adapter's address as this host's resolver published it. No address is
-/// built in: a host the directory gives no Skarbiec endpoint answers empty,
-/// and every reader refuses with that instead of dialing a port nothing may
-/// serve.
-static SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+/// built in: a host the directory gives no Skarbiec endpoint has none, and
+/// the cause is kept beside it — nothing names one, or the marker that
+/// would cannot be read — so a reader refuses with that cause instead of
+/// dialing a port nothing may serve or calling an empty address invalid.
+static SKARBIEC_URL: LazyLock<Result<String, String>> = LazyLock::new(|| {
     let configured = crate::service_resolution::local_address(&cfg(
         "WC_SKARBIEC_URL",
         "secrets.skarbiec.url",
         "",
     ));
     if !configured.trim().is_empty() {
-        return configured;
+        return Ok(configured);
     }
-    crate::deploy::host_access::forward::read_local("skarbiec")
-        .ok()
-        .flatten()
-        .map(|marker| marker.url)
-        .unwrap_or_default()
+    match crate::deploy::host_access::forward::read_local("skarbiec") {
+        Ok(Some(marker)) => Ok(marker.url),
+        Ok(None) => Err(
+            "neither WC_SKARBIEC_URL, the host config's secrets.skarbiec.url nor this host's \
+             ~/.stado/forwards/skarbiec.local (written by `stado service directory publish`) \
+             names one"
+                .to_string(),
+        ),
+        Err(error) => Err(error.message),
+    }
 });
 static SKARBIEC_CONSUMER: LazyLock<String> =
     LazyLock::new(|| cfg("WC_SKARBIEC_CONSUMER", "secrets.skarbiec.consumer", "stado"));
@@ -53,10 +59,19 @@ static SKARBIEC_VAULT_FILE: LazyLock<String> = LazyLock::new(|| {
     expand_tilde(declared.trim()).to_string_lossy().into_owned()
 });
 
-/// The address of the Skarbiec this machine uses; empty when neither the
-/// environment, the host config nor the service directory names one.
+/// The address of the Skarbiec this machine uses; empty when none resolves,
+/// and then [`skarbiec_url_absent`] says why.
 pub fn skarbiec_url() -> &'static str {
-    SKARBIEC_URL.as_str()
+    match SKARBIEC_URL.as_ref() {
+        Ok(url) => url,
+        Err(_) => "",
+    }
+}
+
+/// Why this machine has no Skarbiec address: nothing names one, or the
+/// forward marker that would cannot be read. `None` while one resolves.
+pub fn skarbiec_url_absent() -> Option<&'static str> {
+    SKARBIEC_URL.as_ref().err().map(String::as_str)
 }
 
 /// Stado's Skarbiec consumer name: `stado`.
