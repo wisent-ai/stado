@@ -8,10 +8,13 @@ enum NativeRouteOperations {
             .init(id: "consumer", label: "Consumer identity (optional)", option: "--consumer"),
         ], mutates: false),
         // The services the selected host found standing on a beacon pass —
-        // answering nothing on the question their catalog entry declares
-        // longer than the resolver's refresh interval — and repaired,
-        // restarted, recorded and alerted, as the CLI reads the register.
-        .init(id: "service-recoveries", title: "Read the services this host found standing and recovered", path: ["service", "recoveries"], hostPlacement: .none, fields: [
+        // its own, answering nothing on the question their catalog entry
+        // declares longer than the resolver's refresh interval, and other
+        // hosts', holding this host's resolver requests that long while
+        // their own host did not act — and repaired, restarted, recorded
+        // and alerted, as the CLI reads the register: each line names the
+        // host the service runs on and, for another host's, this host.
+        .init(id: "service-recoveries", title: "Read the services this host found standing and recovered, here or on another host", path: ["service", "recoveries"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Only this service (blank reads every recovery)", option: "--service"),
         ], mutates: false),
         .init(id: "directory-connect", title: "Resolve a consumer's service route and diagnose its connection", path: ["service", "directory", "connect"], hostPlacement: .none, fields: [

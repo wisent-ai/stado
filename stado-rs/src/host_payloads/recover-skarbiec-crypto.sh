@@ -35,6 +35,13 @@ if [ -z "${SKARBIEC_READY_URL:-}" ]; then
   SKARBIEC_READY_URL="$(tr -d '[:space:]' < "$marker")/readyz"
 fi
 health_url="$SKARBIEC_READY_URL"
+# How long a readiness read may wait, before the repair and after it: the
+# directory refresh interval the resolver declares, the one measure of a
+# request that stands, handed in by the caller. Without it the read after
+# the repair had no bound, and a vault whose stranded gpg children still
+# held its slots kept the repair, and the restart that follows it, from
+# ever being reached.
+within="${SKARBIEC_READY_WITHIN_SECONDS:?the caller states how long a readiness read may wait: the directory refresh interval this fleet declares}"
 limit_mb="${SKARBIEC_GPG_DAEMON_MEMORY_LIMIT_MB:-1024}"
 
 # The pid of one daemon serving this account's keyring, from GnuPG's own
@@ -94,7 +101,7 @@ daemons_over_ceiling() {
 }
 
 set +e
-health=$(/usr/bin/curl --silent --show-error --connect-timeout 2 --max-time 70 "$health_url")
+health=$(/usr/bin/curl --silent --show-error --max-time "$within" "$health_url")
 health_status=$?
 set -e
 bloated=$(daemons_over_ceiling)
@@ -133,7 +140,7 @@ skarbiec="$HOME/.stado/bin/skarbiec"
   exit "$status"
 }
 
-if ! health=$(/usr/bin/curl --silent --show-error "$health_url" 2>&1); then
+if ! health=$(/usr/bin/curl --silent --show-error --max-time "$within" "$health_url" 2>&1); then
   printf '%s\n' "Skarbiec health could not be read after GPG daemon recovery: $health" >&2
   exit 1
 fi

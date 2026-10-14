@@ -17,8 +17,10 @@
 //! that stands. [`recover`] then runs its declared repair and restart,
 //! records the event in the host's recovery register and alerts; `stado
 //! service recoveries` reads the register. The beacon carries each probe's
-//! outcome under the unit's `answering`.
+//! outcome under the unit's `answering`. [`peer`] is the same recovery run
+//! from a host whose resolver holds another host's service past the bound.
 
+pub mod peer;
 pub mod recover;
 pub mod register;
 

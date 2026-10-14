@@ -44,6 +44,12 @@ pub struct Recovery {
     pub restarted: bool,
     /// What the alert delivery answered.
     pub alert: Value,
+    /// The host that acted when it was not the host that runs the service:
+    /// its resolver held the service's requests past the bound while the
+    /// service's own host did not recover it. Absent for a host's recovery
+    /// of its own service, and in records written before peers acted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_by: Option<String>,
 }
 
 pub fn path(home: &Path) -> PathBuf {

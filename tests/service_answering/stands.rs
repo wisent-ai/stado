@@ -160,6 +160,7 @@ async fn a_service_that_answers_nothing_stands_once_the_bound_has_passed_and_an_
         restart: json!({ "refusal": "no unit of that name on this machine" }),
         restarted: false,
         alert: json!([]),
+        observed_by: None,
     };
     register::append(&home, &recovery).expect("the recovery is recorded");
     let listed = register::read(&home).expect("the register reads back");

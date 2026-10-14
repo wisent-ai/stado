@@ -14,8 +14,19 @@
 //! host answers either. The measure is the resolver's own: a wait longer
 //! than the refresh interval the target declares, the same reading
 //! `held_at` applies to one adapter.
+//!
+//! [`stood_elsewhere`] reads the same waits the other way round: not
+//! whether a command to one host would stand, but which service on which
+//! other host stands for this host's clients. A host judges its own
+//! services by the question its catalog asks them; one that runs an older
+//! catalog, or whose own Stado stands on the service it would judge, never
+//! finds that service standing while every other host's resolver holds its
+//! requests. A wait still opening its channel says the host or its SSH
+//! daemon does not answer, not the service, and is not read there.
 
-use super::{age_seconds, declared_refresh_seconds, published, unanswered, WaitingOpen};
+use std::collections::BTreeMap;
+
+use super::{age_seconds, declared_refresh_seconds, published, unanswered, Phase, WaitingOpen};
 
 /// What this host's resolver holds unanswered on `host` longer than its
 /// refresh interval: every service of `host` that stands, with the held
@@ -116,4 +127,74 @@ pub(crate) fn held_at(url: &url::Url) -> Result<Option<String>, String> {
         held.len(),
         unanswered(longest, *waited)
     )))
+}
+
+/// One service on another host whose requests from this host stand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Stood {
+    pub(crate) service: String,
+    /// The registry target the requests were relayed to.
+    pub(crate) host: String,
+    /// When the oldest standing request was accepted.
+    pub(crate) since: String,
+    /// How long the oldest standing request has waited.
+    pub(crate) waited_seconds: u64,
+    /// The refresh interval the waits are judged by.
+    pub(crate) bound_seconds: u64,
+    /// How many requests to the service stand.
+    pub(crate) held: usize,
+    /// The oldest wait's own sentence: client, request line, endpoint.
+    pub(crate) sentence: String,
+}
+
+/// Every service on a host other than `this_host` that holds this host's
+/// requests for the first byte of an answer longer than the declared
+/// refresh interval, one entry per service and host, carrying its oldest
+/// wait. Empty when no resolver here publishes waits, when none stands that
+/// long, or when no refresh interval is declared (then nothing can be
+/// judged standing); `Err` when the published list is there and cannot be
+/// read.
+pub(crate) fn stood_elsewhere(this_host: &str) -> Result<Vec<Stood>, String> {
+    let answering: Vec<WaitingOpen> = published()?
+        .into_iter()
+        .filter(|open| {
+            open.phase == Phase::Answer
+                && open.active_host != this_host
+                && open.session_replaced_at.is_none()
+        })
+        .collect();
+    if answering.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(bound_seconds) = declared_refresh_seconds()? else {
+        return Ok(Vec::new());
+    };
+    let mut routes: BTreeMap<(String, String), Vec<(WaitingOpen, i64)>> = BTreeMap::new();
+    for open in answering {
+        let Some(waited) = age_seconds(&open.since) else {
+            continue;
+        };
+        if u64::try_from(waited).is_ok_and(|seconds| seconds > bound_seconds) {
+            routes
+                .entry((open.service.clone(), open.active_host.clone()))
+                .or_default()
+                .push((open, waited));
+        }
+    }
+    Ok(routes
+        .into_iter()
+        .filter_map(|((service, host), waits)| {
+            let held = waits.len();
+            let (oldest, waited) = waits.into_iter().max_by_key(|(_, waited)| *waited)?;
+            Some(Stood {
+                service,
+                host,
+                since: oldest.since.clone(),
+                waited_seconds: u64::try_from(waited).ok()?,
+                bound_seconds,
+                held,
+                sentence: unanswered(&oldest, waited),
+            })
+        })
+        .collect())
 }

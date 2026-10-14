@@ -54,7 +54,10 @@ pub enum RuntimeCommands {
     /// pass asks every declared service the question its catalog entry
     /// declares (`service.answering`), and one that answers nothing longer
     /// than the resolver's declared refresh interval is repaired with its
-    /// declared step, restarted, recorded here and alerted. Reads this
+    /// declared step, restarted, recorded here and alerted. A service on
+    /// another host that holds this host's resolver requests that long is
+    /// recovered from here the same way, over that host's registry SSH
+    /// channel, and its record names this host as `observed_by`. Reads this
     /// host's register, oldest first.
     Recoveries {
         /// Only this service's recoveries.

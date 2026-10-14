@@ -237,6 +237,10 @@ impl Dashboard {
 /// payload's exit status with its last line, which names what it recovered,
 /// what it refused on, or why Skarbiec stayed unready.
 async fn crypto_repair_outcome() -> String {
+    let bound = match crate::cli::host::readiness_bound_seconds() {
+        Ok(seconds) => seconds,
+        Err(refusal) => return format!("the repair payload was not started: {refusal}"),
+    };
     let mut command = tokio::process::Command::new("/bin/sh");
     command
         .arg("-s")
@@ -246,6 +250,10 @@ async fn crypto_repair_outcome() -> String {
                 "{}/readyz",
                 crate::config::skarbiec_url().trim_end_matches('/')
             ),
+        )
+        .env(
+            crate::cli::host::READINESS_BOUND_VARIABLE,
+            bound.to_string(),
         )
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

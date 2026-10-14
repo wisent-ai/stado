@@ -363,6 +363,10 @@ name = "service-answering-stands"
 path = "../tests/service_answering/stands.rs"
 
 [[test]]
+name = "service-answering-peer"
+path = "../tests/service_answering/peer.rs"
+
+[[test]]
 name = "service-images-launcher"
 path = "../tests/service_images/launcher.rs"
 

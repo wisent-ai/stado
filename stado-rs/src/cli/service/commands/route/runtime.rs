@@ -166,10 +166,17 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
                         }
                         report => format!("{} {}", report["name"], report["status"]),
                     };
+                    let acted = match &recovery.observed_by {
+                        Some(observer) => {
+                            format!("; recovered from {observer}, whose resolver held its requests")
+                        }
+                        None => String::new(),
+                    };
                     println!(
-                        "{} {} ({}): {} stood {}s past the {}s bound since {}; {} request(s) held; repair {}; restart {}",
+                        "{} {} on {} ({}): {} stood {}s past the {}s bound since {}; {} request(s) held; repair {}; restart {}{}",
                         recovery.at,
                         recovery.service,
+                        recovery.host,
                         recovery.unit,
                         recovery.question,
                         recovery.stood_seconds,
@@ -178,6 +185,7 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
                         recovery.held_requests.len(),
                         repair,
                         if recovery.restarted { "ended well" } else { "refused" },
+                        acted,
                     );
                 }
             }

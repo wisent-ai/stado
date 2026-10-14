@@ -107,19 +107,40 @@ async fn target_health_probes(target: &str) -> String {
 
 /// The declared Skarbiec cryptographic-daemon repair's payload: run on a
 /// target by [`apply_skarbiec_crypto_repair`], and on the vault host by its
-/// own object API when a vault answer names a held keyring lock.
+/// own object API when a vault answer names a held keyring lock. Both hand
+/// it [`READINESS_BOUND_VARIABLE`].
 pub(crate) const SKARBIEC_CRYPTO_REPAIR_PAYLOAD: &str =
     include_str!("../../../../host_payloads/recover-skarbiec-crypto.sh");
 
+/// The variable the crypto payload reads its readiness bound from.
+pub(crate) const READINESS_BOUND_VARIABLE: &str = "SKARBIEC_READY_WITHIN_SECONDS";
+
+/// How long the crypto payload's readiness reads may wait: the directory
+/// refresh interval this host's resolver declares, the measure every held
+/// request is judged by. Refused, naming what is missing, when no interval
+/// is declared, since a read without a bound kept the repair from ending.
+pub(crate) fn readiness_bound_seconds() -> Result<u64, CmdError> {
+    match crate::cli::resolver::declared_bound_seconds() {
+        Ok(Some(seconds)) => Ok(seconds),
+        Ok(None) => Err(CmdError::declaration(
+            "this host's resolver declares no directory refresh interval, the bound the Skarbiec \
+             crypto repair waits on readiness for; declare it on this target's resolver"
+                .to_string(),
+        )),
+        Err(unreadable) => Err(CmdError::declaration(format!(
+            "the directory refresh interval the Skarbiec crypto repair waits on readiness for \
+             cannot be read: {unreadable}"
+        ))),
+    }
+}
+
 /// Apply the declared Skarbiec cryptographic-daemon repair.
 pub(crate) async fn apply_skarbiec_crypto_repair(target: &str) -> Result<Value, CmdError> {
-    run_recovery(
-        target,
-        SKARBIEC_CRYPTO_REPAIR_PAYLOAD,
-        false,
-        "cryptographic",
-    )
-    .await
+    let script = format!(
+        "{READINESS_BOUND_VARIABLE}={}\nexport {READINESS_BOUND_VARIABLE}\n{SKARBIEC_CRYPTO_REPAIR_PAYLOAD}",
+        readiness_bound_seconds()?
+    );
+    run_recovery(target, &script, false, "cryptographic").await
 }
 
 /// Apply the declared Skarbiec acquisition-state repair.

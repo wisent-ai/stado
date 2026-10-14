@@ -82,18 +82,33 @@ pub async fn collect_beacon(publish: bool) -> Result<(), CmdError> {
 /// The `--health-interval-seconds` role of the host process: build this
 /// machine's health beacon every `period` and deliver it to the fleet store,
 /// promising the next one within the period plus what the last collection
-/// took. A store that cannot be opened, or a collection that fails, is said
-/// on stderr and tried again on the next tick; the role never ends.
+/// took. The collection runs before the store is opened: it is also the
+/// pass that recovers a service that stands, here or on another host, and
+/// a store that stands behind that very service (an object API that
+/// authorizes through the vault) kept the pass from ever running. A store
+/// that cannot be opened, or a collection that fails, is said on stderr and
+/// tried again on the next tick; the role never ends.
 pub async fn collect_beacons_every(period: std::time::Duration) -> Result<(), CmdError> {
     let mut schedule = tokio::time::interval(period);
     schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut store: Option<crate::queue::JobStorage> = None;
-    // How long the last collection took: the part of the next beacon's
-    // promise the period alone does not cover, since the next one is
-    // published only once its own collection finishes.
-    let mut last_collection = std::time::Duration::ZERO;
     loop {
         schedule.tick().await;
+        // Every collection runs to completion. A delayed pass skips obsolete
+        // scheduled ticks instead of cancelling work or bursting repeated probes.
+        let started = std::time::Instant::now();
+        let collected = collect_document().await;
+        // How long this collection took: the part of the next beacon's
+        // promise the period alone does not cover, since the next one is
+        // published only once its own collection finishes.
+        let last_collection = started.elapsed();
+        let mut document = match collected {
+            Ok(document) => document,
+            Err(error) => {
+                eprintln!("[stado serve host-health] collect failed: {error}");
+                continue;
+            }
+        };
         if store.is_none() {
             match crate::queue::JobStorage::new().await {
                 Ok(opened) => store = Some(opened),
@@ -109,22 +124,15 @@ pub async fn collect_beacons_every(period: std::time::Duration) -> Result<(), Cm
         let Some(store) = store.as_ref() else {
             continue;
         };
-        // Every collection runs to completion. A delayed pass skips obsolete
-        // scheduled ticks instead of cancelling work or bursting repeated probes.
-        let started = std::time::Instant::now();
-        let collected = async {
-            let mut document = collect_document().await?;
-            super::deliver_document(
-                &mut document,
-                super::Destination::Store(store),
-                Some(period + last_collection),
-            )
-            .await
-        };
-        if let Err(error) = collected.await {
-            eprintln!("[stado serve host-health] collect-and-publish failed: {error}");
+        if let Err(error) = super::deliver_document(
+            &mut document,
+            super::Destination::Store(store),
+            Some(period + last_collection),
+        )
+        .await
+        {
+            eprintln!("[stado serve host-health] publish failed: {error}");
         }
-        last_collection = started.elapsed();
     }
 }
 
@@ -256,6 +264,12 @@ async fn collect_document() -> Result<Value, CmdError> {
         // beside the declared units rather than `active` from an old read.
         object.insert("roles".to_string(), roles_and_strays(&home)?);
     }
+    // The services of other hosts that hold this host's requests past the
+    // bound, recovered from here when their own host did not act.
+    let peers = crate::deploy::service_answering::peer::recoveries(&home, &target.name).await;
+    if let Some(object) = document.as_object_mut() {
+        object.insert("peer_recoveries".to_string(), peers);
+    }
     Ok(document)
 }
 
@@ -327,9 +341,10 @@ async fn answering_entry(
     if reading.stands() {
         let home = crate::config_file::expand_tilde("~");
         let recovered = crate::deploy::service_answering::recover::recover(
-            &home, hostname, &entry, unit, &reading,
+            &home, hostname, &entry, unit, &reading, None,
         )
         .await;
+        crate::deploy::service_answering::forget(&entry.name);
         block["recovery"] = match recovered {
             Ok(record) => record,
             Err(error) => json!({ "refusal": error.to_string() }),

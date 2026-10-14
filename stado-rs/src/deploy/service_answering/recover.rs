@@ -1,9 +1,13 @@
-//! What the host does with a service that stands: the declared repair steps
+//! What a host does with a service that stands: the declared repair steps
 //! of its repair declaration that the answering declaration names, in order,
 //! then the declared restart through the same path `stado service restart`
 //! takes, then the record and the alert. No manual step: the host that runs
-//! the service is the one that acts, on the beacon pass that found it
-//! standing, and the next pass asks the new process afresh.
+//! the service acts on the beacon pass that found it standing, and the next
+//! pass asks the new process afresh. Another host whose resolver holds the
+//! service's requests past the same bound acts through this same path on
+//! the host that runs it ([`Peer`]), since the steps are fixed host payloads
+//! and the restart rides the registry SSH channel, neither of which needs
+//! that host's own Stado.
 //!
 //! Every named step runs: each reads its own cause and refuses when that
 //! cause is absent, so a standing caused by a wedged daemon is cleared by
@@ -24,14 +28,26 @@ use crate::deploy::service_catalog::CatalogService;
 /// The alert's subject.
 const SUBJECT: &str = "Stado recovered a service that stopped answering";
 
+/// What another host saw stand: the host whose resolver held the service's
+/// requests, and the oldest held request's own sentence.
+#[derive(Debug, Clone, Copy)]
+pub struct Peer<'a> {
+    pub observer: &'a str,
+    pub sentence: &'a str,
+}
+
 /// Recover `entry`, which `reading` found standing on `host`, and record
-/// what was done. Answers the record as JSON for the beacon.
+/// what was done. Answers the record as JSON for the beacon. `peer` is the
+/// host that acts on a service of another host and what it saw; `None` when
+/// the host that runs the service asked its own question. The caller that
+/// asked the question forgets it afterwards ([`super::forget`]).
 pub async fn recover(
     home: &std::path::Path,
     host: &str,
     entry: &CatalogService,
     unit: &str,
     reading: &Reading,
+    peer: Option<Peer<'_>>,
 ) -> Result<Value, CmdError> {
     let Reading::Stood {
         since,
@@ -75,25 +91,33 @@ pub async fn recover(
         Ok(report) => (report, true),
         Err(error) => (json!({ "refusal": error.to_string() }), false),
     };
-    super::forget(&entry.name);
-    let message = format!(
-        "{host}: {} ({unit}) answered nothing on {} {} for {waited_seconds}s, past the {bound_seconds}s \
-         bound; {} request(s) stood on this host's resolver; repair {}; restart {}. `stado service \
-         recoveries` holds the record.",
-        entry.name,
-        declared.method,
-        declared.path,
-        held_requests.len(),
-        match repair.as_slice() {
-            [] => String::from("not declared"),
-            reports => reports
-                .iter()
-                .map(|report| format!("{} {}", report["name"], report["status"]))
-                .collect::<Vec<_>>()
-                .join(", "),
-        },
-        if restarted { "ended well" } else { "refused" }
-    );
+    let repaired = match repair.as_slice() {
+        [] => String::from("not declared"),
+        reports => reports
+            .iter()
+            .map(|report| format!("{} {}", report["name"], report["status"]))
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    let restart_word = if restarted { "ended well" } else { "refused" };
+    let message = match peer {
+        None => format!(
+            "{host}: {} ({unit}) answered nothing on {} {} for {waited_seconds}s, past the \
+             {bound_seconds}s bound; {} request(s) stood on this host's resolver; repair \
+             {repaired}; restart {restart_word}. `stado service recoveries` holds the record.",
+            entry.name,
+            declared.method,
+            declared.path,
+            held_requests.len(),
+        ),
+        Some(peer) => format!(
+            "{host}: {} ({unit}) held {}'s requests for {waited_seconds}s, past the \
+             {bound_seconds}s bound, and {host} did not recover it itself: {}; recovered from {} \
+             over its registry SSH channel; repair {repaired}; restart {restart_word}. `stado \
+             service recoveries` on {} holds the record.",
+            entry.name, peer.observer, peer.sentence, peer.observer, peer.observer,
+        ),
+    };
     let alert: Vec<Value> = crate::monitor::alerts::send_alert(crate::config::alerts_topic(), &message, SUBJECT)
         .await
         .iter()
@@ -115,6 +139,7 @@ pub async fn recover(
         restart,
         restarted,
         alert: Value::Array(alert),
+        observed_by: peer.map(|peer| peer.observer.to_string()),
     };
     register::append(home, &recovery)?;
     Ok(json!(recovery))
