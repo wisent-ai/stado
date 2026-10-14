@@ -7,8 +7,7 @@ use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 
 use super::jobs::{
-    candidate_prefixes, compiling_count, job_state_and_cost, previous_compile_total,
-    settled_reading, JobReading,
+    candidate_prefixes, compile_progress, job_state_and_cost, settled_reading, JobReading, Progress,
 };
 use super::legs::{published_every_submitted_platform, required_leg_failed};
 use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX};
@@ -275,27 +274,26 @@ pub(crate) async fn matching_runs(
             let Some(job_id) = record["job_id"].as_str().map(str::to_owned) else {
                 continue;
             };
-            // The build's own progress, from the log the agent streams while
-            // the job runs: crates compiled so far, measured against the same
-            // count from this platform's previous run. cargo publishes no
-            // total, so the previous run IS the honest denominator, and the
-            // figure is labelled an estimate everywhere it is shown.
+            // The build's own progress, measured against this platform's
+            // previous run ([`compile_progress`]).
             if record["job_state"].as_str() == Some("running") {
-                if let Some(compiled) = compiling_count(&store, &job_id).await {
-                    let mut progress = Map::new();
-                    progress.insert("compiled".into(), Value::from(compiled));
-                    let previous = match &product_name {
-                        Some(product) => {
-                            previous_compile_total(&store, &older, product, platform_name).await
-                        }
-                        None => {
-                            progress.insert(
-                                "previous_run_unmeasured".into(),
-                                Value::from("the run names no product"),
-                            );
-                            None
-                        }
-                    };
+                let measured = compile_progress(
+                    &store,
+                    &job_id,
+                    &older,
+                    product_name.as_deref(),
+                    platform_name,
+                )
+                .await;
+                if let Progress::Unreadable(cause) = &measured {
+                    record["compile_progress"] = serde_json::json!({ "unreadable": cause });
+                }
+                if let Progress::Compiled {
+                    compiled,
+                    mut progress,
+                    previous,
+                } = measured
+                {
                     if let Some(total) = previous {
                         progress.insert("of_previous_run".into(), Value::from(total));
                         // The measured ratio, as it is: a run that compiles

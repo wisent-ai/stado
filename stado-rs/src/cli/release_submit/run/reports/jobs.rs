@@ -12,6 +12,7 @@ use crate::release_control;
 use crate::release_pipeline::{self, ProductManifest};
 
 use super::load_run_value;
+use serde_json::{Map, Value};
 
 /// How long one platform's build actually took, in seconds.
 ///
@@ -118,35 +119,44 @@ pub(super) async fn settled_reading(
     Ok(settled.map(|job| reading(&job, &job.state)))
 }
 
-/// Distinct crates the job's streamed log says were compiled so far.
-pub(super) async fn compiling_count(store: &JobStorage, job_id: &str) -> Option<u64> {
-    let bytes = store
-        .read_bytes(&format!("status/{job_id}/output/command_output.log"))
+/// Distinct crates the job's streamed log says were compiled so far; none
+/// while the job has streamed no log. A log that cannot be read is the error.
+async fn compiling_count(store: &JobStorage, job_id: &str) -> Result<Option<u64>, String> {
+    let path = format!("status/{job_id}/output/command_output.log");
+    let Some(bytes) = store
+        .read_bytes(&path)
         .await
-        .ok()
-        .flatten()?;
+        .map_err(|error| format!("{path} could not be read: {error}"))?
+    else {
+        return Ok(None);
+    };
     let text = String::from_utf8_lossy(&bytes);
-    Some(
+    Ok(Some(
         text.lines()
             .filter(|line| line.trim_start().starts_with("Compiling "))
             .count() as u64,
-    )
+    ))
 }
 
 /// The compile count of the newest older run of the same product and
-/// platform whose job finished — the denominator for the estimate.
+/// platform whose job finished — the denominator for the estimate. An older
+/// run or log that cannot be read is the error: skipped, a farther run's
+/// count stood as the denominator, or none did.
 ///
 /// `older` is the run objects newest-first that [`recent_runs`] did not need,
 /// as paths: the answer is nearly always the first or second of them, so they
 /// are downloaded one at a time and the walk stops at the first usable count.
-pub(super) async fn previous_compile_total(
+async fn previous_compile_total(
     store: &JobStorage,
     older: &[String],
     product: &str,
     platform: &str,
-) -> Option<u64> {
+) -> Result<Option<u64>, String> {
     for path in older {
-        let Ok(Some(run)) = load_run_value(store, path).await else {
+        let Some(run) = load_run_value(store, path)
+            .await
+            .map_err(|error| format!("the older run {path} could not be read: {error}"))?
+        else {
             continue;
         };
         if run["product"].as_str() != Some(product) {
@@ -156,13 +166,63 @@ pub(super) async fn previous_compile_total(
         let Some(job_id) = record["job_id"].as_str() else {
             continue;
         };
-        if let Some(count) = compiling_count(store, job_id).await {
+        if let Some(count) = compiling_count(store, job_id).await? {
             if count > 0 {
-                return Some(count);
+                return Ok(Some(count));
             }
         }
     }
-    None
+    Ok(None)
+}
+
+/// What a running job's streamed log says of its progress.
+pub(super) enum Progress {
+    /// The job has streamed no log yet.
+    NotStarted,
+    /// The log could not be read, for this cause.
+    Unreadable(String),
+    /// Crates compiled so far; `previous` the previous run's count when it
+    /// was measured, and `progress` the report's fields so far, carrying
+    /// `previous_run_unmeasured` when the previous run could not be.
+    Compiled {
+        compiled: u64,
+        progress: Map<String, Value>,
+        previous: Option<u64>,
+    },
+}
+
+/// A running job's crates compiled so far, measured against the same count
+/// from this platform's previous run.
+pub(super) async fn compile_progress(
+    store: &JobStorage,
+    job_id: &str,
+    older: &[String],
+    product: Option<&str>,
+    platform: &str,
+) -> Progress {
+    let compiled = match compiling_count(store, job_id).await {
+        Ok(Some(compiled)) => compiled,
+        Ok(None) => return Progress::NotStarted,
+        Err(cause) => return Progress::Unreadable(cause),
+    };
+    let mut progress = Map::new();
+    progress.insert("compiled".into(), Value::from(compiled));
+    let measured = match product {
+        Some(product) => previous_compile_total(store, older, product, platform).await,
+        None => Err("the run names no product".to_string()),
+    };
+    let previous = match measured {
+        Ok(previous) => previous,
+        Err(cause) => {
+            progress.insert("previous_run_unmeasured".into(), Value::from(cause));
+            None
+        }
+    };
+    Progress::Compiled {
+        compiled,
+        progress,
+        previous,
+    }
 }
 
 /// Whether a run's platform is one the release cannot ship without, by the
