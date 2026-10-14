@@ -12,9 +12,9 @@ pub struct StorageLsArgs {
     /// Object-name prefix. Omit for per-prefix counts across the canonical
     /// prefix set — the fast answer to "is the queue empty?".
     prefix: Option<String>,
-    /// Maximum objects listed under an explicit prefix.
-    #[arg(long, default_value_t = default_list_limit())]
-    limit: usize,
+    /// Maximum objects listed under an explicit prefix. Omit to list every object.
+    #[arg(long)]
+    limit: Option<usize>,
     /// Also report each listed object's body size. Opt-in because it costs
     /// one download per object; see `probe_sizes`.
     #[arg(long)]

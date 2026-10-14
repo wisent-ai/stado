@@ -16,8 +16,10 @@ pub(in crate::cli::storage) async fn ls_prefix(
         .await?;
     blobs.sort_by(|left, right| left.name.cmp(&right.name));
     let total = blobs.len();
-    let truncated = total > args.limit;
-    blobs.truncate(args.limit);
+    let truncated = args.limit.is_some_and(|limit| total > limit);
+    if let Some(limit) = args.limit {
+        blobs.truncate(limit);
+    }
     let sizes = if args.size {
         probe_sizes(backend, &blobs).await
     } else {
@@ -71,11 +73,8 @@ pub(in crate::cli::storage) async fn ls_prefix(
         .collect();
     print_table(&headers, &rows);
     println!("\n{} of {total} object(s) under {prefix:?}.", blobs.len());
-    if truncated {
-        println!(
-            "Truncated by --limit {}; raise it to see the rest.",
-            args.limit
-        );
+    if let Some(limit) = args.limit.filter(|_| truncated) {
+        println!("Truncated by --limit {limit}; omit it to see every object.");
     }
     Ok(())
 }
@@ -86,7 +85,7 @@ pub(in crate::cli::storage) async fn ls_prefix(
 /// docs: [`BlobInfo`] has no size field — the backend listing contract
 /// yields name, timestamp and metadata only — so the only route to a byte
 /// count is reading the body. That is why `--size` is opt-in and why it is
-/// bounded by `--limit`, and the fan-out is the crate's one bulk budget
+/// bounded only when `--limit` is stated, and the fan-out is the crate's one bulk budget
 /// ([`copy::default_concurrency`], the OS's available parallelism) rather
 /// than a second concurrency style.
 async fn probe_sizes(backend: &Arc<dyn BlobBackend>, blobs: &[BlobInfo]) -> Vec<SizeProbe> {

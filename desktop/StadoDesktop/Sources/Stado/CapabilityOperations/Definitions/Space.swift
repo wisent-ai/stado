@@ -16,6 +16,12 @@ enum NativeSpaceOperations {
         .init(id: "limit", label: "Item limit (optional)", option: "--limit"),
     ]
     static let all: [NativeCapabilityOperation] = [
+        .init(id: "list-store-objects", title: "List objects in the selected API's configured store", path: ["storage", "ls"],
+            hostPlacement: .none, fields: [
+                .init(id: "prefix", label: "Object prefix (blank reads canonical prefix counts)"),
+                .init(id: "limit", label: "Maximum objects (blank lists every object)", option: "--limit"),
+                .init(id: "size", label: "Read object bodies to report their sizes", option: "--size", flag: true),
+            ], mutates: false),
         .init(id: "preview-reclaim", title: "Preview selected reclamation stages", path: ["space", "reclaim"],
             hostPlacement: .positional, fields: reclaimFields, fixedArguments: ["--dry-run"], mutates: false),
         .init(id: "apply-reclaim", title: "Apply selected reclamation stages", path: ["space", "reclaim"],

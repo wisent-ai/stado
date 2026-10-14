@@ -134,14 +134,6 @@ fn default_concurrency() -> NonZeroUsize {
     NonZeroUsize::new(copy::default_concurrency()).expect("the crate fan-out budget is non-zero")
 }
 
-/// Default `--limit` for `storage ls`: the largest count one byte can
-/// express. A hot prefix (`queue/` carries five figures of blobs) is
-/// truncated with a note rather than flooding the terminal, and the
-/// operator raises the flag when they want the rest.
-fn default_list_limit() -> usize {
-    usize::from(u8::MAX)
-}
-
 // ---- shared rendering ----
 
 /// Pretty-printed JSON on stdout, same shape as `cli/quota.rs::echo_json`.
