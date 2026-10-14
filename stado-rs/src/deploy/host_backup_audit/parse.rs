@@ -45,100 +45,27 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                 totals.bytes += bytes;
             }
             Some("STADO_BACKUP_OBJECT") => {
-                let (
-                    Some(path),
-                    Some(primary_state),
-                    Some(primary_bytes),
-                    Some(primary_sha256),
-                    Some(backup_state),
-                    Some(backup_bytes),
-                    Some(backup_sha256),
-                    Some(primary_metadata_state),
-                    Some(primary_metadata_bytes),
-                    Some(primary_metadata_sha256),
-                    Some(backup_metadata_state),
-                    Some(backup_metadata_bytes),
-                    Some(backup_metadata_sha256),
-                ) = (
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                )
-                else {
-                    continue;
-                };
-                let identity = |state: &str, bytes: &str, sha256: &str| ObjectIdentity {
-                    state: state.to_string(),
-                    bytes: bytes.parse().ok(),
-                    sha256: (!sha256.is_empty()).then(|| sha256.to_string()),
-                };
-                audit.objects.push(ObjectComparison {
-                    path: path.to_string(),
-                    primary: identity(primary_state, primary_bytes, primary_sha256),
-                    backup: identity(backup_state, backup_bytes, backup_sha256),
-                    primary_metadata: identity(
-                        primary_metadata_state,
-                        primary_metadata_bytes,
-                        primary_metadata_sha256,
-                    ),
-                    backup_metadata: identity(
-                        backup_metadata_state,
-                        backup_metadata_bytes,
-                        backup_metadata_sha256,
-                    ),
-                });
-            }
-            Some("STADO_BACKUP_INVENTORY_OBJECT") => {
-                let (
-                    Some(encoded_path),
-                    Some(primary_state),
-                    Some(primary_bytes),
-                    Some(primary_sha256),
-                    Some(backup_state),
-                    Some(backup_bytes),
-                    Some(backup_sha256),
-                    Some(primary_metadata_state),
-                    Some(primary_metadata_bytes),
-                    Some(primary_metadata_sha256),
-                    Some(backup_metadata_state),
-                    Some(backup_metadata_bytes),
-                    Some(backup_metadata_sha256),
-                ) = (
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                    fields.next(),
-                )
-                else {
-                    // A row the audit printed and this reader cannot read
-                    // leaves the inventory incomplete; dropped, the audit
-                    // compared fewer objects and reported the rest matched.
+                // A requested object the reader cannot read leaves the audit
+                // incomplete; dropped, the operator asked about an object and
+                // was told nothing.
+                let Some(path) = fields.next() else {
                     audit.unavailable = Some(format!(
                         "the audit printed an object row that does not read: {line}"
                     ));
                     continue;
                 };
-                let Some(path) = hex::decode(encoded_path)
-                    .ok()
+                match object_identities(path.to_string(), &mut fields, line) {
+                    Ok(object) => audit.objects.push(object),
+                    Err(detail) => audit.unavailable = Some(detail),
+                }
+            }
+            Some("STADO_BACKUP_INVENTORY_OBJECT") => {
+                // A row the audit printed and this reader cannot read leaves
+                // the inventory incomplete; dropped, the audit compared fewer
+                // objects and reported the rest matched.
+                let Some(path) = fields
+                    .next()
+                    .and_then(|encoded| hex::decode(encoded).ok())
                     .and_then(|bytes| String::from_utf8(bytes).ok())
                 else {
                     audit.unavailable = Some(format!(
@@ -146,26 +73,10 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                     ));
                     continue;
                 };
-                let identity = |state: &str, bytes: &str, sha256: &str| ObjectIdentity {
-                    state: state.to_string(),
-                    bytes: bytes.parse().ok(),
-                    sha256: (!sha256.is_empty()).then(|| sha256.to_string()),
-                };
-                audit.inventory_objects.push(ObjectComparison {
-                    path,
-                    primary: identity(primary_state, primary_bytes, primary_sha256),
-                    backup: identity(backup_state, backup_bytes, backup_sha256),
-                    primary_metadata: identity(
-                        primary_metadata_state,
-                        primary_metadata_bytes,
-                        primary_metadata_sha256,
-                    ),
-                    backup_metadata: identity(
-                        backup_metadata_state,
-                        backup_metadata_bytes,
-                        backup_metadata_sha256,
-                    ),
-                });
+                match object_identities(path, &mut fields, line) {
+                    Ok(object) => audit.inventory_objects.push(object),
+                    Err(detail) => audit.unavailable = Some(detail),
+                }
             }
             Some("STADO_BACKUP_NAMESPACE") => {
                 let (Some(root), Some(encoded)) = (fields.next(), fields.next()) else {
@@ -216,6 +127,9 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                 let (Some(outcome), Some(size), Some(_path)) =
                     (fields.next(), fields.next(), fields.next())
                 else {
+                    audit.unavailable = Some(format!(
+                        "the reclaim printed a row that does not read: {line}"
+                    ));
                     continue;
                 };
                 let Ok(bytes) = size.trim().parse::<u64>() else {
@@ -228,7 +142,12 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                     "deleted" => &mut audit.deleted,
                     "would_delete" => &mut audit.would_delete,
                     "delete_failed" => &mut audit.delete_failed,
-                    _ => continue,
+                    _ => {
+                        audit.unavailable = Some(format!(
+                            "the reclaim printed an outcome this Stado does not know: {line}"
+                        ));
+                        continue;
+                    }
                 };
                 totals.objects += 1;
                 totals.bytes += bytes;
@@ -245,14 +164,31 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
                 }
             }
             Some("STADO_BACKUP_FREE") => {
-                let (Some(phase), Some(blocks)) = (fields.next(), fields.next()) else {
-                    continue;
+                // The free space the pass read on each side of its deletions;
+                // a reading that does not read is said, never shown as unread.
+                let reading = match (fields.next(), fields.next()) {
+                    (Some(phase), Some(blocks)) => {
+                        crate::deploy::host_channel::marker_number::<i64>(
+                            blocks,
+                            "free block count",
+                        )
+                        .map(|blocks| (phase, blocks))
+                    }
+                    _ => Err("it names no phase or block count".to_string()),
                 };
-                let blocks = blocks.trim().parse::<i64>().ok();
-                match phase {
-                    "before" => audit.free_kb_before = blocks,
-                    "after" => audit.free_kb_after = blocks,
-                    _ => {}
+                match reading {
+                    Ok(("before", blocks)) => audit.free_kb_before = blocks,
+                    Ok(("after", blocks)) => audit.free_kb_after = blocks,
+                    Ok(_) => {
+                        audit.unavailable = Some(format!(
+                            "the audit printed a free-space phase this Stado does not know: {line}"
+                        ))
+                    }
+                    Err(detail) => {
+                        audit.unavailable = Some(format!(
+                            "the audit printed a free-space row where {detail}: {line}"
+                        ))
+                    }
                 }
             }
             _ => {}
@@ -266,4 +202,39 @@ pub fn parse_output(stdout: &str, host: &str) -> BackupAudit {
         .iter()
         .all(|root| namespace_roots_complete.contains(*root));
     audit
+}
+
+/// The four identities of one object row, in the order the program prints
+/// them after the path: state, byte count and digest of the primary, of the
+/// backup and of their two metadata files. A row with fewer fields, or a byte
+/// count that is not a number, is refused quoting the line; an empty or `-`
+/// byte count is an object the program found no size for.
+fn object_identities(
+    path: String,
+    fields: &mut std::str::Split<'_, char>,
+    line: &str,
+) -> Result<ObjectComparison, String> {
+    let mut identity = || -> Result<ObjectIdentity, String> {
+        let (Some(state), Some(bytes), Some(sha256)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            return Err(format!(
+                "the audit printed an object row that does not read: {line}"
+            ));
+        };
+        Ok(ObjectIdentity {
+            state: state.to_string(),
+            bytes: crate::deploy::host_channel::marker_number(bytes, "byte count").map_err(
+                |detail| format!("the audit printed an object row where {detail}: {line}"),
+            )?,
+            sha256: (!sha256.is_empty()).then(|| sha256.to_string()),
+        })
+    };
+    Ok(ObjectComparison {
+        path,
+        primary: identity()?,
+        backup: identity()?,
+        primary_metadata: identity()?,
+        backup_metadata: identity()?,
+    })
 }
