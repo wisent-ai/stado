@@ -45,10 +45,10 @@ impl ArtifactError {
     }
 
     /// The fleet failure class of this artifact code: a missing artifact or
-    /// alias is not found, a conflict, an invalid reference or manifest and a
-    /// failed verification are refusals of the request, and a corrupt stored
-    /// record is the registry's own outage. A code this build does not know
-    /// stays unknown rather than guessed.
+    /// alias is not found, a conflict, an invalid reference or manifest, a
+    /// failed verification and an actor that cannot be read are refusals of
+    /// the request, and a corrupt stored record is the registry's own outage.
+    /// A code this build does not know stays unknown rather than guessed.
     pub fn failure_code(&self) -> crate::primitives::failure::FailureCode {
         use crate::primitives::failure::FailureCode;
         match self.code.as_str() {
@@ -57,7 +57,8 @@ impl ArtifactError {
             | "ARTIFACT_VERSION_CONFLICT"
             | "ARTIFACT_INVALID_REF"
             | "ARTIFACT_INVALID_MANIFEST"
-            | "ARTIFACT_VERIFICATION_FAILED" => FailureCode::Refused,
+            | "ARTIFACT_VERIFICATION_FAILED"
+            | "ARTIFACT_ACTOR_UNREADABLE" => FailureCode::Refused,
             "ARTIFACT_CORRUPT_ALIAS" | "ARTIFACT_CORRUPT_MANIFEST" => FailureCode::InfraDown,
             _ => FailureCode::Unknown,
         }

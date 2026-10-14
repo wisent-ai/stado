@@ -37,6 +37,11 @@ impl ArtifactRegistry {
             .into());
         }
         let path = alias_path(&alias_ref);
+        let updated_by = if updated_by.is_empty() {
+            actor()?
+        } else {
+            updated_by.to_string()
+        };
         let record = serde_json::json!({
             "schema_version":
                 1,
@@ -44,7 +49,7 @@ impl ArtifactRegistry {
             "alias": alias,
             "target_version": target.version,
             "updated_at": now(),
-            "updated_by": if updated_by.is_empty() { actor() } else { updated_by.to_string() },
+            "updated_by": updated_by,
             "previous_version": expected_previous.unwrap_or(""),
         });
         let content = crate::queue::submit::json_dumps_sorted_compact(&record);

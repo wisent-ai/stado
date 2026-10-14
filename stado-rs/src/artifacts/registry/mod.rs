@@ -39,15 +39,14 @@ fn now() -> String {
     crate::models::isoformat_utc(chrono::Utc::now())
 }
 
-/// Python `_actor()`: `f"{getpass.getuser()}@{socket.gethostname()}"`.
-fn actor() -> String {
-    let user = std::env::var("USER")
-        .ok()
-        .filter(|u| !u.is_empty())
-        .or_else(|| std::env::var("LOGNAME").ok())
-        .unwrap_or_default();
+/// Who publishes or moves an alias: `<account>@<host>`, the account read as a
+/// job submitter is. Refused when it cannot be read: read as empty, the
+/// record named `@<host>`, an actor with no account.
+fn actor() -> Result<String, RegistryError> {
+    let user = crate::queue::submit::submitter()
+        .map_err(|error| ArtifactError::new("ARTIFACT_ACTOR_UNREADABLE", error.to_string()))?;
     let host = crate::providers::vast::system_hostname();
-    format!("{user}@{host}")
+    Ok(format!("{user}@{host}"))
 }
 
 /// Registry operation failure. [`RegistryError::Artifact`] is the

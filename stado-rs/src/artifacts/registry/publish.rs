@@ -60,7 +60,7 @@ impl ArtifactRegistry {
             prepared.created_at = now();
         }
         if prepared.created_by.is_empty() {
-            prepared.created_by = actor();
+            prepared.created_by = actor()?;
         }
         prepared.verification = ArtifactVerification {
             adapter: report.adapter.clone(),
