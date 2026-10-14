@@ -34,4 +34,4 @@ pub use validate::manifest::{
 };
 pub use validate::predicates::safe_relative;
 pub use validate::roles::{platform_runtime_role, runtime_role, RuntimeRole};
-pub use validate::version::{declared_version, validate_catalog_entry};
+pub use validate::version::{declared_version, validate_catalog_entry, version_path, with_version};

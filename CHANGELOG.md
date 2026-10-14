@@ -22,6 +22,10 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+### Added
+
+- **A delivery loop takes a commit that carries a recorded repair to the hosts that run it:** `stado serve --release-loop-root DIR --release-loop-channel candidate|stable` makes a pass over the product checkouts under DIR at start and again whenever a checkout's branch moves (the kernel's notification on `.git/refs/heads`, nothing polled). For each checkout it reads the commit, the version it declares and the recorded runs as `stado release newest` does, and asks Oko (`oko defects list --open --product P --json`) for the open defects whose recorded repair that commit contains. A commit carrying none owes nothing. One carrying some gets the least next version the versioning rule allows committed in the product's own version source (with the workspace's `Cargo.lock` entry moved by `cargo update --workspace --offline`) when its declared version is taken, goes through the pipeline `stado release submit` drives — build, the product's quality steps, signing, publication and delivery — and its release is recorded on its defects with `oko defects released --product P --close`. A step that refuses keeps its exact error on the commit in `~/.stado/release-loop.json` (`STADO_RELEASE_LOOP_REGISTER`), is noted on every carried defect (`stado release loop: <product> at <commit> did not reach a release; the <step> step refused: <error>`), and the commit is not taken again; the product's next commit is the next attempt. A version file or lock carrying someone's uncommitted change, or a checkout that moved while it was planned, is refused by name rather than committed over.
+
 ### Fixed
 
 - **Committed lock mismatches are source configuration failures, not credential refusals:** missing path dependencies are diagnosed too, each missing package names its declaring manifest, and the CLI and Desktop preserve Cargo's original failure and evidence location. The real committed-lock journey exports stale and repaired revisions, compiles with Cargo, executes the repaired binary, and keeps unrelated compiler errors distinct.

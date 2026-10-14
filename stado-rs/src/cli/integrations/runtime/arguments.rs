@@ -112,6 +112,13 @@ pub(crate) struct ServeArgs {
     /// runner's own account.
     #[arg(long, value_name = "ROOT")]
     pub precheck_runner: Option<std::path::PathBuf>,
+    /// Run the delivery loop over the product checkouts under this directory
+    /// inside this process: a pass at start and on every branch move.
+    #[arg(long, value_name = "DIR", requires = "release_loop_channel")]
+    pub release_loop_root: Option<std::path::PathBuf>,
+    /// The channel the delivery loop releases on.
+    #[arg(long, value_enum, requires = "release_loop_root")]
+    pub release_loop_channel: Option<crate::cli::release_submit::SubmitChannel>,
     /// Collect workstation diagnostics inside this host process.
     #[arg(long)]
     pub watchdog: bool,
@@ -216,6 +223,13 @@ impl ServeArgs {
         }
         if let Some(root) = &self.precheck_runner {
             args.push(format!("--precheck-runner={}", root.display()));
+        }
+        if let (Some(root), Some(channel)) = (&self.release_loop_root, self.release_loop_channel) {
+            let channel = channel
+                .to_possible_value()
+                .expect("release channels are CLI values");
+            args.push(format!("--release-loop-root={}", root.display()));
+            args.push(format!("--release-loop-channel={}", channel.get_name()));
         }
         if self.api {
             args.push("--api".to_string());

@@ -83,6 +83,66 @@ pub fn declared_version(
     Ok(value)
 }
 
+/// The file a version source names, relative to the checkout.
+pub fn version_path(source: &VersionSource) -> &str {
+    source.path()
+}
+
+/// `bytes` of the file `source` names with the version it declares replaced
+/// by `next`, everything else byte for byte: the one writer of a version, so
+/// what [`declared_version`] reads back is `next`. A JSON source is changed
+/// as text, at the one string literal holding the declared version; a file
+/// holding it more than once is refused rather than guessed at.
+pub fn with_version(source: &VersionSource, bytes: &[u8], next: &str) -> Result<Vec<u8>, String> {
+    if !identifier(next) {
+        return Err(format!("{next:?} is not a version coordinate"));
+    }
+    let current = declared_version(source, |_| Ok(bytes.to_vec()))?;
+    let path = source.path();
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| format!("version source {path} is not UTF-8"))?;
+    let written = match source {
+        VersionSource::Regex { pattern, .. } => {
+            let expression = Regex::new(pattern).map_err(|error| error.to_string())?;
+            expression
+                .replace_all(text, |capture: &regex::Captures<'_>| {
+                    let whole = capture.iter().next().flatten();
+                    match (whole, capture.name("version")) {
+                        (Some(whole), Some(value)) => format!(
+                            "{}{next}{}",
+                            &text[whole.start()..value.start()],
+                            &text[value.end()..whole.end()]
+                        ),
+                        (Some(whole), None) => whole.as_str().to_string(),
+                        (None, _) => String::new(),
+                    }
+                })
+                .into_owned()
+        }
+        VersionSource::Json { .. } => {
+            let literal = format!("\"{current}\"");
+            let found: Vec<usize> = text.match_indices(&literal).map(|(at, _)| at).collect();
+            let [only] = found.as_slice() else {
+                return Err(format!(
+                    "version source {path} holds {literal} {} times, so the declared one cannot be told apart",
+                    found.len()
+                ));
+            };
+            format!(
+                "{}\"{next}\"{}",
+                &text[..*only],
+                &text[*only + literal.len()..]
+            )
+        }
+        VersionSource::Text { .. } => {
+            let start = text.len() - text.trim_start().len();
+            let stop = text.trim_end().len();
+            format!("{}{next}{}", &text[..start], &text[stop..])
+        }
+    };
+    Ok(written.into_bytes())
+}
+
 pub fn validate_catalog_entry(entry: &ReleaseCatalogEntry) -> Result<(), String> {
     if entry.schema_version != SCHEMA_VERSION
         || !identifier(&entry.product)

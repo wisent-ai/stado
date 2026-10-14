@@ -147,6 +147,7 @@ fn roles(args: &ServeArgs) -> Vec<&'static str> {
         (args.forward_destination.is_some(), "--forward-destination"),
         (args.edge_caddyfile.is_some(), "--edge-caddyfile"),
         (args.precheck_runner.is_some(), "--precheck-runner"),
+        (args.release_loop_root.is_some(), "--release-loop-root"),
     ]
     .into_iter()
     .filter_map(|(on, flag)| on.then_some(flag))
