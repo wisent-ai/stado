@@ -57,8 +57,8 @@ pub(super) fn stage(
     arguments.extend(forwarded.iter().cloned());
     let mut report = execute_revision(runtime, manifest, revision, "build", &arguments)?.report;
     let succeeded = report.get("error").is_none();
+    let mut placed = Vec::new();
     if succeeded {
-        let mut placed = Vec::new();
         for binary in &binaries {
             let built = target.join("release").join(binary);
             if !built.is_file() {
@@ -80,8 +80,11 @@ pub(super) fn stage(
     } else if let Some(error) = report["error"].as_str() {
         eprintln!("{error}");
     } else {
-        for path in report["staged"].as_array().into_iter().flatten() {
-            println!("staged {}", path.as_str().unwrap_or_default());
+        // The paths this command placed, printed as placed: read back from
+        // the report with an empty-text default, a path that was not text
+        // printed as nothing staged.
+        for path in &placed {
+            println!("staged {}", path.display());
         }
     }
     Ok(if succeeded { 0 } else { 1 })
