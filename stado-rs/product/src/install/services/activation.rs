@@ -11,7 +11,7 @@ use crate::common::{checked, stado, Runtime};
 use crate::install::{operation, transaction};
 use crate::state::ProductState;
 
-pub(super) struct Activation<'a> {
+pub(in crate::install) struct Activation<'a> {
     pub runtime: &'a Runtime,
     pub product: &'a Value,
     pub id: &'a str,

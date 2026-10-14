@@ -92,6 +92,8 @@ impl fmt::Display for Cycle {
     }
 }
 
+impl std::error::Error for Cycle {}
+
 fn awaits_directory() -> Result<PathBuf, String> {
     let mut graph = crate::open::directory()?.into_os_string();
     graph.push(GRAPH);
