@@ -47,29 +47,35 @@ pub async fn grant_show(
             resolved.name
         )));
     };
-    let capabilities: Vec<String> = grant
-        .get("capabilities")
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .map(|capability| {
-                    let item = capability
-                        .get("item")
-                        .and_then(Value::as_str)
-                        .unwrap_or("<no item>");
-                    let action = capability
-                        .get("action")
-                        .and_then(Value::as_str)
-                        .unwrap_or("<no action>");
-                    match capability.get("field").and_then(Value::as_str) {
-                        Some(field) => format!("{item}#{field}:{action}"),
-                        None => format!("{item}:{action}"),
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // A grant whose listing carries no capability array, or a capability
+    // without its item or action, is a listing this build cannot read, not a
+    // grant that records no capability.
+    let unreadable = |what: &str, value: &Value| {
+        CmdError::click(format!(
+            "{}: the vault's grant listing for {consumer} carries {what}: {value}",
+            resolved.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
+    let Some(entries) = grant.get("capabilities").and_then(Value::as_array) else {
+        return Err(unreadable("no capabilities array", grant));
+    };
+    let mut capabilities: Vec<String> = Vec::with_capacity(entries.len());
+    for capability in entries {
+        let (Some(item), Some(action)) = (
+            capability.get("item").and_then(Value::as_str),
+            capability.get("action").and_then(Value::as_str),
+        ) else {
+            return Err(unreadable(
+                "a capability without its item or action",
+                capability,
+            ));
+        };
+        capabilities.push(match capability.get("field").and_then(Value::as_str) {
+            Some(field) => format!("{item}#{field}:{action}"),
+            None => format!("{item}:{action}"),
+        });
+    }
 
     let mut bearer_verdict = String::from("not checked: no --token-file was named");
     let mut effective: Option<bool> = None;
