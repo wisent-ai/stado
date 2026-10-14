@@ -59,7 +59,7 @@ pub async fn run_on_host(
         target.release_platform.starts_with("darwin")
     };
     let prune =
-        crate::providers::local::disk_cleanup::build_caches::privacy_protected_parts(darwin);
+        crate::providers::local::space_reclaim::build_caches::privacy_protected_parts(darwin);
     let command = remote_command(root, days, apply, force, prune);
     // The walk runs until it ends; its own exit and output are the answer.
     let result = if target_is_local(target) {

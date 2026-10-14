@@ -242,7 +242,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // The handshake above is the queue agent's, and only the queue agent
     // implements it: `providers::local::agent` is the sole reader of
     // `stado.release-version`. Every other unit launched from this directory
-    // — the disk-cleanup janitor, the resolver, the health beacon — keeps
+    // — the host's space-reclaim watch, the resolver, the health beacon — keeps
     // executing the inode it started with, for as long as it lives, because
     // nothing tells launchd or systemd that the file underneath changed.
     //

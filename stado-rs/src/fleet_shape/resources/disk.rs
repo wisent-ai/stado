@@ -2,7 +2,7 @@
 
 use super::super::{Finding, DISK_CHECK};
 use crate::deploy::{host_disk, Runner};
-use crate::providers::local::disk_cleanup::rule::{VolumeReading, DISK_FULL_PERCENT};
+use crate::providers::local::space_reclaim::rule::{VolumeReading, DISK_FULL_PERCENT};
 use crate::targets::ComputeTarget;
 
 /// A finding when a host's volume is at the disk-full threshold: its janitor

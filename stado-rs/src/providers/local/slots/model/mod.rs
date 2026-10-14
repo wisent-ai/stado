@@ -3,11 +3,9 @@
 //! executes in; and the Python-parity conversions every record here is
 //! formatted with.
 //!
-//! `disk_cleanup` is imported here rather than in the parts because the
-//! janitor paths the slot holds are named `super::disk_cleanup::...` exactly
-//! as they were when this was one file.
+//! The local space-reclaim import is shared by the slot model modules.
 
-use crate::providers::local::disk_cleanup;
+use crate::providers::local::space_reclaim;
 
 use super::*;
 

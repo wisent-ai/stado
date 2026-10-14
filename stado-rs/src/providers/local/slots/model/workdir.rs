@@ -5,7 +5,7 @@
 use super::*;
 
 pub(crate) fn job_work_dir(job_id: &str) -> std::io::Result<PathBuf> {
-    super::disk_cleanup::queue_workdirs::work_dir(job_id)
+    super::space_reclaim::queue_workdirs::work_dir(job_id)
 }
 
 pub(crate) fn open_agent_reserved_file(path: &Path) -> io::Result<File> {
@@ -13,7 +13,7 @@ pub(crate) fn open_agent_reserved_file(path: &Path) -> io::Result<File> {
         Ok(info)
             if !info.file_type().is_file()
                 || info.file_type().is_symlink()
-                || info.uid() != super::disk_cleanup::euid() =>
+                || info.uid() != super::space_reclaim::euid() =>
         {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -32,7 +32,7 @@ pub(crate) fn open_agent_reserved_file(path: &Path) -> io::Result<File> {
         .mode(0o600)
         .open(path)?;
     let info = file.metadata()?;
-    if !info.is_file() || info.uid() != super::disk_cleanup::euid() {
+    if !info.is_file() || info.uid() != super::space_reclaim::euid() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!("unsafe agent-reserved file {}", path.display()),

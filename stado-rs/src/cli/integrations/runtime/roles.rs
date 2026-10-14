@@ -73,7 +73,6 @@ pub(crate) fn command_roles(words: &[&str]) -> Vec<&'static str> {
         ("serve", _) => ServeLine::try_parse_from(words)
             .map(|line| roles(&line.args))
             .unwrap_or_default(),
-        ("disk-cleanup", _) => vec!["--disk-cleanup"],
         ("product", _) if product_verb(rest) == Some("sync") => {
             vec!["--product-sync-interval-seconds"]
         }
@@ -138,7 +137,6 @@ fn roles(args: &ServeArgs) -> Vec<&'static str> {
             "--product-sync-interval-seconds",
         ),
         (args.run_worker, "--worker"),
-        (args.disk_cleanup, "--disk-cleanup"),
         (
             args.failure_fixer_interval_seconds.is_some(),
             "--failure-fixer-interval-seconds",

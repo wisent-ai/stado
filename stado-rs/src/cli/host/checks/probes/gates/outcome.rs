@@ -73,7 +73,7 @@ pub(super) fn claiming_outcome(
 /// whatever else the host is blocked on. A reading the host did not answer
 /// with is a failure, never a pass.
 pub(super) fn disk_outcome(gates: &crate::deploy::host_gates::HostGates) -> Result<(), CmdError> {
-    let threshold = crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT;
+    let threshold = crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT;
     let Some(used) = gates.used_percent else {
         return Err(CmdError::click(format!(
             "{} did not report how full its volume is",

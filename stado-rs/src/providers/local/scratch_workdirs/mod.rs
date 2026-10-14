@@ -6,7 +6,7 @@
 
 mod filesystem;
 
-use crate::providers::local::disk_cleanup::{free_bytes, safefs};
+use crate::providers::local::space_reclaim::{free_bytes, safefs};
 use serde::Serialize;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};

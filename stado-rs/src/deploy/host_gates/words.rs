@@ -120,22 +120,22 @@ pub const DISK_ATTACHED_UNMOUNTED: &str = "disk_attached_unmounted";
 /// a workload holds the run lock in shared mode for its whole duration and
 /// every pass meanwhile answers `lock_busy`, which is the modelled answer and
 /// not a fault, and a janitor that keeps promising passes while being turned
-/// away is [`DISK_CLEANUP_LOCK_HELD`]. And it does not refuse work on a host
+/// away is [`SPACE_RECLAIM_LOCK_HELD`]. And it does not refuse work on a host
 /// that still has room: on a full volume a stalled janitor must block,
 /// because nothing is bringing the space back; under the threshold, refusing
 /// work creates no space and only removes capacity.
 ///
 /// It has no exemption: every host runs the rule.
-pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
+pub const SPACE_RECLAIM_STALLED: &str = "space_reclaim_stalled";
 
 /// This host's janitor keeps its promise and its last pass was refused the
 /// run lock: the lock is HELD.
 ///
-/// Its own word and not a shade of [`DISK_CLEANUP_STALLED`], because the two
+/// Its own word and not a shade of [`SPACE_RECLAIM_STALLED`], because the two
 /// send an operator to opposite places. A stalled janitor is a janitor that
 /// ran and got nowhere — read its report, its policy, its errors. A held lock
 /// is a janitor that never started, and the only thing worth looking at is the
-/// process on the other end of `~/.cache/wisent-compute/disk-cleanup.lock`,
+/// process on the other end of `~/.cache/wisent-compute/space-reclaim.lock`,
 /// which `stado space report` names in `cleanup_lock.holders`.
 ///
 /// A host can report the stalled word with room on its volume while its own
@@ -145,19 +145,19 @@ pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
 /// fixed, and this word exists so the next hold that outlives its workload is
 /// read as a lock and not as a full disk.
 ///
-/// Blocks on the same rule as [`DISK_CLEANUP_STALLED`] and for the same
+/// Blocks on the same rule as [`SPACE_RECLAIM_STALLED`] and for the same
 /// reason: under pressure a janitor that cannot run must refuse work, and
 /// under the threshold refusing work creates no space. It is a note there.
-pub const DISK_CLEANUP_LOCK_HELD: &str = "disk_cleanup_lock_held";
+pub const SPACE_RECLAIM_LOCK_HELD: &str = "space_reclaim_lock_held";
 
 /// This host's agent cannot take the shared workload hold on the cleanup
 /// lock because a standalone cleanup pass holds it exclusively, so every
 /// claim stops before it starts. The agent's own word
-/// ([`disk_cleanup::CLEANUP_IN_PROGRESS`]), published as `admission_reason`
+/// ([`space_reclaim::CLEANUP_IN_PROGRESS`]), published as `admission_reason`
 /// in its capacity broadcast.
 ///
-/// A BLOCKER whatever the disk says, unlike [`DISK_CLEANUP_STALLED`] and
-/// [`DISK_CLEANUP_LOCK_HELD`], because it is not a prediction about space:
+/// A BLOCKER whatever the disk says, unlike [`SPACE_RECLAIM_STALLED`] and
+/// [`SPACE_RECLAIM_LOCK_HELD`], because it is not a prediction about space:
 /// it is the claim path's own answer, read back. A janitor pass can hold the
 /// lock for hours inside a directory macOS has parked behind a consent
 /// dialog; every claim answers this word and takes nothing while the
@@ -166,8 +166,8 @@ pub const DISK_CLEANUP_LOCK_HELD: &str = "disk_cleanup_lock_held";
 /// same as for the held lock: `stado space report` names the holder in
 /// `cleanup_lock.holders`.
 ///
-/// [`disk_cleanup::CLEANUP_IN_PROGRESS`]: crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS
-pub const CLEANUP_IN_PROGRESS: &str = crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS;
+/// [`space_reclaim::CLEANUP_IN_PROGRESS`]: crate::providers::local::space_reclaim::CLEANUP_IN_PROGRESS
+pub const CLEANUP_IN_PROGRESS: &str = crate::providers::local::space_reclaim::CLEANUP_IN_PROGRESS;
 
 /// The word this command reports when a host declares a queue agent and its
 /// newest health beacon does not report that unit running.

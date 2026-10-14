@@ -52,14 +52,16 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
     report.insert("memory".to_string(), memory_report(reading));
     // The disk-full rule, judged on the `usage` reading above.
     let volume = reading.usage.as_ref().and_then(|usage| {
-        Some(crate::providers::local::disk_cleanup::rule::VolumeReading {
-            total_bytes: usage.blocks_kb.parse::<i64>().ok()?.checked_mul(1024)?,
-            free_bytes: usage.available_kb.parse::<i64>().ok()?.checked_mul(1024)?,
-        })
+        Some(
+            crate::providers::local::space_reclaim::rule::VolumeReading {
+                total_bytes: usage.blocks_kb.parse::<i64>().ok()?.checked_mul(1024)?,
+                free_bytes: usage.available_kb.parse::<i64>().ok()?.checked_mul(1024)?,
+            },
+        )
     });
     report.insert(
         "rule".to_string(),
-        crate::providers::local::disk_cleanup::rule::rule_json(volume),
+        crate::providers::local::space_reclaim::rule::rule_json(volume),
     );
     let state = &reading.state;
     report.insert(

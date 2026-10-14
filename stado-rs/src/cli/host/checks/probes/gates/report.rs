@@ -49,7 +49,7 @@ pub(super) fn print_report(gates: &HostGates) {
             .used_percent
             .map_or_else(|| "not observed".to_string(), |used| format!("{used:.1}%")),
         gigabytes(gates.headroom_gb),
-        crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT,
+        crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT,
     );
     // Beside the disk line and never inside it: the disk and memory refuse
     // work for different reasons and are repaired differently.

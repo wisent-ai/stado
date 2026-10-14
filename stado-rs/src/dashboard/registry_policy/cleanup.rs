@@ -12,7 +12,7 @@ use super::*;
 /// empty report.
 fn last_report() -> Result<Value, String> {
     let home = crate::config_file::expand_tilde("~");
-    let path = home.join(crate::providers::local::disk_cleanup::state_relative_path());
+    let path = home.join(crate::providers::local::space_reclaim::state_relative_path());
     let recorded = match std::fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str::<Value>(&text)
             .map_err(|error| format!("{} is not JSON: {error}", path.display()))?
@@ -22,7 +22,7 @@ fn last_report() -> Result<Value, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Null,
         Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
     };
-    Ok(crate::providers::local::disk_cleanup::sanitize_cleanup_report(&recorded))
+    Ok(crate::providers::local::space_reclaim::sanitize_cleanup_report(&recorded))
 }
 
 /// `GET /api/cleanup.json`
@@ -30,11 +30,11 @@ pub(crate) fn get_cleanup() -> Response {
     match last_report() {
         Ok(report) => send_json(
             http_status(reqwest::StatusCode::OK),
-            &json!({"ok": true, "service": "disk-cleanup", "report": report}),
+            &json!({"ok": true, "service": "space-reclaim", "report": report}),
         ),
         Err(error) => send_json(
             http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
-            &json!({"ok": false, "service": "disk-cleanup", "error": error}),
+            &json!({"ok": false, "service": "space-reclaim", "error": error}),
         ),
     }
 }
@@ -45,9 +45,9 @@ pub(crate) fn get_cleanup() -> Response {
 /// are the same as the timer's — a run asked for from the GUI is the same
 /// pass the timer would have made, not a second implementation of it.
 pub(crate) async fn run_cleanup() -> Response {
-    let report = crate::providers::local::disk_cleanup::run_cleanup_once(
+    let report = crate::providers::local::space_reclaim::run_cleanup_once(
         0,
-        crate::providers::local::disk_cleanup::CleanupWriter::Cli { every: None },
+        crate::providers::local::space_reclaim::CleanupWriter::Cli { every: None },
         &mut |_message| {},
     )
     .await;
@@ -55,8 +55,8 @@ pub(crate) async fn run_cleanup() -> Response {
         http_status(reqwest::StatusCode::OK),
         &json!({
             "ok": true,
-            "service": "disk-cleanup",
-            "report": crate::providers::local::disk_cleanup::sanitize_cleanup_report(&report),
+            "service": "space-reclaim",
+            "report": crate::providers::local::space_reclaim::sanitize_cleanup_report(&report),
         }),
     )
 }

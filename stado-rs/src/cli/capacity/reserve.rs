@@ -171,7 +171,7 @@ fn refusal(
         | "disk_unreadable"
         | "disk_gate_refused"
         | "cleanup_in_progress"
-        | "disk_cleanup_lock_held" => UnmetReason::DiskPressure,
+        | "space_reclaim_lock_held" => UnmetReason::DiskPressure,
         "reservations_exhausted" => UnmetReason::ReservationsExhausted,
         _ => UnmetReason::CapacityExhausted,
     };

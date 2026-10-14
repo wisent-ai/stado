@@ -227,7 +227,7 @@ async fn collect_document() -> Result<Value, CmdError> {
     // space. `stado host health` prints these two numbers; the old shell
     // collector published a `df -h` line instead and both read as `-`.
     let home = crate::config_file::expand_tilde("~");
-    if let Ok(free) = crate::providers::local::disk_cleanup::free_bytes(&home) {
+    if let Ok(free) = crate::providers::local::space_reclaim::free_bytes(&home) {
         if let Some(object) = document.as_object_mut() {
             let free_gb = free / i64::from(1024).pow(3);
             object.insert("disk_avail_gb".to_string(), json!(free_gb));

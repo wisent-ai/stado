@@ -5,7 +5,7 @@
 //! report printing `99%`, and a delivery dying with `No space left on
 //! device`. So the report measures:
 //!
-//! - **the verdict**, from the rule ([`crate::providers::local::disk_cleanup::rule`])
+//! - **the verdict**, from the rule ([`crate::providers::local::space_reclaim::rule`])
 //!   applied to the host's own `df` reading;
 //! - **the coverage**, from [`crate::deploy::host_reclaim::declared_stages`]
 //!   and the `du` inventory the same report collects, per stage root;

@@ -108,13 +108,9 @@ pub(crate) fn measured_capacity(
 /// Publish one capacity broadcast and say, in the log, which branch of the loop
 /// produced it and whether the store accepted it.
 ///
-/// The loop below can leave its iteration nine ways and used to name none of
-/// them. On the always-on mac that cost seven days: the log showed
-/// `loop: iter-start` and a disk-cleanup report every ten seconds, nothing
-/// after, and the broadcast in the fleet store stayed frozen at a timestamp
-/// three minutes before the agent's unit was re-declared. Both facts were
-/// consistent with about four different branches and with a crash-restart loop,
-/// and separating them took a census of a log that should simply have said.
+/// The loop has several exit paths. A space-reclaim report alone says
+/// nothing about whether the next capacity publication reached the store;
+/// each branch therefore records its own result and failed write.
 ///
 /// Two of the publish sites also discarded the store's answer with `let _ =`, so
 /// an agent whose every write was being refused reported exactly what an agent

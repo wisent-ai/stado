@@ -2,11 +2,9 @@
 //! back to the queue, and the tick that carries a live slot to its durable
 //! terminal state.
 //!
-//! `disk_cleanup` is imported here rather than in the parts because the
-//! janitor's work-directory creation is named `super::disk_cleanup::...`
-//! exactly as it was when this was one file.
+//! The local space-reclaim import is shared by the slot transition modules.
 
-use crate::providers::local::disk_cleanup;
+use crate::providers::local::space_reclaim;
 
 use super::*;
 

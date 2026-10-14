@@ -134,7 +134,7 @@ pub async fn start_slot(
             return Ok(None);
         }
     }
-    let work_dir = super::disk_cleanup::queue_workdirs::create_work_dir(&job.job_id)?;
+    let work_dir = super::space_reclaim::queue_workdirs::create_work_dir(&job.job_id)?;
     let artifact_inputs_json = canonical_json(&Value::Object(job.resolved_input_artifacts.clone()));
     let artifact_inputs_file = work_dir.join("artifacts.json");
     let mut artifact_inputs = open_agent_reserved_file(&artifact_inputs_file)?;
@@ -267,7 +267,7 @@ pub async fn start_slot(
         paused: false,
         started_mono: Instant::now(),
         _hb_task: hb_task,
-        disk_cleanup_lock: None,
+        space_reclaim_lock: None,
         gpu_uuid: gpu_uuid.map(str::to_string),
         group_ended: false,
     }))

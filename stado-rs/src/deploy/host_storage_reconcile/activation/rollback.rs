@@ -35,7 +35,6 @@ printf 'STADO_OBJECT_API_ROUTE\tcaptured-prior\n'
 pub(in crate::deploy::host_storage_reconcile) fn restore_priority(role: &str) -> u8 {
     match role {
         "object-api" => 0,
-        "disk-cleanup" => 1,
         "runner" => 3,
         "current-runner" => 4,
         _ => 2,

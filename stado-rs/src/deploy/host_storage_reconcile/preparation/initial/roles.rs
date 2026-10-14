@@ -24,7 +24,7 @@ const STORAGE_ROUTE_KEYS: &[&str] = &[
 
 /// The order units are stopped in: runners first, so no job is claimed
 /// against a store that is moving, the object API last.
-const STOP_ORDER: &[&str] = &["runner", "current-runner", "disk-cleanup"];
+const STOP_ORDER: &[&str] = &["runner", "current-runner"];
 
 fn command_tokens(command: &str) -> Vec<&str> {
     command
@@ -65,11 +65,7 @@ pub(in crate::deploy::host_storage_reconcile) fn service_role(
     if tokens.iter().any(|token| executable_name(token) == "stado") {
         // Every resident Stado role runs in the host process above; any other
         // Stado unit is a writer of the store.
-        return if tokens.contains(&"disk-cleanup") {
-            "disk-cleanup"
-        } else {
-            "writer"
-        };
+        return "writer";
     }
     "other"
 }

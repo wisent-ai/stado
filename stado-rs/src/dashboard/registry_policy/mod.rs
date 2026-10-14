@@ -6,7 +6,7 @@
 //! carries a fleet's addresses and channels; an operator client asking about
 //! a host has no business receiving them, and this file is not a registry
 //! editor. Janitor behaviour is not declared at all: the disk-full rule
-//! ([`crate::providers::local::disk_cleanup::rule`]) has no settings.
+//! ([`crate::providers::local::space_reclaim::rule`]) has no settings.
 
 use serde_json::{json, Map, Value};
 

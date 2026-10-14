@@ -13,7 +13,7 @@ use crate::deploy::host_recovery::WC_CANDIDATES;
 use crate::deploy::products;
 use crate::deploy::service::{LAUNCHD_UNIT_DIRECTORIES, SYSTEMD_UNIT_DIRECTORIES};
 use crate::deploy::shlex_quote;
-use crate::providers::local::disk_cleanup::chromium_clones;
+use crate::providers::local::space_reclaim::chromium_clones;
 
 use super::{BUILD_WORK_ROOT, CONTAINER_PREFIX, LOCAL_EVIDENCE_ROOT};
 

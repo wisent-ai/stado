@@ -26,7 +26,6 @@ pub struct ActiveSlot {
     /// Detached heartbeat task (daemon-thread parity); exits when the pid dies.
     pub(crate) _hb_task: tokio::task::JoinHandle<()>,
     /// Shared hold on the janitor's cleanup lock for this live workload
-    /// (Python `slot["disk_cleanup_lock"]`).
     ///
     /// Released by [`ActiveSlot::reap`] the instant the workload's process is
     /// observed to have exited — NOT when the slot is dropped. The slot
@@ -35,7 +34,7 @@ pub struct ActiveSlot {
     /// keeps the slot alive for as long as the store refuses. Tying the hold
     /// to the slot therefore tied a cross-process lock to an unbounded retry.
     /// See [`release_hold_for_exited_workload`].
-    pub disk_cleanup_lock: Option<super::disk_cleanup::WorkloadLock>,
+    pub space_reclaim_lock: Option<super::space_reclaim::WorkloadLock>,
     /// Driver UUID of the board this job was placed on, when the host has one
     /// to choose. The agent reads it back to keep the next claim off a card it
     /// has already filled, and to keep deliberately GPU-sharing jobs together
@@ -89,7 +88,7 @@ impl ActiveSlot {
     ) -> std::io::Result<Option<std::process::ExitStatus>> {
         let status = self.child.try_wait()?;
         if status.is_some() {
-            release_hold_for_exited_workload(&mut self.disk_cleanup_lock, log_fn);
+            release_hold_for_exited_workload(&mut self.space_reclaim_lock, log_fn);
             self.end_leftover_group(log_fn);
         }
         Ok(status)
@@ -121,9 +120,9 @@ impl ActiveSlot {
 ///
 /// # The defect this exists to make impossible
 ///
-/// [`super::disk_cleanup::acquire_workload_lock_in`] takes a SHARED `fs2` hold
-/// on `~/.cache/wisent-compute/disk-cleanup.lock` per live workload, and
-/// `disk_cleanup`'s own pass needs that same file EXCLUSIVELY. One shared hold
+/// [`super::space_reclaim::acquire_workload_lock_in`] takes a shared `fs2` hold
+/// on `~/.cache/wisent-compute/space-reclaim.lock` per live workload, and the
+/// reclaim pass needs that same file exclusively. One shared hold
 /// that is never released therefore makes every exclusive acquire fail
 /// forever — not for a while, forever — and a cleanup pass answers `lock_busy`
 /// on every tick without ever scanning a directory.
@@ -139,7 +138,7 @@ impl ActiveSlot {
 /// An agent can hold the lock for hours while `space report` names it as the
 /// holder, every pass reports `outcome: lock_busy`, and the janitor's last
 /// success stays where it was. `host gates` then reads that success age
-/// against `STALL_INTERVALS * 300s` and reports `disk_cleanup_stalled`, which
+/// against the rule's check cadence and reports `space_reclaim_stalled`, which
 /// closes the host to all work with free space above its watermark and jobs
 /// pinned to it. When that happens on every builder of a platform at once,
 /// the platform has no builder at all.
@@ -150,11 +149,11 @@ impl ActiveSlot {
 /// installed; and installing one needs a `darwin-arm64` builder, which is the
 /// host this wedge closed.
 pub fn release_hold_for_exited_workload(
-    hold: &mut Option<super::disk_cleanup::WorkloadLock>,
+    hold: &mut Option<super::space_reclaim::WorkloadLock>,
     log_fn: &mut dyn FnMut(&str),
 ) {
     if let Some(hold) = hold.take() {
-        super::disk_cleanup::release_workload_lock(hold, log_fn);
+        super::space_reclaim::release_workload_lock(hold, log_fn);
     }
 }
 

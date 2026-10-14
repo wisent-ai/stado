@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use super::paths;
-use crate::providers::local::disk_cleanup::rule;
+use crate::providers::local::space_reclaim::rule;
 
 pub(super) struct Scope {
     pub cleaner: &'static rule::Cleaner,
@@ -44,7 +44,7 @@ pub(super) fn scopes(
                 Some(root) => root.to_string(),
                 None => continue,
             }
-        } else if cleaner.name == crate::providers::local::disk_cleanup::weles::CLEANER {
+        } else if cleaner.name == crate::providers::local::space_reclaim::weles::CLEANER {
             match weles_recordings_dir {
                 Some(declared) => paths::absolute(declared, home),
                 None => paths::absolute(&format!("~/{}", cleaner.root), home),

@@ -169,7 +169,7 @@ fn command_line_words(action: &str, arguments: &ArgMatches, host: &str) -> Vec<S
 /// on, before anything is exported or compiled.
 fn janitor_hold(
     matches: &ArgMatches,
-) -> Result<Option<crate::providers::local::disk_cleanup::WorkloadLock>, CmdError> {
+) -> Result<Option<crate::providers::local::space_reclaim::WorkloadLock>, CmdError> {
     let Some((action, arguments)) = matches.subcommand() else {
         return Ok(None);
     };
@@ -189,13 +189,13 @@ fn janitor_hold(
         holder.push_str(" --surface ");
         holder.push_str(surface);
     }
-    match crate::providers::local::disk_cleanup::acquire_workload_lock(&holder) {
+    match crate::providers::local::space_reclaim::acquire_workload_lock(&holder) {
         Ok(Some(lock)) => Ok(Some(lock)),
         Ok(None) => Err(CmdError::refused(format!(
             "{holder} builds into a directory the disk janitor reclaims, and the janitor is \
              cleaning this machine or has asked for its turn; nothing was exported or built. \
              It waits on: {}",
-            crate::providers::local::disk_cleanup::workload_holders()
+            crate::providers::local::space_reclaim::workload_holders()
         ))),
         Err(error) => Err(CmdError::click(format!(
             "{holder} cannot take the disk janitor's cleanup lock, so a cleanup pass could \

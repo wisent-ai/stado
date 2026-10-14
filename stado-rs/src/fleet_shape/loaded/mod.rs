@@ -52,7 +52,7 @@ pub(in crate::fleet_shape) fn duplicate_domains(
 ///
 /// - The control-plane unit declares `stado coordinator`, and launchd holds
 ///   a `stado dashboard` under it — a command the product has deleted, whose
-///   refresh loop forces a disk-cleanup pass every two minutes and holds the
+///   refresh loop forces a space-reclaim pass at its old cadence and holds the
 ///   janitor's lock while it does, while every report that reads the unit
 ///   file agrees with itself.
 /// - A process older than the binary it executes is running code nobody

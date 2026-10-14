@@ -2,7 +2,7 @@
 //! is separate from deletion eligibility.
 
 use super::super::render::gib;
-use crate::providers::local::disk_cleanup::rule::{VolumeReading, DISK_FULL_PERCENT};
+use crate::providers::local::space_reclaim::rule::{VolumeReading, DISK_FULL_PERCENT};
 use serde_json::Value;
 
 /// `unmeasured` without a volume reading, `below_threshold` under the rule's

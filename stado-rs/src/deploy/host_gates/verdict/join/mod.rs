@@ -13,8 +13,8 @@ use crate::deploy::host_gates::gates::HostGates;
 use crate::deploy::host_gates::words::{
     AGENT_STORE_DEVICE_ONLY, AGENT_STORE_UNKNOWN, AGENT_STORE_UNREADABLE,
     CAPACITY_PUBLICATION_STALE, CLEANUP_IN_PROGRESS, DISK_ATTACHED_UNMOUNTED,
-    DISK_CLEANUP_LOCK_HELD, DISK_CLEANUP_STALLED, DISK_PRESSURE_UNRESOLVED,
-    LOCAL_SNAPSHOTS_UNRECLAIMABLE, NO_CAPACITY_PUBLICATION, PINNED_ONLY, QUEUE_PAUSED,
+    DISK_PRESSURE_UNRESOLVED, LOCAL_SNAPSHOTS_UNRECLAIMABLE, NO_CAPACITY_PUBLICATION, PINNED_ONLY,
+    QUEUE_PAUSED, SPACE_RECLAIM_LOCK_HELD, SPACE_RECLAIM_STALLED,
 };
 use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
 use crate::queue::capacity::Publication;
@@ -77,10 +77,10 @@ pub fn assemble(
     // visible in diagnostic fields regardless of whether it currently blocks
     // placement.
     if janitor.stalled && disk_full {
-        blockers.push(DISK_CLEANUP_STALLED.to_string());
+        blockers.push(SPACE_RECLAIM_STALLED.to_string());
     }
     if janitor.lock_held && disk_full {
-        blockers.push(DISK_CLEANUP_LOCK_HELD.to_string());
+        blockers.push(SPACE_RECLAIM_LOCK_HELD.to_string());
     }
     if diag_flag(payload, QUEUE_PAUSED) == Some(true) {
         blockers.push(QUEUE_PAUSED.to_string());
@@ -106,13 +106,13 @@ pub fn assemble(
     // operator has to be told that the mechanism which maintains this host's
     // free space is not running, before the day it matters.
     if janitor.stalled && !disk_full {
-        notes.push(DISK_CLEANUP_STALLED.to_string());
+        notes.push(SPACE_RECLAIM_STALLED.to_string());
     }
     // The same finding for a lock that is held rather than a janitor that is
     // silent, and a note for the same reason: a host with headroom that cannot
     // clean is a host to go fix, not a host to close.
     if janitor.lock_held && !disk_full {
-        notes.push(DISK_CLEANUP_LOCK_HELD.to_string());
+        notes.push(SPACE_RECLAIM_LOCK_HELD.to_string());
     }
     if agent_store.is_none() {
         notes.push(AGENT_STORE_UNREADABLE.to_string());
@@ -148,8 +148,8 @@ pub fn assemble(
         blockers,
         disk_pressure_unresolved,
         free_bytes,
-        disk_cleanup_stalled: janitor.stalled,
-        disk_cleanup_lock_held: janitor.lock_held,
+        space_reclaim_stalled: janitor.stalled,
+        space_reclaim_lock_held: janitor.lock_held,
         cleanup_success_age_seconds,
         cleanup_prevented_age_seconds: janitor.prevented_age_seconds,
         free_gb,

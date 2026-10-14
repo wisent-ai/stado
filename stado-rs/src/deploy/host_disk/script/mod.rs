@@ -13,7 +13,7 @@ pub use assemble::{background_section, remote_script_for};
 
 /// `df` of every volume the fleet writes to — the `usage` field. Read by
 /// both scopes. These are the volumes the janitor's disk-full rule measures
-/// (`disk_cleanup::rule::read_fleet_volume`): the one holding `$HOME` and,
+/// (`space_reclaim::rule::read_fleet_volume`): the one holding `$HOME` and,
 /// when the target declares a work root, the one holding it; the fold keeps
 /// the one with less room before the threshold, as the rule does. `/` is
 /// none of them: on macOS it is the sealed system snapshot, and on a host
@@ -59,7 +59,7 @@ fi
 /// `last_success_at`, `low_bytes` and each periodic writer's promise — and
 /// the Stado processes alive on the host, so a promise's writer can be found
 /// alive or gone. Read by both scopes: it is where
-/// `cleanup_success_age_seconds` and `disk_cleanup_stalled` come from.
+/// `cleanup_success_age_seconds` and `space_reclaim_stalled` come from.
 /// `pgrep` answers 1 when no process matches; only a status above that is a
 /// failed read, and then the marker is not printed at all.
 const CLEANUP_STATE_SECTION: &str = r#"state="$HOME/@STATE_PATH@"

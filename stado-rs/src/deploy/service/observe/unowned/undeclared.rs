@@ -86,7 +86,7 @@ pub struct UndeclaredUnit {
     /// The declaration and the process are two different facts and they can
     /// disagree: a unit can declare `stado coordinator` while launchd holds a
     /// days-old process of a command the product has since deleted under it,
-    /// whose refresh loop still forces a disk-cleanup pass every two minutes
+    /// whose refresh loop still forces a space-reclaim pass at its old cadence
     /// and stamps the janitor's shared interval out from under the queue
     /// agent. Every report that reads the unit file agrees with itself and
     /// none of them is looking at the process.

@@ -40,7 +40,7 @@ pub(super) async fn reclaim_local(
                 .machine_readable(json_output),
         );
     }
-    crate::cli::hosts::disk_cleanup::run(!apply).await
+    crate::cli::hosts::space_reclaim::run(!apply).await
 }
 
 pub(super) async fn reclaim(

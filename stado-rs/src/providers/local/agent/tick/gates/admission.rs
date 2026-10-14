@@ -72,35 +72,35 @@ pub(crate) async fn publish_and_admit(
     // probe takes the
     // shared lock and releases it at once, which is what the claim would do,
     // and what it saw is published under the same key the claim path writes.
-    let probe = crate::providers::local::disk_cleanup::acquire_workload_lock("admission-probe");
+    let probe = crate::providers::local::space_reclaim::acquire_workload_lock("admission-probe");
     let lock_reason = match probe {
         Ok(Some(probe)) => {
-            crate::providers::local::disk_cleanup::release_workload_lock(probe, log_fn);
-            agent_diag.remove("disk_cleanup_admission");
+            crate::providers::local::space_reclaim::release_workload_lock(probe, log_fn);
+            agent_diag.remove("space_reclaim_admission");
             None
         }
         Ok(None) => {
             agent_diag.insert(
-                "disk_cleanup_admission".into(),
-                Value::from(crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS),
+                "space_reclaim_admission".into(),
+                Value::from(crate::providers::local::space_reclaim::CLEANUP_IN_PROGRESS),
             );
-            Some(crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS)
+            Some(crate::providers::local::space_reclaim::CLEANUP_IN_PROGRESS)
         }
         Err(exc) => {
             // The claim path stops for this too, so the publication says so.
             log_fn(&format!(
-                "disk cleanup workload lock unavailable: {}",
+                "space reclaim workload lock unavailable: {}",
                 exc.code
             ));
             agent_diag.insert(
-                "disk_cleanup_admission".into(),
+                "space_reclaim_admission".into(),
                 Value::from(format!(
                     "{}:{}",
-                    crate::providers::local::disk_cleanup::CLEANUP_LOCK_ERROR,
+                    crate::providers::local::space_reclaim::CLEANUP_LOCK_ERROR,
                     exc.code
                 )),
             );
-            Some(crate::providers::local::disk_cleanup::CLEANUP_LOCK_ERROR)
+            Some(crate::providers::local::space_reclaim::CLEANUP_LOCK_ERROR)
         }
     };
     let policy_reason = if queue_control.paused {

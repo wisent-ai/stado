@@ -116,14 +116,6 @@ pub(crate) fn merge(
         }
         merge_environment(&mut environment, component)?;
     }
-    if runtime.disk_cleanup && runtime.health_interval_seconds.is_none() {
-        return Err(DeployError(
-            "the host's disk-cleanup watch reads the volume at its --health-interval-seconds, \
-             and no component of this host declares that cadence"
-                .to_string(),
-        )
-        .stating(crate::primitives::failure::FailureCode::Config));
-    }
     host.env = merge::host_environment(std::mem::take(&mut host.env), environment);
     let binary = host.exec_args.first().cloned().ok_or_else(|| {
         DeployError("host unit has no executable".to_string())

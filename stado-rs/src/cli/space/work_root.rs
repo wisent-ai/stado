@@ -138,7 +138,7 @@ pub async fn dispatch(target: &str, path: Option<&str>, json: bool) -> Result<()
             ),
             None => println!(
                 "{target}: no work root declared; the agent keeps job trees under ~/{} and build caches under ~/.stado/{}",
-                crate::providers::local::disk_cleanup::queue_workdirs::WORK_ROOT,
+                crate::providers::local::space_reclaim::queue_workdirs::WORK_ROOT,
                 work_base::BUILD_CACHE_LEAF
             ),
         }

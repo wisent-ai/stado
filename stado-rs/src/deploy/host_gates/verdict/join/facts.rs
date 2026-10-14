@@ -11,7 +11,7 @@ use super::janitor::JanitorHealth;
 use crate::deploy::host_disk;
 use crate::deploy::host_gates::words::DISK_PRESSURE_UNRESOLVED;
 use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
-use crate::providers::local::disk_cleanup::rule::VolumeReading;
+use crate::providers::local::space_reclaim::rule::VolumeReading;
 use crate::queue::capacity::Publication;
 
 pub(super) struct Facts {

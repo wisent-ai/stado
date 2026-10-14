@@ -81,7 +81,7 @@ pub const STATE_UNKNOWN: &str = "unknown";
 pub const STATE_UNREADABLE: &str = "unreadable";
 
 /// The `kind` slot of the label [`plan_deploy`] mints, so a deployed
-/// service can never collide with the agent / coordinator / disk-cleanup /
+/// service can never collide with the host's worker / coordinator / reclaim /
 /// failure-fixer labels `local_install::label` produces for those kinds.
 pub const DEPLOY_KIND: &str = "service";
 

@@ -24,7 +24,7 @@ pub fn background_section() -> String {
 /// The refused list of one platform as one quoted, newline-separated word.
 fn prune_word(darwin: bool) -> String {
     shlex_quote(
-        &crate::providers::local::disk_cleanup::build_caches::privacy_protected_parts(darwin)
+        &crate::providers::local::space_reclaim::build_caches::privacy_protected_parts(darwin)
             .join("\n"),
     )
 }
@@ -81,19 +81,19 @@ pub fn remote_script_for(scope: DiskScope, work_root: Option<&str>) -> String {
         .replace(WORK_ROOT_MARK, &work_root)
         .replace(
             "__CLONE_CONTAINER__",
-            disk_cleanup::chromium_clones::CLONE_CONTAINER,
+            space_reclaim::chromium_clones::CLONE_CONTAINER,
         )
         .replace(
             "__CLONE_ROOT__",
-            disk_cleanup::chromium_clones::CLONE_ROOT_NAME,
+            space_reclaim::chromium_clones::CLONE_ROOT_NAME,
         )
         .replace(
             STATE_PATH_MARK,
-            &shlex_quote(&disk_cleanup::state_relative_path()),
+            &shlex_quote(&space_reclaim::state_relative_path()),
         )
         .replace(
             LOCK_PATH_MARK,
-            &shlex_quote(&disk_cleanup::lock_relative_path()),
+            &shlex_quote(&space_reclaim::lock_relative_path()),
         )
         .replace("__DARWIN_PRUNE__", &prune_word(true))
         .replace("__OTHER_PRUNE__", &prune_word(false))

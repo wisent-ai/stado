@@ -8,7 +8,7 @@ use super::*;
 ///
 /// `git-remote-https` otherwise has no transfer-progress deadline: a live TCP
 /// connection that stops moving bytes keeps the job process, its CPU/RAM
-/// reservation, heartbeat lease, and disk-cleanup hold forever. Git's
+/// reservation, heartbeat lease, and space-reclaim hold forever. Git's
 /// documented low-speed pair makes each HTTPS attempt fail after two minutes
 /// below 1 KiB/s; callers that deliberately need another bound can still set
 /// either variable in the shell command itself.

@@ -17,10 +17,10 @@
 //!   keeping the one with less room before the threshold. The POSIX output
 //!   format keeps the columns the same on macOS and Linux, unlike the default
 //!   macOS layout, which inserts three inode columns before the mount point.
-//! - The rule's verdict is [`crate::providers::local::disk_cleanup::rule`]
+//! - The rule's verdict is [`crate::providers::local::space_reclaim::rule`]
 //!   applied to that usage.
 //! - State comes from the janitor's own state file, named by
-//!   [`crate::providers::local::disk_cleanup::state_relative_path`] and
+//!   [`crate::providers::local::space_reclaim::state_relative_path`] and
 //!   written by that module's `write_state`. The `last pass` and `freed
 //!   bytes` this command reports are derived from that document; nothing
 //!   here re-implements the janitor's bookkeeping.
@@ -47,7 +47,7 @@ use serde_json::{json, Map, Value};
 
 use super::host_channel;
 use super::{shlex_quote, DeployError, Runner};
-use crate::providers::local::disk_cleanup;
+use crate::providers::local::space_reclaim;
 use crate::targets::ComputeTarget;
 
 mod memory;
@@ -87,7 +87,7 @@ const LOCK_PATH_MARK: &str = "@LOCK_PATH@";
 /// while the full script can run for minutes and burn several CPU-minutes,
 /// so `stado host gates <host>` would die on the two-minute
 /// [`host_channel::remote_timeout`] having computed nothing an operator
-/// could read — `disk_cleanup_stalled` and `cleanup_success_age_seconds`
+/// could read — `space_reclaim_stalled` and `cleanup_success_age_seconds`
 /// unobtainable on the machine the command runs on. That work would be
 /// performed for a consumer that does not exist: `host gates` never reads
 /// `inventory`, `clone_summaries` or `lock_holders`.

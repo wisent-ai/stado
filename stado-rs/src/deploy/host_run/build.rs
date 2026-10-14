@@ -30,7 +30,7 @@ pub async fn build(
     // role of its one process, so a host whose volume is already at the
     // disk-full threshold is refused before anything is compiled.
     let gates = crate::deploy::host_gates::read_host_gates(&target.name, runner).await?;
-    let threshold = crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT;
+    let threshold = crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT;
     if let Some(used) = gates
         .used_percent
         .filter(|used| *used >= f64::from(threshold))

@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
 
-use crate::providers::local::disk_cleanup::queue_workdirs::{work_root, WORKDIR_PREFIX};
+use crate::providers::local::space_reclaim::queue_workdirs::{work_root, WORKDIR_PREFIX};
 use crate::queue::JobStorage;
 
 use super::super::agent_log;
@@ -136,7 +136,7 @@ pub(super) async fn release_left_behind(
     log_fn: &mut dyn FnMut(&str),
 ) {
     let still_running = |job_id: &str| -> Result<Vec<String>, String> {
-        let directory = crate::providers::local::disk_cleanup::queue_workdirs::work_dir(job_id)
+        let directory = crate::providers::local::space_reclaim::queue_workdirs::work_dir(job_id)
             .map_err(|error| format!("its work directory cannot be named: {error}"))?;
         if !directory.is_dir() {
             return Ok(Vec::new());

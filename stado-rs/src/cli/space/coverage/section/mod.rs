@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use super::paths;
 use crate::deploy::host_reclaim::StageDeclaration;
-use crate::providers::local::disk_cleanup::rule::{self, VolumeReading};
+use crate::providers::local::space_reclaim::rule::{self, VolumeReading};
 
 pub(super) mod mechanisms;
 mod verdict;

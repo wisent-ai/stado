@@ -241,13 +241,10 @@ async fn start_roles(
     if let Some(api) = api {
         supervisor.spawn("api", move || api.run())?;
     }
-    if args.disk_cleanup {
-        // `--disk-cleanup` requires `--health-interval-seconds`.
-        if let Some(every) = args.health_interval_seconds {
-            supervisor.spawn("disk-cleanup", move || {
-                crate::cli::hosts::disk_cleanup::watch(every)
-            })?;
-        }
+    if let Some(every) = args.health_interval_seconds {
+        supervisor.spawn("space-reclaim", move || {
+            crate::cli::hosts::space_reclaim::watch(every)
+        })?;
     }
     if let Some(interval) = args.failure_fixer_interval_seconds {
         supervisor.spawn("failure-fixer", move || async move {

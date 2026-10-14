@@ -13,13 +13,13 @@ pub mod accelerators;
 pub mod agent;
 pub(crate) mod cloud;
 pub mod disk;
-pub mod disk_cleanup;
 pub mod disk_staging;
 pub mod helpers;
 pub mod host_memory;
 pub mod probe;
 pub mod scratch_workdirs;
 pub mod slots;
+pub mod space_reclaim;
 pub mod work_base;
 
 pub use crate::scheduler::dispatch::r#box::output::{build_job_command, verify_command};

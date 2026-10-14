@@ -9,7 +9,7 @@ pub use json::to_report;
 /// Read the janitor's state document.
 ///
 /// The keys are exactly the ones
-/// [`crate::providers::local::disk_cleanup`]'s `write_state` emits:
+/// [`crate::providers::local::space_reclaim`]'s `write_state` emits:
 /// `last_attempt_at` at the top level and the whole previous report under
 /// `report`.
 pub fn parse_state(payload: &str) -> CleanupState {
@@ -31,7 +31,7 @@ pub fn parse_state(payload: &str) -> CleanupState {
     let last_attempt = document.get("last_attempt_at").and_then(Value::as_f64);
     // Every periodic writer's promise, and the one that reaches furthest.
     let stated: Vec<(String, Option<f64>, Option<u32>)> = document
-        .get(crate::providers::local::disk_cleanup::JANITOR_PROMISES)
+        .get(crate::providers::local::space_reclaim::JANITOR_PROMISES)
         .and_then(Value::as_object)
         .into_iter()
         .flatten()
@@ -71,7 +71,7 @@ pub fn parse_state(payload: &str) -> CleanupState {
         next_pass_by: furthest.as_ref().and_then(|(_, by)| iso_from_epoch(*by)),
         promised_by: furthest.map(|(writer, _)| writer),
         prevented: report
-            .is_some_and(crate::providers::local::disk_cleanup::janitor_pass_was_prevented),
+            .is_some_and(crate::providers::local::space_reclaim::janitor_pass_was_prevented),
         writer: text("writer"),
         writer_version: text("writer_version"),
         writer_pid: field("writer_pid").and_then(Value::as_i64),

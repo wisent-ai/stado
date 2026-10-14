@@ -179,7 +179,7 @@ pub(super) fn require_node_toolchain(
 fn free_gibibytes(path: &Path) -> Option<f64> {
     let stats = nix::sys::statvfs::statvfs(path).ok()?;
     let bytes = u128::from(stats.blocks_available()) * u128::from(stats.fragment_size());
-    Some(bytes as f64 / crate::providers::local::disk_cleanup::GIB as f64)
+    Some(bytes as f64 / crate::providers::local::space_reclaim::GIB as f64)
 }
 
 /// Whether the unpacked source is a Cargo one: a `Cargo.toml` at its root or

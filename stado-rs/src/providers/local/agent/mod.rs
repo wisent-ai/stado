@@ -16,8 +16,8 @@
 //! self-terminate for provider-owned replacement. A registry GPU-type change
 //! remains an explicit operator restart.
 //!
-//! The janitor-owned disk-cleanup engine IS ported ([`super::disk_cleanup`]):
-//! this loop runs `run_cleanup_once` every tick, holds a shared workload lock
+//! The local space-reclaim engine ([`super::space_reclaim`]) runs outside the
+//! publication tick at its declared cadence and holds a shared workload lock
 //! per running job, and refuses new jobs while disk pressure is unresolved.
 //! One behavioral simplification: Python releases a finished job's workload
 //! lock explicitly and logs release failures; the Rust port lets the

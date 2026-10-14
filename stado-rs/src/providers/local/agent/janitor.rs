@@ -32,7 +32,7 @@
 //! Nothing here changes cleanup itself. `run_cleanup_once` keeps its own
 //! cross-process lock and the disk-full rule, and it is still invoked at the
 //! tick's poll cadence — just not from the tick. The only observable change is
-//! that `diag.disk_cleanup` describes the most recently completed pass rather
+//! that `diag.space_reclaim` describes the most recently completed pass rather
 //! than one that finished microseconds ago, and `host gates` reports a
 //! publication's age rather than assuming freshness.
 
@@ -106,7 +106,7 @@ impl JanitorReports {
     /// report, and waiting `interval` between passes.
     ///
     /// A thread with its own current-thread runtime rather than
-    /// `tokio::spawn`, for a concrete reason: `disk_cleanup::run_cleanup_once`
+    /// `tokio::spawn`, for a concrete reason: `space_reclaim::run_cleanup_once`
     /// takes its logger as `&mut dyn FnMut(&str)`, which is not `Send`, so any
     /// future holding one cannot be spawned onto the agent's multi-threaded
     /// runtime. The alternatives were to widen the cleanup engine's own

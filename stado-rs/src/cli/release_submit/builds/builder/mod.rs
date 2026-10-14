@@ -133,7 +133,7 @@ pub(crate) async fn builder(
                                 "cpu_busy"
                                     | "ram_headroom_low"
                                     | "exclusive_job_running"
-                                    | crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS
+                                    | crate::providers::local::space_reclaim::CLEANUP_IN_PROGRESS
                             )
                         }) =>
                 {

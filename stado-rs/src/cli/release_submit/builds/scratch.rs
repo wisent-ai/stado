@@ -33,10 +33,12 @@ fn published_headroom_bytes(publication: &Value, free: u64) -> Option<i64> {
         .as_f64()
         .filter(|used| (0.0..100.0).contains(used))?;
     let total = (free as f64 / (1.0 - used / 100.0)) as i64;
-    Some(crate::providers::local::disk_cleanup::rule::headroom_bytes(
-        total,
-        i64::try_from(free).ok()?,
-    ))
+    Some(
+        crate::providers::local::space_reclaim::rule::headroom_bytes(
+            total,
+            i64::try_from(free).ok()?,
+        ),
+    )
 }
 
 /// The reason a host cannot take this build, or `None` when it can.
@@ -73,7 +75,7 @@ pub(crate) fn scratch_verdict(publication: &Value, evidence: &ScratchReceipt) ->
          the volume)",
         free as f64 / GIB,
         headroom as f64 / GIB,
-        crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT,
+        crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT,
         evidence.platform,
         evidence.product,
     ))

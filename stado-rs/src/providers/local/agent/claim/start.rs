@@ -6,11 +6,11 @@ use chrono::Utc;
 use serde_json::{Map, Value};
 
 use crate::models::{isoformat_utc, Job};
-use crate::providers::local::disk_cleanup;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::{
     job_system_packages_eligible, start_slot, ActiveSlot, StartSlotError,
 };
+use crate::providers::local::space_reclaim;
 use crate::queue::JobStorage;
 
 /// Claim and start one candidate. `true` means this scan is finished — the
@@ -93,7 +93,7 @@ pub(crate) async fn start_candidate(
         }
     }
     *diag_eligible += 1;
-    // The disk-cleanup workload lock (Python
+    // The space-reclaim workload lock (Python
     // `acquire_workload_lock`): a shared hold on the janitor's
     // lock file for as long as the workload owns its slot. A job that stages
     // nothing on this disk ([`super::queue::stages_nothing`]: an in-place Oko
@@ -103,16 +103,20 @@ pub(crate) async fn start_candidate(
     let workload_lock = if super::queue::stages_nothing(job) {
         None
     } else {
-        let held = match disk_cleanup::acquire_workload_lock(&job.job_id) {
+        let held = match space_reclaim::acquire_workload_lock(&job.job_id) {
             Ok(lock) => lock,
             Err(exc) => {
                 log_fn(&format!(
-                    "disk cleanup workload lock unavailable: {}",
+                    "space reclaim workload lock unavailable: {}",
                     exc.code
                 ));
                 agent_diag.insert(
-                    "disk_cleanup_admission".into(),
-                    Value::from(format!("{}:{}", disk_cleanup::CLEANUP_LOCK_ERROR, exc.code)),
+                    "space_reclaim_admission".into(),
+                    Value::from(format!(
+                        "{}:{}",
+                        space_reclaim::CLEANUP_LOCK_ERROR,
+                        exc.code
+                    )),
                 );
                 return Ok(true);
             }
@@ -136,16 +140,16 @@ pub(crate) async fn start_candidate(
             }
             None => {
                 agent_diag.insert(
-                    "disk_cleanup_admission".into(),
-                    Value::from(disk_cleanup::CLEANUP_IN_PROGRESS),
+                    "space_reclaim_admission".into(),
+                    Value::from(space_reclaim::CLEANUP_IN_PROGRESS),
                 );
                 return Ok(true);
             }
         }
     };
-    let release = |lock: Option<disk_cleanup::WorkloadLock>, log_fn: &mut dyn FnMut(&str)| {
+    let release = |lock: Option<space_reclaim::WorkloadLock>, log_fn: &mut dyn FnMut(&str)| {
         if let Some(lock) = lock {
-            disk_cleanup::release_workload_lock(lock, log_fn);
+            space_reclaim::release_workload_lock(lock, log_fn);
         }
     };
     // Which board: the emptiest one that can hold the job. One card, or
@@ -220,7 +224,7 @@ pub(crate) async fn start_candidate(
         release(workload_lock, log_fn);
         return Ok(false);
     };
-    new_slot.disk_cleanup_lock = workload_lock;
+    new_slot.space_reclaim_lock = workload_lock;
     let exclusive_started = helpers::slot_is_exclusive(&new_slot.slot);
     slots.push(new_slot);
     *available_cpu_cores = available_cpu_cores.saturating_sub(requested_cpu_cores);

@@ -8,9 +8,9 @@ use serde_json::{Map, Value};
 
 use crate::providers::local::agent::heartbeat::{CapacityHeartbeat, HeartbeatTask};
 use crate::providers::local::agent::janitor::{JanitorReports, JanitorTask};
-use crate::providers::local::disk_cleanup;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::{advance_slot, ActiveSlot, SlotOutcome};
+use crate::providers::local::space_reclaim;
 use crate::queue::capacity::CapacitySnapshot;
 use crate::queue::JobStorage;
 use crate::sizing::Sizing;
@@ -63,9 +63,9 @@ pub(super) fn spawn_janitor(poll: Duration) -> (JanitorReports, JanitorTask) {
         // an expired lease is host garbage, and the host is the only thing
         // that always knows it holds one.
         crate::providers::local::disk::scratch_sweep::sweep(&mut |msg: &str| agent_log(msg)).await;
-        disk_cleanup::run_cleanup_once(
+        space_reclaim::run_cleanup_once(
             active_jobs,
-            disk_cleanup::CleanupWriter::AgentTick { every: poll },
+            space_reclaim::CleanupWriter::AgentTick { every: poll },
             &mut |msg: &str| agent_log(msg),
         )
         .await
@@ -235,12 +235,12 @@ pub(super) async fn advance_slots(
     // janitor is doing, so nothing on this line may ever wait for it.
     janitor_reports.set_active_jobs(slots.len() as i64);
     if let Some(cleanup_report) = janitor_reports.latest() {
-        agent_diag.insert("disk_cleanup".into(), cleanup_report);
+        agent_diag.insert("space_reclaim".into(), cleanup_report);
     } else {
         // No pass has completed yet. Say so rather than leaving the key
         // absent, which reads identically to a wedged janitor.
         agent_diag.insert(
-            "disk_cleanup".into(),
+            "space_reclaim".into(),
             serde_json::json!({"outcome": "no_pass_completed_yet"}),
         );
     }

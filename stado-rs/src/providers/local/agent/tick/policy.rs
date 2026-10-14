@@ -8,8 +8,8 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use crate::providers::local::disk::fleet_flush::spawn_fleet_flush;
-use crate::providers::local::disk_cleanup;
 use crate::providers::local::slots::ActiveSlot;
+use crate::providers::local::space_reclaim;
 use crate::queue::capacity::CapacitySnapshot;
 use crate::queue::JobStorage;
 use crate::targets::ComputeTarget;
@@ -93,10 +93,11 @@ pub(super) async fn disk_policy(
     // with `disk_pressure_active` in the diagnostics, and `host gates`
     // reports the numbers.
     let reading =
-        disk_cleanup::rule::read_volume(&crate::providers::local::work_base::measured_volume())
+        space_reclaim::rule::read_volume(&crate::providers::local::work_base::measured_volume())
             .ok();
     let current_free_bytes = reading.map(|reading| reading.free_bytes);
-    *disk_low_bytes = reading.map(|reading| disk_cleanup::rule::reserve_bytes(reading.total_bytes));
+    *disk_low_bytes =
+        reading.map(|reading| space_reclaim::rule::reserve_bytes(reading.total_bytes));
     let pressure_active = reading.is_some_and(|reading| reading.full());
     agent_diag.insert(
         "disk_used_percent".into(),

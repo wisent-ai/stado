@@ -142,7 +142,7 @@ pub struct CleanupState {
     /// of the binary that wrote it.
     ///
     /// The state file has several writers on an always-on host: the queue agent
-    /// every tick, and the `--disk-cleanup` role on its own period. The agent
+    /// every tick, and the host health watch at its declared cadence. The agent
     /// can report `healthy_noop` while this command reads `lock_busy` from the
     /// same path seconds later: both readings are true about their own writer
     /// and neither about the host, so `outcome` alone tells an operator

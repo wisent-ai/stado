@@ -7,7 +7,7 @@
 //!   kind=local registry targets (pip install + inline systemd units).
 //! - [`local_install`] — `stado bootstrap --local`: per-user launchd /
 //!   systemd --user install on the current machine for the agent /
-//!   coordinator / disk-cleanup / failure-fixer / watchdog kinds.
+//!   coordinator / space-reclaim / failure-fixer / watchdog work.
 //! - [`host_recovery`] — the `stado repair stado --step host` implementation:
 //!   a fixed, narrow SSH recovery program for managed macOS hosts, with the
 //!   tab-delimited `STADO_*` marker protocol ported byte-exactly.

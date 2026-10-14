@@ -2,7 +2,7 @@
 //! One descriptor is held per level; a tree deeper than the process may open
 //! reports the system's own refusal.
 
-use crate::providers::local::disk_cleanup::safefs;
+use crate::providers::local::space_reclaim::safefs;
 use nix::sys::stat::FileStat;
 use std::ffi::{OsStr, OsString};
 use std::io;

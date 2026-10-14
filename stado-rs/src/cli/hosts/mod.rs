@@ -4,5 +4,5 @@
 
 pub mod agent;
 pub mod coordinator;
-pub mod disk_cleanup;
 pub mod machine;
+pub mod space_reclaim;

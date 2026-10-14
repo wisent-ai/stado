@@ -14,25 +14,25 @@ pub struct HostGates {
     pub claiming: bool,
     pub blockers: Vec<String>,
     pub disk_pressure_unresolved: bool,
-    /// [`DISK_CLEANUP_STALLED`]: the janitor has not completed a pass within
+    /// [`SPACE_RECLAIM_STALLED`]: the janitor has not completed a pass within
     /// `STALL_INTERVALS` of the rule's check cadence. Carried as a field and
     /// not only as a blocker string because the release verdict embeds it
     /// beside `disk_pressure_unresolved` ([`gates_section`]), and an operator
     /// reading a full volume has to be able to see in the same object whether
     /// anything is still trying to fix it.
     ///
-    /// [`DISK_CLEANUP_STALLED`]: super::DISK_CLEANUP_STALLED
+    /// [`SPACE_RECLAIM_STALLED`]: super::SPACE_RECLAIM_STALLED
     /// [`gates_section`]: super::gates_section
-    pub disk_cleanup_stalled: bool,
-    /// [`DISK_CLEANUP_LOCK_HELD`]: the janitor is being refused the run lock
+    pub space_reclaim_stalled: bool,
+    /// [`SPACE_RECLAIM_LOCK_HELD`]: the janitor is being refused the run lock
     /// AND has completed nothing inside the stall window. Carried beside
-    /// `disk_cleanup_stalled` and never merged into it: the two are mutually
+    /// `space_reclaim_stalled` and never merged into it: the two are mutually
     /// exclusive by construction and name different remedies.
     ///
-    /// [`DISK_CLEANUP_LOCK_HELD`]: super::DISK_CLEANUP_LOCK_HELD
-    pub disk_cleanup_lock_held: bool,
+    /// [`SPACE_RECLAIM_LOCK_HELD`]: super::SPACE_RECLAIM_LOCK_HELD
+    pub space_reclaim_lock_held: bool,
     /// Seconds since a pass was last PREVENTED from taking the run lock, or
-    /// `None` when none was. The number behind `disk_cleanup_lock_held`, and
+    /// `None` when none was. The number behind `space_reclaim_lock_held`, and
     /// the one that distinguishes "a workload is holding it right now" from "a
     /// hold has outlived its workload".
     pub cleanup_prevented_age_seconds: Option<i64>,

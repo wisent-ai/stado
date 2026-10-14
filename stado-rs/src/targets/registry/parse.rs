@@ -86,12 +86,9 @@ fn name_is_truthy(value: &Value) -> bool {
         .is_some_and(|name| !name.is_empty())
 }
 
-/// Target fields no release reads any more. `disk_cleanup` and
-/// `memory_reclaim` were per-host janitor settings; the janitor now follows
-/// one built-in rule ([`crate::providers::local::disk_cleanup::rule`]) and
-/// takes nothing from the registry.
-const RETIRED_TARGET_FIELDS: [&str; 4] =
-    ["slots", "max_concurrent", "disk_cleanup", "memory_reclaim"];
+/// Target fields no release reads any more. The host's space-reclaim rule
+/// is read from the fleet policy, not a per-host setting.
+const RETIRED_TARGET_FIELDS: &[&str] = &["slots", "max_concurrent", "memory_reclaim"];
 
 fn carries_retired_fields(target: &Value) -> bool {
     RETIRED_TARGET_FIELDS
@@ -108,7 +105,7 @@ fn strip_retired_target_fields(target: &mut Value) -> bool {
         return false;
     };
     let mut changed = false;
-    for field in RETIRED_TARGET_FIELDS {
+    for &field in RETIRED_TARGET_FIELDS {
         changed |= fields.remove(field).is_some();
     }
     if let Some(overrides) = fields

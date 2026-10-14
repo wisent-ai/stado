@@ -1,10 +1,8 @@
 //! Reclaim regenerable build caches on a registry-managed host.
 //!
-//! The disk cleaner knows two consumers, `huggingface_cache` and
-//! `weles_recordings`, and neither covers what actually fills a developer
-//! host: build output. A macbook ran out of space mid-link with 386 MiB free
-//! while `disk-cleanup` reported a healthy no-op, because 6.8 GiB of `target/`
-//! directories are invisible to it.
+//! The local reclaim rule's declared cleaners do not cover every build
+//! output tree. This stage inventories cache-tagged build directories that
+//! the fleet can regenerate and reports their actual size before removal.
 //!
 //! Safety comes from the Cache Directory Tagging Standard rather than from
 //! guessing at directory names: a directory is deletable only when it contains

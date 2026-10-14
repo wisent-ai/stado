@@ -4,8 +4,8 @@
 use super::*;
 
 /// The refusal a client receives for a retired janitor declaration.
-const RETIRED_DECLARATION: &str = "disk_cleanup and memory_reclaim are no longer declared; the \
-     janitor deletes everything the fleet put on a host at 80% used";
+const RETIRED_DECLARATION: &str = "memory_reclaim is no longer declared; \
+     space reclaim follows the fleet's disk-full rule";
 
 fn refuse(status: reqwest::StatusCode, error: impl Into<String>) -> Response {
     send_json(http_status(status), &json!({"error": error.into()}))
@@ -42,7 +42,7 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
     for key in body.keys() {
         match key.as_str() {
             "target" | "pinned_only" => {}
-            "disk_cleanup" | "memory_reclaim" => {
+            "memory_reclaim" => {
                 return refuse(reqwest::StatusCode::BAD_REQUEST, RETIRED_DECLARATION)
             }
             other => {

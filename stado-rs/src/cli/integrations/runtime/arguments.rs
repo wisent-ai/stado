@@ -25,10 +25,6 @@ pub(crate) struct ServeArgs {
         conflicts_with_all = ["resolver", "release_interval_seconds", "target", "auto"]
     )]
     pub standalone: bool,
-    /// Run the disk and memory cleanup watch inside this host process, reading
-    /// the volume at the host's declared --health-interval-seconds.
-    #[arg(long, requires = "health_interval_seconds")]
-    pub disk_cleanup: bool,
     /// Dispatch unhandled failed jobs inside this process at the declared cadence.
     #[arg(long)]
     pub failure_fixer_interval_seconds: Option<NonZeroU64>,
@@ -152,9 +148,6 @@ impl ServeArgs {
         }
         if self.run_worker {
             args.push("--worker".to_string());
-        }
-        if self.disk_cleanup {
-            args.push("--disk-cleanup".to_string());
         }
         if let Some(interval) = self.failure_fixer_interval_seconds {
             args.push(format!("--failure-fixer-interval-seconds={interval}"));

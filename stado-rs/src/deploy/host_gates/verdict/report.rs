@@ -59,9 +59,9 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "free_gb": gates.free_gb,
             "used_percent": gates.used_percent,
             "headroom_gb": gates.headroom_gb,
-            "full_percent": crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT,
+            "full_percent": crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT,
             "full": gates.used_percent.map(|used| {
-                used >= f64::from(crate::providers::local::disk_cleanup::rule::DISK_FULL_PERCENT)
+                used >= f64::from(crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT)
             }),
             // Snapshot space is reported separately: on a Mac deleted bytes
             // stay pinned until local Time Machine snapshots are thinned.
@@ -72,11 +72,11 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "unmounted_disks": gates.unmounted_disks,
             // Whether anything is still trying to keep the two numbers above
             // apart, and how long since it last managed to.
-            "cleanup_stalled": state_known.then_some(gates.disk_cleanup_stalled),
+            "cleanup_stalled": state_known.then_some(gates.space_reclaim_stalled),
             "cleanup_success_age_seconds": gates.cleanup_success_age_seconds,
             // ...and whether it is not trying because it cannot get the lock,
             // which points at a process and not at this disk.
-            "cleanup_lock_held": state_known.then_some(gates.disk_cleanup_lock_held),
+            "cleanup_lock_held": state_known.then_some(gates.space_reclaim_lock_held),
             "cleanup_prevented_age_seconds": gates.cleanup_prevented_age_seconds,
         }),
     );
@@ -145,7 +145,7 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
 /// `capacity/<consumer>.json` would eventually give two answers to one
 /// question, and the operator would believe whichever they ran first.
 ///
-/// `disk_cleanup_stalled` rides here beside the pressure and the two numbers
+/// `space_reclaim_stalled` rides here beside the pressure and the two numbers
 /// because a release verdict is where this fleet actually looks. A host that
 /// stops every release can report the pressure and the numbers correctly for
 /// days; what no verdict anywhere says is that the janitor which is supposed
@@ -160,8 +160,8 @@ pub fn gates_section(gates: &HostGates) -> Value {
         "observations": gates.observations,
         "pressure_source": gates.pressure_source,
         "disk_pressure_unresolved": gates.pressure_source.map(|_| gates.disk_pressure_unresolved),
-        "disk_cleanup_stalled": state_known.then_some(gates.disk_cleanup_stalled),
-        "disk_cleanup_lock_held": state_known.then_some(gates.disk_cleanup_lock_held),
+        "space_reclaim_stalled": state_known.then_some(gates.space_reclaim_stalled),
+        "space_reclaim_lock_held": state_known.then_some(gates.space_reclaim_lock_held),
         "cleanup_success_age_seconds": gates.cleanup_success_age_seconds,
         "free_bytes": gates.free_bytes,
         "free_gb": gates.free_gb,

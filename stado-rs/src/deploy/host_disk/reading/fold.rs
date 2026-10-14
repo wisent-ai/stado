@@ -150,9 +150,7 @@ pub fn parse_output(stdout: &str) -> DiskReading {
 fn headroom_kb(usage: &DiskUsage) -> Option<i64> {
     let total = usage.blocks_kb.parse::<i64>().ok()?;
     let free = usage.available_kb.parse::<i64>().ok()?;
-    Some(crate::providers::local::disk_cleanup::rule::headroom_bytes(
-        total, free,
-    ))
+    Some(crate::providers::local::space_reclaim::rule::headroom_bytes(total, free))
 }
 
 /// `lsblk -P` prints `KEY="value"` pairs; the values are what the kernel

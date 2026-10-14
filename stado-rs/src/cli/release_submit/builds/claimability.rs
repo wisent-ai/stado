@@ -75,7 +75,7 @@ fn publication_flag(publication: &Value, name: &str) -> Option<bool> {
 /// vocabulary so the selector and diagnostics cannot drift apart.
 fn publication_blockers(publication: &Value) -> Vec<String> {
     use crate::deploy::host_gates::{
-        DISK_CLEANUP_STALLED, DISK_PRESSURE_ACTIVE, DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED,
+        DISK_PRESSURE_ACTIVE, DISK_PRESSURE_UNRESOLVED, QUEUE_PAUSED, SPACE_RECLAIM_STALLED,
     };
     let flag = |name: &str| publication_flag(publication, name);
     let mut blockers = Vec::new();
@@ -95,12 +95,12 @@ fn publication_blockers(publication: &Value) -> Vec<String> {
     // `lock_busy` is the outcome that never advances `last_success_at`.
     if publication
         .get("diag")
-        .and_then(|diag| diag.get("disk_cleanup"))
+        .and_then(|diag| diag.get("space_reclaim"))
         .and_then(|cleanup| cleanup.get("outcome"))
         .and_then(Value::as_str)
         == Some("lock_busy")
     {
-        blockers.push(format!("{DISK_CLEANUP_STALLED} (janitor pass lock_busy)"));
+        blockers.push(format!("{SPACE_RECLAIM_STALLED} (janitor pass lock_busy)"));
     }
     if let Some(reason) = publication
         .get("diag")

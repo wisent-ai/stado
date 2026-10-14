@@ -3,7 +3,7 @@
 //!
 //! This module contains NO cleanup policy. It cannot: the policy is a
 //! bounded, dir_fd-relative walk of the target's own filesystem
-//! ([`crate::providers::local::disk_cleanup`]), and the only machine that
+//! ([`crate::providers::local::space_reclaim`]), and the only machine that
 //! can see that filesystem is the target. A second, remote re-implementation
 //! of "what would be deleted" would be a second answer to the question, and
 //! the first time the two disagreed the operator would believe the wrong
