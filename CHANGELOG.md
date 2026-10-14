@@ -36,6 +36,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **Push quality checks inspect the commits Git is pushing, not another writer's working tree:** `stado quality check --pre-push --if-declared` reads Git's ref updates, names each selected commit and reads both the manifest and gates from its clean export. Repeated refs share a check; deleted refs have no source gate. `--revision COMMIT` selects an explicit committed tree without fetching a different tip, also available in Desktop Releases through the native operator API. Invalid records and noncommit objects refuse rather than selecting another source. The real journey under `tests/quality/push/` covers non-HEAD pushes, dirty declarations and source, committed formatting failures, ref deletion and noncommit refusals. Git dispatchers must forward the preserved update stream.
+
 - **A source installation of Skarbiec signs with the keychain its catalog recipe declares:** the CLI, service and desktop recipes select the installing machine's local keychain before building. A missing keychain refuses by path without consulting the vault or placing bytes; a conflicting explicit signing source refuses. The installed receipt names the selected keychain and each native file's observed authority, team, identifier and CDHash, also shown in Desktop Products. Exact published releases remain verified rather than re-signed.
 
 - **`stado job watch` refuses a log page without its text, cursor or end flag:** such a page was read as empty text, the same cursor and the end of the log, so the tail stopped as if the job's log were complete. The refusal names the job, the cursor and the page.
