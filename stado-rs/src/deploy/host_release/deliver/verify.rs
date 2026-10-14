@@ -27,30 +27,70 @@ pub(super) async fn verify_stable_binds(
         return (verdicts, missing);
     }
     for plan in plans {
-        let port = plan.bind.rsplit(':').next().unwrap_or_default().to_string();
-        let listening = stable_bind_listening(target, &port, runner).await;
-        verdicts.insert(
-            plan.bind.clone(),
-            json!({
-                "product": plan.product,
-                "verdict": if listening { "listening" } else { "absent" },
-            }),
-        );
-        if !listening {
-            missing.push(format!("{} ({})", plan.bind, plan.product));
+        let Some((_, port)) = plan.bind.rsplit_once(':') else {
+            verdicts.insert(
+                plan.bind.clone(),
+                json!({"product": plan.product, "verdict": "unread", "error": "the bind names no port"}),
+            );
+            missing.push(format!(
+                "{} ({}; the bind names no port)",
+                plan.bind, plan.product
+            ));
+            continue;
+        };
+        match stable_bind_listening(target, port, runner).await {
+            Ok(listening) => {
+                verdicts.insert(
+                    plan.bind.clone(),
+                    json!({
+                        "product": plan.product,
+                        "verdict": if listening { "listening" } else { "absent" },
+                    }),
+                );
+                if !listening {
+                    missing.push(format!("{} ({})", plan.bind, plan.product));
+                }
+            }
+            // A listener read that failed is not proof nothing listens: the
+            // verdict says it was not read, with the cause, and the bind still
+            // keeps the delivery from reporting success.
+            Err(error) => {
+                verdicts.insert(
+                    plan.bind.clone(),
+                    json!({"product": plan.product, "verdict": "unread", "error": error}),
+                );
+                missing.push(format!(
+                    "{} ({}; its listener could not be read: {error})",
+                    plan.bind, plan.product
+                ));
+            }
         }
     }
     (verdicts, missing)
 }
 
 /// Whether one loopback port has a listener on the target, read with the same
-/// `lsof` spelling every other reader of "what is listening" uses.
-async fn stable_bind_listening(target: &ComputeTarget, port: &str, runner: &Runner) -> bool {
+/// `lsof` spelling every other reader of "what is listening" uses: `Ok(false)`
+/// only when `lsof` answered and listed nothing, which it says by failing
+/// without an error line. A channel that did not carry the read, or an `lsof`
+/// that failed with an error, is the error it reported.
+async fn stable_bind_listening(
+    target: &ComputeTarget,
+    port: &str,
+    runner: &Runner,
+) -> Result<bool, String> {
     let selector = format!("-iTCP:{port}");
     let words = ["/usr/sbin/lsof", "-nP", selector.as_str(), "-sTCP:LISTEN"];
-    host_channel::run_program(target, &words, runner)
+    let output = host_channel::run_program(target, &words, runner)
         .await
-        .is_ok_and(|output| output.ok() && !output.stdout.trim().is_empty())
+        .map_err(|error| error.to_string())?;
+    if !output.stdout.trim().is_empty() {
+        return Ok(true);
+    }
+    match output.stderr.trim() {
+        "" => Ok(false),
+        error => Err(format!("lsof {}: {error}", selector)),
+    }
 }
 
 /// What a `--dry-run` says it would do, in the order it would do it.
