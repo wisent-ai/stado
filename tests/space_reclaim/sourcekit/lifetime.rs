@@ -83,11 +83,13 @@ const ORIGIN: &str = "https://github.com/wisent-ai/editor-lifetime-fixture";
 const MANIFEST: &str = "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(name: \"EditorLifetimeFixture\")\n";
 
 /// `git args` in `directory`, recorded with the journey's evidence; refused
-/// with git's own words.
+/// with git's own words. The operator's global Git configuration and hooks
+/// never judge the fixture's own history.
 fn git(native: &Native, directory: &std::path::Path, args: &[&str]) {
     let output = match Command::new("git")
         .args(args)
         .current_dir(directory)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .output()
     {
         Ok(output) => output,
@@ -117,7 +119,7 @@ fn canonical_package(native: &Native) -> (String, String) {
             "-c",
             "user.name=editor lifetime journey",
             "-c",
-            "user.email=journey@invalid",
+            "user.email=journey@lifetime.example",
             "commit",
             "--message",
             "isolated editor package",
