@@ -13,9 +13,8 @@ use clap::ArgMatches;
 /// Whether `matches` (the `stado product` invocation) compiles into the
 /// reclaimable build tree.
 pub fn compiles(matches: &ArgMatches) -> bool {
-    match matches.subcommand() {
-        Some(("install" | "update" | "cargo", _)) => true,
-        Some(("swift", _)) => true,
-        _ => false,
-    }
+    matches!(
+        matches.subcommand(),
+        Some(("install" | "update" | "cargo" | "swift", _))
+    )
 }
