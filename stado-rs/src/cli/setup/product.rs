@@ -247,11 +247,14 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
 fn product_failure_code(error: &anyhow::Error) -> crate::primitives::failure::FailureCode {
     for cause in error.chain() {
         if cause
+            .downcast_ref::<stado_product::cargo_lock::UnlockedManifest>()
+            .is_some()
+        {
+            return crate::primitives::failure::FailureCode::Config;
+        }
+        if cause
             .downcast_ref::<stado_product::InstallationHostConflict>()
             .is_some()
-            || cause
-                .downcast_ref::<stado_product::cargo_lock::UnlockedManifest>()
-                .is_some()
         {
             return crate::primitives::failure::FailureCode::Refused;
         }

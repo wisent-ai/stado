@@ -63,8 +63,8 @@ impl fmt::Display for UnlockedManifest {
         let lock = self.manifest.with_file_name("Cargo.lock");
         write!(
             formatter,
-            "{} at {}: {} declares {} that its committed {} does not lock, so `cargo build \
-             --locked` refuses this revision; commit {} updated for {} \
+            "committed source configuration: {} at {}: {} declares {} that its committed {} \
+             does not lock; commit {} updated for {} \
              (cargo update -w --manifest-path {}) in {} and install again. The build said: {}",
             self.product,
             self.revision,
@@ -83,8 +83,7 @@ impl fmt::Display for UnlockedManifest {
 impl std::error::Error for UnlockedManifest {}
 
 /// The dependencies the manifests of `workspace` declare that its
-/// `Cargo.lock` names no package for, path dependencies (the workspace's own
-/// members) aside.
+/// `Cargo.lock` names no package for, including newly added path packages.
 pub fn unlocked(workspace: &Path) -> Result<Vec<String>> {
     let manifest = workspace.join("Cargo.toml");
     let output = stado_wait::output(
@@ -138,10 +137,21 @@ pub fn unlocked(workspace: &Path) -> Result<Vec<String>> {
     })?;
     let mut missing = BTreeSet::new();
     for package in packages {
+        let declaring = package["manifest_path"].as_str().with_context(|| {
+            format!(
+                "cargo metadata for {} omitted a package manifest",
+                manifest.display()
+            )
+        })?;
+        let declaring = Path::new(declaring)
+            .strip_prefix(workspace)
+            .with_context(|| {
+                format!(
+                    "declaring manifest {declaring} is outside {}",
+                    workspace.display()
+                )
+            })?;
         for dependency in package["dependencies"].as_array().into_iter().flatten() {
-            if dependency.get("path").is_some_and(|path| !path.is_null()) {
-                continue;
-            }
             let Some(name) = dependency["name"].as_str() else {
                 bail!(
                     "cargo metadata for {} lists a dependency of {} without a name",
@@ -150,7 +160,7 @@ pub fn unlocked(workspace: &Path) -> Result<Vec<String>> {
                 );
             };
             if !locked.contains(name) {
-                missing.insert(name.to_string());
+                missing.insert(format!("{name} (declared in {})", declaring.display()));
             }
         }
     }

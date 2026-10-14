@@ -34,3 +34,8 @@ libc = "0.2"
 regex = "1"
 scraper = "0.24"
 stado-wait = { version = "0.1.0", path = "../wait" }
+
+[[test]]
+name = "committed-lock-attribution"
+path = "../../tests/product/lock/main.rs"
+harness = false
