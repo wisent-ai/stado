@@ -27,18 +27,14 @@ struct Defect {
     id: String,
     #[serde(default)]
     repaired_in: Option<String>,
-    #[serde(default)]
-    owner: Option<String>,
 }
 
 /// One open defect's recorded repair: the defect, the repository the
-/// repair was committed in, the repair commit and the session that owns the
-/// defect (none when Oko records no owner).
+/// repair was committed in and the repair commit.
 pub struct Repair {
-    pub(crate) id: String,
-    pub(crate) repository: String,
-    pub(crate) commit: String,
-    pub(crate) owner: Option<String>,
+    id: String,
+    repository: String,
+    commit: String,
 }
 
 /// Every open defect's recorded repair, read once for a whole pass: the
@@ -60,7 +56,6 @@ pub async fn open_repairs() -> Result<Vec<Repair>, CmdError> {
                 id: defect.id,
                 repository: repository.to_string(),
                 commit: commit.to_string(),
-                owner: defect.owner,
             })
         })
         .collect())

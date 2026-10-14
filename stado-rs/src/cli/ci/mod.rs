@@ -14,12 +14,6 @@
 //! declaration and the forge each refuse by name when they do not answer;
 //! nothing is guessed in their place. The text form prints each field as
 //! the forge gave it, `null` where the forge gave none.
-//!
-//! The answer also carries the product's delivery queue ([`queue`]): the
-//! origin's `main` and delivery tips and every candidate the queue's builder
-//! gated, admitted or refused with its refusals and defect.
-
-pub mod queue;
 
 use serde_json::{json, Value};
 
@@ -227,7 +221,6 @@ pub async fn status_document(product: &str, revision: Option<&str>) -> Result<Va
         "revision": revision,
         "workflows": rows,
         "finding": finding,
-        "queue": queue::status(product).await?,
     }))
 }
 
@@ -245,13 +238,6 @@ pub async fn status(product: &str, revision: Option<&str>, json: bool) -> Result
     println!("{product} ({})", document["repository"]);
     if let Some(finding) = document["finding"].as_str() {
         println!("  {finding}");
-    }
-    println!(
-        "  delivery queue ({}): origin {}",
-        document["queue"]["register"], document["queue"]["origin"]
-    );
-    for entry in queue::register::of_product(product)? {
-        println!("    {}", queue::register::line(&entry));
     }
     for row in document["workflows"].as_array().into_iter().flatten() {
         let workflow = &row["workflow"];

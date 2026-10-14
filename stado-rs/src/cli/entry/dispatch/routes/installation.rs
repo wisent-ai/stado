@@ -22,11 +22,6 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
         InstallationCommands::Billing(sub) => billing::dispatch(&sub).await,
         InstallationCommands::Cloud(sub) => azure::dispatch(sub).await,
         InstallationCommands::Tunnel(sub) => cloudflare::dispatch(sub).await,
-        InstallationCommands::Workdirs {
-            apply,
-            include_files,
-            json,
-        } => workdirs::run(apply, include_files, json),
         InstallationCommands::Waits { action, json } => waits::dispatch(action, json),
         InstallationCommands::PublicStatus(command) => public_status::dispatch(command).await,
     }

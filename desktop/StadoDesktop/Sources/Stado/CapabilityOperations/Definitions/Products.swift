@@ -66,20 +66,11 @@ enum NativeProductOperations {
         ], mutates: false),
         // The answer lists each workflow the product's repository declares
         // with its newest run, its conclusion and the failed job and step of
-        // a run that did not pass, read from the forge as the CLI reads it,
-        // and the product's delivery queue: the origin's main and delivery
-        // tips and every candidate admitted or refused with its refusals.
-        .init(id: "ci-status", title: "Read what the forge's continuous integration and the delivery queue last did for a product", path: ["ci", "status"], hostPlacement: .none, fields: [
+        // a run that did not pass, read from the forge as the CLI reads it.
+        .init(id: "ci-status", title: "Read what the forge's continuous integration last did for a product", path: ["ci", "status"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product of the catalog", required: true),
             .init(id: "revision", label: "Full commit (blank reads the newest run of any revision)", option: "--revision"),
         ], mutates: false),
-        // One pass of the delivery queue's builder: the delivery branch's tip
-        // is gated with every installation gate and main moved to it when
-        // none refuses; a refusal ends the operation as refused with every
-        // refusal and the Oko defect recorded for it.
-        .init(id: "ci-deliver", title: "Gate the delivery branch's candidate and move main to it when every installation gate passes", path: ["ci", "deliver"], hostPlacement: .none, fields: [
-            .init(id: "checkout", label: "Product checkout on the selected host", option: "--checkout", required: true),
-        ]),
         // The components each product declares under `public_status`, as the
         // status page reads them: state, since when and the last failed
         // check with the answer that failed it. `check` asks every component

@@ -74,7 +74,6 @@ pub mod submit;
 pub mod waits;
 pub mod web;
 pub mod work;
-pub mod workdirs;
 pub mod workload;
 
 pub use entry::dispatch::main_entry;

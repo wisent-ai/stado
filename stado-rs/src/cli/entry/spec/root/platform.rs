@@ -207,17 +207,14 @@ pub(crate) enum PlatformCommands {
 }
 
 /// `stado ci`: the forge's continuous integration, read for a catalogued
-/// product, and the delivery queue that alone moves a product's `main`.
+/// product.
 #[derive(Subcommand)]
 pub(crate) enum CiCommands {
     /// The newest run of every workflow the product's repository declares,
     /// with its conclusion and, for a run that did not pass, each failed job
-    /// and the step that failed in it, and the product's delivery queue: the
-    /// origin's `main` and `delivery` tips and every candidate the queue
-    /// gated, admitted or refused with its refusals and defect. Reads the
-    /// forge's API as the identity Stado's GitHub declaration names in
-    /// Skarbiec; refuses by name when Skarbiec, the declaration or the forge
-    /// does not answer.
+    /// and the step that failed in it. Reads the forge's API as the identity
+    /// Stado's GitHub declaration names in Skarbiec; refuses by name when
+    /// Skarbiec, the declaration or the forge does not answer.
     Status {
         /// A product of the catalog (`stado product catalog` lists them).
         product: String,
@@ -226,23 +223,6 @@ pub(crate) enum CiCommands {
         #[arg(long)]
         revision: Option<String>,
         /// Print the document instead of lines.
-        #[arg(long)]
-        json: bool,
-    },
-    /// One pass of the delivery queue's serialized builder over a checkout:
-    /// take the tip of its origin's `delivery` branch, run every installation
-    /// gate over that exact commit to its end, and move the origin's `main`
-    /// to it when none refuses. A refused candidate leaves `main` where it
-    /// was, is recorded as one Oko defect carrying every refusal and owned by
-    /// the session whose recorded repair rides on it, and exits non-zero; the
-    /// next admitted candidate is recorded as that defect's repair. A pass
-    /// that finds another holding the builder's lock waits for it, said on
-    /// stderr.
-    Deliver {
-        /// The product checkout whose origin's `delivery` branch is gated.
-        #[arg(long)]
-        checkout: std::path::PathBuf,
-        /// Print the entry as JSON (`{"entry": …}`, null when nothing waits).
         #[arg(long)]
         json: bool,
     },

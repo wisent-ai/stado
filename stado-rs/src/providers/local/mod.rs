@@ -17,7 +17,6 @@ pub mod disk_staging;
 pub mod helpers;
 pub mod host_memory;
 pub mod probe;
-pub mod scratch_workdirs;
 pub mod slots;
 pub mod space_reclaim;
 pub mod work_base;

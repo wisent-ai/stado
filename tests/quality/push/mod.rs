@@ -111,14 +111,12 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
             .arg(&hooks),
     );
 
-    // `main` moves only through the delivery queue, so a session's push names
-    // the delivery branch, where the compile-free gates (rustfmt) run.
     let pushed = fixture.success(
         fixture
             .git()
             .arg("push")
             .arg("origin")
-            .arg(format!("{good}:refs/heads/delivery"))
+            .arg(format!("{good}:refs/heads/main"))
             .arg(format!("{good}:refs/heads/review")),
     );
     let transcript = format!(
@@ -140,7 +138,7 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
             .git()
             .arg("push")
             .arg("origin")
-            .arg(format!("{bad}:refs/heads/delivery")),
+            .arg(format!("{bad}:refs/heads/main")),
     );
     assert!(
         !refused.status.success(),

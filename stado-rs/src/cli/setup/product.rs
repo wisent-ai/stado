@@ -211,16 +211,6 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
         print!("{output}");
         return Ok(());
     }
-    if let Some((_, arguments)) = command.matches.subcommand() {
-        let product = arguments.try_get_one::<String>("positional").ok().flatten();
-        let commit = arguments
-            .try_get_one::<String>("source-commit")
-            .ok()
-            .flatten();
-        if let (Some(product), Some(commit)) = (product, commit) {
-            crate::cli::release_loop::register::refuse_failed(product, commit)?;
-        }
-    }
     // Released when this function returns, after the operation has answered.
     let _hold = janitor_hold(&command.matches)?;
     // Product operations run compilers, codesign and `stado` subcommands and

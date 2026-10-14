@@ -65,7 +65,6 @@ struct SettingsView: View {
                 RegistryImportControl(store: fleetStore)
             }
 
-            WorkdirsSection(fleetStore: fleetStore)
             WaitsSection(fleetStore: fleetStore)
             BuildTreesSection(fleetStore: fleetStore)
             SigningSection(fleetStore: fleetStore)

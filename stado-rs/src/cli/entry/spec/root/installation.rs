@@ -65,23 +65,6 @@ pub(crate) enum InstallationCommands {
     #[command(subcommand)]
     Tunnel(cloudflare::TunnelCommands),
 
-    /// Preview every directory directly under ~/.stado/work, including job
-    /// and run areas. --apply removes them all, even when active.
-    Workdirs {
-        /// Delete all listed directories; root-level files and links stay
-        /// unless --include-files is given.
-        #[arg(long)]
-        apply: bool,
-        /// Also remove the loose files and links directly at the root, so the
-        /// scratch root itself ends up empty. Links are unlinked, never
-        /// followed.
-        #[arg(long = "include-files")]
-        include_files: bool,
-        /// Emit the machine-readable report.
-        #[arg(long)]
-        json: bool,
-    },
-
     /// List the waits open on this machine, from the register every Stado
     /// wait keeps (`$STADO_WAITS_DIR` or ~/.stado/waits); a wait whose
     /// process no longer runs is reported ended and removed. `open`

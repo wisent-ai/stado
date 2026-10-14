@@ -17,6 +17,7 @@ mod retirement;
 mod rollback_target;
 mod sourcekit;
 mod space;
+mod workdirs;
 
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};

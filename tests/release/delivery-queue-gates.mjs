@@ -1,18 +1,18 @@
-// Real journey of the delivery queue's gate step through the built Stado and
-// the built Oko. A workspace of its own under
+// Real journey of the delivery queue's compile-free gate step through the
+// built Stado and the built Oko. A workspace of its own under
 // .build/release-delivery-queue-gates holds one product checkout whose
 // release manifest takes Stado's own platform recipes and replaces their
-// quality gates with a format gate that passes and a lint gate that refuses
-// (`sh -c 'exit 3'`), the shape of a commit formatted but refused by clippy;
-// Oko's defect register and the queue's register are files of this run.
+// quality gates with one format gate that refuses (`sh -c 'exit 3'`); Oko's
+// defect register and the queue's register are files of this run.
 //
 // 1. A defect whose recorded repair is the checkout's commit makes the
-//    commit owe a release; `stado release newest --plan` runs every gate the
-//    product's installation runs before queueing, and the lint gate refuses:
-//    the register keeps the commit failed at step `gates` with that gate's
-//    refusal, and the defect carries the note naming the commit and step.
+//    commit owe a release; `stado release newest --plan` runs the format
+//    gate before queueing, and the gate refuses: the register keeps the
+//    commit failed at step `gates` with the gate's refusal, nothing is
+//    built, and the defect carries the note naming the commit and step.
 // 2. The commit is not taken again: a second `--plan` leaves the entry as it
 //    was, and the gated `stado release newest` does not submit it.
+//
 // Needs STADO_BIN, OKO_BIN and STADO_TEST_SUCCESS_EXIT.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -72,10 +72,9 @@ function defect(id) {
 }
 
 try {
-  const passingFormat = { name: 'passing-format', argv: ['sh', '-c', 'exit'], kind: 'format' };
-  const refusingGate = { name: 'refusing-lint', argv: ['sh', '-c', 'exit 3'], kind: 'lint' };
+  const refusingGate = { name: 'refusing-format', argv: ['sh', '-c', 'exit 3'], kind: 'format' };
   const platforms = Object.fromEntries(Object.entries(own.platforms)
-    .map(([name, recipe]) => [name, { ...recipe, quality: [passingFormat, refusingGate] }]));
+    .map(([name, recipe]) => [name, { ...recipe, quality: [refusingGate] }]));
   git(['init', '-q', '-b', 'main']);
   writeFileSync(join(checkout, 'VERSION'), `${own.schema_version}.${own.schema_version}.${own.schema_version}\n`);
   writeFileSync(join(checkout, '.wisent-release.json'), JSON.stringify({
@@ -98,7 +97,7 @@ try {
   const [refused] = plan().queue;
   assert.equal(refused.state, 'failed');
   assert.equal(refused.step, 'gates');
-  assert.ok(refused.error.includes('refusing-lint'), refused.error);
+  assert.ok(refused.error.includes('refusing-format'), refused.error);
   assert.deepEqual(refused.carried, [id]);
   assert.equal(git(['rev-parse', 'HEAD']), commit, 'the gate step committed');
   const sentence = `stado release loop: ${product} at ${commit} did not reach a release; the gates step refused: ${refused.error}`;
