@@ -73,8 +73,20 @@ pub fn parse_report(stdout: &str) -> Vec<CacheEntry> {
         let Some(state) = fields.next().filter(|state| !state.is_empty()) else {
             continue;
         };
-        let path = fields.next().unwrap_or_default();
-        let kib = fields.next().unwrap_or_default();
+        // A status line without its path or size is a walk that did not
+        // report what it saw: recorded as a failed scan carrying the line, so
+        // the census is incomplete, never a cache silently left out.
+        let (Some(path), Some(kib)) = (
+            fields.next().filter(|path| !path.is_empty()),
+            fields.next().filter(|kib| !kib.is_empty()),
+        ) else {
+            entries.push(CacheEntry {
+                state: super::program::SCAN_FAILED.to_string(),
+                path: format!("status line without a path and size: {rest}"),
+                kib: String::new(),
+            });
+            continue;
+        };
         entries.push(CacheEntry {
             state: state.to_string(),
             path: path.to_string(),
