@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use crate::common::Runtime;
 
 fn entries(area: &Path) -> Result<Vec<Value>> {
-    let entries = match fs::read_dir(&area) {
+    let entries = match fs::read_dir(area) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(Vec::new());
