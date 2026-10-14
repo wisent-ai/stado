@@ -32,6 +32,7 @@ struct ServiceDeclareView: View {
     @State private var catalogProblem: String?
     @State private var deployingCatalogName: String?
     @State private var errorMessage: String?
+    @State private var ensured: EnsureOutcome?
 
     private let cli = StadoCLI()
 
@@ -117,6 +118,19 @@ struct ServiceDeclareView: View {
                 }
             }
 
+            if let ensured {
+                WisentSectionBox(title: "Service ensured") {
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                        Text("\(ensured.name) on \(ensured.host): \(ensured.action)")
+                        ForEach(ensured.predecessors.indices, id: \.self) { index in
+                            let unit = ensured.predecessors[index]
+                            Text("\(unit.unit): \(unit.state) — \(unit.detail)")
+                        }
+                    }
+                    .textSelection(.enabled)
+                }
+            }
+
             WisentSectionBox(title: "Name and placement", detail: "Lowercase identifier, and the registry host it runs on.") {
                 HStack(spacing: WisentDesign.Space.x3) {
                     TextField("example-serving", text: $name)
@@ -174,7 +188,7 @@ struct ServiceDeclareView: View {
             }
 
             if let errorMessage {
-                WisentErrorBanner(title: "Declaration refused", detail: errorMessage)
+                WisentErrorBanner(title: "Service operation refused", detail: errorMessage)
             }
 
             HStack(spacing: WisentDesign.Space.x2) {
@@ -208,12 +222,20 @@ struct ServiceDeclareView: View {
         let services: [WisentCatalogEntry]
     }
 
-    /// `ensure --json` prints one record document; the fields this sheet
-    /// needs are none. Success is the CLI exit status plus a decodable payload,
-    /// so every successful action (`already_correct`, `restarted`, `converged`,
-    /// `reloaded`, or `created`) is accepted without a second action allowlist.
-    /// The screen behind re-reads the fleet either way.
-    private struct EnsureOutcome: Decodable, Sendable {}
+    /// The CLI's per-unit result survives successful JSON decoding, rather
+    /// than disappearing with the sheet before the operator can inspect it.
+    private struct EnsureOutcome: Decodable, Sendable {
+        let host: String
+        let name: String
+        let action: String
+        let predecessors: [PredecessorOutcome]
+    }
+
+    private struct PredecessorOutcome: Decodable, Sendable {
+        let unit: String
+        let state: String
+        let detail: String
+    }
 
     private func loadCatalog() async {
         guard !catalogLoaded else { return }
@@ -235,10 +257,11 @@ struct ServiceDeclareView: View {
     /// for a headless host.
     private func deployFromCatalog(_ entry: WisentCatalogEntry) async {
         deployingCatalogName = entry.name
+        ensured = nil
         errorMessage = nil
         defer { deployingCatalogName = nil }
         do {
-            _ = try await cli.json(
+            let outcome = try await cli.json(
                 EnsureOutcome.self,
                 arguments: [
                     "service", "ensure", entry.name,
@@ -248,8 +271,8 @@ struct ServiceDeclareView: View {
                 ],
                 confirmsMutation: true
             )
+            ensured = outcome
             onDeclared()
-            dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }

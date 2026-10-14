@@ -11,21 +11,16 @@ pub(crate) struct EnsureReceipt {
     pub(crate) action: String,
     pub(crate) pid: Option<u32>,
     pub(crate) audited: Option<String>,
+    pub(crate) predecessors: Vec<service::PredecessorRetirement>,
 }
 
-/// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
-///
-/// The idempotent half of `deploy`, and the only one that works on an ssh
-/// login with no Aqua session. Two facts decide everything it does, and both
-/// come from the host: what the unit on the box declares it runs, and what the
-/// process under it is actually running. See
-/// [`crate::deploy::service::ensure_service`].
+/// Idempotently assert one service from the declared program and the host's
+/// observed unit. The same receipt serves the CLI and internal callers.
 pub(crate) async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     let as_json = options.as_json;
     let receipt = ensure_unit(options).await?;
     if as_json {
-        // Exactly the contract's keys: a desktop client consumes this shape.
-        // Where the record landed goes to stderr rather than into the object.
+        // The per-unit results are part of the JSON contract as well as stderr.
         if let Some(audited) = receipt.audited.as_deref() {
             eprintln!("audit record {audited}");
         }
@@ -36,6 +31,7 @@ pub(crate) async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             "domain": receipt.domain,
             "action": receipt.action,
             "pid": receipt.pid,
+            "predecessors": receipt.predecessors,
         }));
     }
     let pid = match receipt.pid {
@@ -287,7 +283,9 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         error
     })?;
 
-    predecessors::retire_after_ensure(&target, catalog_entry.as_ref(), &record, &runner).await?;
+    let predecessors =
+        predecessors::retire_after_ensure(&target, catalog_entry.as_ref(), &record, &runner)
+            .await?;
     Ok(EnsureReceipt {
         host,
         name: record.name.clone(),
@@ -296,5 +294,6 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         action: outcome.action.clone(),
         pid: outcome.pid.trim().parse::<u32>().ok(),
         audited,
+        predecessors,
     })
 }

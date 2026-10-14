@@ -23,7 +23,7 @@ pub struct Predecessors {
 }
 
 impl Predecessors {
-    /// Every unit that is retired once its work is proven to run elsewhere.
+    /// Units to withdraw once the replacement has started and proved its roles.
     pub fn units(&self) -> impl Iterator<Item = &str> {
         self.replaced
             .iter()

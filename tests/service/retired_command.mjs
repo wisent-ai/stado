@@ -86,8 +86,16 @@ try {
   const retiredVerb = run(binary, ['disk-cleanup', '--help']);
   assert.ok(retiredVerb.status, 'The old root command must be refused');
   const ensure = run(binary, ['service', 'ensure', 'stado', '--host', host,
-    '--reason', 'replace an obsolete recurring command']);
-  success(ensure);
+    '--reason', 'replace an obsolete recurring command', '--json']);
+  const receipt = JSON.parse(success(ensure));
+  const retiredResult = receipt.predecessors.find(unit => unit.unit === retired);
+  assert.ok(retiredResult, `JSON omitted retirement result for ${retired}`);
+  assert.equal(retiredResult.state, 'retired');
+  assert.match(retiredResult.detail, /removed root command:/,
+    'JSON must carry the cause for Desktop');
+  const keptResult = receipt.predecessors.find(unit => unit.unit === kept);
+  assert.ok(keptResult, `JSON omitted kept result for ${kept}`);
+  assert.equal(keptResult.state, 'kept');
   assert.match(ensure.stderr, new RegExp(`${retired}: retired \\(removed root command:`),
     'Ensure must name the withdrawn unit and the cause');
   const gone = run('launchctl', ['print', `${domain}/${retired}`]);
@@ -95,7 +103,7 @@ try {
   success(run('launchctl', ['print', `${domain}/${kept}`]));
   assert.match(ensure.stderr, new RegExp(`${kept}: kept`),
     'A valid one-pass unit must not be withdrawn');
-  report.after = { retired_absent: true, valid_unit_present: true };
+  report.after = { receipt, retired_absent: true, valid_unit_present: true };
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);

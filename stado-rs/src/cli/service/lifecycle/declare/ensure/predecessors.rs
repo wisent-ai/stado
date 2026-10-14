@@ -53,24 +53,19 @@ pub(super) async fn host_ready(
     Ok(())
 }
 
-/// Retire every unit on `target` that runs `entry`'s program under another
-/// label, whole for any product but the host Stado process and, for that
-/// process, each unit whose roles the just-ensured `running` unit's live
-/// process is proven to run, and say what happened to each on stderr,
-/// leaving the command's JSON contract unchanged. A unit that could not be
-/// retired is the command's failure: the replacement runs, but its
-/// predecessor may run beside it. A kept unit is not a failure. A role that
-/// shares its unit's listener is not touched here: the reconciler hands it
-/// over under the unit's lease and can repair it if the role does not take,
-/// so this command only says so. The API listener's units are kept until the
-/// host Stado process records its takeover, and retired after.
+/// Retire units that the just-ensured process supersedes, after proving its
+/// roles live. Keep the per-unit result in the receipt and on stderr; a
+/// failed retirement refuses ensure because the old unit may run beside it.
+/// Shared-listener roles are handed over by the reconciler instead.
 pub(super) async fn retire_after_ensure(
     target: &crate::targets::ComputeTarget,
     entry: Option<&crate::deploy::service_catalog::CatalogService>,
     running: &crate::deploy::service::ManagedService,
     runner: &crate::deploy::Runner,
-) -> Result<(), CmdError> {
-    let Some(entry) = entry else { return Ok(()) };
+) -> Result<Vec<service::PredecessorRetirement>, CmdError> {
+    let Some(entry) = entry else {
+        return Ok(Vec::new());
+    };
     let found = service::predecessors_on(target, entry, Some(running), runner)
         .await
         .map_err(|error| {
@@ -86,6 +81,7 @@ pub(super) async fn retire_after_ensure(
         .map(|role| role.unit.clone())
         .collect();
     let mut failed = Vec::new();
+    let mut retirements = Vec::new();
     for retirement in service::retire_found(target, running, found, runner).await {
         eprintln!(
             "{}: {} replaced {}: {} ({})",
@@ -94,6 +90,7 @@ pub(super) async fn retire_after_ensure(
         if retirement.state == "failed" {
             failed.push(format!("{}: {}", retirement.unit, retirement.detail));
         }
+        retirements.push(retirement);
     }
     for unit in listeners {
         eprintln!(
@@ -102,7 +99,7 @@ pub(super) async fn retire_after_ensure(
         );
     }
     if failed.is_empty() {
-        return Ok(());
+        return Ok(retirements);
     }
     Err(CmdError::unreachable(format!(
         "{}: {} is running, but the units it replaced could not all be retired: {}",
