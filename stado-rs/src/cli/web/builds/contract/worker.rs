@@ -29,7 +29,16 @@ pub(in crate::cli::web::builds) struct Worker {
 /// a failed release log needs to know the variable is Stado's to supply, not
 /// something they forgot to export.
 fn required(name: &str) -> Result<String, CmdError> {
-    let value = std::env::var(name).unwrap_or_default();
+    // A value that is not text is named as such: read as unset, the step
+    // said Stado had not provided a variable it had.
+    let value = match std::env::var(name) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => String::new(),
+        Err(error) => {
+            return Err(CmdError::click(format!("{name} cannot be read: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config))
+        }
+    };
     let value = value.trim();
     if value.is_empty() {
         return Err(CmdError::click(format!(
@@ -47,7 +56,16 @@ pub(in crate::cli::web::builds) fn worker() -> Result<Worker, CmdError> {
     let platform = required("WISENT_PLATFORM")?;
     // Read but not required: a web product declares no inputs, and refusing an
     // empty value would fail every web release for a variable nothing reads.
-    let inputs = std::env::var("WISENT_INPUTS_DIR").unwrap_or_default();
+    let inputs = match std::env::var("WISENT_INPUTS_DIR") {
+        Ok(inputs) => inputs,
+        Err(std::env::VarError::NotPresent) => String::new(),
+        Err(error) => {
+            return Err(
+                CmdError::click(format!("WISENT_INPUTS_DIR cannot be read: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::Config),
+            )
+        }
+    };
     if !source.is_dir() {
         return Err(CmdError::click(format!(
             "WISENT_SOURCE_DIR names {}, which is not a directory: the release worker did not prepare a checkout there",
