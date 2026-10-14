@@ -154,7 +154,13 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     let root_already_current = regular_file_matches(&destination, &content)?;
     let staged = directory.join(format!("{name}.release-incoming"));
     if !root_already_current {
-        if destination.exists() {
+        // A binary that cannot be examined refuses: read as absent, it was
+        // replaced without the `.previous` a restore reinstalls.
+        let replaced = crate::primitives::presence::present(&destination).map_err(|error| {
+            CmdError::click(error.to_string())
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
+        if replaced {
             // The replaced binary becomes `<name>.previous`, the rollback
             // target `release local restore --previous` reinstalls and
             // reclaim keeps the retained release of; staged, then renamed.

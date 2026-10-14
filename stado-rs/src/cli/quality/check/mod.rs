@@ -86,11 +86,15 @@ async fn export_check(
         if_declared,
     )
     .await;
-    if run_area.exists() {
-        std::fs::remove_dir_all(&run_area).map_err(|error| {
-            CmdError::click(format!("cannot remove {}: {error}", run_area.display()))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+    match std::fs::remove_dir_all(&run_area) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(
+                CmdError::click(format!("cannot remove {}: {error}", run_area.display()))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind())),
+            )
+        }
     }
     let Some(product) = verdict? else {
         return Ok(());
