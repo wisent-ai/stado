@@ -14,9 +14,14 @@ where
     E: aws_sdk_ec2::error::ProvideErrorMetadata + std::fmt::Debug,
 {
     if let Some(service) = err.as_service_error() {
-        let code = service.code().unwrap_or("");
-        let message = service.message().unwrap_or("");
-        return ProviderError::Aws(format!("EC2 {desc} failed: {code}: {message}"));
+        // A service error without its code or message is said as such, with
+        // the error the SDK holds, not as an empty code and message.
+        return ProviderError::Aws(match (service.code(), service.message()) {
+            (Some(code), Some(message)) => format!("EC2 {desc} failed: {code}: {message}"),
+            (Some(code), None) => format!("EC2 {desc} failed: {code} (no message): {service:?}"),
+            (None, Some(message)) => format!("EC2 {desc} failed (no code): {message}"),
+            (None, None) => format!("EC2 {desc} failed with no code and no message: {service:?}"),
+        });
     }
     ProviderError::Aws(format!("EC2 {desc} failed: {err}"))
 }
