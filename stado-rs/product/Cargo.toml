@@ -39,3 +39,8 @@ stado-wait = { version = "0.1.0", path = "../wait" }
 name = "committed-lock-attribution"
 path = "../../tests/product/lock/main.rs"
 harness = false
+
+[[test]]
+name = "concurrent-shed"
+path = "../../tests/product/runs/main.rs"
+harness = false

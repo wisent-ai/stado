@@ -179,8 +179,9 @@ pub fn shed(run: &Path) -> Result<()> {
     for entry in fs::read_dir(run).with_context(|| format!("reading {}", run.display()))? {
         let entry = entry.with_context(|| format!("reading {}", run.display()))?;
         if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            fs::remove_dir_all(entry.path())
-                .with_context(|| format!("removing {}", entry.path().display()))?;
+            // Two builds under one parent shed the same previous run; a
+            // tree the other removed first is the state this removal was for.
+            remove_superseded(&entry.path(), "tree")?;
         }
     }
     match fs::remove_file(run.join(KEPT)) {
