@@ -25,6 +25,21 @@ pub(crate) use hosts::{fleet_hosts, this_host};
 pub(super) use input::{pin_input, PinInputArgs};
 pub(super) use withdraw::withdraw_publisher;
 
+/// Whether this host reads the vault on the owner through its route rather
+/// than holding one: it declares no `secrets.skarbiec.vault_file`. Its
+/// verifier is the owner's reconciliation to cover; repairing it here would
+/// judge a retired local copy whose grant no longer matches its bearer.
+/// Declaring and withdrawing a publisher both ask this.
+pub(super) fn reads_owner_vault() -> bool {
+    crate::config::skarbiec_vault_file().trim().is_empty()
+}
+
+/// The report entry for a host whose verifier the owner's reconciliation
+/// covers.
+pub(super) fn covered_by_owner(host: &str, owner: &str) -> serde_json::Value {
+    json!({ "step": "verifier", "host": host, "repair": "not needed: reads the vault on the owner", "owner": owner })
+}
+
 /// Bytes of randomness in a minted publisher bearer; the same width the
 /// verifier reconciliation mints (`openssl rand -hex 32`).
 const BEARER_BYTES: usize = 32;
@@ -104,8 +119,8 @@ pub(super) async fn declare_publisher(
     //    client that holds no vault of its own reads the owner's through
     //    secrets.skarbiec.url, so its bearer already lives there and copying
     //    it would ask for a local vault authority it does not have.
-    let client_reads_owner = this_host().await.is_ok_and(|here| here == client)
-        && crate::config::skarbiec_vault_file().trim().is_empty();
+    let client_reads_owner =
+        this_host().await.is_ok_and(|here| here == client) && reads_owner_vault();
     if client != owner && !client_reads_owner {
         vault_token_sync(
             client,
@@ -188,7 +203,7 @@ pub(super) async fn declare_publisher(
         // copy. Its declaration only lets its own build and release submit
         // find the publisher.
         if client_reads_owner && host == client {
-            report.push(json!({ "step": "verifier", "host": host, "repair": "not needed: reads the vault on the owner", "owner": owner }));
+            report.push(covered_by_owner(host, owner));
             continue;
         }
         let arguments = [

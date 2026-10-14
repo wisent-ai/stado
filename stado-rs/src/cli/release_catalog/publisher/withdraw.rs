@@ -64,10 +64,10 @@ pub(crate) async fn withdraw_publisher(
     // its route: the owner's own reconciliation covers it, and repairing it
     // would reconcile its retired local copy, whose grant no longer matches
     // the bearer this host holds.
-    let here_reads_owner = crate::config::skarbiec_vault_file().trim().is_empty();
+    let here_reads_owner = super::reads_owner_vault();
     for host in &hosts {
         if here_reads_owner && host == &here && host != &owner {
-            report.push(json!({ "step": "verifier", "host": host, "repair": "not needed: reads the vault on the owner", "owner": owner }));
+            report.push(super::covered_by_owner(host, &owner));
             continue;
         }
         let arguments = [
