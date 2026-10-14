@@ -3,6 +3,7 @@
 //! written and a refusal names the gate.
 
 mod modules;
+mod paths;
 pub(crate) use modules::check_source;
 use std::path::{Path, PathBuf};
 use std::process::Command;

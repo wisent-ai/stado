@@ -4,7 +4,10 @@
 //! module file it does not hold refuses the commit naming the declaring file
 //! and the files it looked for, before any gate runs and with nothing
 //! compiled; the same product once the file is committed is not refused by
-//! that check. The checkout is a real Git repository of this test's own
+//! that check. A tree whose code names `crate::hidden` while `hidden/mod.rs`
+//! is committed but declared by nothing is refused the same way, naming the
+//! using file, the path and the undeclared file, until `mod hidden;` is
+//! committed. The checkout is a real Git repository of this test's own
 //! under the repository's `.build`, with a tracked change left in it so the
 //! check reads `HEAD` rather than an origin; Stado's home and store are this
 //! run's own.
@@ -15,6 +18,7 @@ use std::process::{Command, Output, Stdio};
 
 const MANIFEST: &str = ".wisent-release.json";
 const REFUSAL: &str = "declares module files it does not hold";
+const UNREACHED: &str = "uses modules no declaration reaches";
 
 fn git(directory: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -148,6 +152,57 @@ fn a_module_declared_without_its_file_is_refused_before_anything_compiles() {
     assert!(
         !said.contains(REFUSAL),
         "the module check refused a complete tree: {said}"
+    );
+
+    fs::create_dir_all(checkout.join("src/hidden")).unwrap();
+    fs::write(checkout.join("src/hidden/mod.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(
+        checkout.join("src/main.rs"),
+        "mod present;\nmod absent;\nfn main() {\n    crate::hidden::run();\n}\n",
+    )
+    .unwrap();
+    git(&checkout, &["add", "src"]);
+    git(
+        &checkout,
+        &[
+            "commit",
+            "--quiet",
+            "-m",
+            "uses hidden without declaring it",
+        ],
+    );
+    let hidden = stado(
+        &root,
+        &mut report,
+        &["quality", "check", "--root", &checkout.to_string_lossy()],
+    );
+    let said = String::from_utf8_lossy(&hidden.stderr).into_owned();
+    assert!(
+        !hidden.status.success(),
+        "a path into an undeclared module was accepted"
+    );
+    assert!(said.contains(UNREACHED), "{said}");
+    assert!(
+        said.contains("src/main.rs uses `crate::hidden`, and the tree holds src/hidden/mod.rs"),
+        "{said}"
+    );
+
+    fs::write(
+        checkout.join("src/main.rs"),
+        "mod present;\nmod absent;\nmod hidden;\nfn main() {\n    crate::hidden::run();\n}\n",
+    )
+    .unwrap();
+    git(&checkout, &["add", "src/main.rs"]);
+    git(&checkout, &["commit", "--quiet", "-m", "declares hidden"]);
+    let declared = stado(
+        &root,
+        &mut report,
+        &["quality", "check", "--root", &checkout.to_string_lossy()],
+    );
+    let said = String::from_utf8_lossy(&declared.stderr).into_owned();
+    assert!(
+        !said.contains(UNREACHED) && !said.contains(REFUSAL),
+        "the module check refused a declared module: {said}"
     );
     report["outcome"] = json!("passed");
     fs::write(

@@ -125,6 +125,22 @@ fn reachable(roots: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
 static PATH_ATTRIBUTE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"#\[path\s*=\s*"(?P<path>[^"]+)"\s*\]"#).expect("static"));
 
+/// The crate's roots: `src/lib.rs`, every `[[bin]]` path, and `src/main.rs`.
+fn every_root(crate_dir: &Path) -> Vec<PathBuf> {
+    let mut roots = crate_roots(crate_dir);
+    let main = crate_dir.join("src/main.rs");
+    if main.is_file() && !roots.contains(&main) {
+        roots.push(main);
+    }
+    roots
+}
+
+/// Every module file the crate at `crate_dir` reaches from its roots through
+/// `mod` declarations, read from the files alone.
+pub(crate) fn reached_modules(crate_dir: &Path) -> Result<BTreeSet<PathBuf>, String> {
+    reachable(&every_root(crate_dir))
+}
+
 /// Every `mod name;` a module reachable from the crate at `crate_dir`
 /// declares that names no file in the tree — neither `<name>.rs` nor
 /// `<name>/mod.rs` where it resolves, nor the file a `#[path]` attribute
@@ -132,11 +148,7 @@ static PATH_ATTRIBUTE: LazyLock<Regex> =
 /// nothing: a commit that deleted a module file another still declares, or
 /// declared one it never added, fails here before anything builds on it.
 pub(crate) fn undeclared_files(crate_dir: &Path) -> Result<Vec<String>, String> {
-    let mut roots = crate_roots(crate_dir);
-    let main = crate_dir.join("src/main.rs");
-    if main.is_file() && !roots.contains(&main) {
-        roots.push(main);
-    }
+    let roots = every_root(crate_dir);
     let root_set: BTreeSet<PathBuf> = roots.iter().cloned().collect();
     let mut missing = Vec::new();
     for file in reachable(&roots)? {

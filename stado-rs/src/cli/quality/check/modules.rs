@@ -37,28 +37,44 @@ fn crates(directory: &Path, into: &mut Vec<PathBuf>) -> Result<(), CmdError> {
 }
 
 /// Refuse `revision` of `checkout`, exported at `tree`, when a crate in it
-/// declares a module file the tree does not hold, naming every such
-/// declaration.
+/// declares a module file the tree does not hold, or names through a
+/// `crate::` path a module file the tree holds but no declaration reaches,
+/// naming every such declaration and path.
 pub(super) fn check(tree: &Path, checkout: &Path, revision: &str) -> Result<(), CmdError> {
     let mut found = Vec::new();
     crates(tree, &mut found)?;
-    let mut missing = Vec::new();
+    let (mut missing, mut unreached) = (Vec::new(), Vec::new());
     for crate_dir in &found {
         missing.extend(undeclared_files(crate_dir).map_err(CmdError::click)?);
-    }
-    if missing.is_empty() {
-        return Ok(());
+        unreached.extend(super::paths::unreached(crate_dir).map_err(CmdError::click)?);
     }
     let exported = format!("{}/", tree.display());
-    Err(CmdError::refused(format!(
-        "{revision} of {} declares module files it does not hold, so no build of it compiles: {}",
-        checkout.display(),
-        missing
+    let listed = |lines: &[String]| {
+        lines
             .iter()
             .map(|line| line.replace(&exported, ""))
             .collect::<Vec<_>>()
             .join("; ")
-    )))
+    };
+    let mut refusals = Vec::new();
+    if !missing.is_empty() {
+        refusals.push(format!(
+            "{revision} of {} declares module files it does not hold, so no build of it compiles: {}",
+            checkout.display(),
+            listed(&missing)
+        ));
+    }
+    if !unreached.is_empty() {
+        refusals.push(format!(
+            "{revision} of {} uses modules no declaration reaches, so no build of it compiles: {}",
+            checkout.display(),
+            listed(&unreached)
+        ));
+    }
+    if refusals.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::refused(refusals.join(". ")))
 }
 
 /// The locks and the module declarations of `revision` of `checkout`, over

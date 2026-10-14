@@ -18,7 +18,7 @@ mod modules;
 mod rule;
 mod surface;
 
-pub(crate) use modules::undeclared_files;
+pub(crate) use modules::{reached_modules, undeclared_files};
 pub(crate) use rule::{least_next, semver_order};
 
 use std::path::PathBuf;
