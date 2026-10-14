@@ -168,6 +168,10 @@ name = "capability-unreadable"
 path = "../tests/capability/unreadable.rs"
 
 [[test]]
+name = "capability-garbled-requirement"
+path = "../tests/capability/garbled_requirement.rs"
+
+[[test]]
 name = "scheduler"
 path = "../tests/scheduler/main.rs"
 
