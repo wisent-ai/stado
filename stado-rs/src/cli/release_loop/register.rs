@@ -42,6 +42,9 @@ pub enum State {
 pub enum Step {
     /// Reading Oko for the open defects whose repair the commit carries.
     Carried,
+    /// The product's format gates and the lock check over the committed
+    /// tree: no compilation, so they run before the build gate opens.
+    Gates,
     /// Committing the least next version the versioning rule allows.
     Version,
     /// `stado release submit`: build, the product's quality steps, signing,
@@ -56,6 +59,7 @@ impl Step {
     pub fn name(self) -> &'static str {
         match self {
             Self::Carried => "carried",
+            Self::Gates => "gates",
             Self::Version => "version",
             Self::Release => "release",
             Self::Record => "record",

@@ -16,7 +16,8 @@ use chrono::Utc;
 
 use super::super::register::{self, Entry, State, Step};
 use super::carried::{carried, note_failure, open_repairs, record_released, repository_of, Repair};
-use super::version::commit_next;
+use super::version::{commit_next, declares_format_gate};
+use crate::cli::quality::{check_revision, Report, Selection};
 use crate::cli::release_newest::{Planned, Standing};
 use crate::cli::release_submit::{submit, ReleaseSubmitArgs, SubmitChannel};
 use crate::cli::CmdError;
@@ -146,7 +147,10 @@ pub enum Mode {
 fn settled(kept: &Entry) -> bool {
     match kept.state {
         State::Delivered => true,
-        State::Failed => matches!(kept.step, Step::Version | Step::Release | Step::Record),
+        State::Failed => matches!(
+            kept.step,
+            Step::Gates | Step::Version | Step::Release | Step::Record
+        ),
         State::Running | State::Queued | State::NothingCarried => false,
     }
 }
@@ -201,6 +205,27 @@ async fn deliver(
         };
         return failed(current, CmdError::click(error)).await.map(Some);
     };
+    // The format gates and the lock check read the committed tree and
+    // compile nothing, so they run as soon as a commit carries a repair,
+    // not behind the build gate: a commit committed unformatted or with a
+    // lock its manifest outgrew is named on its defects before anyone builds
+    // on it. A commit kept queued has passed them.
+    let checked = kept
+        .as_ref()
+        .is_some_and(|kept| kept.state == State::Queued);
+    if !published && !checked {
+        current.step = Step::Gates;
+        let gated = match declares_format_gate(checkout, product) {
+            Ok(gated) => gated,
+            Err(error) => return failed(current, error).await.map(Some),
+        };
+        let gates = Selection::Formatting;
+        if gated {
+            if let Err(error) = check_revision(checkout, &commit, Report::Stderr, gates).await {
+                return failed(current, error).await.map(Some);
+            }
+        }
+    }
     let first = match (bump, published) {
         (true, _) => Step::Version,
         (false, false) => Step::Release,

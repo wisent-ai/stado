@@ -58,7 +58,10 @@ pub fn handled(entries: &[Entry]) -> Vec<String> {
             State::Delivered => true,
             State::Failed => matches!(
                 entry.step,
-                register::Step::Version | register::Step::Release | register::Step::Record
+                register::Step::Gates
+                    | register::Step::Version
+                    | register::Step::Release
+                    | register::Step::Record
             ),
             State::Running | State::Queued | State::NothingCarried => false,
         })

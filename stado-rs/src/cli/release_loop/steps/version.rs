@@ -68,6 +68,17 @@ fn manifest_of(
     }
 }
 
+/// Whether `checkout`'s manifest declares a format gate on any platform:
+/// a product without one has nothing for the queue's compile-free gate step
+/// to run, and its release pipeline runs whatever it declares.
+pub fn declares_format_gate(checkout: &Path, product: &str) -> Result<bool, CmdError> {
+    Ok(manifest_of(checkout, product)?
+        .platforms
+        .values()
+        .flat_map(|platform| &platform.quality)
+        .any(|gate| gate.kind == crate::release_pipeline::GateKind::Format))
+}
+
 /// Commit `next` as `product`'s version in `checkout`, standing at `commit`,
 /// and answer the new commit.
 pub async fn commit_next(
