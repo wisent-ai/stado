@@ -41,21 +41,39 @@ pub(crate) fn expand_tilde(entry: &str) -> PathBuf {
 }
 
 /// Locate the config file: $STADO_CONFIG override first (must exist), then
-/// the candidate list. Returns None when no file exists.
-pub fn find_config_file() -> Option<PathBuf> {
-    let override_ = std::env::var(FILE_ENV).unwrap_or_default();
+/// the candidate list. None when no candidate exists and none is selected.
+/// A selection that is not text, or that names a file that does not exist,
+/// is refused: read as no selection, Stado ran on another file or on none
+/// while the caller believed it ran on theirs.
+pub fn find_config_file() -> Result<Option<PathBuf>, ConfigError> {
+    let override_ = match std::env::var(FILE_ENV) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => String::new(),
+        Err(error) => {
+            return Err(ConfigError::Selected {
+                variable: FILE_ENV,
+                message: format!("cannot be read: {error}"),
+            })
+        }
+    };
     let override_ = override_.trim();
     if !override_.is_empty() {
         let candidate = expand_tilde(override_);
-        return candidate.exists().then_some(candidate);
+        if !candidate.exists() {
+            return Err(ConfigError::Selected {
+                variable: FILE_ENV,
+                message: format!("names {}, which does not exist", candidate.display()),
+            });
+        }
+        return Ok(Some(candidate));
     }
     for entry in CANDIDATES {
         let candidate = expand_tilde(entry);
         if candidate.exists() {
-            return Some(candidate);
+            return Ok(Some(candidate));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Parse a config file without touching the process-wide cache.
@@ -80,7 +98,7 @@ pub fn load_config_file() -> Result<&'static Map<String, Value>, ConfigError> {
     if let Some(cache) = CACHE.get() {
         return Ok(&cache.data);
     }
-    let path = find_config_file();
+    let path = find_config_file()?;
     let data = match &path {
         None => Map::new(),
         Some(path) => load_uncached(path)?,
@@ -95,7 +113,7 @@ pub fn load_config_file() -> Result<&'static Map<String, Value>, ConfigError> {
 /// restart: a release publisher declared after the process loaded its
 /// configuration (see `release_publisher_for_key`).
 pub fn load_config_file_fresh() -> Result<Map<String, Value>, ConfigError> {
-    match find_config_file() {
+    match find_config_file()? {
         None => Ok(Map::new()),
         Some(path) => load_uncached(&path),
     }

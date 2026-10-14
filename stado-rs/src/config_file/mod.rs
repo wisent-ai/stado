@@ -52,6 +52,13 @@ pub enum ConfigError {
     Invalid { path: PathBuf, message: String },
     #[error("stado config file {0} must contain a JSON object")]
     NotAnObject(PathBuf),
+    /// The file STADO_CONFIG selects cannot be used: the variable is not
+    /// text, or the file it names does not exist.
+    #[error("{variable} {message}")]
+    Selected {
+        variable: &'static str,
+        message: String,
+    },
 }
 
 /// A commented starting-point config, mirroring Python `template()`.

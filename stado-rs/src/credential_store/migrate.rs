@@ -30,13 +30,24 @@ fn deployment(detail: impl Into<String>) -> SkarbiecError {
 }
 
 fn config_path_for_write() -> Result<PathBuf, SkarbiecError> {
-    if let Some(path) = crate::config_file::find_config_file() {
-        return Ok(path);
-    }
-    if let Ok(raw) = std::env::var(crate::config_file::FILE_ENV) {
-        if !raw.trim().is_empty() {
-            return Ok(crate::config_file::expand_tilde(raw.trim()));
+    // The selected file is written even before it exists; a selection that
+    // is not text is refused rather than read as none.
+    match std::env::var(crate::config_file::FILE_ENV) {
+        Ok(raw) if !raw.trim().is_empty() => {
+            return Ok(crate::config_file::expand_tilde(raw.trim()))
         }
+        Ok(_) | Err(std::env::VarError::NotPresent) => {}
+        Err(error) => {
+            return Err(deployment(format!(
+                "{} cannot be read: {error}",
+                crate::config_file::FILE_ENV
+            )))
+        }
+    }
+    if let Some(path) =
+        crate::config_file::find_config_file().map_err(|error| deployment(error.to_string()))?
+    {
+        return Ok(path);
     }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)

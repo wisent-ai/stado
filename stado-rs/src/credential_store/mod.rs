@@ -97,7 +97,9 @@ fn unsupported(scheme: &str) -> SkarbiecError {
 /// Selector persisted in the config file. This is deliberately read on every
 /// call: a successful migration updates the config in the same process.
 pub fn configured_selector() -> Result<String, SkarbiecError> {
-    let Some(path) = crate::config_file::find_config_file() else {
+    let Some(path) = crate::config_file::find_config_file()
+        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?
+    else {
         return Ok(DEFAULT_STORE.to_string());
     };
     let body = std::fs::read_to_string(&path).map_err(|source| {

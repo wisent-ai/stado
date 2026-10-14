@@ -24,10 +24,14 @@ pub(super) fn prepare_config(
 ) -> Result<PreparedConfig, CmdError> {
     let path = match &args.config {
         Some(path) => crate::config_file::expand_tilde(&path.to_string_lossy()),
-        None => crate::config_file::find_config_file().ok_or_else(|| {
-            CmdError::click("no Stado config file exists; pass --config PATH so recovery can perform an explicit atomic cutover")
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?,
+        None => crate::config_file::find_config_file()
+            .map_err(|error| {
+                CmdError::click(error.to_string()).stating(crate::primitives::failure::FailureCode::Config)
+            })?
+            .ok_or_else(|| {
+                CmdError::click("no Stado config file exists; pass --config PATH so recovery can perform an explicit atomic cutover")
+                    .stating(crate::primitives::failure::FailureCode::Config)
+            })?,
     };
     let text = fs::read_to_string(&path)?;
     let mut document: Value = serde_json::from_str(&text)?;
