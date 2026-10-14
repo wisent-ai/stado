@@ -101,27 +101,24 @@ fn json_float(value: &serde_json::Value) -> Option<f64> {
 ///
 /// A missing blob means nothing was marked yet. A corrupt or non-object blob
 /// reads as empty: the next mark overwrites it, and a corrupted state file
-/// must not stop the autoscaler. Any other storage error propagates.
+/// must not stop the autoscaler. That reading is said in the log with the
+/// blob and why, since the marks it held are gone with the next write. Any
+/// other storage error propagates.
 async fn load(store: &JobStorage, blob: &str) -> Result<BTreeMap<String, f64>, StorageError> {
     Ok(match store.download_text(blob).await? {
         None => BTreeMap::new(),
-        // A map that is not a JSON object was read as empty, and the next
-        // update wrote that empty map over it: every mark it held was lost
-        // without a word. It is the read's error now.
         Some(text) => match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(serde_json::Value::Object(obj)) => obj
                 .iter()
                 .filter_map(|(k, v)| json_float(v).map(|f| (k.clone(), f)))
                 .collect(),
             Ok(other) => {
-                return Err(StorageError::Other(format!(
-                    "{blob} is not a map of exhaustion marks: {other}"
-                )))
+                tracing::warn!(blob, found = %other, "gcp exhaustion marks are not a map; read as none");
+                BTreeMap::new()
             }
-            Err(error) => {
-                return Err(StorageError::Other(format!(
-                    "{blob} is not JSON, so its exhaustion marks cannot be read: {error}"
-                )))
+            Err(err) => {
+                tracing::warn!(blob, %err, "gcp exhaustion marks are not JSON; read as none");
+                BTreeMap::new()
             }
         },
     })
