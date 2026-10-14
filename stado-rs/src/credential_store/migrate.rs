@@ -229,7 +229,7 @@ pub async fn migrate(
             "no credential-store change is pending; set {ENV_STORE} or pass --to"
         )));
     }
-    if let Ok(environment) = std::env::var(ENV_STORE) {
+    if let Some(environment) = crate::config_file::variable(ENV_STORE).map_err(deployment)? {
         let environment = environment.trim();
         if !environment.is_empty()
             && explicit_destination.is_some_and(|value| value.trim() != environment)

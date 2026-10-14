@@ -30,7 +30,7 @@ use unit_state::{unit_state, UnitState};
 /// read is refused: read as "no unit", the takeover is skipped and the old
 /// unit keeps the port the replacement must bind, with nothing saying why.
 fn own_unit() -> Result<Option<String>, DeployError> {
-    if let Ok(label) = std::env::var("XPC_SERVICE_NAME") {
+    if let Some(label) = crate::config_file::variable("XPC_SERVICE_NAME").map_err(DeployError)? {
         return Ok(Some(label));
     }
     let path = "/proc/self/cgroup";

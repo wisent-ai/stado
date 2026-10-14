@@ -178,7 +178,9 @@ fn register(
         )
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    if let Ok(destination) = std::env::var("STADO_TOKEN_DESTINATION") {
+    if let Some(destination) =
+        crate::config_file::variable("STADO_TOKEN_DESTINATION").map_err(CmdError::declaration)?
+    {
         if !destination.is_empty() {
             persist(Path::new(&destination), &token)?;
         }

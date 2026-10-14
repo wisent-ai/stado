@@ -56,10 +56,14 @@ pub async fn auto_list_loop(
     }
     // WC_VAST_MAX_DURATION_S env wins (cli.py uneditable).
     let mut duration_s = params.duration_s;
-    if let Ok(raw) = std::env::var("WC_VAST_MAX_DURATION_S") {
+    if let Some(raw) =
+        crate::config_file::variable("WC_VAST_MAX_DURATION_S").map_err(VastError::config)?
+    {
         if !raw.is_empty() {
-            duration_s = Some(raw.trim().parse::<i64>().map_err(|_| {
-                VastError::config(format!("WC_VAST_MAX_DURATION_S must be int: {raw}"))
+            duration_s = Some(raw.trim().parse::<i64>().map_err(|error| {
+                VastError::config(format!(
+                    "WC_VAST_MAX_DURATION_S must be int: {raw}: {error}"
+                ))
             })?);
         }
     }

@@ -20,7 +20,9 @@ use crate::cli::CmdError;
 /// release, so git is still consulted and the failure of both is one
 /// sentence naming both.
 pub(in crate::cli::web::builds) fn revision(source: &Path) -> Result<String, CmdError> {
-    if let Ok(declared) = std::env::var("WISENT_SOURCE_COMMIT") {
+    if let Some(declared) =
+        crate::config_file::variable("WISENT_SOURCE_COMMIT").map_err(CmdError::declaration)?
+    {
         let declared = declared.trim();
         if !declared.is_empty() {
             return Ok(declared.to_string());

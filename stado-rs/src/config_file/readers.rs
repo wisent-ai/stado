@@ -70,15 +70,25 @@ pub(super) fn py_truthy(value: &Value) -> bool {
     }
 }
 
+/// The environment variable `name` as it is set, or none when it is not. A
+/// value that is not text is the error naming it: read with `if let Ok`, it
+/// was taken for unset and another source stood in for the operator's.
+pub(crate) fn variable(name: &str) -> Result<Option<String>, String> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(format!("{name} cannot be read: {error}")),
+    }
+}
+
 /// The environment override `env_name` when it is set to something; unset
 /// and empty are none. A value that is not text stops, like a malformed
 /// config file: passed over, the config file or the default stood in for the
 /// override the operator set.
 fn override_of(env_name: &str) -> Option<String> {
-    match std::env::var(env_name) {
-        Ok(value) if !value.is_empty() => Some(value),
-        Ok(_) | Err(std::env::VarError::NotPresent) => None,
-        Err(error) => panic!("{env_name} cannot be read: {error}"),
+    match variable(env_name) {
+        Ok(value) => value.filter(|value| !value.is_empty()),
+        Err(cause) => panic!("{cause}"),
     }
 }
 

@@ -32,6 +32,7 @@ mod validation;
 
 pub use discovery::{config_path, find_config_file, load_config_file};
 pub(crate) use discovery::{expand_tilde, home, home_dir};
+pub(crate) use readers::variable;
 pub use readers::{field_value, get, get_fresh, resolve, resolve_list};
 pub use validation::validate;
 

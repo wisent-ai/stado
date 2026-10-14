@@ -17,7 +17,9 @@ use crate::cli::CmdError;
 /// A binary that is not where the configuration says, or nowhere at all, is
 /// this machine's configuration: config.
 pub fn cloudflared_binary() -> Result<PathBuf, CmdError> {
-    if let Ok(explicit) = std::env::var("STADO_CLOUDFLARED_BIN") {
+    if let Some(explicit) =
+        crate::config_file::variable("STADO_CLOUDFLARED_BIN").map_err(CmdError::declaration)?
+    {
         let path = PathBuf::from(explicit.trim());
         if !path.is_file() {
             return Err(CmdError::declaration(format!(
