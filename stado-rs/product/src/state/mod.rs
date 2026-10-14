@@ -170,7 +170,7 @@ fn retire_former_program(runtime: &Runtime, root: &std::path::Path) -> Result<()
 
 pub fn all(runtime: &Runtime) -> Result<Vec<ProductState>> {
     let root = runtime.home.join(".stado/products");
-    if !root.exists() {
+    if !crate::common::files::present(&root)? {
         return Ok(Vec::new());
     }
     retire_former_program(runtime, &root)?;

@@ -210,9 +210,7 @@ pub fn checkout_tag(root: &Path, tag: &str, destination: &Path) -> Result<PathBu
     if !peeled.contains(&local.trim().to_owned()) {
         bail!("tag {tag} is {} here but {peeled:?} at the remote; refusing to measure against a tag whose identity is not settled", local.trim());
     }
-    if destination.exists() {
-        std::fs::remove_dir_all(destination)?;
-    }
+    crate::common::files::remove_tree(destination)?;
     std::fs::create_dir_all(destination)?;
     let archive =
         checked(

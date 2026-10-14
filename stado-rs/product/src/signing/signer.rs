@@ -54,8 +54,15 @@ impl Signer {
 
     /// A source recipe names its signer, not the signer already on build
     /// output. Only an installed destination constrains the prior identity.
+    /// An installed destination that cannot be examined is the error: read as
+    /// absent, the candidate's own signature stood in for the identity the
+    /// installed program carries.
     pub(super) fn previous(&self, candidate: &Path, installed: Option<&Path>) -> Result<Value> {
-        match installed.filter(|path| path.exists()) {
+        let installed = match installed {
+            Some(path) if crate::common::files::present(path)? => Some(path),
+            _ => None,
+        };
+        match installed {
             Some(path) => inspect(path),
             None if self.require_signature => Ok(json!({"state": super::SignatureState::Missing})),
             None => inspect(candidate),
