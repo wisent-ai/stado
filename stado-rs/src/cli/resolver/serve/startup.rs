@@ -36,20 +36,25 @@ async fn load_startup(
     local_store: Option<&Arc<RegistryStore>>,
 ) -> Result<Startup, String> {
     let (bootstrap, bootstrap_version, recovered) = match local_store {
-        Some(local_store) => match read_local_snapshot(local_store).await {
-            Ok((document, store_version, _)) => (document, store_version, false),
-            Err(authority_error) => {
-                let document = last_good_document().map_err(|cache_error| {
-                    format!(
-                        "registry authority failed ({authority_error}); recovery registry failed ({cache_error})"
-                    )
-                })?;
-                eprintln!(
-                    "stado resolver recovery: registry authority failed ({authority_error}); bootstrapping routing from the last-known-good registry"
-                );
-                (document, "last-known-good".to_string(), true)
+        Some(local_store) => {
+            let read = within_declared(target, read_local_snapshot(local_store))
+                .await
+                .and_then(|read| read.map_err(|error| error.to_string()));
+            match read {
+                Ok((document, store_version, _)) => (document, store_version, false),
+                Err(authority_error) => {
+                    let document = last_good_document().map_err(|cache_error| {
+                        format!(
+                            "registry authority failed ({authority_error}); recovery registry failed ({cache_error})"
+                        )
+                    })?;
+                    eprintln!(
+                        "stado resolver recovery: registry authority failed ({authority_error}); bootstrapping routing from the last-known-good registry"
+                    );
+                    (document, "last-known-good".to_string(), true)
+                }
             }
-        },
+        }
         None => {
             let document = last_good_document()?;
             eprintln!(
@@ -104,6 +109,39 @@ async fn load_startup(
         directory_generation,
         recovered,
     })
+}
+
+/// `read`, unless it outlasts the refresh interval the last-known-good
+/// registry declares for `target`'s resolver: then why. This host's
+/// registry store can be reached only through services whose adapters this
+/// very resolver relays — the object API and Skarbiec — and those relay
+/// nothing before the first registry read ends, so the read stood for as long
+/// as the resolver did, every consumer on the host without a route. Past
+/// the interval the resolver serves the last-known-good copy and binds; the
+/// refresh loop reads the store again. With no copy, or one that declares
+/// no resolver for `target`, there is no measure and the read is waited on.
+async fn within_declared<T>(
+    target: &str,
+    read: impl std::future::Future<Output = T>,
+) -> Result<T, String> {
+    let declared = last_good_document()
+        .ok()
+        .and_then(|document| service_resolution::resolver_config(&document, target).ok())
+        .map(|config| config.refresh_seconds);
+    let Some(seconds) = declared else {
+        return Ok(read.await);
+    };
+    let period = std::time::Duration::from_secs(seconds);
+    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    tokio::pin!(read);
+    tokio::select! {
+        answer = &mut read => Ok(answer),
+        _ = interval.tick() => Err(format!(
+            "this host's registry store did not answer within the {seconds}s refresh interval the \
+             last-known-good registry declares for {target}; its reads ride adapters this resolver \
+             relays only once it serves"
+        )),
+    }
 }
 
 /// [`load_startup`], publishing its refusal.
