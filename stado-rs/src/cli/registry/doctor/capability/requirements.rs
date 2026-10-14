@@ -102,16 +102,22 @@ pub(super) async fn load_job_requirements(
                 .push(format!("{} is not readable JSON", blob.name));
             continue;
         };
-        let schema = body
-            .get("schema")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if schema != REQUIREMENTS_SCHEMA {
-            declarations.refused.push(format!(
-                "{} carries schema {schema:?} rather than {REQUIREMENTS_SCHEMA}",
-                blob.name
-            ));
-            continue;
+        match body.get("schema").and_then(Value::as_str) {
+            Some(schema) if schema == REQUIREMENTS_SCHEMA => {}
+            Some(schema) => {
+                declarations.refused.push(format!(
+                    "{} carries schema {schema:?} rather than {REQUIREMENTS_SCHEMA}",
+                    blob.name
+                ));
+                continue;
+            }
+            None => {
+                declarations.refused.push(format!(
+                    "{} names no schema; {REQUIREMENTS_SCHEMA} is the one it is read with",
+                    blob.name
+                ));
+                continue;
+            }
         }
         let Some(trajectories) = body.get("trajectories").and_then(Value::as_object) else {
             declarations
@@ -120,17 +126,21 @@ pub(super) async fn load_job_requirements(
             continue;
         };
         for (trajectory, value) in trajectories {
-            // A non-string entry is dropped rather than guessed at: a garbled
-            // requirement must not be able to pass as a satisfied one.
-            let capabilities = value
-                .as_array()
-                .map(|ids| {
-                    ids.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
+            // A garbled requirement is refused by name rather than guessed at:
+            // read as an empty list, a trajectory whose value is not a list of
+            // capability ids passed as one that needs nothing.
+            let listed = value.as_array().map(|ids| {
+                ids.iter()
+                    .map(|id| id.as_str().map(str::to_string))
+                    .collect::<Option<Vec<String>>>()
+            });
+            let Some(Some(capabilities)) = listed else {
+                declarations.refused.push(format!(
+                    "{} declares trajectory {trajectory} as {value}, not a list of capability ids",
+                    blob.name
+                ));
+                continue;
+            };
             declarations
                 .needs
                 .insert(trajectory.clone(), (blob.name.clone(), capabilities));
