@@ -168,9 +168,10 @@ pub fn lock() -> Result<Option<std::fs::File>, CmdError> {
 /// Who holds the pass lock now, as the holder recorded itself; `None` when
 /// no pass holds it.
 pub fn lock_holder() -> Result<Option<String>, CmdError> {
-    use fs2::FileExt;
     let (path, file) = lock_file()?;
-    match file.try_lock_shared() {
+    // `File` has an inherent `try_lock_shared` (std) that shadows fs2's and
+    // answers a `TryLockError`; the io::Error fs2 answers is what is read here.
+    match fs2::FileExt::try_lock_shared(&file) {
         Ok(()) => Ok(None),
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
             let named = path.with_extension("holder");
