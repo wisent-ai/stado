@@ -58,6 +58,13 @@ pub struct ReleaseNewestArgs {
     /// checkout and running no step; the other flags but --json are not read.
     #[arg(long)]
     register: bool,
+    /// After the `--first` products are delivered and installed on this
+    /// host, push every checkout of the workspace holding commits its
+    /// upstream does not, read each pushed product's CI, and only then
+    /// deliver the rest; unpushed commits are counted per checkout before
+    /// and after. Needs `--first`: the products every push needs first.
+    #[arg(long)]
+    push: bool,
     #[arg(long)]
     json: bool,
 }
@@ -73,6 +80,7 @@ pub async fn newest(args: &ReleaseNewestArgs) -> Result<(), CmdError> {
     let root = workspace(args.root.clone())?;
     let planned = ordered(plan(&root, &args.products).await?, &args.first)?;
     if args.plan {
+        let unpushed = crate::cli::release_loop::push::unpushed(&root).await?;
         let queued = crate::cli::release_loop::queue(&root, &planned).await?;
         // With products selected, the other repositories' repairs are not
         // this plan's to place.
@@ -86,15 +94,60 @@ pub async fn newest(args: &ReleaseNewestArgs) -> Result<(), CmdError> {
                 }
             },
         };
-        print_plan(&root, &planned, &queued, &unplaced, args.json);
+        print_plan(&root, &planned, &queued, &unplaced, &unpushed, args.json);
         return Ok(());
     }
     let started = chrono::Utc::now();
-    let delivered = crate::cli::release_loop::deliver(&root, &planned, args.channel).await?;
+    let (delivered, pushing) = match args.push {
+        false => (
+            crate::cli::release_loop::deliver(&root, &planned, args.channel).await?,
+            None,
+        ),
+        true => {
+            if args.first.is_empty() {
+                return Err(CmdError::usage(
+                    "--push pushes only after the --first products are delivered and installed on this host: \
+                     name with --first the products every push needs first, the one whose pre-push gate checks \
+                     every push among them",
+                ));
+            }
+            let before = crate::cli::release_loop::push::unpushed(&root).await?;
+            let (leading, trailing): (Vec<Planned>, Vec<Planned>) = planned
+                .iter()
+                .cloned()
+                .partition(|entry| args.first.contains(&entry.product));
+            let mut delivered =
+                crate::cli::release_loop::deliver(&root, &leading, args.channel).await?;
+            let installed = crate::cli::release_loop::push::install(&leading, &delivered).await?;
+            let pushed =
+                crate::cli::release_loop::push::push(&root, &before, &planned, &installed).await?;
+            let after = crate::cli::release_loop::push::unpushed(&root).await?;
+            delivered
+                .extend(crate::cli::release_loop::deliver(&root, &trailing, args.channel).await?);
+            (
+                delivered,
+                Some(crate::cli::release_loop::push::Phase {
+                    before,
+                    installed,
+                    pushed,
+                    after,
+                }),
+            )
+        }
+    };
     let handled = crate::cli::release_loop::handled(&delivered);
     let mut planned = ordered(plan(&root, &args.products).await?, &args.first)?;
     planned.retain(|entry| !handled.contains(&entry.product));
-    report::submit_planned(&root, planned, &delivered, started, args.channel, args.json).await
+    report::submit_planned(
+        &root,
+        planned,
+        &delivered,
+        pushing.as_ref(),
+        started,
+        args.channel,
+        args.json,
+    )
+    .await
 }
 
 /// `planned` with the products `first` names moved to the front in that

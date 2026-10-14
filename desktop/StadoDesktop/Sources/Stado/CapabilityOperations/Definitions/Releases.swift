@@ -126,6 +126,7 @@ enum NativeReleaseSourceOperations {
             .init(id: "product", label: "One product (blank releases every product that is due)", option: "--product"),
             .init(id: "first", label: "Products delivered first, in order, comma-separated (blank keeps name order)", option: "--first"),
             .init(id: "channel", label: "Release channel", option: "--channel", choices: ["candidate", "stable"], initial: "candidate"),
+            .init(id: "push", label: "After the first products are delivered and installed here, push every checkout and read its CI, then deliver the rest", option: "--push", flag: true),
         ]),
         // A build is not a release. These queue and read builds and publish
         // nothing; `release-build` is the release that consumes one, and the

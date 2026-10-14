@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use chrono::{DateTime, Utc};
 
+use crate::cli::release_loop::push::{Phase, Unpushed};
 use crate::cli::release_loop::register::{Entry, State};
 use crate::cli::release_loop::Unplaced;
 use crate::cli::release_submit::{submit, ReleaseSubmitArgs, SubmitChannel};
@@ -46,19 +47,21 @@ pub fn print_register(json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// The workspace as it stands, the delivery queue kept from it and every
-/// open repair no checkout carries, with nothing submitted.
+/// The workspace as it stands, the delivery queue kept from it, every open
+/// repair no checkout carries and every checkout's unpushed commits, with
+/// nothing submitted.
 pub fn print_plan(
     root: &Path,
     planned: &[Planned],
     queued: &[Entry],
     unplaced: &[Unplaced],
+    unpushed: &[Unpushed],
     json: bool,
 ) {
     if json {
         let report = serde_json::json!({
             "workspace": root.display().to_string(), "products": planned, "queue": queued,
-            "unplaced": unplaced,
+            "unplaced": unplaced, "unpushed": unpushed,
         });
         match serde_json::to_string_pretty(&report) {
             Ok(text) => println!("{text}"),
@@ -79,6 +82,13 @@ pub fn print_plan(
             repair.defect, repair.revision, repair.why
         );
     }
+    for checkout in unpushed {
+        match (checkout.ahead, &checkout.unreadable) {
+            (Some(ahead), _) => println!("  unpushed  {}  {ahead}", checkout.repository),
+            (None, Some(why)) => println!("  unpushed  {}  unread: {why}", checkout.repository),
+            (None, None) => println!("  unpushed  {}  unread", checkout.repository),
+        }
+    }
     let releasable = planned.iter().filter(|entry| entry.is_releasable()).count();
     println!(
         "{releasable} of {} product(s) would be released",
@@ -88,12 +98,14 @@ pub fn print_plan(
 
 /// Submit every releasable product, in the plan's order (`--first` ahead,
 /// then name order), after the delivery queue's own deliveries in
-/// `delivered`; a queued commit that refused in this command, at or after
-/// `started`, fails it like a refused submission.
+/// `delivered` and the push phase in `pushing`; a queued commit that refused
+/// in this command, at or after `started`, fails it like a refused
+/// submission, and so does a push that did not land.
 pub async fn submit_planned(
     root: &Path,
     planned: Vec<Planned>,
     delivered: &[Entry],
+    pushing: Option<&Phase>,
     started: DateTime<Utc>,
     channel: SubmitChannel,
     json: bool,
@@ -101,6 +113,9 @@ pub async fn submit_planned(
     if !json {
         println!("workspace {}", root.display());
         crate::cli::release_loop::print(delivered);
+        if let Some(phase) = pushing {
+            crate::cli::release_loop::push::print(phase);
+        }
         for entry in planned.iter().filter(|entry| !entry.is_releasable()) {
             println!("  {}  {}", entry.product, describe(&entry.standing));
         }
@@ -140,17 +155,25 @@ pub async fn submit_planned(
         .filter(|entry| entry.state == State::Failed && entry.updated_at >= started)
         .map(|entry| entry.product.as_str())
         .collect();
+    let unpushed: Vec<&str> = pushing
+        .into_iter()
+        .flat_map(|phase| phase.pushed.iter())
+        .filter(|pushed| pushed.error.is_some())
+        .map(|pushed| pushed.repository.as_str())
+        .collect();
     let failed: Vec<&str> = outcomes
         .iter()
         .filter(|outcome| !outcome.released)
         .map(|outcome| outcome.product.as_str())
         .chain(refused_queue)
+        .chain(unpushed)
         .collect();
     if json {
         let report = serde_json::json!({
             "workspace": root.display().to_string(),
             "products": planned,
             "queue": delivered,
+            "push": pushing,
             "outcomes": outcomes,
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -165,7 +188,7 @@ pub async fn submit_planned(
         return Ok(());
     }
     Err(CmdError::click(format!(
-        "release newest: {} product(s) refused: {}",
+        "release newest: {} product(s) or checkout(s) refused: {}",
         failed.len(),
         failed.join(", ")
     )))

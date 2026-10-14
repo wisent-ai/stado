@@ -4,7 +4,7 @@
 
 mod carried;
 mod deliver;
-mod process;
+pub(super) mod process;
 mod version;
 
 pub use carried::{open_repairs, unplaced, Unplaced};
