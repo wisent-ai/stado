@@ -59,6 +59,14 @@
             "warnings"
           ],
           "kind": "lint"
+        },
+        {
+          "name": "committed-lock-attribution",
+          "argv": [
+            "cargo", "test", "--locked", "--manifest-path", "stado-rs/product/Cargo.toml",
+            "--test", "committed-lock-attribution"
+          ],
+          "kind": "test"
         }
       ],
       "build": {
@@ -122,6 +130,14 @@
             "warnings"
           ],
           "kind": "lint"
+        },
+        {
+          "name": "committed-lock-attribution",
+          "argv": [
+            "cargo", "test", "--locked", "--manifest-path", "stado-rs/product/Cargo.toml",
+            "--test", "committed-lock-attribution"
+          ],
+          "kind": "test"
         }
       ],
       "build": {
