@@ -69,6 +69,16 @@ pub struct Delivered {
     pub at: DateTime<Utc>,
 }
 
+/// A checkout's push of `main` after every step installed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Pushed {
+    pub revision: String,
+    pub at: DateTime<Utc>,
+    /// What `git push` said when the push gates refused it.
+    #[serde(default)]
+    pub refusal: Option<String>,
+}
+
 /// What the last pass did, in its own words.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pass {
@@ -86,6 +96,9 @@ pub struct State {
     /// By step (`PRODUCT:SURFACE`).
     #[serde(default)]
     pub delivered: BTreeMap<String, Delivered>,
+    /// By checkout.
+    #[serde(default)]
+    pub pushed: BTreeMap<String, Pushed>,
     #[serde(default)]
     pub last_pass: Option<Pass>,
 }

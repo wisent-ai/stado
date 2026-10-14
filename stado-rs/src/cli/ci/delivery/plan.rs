@@ -46,6 +46,11 @@ impl Step {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
     pub steps: Vec<Step>,
+    /// Whether a pass that installs every step then pushes `main` of every
+    /// checkout: declared with `--push`, never assumed, because a push
+    /// publishes the operator's commits.
+    #[serde(default)]
+    pub push: bool,
     pub declared_at: DateTime<Utc>,
 }
 
@@ -128,11 +133,15 @@ fn print(plan: &Plan, json: bool) -> Result<(), CmdError> {
     for step in &plan.steps {
         println!("  - {} from {}", step.key(), step.checkout.display());
     }
+    match plan.push {
+        true => println!("  then push main of every checkout"),
+        false => println!("  no push: declared without --push"),
+    }
     Ok(())
 }
 
-/// `stado ci plan set --step PRODUCT:SURFACE:CHECKOUT … [--json]`.
-pub fn set(steps: &[String], json: bool) -> Result<(), CmdError> {
+/// `stado ci plan set --step PRODUCT:SURFACE:CHECKOUT … [--push] [--json]`.
+pub fn set(steps: &[String], push: bool, json: bool) -> Result<(), CmdError> {
     if steps.is_empty() {
         return Err(CmdError::usage(
             "a delivery plan names at least one --step PRODUCT:SURFACE:CHECKOUT",
@@ -155,6 +164,7 @@ pub fn set(steps: &[String], json: bool) -> Result<(), CmdError> {
     }
     let plan = Plan {
         steps,
+        push,
         declared_at: Utc::now(),
     };
     write_json(&path()?, &plan)?;

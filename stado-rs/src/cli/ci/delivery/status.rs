@@ -25,6 +25,7 @@ pub fn status() -> Result<Value, CmdError> {
         "running": running,
         "refused": current.refused,
         "delivered": current.delivered,
+        "pushed": current.pushed,
         "last_pass": current.last_pass,
     }))
 }
@@ -61,6 +62,18 @@ pub fn print_status(document: &Value) {
             "  delivered: {step} at {} on {}",
             delivered["revision"], delivered["at"]
         );
+    }
+    for (checkout, pushed) in document["pushed"].as_object().into_iter().flatten() {
+        match pushed["refusal"].as_str() {
+            Some(refusal) => println!(
+                "  push refused: {checkout} at {} on {}: {refusal}",
+                pushed["revision"], pushed["at"]
+            ),
+            None => println!(
+                "  pushed: {checkout} at {} on {}",
+                pushed["revision"], pushed["at"]
+            ),
+        }
     }
     if let Some(last) = document["last_pass"].as_object() {
         println!("  last pass {}: {}", last["ended_at"], last["said"]);

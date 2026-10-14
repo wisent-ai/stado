@@ -1,20 +1,20 @@
 //! The delivery routine: Stado installs the declared plan's products from the
-//! current `main` of their checkouts, in order, so delivering a repair does
-//! not wait on any agent's turn.
+//! `main` HEAD of their checkouts, in order, then pushes every repository when
+//! the plan declares it, so delivering a repair waits on no agent's turn.
 //!
-//! `stado ci run` is one pass, run by Stado's own scheduler on the cadence
-//! the operator declares (`stado schedule create --cron … 'stado ci run'`),
-//! never per commit. A pass reads each step's `main` on its origin and runs
-//! `stado product install PRODUCT --surface SURFACE --source-commit <main>
-//! --wait` for every step whose `main` it has not installed yet; the install
-//! runs every quality gate to its end, so its refusal names every refusal of
-//! the run. A refused step stops the pass (the later steps build on it), is
-//! kept with every refusal and recorded in Oko as one defect per session whose
-//! recorded repair the refused revision brought, and is not installed again
-//! until its `main` moves: the next pass resumes at that step, notes a refusal
-//! that remains on the same defects, and records the revision that installs
-//! as their repair. One pass runs at a time; a pass that finds another
-//! running says which step it is on and since when, and ends.
+//! `stado ci run` is one pass, run by Stado's scheduler on the operator's
+//! cadence (`stado schedule create --cron … 'stado ci run'`), never per
+//! commit. `main` HEAD holds the commits the compile-free push checks passed,
+//! pushed or not: the repairs of the push gates wait there until the products
+//! running those gates are installed. A pass installs every step whose `main`
+//! it has not installed (`stado product install … --source-commit <main>
+//! --wait`, every quality gate run to its end). A refused step stops the pass,
+//! is kept with every refusal and recorded in Oko as one defect per session
+//! whose repair the revision brought, and waits until its `main` moves: the
+//! next pass resumes there, notes a refusal that remains on the same defects
+//! and records the revision that installs as their repair. Then, with
+//! `--push` declared, the pass pushes `main` of every checkout through the
+//! gates just installed and keeps each outcome. One pass runs at a time.
 
 mod oko;
 pub mod plan;
@@ -30,31 +30,55 @@ use chrono::Utc;
 use crate::cli::release_loop::process::{run as process, succeeds};
 use crate::cli::CmdError;
 use plan::{Plan, Step};
-use state::{Delivered, Pass, Refused, Running, State};
+use state::{Delivered, Pass, Pushed, Refused, Running, State};
 
-/// The branch the routine installs from. A git ref name: the protocol
+/// The branch the routine installs and pushes. A git ref name: the protocol
 /// between the checkout, its origin and the install.
 const MAIN: &str = "main";
 
-/// The commit `main` stands on at the checkout's origin now, fetched into
-/// the checkout so the install can export it.
+/// The commit the checkout's `main` stands on: the work committed there,
+/// pushed or not.
 async fn main_tip(checkout: &Path) -> Result<String, CmdError> {
     let head = format!("refs/heads/{MAIN}");
-    let listed = process("git", &["ls-remote", "origin", &head], Some(checkout)).await?;
-    let tip = listed
-        .lines()
-        .find_map(|line| {
-            let (object, reference) = line.split_once('\t')?;
-            (reference == head).then(|| object.to_string())
-        })
-        .ok_or_else(|| {
-            CmdError::refused(format!(
-                "the origin of {} holds no {MAIN} branch to install from",
+    let tip = process("git", &["rev-parse", "--verify", &head], Some(checkout))
+        .await
+        .map_err(|error| {
+            error.within(format!(
+                "{} holds no {MAIN} branch to install from",
                 checkout.display()
             ))
         })?;
-    process("git", &["fetch", "--quiet", "origin", MAIN], Some(checkout)).await?;
-    Ok(tip)
+    Ok(tip.trim().to_string())
+}
+
+/// Push `main` of every checkout of the plan, each once, through the push
+/// gates the pass installed; every push's outcome, refused ones named.
+async fn push(plan: &Plan, current: &mut State) -> Result<Vec<String>, CmdError> {
+    let mut refusals = Vec::new();
+    let mut pushed: Vec<&Path> = Vec::new();
+    for step in &plan.steps {
+        if pushed.contains(&step.checkout.as_path()) {
+            continue;
+        }
+        pushed.push(&step.checkout);
+        let revision = main_tip(&step.checkout).await?;
+        let refspec = format!("refs/heads/{MAIN}:refs/heads/{MAIN}");
+        let outcome = process("git", &["push", "origin", &refspec], Some(&step.checkout)).await;
+        let refusal = outcome.err().map(|error| error.to_string());
+        if let Some(refusal) = &refusal {
+            refusals.push(format!("{}: {refusal}", step.checkout.display()));
+        }
+        current.pushed.insert(
+            step.checkout.display().to_string(),
+            Pushed {
+                revision,
+                at: Utc::now(),
+                refusal,
+            },
+        );
+        state::write(current)?;
+    }
+    Ok(refusals)
 }
 
 /// Install `step` at `revision` through this Stado's own product install;
@@ -84,7 +108,8 @@ async fn install(step: &Step, revision: &str) -> Result<(), CmdError> {
 
 /// What one pass ended with.
 enum Outcome {
-    Delivered(Vec<String>),
+    /// Every step installed; what each step said, and every refused push.
+    Delivered(Vec<String>, Vec<String>),
     Waiting(Refused),
     Refused(Refused),
 }
@@ -179,7 +204,13 @@ async fn pass(plan: &Plan, current: &mut State) -> Result<Outcome, CmdError> {
         );
         state::write(current)?;
     }
-    Ok(Outcome::Delivered(said))
+    if !plan.push {
+        said.push("the plan declares no push".to_string());
+        return Ok(Outcome::Delivered(said, Vec::new()));
+    }
+    let refused_pushes = push(plan, current).await?;
+    said.push("pushed main of every checkout its push gates admitted".to_string());
+    Ok(Outcome::Delivered(said, refused_pushes))
 }
 
 /// `stado ci run [--json]`: one pass of the routine. A refused step exits
@@ -203,7 +234,18 @@ pub async fn run(json: bool) -> Result<(), CmdError> {
     let started_at = Utc::now();
     let outcome = pass(&plan, &mut current).await;
     let (said, refused) = match &outcome {
-        Ok(Outcome::Delivered(said)) => (said.join("; "), None),
+        Ok(Outcome::Delivered(said, pushes)) => match pushes.is_empty() {
+            true => (said.join("; "), None),
+            false => (
+                format!(
+                    "{}; {} push(es) refused: {}",
+                    said.join("; "),
+                    pushes.len(),
+                    pushes.join("; ")
+                ),
+                None,
+            ),
+        },
         Ok(Outcome::Waiting(refused)) => (
             format!(
                 "{} refused at {} and its {MAIN} has not moved; waiting for a commit that repairs: {}",
@@ -231,19 +273,25 @@ pub async fn run(json: bool) -> Result<(), CmdError> {
         said: said.clone(),
     });
     state::write(&current)?;
-    outcome?;
+    let outcome = outcome?;
     if json {
         println!("{}", serde_json::to_string_pretty(&current)?);
     } else {
         println!("stado ci run: {said}");
     }
-    match refused {
-        Some(refused) => Err(CmdError::refused(format!(
+    if let Some(refused) = refused {
+        return Err(CmdError::refused(format!(
             "{} refused at {}, every refusal of the run:\n{}",
             refused.step,
             refused.revision,
             refused.refusals.join("\n")
+        )));
+    }
+    match outcome {
+        Outcome::Delivered(_, pushes) if !pushes.is_empty() => Err(CmdError::refused(format!(
+            "every step is installed, and these pushes were refused:\n{}",
+            pushes.join("\n")
         ))),
-        None => Ok(()),
+        _ => Ok(()),
     }
 }

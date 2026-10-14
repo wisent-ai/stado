@@ -3,14 +3,16 @@
 // this run under .build/ci-delivery-run, so the operator's plan and state are
 // never read or written. STADO_DELIVERY_TEST_STEP names one catalogued
 // product's step as PRODUCT:SURFACE:CHECKOUT, its checkout the canonical one.
+// The plan is declared without --push, so the journey publishes nothing: the
+// checkout's view of its origin is the same before and after.
 //
 // 1. A pass with no plan is refused naming `stado ci plan set`.
 // 2. A relative checkout, a checkout that holds no git checkout and a step
 //    named twice are refused, and no plan is written.
-// 3. The plan is declared and read back.
-// 4. A pass installs the step from its origin's main: the state names the
-//    step delivered at that revision, or refused with its refusals and the
-//    defects recorded for them in Oko.
+// 3. The plan is declared without --push and read back.
+// 4. A pass installs the step from its checkout's main HEAD: the state names
+//    the step delivered at that revision with no push, or refused with its
+//    refusals and the defects recorded for them in Oko.
 // 5. A second pass installs nothing again: a delivered step is said as
 //    already installed, a refused one as waiting for a commit, and no defect
 //    is recorded twice.
@@ -74,6 +76,7 @@ function oko(args) {
   assert.equal(result.status, successExit, `oko ${args.join(' ')} was refused: ${result.stderr}`);
   return JSON.parse(result.stdout);
 }
+const git = args => spawnSync('git', args, { cwd: checkout, encoding: 'utf8' }).stdout.trim();
 const state = () => JSON.parse(readFileSync(environment.STADO_DELIVERY_STATE, 'utf8'));
 const recordedIds = () => existsSync(environment.OKO_DEFECT_REGISTER)
   ? oko(['defects', 'list', '--product', product, '--json']).map(defect => defect.id)
@@ -92,16 +95,19 @@ try {
 
   const declared = JSON.parse(ok(['ci', 'plan', 'set', '--step', step, '--json']));
   assert.deepEqual(declared.steps, [{ product, surface, checkout }]);
+  assert.equal(declared.push, false, 'a plan declared without --push pushes');
   assert.deepEqual(JSON.parse(ok(['ci', 'plan', 'show', '--json'])).steps, declared.steps);
 
-  const [main] = spawnSync('git', ['ls-remote', 'origin', 'refs/heads/main'], { cwd: checkout, encoding: 'utf8' })
-    .stdout.split('\t');
+  const main = git(['rev-parse', '--verify', 'refs/heads/main']);
+  const originBefore = git(['rev-parse', 'refs/remotes/origin/main']);
   const first = run(['ci', 'run', '--json']);
   const afterFirst = state();
   assert.equal(afterFirst.running, null, 'a finished pass left a step running');
   if (first.status === successExit) {
     assert.equal(afterFirst.delivered[key].revision, main);
     assert.equal(afterFirst.refused, null);
+    assert.deepEqual(afterFirst.pushed, {}, 'a plan declared without --push pushed');
+    assert.ok(afterFirst.last_pass.said.includes('the plan declares no push'), afterFirst.last_pass.said);
   } else {
     assert.equal(afterFirst.refused.step, key);
     assert.equal(afterFirst.refused.revision, main);
@@ -125,6 +131,7 @@ try {
     assert.match(said, /has not moved; waiting for a commit that repairs/);
   }
   assert.deepEqual(recordedIds(), recorded, 'a second pass recorded a defect');
+  assert.equal(git(['rev-parse', 'refs/remotes/origin/main']), originBefore, 'the journey moved the checkout\'s origin');
 
   const status = JSON.parse(ok(['ci', 'status', product, '--json']));
   assert.deepEqual(status.delivery.plan.steps, declared.steps);

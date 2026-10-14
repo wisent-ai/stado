@@ -232,12 +232,15 @@ pub(crate) enum CiCommands {
     /// One pass of the delivery routine, which Stado's scheduler runs on the
     /// cadence the operator declares (`stado schedule create --cron …
     /// 'stado ci run'`): install each step of the declared plan from its
-    /// checkout's current `main`, in order, with every quality gate run to
-    /// its end. A refused step stops the pass, is recorded in Oko as one
-    /// defect per session whose repair the revision brought, carrying every
-    /// refusal, and exits non-zero; the next pass resumes at it once its
-    /// `main` moves and records the revision that installs as the repair.
-    /// A pass that finds another running says which step it is on and ends.
+    /// checkout's `main` HEAD, pushed or not, in order, with every quality
+    /// gate run to its end, then — when the plan declares `--push` — push
+    /// `main` of every checkout through the gates just installed. A refused
+    /// step stops the pass, is recorded in Oko as one defect per session whose
+    /// repair the revision brought, carrying every refusal, and exits
+    /// non-zero; the next pass resumes at it once its `main` moves and
+    /// records the revision that installs as the repair. A refused push
+    /// exits non-zero naming it. A pass that finds another running says
+    /// which step it is on and ends.
     Run {
         /// Print the routine's state after the pass.
         #[arg(long)]
@@ -260,6 +263,11 @@ pub(crate) enum CiPlanCommands {
             required = true
         )]
         steps: Vec<String>,
+        /// After every step is installed from its checkout's `main` HEAD,
+        /// push `main` of every checkout through the push gates just
+        /// installed. Without it a pass installs and pushes nothing upstream.
+        #[arg(long)]
+        push: bool,
         #[arg(long)]
         json: bool,
     },
