@@ -97,22 +97,42 @@ impl Dashboard {
                 )))
             }
         };
-        let requested = payload
-            .get("provider")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let target = if requested.is_empty() {
-            let [target] = client.targets() else {
+        // No provider names the client's one target; a provider that is not
+        // text, or a client with several targets and none named, is a request
+        // this route cannot place, said as that rather than as unauthorized.
+        let requested = match payload.get("provider") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(provider)) => Some(provider.clone()),
+            Some(other) => {
+                return invalid_machine_request(&format!(
+                    "machine request provider must be text, got {other}"
+                ))
+            }
+        };
+        let target = match requested {
+            None => match client.targets() {
+                [target] => target.clone(),
+                [] => {
+                    return machine_result_response(Err(MachineError::new(
+                        "UNAUTHORIZED",
+                        "unauthorized",
+                    )))
+                }
+                several => {
+                    return invalid_machine_request(&format!(
+                        "machine request names no provider, and this client may submit to \
+                         several: {}",
+                        several.join(", ")
+                    ))
+                }
+            },
+            Some(requested) if client.allows_target(&requested) => requested,
+            Some(_) => {
                 return machine_result_response(Err(MachineError::new(
                     "UNAUTHORIZED",
                     "unauthorized",
-                )));
-            };
-            target.clone()
-        } else if client.allows_target(requested) {
-            requested.to_string()
-        } else {
-            return machine_result_response(Err(MachineError::new("UNAUTHORIZED", "unauthorized")));
+                )))
+            }
         };
         let Some(object) = payload.as_object_mut() else {
             return invalid_machine_request("machine request must be an object");
