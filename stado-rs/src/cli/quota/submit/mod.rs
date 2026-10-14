@@ -105,12 +105,17 @@ pub(super) async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(),
     // CLI surfaces only the billing-decline → escalation rows.
     let relevant: Vec<&Value> = results
         .iter()
-        .filter(|r| {
-            let action = r.get("action").and_then(Value::as_str).unwrap_or("");
-            action == "escalated"
-                || action == "error"
-                || (action == "dry_run"
-                    && r.get("would").and_then(Value::as_str) == Some("escalated"))
+        .filter(|r| match r.get("action").and_then(Value::as_str) {
+            // A row without its action cannot be placed; read as "", it was
+            // dropped and could leave "(no billing-decline tickets)" printed
+            // over a ticket nobody saw. It is shown with its action unreported.
+            None => true,
+            Some(action) => {
+                action == "escalated"
+                    || action == "error"
+                    || (action == "dry_run"
+                        && r.get("would").and_then(Value::as_str) == Some("escalated"))
+            }
         })
         .collect();
     if relevant.is_empty() {
