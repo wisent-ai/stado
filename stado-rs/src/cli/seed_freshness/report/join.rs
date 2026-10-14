@@ -17,23 +17,27 @@ pub fn attempts_of(evidence: &Value, login_item: &str) -> Result<Vec<Attempt>, S
         .get("attempts")
         .and_then(Value::as_array)
         .ok_or_else(|| "the sign-in evidence carries no attempts list".to_string())?;
-    Ok(rows
-        .iter()
+    // An attempt is placed in time and judged by its result; a row without
+    // them is refused naming the account, never read as an attempt at the
+    // epoch with an empty result.
+    rows.iter()
         .filter(|row| row.get("login_item").and_then(Value::as_str) == Some(login_item))
         .map(|row| {
             let flag = |name: &str| row.get(name).and_then(Value::as_bool).unwrap_or(false);
-            Attempt {
-                at: row
-                    .get("at")
+            let text = |name: &str| {
+                row.get(name)
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                at_ms: row.get("at_ms").and_then(Value::as_i64).unwrap_or(0),
-                result: row
-                    .get("result")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        format!("a sign-in attempt for {login_item} states no {name}: {row}")
+                    })
+            };
+            Ok(Attempt {
+                at: text("at")?,
+                at_ms: row.get("at_ms").and_then(Value::as_i64).ok_or_else(|| {
+                    format!("a sign-in attempt for {login_item} states no at_ms: {row}")
+                })?,
+                result: text("result")?,
                 code_submitted: flag("code_submitted"),
                 code_rejected: flag("code_rejected"),
                 locked_out: flag("locked_out"),
@@ -49,9 +53,9 @@ pub fn attempts_of(evidence: &Value, login_item: &str) -> Result<Vec<Attempt>, S
                             .collect()
                     })
                     .unwrap_or_default(),
-            }
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Join the vault sweep and the attempt evidence into one report.
