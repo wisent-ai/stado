@@ -198,7 +198,11 @@ pub(crate) fn end(key: u64) -> usize {
 
 /// The waits this host's resolver has published: none when no resolver has
 /// published any yet, every one when the file is there, and the file's own
-/// failure when it is there and cannot be read.
+/// failure when it is there and cannot be read. A list whose resolver has
+/// exited names connections that went with it: the kernel closed them when
+/// it ended, so nothing a request sends now stands behind them; a resolver
+/// that starts again clears the list itself ([`start`]). With no published
+/// state to name the writer, the list is read as it is.
 fn published() -> Result<Vec<WaitingOpen>, String> {
     let Some(path) = waiting_path() else {
         return Ok(Vec::new());
@@ -213,6 +217,11 @@ fn published() -> Result<Vec<WaitingOpen>, String> {
             ))
         }
     };
+    if let Some(state) = super::published::published_state() {
+        if !super::published::publisher_running(&state) {
+            return Ok(Vec::new());
+        }
+    }
     serde_json::from_str(&body).map_err(|error| {
         format!(
             "the resolver's waiting list at {} is not the list this build writes: {error}",
