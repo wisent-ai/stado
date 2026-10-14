@@ -98,11 +98,17 @@ pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
     // Endpoints: explicit map wins; `port` is the loopback shorthand for the
     // declared host. The directory contract requires at least the active
     // host's endpoint, so neither present is an author error, not a default.
-    let mut endpoints = value
-        .get("endpoints")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    // An 'endpoints' that is not a map was read as no endpoints, and the
+    // 'port' shorthand then stood in for what the author declared.
+    let mut endpoints = match value.get("endpoints") {
+        None => serde_json::Map::new(),
+        Some(Value::Object(endpoints)) => endpoints.clone(),
+        Some(other) => {
+            return Err(CmdError::usage(format!(
+                "{file}: 'endpoints' must map each host to its endpoint, got {other}"
+            )))
+        }
+    };
     if let (Some(port), false) = (
         value.get("port").and_then(Value::as_u64),
         endpoints.contains_key(host),
