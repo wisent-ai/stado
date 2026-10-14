@@ -49,15 +49,24 @@ const MANAGED_VERSIONS: &str = "managed_versions";
 const STADO_BINARY: &str = "stado";
 
 /// Hosts whose declared Stado is older than `GRANTS_SINCE`, or declares none.
-fn hosts_behind(document: &Value) -> Vec<String> {
-    let mut out = Vec::new();
-    for target in document
+///
+/// A registry without a targets list, or a target naming no name, is a host
+/// whose Stado nobody can read: read as none, a document missing its targets
+/// passed as one where every host already reads `grants`.
+fn hosts_behind(document: &Value) -> Result<Vec<String>, CmdError> {
+    let targets = document
         .get("targets")
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
+        .ok_or_else(|| {
+            CmdError::refused(
+                "the registry carries no targets list, so which hosts can read the service \
+                 directory is not known; the registry was not changed",
+            )
+        })?;
+    let mut out = Vec::new();
+    for target in targets {
         let Some(name) = target.get("name").and_then(Value::as_str) else {
+            out.push(format!("a target naming no name ({target})"));
             continue;
         };
         let declared = target
@@ -72,7 +81,7 @@ fn hosts_behind(document: &Value) -> Vec<String> {
             });
         }
     }
-    out
+    Ok(out)
 }
 
 /// Whether `installed` is at least `required`, comparing `X.Y.Z` numerically.
@@ -111,7 +120,7 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
         .ok_or_else(|| crate::cli::registry::registry_absent(store.location()))?;
     let mut document: Value = serde_json::from_str(&blob.content)?;
     if declares_grants(path) {
-        let behind = hosts_behind(&document);
+        let behind = hosts_behind(&document)?;
         if !behind.is_empty() {
             return Err(CmdError::refused(format!(
                 "declaring `{GRANTS_FIELD}` would make this registry unreadable for {} host(s) \
