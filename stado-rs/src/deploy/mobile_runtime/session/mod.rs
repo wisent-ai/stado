@@ -52,18 +52,26 @@ pub async fn verify(
     let parsed: Value = serde_json::from_str(line).map_err(|error| {
         DeployError::unreachable(format!("runtime script returned bad JSON: {error}"))
     })?;
-    let field = |name: &str| {
+    // The script prints every field, empty when the host has nothing there.
+    // A field that is absent or not text is a report this reader does not
+    // understand, so it is refused rather than read as a missing component.
+    let field = |name: &str| -> Result<String, DeployError> {
         parsed
             .get(name)
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
+            .map(str::to_string)
+            .ok_or_else(|| {
+                DeployError::unreachable(format!(
+                    "{}: runtime report carries no text field {name}: {line}",
+                    target.name
+                ))
+            })
     };
 
     let mut components = Vec::new();
 
-    let appium_path = field("appium_path");
-    let appium_version = field("appium_version");
+    let appium_path = field("appium_path")?;
+    let appium_version = field("appium_version")?;
     // The declaration is an exact version, so a present-but-different Appium
     // is `drifted` and not `present`: a placement pinned to a driver protocol
     // that its server does not speak fails at the first command, which is the
@@ -89,7 +97,7 @@ pub async fn verify(
         state: appium_state.to_string(),
     });
 
-    let installed_drivers = field("drivers");
+    let installed_drivers = field("drivers")?;
     for driver in &declared.drivers {
         // The listing's columns differ between Appium 2 and 3, so this reads
         // the one shape both spell the same way: `<name>@<version>`. Reporting
@@ -121,8 +129,8 @@ pub async fn verify(
     }
 
     if declared.platform_tools {
-        let adb_path = field("adb_path");
-        let adb_version = field("adb_version");
+        let adb_path = field("adb_path")?;
+        let adb_version = field("adb_version")?;
         let adb_state = if adb_path.is_empty() {
             COMPONENT_MISSING
         } else if adb_version.is_empty() {
@@ -147,7 +155,7 @@ pub async fn verify(
     // says nothing about them cannot fail on them, and a report that omitted
     // them would let a host keep a driver the server refuses to host, waiting
     // to deadlock npm for the next install into that tree.
-    for (driver, server_said) in incompatible_drivers(&field("warnings")) {
+    for (driver, server_said) in incompatible_drivers(&field("warnings")?) {
         if declared.drivers.contains(&driver) {
             continue;
         }
