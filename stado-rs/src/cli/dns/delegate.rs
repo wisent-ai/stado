@@ -32,22 +32,52 @@ const CARRIED: &[&str] = &["A", "AAAA", "CNAME", "MX", "TXT", "NS", "ALIAS"];
 /// The Cloudflare TTL for "automatic".
 const AUTOMATIC_TTL: u32 = 1;
 
-fn entry(zone: &Zone, record: &Record) -> Result<ZoneEntry, String> {
+/// Why one registrar record cannot become a Cloudflare entry.
+enum Unmovable {
+    /// Cloudflare holds no record of this type.
+    Uncarried(String),
+    /// The registrar stated a value this move cannot read.
+    Unreadable(String),
+}
+
+fn entry(zone: &Zone, record: &Record) -> Result<ZoneEntry, Unmovable> {
     let record_type = record.record_type.to_ascii_uppercase();
     if !CARRIED.contains(&record_type.as_str()) {
-        return Err(format!(
+        return Err(Unmovable::Uncarried(format!(
             "{} {} {}",
             record.record_type, record.host, record.address
-        ));
+        )));
     }
     let name = if record.host == "@" {
         zone.name.clone()
     } else {
         format!("{}.{}", record.host, zone.name)
     };
-    let priority = (record_type == "MX")
-        .then(|| record.mx_pref.trim().parse::<u16>().ok())
-        .flatten();
+    // An MX record's preference and any record's TTL are carried as stated.
+    // Unreadable, the preference was dropped and the TTL made automatic, so
+    // the moved zone served a record the registrar never held.
+    let priority = if record_type == "MX" {
+        let Ok(preference) = record.mx_pref.trim().parse::<u16>() else {
+            return Err(Unmovable::Unreadable(format!(
+                "MX {} {} has preference {:?}",
+                record.host, record.address, record.mx_pref
+            )));
+        };
+        Some(preference)
+    } else {
+        None
+    };
+    // The registrar leaves the TTL out when it applies its own default, which
+    // is what Cloudflare's automatic TTL is.
+    let ttl = match record.ttl.trim() {
+        "" => AUTOMATIC_TTL,
+        stated => stated.parse().map_err(|_| {
+            Unmovable::Unreadable(format!(
+                "{} {} {} has TTL {:?}",
+                record.record_type, record.host, record.address, record.ttl
+            ))
+        })?,
+    };
     Ok(ZoneEntry {
         name,
         record_type: if record_type == "ALIAS" {
@@ -57,7 +87,7 @@ fn entry(zone: &Zone, record: &Record) -> Result<ZoneEntry, String> {
         },
         content: record.address.trim_end_matches('.').to_string(),
         priority,
-        ttl: record.ttl.trim().parse().unwrap_or(AUTOMATIC_TTL),
+        ttl,
     })
 }
 
@@ -89,10 +119,12 @@ pub(super) async fn delegate(
     let records = get_hosts(&registrar, &zone).await?;
     let mut entries = Vec::with_capacity(records.len());
     let mut uncarried = Vec::new();
+    let mut unreadable = Vec::new();
     for record in &records {
         match entry(&zone, record) {
             Ok(entry) => entries.push(entry),
-            Err(described) => uncarried.push(described),
+            Err(Unmovable::Uncarried(described)) => uncarried.push(described),
+            Err(Unmovable::Unreadable(described)) => unreadable.push(described),
         }
     }
     if !uncarried.is_empty() {
@@ -101,6 +133,14 @@ pub(super) async fn delegate(
              with records Cloudflare holds, then run this again. Nothing was written.",
             zone.name,
             uncarried.join(", ")
+        )));
+    }
+    if !unreadable.is_empty() {
+        return Err(CmdError::refused(format!(
+            "{} was not moved: the registrar states values this move cannot read: {}; correct \
+             them in the zone, then run this again. Nothing was written.",
+            zone.name,
+            unreadable.join(", ")
         )));
     }
 
