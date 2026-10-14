@@ -21,12 +21,14 @@ pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdErro
             name,
             host,
             ports,
+            wait,
             json,
         } => {
             serving(ServingOptions {
                 name: &name,
                 host: &host,
                 ports: &ports,
+                wait,
                 as_json: json,
             })
             .await

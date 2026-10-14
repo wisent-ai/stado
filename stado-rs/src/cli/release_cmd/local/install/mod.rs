@@ -1,8 +1,10 @@
 //! `stado release local install` — verify the delivered archive, install one
 //! member, and reconcile every reader of the name it replaced.
 
+mod activation;
 mod attestation;
 mod config_gate;
+mod unit_migration;
 
 use std::path::{Path, PathBuf};
 
@@ -188,12 +190,24 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // Stado could read, repair or roll itself back. So the incoming binary
     // validates the configuration first, after its own migrations, and one it
     // refuses is not installed.
-    if stado_version.is_some() && !root_already_current {
-        if let Err(refusal) = config_gate::admit(&staged, &name) {
-            discard_stages(&staged, release_version_stage.as_deref());
-            return Err(refusal);
+    let resident_host = if stado_version.is_some() {
+        let candidate = if root_already_current {
+            &destination
+        } else {
+            &staged
+        };
+        let admission = config_gate::admit(candidate, &name)
+            .and_then(|()| unit_migration::admit(candidate, &name, &home));
+        match admission {
+            Ok(host) => host,
+            Err(refusal) => {
+                discard_stages(&staged, release_version_stage.as_deref());
+                return Err(refusal);
+            }
         }
-    }
+    } else {
+        None
+    };
     // A program installed products call is replaced only by one that still
     // answers every command they were recorded running; the same check
     // `stado product install` makes before it places a program.
@@ -218,54 +232,15 @@ pub(in crate::cli::release_cmd) async fn install_archive(
             &staged
         },
     );
-    let mut in_flight_log = |message: &str| println!("{VERB}: {message}");
-    let in_flight = crate::self_update::ReplacementInFlight::begin(
+    activation::place(
         &directory,
-        std::slice::from_ref(&name),
-        &mut in_flight_log,
-    );
-    if !root_already_current {
-        std::fs::rename(&staged, &destination).map_err(|error| {
-            CmdError::click(format!("cannot install {name}: {error}"))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
-    }
-    if let Some(staged_version) = release_version_stage {
-        let installed_version = directory.join("stado.release-version");
-        std::fs::rename(&staged_version, &installed_version).map_err(|error| {
-            CmdError::click(format!(
-                "cannot activate the installed Stado release coordinate: {error}"
-            ))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
-    }
-    // The handshake above is the queue agent's, and only the queue agent
-    // implements it: `providers::local::agent` is the sole reader of
-    // `stado.release-version`. Every other unit launched from this directory
-    // — the host's space-reclaim watch, the resolver, the health beacon — keeps
-    // executing the inode it started with, for as long as it lives, because
-    // nothing tells launchd or systemd that the file underneath changed.
-    //
-    // Installation is not activation: every non-agent reader must execute the
-    // delivered image before it can consume that release's configuration schema.
-    //
-    // In place, and never the agent: see `self_update::recycle_replaced_units`.
-    // Run this image check even when the pathname already matches the delivered
-    // bytes. A prior attempt can replace the root and fail after recycling only
-    // some global readers; matching processes are skipped, while any remaining
-    // process on the replaced inode still has to converge before resume succeeds.
-    let mut recycle_log = |message: &str| println!("{message}");
-    crate::self_update::recycle_replaced_units(
-        VERB,
-        &directory,
-        std::slice::from_ref(&name),
-        &mut recycle_log,
+        &name,
+        &staged,
+        release_version_stage.as_deref(),
+        root_already_current,
+        resident_host.as_deref(),
     )
-    .await
-    // Every way the recycle fails is the host's service manager or process
-    // table refusing to restart a reader: the host's outage.
-    .map_err(CmdError::unreachable)?;
-    drop(in_flight);
+    .await?;
     if stado_version.is_some() {
         converge_service_local_stado_readers(VERB, &destination, &reader_archive).await?;
     }

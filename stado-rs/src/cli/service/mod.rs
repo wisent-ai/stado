@@ -64,6 +64,7 @@ pub(crate) use lifecycle::deploy::catalog::{
 };
 pub(crate) use lifecycle::release::release_pipeline_product;
 pub(crate) use lifecycle::release::unit::{host_sudo_password, restart, restart_quietly};
+pub(crate) use reports::status::last_failure;
 pub(crate) use runtime::secrets::service_secret;
 
 // ---------------------------------------------------------------------------

@@ -15,8 +15,14 @@ pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError>
         name,
         host,
         ports,
+        wait,
         as_json,
     } = options;
+    if wait && !ports.is_empty() {
+        return Err(CmdError::usage(
+            "service serving --wait reads the directory's declared port; omit --port",
+        ));
+    }
     let services = declared_for_serving(name, host).await?;
     let runner = production_runner();
     let target = crate::cli::canonical_host(host).await?;
@@ -33,6 +39,22 @@ pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError>
     let mut failures = Vec::new();
 
     for declared in &services {
+        if wait {
+            use crate::cli::service::lifecycle::release::awaited::{until_serving, Served};
+            match until_serving(&target, declared, &runner).await? {
+                Served::Serving => {}
+                Served::NoDeclaredPort => {
+                    return Err(CmdError::refused(format!(
+                        "{host}: {} has no declared port to await",
+                        declared.unit_id()
+                    )));
+                }
+                Served::Failed(why) => {
+                    let evidence = crate::cli::service::last_failure(declared).await;
+                    return Err(CmdError::unreachable(format!("{why}; {evidence}")));
+                }
+            }
+        }
         let mut wanted: Vec<u16> = ports.to_vec();
         if wanted.is_empty() {
             if let Some(port) = directory_port(name, host).await? {

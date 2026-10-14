@@ -15,6 +15,7 @@ pub(crate) struct ServingOptions<'a> {
     pub(crate) name: &'a str,
     pub(crate) host: &'a str,
     pub(crate) ports: &'a [u16],
+    pub(crate) wait: bool,
     pub(crate) as_json: bool,
 }
 

@@ -16,7 +16,9 @@
 //! meanwhile.
 
 mod after;
+mod perform;
 pub(in crate::install) use after::{after_install, lock_surface};
+pub use perform::perform;
 
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;

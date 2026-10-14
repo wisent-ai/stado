@@ -51,6 +51,11 @@ pub enum EnvironmentCommands {
         /// used.
         #[arg(long = "port")]
         ports: Vec<u16>,
+        /// Wait for the declared unit's own process to serve its directory
+        /// port, or refuse when it exits or settles on another port. No
+        /// elapsed-time guess; incompatible with an explicit --port.
+        #[arg(long)]
+        wait: bool,
         #[arg(long)]
         json: bool,
     },

@@ -33,6 +33,7 @@ mod check;
 mod gates;
 mod inputs;
 mod lockfile;
+mod units;
 mod web;
 
 use std::path::Path;
@@ -40,10 +41,26 @@ use std::process::Command;
 
 pub use self::check::check;
 pub(crate) use self::check::{check_revision, check_source};
+pub(crate) use units::check as units;
 
 pub(crate) use self::gates::Selection;
 use self::gates::{declared_gates, selected_gates, Declaration};
 use crate::cli::CmdError;
+
+/// Validate an arbitrary Stado argv with this binary's root parser without
+/// dispatching it. A release checks the unit it would restart this way while
+/// the previous executable still serves the host.
+pub fn parse(argv: &[String]) -> Result<(), CmdError> {
+    use clap::{CommandFactory, FromArgMatches};
+
+    let matches = crate::cli::Cli::command()
+        .try_get_matches_from(std::iter::once("stado").chain(argv.iter().map(String::as_str)))
+        .map_err(|error| CmdError::refused(format!("unit argv rejected: {error}")))?;
+    crate::cli::Cli::from_arg_matches(&matches)
+        .map_err(|error| CmdError::refused(format!("unit argv rejected: {error}")))?;
+    println!("accepted: stado {}", argv.join(" "));
+    Ok(())
+}
 
 /// The argument that makes a formatter report instead of write.
 const CHECK_FLAG: &str = "--check";

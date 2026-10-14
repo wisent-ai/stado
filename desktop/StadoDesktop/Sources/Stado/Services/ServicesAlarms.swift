@@ -23,7 +23,29 @@ extension ServicesView {
                         ? "One managed service reports failed"
                         : "\(fleetStore.failedServices.count.formatted(.number)) managed services report failed",
                     detail: fleetStore.failedServices
-                        .map { "\($0.host) \($0.unitID.isEmpty ? $0.name : $0.unitID)" }
+                        .map { entry in
+                            let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
+                            var parts = ["\(entry.host) \(unit)"]
+                            if let failure = entry.failure {
+                                if let exit = failure.lastExit {
+                                    parts.append("last launchd exit \(exit)")
+                                } else {
+                                    parts.append("service status did not read launchctl's last exit for \(unit) on \(entry.host)")
+                                }
+                                if let line = failure.errorLines.last {
+                                    parts.append("last stderr: \(line)")
+                                } else {
+                                    parts.append("service status did not read the last stderr line for \(unit) on \(entry.host)")
+                                }
+                                if let note = failure.note {
+                                    parts.append(note)
+                                }
+                            }
+                            if let error = entry.failureReadError {
+                                parts.append("service status could not read \(unit) on \(entry.host): \(error)")
+                            }
+                            return parts.joined(separator: "; ")
+                        }
                         .joined(separator: "\n"),
                     actions: [
                         WisentAction("Show them", symbol: "arrow.down.right") {

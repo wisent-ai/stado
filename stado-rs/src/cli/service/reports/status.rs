@@ -9,16 +9,14 @@ pub(crate) async fn status(name: &str, lines: Option<usize>, json: bool) -> Resu
     if rows.is_empty() {
         return Err(unmanaged(name, None));
     }
-    // A `failed` row is the beacon saying "it died" — more often than not
-    // with an empty detail. The why lives on the host: launchd's last exit
-    // status, and the stderr the unit wrote before it went. Gather it
-    // best-effort over the read-only channels; `status` must still answer
-    // when the host cannot.
+    // A failed unit's own final stderr line and exit are part of status,
+    // even when the reader did not request a larger log window. The beacon
+    // can be stale, but a host read names the process that actually exited.
     let runner = production_runner();
     let mut failures: Vec<FailureEvidence> = Vec::new();
     for row in &rows {
         if row.state == service::STATE_FAILED {
-            failures.push(failure_evidence(row, lines, &runner).await);
+            failures.push(failure_evidence(&row.service, lines, &runner).await);
         }
     }
     render_status(&rows, json, &failures)
@@ -39,16 +37,16 @@ fn launchctl_last_exit(stdout: &str, label: &str) -> Option<String> {
 }
 
 async fn failure_evidence(
-    row: &ServiceStatus,
+    declared: &ManagedService,
     lines: Option<usize>,
     runner: &crate::deploy::Runner,
 ) -> FailureEvidence {
-    let unit = row.service.unit_id().to_string();
+    let unit = declared.unit_id().to_string();
     let mut evidence = FailureEvidence {
-        host: row.service.host.clone(),
+        host: declared.host.clone(),
         unit: unit.clone(),
         last_exit: None,
-        stderr_read: lines.is_some(),
+        stderr_read: true,
         error_origin: None,
         error_lines: Vec::new(),
         note: None,
@@ -56,7 +54,7 @@ async fn failure_evidence(
     // The last exit status rides the approved read-only allowlist: the
     // exact `launchctl list` entry, never a shell.
     let words = vec!["launchctl".to_string(), "list".to_string()];
-    match host_exec::exec_host(&row.service.host, &words, runner).await {
+    match host_exec::exec_host(&declared.host, &words, runner).await {
         Ok(report)
             if report.get("status").and_then(Value::as_str) == Some(host_exec::OK_STATUS) =>
         {
@@ -76,21 +74,62 @@ async fn failure_evidence(
         }
         Err(exc) => evidence.push_note(format!("last exit unreadable: {exc}")),
     }
-    // The stderr tail comes from the same logs path `service logs` uses, and
-    // only as far back as the reader asked: `tail_logs` splits its window
-    // between stdout and stderr, so twice the lines gives stderr exactly them.
-    let Some(lines) = lines else {
-        return evidence;
+    // The default is the last stderr line; --lines requests a larger window.
+    // tail_logs divides its window between stdout and stderr.
+    let requested = match lines {
+        Some(lines) => lines,
+        None => std::num::NonZeroUsize::MIN.get(),
     };
-    match crate::cli::canonical_host(&row.service.host).await {
-        Ok(target) => match service::tail_logs(&target, &row.service, 2 * lines, runner).await {
+    match crate::cli::canonical_host(&declared.host).await {
+        Ok(target) => match service::tail_logs(
+            &target,
+            declared,
+            requested.saturating_add(requested),
+            runner,
+        )
+        .await
+        {
             Ok(log) => {
                 evidence.error_origin = log.error_origin;
-                evidence.error_lines = log.error_body.lines().map(str::to_string).collect();
+                evidence.error_lines = if lines.is_some() {
+                    log.error_body.lines().map(str::to_string).collect()
+                } else {
+                    log.error_body
+                        .lines()
+                        .last()
+                        .map(str::to_string)
+                        .into_iter()
+                        .collect()
+                };
             }
             Err(exc) => evidence.push_note(format!("stderr unreadable: {exc}")),
         },
         Err(exc) => evidence.push_note(format!("stderr unreadable: {exc}")),
     }
     evidence
+}
+
+/// Native exit and stderr evidence independent of a healthy beacon row.
+/// Activation reads this before it restores a predecessor.
+pub(crate) async fn last_failure(declared: &ManagedService) -> String {
+    let evidence = failure_evidence(declared, None, &production_runner()).await;
+    let mut parts = Vec::new();
+    match evidence.last_exit {
+        Some(exit) => parts.push(format!("last launchctl exit {exit}")),
+        None => parts.push(format!(
+            "{}: launchctl did not report the last exit",
+            declared.unit_id()
+        )),
+    }
+    match evidence.error_lines.last() {
+        Some(line) => parts.push(format!("last stderr: {line}")),
+        None => parts.push(format!(
+            "{}: stderr had no readable last line",
+            declared.unit_id()
+        )),
+    }
+    if let Some(note) = evidence.note {
+        parts.push(note);
+    }
+    parts.join("; ")
 }

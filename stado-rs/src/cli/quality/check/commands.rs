@@ -1,5 +1,4 @@
 //! Audit the CLI artifact built from the exact committed source being checked.
-//! Help is evidence from the executable, not a second maintained command list.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
@@ -250,6 +249,7 @@ pub(super) fn check(
     for binary in staged_binaries(&output, &declared.stage)? {
         let mut path = Vec::new();
         discover(&binary, &mut path, None, &mut command_tree)?;
+        super::super::units::qualify(&binary, declared, report)?;
     }
     let prompt = format!(
         "Judge the real command tree below using these CLI rules. Refuse commands named for one \

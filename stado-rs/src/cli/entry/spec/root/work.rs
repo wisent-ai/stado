@@ -106,6 +106,25 @@ pub(crate) struct AgentOptions {
 /// The `format` gates a product declares, read or applied from a checkout.
 #[derive(Subcommand)]
 pub(crate) enum QualityCommands {
+    /// Parse a command line with this exact binary without running it.
+    /// Install and release admission use this to check unit argv before
+    /// replacing a process's executable.
+    Parse {
+        #[arg(last = true, required = true)]
+        argv: Vec<String>,
+    },
+    /// Check every installed managed unit that invokes PROGRAM against the
+    /// candidate's own parser, on one host or the whole registry.
+    Units {
+        #[arg(long)]
+        candidate: std::path::PathBuf,
+        #[arg(long)]
+        program: String,
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        platform: Option<String>,
+    },
     /// Format this checkout the way its declared gates of kind `format` read
     /// it. A web product, whose `format` gate is `stado web quality`, is
     /// refused: that gate runs the product's own scripts and names no

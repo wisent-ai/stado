@@ -1,3 +1,6 @@
+mod activation;
+pub(super) use activation::Activation;
+
 use crate::{
     catalog::text,
     common::{capture, checked, stado},

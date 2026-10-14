@@ -13,12 +13,40 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 pub fn rollback(runtime: &Runtime, product: &Value, surface: &str) -> Result<ProductState> {
+    rollback_inner(runtime, product, surface, None)
+}
+
+/// A failed activation may restore only the receipt it just placed. The
+/// after-install phase releases the writer, so another install can win it
+/// before activation returns; never roll that newer installation back.
+pub(in crate::install) fn rollback_expected(
+    runtime: &Runtime,
+    product: &Value,
+    surface: &str,
+    expected: &ProductState,
+) -> Result<ProductState> {
+    rollback_inner(runtime, product, surface, Some(expected))
+}
+
+fn rollback_inner(
+    runtime: &Runtime,
+    product: &Value,
+    surface: &str,
+    expected: Option<&ProductState>,
+) -> Result<ProductState> {
     let id = text(product, "id")?;
     let _writer =
         runtime.surface_lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
     let _ownership = ownership::writer(runtime)?;
     let mut current = ProductState::load(runtime, id, surface)?
         .context("product surface has no recorded installation")?;
+    if let Some(expected) = expected {
+        if serde_json::to_value(&current)? != serde_json::to_value(expected)? {
+            bail!(
+                "{id}/{surface}: another installation recorded itself before rollback; the newer receipt was left untouched"
+            );
+        }
+    }
     if (current.status == crate::state::InstallStatus::RolledBack
         || (current.status == crate::state::InstallStatus::Absent && current.previous.is_none()))
         && current.extra.contains_key("rollback")
