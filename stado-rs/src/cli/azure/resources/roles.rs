@@ -42,11 +42,19 @@ pub(super) async fn ensure_role(
     let (status, body) =
         super::discovery::arm_answer(response, &format!("assigning {role_name} on {scope}"))
             .await?;
-    let error_code = body
-        .pointer("/error/code")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let ok = status.is_success() || error_code == "RoleAssignmentExists";
+    let error_code = body.pointer("/error/code").and_then(Value::as_str);
+    let ok = status.is_success() || error_code == Some("RoleAssignmentExists");
+    // A refusal Azure answered without its code or message is reported with
+    // the body it did answer, not with an empty code and a sentence of ours.
+    let error = if ok {
+        Value::Null
+    } else {
+        json!({
+            "code": error_code,
+            "message": body.pointer("/error/message").and_then(Value::as_str),
+            "answer": body,
+        })
+    };
     Ok(json!({
         "role": role_name,
         "scope": scope,
@@ -54,10 +62,7 @@ pub(super) async fn ensure_role(
         "ok": ok,
         "http_status": status.as_u16(),
         "outcome": if status.is_success() { "applied" } else if ok { "already_present" } else { "failed" },
-        "error": if ok { Value::Null } else { json!({
-            "code": error_code,
-            "message": body.pointer("/error/message").and_then(Value::as_str).unwrap_or("Azure role assignment failed")
-        }) }
+        "error": error,
     }))
 }
 
