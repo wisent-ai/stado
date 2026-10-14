@@ -70,7 +70,18 @@ pub(crate) async fn run_gui_automation(
             .await
         }
         "disable" => {
-            let bundle = plan.get("bundle").and_then(Value::as_str).unwrap_or("");
+            // An absent bundle disables only the driver's own grants; a
+            // bundle that is present but not text is refused, not read as
+            // absent.
+            let bundle = match plan.get("bundle") {
+                None | Some(Value::Null) => "",
+                Some(Value::String(bundle)) => bundle.as_str(),
+                Some(other) => {
+                    return Err(CmdError::usage(format!(
+                        "gui-automation plan bundle must be a bundle identifier, not {other}; fix the plan"
+                    )))
+                }
+            };
             crate::deploy::host_gui_automation::disable(&resolved, bundle, &runner).await
         }
         other => {
