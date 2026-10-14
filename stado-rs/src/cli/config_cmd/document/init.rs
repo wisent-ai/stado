@@ -64,7 +64,20 @@ pub(in crate::cli::config_cmd) fn init() -> Result<(), CmdError> {
         )
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let selected = std::env::var(config_file::FILE_ENV).unwrap_or_default();
+    // Unset is the default file; a selection that is not text is refused,
+    // where it was read as unset and the template went to the default file
+    // instead of the one the caller chose.
+    let selected = match std::env::var(config_file::FILE_ENV) {
+        Ok(selected) => selected,
+        Err(std::env::VarError::NotPresent) => String::new(),
+        Err(error) => {
+            return Err(CmdError::click(format!(
+                "{} cannot be read: {error}",
+                config_file::FILE_ENV
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config))
+        }
+    };
     let path = if selected.trim().is_empty() {
         std::path::Path::new(&home)
             .join(".stado")
