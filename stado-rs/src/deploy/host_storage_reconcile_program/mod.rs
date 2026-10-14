@@ -22,7 +22,9 @@ pub(super) type Step<T> = Result<T, String>;
 pub(super) struct Context {
     phase: String,
     tx: String,
-    owner_token: String,
+    /// The owner token the worker handed in; none when it handed none (the
+    /// owner read needs none), refused by the phases that prove ownership.
+    owner_token: Option<String>,
     /// The inherited, verified transaction lock; set only after its proof.
     lock_fd: Option<i32>,
     primary: String,
@@ -56,7 +58,15 @@ impl Context {
         Ok(Self {
             phase: phase.to_string(),
             tx: tx.to_string(),
-            owner_token: std::env::var("STADO_RECONCILE_OWNER_TOKEN").unwrap_or_default(),
+            owner_token: match std::env::var("STADO_RECONCILE_OWNER_TOKEN") {
+                Ok(token) => Some(token),
+                Err(std::env::VarError::NotPresent) => None,
+                Err(error) => {
+                    return Err(format!(
+                        "STADO_RECONCILE_OWNER_TOKEN cannot be read: {error}"
+                    ))
+                }
+            },
             lock_fd: None,
             primary: format!("{stado}/local-storage"),
             backup: format!("{stado}/local-backup"),

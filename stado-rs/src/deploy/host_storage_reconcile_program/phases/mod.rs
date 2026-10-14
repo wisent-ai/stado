@@ -53,13 +53,29 @@ fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
 fn prove_lock(context: &mut Context) -> Step<()> {
     let unavailable =
         |error: String| format!("resident transaction lock proof is unavailable: {error}");
+    // The descriptor and the token are what the worker hands in; each one it
+    // did not hand is named, where an absent descriptor read as "-1" and an
+    // absent token as "" and both said only that nothing authorized the effect.
     let fd: i32 = std::env::var("STADO_RECONCILE_LOCK_FD")
-        .unwrap_or_else(|_| "-1".to_string())
+        .map_err(|error| {
+            unavailable(format!(
+                "no lock descriptor was inherited: STADO_RECONCILE_LOCK_FD {error}"
+            ))
+        })?
         .parse()
-        .map_err(|error| unavailable(format!("{error}")))?;
-    if fd < 0 {
+        .map_err(|error| {
+            unavailable(format!(
+                "STADO_RECONCILE_LOCK_FD is not a descriptor: {error}"
+            ))
+        })?;
+    if fd.is_negative() {
         return Err(unavailable("no lock descriptor was inherited".to_string()));
     }
+    let Some(token) = context.owner_token.clone() else {
+        return Err(unavailable(
+            "no owner token was handed in: STADO_RECONCILE_OWNER_TOKEN is not set".to_string(),
+        ));
+    };
     // SAFETY: fstat only reads the status of the inherited descriptor.
     let descriptor = nix::sys::stat::fstat(unsafe { BorrowedFd::borrow_raw(fd) })
         .map_err(|error| unavailable(error.to_string()))?;
@@ -72,7 +88,7 @@ fn prove_lock(context: &mut Context) -> Step<()> {
     if !same_lock
         || text(&owner, "schema") != Some(OWNER_SCHEMA)
         || text(&owner, "transaction") != Some(context.tx.as_str())
-        || text(&owner, "token") != Some(context.owner_token.as_str())
+        || text(&owner, "token") != Some(token.as_str())
         || text(&owner, "status") != Some("executing")
     {
         return Err(
