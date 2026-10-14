@@ -126,7 +126,9 @@ async fn record_ensure_audit(
         "kind": record.kind,
         "path": record.path,
         "domain": outcome.domain_word(),
-        "pid": outcome.pid.trim().parse::<u32>().ok(),
+        "pid": outcome.pid_number().map_err(|detail| {
+            CmdError::click(format!("{}: {} ensured, but {detail}", record.host, record.name))
+        })?,
         "program": plan.program,
         "argv": plan.argv,
         "reason": reason,

@@ -286,13 +286,16 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     )
     .await?;
     predecessors.extend(after);
+    let pid = outcome.pid_number().map_err(|detail| {
+        CmdError::click(format!("{host}: {} ensured, but {detail}", options.name))
+    })?;
     Ok(EnsureReceipt {
         host,
         name: record.name.clone(),
         label: record.unit_id().to_string(),
         domain: outcome.domain_word().to_string(),
         action: outcome.action.clone(),
-        pid: outcome.pid.trim().parse::<u32>().ok(),
+        pid,
         audited,
         predecessors,
     })

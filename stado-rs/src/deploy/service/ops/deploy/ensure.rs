@@ -84,6 +84,12 @@ impl EnsureOutcome {
     pub fn changed(&self) -> bool {
         self.action != ACTION_ALREADY_CORRECT
     }
+
+    /// The pid the host reported under the unit: `None` when it reported
+    /// none, and a refusal quoting a value that is not a pid.
+    pub fn pid_number(&self) -> Result<Option<u32>, String> {
+        crate::deploy::host_channel::marker_number(&self.pid, "pid")
+    }
 }
 
 /// The unit file [`ensure_service`] addresses for this plan: the system
