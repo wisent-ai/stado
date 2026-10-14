@@ -139,15 +139,18 @@ pub async fn gcp_request_status(client: &CloudQuotasClient) -> Result<Vec<Value>
         // a missing or nothing-granted value is null in the row.
         let granted = json_i64(config.get("grantedValue")).filter(|v| v.is_positive());
         out.push(json!({
-            "name": pref.get("name").and_then(Value::as_str).unwrap_or(""),
-            "quota_id": pref.get("quotaId").and_then(Value::as_str).unwrap_or(""),
-            "gpu_family": dims.get("gpu_family").and_then(Value::as_str).unwrap_or(""),
-            "region": dims.get("region").and_then(Value::as_str).unwrap_or(""),
+            // Each field Google did not send stays null: read as "", a
+            // preference without a region or family looked like one Google
+            // named with nothing.
+            "name": pref.get("name").and_then(Value::as_str),
+            "quota_id": pref.get("quotaId").and_then(Value::as_str),
+            "gpu_family": dims.get("gpu_family").and_then(Value::as_str),
+            "region": dims.get("region").and_then(Value::as_str),
             "preferred_value": json_i64(config.get("preferredValue")),
             "granted_value": granted,
             "state": state,
-            "state_detail": config.get("stateDetail").and_then(Value::as_str).unwrap_or(""),
-            "create_time": pref.get("createTime").and_then(Value::as_str).unwrap_or(""),
+            "state_detail": config.get("stateDetail").and_then(Value::as_str),
+            "create_time": pref.get("createTime").and_then(Value::as_str),
         }));
     }
     Ok(out)
