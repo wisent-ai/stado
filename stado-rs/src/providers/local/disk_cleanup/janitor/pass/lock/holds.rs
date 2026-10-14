@@ -139,9 +139,13 @@ pub(crate) fn turn_request(state_dir: &Path) -> Result<Option<TurnRequest>, Jani
             )))
         }
     };
-    let request = serde_json::from_slice::<TurnRequest>(&body)
-        .ok()
-        .filter(|request| request.pid.is_some_and(pid_alive));
+    let decoded = serde_json::from_slice::<TurnRequest>(&body).map_err(|error| {
+        JanitorError::os(&format!(
+            "cannot parse the janitor turn request {}: {error}",
+            path.display()
+        ))
+    })?;
+    let request = Some(decoded).filter(|request| request.pid.is_some_and(pid_alive));
     if request.is_none() {
         if let Some(left) = crate::primitives::staging::remove(&path) {
             eprintln!("janitor: a turn request nobody stands behind stays: {left}");

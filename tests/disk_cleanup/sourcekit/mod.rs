@@ -122,6 +122,30 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
         refusal.contains("ownership was not established"),
         "{refusal}"
     );
+    let turn = native.state_dir().join("disk-cleanup-turn.json");
+    fs::write(&turn, b"{").expect("write interrupted turn record in isolated home");
+    let damaged = build
+        .output()
+        .expect("invoke build with damaged turn record");
+    let diagnostic = String::from_utf8_lossy(&damaged.stderr);
+    native.observe(
+        "unreadable cleanup turn",
+        json!({
+            "command": "stado product swift build", "status": damaged.status.code(),
+            "stdout": String::from_utf8_lossy(&damaged.stdout), "stderr": diagnostic
+        }),
+    );
+    assert!(
+        !damaged.status.success(),
+        "an unreadable turn cannot admit a build"
+    );
+    assert!(
+        diagnostic.contains(&turn.display().to_string()),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("cannot parse"), "{diagnostic}");
+    assert_eq!(fs::read(&turn).expect("retain damaged turn evidence"), b"{");
+    fs::remove_file(&turn).expect("remove only the test's damaged record");
     fs2::FileExt::unlock(&lock).expect("release isolated cleanup hold");
     let cache = native.home.join("checkout/target");
     native.cache(&cache);
