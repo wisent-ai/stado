@@ -80,11 +80,12 @@ pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Resu
     .map_err(refused)?;
 
     let fingerprints = pass.get("fingerprints").cloned().unwrap_or(Value::Null);
-    let unreadable = fingerprints
-        .get("unreadable")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or_default();
+    // A pass that names no `unreadable` list did not report one; read as an
+    // empty list it printed "0 unreadable", a count nobody made.
+    let unreadable = match fingerprints.get("unreadable").and_then(Value::as_array) {
+        Some(listed) => listed.len().to_string(),
+        None => "(unreadable not reported)".to_string(),
+    };
     if json_output {
         println!(
             "{}",
