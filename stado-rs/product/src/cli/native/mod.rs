@@ -17,12 +17,13 @@ pub(super) fn forwarded() -> Arg {
 /// compiler-specific command name.
 pub fn editor() -> Command {
     Command::new("editor")
-        .about("Serve editor build settings from a canonical product source")
+        .about("Serve editor build settings or inspect live workspace instances")
         .arg(value(
             "package-path",
-            "Package directory; defaults to the current directory",
+            "Canonical package directory; serve may use the initialization URI, status lists all when omitted",
         ))
-        .arg(Arg::new("operation").required(true).value_parser(["serve"]))
+        .arg(flag("json", "Print observed editor instances as JSON; status only"))
+        .arg(Arg::new("operation").required(true).value_parser(["serve", "status"]))
 }
 
 pub fn cargo() -> Command {

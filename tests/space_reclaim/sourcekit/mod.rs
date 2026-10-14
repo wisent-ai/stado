@@ -1,5 +1,6 @@
 //! A real editor protocol process stays responsive while the janitor reclaims
 //! an isolated volume. No compiler, mocked server or production cleanup runs.
+mod lifetime;
 use super::native::Native;
 use serde_json::{json, Value};
 use std::fs::{self, File};

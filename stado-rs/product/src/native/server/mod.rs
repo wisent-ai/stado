@@ -1,3 +1,5 @@
+mod instances;
+mod parent;
 mod settings;
 mod wire;
 use super::{index::commands::uri, protocol::*, source};
@@ -12,13 +14,31 @@ pub fn serve_editor(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i3
     let operation = arguments
         .get_one::<String>("operation")
         .context("editor operation is missing")?;
-    if operation != "serve" {
-        bail!("unsupported editor operation {operation}");
-    }
     let package = arguments
         .get_one::<String>("package-path")
         .map(PathBuf::from);
-    serve(runtime, package)
+    match operation.as_str() {
+        "serve" => {
+            if arguments.get_flag("json") {
+                bail!(
+                    "editor serve owns protocol stdio; --json is only supported by editor status"
+                );
+            }
+            serve(runtime, package)
+        }
+        "status" => {
+            let workspace = package
+                .map(|path| {
+                    path.canonicalize()
+                        .with_context(|| format!("resolve editor workspace {}", path.display()))
+                })
+                .transpose()?;
+            let report = instances::status(runtime, workspace.as_deref())?;
+            crate::common::emit(&report)?;
+            Ok(libc::EXIT_SUCCESS)
+        }
+        _ => bail!("unsupported editor operation {operation}"),
+    }
 }
 
 #[derive(Debug)]
@@ -38,6 +58,8 @@ struct Server<'a> {
     requested: Option<PathBuf>,
     package: Option<PathBuf>,
     settings: settings::Cache,
+    instance: Option<instances::Instance>,
+    parent_pid: libc::pid_t,
 }
 impl Server<'_> {
     fn request(&mut self, method: &str, parameters: &Value) -> Result<Value> {
@@ -54,6 +76,21 @@ impl Server<'_> {
                     .map_err(|_| anyhow::anyhow!("invalid local native workspace URI: {root}"))
             })?;
             let package = source::package(self.runtime, &requested)?.path;
+            if let Some(instance) = &self.instance {
+                if instance.workspace != package {
+                    bail!(
+                        "editor connection already owns {}; cannot initialize another workspace {}",
+                        instance.workspace.display(),
+                        package.display()
+                    );
+                }
+            } else {
+                self.instance = Some(instances::Instance::acquire(
+                    self.runtime,
+                    &package,
+                    self.parent_pid,
+                )?);
+            }
             self.package = Some(package.clone());
             self.settings.invalidate();
             return Ok(
@@ -128,11 +165,21 @@ impl Server<'_> {
 }
 
 pub fn serve(runtime: &Runtime, requested: Option<PathBuf>) -> Result<i32> {
+    let parent = parent::Parent::observe()?;
+    let instance = match requested.as_ref() {
+        Some(requested) => {
+            let package = source::package(runtime, requested)?.path;
+            Some(instances::Instance::acquire(runtime, &package, parent.pid)?)
+        }
+        None => None,
+    };
     let mut server = Server {
         runtime,
         requested,
         package: None,
         settings: settings::Cache::default(),
+        instance,
+        parent_pid: parent.pid,
     };
     let stdin = io::stdin();
     let stdout = io::stdout();
