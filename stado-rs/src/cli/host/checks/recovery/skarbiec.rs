@@ -69,8 +69,17 @@ pub(crate) async fn apply_skarbiec_audit_repair(target: &str) -> Result<Value, C
 /// markers, and refuses naming the marker when that is missing too, rather
 /// than probing an endpoint this function invented.
 async fn target_health_probes(target: &str) -> String {
-    let Ok(registry) = crate::cli::registry::read_registry().await else {
-        return String::new();
+    // A repair of Skarbiec must run while the registry, which may read
+    // through Skarbiec, cannot be read: the script then reads the target's
+    // own forward markers. That is said, not left for the operator to guess.
+    let registry = match crate::cli::registry::read_registry().await {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!(
+                "{target}: the registry could not be read ({error}); the repair reads the target's own forward markers for its health endpoints"
+            );
+            return String::new();
+        }
     };
     let Some(directory) = registry.service_directory.as_ref() else {
         return String::new();
