@@ -145,9 +145,18 @@ async fn field(
     item: &str,
     field: &str,
 ) -> Result<String, Error> {
+    // The credential read runs with this process's PATH; one that cannot be
+    // read is refused, where it was handed on empty and the vault CLI failed
+    // to start for a reason nobody saw.
+    let path = std::env::var("PATH").map_err(|error| {
+        Error::new(
+            "read credential field",
+            format!("PATH cannot be read: {error}"),
+        )
+    })?;
     let environment = [
         ("HOME", database.home.display().to_string()),
-        ("PATH", std::env::var("PATH").unwrap_or_default()),
+        ("PATH", path),
         ("TMPDIR", std::env::temp_dir().display().to_string()),
     ];
     let grant_file = database.token_file();

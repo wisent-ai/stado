@@ -44,7 +44,16 @@ pub(in crate::cli::web::builds) fn npm(
     variables: &[(String, String)],
 ) -> Result<(), CmdError> {
     let program = toolchain_program("npm");
-    let mut path = std::env::var("PATH").unwrap_or_default();
+    // Unset is no inherited PATH; one that is not text is refused, where it
+    // was read as unset and npm ran without the directories it named.
+    let mut path = match std::env::var("PATH") {
+        Ok(path) => path,
+        Err(std::env::VarError::NotPresent) => String::new(),
+        Err(error) => {
+            return Err(CmdError::click(format!("PATH cannot be read: {error}"))
+                .stating(crate::primitives::failure::FailureCode::Config))
+        }
+    };
     if let Some(directory) = PathBuf::from(&program).parent() {
         let directory = directory.to_string_lossy().into_owned();
         if !directory.is_empty() && !directory.starts_with("npm") {

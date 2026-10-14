@@ -39,10 +39,9 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
     let home = std::env::var("HOME").map_err(|error| error.to_string())?;
     let skarbiec = std::path::Path::new(&home).join(".stado/bin/skarbiec");
     let vault = std::path::Path::new(&home).join(".stado/skarbiec.vault.json");
-    let path = format!(
-        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{}",
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let inherited =
+        std::env::var("PATH").map_err(|error| format!("PATH cannot be read: {error}"))?;
+    let path = format!("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{inherited}");
     // The vault answers or the process exits; a keychain prompt on a loaded
     // host is not a failed read.
     let output = crate::wait::output_async(
