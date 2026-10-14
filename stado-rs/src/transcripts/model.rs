@@ -23,8 +23,9 @@ pub struct Finding {
     /// was rotated while transcripts kept every generation, so the newest is
     /// the only one worth restoring.
     pub distinct_values: usize,
-    /// Newest file modification time seen, ISO-8601, as the freshness signal.
-    pub newest_seen: String,
+    /// Newest file modification time seen, ISO-8601, as the freshness
+    /// signal; `None` when the file system could not say when it was written.
+    pub newest_seen: Option<String>,
     /// Files the name appeared in, newest first.
     pub sources: Vec<PathBuf>,
     /// Whether any sighting came from live runtime output.

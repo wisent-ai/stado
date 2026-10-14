@@ -20,16 +20,19 @@ fn modified_epoch(path: &Path) -> u64 {
         .unwrap_or_default()
 }
 
-/// When the file was last written, as UTC ISO-8601; empty when the file
-/// system cannot say. Formatted in process: spawning `date` once per file
-/// cost a process for each of tens of thousands of transcripts.
-pub(in crate::transcripts) fn modified_iso(path: &Path) -> String {
-    match fs::metadata(path).and_then(|meta| meta.modified()) {
-        Ok(time) => chrono::DateTime::<chrono::Utc>::from(time)
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string(),
-        Err(_) => String::new(),
-    }
+/// When the file was last written, as UTC ISO-8601; `None` when the file
+/// system cannot say, rather than an empty time read as one. Formatted in
+/// process: spawning `date` once per file cost a process for each of tens of
+/// thousands of transcripts.
+pub(in crate::transcripts) fn modified_iso(path: &Path) -> Option<String> {
+    fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .map(|time| {
+            chrono::DateTime::<chrono::Utc>::from(time)
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string()
+        })
 }
 
 /// Collect the files under `root`. A root that does not exist holds no

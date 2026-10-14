@@ -19,7 +19,7 @@ pub fn scan(include_file_quotes: bool) -> Vec<Finding> {
     struct Accumulator {
         occurrences: usize,
         values: Vec<String>,
-        newest: String,
+        newest: Option<String>,
         sources: Vec<PathBuf>,
         origin: Origin,
     }

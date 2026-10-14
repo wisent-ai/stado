@@ -79,7 +79,10 @@ pub(crate) async fn harvest(json: bool, restore: Option<&str>, all: bool) -> Res
                 finding.name.clone(),
                 finding.occurrences.to_string(),
                 finding.distinct_values.to_string(),
-                finding.newest_seen.clone(),
+                match &finding.newest_seen {
+                    Some(seen) => seen.clone(),
+                    None => "not reported".to_string(),
+                },
                 finding.sources.len().to_string(),
                 match finding.origin {
                     crate::transcripts::Origin::Runtime => "runtime".to_string(),
