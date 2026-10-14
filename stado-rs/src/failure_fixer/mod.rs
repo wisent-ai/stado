@@ -59,8 +59,13 @@ pub struct FailureRecord {
     pub failed_at: String,
 }
 
-/// Python `_parse_failed_blob`: absent/corrupt blobs become None; missing
-/// fields default to "".
+/// One `failed/<jid>.json` as a record, or `None` when it is absent or cannot
+/// be one. A record that is not JSON, or names no `job_id`, `command` or
+/// `failed_at`, is said on stderr with its path and left out: with an empty
+/// job id every such record shared one state file, with an empty failure
+/// time it was dropped by every `--since`, and with an empty command a fix
+/// was dispatched for nothing. `batch_id` and `error` may be absent; the
+/// prompt says so.
 async fn parse_failed_blob(
     store: &JobStorage,
     name: &str,
@@ -68,21 +73,33 @@ async fn parse_failed_blob(
     let Some(txt) = store.download_text(name).await? else {
         return Ok(None);
     };
-    let Ok(blob) = serde_json::from_str::<Value>(&txt) else {
+    let blob = match serde_json::from_str::<Value>(&txt) {
+        Ok(blob) => blob,
+        Err(error) => {
+            eprintln!("[failure-fixer] {name} is not a failure record: {error}");
+            return Ok(None);
+        }
+    };
+    let text = |key: &str| blob.get(key).and_then(Value::as_str).map(str::to_string);
+    let (Some(job_id), Some(command), Some(failed_at)) =
+        (text("job_id"), text("command"), text("failed_at"))
+    else {
+        eprintln!(
+            "[failure-fixer] {name} names no job_id, command or failed_at, so no fix can be \
+             dispatched or remembered for it"
+        );
         return Ok(None);
     };
-    let field = |key: &str| {
-        blob.get(key)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
+    let stated = |key: &str| match text(key) {
+        Some(value) => value,
+        None => format!("(the record names no {key})"),
     };
     Ok(Some(FailureRecord {
-        job_id: field("job_id"),
-        batch_id: field("batch_id"),
-        command: field("command"),
-        error: field("error"),
-        failed_at: field("failed_at"),
+        job_id,
+        batch_id: stated("batch_id"),
+        command,
+        error: stated("error"),
+        failed_at,
     }))
 }
 
