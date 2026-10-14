@@ -196,7 +196,8 @@ fn staged_binaries(
                 path.display()
             )));
         }
-        let execute = (libc::S_IXUSR | libc::S_IXGRP | libc::S_IXOTH) as u32;
+        use nix::sys::stat::Mode;
+        let execute = u32::from((Mode::S_IXUSR | Mode::S_IXGRP | Mode::S_IXOTH).bits());
         if metadata.is_file() && NonZeroU32::new(metadata.permissions().mode() & execute).is_some()
         {
             binaries.push(path);
