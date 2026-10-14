@@ -29,6 +29,7 @@
 //! Stdout is never written, so `--json` output is untouched.
 
 mod cancel;
+pub mod cycle;
 pub mod external;
 mod http;
 mod line;
@@ -90,6 +91,17 @@ pub struct Waiting {
 
 /// Say that a wait starts, before it starts.
 pub fn begin(kind: Kind, what: impl Display, place: impl Display) -> Waiting {
+    start(kind, what, place, None)
+}
+
+/// [`begin`], recording first the lock the wait awaits, when it awaits one,
+/// in the wait-for graph.
+fn start(
+    kind: Kind,
+    what: impl Display,
+    place: impl Display,
+    awaits: Option<&std::path::Path>,
+) -> Waiting {
     let id = format!(
         "{}-{}",
         std::process::id(),
@@ -105,7 +117,11 @@ pub fn begin(kind: Kind, what: impl Display, place: impl Display) -> Waiting {
         open: true,
     };
     let opening = waiting.open_line();
-    // In the register first: whoever reads the line can find the file.
+    // In the register first: whoever reads the line can find the file, and
+    // the lock it awaits.
+    if let Some(lock) = awaits {
+        cycle::record(&waiting.id, lock);
+    }
     open::opened(&waiting.id, &opening);
     line::write(&opening);
     waiting
@@ -158,6 +174,7 @@ impl Waiting {
             self.id
         ));
         open::closed(&self.id);
+        cycle::forget(&self.id);
     }
 
     /// The wait ended in a failure, for this cause.
@@ -182,6 +199,7 @@ impl Waiting {
     fn write_failure(&self, cause: &str) {
         line::write(&self.failure_line(cause));
         open::closed(&self.id);
+        cycle::forget(&self.id);
     }
 }
 
@@ -246,4 +264,36 @@ pub fn blocking<T, E: std::error::Error>(
 ) -> Result<T, E> {
     let waiting = begin(kind, what, place);
     waiting.settle(work())
+}
+
+/// [`blocking`] for a wait on the lock file `lock`, whose file names its
+/// holder (`"pid": <n>`). The wait is recorded in the wait-for graph while it
+/// stands; one that would close a cycle — the lock held, directly or through
+/// other lock waits, by this process or a process whose completion needs it
+/// — never starts, and the cycle is returned with every link named. A graph
+/// that cannot be read does not stop the wait; it is said beside its line.
+pub fn blocking_on_lock<T, E: std::error::Error>(
+    what: impl Display,
+    lock: &std::path::Path,
+    work: impl FnOnce() -> Result<T, E>,
+) -> Result<Result<T, E>, cycle::Cycle> {
+    match cycle::closed_by_waiting_on(lock) {
+        Ok(Some(cycle)) => {
+            line::write(&format!(
+                "czekanie odmowione: {}; gdzie: {}; przyczyna: {}",
+                line::field(&what.to_string()),
+                line::field(&lock.display().to_string()),
+                line::field(&cycle.to_string())
+            ));
+            return Err(cycle);
+        }
+        Ok(None) => {}
+        Err(unreadable) => line::write(&format!(
+            "graf czekan nieodczytany: {}; przyczyna: {}",
+            line::field(&lock.display().to_string()),
+            line::field(&unreadable)
+        )),
+    }
+    let waiting = start(Kind::Lock, what, lock.display(), Some(lock));
+    Ok(waiting.settle(work()))
 }

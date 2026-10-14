@@ -12,6 +12,7 @@ struct WaitsSection: View {
     @State private var receipt: OperatorCommandResult?
     @State private var problem: String?
     @State private var working = false
+    @State private var cycles: [String]?
 
     var body: some View {
         Section("Open waits on the Stado API host") {
@@ -35,6 +36,17 @@ struct WaitsSection: View {
                 LabeledContent("Ended by this reading", value: String(ended.count))
                 ForEach(ended, id: \.self) { line in
                     Text(line).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                }
+            }
+            Button("Read wait cycles") { Task { await readCycles() } }
+                .disabled(working || !fleetStore.isConfigured)
+            if let cycles {
+                LabeledContent("Lock-wait cycles", value: String(cycles.count))
+                if cycles.isEmpty {
+                    Text("No wait cycle stands among this host's lock waits.")
+                }
+                ForEach(cycles, id: \.self) { cycle in
+                    Text(cycle).font(WisentTypeScale.identifier()).foregroundStyle(WisentDesign.danger).textSelection(.enabled)
                 }
             }
             if let receipt {
@@ -87,6 +99,48 @@ struct WaitsSection: View {
             open = try Self.lines(openRows, section: "open")
             ended = try Self.lines(endedRows, section: "ended")
             register = directory
+        } catch {
+            guard generation == fleetStore.requestGeneration else { return }
+            problem = error.localizedDescription
+        }
+    }
+
+    /// `stado waits cycles --json`: each standing cycle as Stado names it.
+    /// The command exits non-zero when cycles stand and still prints them;
+    /// one that printed nothing failed before reading the graph, and its
+    /// message is the problem shown.
+    @MainActor
+    private func readCycles() async {
+        guard !working, let address = fleetStore.address else { return }
+        let generation = fleetStore.requestGeneration
+        working = true
+        problem = nil
+        defer { working = false }
+        do {
+            // Reading the graph removes the records of waits whose process
+            // no longer runs, so it is sent as a confirmed mutation.
+            let result = try await fleetStore.client.run(
+                arguments: ["waits", "cycles", "--json"], confirmsMutation: true, at: address,
+                authorizationToken: fleetStore.authorizationToken
+            )
+            guard generation == fleetStore.requestGeneration else { return }
+            receipt = result
+            cycles = nil
+            if !result.ok && result.standardOutput.isEmpty {
+                problem = result.message
+                return
+            }
+            guard let document = try JSONSerialization.jsonObject(with: Data(result.standardOutput.utf8)) as? [String: Any],
+                  let rows = document["cycles"] as? [[String: Any]]
+            else {
+                throw WaitsReadFailure("stado waits cycles --json answered a document without cycles: \(result.standardOutput)")
+            }
+            cycles = try rows.map { row in
+                guard let said = row["said"] as? String else {
+                    throw WaitsReadFailure("stado waits cycles --json listed a cycle without its text: \(row)")
+                }
+                return said
+            }
         } catch {
             guard generation == fleetStore.requestGeneration else { return }
             problem = error.localizedDescription

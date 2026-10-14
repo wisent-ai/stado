@@ -193,7 +193,7 @@ pub fn listed() -> Result<Listing, RegisterError> {
 /// Whether a process with this pid exists: signal 0 delivers nothing and
 /// answers whether it could be delivered (EPERM means it exists, owned by
 /// another user).
-fn running(pid: u32) -> bool {
+pub(crate) fn running(pid: u32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };

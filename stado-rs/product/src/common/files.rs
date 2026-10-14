@@ -186,12 +186,14 @@ fn take(path: &Path, mode: Take) -> Result<File> {
                 _ => format!("{holder} (it is placing files)"),
             },
         };
-        wait::blocking(
-            wait::Kind::Lock,
-            format!("the lock held by {held_by}"),
-            path.display(),
-            || file.lock_exclusive(),
-        )
+        // A wait whose lock is held, directly or through other lock waits,
+        // by this process or one that waits for it to end could only stand
+        // until someone killed a process by hand; it is refused at once
+        // with the whole cycle named.
+        wait::blocking_on_lock(format!("the lock held by {held_by}"), path, || {
+            file.lock_exclusive()
+        })
+        .with_context(|| format!("waiting for {} was refused", path.display()))?
         .with_context(|| format!("waiting for {} failed", path.display()))?;
     }
     let taken = chrono::Utc::now().to_rfc3339();

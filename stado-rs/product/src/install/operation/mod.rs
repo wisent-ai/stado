@@ -232,12 +232,12 @@ pub fn cancel(runtime: &Runtime, id: &str, surface: &str) -> Result<Value> {
         .map(stop)
         .collect();
     let file = File::open(&lock).with_context(|| format!("{} cannot be opened", lock.display()))?;
-    wait::blocking(
-        wait::Kind::Lock,
+    wait::blocking_on_lock(
         format!("the cancelled installation operation pid {pid} to let go of its lock"),
-        lock.display(),
+        &lock,
         || file.lock_exclusive(),
     )
+    .with_context(|| format!("waiting for {} was refused", lock.display()))?
     .with_context(|| {
         format!(
             "waiting for {} after cancelling pid {pid} failed",

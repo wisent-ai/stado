@@ -207,6 +207,10 @@ name = "storage-refusal-closed-port"
 path = "../tests/storage/refusal/closed_port.rs"
 
 [[test]]
+name = "wait-cycle-install-lock"
+path = "../tests/wait/cycle/install_lock.rs"
+
+[[test]]
 name = "quality-release-inputs"
 path = "../tests/quality/release_inputs.rs"
 

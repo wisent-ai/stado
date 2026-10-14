@@ -68,7 +68,8 @@ pub(crate) enum InstallationCommands {
     /// List the waits open on this machine, from the register every Stado
     /// wait keeps (`$STADO_WAITS_DIR` or ~/.stado/waits); a wait whose
     /// process no longer runs is reported ended and removed. `open`
-    /// registers a wait for another process; `close` removes one.
+    /// registers a wait for another process; `close` removes one; `cycles`
+    /// names every lock-wait cycle standing on this machine.
     Waits {
         #[command(subcommand)]
         action: Option<WaitsAction>,
@@ -137,6 +138,16 @@ pub(crate) enum WaitsAction {
     Close {
         id: String,
         /// Emit the answer as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Every cycle standing among this machine's lock waits: a process
+    /// waiting on a lock held, directly or through other lock waits, by a
+    /// process whose completion needs it. Each link names the process, its
+    /// command, the lock it waits on and who holds that lock. Fails with
+    /// the refusal status when any cycle stands.
+    Cycles {
+        /// Emit the cycles as JSON.
         #[arg(long)]
         json: bool,
     },
