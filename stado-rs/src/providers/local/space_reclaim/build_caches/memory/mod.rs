@@ -26,6 +26,8 @@
 //! longer found it; a pass that stopped early leaves the earlier memory.
 //! A memory that learned nothing new is not rewritten.
 
+pub(in crate::providers::local::space_reclaim) mod walk;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 

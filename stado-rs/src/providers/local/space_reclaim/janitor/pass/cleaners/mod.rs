@@ -3,7 +3,10 @@
 //! The rebuildable-cache cleaners run here; the store-backed ones — job work
 //! trees, job outputs, replica twins, release versions — run in [`store`].
 //! Time Machine's local snapshots go last, because what deleting them
-//! recovers is the blocks every other cleaner's deletions left pinned.
+//! recovers is the blocks every other cleaner's deletions left pinned. The
+//! build-cache walk is not here: it reads the whole home, so it runs before
+//! the pass takes the exclusive cleanup lock and takes that lock only for
+//! each cache it removes ([`once`](super::once)).
 
 pub(crate) mod budget;
 mod store;
@@ -15,8 +18,8 @@ use std::path::Path;
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 use crate::providers::local::space_reclaim::janitor::state::report::CleanupReport;
 use crate::providers::local::space_reclaim::{
-    agent_logs, build_caches, chromium_clones, compiler_cache, delivered_releases, hf,
-    local_snapshots, object_evidence, weles,
+    agent_logs, chromium_clones, compiler_cache, delivered_releases, hf, local_snapshots,
+    object_evidence, weles,
 };
 
 /// What one pass needs from outside the host's own filesystem.
@@ -29,9 +32,6 @@ pub(crate) struct PassInputs<'a> {
     pub declared_release_versions: Option<&'a BTreeMap<String, BTreeSet<String>>>,
     /// The host's declared Weles recordings directory, when it has one.
     pub weles_recordings_dir: Option<&'a str>,
-    /// The janitor's state directory, where the build-cache memory is kept;
-    /// `None` for a preview, which remembers nothing.
-    pub state_dir: Option<&'a Path>,
 }
 
 /// Run every cleaner, in order.
@@ -49,7 +49,6 @@ pub(crate) async fn run_cleaners(
     report.scanned = true;
     hf::run_hf(home, enforcing, report.active_job_count, report)?;
     weles::scan_weles(home, inputs.weles_recordings_dir, enforcing, report);
-    build_caches::scan_build_caches(home, enforcing, inputs.state_dir, report);
     // The only cleaner whose root is outside this account's home: macOS puts
     // the clones in the per-user temporary container.
     chromium_clones::scan_chromium_clones(home, enforcing, report);

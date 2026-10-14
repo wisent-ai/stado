@@ -18,6 +18,8 @@ mod rollback_target;
 mod sourcekit;
 mod space;
 mod workdirs;
+#[path = "guards/workload_hold.rs"]
+mod workload_hold;
 
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};

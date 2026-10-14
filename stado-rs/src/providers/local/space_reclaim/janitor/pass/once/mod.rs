@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 
+use crate::providers::local::space_reclaim::build_caches;
 use crate::providers::local::space_reclaim::janitor::pass::lock::file::LockState;
 use crate::providers::local::space_reclaim::janitor::pass::lock::holds;
 use crate::providers::local::space_reclaim::janitor::pass::lock::ownership::{
@@ -88,6 +89,21 @@ pub(crate) async fn cleanup_once(
     let store_wait = Instant::now();
     let registry = fetch_canonical_registry().await;
     report.store_wait_ms = store_wait.elapsed().as_millis().min(i64::MAX as u128) as i64;
+    // The build-cache walk reads the whole home, for minutes on a full
+    // developer host. Run under the exclusive lock it refused every running
+    // workload's hold for as long as it read, so a host whose pressure the
+    // cleaners cannot relieve refused every build. It runs here under its
+    // own lock instead, and takes the exclusive lock for each cache it
+    // removes; a cache a workload holds stays for a later pass.
+    report.scanned = true;
+    build_caches::scan_build_caches(
+        &home,
+        !preview,
+        persist,
+        &state_dir,
+        writer.as_str(),
+        &mut report,
+    );
     // Only the kernel can establish ownership. Age is diagnostic information,
     // never permission to replace a live lock or run a second cleanup.
     let lock = match acquire_lock_state(&state_dir, writer.as_str()) {

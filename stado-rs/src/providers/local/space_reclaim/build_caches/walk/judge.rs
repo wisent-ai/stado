@@ -10,6 +10,10 @@ use nix::sys::stat::FileStat;
 use crate::providers::local::space_reclaim::build_caches::held;
 use crate::providers::local::space_reclaim::build_caches::remove::remove_tree;
 use crate::providers::local::space_reclaim::build_caches::walk::Walk;
+use crate::providers::local::space_reclaim::janitor::pass::lock::file::LockState;
+use crate::providers::local::space_reclaim::janitor::pass::lock::ownership::{
+    acquire_lock_state, retired_locks_active,
+};
 use crate::providers::local::space_reclaim::{free_bytes, CleanupReport, JanitorError};
 
 impl<'a> Walk<'a> {
@@ -59,6 +63,26 @@ impl<'a> Walk<'a> {
         };
         report.builds.expected_bytes += expected;
         if !self.enforcing {
+            return Ok(());
+        }
+        // The walk found this cache without excluding running workloads, so
+        // the removal does: the exclusive cleanup lock is taken for this one
+        // cache, without waiting. A workload's hold or another janitor's
+        // pass, or a retired lock generation still held, keeps the cache for
+        // a later pass; the count is this one cache.
+        let cleanup = match acquire_lock_state(self.lock_dir, self.writer)? {
+            LockState::Held(lock) => lock,
+            LockState::Busy { .. } => {
+                report.skip_builds(
+                    "cleanup_lock_busy",
+                    std::slice::from_ref(&name).len() as i64,
+                );
+                return Ok(());
+            }
+        };
+        let predecessors = retired_locks_active(self.lock_dir, &cleanup.file)?;
+        if !predecessors.is_empty() {
+            report.skip_builds("lock_predecessor_active", predecessors.len() as i64);
             return Ok(());
         }
         // A build running in the cache keeps it; the locks taken are held

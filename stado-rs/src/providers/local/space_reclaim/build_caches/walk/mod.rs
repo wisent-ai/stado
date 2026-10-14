@@ -44,6 +44,11 @@ pub(super) struct Walk<'a> {
     pub(super) frontier: VecDeque<PathBuf>,
     /// The measurements earlier passes made of the caches they found.
     pub(super) memory: super::memory::Memo,
+    /// The janitor's state directory, whose exclusive cleanup lock each
+    /// removal takes for its one cache.
+    pub(super) lock_dir: &'a Path,
+    /// The janitor that takes it, as its holder record names it.
+    pub(super) writer: &'a str,
 }
 
 impl<'a> Walk<'a> {

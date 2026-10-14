@@ -94,15 +94,34 @@ pub const SCAN: &str = "build_caches";
 /// unchanged from the memory kept in `state_dir` instead of reading the
 /// tree again; a preview, or a pass with no state directory, remembers
 /// nothing.
-pub(super) fn scan_build_caches(
+///
+/// The walk runs under its own lock in `lock_dir`, not under the janitor's
+/// exclusive cleanup lock, so running workloads keep their holds while it
+/// reads the disk; each removal takes the cleanup lock as `writer` for that
+/// one cache. A walk another janitor is making now leaves the root unwalked
+/// under `walk_in_progress`.
+pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
     home: &Path,
     enforcing: bool,
     state_dir: Option<&Path>,
+    lock_dir: &Path,
+    writer: &str,
     report: &mut CleanupReport,
 ) {
-    placement::place_cargo_builds(home, report);
     // The one root the walk starts from, which a refused pass leaves unwalked.
     let frontier = VecDeque::from([PathBuf::new()]);
+    let _walking = match memory::walk::exclusive(lock_dir) {
+        Ok(Some(walking)) => walking,
+        Ok(None) => {
+            report.skip_builds("walk_in_progress", frontier.len() as i64);
+            return;
+        }
+        Err(error) => {
+            report.add_error("build_caches", &JanitorError::os(&error));
+            return;
+        }
+    };
+    placement::place_cargo_builds(home, report);
     match crate::deploy::host_scan::admit(SCAN) {
         Ok(verdict) if verdict.admitted() => {}
         Ok(verdict) => {
@@ -165,6 +184,8 @@ pub(super) fn scan_build_caches(
             gated,
             frontier,
             memory,
+            lock_dir,
+            writer,
         };
         // The root itself is never a candidate. Its queued children are
         // revalidated through directory descriptors before they are used.

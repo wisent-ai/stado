@@ -86,6 +86,42 @@ pub fn acquire_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, Janit
     acquire_workload_lock_in(&crate::config_file::expand_tilde("~"), holder)
 }
 
+/// The shared hold for one live workload that waits, as a lock wait in the
+/// wait register, while a cleanup pass holds the lock exclusively, and takes
+/// it the moment the pass lets go. An installation refused for a pass that
+/// was cleaning was refused again by the next one, so on a host whose
+/// pressure never lifted it never ran. `None` only while the janitor has
+/// asked for its turn: running workloads are letting it have the lock, and a
+/// new hold would keep it from ever getting it.
+pub fn wait_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, JanitorError> {
+    let state_dir = ensure_state_dir(&secure_home(&crate::config_file::expand_tilde("~"))?)?;
+    if holds::turn_requested(&state_dir)? {
+        return Ok(None);
+    }
+    let file = open_lock(&state_dir)?;
+    let path = state_dir.join(crate::providers::local::space_reclaim::janitor::LOCK_NAME);
+    let what = format!(
+        "the disk janitor's cleanup pass, for {holder} ({})",
+        workload_holders()
+    );
+    match crate::wait::blocking_on_lock(what, &path, || file.lock_shared()) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => return Err(error.into()),
+        Err(cycle) => {
+            return Err(JanitorError::os(&format!(
+                "waiting for the cleanup lock {} would close a wait cycle: {cycle}",
+                path.display()
+            )))
+        }
+    }
+    let mut lock = WorkloadLock {
+        file: Some(file),
+        record: None,
+    };
+    lock.record = Some(holds::record(&state_dir, holder)?);
+    Ok(Some(lock))
+}
+
 /// Who keeps the janitor from its turn on this machine: each live shared
 /// hold with its acquisition timestamp, then the turn request and unread
 /// records. This is a diagnostic observation, not permission to steal a lock.

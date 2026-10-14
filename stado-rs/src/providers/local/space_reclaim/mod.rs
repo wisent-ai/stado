@@ -36,8 +36,8 @@ pub mod weles;
 
 pub use janitor::pass::cleaners::budget::ScanCount;
 pub use janitor::pass::lock::workload::{
-    acquire_workload_lock, acquire_workload_lock_in, release_workload_lock, workload_holders,
-    WorkloadLock, CLEANUP_IN_PROGRESS, CLEANUP_LOCK_ERROR,
+    acquire_workload_lock, acquire_workload_lock_in, release_workload_lock, wait_workload_lock,
+    workload_holders, WorkloadLock, CLEANUP_IN_PROGRESS, CLEANUP_LOCK_ERROR,
 };
 pub use janitor::pass::lock::{ensure_state_dir, secure_home};
 pub use janitor::pass::once::entry::{preview_cleanup_once, run_cleanup_once, CleanupWriter};

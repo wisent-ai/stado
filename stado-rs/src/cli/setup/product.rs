@@ -164,9 +164,10 @@ fn command_line_words(action: &str, arguments: &ArgMatches, host: &str) -> Vec<S
 /// A product installation compiles into a per-workspace build directory the
 /// janitor finds tagged as a regenerable cache. Without the hold a pass under
 /// disk pressure deleted that directory mid-build, and the install failed
-/// copying a binary that no longer existed. A janitor that holds the lock or
-/// has asked for its turn refuses the operation naming the holds it waits
-/// on, before anything is exported or compiled.
+/// copying a binary that no longer existed. A janitor that holds the lock is
+/// waited for, said as a lock wait, and the operation runs once the pass
+/// lets go; one that has asked for its turn refuses the operation naming the
+/// holds it waits on, before anything is exported or compiled.
 fn janitor_hold(
     matches: &ArgMatches,
 ) -> Result<Option<crate::providers::local::space_reclaim::WorkloadLock>, CmdError> {
@@ -189,12 +190,11 @@ fn janitor_hold(
         holder.push_str(" --surface ");
         holder.push_str(surface);
     }
-    match crate::providers::local::space_reclaim::acquire_workload_lock(&holder) {
+    match crate::providers::local::space_reclaim::wait_workload_lock(&holder) {
         Ok(Some(lock)) => Ok(Some(lock)),
         Ok(None) => Err(CmdError::refused(format!(
-            "{holder} builds into a directory the disk janitor reclaims, and the janitor is \
-             cleaning this machine or has asked for its turn; nothing was exported or built. \
-             It waits on: {}",
+            "{holder} builds into a directory the disk janitor reclaims, and the janitor has \
+             asked running work for its turn; nothing was exported or built. It waits on: {}",
             crate::providers::local::space_reclaim::workload_holders()
         ))),
         Err(error) => Err(CmdError::click(format!(
