@@ -117,36 +117,51 @@ pub(super) fn policy_for(
 }
 
 /// The two lowest ports above every port a release policy already binds.
+///
+/// A port a policy declares but that does not read as one is refused with
+/// its product and target: skipped, it could be the highest port in use, and
+/// the candidates chosen above the rest would land on it.
 fn free_candidate_ports(document: &Value, stable: u16) -> Result<(u16, u16), CmdError> {
     let mut used: BTreeSet<u16> = BTreeSet::from([stable]);
     let policies = document
         .pointer("/release_control/products")
         .and_then(Value::as_object)
         .into_iter()
-        .flat_map(|products| products.values());
-    for policy in policies {
+        .flatten();
+    for (product, policy) in policies {
         let targets = policy
             .get("targets")
             .and_then(Value::as_object)
             .into_iter()
-            .flat_map(|targets| targets.values());
-        for target in targets {
-            used.extend(
-                target
-                    .get("candidate_ports")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_u64)
-                    .filter_map(|port| u16::try_from(port).ok()),
-            );
-            used.extend(
-                target
-                    .get("stable_bind")
-                    .and_then(Value::as_str)
+            .flatten();
+        for (host, target) in targets {
+            let unreadable = |what: &str, value: &Value| {
+                CmdError::refused(format!(
+                    "release_control.products.{product}.targets.{host}.{what} is {value}, which \
+                     names no port, so the ports already in use are not known; nothing was \
+                     enrolled"
+                ))
+            };
+            // `null` is what a replace-strategy policy declares: no ports.
+            if let Some(ports) = target
+                .get("candidate_ports")
+                .filter(|ports| !ports.is_null())
+            {
+                for port in ports
+                    .as_array()
+                    .ok_or_else(|| unreadable("candidate_ports", ports))?
+                {
+                    let read = port.as_u64().and_then(|port| u16::try_from(port).ok());
+                    used.insert(read.ok_or_else(|| unreadable("candidate_ports", port))?);
+                }
+            }
+            if let Some(bind) = target.get("stable_bind").filter(|bind| !bind.is_null()) {
+                let read = bind
+                    .as_str()
                     .and_then(|bind| bind.rsplit_once(':'))
-                    .and_then(|(_, port)| port.parse::<u16>().ok()),
-            );
+                    .and_then(|(_, port)| port.parse::<u16>().ok());
+                used.insert(read.ok_or_else(|| unreadable("stable_bind", bind))?);
+            }
         }
     }
     let highest = used.iter().next_back().copied().unwrap_or(stable);
