@@ -34,6 +34,15 @@ impl MachineFacade {
             source_sha,
             ..
         } = reserved;
+        // `validate` admits only a request with a text command, so one without
+        // it is a malformed request, refused before the record is marked as
+        // enqueuing rather than submitted as an empty job.
+        let Some(command) = request["command"].as_str().map(str::to_string) else {
+            return Err(MachineError::new(
+                "INTERNAL",
+                format!("the request recorded at {record_path} names no command"),
+            ));
+        };
         renew_machine_request_claim(&self.store, record_path, owner, "ready-to-enqueue").await?;
 
         let versioned = self
@@ -179,7 +188,6 @@ impl MachineFacade {
             options.repo_workdir = String::new();
             options.repo_extras = String::new();
         }
-        let command = request["command"].as_str().unwrap_or_default().to_string();
         let submitted = submit_batch(std::slice::from_ref(&command), &options).await;
         renew_machine_request_enqueue(&self.store, record_path, owner, "enqueue-complete").await?;
         let job = match submitted {
