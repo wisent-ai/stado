@@ -92,7 +92,7 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<Promotion, CmdError> {
                 &run.version,
                 artifact_sha256,
             )
-            .await
+            .await?
             {
                 // Same default the validator applies, read through the same
                 // constant: a replace target may omit the key, and a submit
@@ -131,7 +131,7 @@ pub(crate) async fn reconcile(run: &ReleaseRun) -> Result<Promotion, CmdError> {
                 &run.version,
                 artifact_sha256,
             )
-            .await
+            .await?
             {
                 return Err(CmdError::click(format!(
                     "target {name} did not publish committed replace status for {} generation {}",

@@ -15,24 +15,32 @@ struct ReplaceRolloutStatus {
     active_sha256: Option<String>,
 }
 
+/// Whether `target` has committed `version` with `artifact_sha256` at
+/// `generation`: `Ok(false)` while its status is absent or names another
+/// state. A status that cannot be read or parsed is the error: read as "not
+/// committed", it restarted the service onto a release it may already run
+/// and then refused as a target that "did not publish committed status".
 pub(super) async fn replace_status_exact(
     product: &str,
     target: &str,
     generation: u64,
     version: &str,
     artifact_sha256: &str,
-) -> bool {
+) -> Result<bool, CmdError> {
     let uri = crate::release_agent::release_status_uri(product, target);
-    let Ok(bytes) = storage::fetch_object(&uri).await else {
-        return false;
+    let Some((bytes, _)) = storage::fetch_object_versioned(&uri).await? else {
+        return Ok(false);
     };
-    let Ok(status) = serde_json::from_slice::<ReplaceRolloutStatus>(&bytes) else {
-        return false;
-    };
-    status.rollout_generation == generation
+    let status = serde_json::from_slice::<ReplaceRolloutStatus>(&bytes).map_err(|error| {
+        CmdError::click(format!(
+            "the release status {uri} of {target} is not a replace rollout status: {error}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    Ok(status.rollout_generation == generation
         && status.phase == crate::release_agent::RolloutPhase::Committed
         && status.active_version.as_deref() == Some(version)
-        && status.active_sha256.as_deref() == Some(artifact_sha256)
+        && status.active_sha256.as_deref() == Some(artifact_sha256))
 }
 
 pub(super) fn replace_service(
