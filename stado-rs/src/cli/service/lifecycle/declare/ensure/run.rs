@@ -243,10 +243,6 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         predecessors::retire_before_ensure(&target, catalog_entry.as_ref(), &runner).await?;
     let outcome =
         predecessors::ensure_or_reinstate(&target, options.name, &plan, &retired, &runner).await?;
-    // The restarted resolver must serve before its registry route is written.
-    route::await_route(&target, &plan, &outcome, options.name)
-        // A running unit with no serving route is still unavailable.
-        .map_err(|cause| CmdError::unreachable(format!("{host}: {cause}")))?;
 
     let mut record = service::record_from_ensure(&host, options.name, &outcome, &now());
     record.program = unit.program;

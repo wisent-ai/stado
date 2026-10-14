@@ -177,9 +177,9 @@ pub(super) async fn reinstate_after_failed_ensure(
     )
 }
 
-/// Ensure `plan` for `name` on `target` with the units `retired` for it
-/// already off the host: the outcome when the unit came up, and otherwise the
-/// refusal saying why, with the retired units given back.
+/// Ensure the unit and its serving route before releasing predecessor recovery.
+/// A failure at either boundary gives back the retired units and retains both
+/// the original cause and the recovery outcomes.
 pub(super) async fn ensure_or_reinstate(
     target: &crate::targets::ComputeTarget,
     name: &str,
@@ -219,6 +219,13 @@ pub(super) async fn ensure_or_reinstate(
         return Err(
             CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown)
         );
+    }
+    if let Err(cause) = super::route::await_route(target, plan, &outcome, name) {
+        let given_back = reinstate_after_failed_ensure(target, &plan.label, retired, runner).await;
+        return Err(CmdError::unreachable(format!(
+            "{}: {cause}{given_back}",
+            target.name
+        )));
     }
     Ok(outcome)
 }
