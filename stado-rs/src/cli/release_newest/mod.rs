@@ -52,6 +52,12 @@ pub struct ReleaseNewestArgs {
     /// submitting anything.
     #[arg(long)]
     plan: bool,
+    /// Print the delivery queue's register as it stands — every commit the
+    /// queue kept, its state and step, the defects it carried and recorded,
+    /// and when its release was published and recorded — reading no
+    /// checkout and running no step; the other flags but --json are not read.
+    #[arg(long)]
+    register: bool,
     #[arg(long)]
     json: bool,
 }
@@ -61,6 +67,9 @@ pub struct ReleaseNewestArgs {
 /// submitted. The queue's steps run here, in the release command the build
 /// gate admits, and nowhere else: `--plan` and the serve role only queue.
 pub async fn newest(args: &ReleaseNewestArgs) -> Result<(), CmdError> {
+    if args.register {
+        return report::print_register(args.json);
+    }
     let root = workspace(args.root.clone())?;
     let planned = ordered(plan(&root, &args.products).await?, &args.first)?;
     if args.plan {

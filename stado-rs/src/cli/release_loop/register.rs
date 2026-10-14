@@ -99,6 +99,13 @@ pub struct Entry {
     pub recorded: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub error: Option<String>,
+    /// When this pass's release step published the release; none while it
+    /// has not, and on an entry the release step of an earlier pass took.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub released_at: Option<DateTime<Utc>>,
+    /// When Oko recorded the published release on the carried defects.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub recorded_at: Option<DateTime<Utc>>,
     pub started_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

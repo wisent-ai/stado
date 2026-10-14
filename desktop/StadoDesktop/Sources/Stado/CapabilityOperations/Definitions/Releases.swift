@@ -117,6 +117,10 @@ enum NativeReleaseSourceOperations {
             .init(id: "product", label: "One product (blank reads every product)", option: "--product"),
             .init(id: "first", label: "Products delivered first, in order, comma-separated (blank keeps name order)", option: "--first"),
         ], fixedArguments: ["--plan"], mutates: false),
+        // The queue's register as it stands, the same `--register` read the
+        // fleet report takes: each commit's state and step, the refusing
+        // step's error, and when its release was published and recorded.
+        .init(id: "newest-register", title: "Read the delivery queue's register: every kept commit, the step that refused it, and when its release was published and recorded", path: ["release", "newest"], hostPlacement: .none, fixedArguments: ["--register"], mutates: false),
         .init(id: "newest", title: "Deliver the queue of repaired commits, then release every product from the commit and version it declares", path: ["release", "newest"], hostPlacement: .none, fields: [
             .init(id: "root", label: "Workspace holding the product checkouts (blank reads the checkout's own workspace)", option: "--root"),
             .init(id: "product", label: "One product (blank releases every product that is due)", option: "--product"),

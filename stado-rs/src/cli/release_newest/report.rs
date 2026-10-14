@@ -30,6 +30,22 @@ struct Outcome {
     refusal: Option<String>,
 }
 
+/// The delivery queue's register as it stands, newest entry first: JSON
+/// (`{path, entries}`), or one queue line per entry.
+pub fn print_register(json: bool) -> Result<(), CmdError> {
+    let path = crate::cli::release_loop::register::path()?;
+    let document = crate::cli::release_loop::register::read()?;
+    if json {
+        let report =
+            serde_json::json!({ "path": path.display().to_string(), "entries": document.entries });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!("register {}", path.display());
+    crate::cli::release_loop::print(&document.entries);
+    Ok(())
+}
+
 /// The workspace as it stands, the delivery queue kept from it and every
 /// open repair no checkout carries, with nothing submitted.
 pub fn print_plan(

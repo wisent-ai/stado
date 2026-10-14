@@ -98,6 +98,8 @@ fn entry(product: &str, commit: &str, step: Step) -> Entry {
         carried: Vec::new(),
         recorded: Vec::new(),
         error: None,
+        released_at: None,
+        recorded_at: None,
         started_at: now,
         updated_at: now,
     }
@@ -186,6 +188,7 @@ async fn deliver(
     let mut current = entry(product, &commit, Step::Carried);
     if let Some(kept) = &kept {
         current.started_at = kept.started_at;
+        current.released_at = kept.released_at;
     }
     current.version = version.clone();
     current.carried = match carried(repairs, checkout, &commit).await {
@@ -257,6 +260,7 @@ async fn deliver(
         if let Err(error) = submit(&args).await {
             return failed(current, error).await.map(Some);
         }
+        current.released_at = Some(Utc::now());
     }
     at(&mut current, Step::Record)?;
     let repository = repository_of(checkout)?;
@@ -264,6 +268,7 @@ async fn deliver(
         Ok(recorded) => recorded,
         Err(error) => return failed(current, error).await.map(Some),
     };
+    current.recorded_at = Some(Utc::now());
     current.state = State::Delivered;
     current.updated_at = Utc::now();
     register::keep(&current)?;
