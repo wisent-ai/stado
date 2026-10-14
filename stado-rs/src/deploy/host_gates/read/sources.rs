@@ -32,19 +32,34 @@ pub(super) async fn waiting_jobs(
     now: DateTime<Utc>,
 ) -> Result<WaitingRead, DeployError> {
     let prefix = format!("{}-", target.kind);
+    // The scan's filter answers a bool; an identity the registry declares on
+    // several targets is kept here and refuses the read after the scan,
+    // instead of hiding the job it pins as pinned elsewhere.
+    let ambiguous: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
     let pinned_here = |job: &crate::models::Job| -> bool {
-        !job.pinned_host.is_empty()
-            && (job.pinned_host == target.name
-                || job
-                    .pinned_host
-                    .strip_prefix(prefix.as_str())
-                    .is_some_and(|identity| {
-                        registry
-                            .lookup_self(identity)
-                            .ok()
-                            .flatten()
-                            .is_some_and(|found| found.name == target.name)
-                    }))
+        if job.pinned_host.is_empty() {
+            return false;
+        }
+        if job.pinned_host == target.name {
+            return true;
+        }
+        let Some(identity) = job.pinned_host.strip_prefix(prefix.as_str()) else {
+            return false;
+        };
+        match registry.lookup_self(identity) {
+            Ok(found) => found.is_some_and(|found| found.name == target.name),
+            Err(error) => {
+                if let Ok(mut kept) = ambiguous.lock() {
+                    kept.get_or_insert_with(|| {
+                        format!(
+                            "job {} is pinned to {}: {error}",
+                            job.job_id, job.pinned_host
+                        )
+                    });
+                }
+                false
+            }
+        }
     };
     let queued = store
         .list_claimable_jobs(
@@ -59,6 +74,21 @@ pub(super) async fn waiting_jobs(
         )
         .await
         .map_err(DeployError::from)?;
+    match ambiguous.into_inner() {
+        Ok(None) => {}
+        Ok(Some(cause)) => {
+            return Err(DeployError(format!(
+                "the jobs waiting on {} cannot be told apart from another host's: {cause}",
+                target.name
+            )))
+        }
+        Err(poisoned) => {
+            return Err(DeployError(format!(
+                "the jobs waiting on {} were not read: the scan's filter panicked ({poisoned})",
+                target.name
+            )))
+        }
+    }
     let mut waiting = Vec::new();
     for job in queued {
         let age_seconds = DateTime::parse_from_rfc3339(&job.created_at)
