@@ -137,8 +137,16 @@ pub(super) async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), Cm
                 std::collections::BTreeSet<String>,
             > = Default::default();
             for row in rows {
-                let family = row.get("family").and_then(Value::as_str).unwrap_or("");
-                let location = row.get("location").and_then(Value::as_str).unwrap_or("");
+                // A row without its family or location is grouped and counted
+                // under that statement, not under an empty name.
+                let family = match row.get("family").and_then(Value::as_str) {
+                    Some(family) => family,
+                    None => "(family not reported)",
+                };
+                let location = match row.get("location").and_then(Value::as_str) {
+                    Some(location) => location,
+                    None => "(location not reported)",
+                };
                 seen_fam
                     .entry(family.to_string())
                     .or_default()
