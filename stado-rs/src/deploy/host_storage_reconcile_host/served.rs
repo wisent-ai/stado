@@ -51,10 +51,20 @@ pub(super) async fn object_runtime(port: u16) -> Result<(), String> {
 }
 
 /// Path under `ecosystem/probierz/` to body identity, for one inventory.
-fn identities(payload: &Value, name: &str) -> BTreeMap<String, Value> {
+///
+/// An inventory that is not a list, or an entry naming no path, is refused:
+/// read as empty, two missing inventories and an empty listing compared
+/// equal and named the served store `identical` to both roots.
+fn identities(payload: &Value, name: &str) -> Result<BTreeMap<String, Value>, String> {
+    let items = payload[name]
+        .as_array()
+        .ok_or_else(|| format!("served-store payload carries no {name} inventory list"))?;
     let mut result = BTreeMap::new();
-    for item in payload[name].as_array().into_iter().flatten() {
-        let path = item.get("path").and_then(Value::as_str).unwrap_or_default();
+    for item in items {
+        let path = item
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("served-store {name} inventory entry names no path: {item}"))?;
         if let Some(key) = path.strip_prefix(LIFECYCLE_PREFIX) {
             result.insert(
                 key.to_string(),
@@ -62,7 +72,7 @@ fn identities(payload: &Value, name: &str) -> BTreeMap<String, Value> {
             );
         }
     }
-    result
+    Ok(result)
 }
 
 fn physical_identity(payload: &Value, name: &str, path: &str) -> Value {
@@ -121,15 +131,21 @@ pub(super) async fn served_store(port: u16) -> Result<(), String> {
         .json()
         .await
         .map_err(failed)?;
-    let mut keys: Vec<String> = listed["objects"]
+    let objects = listed["objects"]
         .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("key").and_then(Value::as_str).map(str::to_string))
-        .collect();
+        .ok_or_else(|| format!("object API listing carries no objects list: {listed}"))?;
+    let mut keys: Vec<String> = objects
+        .iter()
+        .map(|item| {
+            item.get("key")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| format!("object API listing entry names no key: {item}"))
+        })
+        .collect::<Result<_, String>>()?;
     keys.sort();
-    let primary_before = identities(&payload, "primary");
-    let backup = identities(&payload, "backup");
+    let primary_before = identities(&payload, "primary")?;
+    let backup = identities(&payload, "backup")?;
     let mut primary = primary_before.clone();
     if payload["primary_after_commit"].as_bool() == Some(true) {
         use crate::deploy::host_storage_reconcile::ConflictWinner;
