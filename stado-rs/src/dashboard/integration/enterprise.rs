@@ -51,10 +51,17 @@ async fn snapshot(store: &JobStorage) -> HandlerResult {
         .list_all_jobs()
         .await
         .map_err(|_| HandlerError::UpstreamFailure)?;
-    let queue = all.get("queue").cloned().unwrap_or_default();
-    let running = all.get("running").cloned().unwrap_or_default();
-    let completed = all.get("completed").cloned().unwrap_or_default();
-    let failed = all.get("failed").cloned().unwrap_or_default();
+    // The listing holds every state, empty or not; a state it lacks is a
+    // listing this snapshot cannot read, not a state with no jobs.
+    let state = |name: &str| {
+        all.get(name)
+            .cloned()
+            .ok_or_else(|| HandlerError::UpstreamFailure)
+    };
+    let queue = state(crate::queue::runs::QUEUE)?;
+    let running = state(crate::queue::runs::RUNNING)?;
+    let completed = state(crate::queue::runs::COMPLETED)?;
+    let failed = state(crate::queue::runs::FAILED)?;
     let mut recent_completed = completed.clone();
     recent_completed.sort_by_key(|job| std::cmp::Reverse(timestamp(job, "completed")));
     let mut recent_failed = failed.clone();
