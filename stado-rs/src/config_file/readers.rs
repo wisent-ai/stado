@@ -70,17 +70,28 @@ pub(super) fn py_truthy(value: &Value) -> bool {
     }
 }
 
+/// The environment override `env_name` when it is set to something; unset
+/// and empty are none. A value that is not text stops, like a malformed
+/// config file: passed over, the config file or the default stood in for the
+/// override the operator set.
+fn override_of(env_name: &str) -> Option<String> {
+    match std::env::var(env_name) {
+        Ok(value) if !value.is_empty() => Some(value),
+        Ok(_) | Err(std::env::VarError::NotPresent) => None,
+        Err(error) => panic!("{env_name} cannot be read: {error}"),
+    }
+}
+
 /// env > config file (dotted) > built-in default.
 ///
 /// A set-but-empty environment variable counts as unset (Python
 /// `value != ""`). Config file values are stringified: strings as-is,
 /// numbers/bools via their JSON rendering; anything else (array, object,
-/// null) falls through to the default. Panics on a malformed config file.
+/// null) falls through to the default. Panics on a malformed config file or
+/// an override that is not text.
 pub fn resolve(env_name: &str, dotted: &str, default: &str) -> String {
-    if let Ok(value) = std::env::var(env_name) {
-        if !value.is_empty() {
-            return value;
-        }
+    if let Some(value) = override_of(env_name) {
+        return value;
     }
     let data = load_config_file().expect("invalid stado config file");
     match get_in(data, dotted) {
@@ -96,17 +107,15 @@ pub fn resolve(env_name: &str, dotted: &str, default: &str) -> String {
 /// Env values split on commas with each part trimmed and empties dropped.
 /// Config file values must be a JSON array; items are stringified
 /// (Python `str(part).strip()`), trimmed, and empties dropped. Panics on a
-/// malformed config file.
+/// malformed config file or an override that is not text.
 pub fn resolve_list(env_name: &str, dotted: &str, default: &[&str]) -> Vec<String> {
-    if let Ok(value) = std::env::var(env_name) {
-        if !value.is_empty() {
-            return value
-                .split(',')
-                .map(str::trim)
-                .filter(|part| !part.is_empty())
-                .map(str::to_string)
-                .collect();
-        }
+    if let Some(value) = override_of(env_name) {
+        return value
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect();
     }
     let data = load_config_file().expect("invalid stado config file");
     if let Some(Value::Array(items)) = get_in(data, dotted) {
