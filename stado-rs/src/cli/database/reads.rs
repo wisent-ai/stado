@@ -1,7 +1,7 @@
 //! The plane's reads: the placement-aware listing of every declaration, and
 //! the per-consumer resolution that hands out the credential coordinate.
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::cli::CmdError;
 use crate::service_resolution;
@@ -23,8 +23,19 @@ pub(super) async fn list(json_output: bool) -> Result<(), CmdError> {
         .transpose()?;
 
     let mut rows = Vec::new();
+    // The person-readable lines are written from the declarations the rows
+    // are built from, so no declared field is printed as an empty string.
+    let mut lines = Vec::new();
     for (name, database) in databases {
         let route = routes.and_then(|routes| routes.get(name));
+        lines.push(format!(
+            "{name} engine={} item={} scopes=[{}] consumers=[{}] placed={}",
+            database.engine(),
+            database.item(),
+            database.scopes().join(","),
+            database.consumers().join(","),
+            route.is_some()
+        ));
         rows.push(json!({
             "database": name,
             "engine": database.engine(),
@@ -39,37 +50,8 @@ pub(super) async fn list(json_output: bool) -> Result<(), CmdError> {
     if json_output {
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
-        for row in &rows {
-            let scopes = row["scopes"]
-                .as_array()
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(",")
-                })
-                .unwrap_or_default();
-            let consumers = row["consumers"]
-                .as_array()
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(",")
-                })
-                .unwrap_or_default();
-            println!(
-                "{} engine={} item={} scopes=[{scopes}] consumers=[{consumers}] placed={}",
-                row["database"].as_str().unwrap_or_default(),
-                row["engine"].as_str().unwrap_or_default(),
-                row["item"].as_str().unwrap_or_default(),
-                row["placed"]
-                    .as_bool()
-                    .map(|placed| placed.to_string())
-                    .unwrap_or_default(),
-            );
+        for line in &lines {
+            println!("{line}");
         }
     }
     Ok(())
