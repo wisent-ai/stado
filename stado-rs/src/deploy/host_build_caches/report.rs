@@ -35,8 +35,8 @@ impl BuildCacheReport {
     /// size is a number of KiB — the program sizes every tagged directory,
     /// judged or not, and prints `-` for every other row), and whether the
     /// walk ran to its end, which an empty census must say apart from one
-    /// nobody finished: a walk whose root was absent or that `find` ended
-    /// without a tag saw nothing, whatever its exit status.
+    /// nobody finished. A refused directory leaves its contents unknown,
+    /// even if the walk found readable caches elsewhere.
     pub fn census(&self) -> (Vec<crate::deploy::host_disk::DiskItem>, bool) {
         let rows =
             self.entries
@@ -51,7 +51,9 @@ impl BuildCacheReport {
                 })
                 .collect();
         let walked = !self.entries.iter().any(|entry| {
-            entry.state == super::program::SCAN_FAILED || entry.state == super::program::ROOT_ABSENT
+            entry.state == super::program::SCAN_FAILED
+                || entry.state == super::program::ROOT_ABSENT
+                || entry.state == "permission-denied"
         });
         (rows, walked && self.error.is_none() && !self.timed_out)
     }

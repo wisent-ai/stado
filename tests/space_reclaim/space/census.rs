@@ -70,12 +70,14 @@ async fn the_census_preserves_a_real_directory_refusal_and_its_cache_bytes() {
     let project = native.home.join("unreadable-project");
     let cache = project.join("target");
     native.cache(&cache);
+    let readable = native.home.join("readable-project/target");
+    native.cache(&readable);
     let payload = cache.join("payload");
     let before = fs::read(&payload).expect("read isolated cache before census");
     let permissions = fs::metadata(&project)
         .expect("read project metadata")
         .permissions();
-    let denied = permissions.mode() & !(libc::S_IRWXU | libc::S_IRWXG | libc::S_IRWXO);
+    let denied = permissions.mode() & !u32::from(libc::S_IRWXU | libc::S_IRWXG | libc::S_IRWXO);
     let target = local_target().expect("this host is a target");
     let declaration = BuildCacheDeclaration {
         root: native
@@ -89,11 +91,13 @@ async fn the_census_preserves_a_real_directory_refusal_and_its_cache_bytes() {
     let access_error = fs::read_dir(&project).err().map(|error| error.to_string());
     let report = report_declaration_on_host(&target, &declaration, &production_runner()).await;
     fs::set_permissions(&project, permissions).expect("restore isolated project permissions");
+    let (census, complete) = report.census();
     native.observe(
         "unreadable build-cache census",
         serde_json::json!({
             "access_error": access_error,
             "error": report.error,
+            "census_complete": complete,
             "entries": report.entries.iter().map(|entry| serde_json::json!({
                 "state": entry.state, "path": entry.path, "kib": entry.kib,
             })).collect::<Vec<_>>(),
@@ -117,6 +121,22 @@ async fn the_census_preserves_a_real_directory_refusal_and_its_cache_bytes() {
             .iter()
             .any(|entry| entry.path == cache.to_str().expect("fixture path is UTF-8")),
         "an unreadable cache must not be reported as inspected"
+    );
+    assert!(
+        !complete,
+        "a refused directory leaves the census incomplete"
+    );
+    assert!(
+        census
+            .iter()
+            .any(|entry| entry.path == readable.to_str().expect("fixture path is UTF-8")),
+        "a directory refusal must preserve measurements of readable caches"
+    );
+    assert!(
+        !census
+            .iter()
+            .any(|entry| entry.path == cache.to_str().expect("fixture path is UTF-8")),
+        "the byte census must not invent measurements for the refused cache"
     );
     assert_eq!(fs::read(&payload).expect("read retained cache"), before);
 }
