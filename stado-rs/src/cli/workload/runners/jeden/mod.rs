@@ -179,7 +179,7 @@ pub(super) async fn candidates(
         }
         return Ok(vec![target]);
     }
-    let capacity = live_capacity().await;
+    let capacity = live_capacity().await?;
     let mut targets = registry
         .targets
         .iter()

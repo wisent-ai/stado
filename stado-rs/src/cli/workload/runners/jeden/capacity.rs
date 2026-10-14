@@ -9,14 +9,29 @@ use serde_json::Value;
 use crate::deploy::host_channel;
 use crate::targets::ComputeTarget;
 
-pub(super) async fn live_capacity() -> Vec<Value> {
-    let Ok(store) = crate::queue::submit::default_store("").await else {
-        return Vec::new();
-    };
-    crate::queue::capacity::read_consumer_capacity(&store)
+/// Every agent's capacity publication. A store that cannot be opened or read
+/// is refused: read as no publications, every host looked as if its agent had
+/// said nothing, so a host refusing work was chosen and the session queued.
+pub(super) async fn live_capacity() -> Result<Vec<Value>, crate::cli::CmdError> {
+    let store = crate::queue::submit::default_store("")
         .await
-        .map(|entries| entries.into_values().collect())
-        .unwrap_or_default()
+        .map_err(|error| {
+            crate::cli::CmdError::click(format!(
+                "the job store holding the agents' capacity publications cannot be opened, so no \
+             host can be judged ready for a session: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
+    let entries = crate::queue::capacity::read_consumer_capacity(&store)
+        .await
+        .map_err(|error| {
+            crate::cli::CmdError::click(format!(
+                "the agents' capacity publications cannot be read, so no host can be judged \
+                 ready for a session: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
+    Ok(entries.into_values().collect())
 }
 
 /// The publication this target's own agent wrote, when it wrote one.

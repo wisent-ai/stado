@@ -91,7 +91,7 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
         .stating(crate::primitives::failure::FailureCode::Config));
     }
     let checkout = checkout_path(request.workspace);
-    let capacity = live_capacity().await;
+    let capacity = live_capacity().await?;
     let mut refusals = Vec::new();
     for target in hosts.drain(..) {
         // A pinned session only ever runs where it was placed, so a host
