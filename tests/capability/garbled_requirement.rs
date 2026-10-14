@@ -6,7 +6,10 @@
 //! machine; the test declares on that target a service running a trajectory,
 //! publishes `job_requirements/<name>.json` naming the trajectory with a value
 //! that is not a list, and reads the real `stado registry doctor --json`.
+// This journey reads the deployment's store and CLI only; the beacon serving
+// the host-health journeys drive through it is unused here.
 #[path = "../host_health/beacon/deployment.rs"]
+#[allow(dead_code)]
 mod deployment;
 
 use deployment::Deployment;
