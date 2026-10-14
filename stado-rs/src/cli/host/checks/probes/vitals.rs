@@ -27,25 +27,24 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
         field("five"),
         field("fifteen")
     );
-    let users = report
-        .get("users")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if users.is_empty() {
-        println!("users:   none logged in");
-    } else {
-        let rows: Vec<Vec<String>> = users
-            .iter()
-            .map(|user| {
-                vec![
-                    cell(user.get("user")),
-                    cell(user.get("line")),
-                    cell(user.get("since")),
-                ]
-            })
-            .collect();
-        crate::cli::reporting::table::print(&["USER", "LINE", "SINCE"], &rows);
+    // A report without its user list did not say who is logged in; it was
+    // printed as "none logged in", which is a claim about the host.
+    match report.get("users").and_then(Value::as_array) {
+        None => println!("users:   not reported"),
+        Some(users) if users.is_empty() => println!("users:   none logged in"),
+        Some(users) => {
+            let rows: Vec<Vec<String>> = users
+                .iter()
+                .map(|user| {
+                    vec![
+                        cell(user.get("user")),
+                        cell(user.get("line")),
+                        cell(user.get("since")),
+                    ]
+                })
+                .collect();
+            crate::cli::reporting::table::print(&["USER", "LINE", "SINCE"], &rows);
+        }
     }
     report_outcome(&report, crate::deploy::host_state::uptime::OK_STATUS)
 }
