@@ -73,18 +73,24 @@ fn print_report(report: &Value, json_output: bool) -> Result<(), CmdError> {
         println!("{}", serde_json::to_string_pretty(report)?);
         return Ok(());
     }
-    let subject = report["role"]
-        .as_str()
-        .map(|role| format!("role {role}"))
-        .unwrap_or_else(|| report["item"].as_str().unwrap_or_default().to_string());
+    // A field the report lacks is said to be unreported, as `mint` says it,
+    // not printed as an empty item, state or revision.
+    let reported = |value: &Value| match value.as_str() {
+        Some(text) => text.to_string(),
+        None => "not reported".to_string(),
+    };
+    let subject = match report["role"].as_str() {
+        Some(role) => format!("role {role}"),
+        None => reported(&report["item"]),
+    };
     println!(
         "{}: stored {subject} as {}; state {} -> {}, revision {} -> {}",
-        report["target"].as_str().unwrap_or_default(),
-        report["kind"].as_str().unwrap_or_default(),
-        report["before"]["state"].as_str().unwrap_or_default(),
-        report["after"]["state"].as_str().unwrap_or_default(),
-        report["before"]["revision"].as_str().unwrap_or_default(),
-        report["after"]["revision"].as_str().unwrap_or_default(),
+        reported(&report["target"]),
+        reported(&report["kind"]),
+        reported(&report["before"]["state"]),
+        reported(&report["after"]["state"]),
+        reported(&report["before"]["revision"]),
+        reported(&report["after"]["revision"]),
     );
     Ok(())
 }
