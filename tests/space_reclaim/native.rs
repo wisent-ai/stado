@@ -75,7 +75,14 @@ impl Native {
             ],
         );
         fs::set_permissions(&this.home, fs::Permissions::from_mode(0o700)).unwrap();
-        let revision = this.tool("git", &["rev-parse", "HEAD"]);
+        // The quality gate runs this journey in an exported tree with no Git
+        // checkout and states the commit it exported (`WISENT_SOURCE_COMMIT`);
+        // run from the checkout, the commit is the checkout's own.
+        let revision = match std::env::var("WISENT_SOURCE_COMMIT") {
+            Ok(commit) => commit,
+            Err(std::env::VarError::NotPresent) => this.tool("git", &["rev-parse", "HEAD"]),
+            Err(error) => panic!("WISENT_SOURCE_COMMIT is set but cannot be read: {error}"),
+        };
         let version = this.success(&["--version"]);
         this.observe(
             "source",
