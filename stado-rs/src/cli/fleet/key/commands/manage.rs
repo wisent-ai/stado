@@ -68,16 +68,34 @@ pub async fn add(
         FailureCode::Refused,
     )
     .await?;
-    let fingerprint = fingerprint_line
+    // `ssh-keygen -lf` prints `<bits> SHA256:<hash> <comment> (<TYPE>)`. A line
+    // without the hash was stored as an empty fingerprint, and one without the
+    // parenthesised type as the whole line, in the vault item that describes
+    // the key; such an answer is refused before anything is written.
+    let Some(fingerprint) = fingerprint_line
         .split_whitespace()
         .find(|part| part.starts_with("SHA256:"))
-        .unwrap_or_default()
-        .to_string();
-    let key_type = fingerprint_line
-        .rsplit('(')
-        .next()
-        .map(|part| part.trim().trim_end_matches(')').to_string())
-        .unwrap_or_default();
+        .map(str::to_string)
+    else {
+        return Err(CmdError::click(format!(
+            "ssh-keygen -lf {from} answered no SHA256 fingerprint: {}",
+            fingerprint_line.trim()
+        ))
+        .stating(FailureCode::Refused));
+    };
+    let Some(key_type) = fingerprint_line
+        .trim()
+        .rsplit_once('(')
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+        .map(|kind| kind.trim().to_string())
+        .filter(|kind| !kind.is_empty())
+    else {
+        return Err(CmdError::click(format!(
+            "ssh-keygen -lf {from} answered no key type: {}",
+            fingerprint_line.trim()
+        ))
+        .stating(FailureCode::Refused));
+    };
     let id = item_id(target);
     let client = configured_client()?;
     client
