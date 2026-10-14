@@ -84,7 +84,7 @@ fn volume_of(home: &Path) -> Result<PathBuf, String> {
     let row = text
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .last()
+        .next_back()
         .ok_or_else(|| format!("df -P {} printed nothing", home.display()))?;
     let fields: Vec<&str> = row.split_whitespace().collect();
     let capacity = fields

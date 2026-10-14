@@ -104,7 +104,7 @@ impl Dashboard {
             None | Some(Value::Null) => None,
             Some(Value::String(provider)) => Some(provider.clone()),
             Some(other) => {
-                return invalid_machine_request(&format!(
+                return invalid_machine_request(format!(
                     "machine request provider must be text, got {other}"
                 ))
             }
@@ -119,7 +119,7 @@ impl Dashboard {
                     )))
                 }
                 several => {
-                    return invalid_machine_request(&format!(
+                    return invalid_machine_request(format!(
                         "machine request names no provider, and this client may submit to \
                          several: {}",
                         several.join(", ")

@@ -66,7 +66,7 @@ pub(super) struct DeclaredGates {
 /// why it declares none (`releases:false`, or no gate of the selected kinds on
 /// this host's platform) — an answer about the product, not a failure to read it.
 pub(super) enum Declaration {
-    Gates(DeclaredGates),
+    Gates(Box<DeclaredGates>),
     Undeclared(String),
 }
 
@@ -77,7 +77,7 @@ pub(super) fn selected_gates(
     selection: Selection,
 ) -> Result<DeclaredGates, CmdError> {
     match declared_gates(root, selection)? {
-        Declaration::Gates(gates) => Ok(gates),
+        Declaration::Gates(gates) => Ok(*gates),
         Declaration::Undeclared(reason) => Err(CmdError::refused(reason)),
     }
 }
@@ -152,7 +152,7 @@ pub(super) fn declared_gates(
     } else {
         None
     };
-    Ok(Declaration::Gates(DeclaredGates {
+    Ok(Declaration::Gates(Box::new(DeclaredGates {
         product: manifest.product.clone(),
         root,
         gates,
@@ -163,7 +163,7 @@ pub(super) fn declared_gates(
         platform: platform.to_owned(),
         contract_version: version,
         inputs: manifest.inputs.clone(),
-    }))
+    })))
 }
 
 /// The platform name and recipe this host can actually run, or the refusal

@@ -53,11 +53,7 @@ async fn snapshot(store: &JobStorage) -> HandlerResult {
         .map_err(|_| HandlerError::UpstreamFailure)?;
     // The listing holds every state, empty or not; a state it lacks is a
     // listing this snapshot cannot read, not a state with no jobs.
-    let state = |name: &str| {
-        all.get(name)
-            .cloned()
-            .ok_or_else(|| HandlerError::UpstreamFailure)
-    };
+    let state = |name: &str| all.get(name).cloned().ok_or(HandlerError::UpstreamFailure);
     let queue = state(crate::queue::runs::QUEUE)?;
     let running = state(crate::queue::runs::RUNNING)?;
     let completed = state(crate::queue::runs::COMPLETED)?;

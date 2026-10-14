@@ -113,7 +113,7 @@ fn discover(
     parent_help: Option<&str>,
     tree: &mut BTreeMap<String, String>,
 ) -> Result<(), CmdError> {
-    let text = help(binary, &path)?;
+    let text = help(binary, path)?;
     if parent_help.is_some_and(|parent| parent == text.as_str()) {
         return Err(CmdError::refused(format!(
             "{} {:?} --help repeated its parent; cannot establish the real command tree",

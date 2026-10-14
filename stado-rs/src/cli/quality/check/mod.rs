@@ -162,7 +162,7 @@ async fn check_tree(
     if_declared: bool,
 ) -> Result<Option<String>, CmdError> {
     let declared = match declared_gates(Some(&tree.to_string_lossy()), selection)? {
-        Declaration::Gates(declared) => declared,
+        Declaration::Gates(declared) => *declared,
         Declaration::Undeclared(reason) if if_declared => {
             report.say(&format!(
                 "stado quality check: {revision}: {reason}; nothing to check"
