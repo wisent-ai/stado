@@ -8,7 +8,7 @@ pub use locks::{
     alive, lock, lock_superseding, lock_waiting, mark_placed, mark_placing, mark_step,
     PHASE_PLACING,
 };
-pub use presence::present;
+pub use presence::{present, remove_tree};
 pub use record::locks_report;
 use serde_json::Value;
 use sha2::{Digest, Sha256};

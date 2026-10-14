@@ -18,3 +18,13 @@ pub fn present(path: &Path) -> Result<bool> {
         Err(error) => Err(error).with_context(|| format!("{} cannot be examined", path.display())),
     }
 }
+
+/// Remove the directory tree at `path` when there is one. Only a tree that
+/// does not exist is nothing to remove; any other failure names the path.
+pub fn remove_tree(path: &Path) -> Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("removing {}", path.display())),
+    }
+}

@@ -138,10 +138,7 @@ fn install(home: &Path, declaration: &Declaration) -> Result<()> {
         }
         let tree = staging.join(format!("node-{version}-{platform}"));
         let destination = root.join(version);
-        if destination.exists() {
-            std::fs::remove_dir_all(&destination)
-                .with_context(|| format!("removing {}", destination.display()))?;
-        }
+        crate::common::files::remove_tree(&destination)?;
         std::fs::rename(&tree, &destination)
             .with_context(|| format!("placing {}", destination.display()))
     })();

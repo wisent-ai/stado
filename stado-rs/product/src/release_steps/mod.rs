@@ -195,9 +195,7 @@ pub fn run_source_bundle(name: &str, includes: &[String]) -> Result<i32> {
     });
 
     let release = output_dir()?.join("release");
-    if release.exists() {
-        fs::remove_dir_all(&release)?;
-    }
+    crate::common::files::remove_tree(&release)?;
     fs::create_dir_all(&release)?;
     let bundle = release.join(name);
     let mut archive = tar::Builder::new(fs::File::create(&bundle)?);

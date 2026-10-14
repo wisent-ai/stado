@@ -118,9 +118,7 @@ fn build() -> Result<i32> {
             }
         }
         let release = output.join("release");
-        if release.exists() {
-            fs::remove_dir_all(&release)?;
-        }
+        crate::common::files::remove_tree(&release)?;
         fs::create_dir_all(&release)?;
         let bundle = release.join(BUNDLE);
         let mut archive = tar::Builder::new(fs::File::create(&bundle)?);

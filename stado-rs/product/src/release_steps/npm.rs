@@ -24,9 +24,7 @@ pub const PACKAGE: &str = "npm-package.tgz";
 pub fn pack() -> Result<i32> {
     let source = PathBuf::from(required("WISENT_SOURCE_DIR")?);
     let release = output_dir()?.join("release");
-    if release.exists() {
-        fs::remove_dir_all(&release)?;
-    }
+    crate::common::files::remove_tree(&release)?;
     fs::create_dir_all(&release)?;
     let status = wait::status(
         Command::new("npm")

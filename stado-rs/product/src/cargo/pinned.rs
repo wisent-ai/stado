@@ -70,10 +70,7 @@ pub fn pin(runtime: &Runtime, requested: &Path, commit: &str) -> Result<Pinned> 
                 .to_owned()
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if exported.exists() {
-                fs::remove_dir_all(&exported)
-                    .with_context(|| format!("clearing {}", exported.display()))?;
-            }
+            crate::common::files::remove_tree(&exported)?;
             let digest = source::export(&root, &full, &exported)?;
             crate::common::atomic_json(
                 &marker,
