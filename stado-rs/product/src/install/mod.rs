@@ -227,9 +227,7 @@ pub fn perform(
         let checkout = plan.source_directory.clone();
         let kept = plan.cache.clone();
         if surface == "cli" {
-            if let Some(host) = services::migrate_host_unit(product, &runtime.home)? {
-                services::admit_units(&plan, id, &host)?;
-            }
+            services::migrate_host_unit(product, &runtime.home)?;
         }
         let mut installed = transaction::commit(&installing, id, surface, host, selected, plan)?;
         installed
