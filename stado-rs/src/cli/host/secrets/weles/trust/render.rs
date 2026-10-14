@@ -60,11 +60,19 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
             return Err(refused(detail));
         }
     };
-    let vault = declared
+    // A live environment that names no vault file is said as such: read as
+    // "", it reached the presence check below as "required file is missing: "
+    // with no path, which named nothing to go and fix.
+    let Some(vault) = declared
         .iter()
         .find(|(key, _)| key == "SKARBIEC_VAULT_FILE")
         .map(|(_, value)| value.clone())
-        .unwrap_or_default();
+    else {
+        remove_remote(&resolved, &[installed.as_str()], &runner).await;
+        return Err(refused(
+            "the live Skarbiec environment declares no SKARBIEC_VAULT_FILE".to_string(),
+        ));
+    };
     let skarbiec = match crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await
     {
         Ok(binary) => binary,
