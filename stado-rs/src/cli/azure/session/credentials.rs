@@ -41,17 +41,21 @@ pub(super) async fn store_operator_item(
     refresh_token: &str,
     token_body: &Value,
 ) -> Result<(), CmdError> {
-    let value = json!({
+    let mut value = json!({
         "display_name": "Stado Azure operator session",
         "login_email": account,
         "tenant_id": tenant,
         "client_id": AZURE_CLI_CLIENT_ID,
         "refresh_token": refresh_token,
         "scope": token_body.get("scope").and_then(Value::as_str).unwrap_or(ARM_SCOPE),
-        "client_info": token_body.get("client_info").and_then(Value::as_str).unwrap_or(""),
         "credential_status": "ready",
         "tags": ["wisent", "azure", "operator", "oauth-refresh"]
     });
+    // `client_info` is stored only when the token endpoint returned it: an
+    // empty string read back as an answer Azure never gave.
+    if let Some(info) = token_body.get("client_info").and_then(Value::as_str) {
+        value["client_info"] = json!(info);
+    }
     // `stado-secret` is the canonical kind that carries arbitrary named fields.
     // `oauth-client` is not it: that kind allows only a client id and secret, so
     // a session with a refresh token, tenant and scope is refused by the schema.
