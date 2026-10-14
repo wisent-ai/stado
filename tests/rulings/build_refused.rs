@@ -9,6 +9,10 @@
 //! refuses before Cargo runs, quoting the ruling and its words. Then a later
 //! ruling consents again: the same operation runs to its end. Nothing of the
 //! operator's is read or written; the register is removed at the end.
+//!
+//! An `oko` that gives no verdict decided nothing: with no `oko` on the
+//! operation's PATH the same operation is refused saying the admission
+//! decision was never read, not that a ruling refuses it.
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -89,5 +93,39 @@ fn a_withdrawn_build_is_refused_until_a_later_ruling_lifts_it() {
         text(&allowed.stderr)
     );
 
+    std::fs::remove_dir_all(&root).expect("the run directory is removed");
+}
+
+#[test]
+fn an_oko_that_gives_no_verdict_is_not_read_as_a_ruling() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("rulings-no-verdict-{}", std::process::id()));
+    let empty = root.join("path-without-oko");
+    std::fs::create_dir_all(&empty).expect("the run directory is created");
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let refused = Command::new(env!("CARGO_BIN_EXE_stado"))
+        .args(["product", "cargo", "--manifest-path"])
+        .arg(&manifest)
+        .arg("metadata")
+        .env("PATH", &empty)
+        .output()
+        .expect("the built stado starts");
+    let said = text(&refused.stderr);
+    assert!(
+        !refused.status.success(),
+        "a build ran with no admission decision: {}",
+        text(&refused.stdout)
+    );
+    assert!(
+        said.contains("Oko gave no admission decision")
+            && said.contains("oko admit build")
+            && said.contains("did not run"),
+        "the refusal names the decision that was never read and why: {said}"
+    );
+    assert!(
+        !said.contains("the operator's rulings do not allow it now"),
+        "no ruling was read, so none is quoted: {said}"
+    );
+    assert!(said.contains("nothing was exported or built"), "{said}");
     std::fs::remove_dir_all(&root).expect("the run directory is removed");
 }

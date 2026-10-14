@@ -68,19 +68,28 @@ pub(crate) fn cargo_operations() -> Vec<String> {
 /// `stado product cargo` with its operation open beyond the declared values:
 /// a Cargo subcommand a quality gate of the built tree declares is admitted
 /// too, once the tree is known (`cargo::declared::admit`).
+///
+/// Clap's `mut_arg` takes the argument out and appends it again, so the
+/// reopened `operation` would follow `forward` and the trailing arguments
+/// would no longer be the last positional: every debug build refused the
+/// command definition (`cargo:forward: Arg::trailing_var_arg can only apply
+/// to last positional`) before parsing a word. `forward` is appended after it
+/// again, unchanged.
 pub(super) fn cargo_command() -> Command {
-    cargo().mut_arg("operation", |argument| {
-        argument
-            .value_parser(clap::builder::NonEmptyStringValueParser::new())
-            .long_help(
-                "build, check, test, run, metadata or stage on any tree, or any Cargo \
-                 subcommand a quality gate of the built tree's .wisent-release.json runs \
-                 (clippy; not fmt, which compiles nothing): read under --revision from that \
-                 committed revision. stage: \
-                 a locked release build of the forwarded --bin targets, each binary placed \
-                 at $WISENT_OUTPUT_DIR/<name> for a release manifest to stage",
-            )
-    })
+    cargo()
+        .mut_arg("operation", |argument| {
+            argument
+                .value_parser(clap::builder::NonEmptyStringValueParser::new())
+                .long_help(
+                    "build, check, test, run, metadata or stage on any tree, or any Cargo \
+                     subcommand a quality gate of the built tree's .wisent-release.json runs \
+                     (clippy; not fmt, which compiles nothing): read under --revision from that \
+                     committed revision. stage: \
+                     a locked release build of the forwarded --bin targets, each binary placed \
+                     at $WISENT_OUTPUT_DIR/<name> for a release manifest to stage",
+                )
+        })
+        .mut_arg("forward", |argument| argument)
 }
 
 /// The compiler cache every Cargo build Stado runs goes through.

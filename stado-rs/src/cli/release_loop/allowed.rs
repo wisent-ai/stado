@@ -10,8 +10,17 @@
 //! starts inherits it and is admitted for that action without asking again —
 //! a gate of an admitted build does not hang on which Oko the machine has
 //! installed, and an operation is not admitted twice by two answers.
+//!
+//! Oko answers with its verdict as JSON (`--json`): `allowed` and the
+//! `reason` quoting what decided it. Only a verdict that says not allowed is
+//! the operator's rulings refusing; an `oko` that gives no verdict at all (it
+//! cannot be started, or it is an Oko without the `admit` verb) is said as
+//! that, with its own words, since a ruling that was never read decided
+//! nothing.
 
-use super::steps::process::run;
+use serde_json::Value;
+use tokio::process::Command;
+
 use crate::cli::CmdError;
 
 /// Oko's program; Stado reads rulings through its CLI only.
@@ -64,20 +73,77 @@ pub async fn refusal(action: &str, product: Option<&str>, purposes: &[&str]) -> 
     for purpose in purposes {
         words.extend(["--purpose", *purpose]);
     }
+    words.push("--json");
     let scope = match product {
         Some(product) => format!("{action} of {product}"),
         None => action.to_string(),
     };
-    let answer = run(OKO, &words, None).await.map_err(|refusal| {
-        format!("{scope} is not run: the operator's rulings do not allow it now ({refusal})")
-    })?;
+    let answer = match decision(&words).await {
+        Decision::Allowed(reason) => reason,
+        Decision::Refused(reason) => {
+            return Err(format!(
+                "{scope} is not run: the operator's rulings do not allow it now ({reason})"
+            ))
+        }
+        Decision::Unread(cause) => {
+            return Err(format!(
+                "{scope} is not run: Oko gave no admission decision, so whether the operator's \
+                 rulings allow it was never read ({cause})"
+            ))
+        }
+    };
     // Set before the operation starts anything, so every process it runs
     // inherits it (module doc).
-    std::env::set_var(
-        variable,
-        format!("{} {}", std::process::id(), answer.trim()),
-    );
+    std::env::set_var(variable, format!("{} {}", std::process::id(), answer));
     Ok(())
+}
+
+/// What `oko admit … --json` answered.
+enum Decision {
+    /// Allowed, with the reason Oko gives.
+    Allowed(String),
+    /// Not allowed, with the reason quoting the ruling.
+    Refused(String),
+    /// No verdict: the program could not be run, or it answered something
+    /// that is not one, with what it said.
+    Unread(String),
+}
+
+async fn decision(words: &[&str]) -> Decision {
+    let shown = format!("{OKO} {}", words.join(" "));
+    let mut command = Command::new(OKO);
+    command
+        .args(words)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let output = match crate::wait::until(
+        crate::wait::Kind::Process,
+        &shown,
+        "the caller's directory",
+        command.output(),
+    )
+    .await
+    {
+        Ok(output) => output,
+        Err(error) => return Decision::Unread(format!("{shown} did not run: {error}")),
+    };
+    let verdict: Option<Value> = serde_json::from_slice(&output.stdout).ok();
+    let allowed = verdict
+        .as_ref()
+        .and_then(|verdict| verdict["allowed"].as_bool());
+    let reason = verdict
+        .as_ref()
+        .and_then(|verdict| verdict["reason"].as_str())
+        .map(str::to_owned);
+    match (allowed, reason) {
+        (Some(true), Some(reason)) => Decision::Allowed(reason),
+        (Some(false), Some(reason)) => Decision::Refused(reason),
+        _ => Decision::Unread(format!(
+            "{shown} exited {} without a verdict: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+    }
 }
 
 /// [`refusal`] for a product operation that compiles or publishes, serving
