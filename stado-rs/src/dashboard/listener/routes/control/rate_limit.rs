@@ -18,10 +18,12 @@ impl Dashboard {
                 &json!({"error": "content-type must be application/json"}),
             );
         }
-        let supplied = request
-            .header("authorization")
-            .and_then(|value| value.trim().strip_prefix("Bearer "))
-            .unwrap_or_default();
+        let Some(supplied) = crate::dashboard::listener::auth::presented_bearer(request) else {
+            return send_json(
+                http_status(reqwest::StatusCode::UNAUTHORIZED),
+                &json!({"error": "unauthorized"}),
+            );
+        };
         let client = match rate_limit::authenticate(supplied).await {
             Ok(Some(client)) => client,
             Ok(None) => {
@@ -30,19 +32,21 @@ impl Dashboard {
                     &json!({"error": "unauthorized"}),
                 )
             }
-            Err(_) => {
+            // The cause is said: "rate limiting unavailable" alone left the
+            // caller nothing to repair.
+            Err(error) => {
                 return send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "rate limiting unavailable"}),
+                    &json!({"error": format!("rate limiting unavailable: {error}")}),
                 )
             }
         };
         let payload = match serde_json::from_slice::<ConsumeRequest>(&request.body) {
             Ok(payload) => payload,
-            Err(_) => {
+            Err(error) => {
                 return send_json(
                     http_status(reqwest::StatusCode::BAD_REQUEST),
-                    &json!({"error": "invalid rate-limit request"}),
+                    &json!({"error": format!("invalid rate-limit request: {error}")}),
                 )
             }
         };
