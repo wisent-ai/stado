@@ -116,6 +116,8 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         .blue_green_serving()
         .map_err(CmdError::declaration)?;
     let readiness_url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
+    // No deadline of its own: the stable bind answers, refuses or curl says
+    // why; a three-second cut nobody declared called a slow answer a failure.
     let readiness = host_channel::run_program(
         &target,
         &[
@@ -123,8 +125,6 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
             "--silent",
             "--show-error",
             "--fail",
-            "--max-time",
-            "3",
             "--output",
             "/dev/null",
             &readiness_url,
