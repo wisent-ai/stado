@@ -26,15 +26,16 @@ pub(crate) fn undeclared_row(
         return None;
     }
     let named = !selected.is_empty();
+    // An origin the edge did not name, or one that is not a URL with a host,
+    // has no hostname: said as null, not as an empty name.
     let hostname = reqwest::Url::parse(&selected)
         .ok()
-        .and_then(|url| url.host_str().map(str::to_string))
-        .unwrap_or_default();
+        .and_then(|url| url.host_str().map(str::to_string));
     Some(json!({
         "schema": "stado.public-origin-report.v1",
         "name": Value::Null,
         "hostname": hostname,
-        "origin": if named { selected.as_str() } else { "" },
+        "origin": named.then_some(selected.as_str()),
         "target": Value::Null,
         "publication": Value::Null,
         "upstream": Value::Null,
