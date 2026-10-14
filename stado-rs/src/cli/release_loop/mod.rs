@@ -35,6 +35,7 @@ use crate::cli::release_submit::SubmitChannel;
 use crate::cli::CmdError;
 
 use register::{Entry, State};
+pub(crate) use steps::process;
 pub use steps::Unplaced;
 
 /// Queue every commit of `planned` that carries a repair; build nothing.

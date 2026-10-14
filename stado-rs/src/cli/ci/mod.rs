@@ -14,6 +14,12 @@
 //! declaration and the forge each refuse by name when they do not answer;
 //! nothing is guessed in their place. The text form prints each field as
 //! the forge gave it, `null` where the forge gave none.
+//!
+//! The answer also carries the delivery routine ([`delivery`]): its declared
+//! plan, the step it is installing and for how long, the step that refused
+//! with every refusal and its defects, and what each step last delivered.
+
+pub mod delivery;
 
 use serde_json::{json, Value};
 
@@ -221,6 +227,7 @@ pub async fn status_document(product: &str, revision: Option<&str>) -> Result<Va
         "revision": revision,
         "workflows": rows,
         "finding": finding,
+        "delivery": delivery::status()?,
     }))
 }
 
@@ -239,6 +246,7 @@ pub async fn status(product: &str, revision: Option<&str>, json: bool) -> Result
     if let Some(finding) = document["finding"].as_str() {
         println!("  {finding}");
     }
+    delivery::print_status(&document["delivery"]);
     for row in document["workflows"].as_array().into_iter().flatten() {
         let workflow = &row["workflow"];
         match row["run"].as_object() {

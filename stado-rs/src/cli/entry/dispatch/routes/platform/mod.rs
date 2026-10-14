@@ -65,13 +65,22 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
         PlatformCommands::Artifact(sub) => artifact::dispatch(sub).await,
         PlatformCommands::Build(sub) => build_cmd::dispatch(sub).await,
         PlatformCommands::Release(sub) => release_cmd::dispatch(sub).await,
-        PlatformCommands::Ci(sub) => match sub {
-            crate::cli::entry::spec::root::platform::CiCommands::Status {
-                product,
-                revision,
-                json,
-            } => ci::status(&product, revision.as_deref(), json).await,
-        },
+        PlatformCommands::Ci(sub) => {
+            use crate::cli::entry::spec::root::platform::{CiCommands, CiPlanCommands};
+            match sub {
+                CiCommands::Status {
+                    product,
+                    revision,
+                    json,
+                } => ci::status(&product, revision.as_deref(), json).await,
+                CiCommands::Run { json } => ci::delivery::run(json).await,
+                CiCommands::Plan(CiPlanCommands::Set { steps, json }) => {
+                    ci::delivery::plan::set(&steps, json)
+                }
+                CiCommands::Plan(CiPlanCommands::Show { json }) => ci::delivery::plan::show(json),
+                CiCommands::Plan(CiPlanCommands::Clear) => ci::delivery::plan::clear(),
+            }
+        }
         PlatformCommands::Cost(sub) => cost::dispatch(&sub).await,
         PlatformCommands::Market(sub) => vast::dispatch(&sub).await,
         PlatformCommands::Quota { json, sub } => quota::dispatch(json, &sub).await,

@@ -66,11 +66,23 @@ enum NativeProductOperations {
         ], mutates: false),
         // The answer lists each workflow the product's repository declares
         // with its newest run, its conclusion and the failed job and step of
-        // a run that did not pass, read from the forge as the CLI reads it.
-        .init(id: "ci-status", title: "Read what the forge's continuous integration last did for a product", path: ["ci", "status"], hostPlacement: .none, fields: [
+        // a run that did not pass, read from the forge as the CLI reads it,
+        // and the delivery routine: its plan, the step it is installing and
+        // for how long, the refused step with every refusal and its defects.
+        .init(id: "ci-status", title: "Read what the forge's continuous integration and the delivery routine last did", path: ["ci", "status"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product of the catalog", required: true),
             .init(id: "revision", label: "Full commit (blank reads the newest run of any revision)", option: "--revision"),
         ], mutates: false),
+        // The delivery routine installs these steps, in order, from each
+        // checkout's current main; Stado's scheduler runs `ci run`.
+        .init(id: "ci-plan-set", title: "Declare the products the delivery routine installs, in order", path: ["ci", "plan", "set"], hostPlacement: .none, fields: [
+            .init(id: "steps", label: "Steps, one PRODUCT:SURFACE:CHECKOUT per line, in install order", option: "--step", required: true, multiple: true),
+        ]),
+        .init(id: "ci-plan-show", title: "Read the delivery routine's declared plan", path: ["ci", "plan", "show"], hostPlacement: .none, mutates: false),
+        .init(id: "ci-plan-clear", title: "Remove the delivery routine's plan", path: ["ci", "plan", "clear"], hostPlacement: .none, jsonOutput: false),
+        // One pass: a refused step ends the operation as refused with every
+        // refusal and the Oko defects recorded for it.
+        .init(id: "ci-run", title: "Run one pass of the delivery routine over the declared plan", path: ["ci", "run"], hostPlacement: .none),
         // The components each product declares under `public_status`, as the
         // status page reads them: state, since when and the last failed
         // check with the answer that failed it. `check` asks every component

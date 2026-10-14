@@ -207,14 +207,17 @@ pub(crate) enum PlatformCommands {
 }
 
 /// `stado ci`: the forge's continuous integration, read for a catalogued
-/// product.
+/// product, and the delivery routine that installs the declared plan.
 #[derive(Subcommand)]
 pub(crate) enum CiCommands {
     /// The newest run of every workflow the product's repository declares,
     /// with its conclusion and, for a run that did not pass, each failed job
-    /// and the step that failed in it. Reads the forge's API as the identity
-    /// Stado's GitHub declaration names in Skarbiec; refuses by name when
-    /// Skarbiec, the declaration or the forge does not answer.
+    /// and the step that failed in it, and the delivery routine: its plan,
+    /// the step it is installing and for how long, the refused step with
+    /// every refusal and its defects, and what each step last delivered.
+    /// Reads the forge's API as the identity Stado's GitHub declaration names
+    /// in Skarbiec; refuses by name when Skarbiec, the declaration or the
+    /// forge does not answer.
     Status {
         /// A product of the catalog (`stado product catalog` lists them).
         product: String,
@@ -226,4 +229,46 @@ pub(crate) enum CiCommands {
         #[arg(long)]
         json: bool,
     },
+    /// One pass of the delivery routine, which Stado's scheduler runs on the
+    /// cadence the operator declares (`stado schedule create --cron …
+    /// 'stado ci run'`): install each step of the declared plan from its
+    /// checkout's current `main`, in order, with every quality gate run to
+    /// its end. A refused step stops the pass, is recorded in Oko as one
+    /// defect per session whose repair the revision brought, carrying every
+    /// refusal, and exits non-zero; the next pass resumes at it once its
+    /// `main` moves and records the revision that installs as the repair.
+    /// A pass that finds another running says which step it is on and ends.
+    Run {
+        /// Print the routine's state after the pass.
+        #[arg(long)]
+        json: bool,
+    },
+    /// The delivery routine's declared plan.
+    #[command(subcommand)]
+    Plan(CiPlanCommands),
+}
+
+/// `stado ci plan`: the products the delivery routine installs, in order.
+#[derive(Subcommand)]
+pub(crate) enum CiPlanCommands {
+    /// Declare the plan: each `--step PRODUCT:SURFACE:CHECKOUT`, in the
+    /// order the routine installs them, the checkout named absolutely.
+    Set {
+        #[arg(
+            long = "step",
+            value_name = "PRODUCT:SURFACE:CHECKOUT",
+            required = true
+        )]
+        steps: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the declared plan; refused when none is declared.
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the declared plan: the routine installs nothing until one is
+    /// declared again.
+    Clear,
 }
