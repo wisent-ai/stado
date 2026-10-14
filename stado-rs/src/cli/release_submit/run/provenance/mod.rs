@@ -19,7 +19,9 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::cli::release_submit::run::checkout::{committed_file, git_text};
+use crate::cli::release_submit::run::checkout::{
+    committed_file, committed_file_if_present, git_text,
+};
 use crate::cli::CmdError;
 
 mod published_diff;
@@ -64,22 +66,26 @@ pub(crate) fn append_records<W: std::io::Write>(
     Ok(())
 }
 
-/// The committed baseline's marker, when the commit holds a baseline.
+/// The committed baseline's marker, when the commit holds a baseline. A
+/// baseline git cannot read, or one naming no source, is the error: read as
+/// no baseline, a release went out without the provenance its gate checks.
 fn baseline_marker(root: &Path, commit: &str) -> Result<Option<String>, CmdError> {
-    let Ok(bytes) = committed_file(root, commit, BASELINE) else {
+    let Some(bytes) = committed_file_if_present(root, commit, BASELINE)? else {
         return Ok(None);
     };
     let document: Value = serde_json::from_slice(&bytes).map_err(|error| {
         CmdError::click(format!("{BASELINE} at {commit} is not JSON: {error}"))
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    Ok(Some(
-        document["source"]
-            .as_str()
-            .and_then(|source| source.split_whitespace().next())
-            .unwrap_or_default()
-            .to_string(),
-    ))
+    match document["source"]
+        .as_str()
+        .and_then(|source| source.split_whitespace().next())
+    {
+        Some(marker) => Ok(Some(marker.to_string())),
+        None => Err(CmdError::declaration(format!(
+            "{BASELINE} at {commit} names no source, so the baseline it records cannot be verified"
+        ))),
+    }
 }
 
 /// Every tag name `origin` serves, sorted, so a gate without git history can

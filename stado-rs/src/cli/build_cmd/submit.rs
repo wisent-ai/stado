@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::build_cmd::BuildSubmitArgs;
 use crate::cli::release_catalog;
-use crate::cli::release_submit::{committed_file, immutable, resolve_commit, snapshot};
+use crate::cli::release_submit::{
+    committed_file, committed_file_if_present, immutable, resolve_commit, snapshot,
+};
 use crate::cli::CmdError;
 use crate::release_control;
 use crate::release_pipeline::{
@@ -62,11 +64,24 @@ pub(crate) fn read_source(
     }
     // A release carries the entries written for it: a repository that keeps
     // released entries in changelog/ moves them out of Unreleased in the
-    // version-bump commit, so the submitted revision holds none there.
-    if let Some(entries) = committed_file(&root, &commit, stado_product::changelog::CHANGELOG)
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .and_then(|text| stado_product::changelog::unreleased_entries(&text))
+    // version-bump commit, so the submitted revision holds none there. A
+    // CHANGELOG that cannot be read skipped this check; it is refused.
+    let changelog = match committed_file_if_present(
+        &root,
+        &commit,
+        stado_product::changelog::CHANGELOG,
+    )? {
+        Some(bytes) => Some(String::from_utf8(bytes).map_err(|error| {
+            CmdError::declaration(format!(
+                "{} at {commit} is not UTF-8 text, so its Unreleased entries cannot be read: {error}",
+                stado_product::changelog::CHANGELOG
+            ))
+        })?),
+        None => None,
+    };
+    if let Some(entries) = changelog
+        .as_deref()
+        .and_then(stado_product::changelog::unreleased_entries)
         .filter(|entries| !entries.is_empty())
     {
         return Err(CmdError::refused(format!(

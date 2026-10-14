@@ -152,6 +152,21 @@ pub(crate) fn committed_file(root: &Path, commit: &str, path: &str) -> Result<Ve
     git(root, &["show", &format!("{commit}:{path}")])
 }
 
+/// `path` at `commit`, or `None` when that commit's tree holds no such path.
+/// A git that cannot answer is the error: read as an absent file, it skipped
+/// whatever check the file's presence asks for.
+pub(crate) fn committed_file_if_present(
+    root: &Path,
+    commit: &str,
+    path: &str,
+) -> Result<Option<Vec<u8>>, CmdError> {
+    let listed = git(root, &["ls-tree", "--name-only", "-z", commit, "--", path])?;
+    if listed.is_empty() {
+        return Ok(None);
+    }
+    committed_file(root, commit, path).map(Some)
+}
+
 /// The committed tree as one gzip tar of its regular files.
 ///
 /// `git archive` also writes one entry per directory and a pax global header
