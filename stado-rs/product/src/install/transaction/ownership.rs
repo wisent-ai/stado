@@ -83,12 +83,10 @@ pub fn shared_for_install(
         // its receipt records this machine's staging paths as the source it
         // delivered from, and an unfinished one would otherwise hold this
         // machine's own binary against every later install here.
-        if state
-            .host
-            .as_deref()
-            .is_some_and(|host| !runtime.is_this_host(host))
-        {
-            continue;
+        if let Some(host) = state.host.as_deref() {
+            if !runtime.is_this_host(host)? {
+                continue;
+            }
         }
         if sibling(&state, product, surface, recipe) {
             siblings.push(state);

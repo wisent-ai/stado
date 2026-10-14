@@ -70,29 +70,36 @@ pub struct Runtime {
     /// Where the catalog this installation executes was read: the committed
     /// revision ([`crate::catalog::committed`]), named on the receipt.
     pub catalog_read: Option<crate::catalog::committed::Provenance>,
-    /// This machine's registry target name, as `stado registry self` answers
-    /// it, read once; `None` once asked and not a registry target.
+    /// This machine's registry target name, as `stado registry self --local`
+    /// answers it, read once; `None` once asked and not a registry target.
     this_host: Arc<Mutex<Option<Option<String>>>>,
 }
 
 impl Runtime {
     /// Whether `host` names this machine's registry target. A machine the
     /// registry does not know is no host at all, so every host is another.
-    pub fn is_this_host(&self, host: &str) -> bool {
+    ///
+    /// Answered from this machine's own registry record, never the registry
+    /// authority: an installation here finishes whether or not the host that
+    /// keeps the registry answers. A machine with no readable record is
+    /// refused with the record named, not taken for another host.
+    pub fn is_this_host(&self, host: &str) -> Result<bool> {
         let mut cached = self.this_host.lock().expect("host identity lock");
-        let answer = cached.get_or_insert_with(|| {
-            capture(stado().args(["registry", "self"]))
-                .ok()
-                .filter(|output| output.status.success())
-                .and_then(|output| {
-                    String::from_utf8(output.stdout)
-                        .ok()?
-                        .split_whitespace()
-                        .next()
-                        .map(str::to_owned)
-                })
-        });
-        answer.as_deref() == Some(host)
+        if cached.is_none() {
+            let output = capture(stado().args(["registry", "self", "--local", "--json"]))?;
+            if !output.status.success() {
+                bail!(
+                    "whether host {host} is this machine cannot be told from this machine's own \
+                     registry record (`stado registry self --local` {}): {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+            let answer: serde_json::Value = serde_json::from_slice(&output.stdout)
+                .context("`stado registry self --local --json` printed no JSON object")?;
+            *cached = Some(answer["name"].as_str().map(str::to_owned));
+        }
+        Ok(cached.as_ref().and_then(Option::as_deref) == Some(host))
     }
 
     pub fn new(catalog: Option<PathBuf>) -> Result<Self> {

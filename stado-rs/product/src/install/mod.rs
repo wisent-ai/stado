@@ -59,12 +59,14 @@ pub fn perform(
     // A service surface installs its files on this machine and then ensures
     // the unit on `--host`. For another host that restarted the unit there on
     // the files it already had, and left the new build on this machine.
-    if let Some(other) = host.filter(|host| surface == "service" && !runtime.is_this_host(host)) {
-        bail!(
-            "a service installation puts its files on the machine that runs this command, so \
-             --host {other} would restart {other}'s unit on the files it already has; run the \
-             installation on {other}. Nothing was built, installed or restarted"
-        );
+    if let Some(other) = host.filter(|_| surface == "service") {
+        if !runtime.is_this_host(other)? {
+            bail!(
+                "a service installation puts its files on the machine that runs this command, so \
+                 --host {other} would restart {other}'s unit on the files it already has; run the \
+                 installation on {other}. Nothing was built, installed or restarted"
+            );
+        }
     }
     let (pin, source_commit) = match coordinate {
         Some(Coordinate::Release { version, revision }) => (Some((version, revision)), None),

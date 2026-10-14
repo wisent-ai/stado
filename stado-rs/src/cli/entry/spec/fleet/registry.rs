@@ -99,8 +99,17 @@ pub(crate) enum RegistryCommands {
     #[command(name = "self")]
     SelfTarget {
         /// Print only the target name, for scripts.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "json")]
         name_only: bool,
+        /// Answer from this machine's own registry record (the
+        /// last-known-good copy, or the local store) without asking the
+        /// registry authority; refused naming the record when there is none.
+        #[arg(long)]
+        local: bool,
+        /// Print the answer as JSON; a machine the registry does not carry
+        /// is answered with `"name": null` instead of a refusal.
+        #[arg(long)]
+        json: bool,
     },
     /// Diff registry declarations against live host state.
     Doctor {

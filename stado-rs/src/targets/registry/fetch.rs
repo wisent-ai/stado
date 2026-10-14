@@ -59,7 +59,7 @@ pub enum RegistryFetchError {
 /// the same way and for the sharper reason: a lease whose own document was
 /// missing would otherwise be served the operator's fleet and drive real
 /// commands at it.
-fn store_is_local_filesystem() -> bool {
+pub(crate) fn store_is_local_filesystem() -> bool {
     crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
         == Some(crate::capabilities::StorageAdapter::Local)
 }
@@ -168,6 +168,42 @@ pub fn last_good_for_this_host() -> Option<(Registry, String)> {
         meta.generation,
     );
     Some((registry, notice))
+}
+
+/// The registry for a command that must not depend on the registry authority
+/// answering: the store itself when it is a directory on this disk (read with
+/// no authority in between), otherwise the last-known-good copy, read without
+/// asking anyone. Installing a locally built archive is the repair path for
+/// the services that serve the authority's snapshot — on a host whose vault
+/// or resolver is wedged that snapshot stands unanswered — so the archive path
+/// resolves its host and unit from what this machine already holds. `purpose`
+/// opens the sentence the caller puts before the operator; an absent copy is
+/// refused naming where it was looked for.
+pub async fn registry_without_authority(
+    purpose: &str,
+) -> Result<(Registry, Option<String>), RegistryFetchError> {
+    if store_is_local_filesystem() {
+        return fetch_registry_remote()
+            .await
+            .map(|registry| (registry, None));
+    }
+    let location = match registry_last_good_path() {
+        Some(path) => path.display().to_string(),
+        None => {
+            return Err(RegistryFetchError::Absent {
+                location: "the registry cache directory (HOME is unset)".to_string(),
+            })
+        }
+    };
+    let (registry, meta, age) = load_last_good().ok_or(RegistryFetchError::Absent {
+        location: location.clone(),
+    })?;
+    let notice = format!(
+        "{purpose} from the last-known-good registry copy from {age}s ago ({location}, read_at \
+         {}, generation {}), without asking the registry authority",
+        meta.read_at, meta.generation,
+    );
+    Ok((registry, Some(notice)))
 }
 
 /// Fetch the canonical registry from the configured store (Python
