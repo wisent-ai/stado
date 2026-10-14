@@ -80,6 +80,9 @@ pub struct CleanupReport {
     /// Local Time Machine snapshots. On a Mac this is what decides whether
     /// anything the other cleaners removed became free space.
     pub local_snapshots: CleanerReport,
+    /// The mount point the snapshot cleaner listed snapshots on: the volume
+    /// of the pass's home. `None` when the cleaner did not read one.
+    pub local_snapshot_volume: Option<String>,
     pub object_evidence: CleanerReport,
     /// Logs of the coding-agent harnesses under this account's home.
     pub agent_logs: CleanerReport,

@@ -100,7 +100,7 @@ pub const CLEANERS: &[Cleaner] = &[
     Cleaner {
         name: super::local_snapshots::CLEANER,
         root: "",
-        sweeps: "every local Time Machine snapshot except the operating system's update snapshots",
+        sweeps: "every local Time Machine snapshot of the volume the home lives on, except the operating system's update snapshots",
     },
     Cleaner {
         name: super::object_evidence::CLEANER,

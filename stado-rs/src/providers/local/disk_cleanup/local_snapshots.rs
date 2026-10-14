@@ -8,13 +8,17 @@
 //!
 //! This is the second half, run by the pass itself after every other
 //! cleaner: under the disk-full rule it deletes every Time Machine local
-//! snapshot, so the blocks the other cleaners released become free space.
+//! snapshot of the volume the pass's home lives on (and of no other
+//! volume), so the blocks the other cleaners released become free space.
+//! A home on its own disk image, as every test journey uses, has no
+//! snapshots, so a journey never reaches the machine's own backups. The
+//! report's `local_snapshot_volume` names the volume that was read.
 //!
 //! `com.apple.os.update-*` snapshots are the operating system's recovery
 //! state, not backups; they are retained and counted, never deleted.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::free_bytes;
@@ -26,6 +30,8 @@ pub const CLEANER: &str = "local_snapshots";
 /// The reader and the remover. Fixed absolute paths, the way every other
 /// cleaner names the tools it runs.
 const TMUTIL: &str = "/usr/bin/tmutil";
+/// The reader of the mount point a path lives on.
+const DF: &str = "/bin/df";
 
 /// What `tmutil listlocalsnapshots /` prefixes every Time Machine snapshot
 /// with, and the prefix the operating system's own update snapshots carry.
@@ -59,7 +65,53 @@ fn stamp_of(line: &str) -> Option<&str> {
     shaped.then_some(stamp)
 }
 
-/// Delete every Time Machine local snapshot of this volume.
+/// The mount point of the volume `home` lives on, as `df -P` names it in
+/// its one volume row (the fields after the capacity percentage, which may
+/// themselves hold spaces). A test's isolated home on its own disk image
+/// resolves to that image, and a home under `/Users` to the data volume,
+/// never to another volume.
+fn volume_of(home: &Path) -> Result<PathBuf, String> {
+    let output = crate::wait::output(Command::new(DF).arg("-P").arg(home))
+        .map_err(|error| format!("df could not be run: {error}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        return Err(format!(
+            "df -P {} refused: {}",
+            home.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let row = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .last()
+        .ok_or_else(|| format!("df -P {} printed nothing", home.display()))?;
+    let fields: Vec<&str> = row.split_whitespace().collect();
+    let capacity = fields
+        .iter()
+        .rposition(|field| field.ends_with('%'))
+        .ok_or_else(|| {
+            format!(
+                "df -P {} printed a row without a capacity: {row}",
+                home.display()
+            )
+        })?;
+    let (_, from_capacity) = fields.split_at(capacity);
+    let mount = match from_capacity.split_first() {
+        Some((_, mount)) => mount.join(" "),
+        None => String::new(),
+    };
+    if !mount.starts_with('/') {
+        return Err(format!(
+            "df -P {} printed no mount point: {row}",
+            home.display()
+        ));
+    }
+    Ok(PathBuf::from(mount))
+}
+
+/// Delete every Time Machine local snapshot of the volume `home` lives on,
+/// and of no other volume; the report names that volume.
 ///
 /// Returns without touching anything when the host is not macOS or when the
 /// pass is planning rather than enforcing.
@@ -71,32 +123,50 @@ pub fn delete_all(home: &Path, enforcing: bool, report: &mut CleanupReport) {
         report.local_snapshots = record;
         return;
     }
-    let listed = match crate::wait::output(Command::new(TMUTIL).args(["listlocalsnapshots", "/"])) {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).to_string()
-        }
-        Ok(output) => {
-            bump(&mut record.skipped, "listing_refused");
+    let volume = match volume_of(home) {
+        Ok(volume) => volume,
+        Err(error) => {
+            bump(&mut record.skipped, "volume_unreadable");
             report.add_error(
                 CLEANER,
                 &super::JanitorError::os(&format!(
-                    "tmutil listlocalsnapshots refused: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
+                    "the volume of {} could not be read, so no snapshot is touched: {error}",
+                    home.display()
                 )),
             );
             report.local_snapshots = record;
             return;
         }
-        Err(error) => {
-            bump(&mut record.skipped, "tmutil_unavailable");
-            report.add_error(
-                CLEANER,
-                &super::JanitorError::os(&format!("tmutil could not be run: {error}")),
-            );
-            report.local_snapshots = record;
-            return;
-        }
     };
+    report.local_snapshot_volume = Some(volume.display().to_string());
+    let listed =
+        match crate::wait::output(Command::new(TMUTIL).arg("listlocalsnapshots").arg(&volume)) {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).to_string()
+            }
+            Ok(output) => {
+                bump(&mut record.skipped, "listing_refused");
+                report.add_error(
+                    CLEANER,
+                    &super::JanitorError::os(&format!(
+                        "tmutil listlocalsnapshots {} refused: {}",
+                        volume.display(),
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    )),
+                );
+                report.local_snapshots = record;
+                return;
+            }
+            Err(error) => {
+                bump(&mut record.skipped, "tmutil_unavailable");
+                report.add_error(
+                    CLEANER,
+                    &super::JanitorError::os(&format!("tmutil could not be run: {error}")),
+                );
+                report.local_snapshots = record;
+                return;
+            }
+        };
 
     for line in listed
         .lines()

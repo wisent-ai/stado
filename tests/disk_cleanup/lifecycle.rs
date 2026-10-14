@@ -61,8 +61,26 @@ fn at_the_threshold_everything_the_fleet_put_there_goes_and_user_data_stays() {
     fs::create_dir_all(recording.parent().unwrap()).unwrap();
     fs::write(&recording, b"not uploaded anywhere").unwrap();
     let user_data = native.fill_with_user_data();
+    let host_snapshots_before = host_snapshots();
 
     let report = native.cleanup();
+    // The snapshot cleaner reads the isolated volume, which has none, and
+    // leaves every snapshot of the machine's own volume where it was.
+    assert_eq!(
+        report["local_snapshot_volume"],
+        json!(fs::canonicalize(&native.home)
+            .unwrap()
+            .display()
+            .to_string()),
+        "{report}"
+    );
+    let host_snapshots_after = host_snapshots();
+    for snapshot in &host_snapshots_before {
+        assert!(
+            host_snapshots_after.contains(snapshot),
+            "the pass deleted the machine's own snapshot {snapshot}: {report}"
+        );
+    }
     assert_eq!(report["rule"]["triggered"], true, "{report}");
     assert_eq!(report["pressure_active"], true);
     assert_eq!(
@@ -87,6 +105,26 @@ fn at_the_threshold_everything_the_fleet_put_there_goes_and_user_data_stays() {
     assert!(user_data.is_file(), "the user's data was deleted");
     // The volume is still full of the user's data, which the rule never takes.
     assert_eq!(report["outcome"], "still_full", "{report}");
+}
+
+/// The Time Machine snapshots of the machine's boot data volume, as
+/// `tmutil` lists them.
+fn host_snapshots() -> Vec<String> {
+    let output = std::process::Command::new("/usr/bin/tmutil")
+        .args(["listlocalsnapshots", "/"])
+        .output()
+        .expect("tmutil runs");
+    assert!(
+        output.status.success(),
+        "tmutil listlocalsnapshots / refused: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("com.apple.TimeMachine."))
+        .map(str::to_string)
+        .collect()
 }
 
 #[test]
