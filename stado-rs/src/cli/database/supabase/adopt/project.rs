@@ -134,10 +134,15 @@ pub(super) async fn project_fields(
     };
     let name = project["name"].as_str().unwrap_or(reference);
     let pooler = pooler(reference, token).await;
-    let mut fields = item_fields(name, project, pooler.as_ref(), password)
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+    let mut fields = match item_fields(name, project, pooler.as_ref(), password)? {
+        Value::Object(fields) => fields,
+        other => {
+            return Err(CmdError::click(format!(
+                "project {reference}: its item fields are not an object: {other}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown))
+        }
+    };
     fields.extend(key_fields(reference, token).await?);
     if let Some(url) = custom_url(reference, token).await? {
         fields.insert("custom_url".into(), json!(url));

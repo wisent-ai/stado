@@ -136,8 +136,19 @@ fn item_fields(
     project: &Value,
     pooler: Option<&Value>,
     password: Option<&str>,
-) -> Value {
-    let reference = project["ref"].as_str().unwrap_or_default();
+) -> Result<Value, CmdError> {
+    // Read as "", a project without its ref was stored with the address
+    // `https://.supabase.co`, and a pooler without its user or host with a
+    // connection URL that names neither.
+    let Some(reference) = project["ref"]
+        .as_str()
+        .filter(|reference| !reference.is_empty())
+    else {
+        return Err(CmdError::click(format!(
+            "Supabase answered a project without its ref: {project}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    };
     let port = text("direct_port");
     let mut fields = json!({
         "project_ref": reference,
@@ -164,24 +175,39 @@ fn item_fields(
             "postgresql://postgres:{secret}@db.{reference}.supabase.co:{port}/postgres"
         ));
         if let Some(pooler) = pooler {
-            let user = userinfo(pooler["db_user"].as_str().unwrap_or_default());
-            let host = pooler["db_host"].as_str().unwrap_or_default();
-            fields["pooler_url"] = json!(format!(
-                "postgresql://{user}:{secret}@{host}:{}/postgres",
-                pooler["db_port"]
-            ));
-            // The same pooler in session mode: one server connection per
-            // client connection, so a statement a client names (as SeaORM
-            // through sqlx does) stays its own. `stado_database::connect`
-            // opens this one; the transaction-mode `pooler_url` collides on
-            // `prepared statement "sqlx_s_1" already exists`.
-            fields["session_url"] = json!(format!(
-                "postgresql://{user}:{secret}@{host}:{}/postgres",
-                text("session_pooler_port")
-            ));
+            // A pooler without its user or host gives no connection URL: the
+            // item keeps the password and says why it holds no pooler URL,
+            // since `create` reaches here after the project exists and a
+            // refusal would lose the only copy of the generated password.
+            match (pooler["db_user"].as_str(), pooler["db_host"].as_str()) {
+                (Some(user), Some(host)) => {
+                    let user = userinfo(user);
+                    fields["pooler_url"] = json!(format!(
+                        "postgresql://{user}:{secret}@{host}:{}/postgres",
+                        pooler["db_port"]
+                    ));
+                    // The same pooler in session mode: one server connection
+                    // per client connection, so a statement a client names (as
+                    // SeaORM through sqlx does) stays its own.
+                    // `stado_database::connect` opens this one; the
+                    // transaction-mode `pooler_url` collides on `prepared
+                    // statement "sqlx_s_1" already exists`.
+                    fields["session_url"] = json!(format!(
+                        "postgresql://{user}:{secret}@{host}:{}/postgres",
+                        text("session_pooler_port")
+                    ));
+                }
+                _ => {
+                    fields["pooler_unreported"] = json!(format!(
+                        "Supabase answered project {reference}'s pooler without its user or \
+                         host, so no pooler_url or session_url was written; run stado database \
+                         adopt to read it again"
+                    ));
+                }
+            }
         }
     }
-    fields
+    Ok(fields)
 }
 
 /// A user or password as it may stand in a URL's userinfo: every byte but

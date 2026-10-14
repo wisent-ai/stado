@@ -241,7 +241,7 @@ pub(in crate::cli::database) async fn create(
         })?
         .to_string();
     let pooler = pooler(&reference, &token).await;
-    let fields = item_fields(name, &project, pooler.as_ref(), password.as_deref());
+    let fields = item_fields(name, &project, pooler.as_ref(), password.as_deref())?;
     let context = json!({
         "engine": "postgres",
         "provider": super::super::DatabaseProvider::Supabase,
