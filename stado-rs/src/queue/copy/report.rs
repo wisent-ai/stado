@@ -1,8 +1,6 @@
 //! What a run was asked to do and what it did: the knobs, the per-object
 //! outcome, the per-prefix and whole-run tallies and the dry-run plan.
 
-use super::default_concurrency;
-
 /// Knobs for one copy run.
 #[derive(Clone, Debug)]
 pub struct CopyOptions {
@@ -12,15 +10,6 @@ pub struct CopyOptions {
     pub prefixes: Vec<String>,
     /// Objects copied in parallel.
     pub concurrency: usize,
-}
-
-impl Default for CopyOptions {
-    fn default() -> Self {
-        Self {
-            prefixes: Vec::new(),
-            concurrency: default_concurrency(),
-        }
-    }
 }
 
 /// What happened to one object.

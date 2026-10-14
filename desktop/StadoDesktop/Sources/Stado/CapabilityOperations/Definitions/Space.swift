@@ -15,6 +15,26 @@ enum NativeSpaceOperations {
         .init(id: "root", label: "Declared store root (optional)", option: "--store-root"),
         .init(id: "limit", label: "Item limit (optional)", option: "--limit"),
     ]
+    private static let prefixFields: [NativeCapabilityField] = [
+        .init(id: "prefix", label: "Prefixes (blank selects all canonical prefixes)", option: "--prefix", multiple: true),
+    ]
+    private static let concurrencyFields: [NativeCapabilityField] = [
+        .init(id: "concurrency", label: "Objects in parallel (blank measures available parallelism)", option: "--concurrency"),
+    ]
+    private static let endpointFields: [NativeCapabilityField] = [
+        .init(id: "from", label: "Source backend", option: "--from", required: true),
+        .init(id: "to", label: "Destination backend", option: "--to", required: true),
+        .init(id: "from-path", label: "Source root directory (local)", option: "--from-path"),
+        .init(id: "to-path", label: "Destination root directory (local)", option: "--to-path"),
+        .init(id: "from-bucket", label: "Source bucket (gcs, s3)", option: "--from-bucket"),
+        .init(id: "to-bucket", label: "Destination bucket (gcs, s3)", option: "--to-bucket"),
+        .init(id: "from-account", label: "Source account (azure)", option: "--from-account"),
+        .init(id: "to-account", label: "Destination account (azure)", option: "--to-account"),
+        .init(id: "from-container", label: "Source container (azure)", option: "--from-container"),
+        .init(id: "to-container", label: "Destination container (azure)", option: "--to-container"),
+        .init(id: "from-region", label: "Source region (s3)", option: "--from-region"),
+        .init(id: "to-region", label: "Destination region (s3)", option: "--to-region"),
+    ]
     static let all: [NativeCapabilityOperation] = [
         .init(id: "list-store-objects", title: "List objects in the selected API's configured store", path: ["storage", "ls"],
             hostPlacement: .none, fields: [
@@ -22,6 +42,12 @@ enum NativeSpaceOperations {
                 .init(id: "limit", label: "Maximum objects (blank lists every object)", option: "--limit"),
                 .init(id: "size", label: "Read object bodies to report their sizes", option: "--size", flag: true),
             ], mutates: false),
+        .init(id: "copy-store-objects", title: "Copy objects between stores", path: ["storage", "copy"],
+            hostPlacement: .none, fields: endpointFields + prefixFields + concurrencyFields, jsonOutput: false),
+        .init(id: "backup-store-objects", title: "Copy objects to the configured disaster-recovery store", path: ["storage", "backup"],
+            hostPlacement: .none, fields: prefixFields + concurrencyFields, jsonOutput: false),
+        .init(id: "verify-store-objects", title: "Compare store names, metadata and bytes", path: ["storage", "verify"],
+            hostPlacement: .none, fields: endpointFields + prefixFields, mutates: false),
         .init(id: "preview-reclaim", title: "Preview selected reclamation stages", path: ["space", "reclaim"],
             hostPlacement: .positional, fields: reclaimFields, fixedArguments: ["--dry-run"], mutates: false),
         .init(id: "apply-reclaim", title: "Apply selected reclamation stages", path: ["space", "reclaim"],

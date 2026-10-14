@@ -17,9 +17,9 @@ pub struct StorageCopyArgs {
     /// Print the per-prefix plan and copy nothing.
     #[arg(long)]
     dry_run: bool,
-    /// Objects copied in parallel.
-    #[arg(long, default_value_t = default_concurrency())]
-    concurrency: NonZeroUsize,
+    /// Objects copied in parallel. Omit to measure the OS's available parallelism.
+    #[arg(long)]
+    concurrency: Option<NonZeroUsize>,
 }
 
 #[derive(Args, Debug)]
@@ -31,9 +31,9 @@ pub struct StorageBackupArgs {
     /// Print the plan and write nothing.
     #[arg(long)]
     dry_run: bool,
-    /// Objects copied in parallel.
-    #[arg(long, default_value_t = default_concurrency())]
-    concurrency: NonZeroUsize,
+    /// Objects copied in parallel. Omit to measure the OS's available parallelism.
+    #[arg(long)]
+    concurrency: Option<NonZeroUsize>,
 }
 
 pub(in crate::cli::storage) async fn run(args: &StorageCopyArgs) -> Result<(), CmdError> {
@@ -42,7 +42,7 @@ pub(in crate::cli::storage) async fn run(args: &StorageCopyArgs) -> Result<(), C
         args.ends.destination(),
         CopyOptions {
             prefixes: args.prefix.clone(),
-            concurrency: args.concurrency.get(),
+            concurrency: resolve_concurrency(args.concurrency)?,
         },
         args.dry_run,
         true,
@@ -68,7 +68,7 @@ pub(in crate::cli::storage) async fn backup(args: &StorageBackupArgs) -> Result<
         destination,
         CopyOptions {
             prefixes: args.prefix.clone(),
-            concurrency: args.concurrency.get(),
+            concurrency: resolve_concurrency(args.concurrency)?,
         },
         args.dry_run,
         true,

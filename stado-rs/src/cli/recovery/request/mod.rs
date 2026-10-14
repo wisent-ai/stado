@@ -19,7 +19,6 @@ use clap::Args;
 
 use crate::cli::storage::EndpointArgs;
 use crate::deploy::service;
-use crate::queue::copy::default_concurrency as copy_concurrency;
 use crate::targets::ComputeTarget;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -74,9 +73,9 @@ pub struct RecoveryMigrateArgs {
     /// Resume dispatch and claims after every other step. Without it the destination stays paused.
     #[arg(long)]
     pub(super) resume: bool,
-    /// Objects copied in parallel.
-    #[arg(long, default_value_t = default_concurrency())]
-    pub(super) concurrency: NonZeroUsize,
+    /// Objects copied in parallel. Omit to measure the OS's available parallelism.
+    #[arg(long)]
+    pub(super) concurrency: Option<NonZeroUsize>,
     /// Config file to atomically rewrite. Defaults to Stado's resolved file.
     #[arg(long)]
     pub(super) config: Option<PathBuf>,
@@ -95,10 +94,6 @@ pub struct RecoveryMigrateArgs {
     /// Validate and print the plan; perform no network or filesystem writes and no billing change.
     #[arg(long)]
     pub(super) dry_run: bool,
-}
-
-fn default_concurrency() -> NonZeroUsize {
-    NonZeroUsize::new(copy_concurrency()).expect("copy concurrency is non-zero")
 }
 
 pub(super) struct PreparedConfig {

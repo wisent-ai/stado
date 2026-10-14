@@ -151,7 +151,7 @@ pub async fn gather(
             })
             // The crate's one fan-out budget, the machine's available
             // parallelism (queue::migrations::bulk_workers), not a chosen count.
-            .buffer_unordered(crate::queue::migrations::bulk_workers())
+            .buffer_unordered(crate::queue::migrations::bulk_workers()?)
             .collect()
             .await;
     inspections.sort_by_key(|(index, _)| *index);

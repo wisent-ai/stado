@@ -76,7 +76,7 @@ pub async fn backfill_priority_markers(store: &JobStorage) -> Result<bool, Stora
         .collect();
     let bodies: Vec<Option<String>> = futures::stream::iter(&paths)
         .map(|path| store.download_text(path))
-        .buffered(bulk_workers())
+        .buffered(bulk_workers()?)
         .collect::<Vec<Result<Option<String>, StorageError>>>()
         .await
         .into_iter()

@@ -73,7 +73,7 @@ impl Holders {
         // ownership picture.
         let loaded: Vec<Option<ProviderLease>> = futures::stream::iter(&job_ids)
             .map(|job_id| lease_store.load(job_id))
-            .buffered(bulk_workers())
+            .buffered(bulk_workers()?)
             .collect::<Vec<_>>()
             .await
             .into_iter()

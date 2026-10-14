@@ -161,7 +161,7 @@ pub async fn assign_jobs_at(
                     .await?;
                 Ok::<(), StorageError>(())
             })
-            .buffered(crate::queue::migrations::bulk_workers())
+            .buffered(crate::queue::migrations::bulk_workers()?)
             .collect::<Vec<Result<(), StorageError>>>()
             .await
             .into_iter()

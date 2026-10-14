@@ -23,7 +23,7 @@ pub(in crate::cli::storage) async fn ls_canonical(
                 .map_err(|err| err.to_string());
             (*prefix, outcome)
         })
-        .buffered(copy::default_concurrency())
+        .buffered(copy::default_concurrency()?)
         .collect()
         .await;
 

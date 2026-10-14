@@ -137,6 +137,6 @@ pub const SENTINEL_PATH: &str = "storage_copy/.copy.json";
 
 /// Default copy fan-out: the crate's one bulk budget
 /// (`queue::migrations::bulk_workers`, the OS's available parallelism).
-pub fn default_concurrency() -> usize {
+pub fn default_concurrency() -> Result<usize, super::StorageError> {
     super::migrations::bulk_workers()
 }

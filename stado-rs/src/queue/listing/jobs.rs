@@ -46,10 +46,11 @@ pub async fn list_jobs(
         .filter(|path| path.starts_with(&directory) && path.ends_with(".json"))
         .collect();
     let mut jobs = Vec::new();
+    let workers = crate::queue::migrations::bulk_workers()?;
     for paths in paths.chunks(100) {
         let texts: Vec<Option<String>> = futures::stream::iter(paths)
             .map(|path| store.download_text(path))
-            .buffered(crate::queue::migrations::bulk_workers())
+            .buffered(workers)
             .collect::<Vec<Result<Option<String>, StorageError>>>()
             .await
             .into_iter()

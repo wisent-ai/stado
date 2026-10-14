@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { snapshotSubject, verifyRevision } from '../../native/subject.mjs';
@@ -21,6 +21,8 @@ assert.ok(Number.isSafeInteger(count) && Number.isSafeInteger(limit) && count > 
   'STADO_TEST_LIST_COUNT must exceed STADO_TEST_LIST_LIMIT');
 const revision = required('STADO_TEST_SOURCE_REVISION');
 const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
+const explicitConcurrency = required('STADO_TEST_COPY_CONCURRENCY');
+const refusedConcurrency = required('STADO_TEST_COPY_REFUSED_CONCURRENCY');
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const output = join(repository, '.build', 'storage-listing', randomUUID());
 const home = join(output, 'home');
@@ -47,9 +49,9 @@ function command(args, succeeds = true) {
   assert.equal(result.status === successExit, succeeds, result.stderr);
   return result;
 }
-function snapshot() {
-  return readdirSync(join(store, 'queue')).filter(name => name.endsWith('.json')).sort()
-    .map(name => ({ name: `queue/${name}`, sha256: digest(readFileSync(join(store, 'queue', name))) }));
+function snapshot(root = store) {
+  return readdirSync(join(root, 'queue')).filter(name => name.endsWith('.json')).sort()
+    .map(name => ({ name: `queue/${name}`, sha256: digest(readFileSync(join(root, 'queue', name))) }));
 }
 const names = result => result.objects.map(object => object.name);
 try {
@@ -92,6 +94,26 @@ try {
   for (const name of expected) assert.ok(text.includes(name), `text output omitted ${name}`);
   const refused = command(['storage', 'ls', 'queue/', '--limit', 'not-an-integer'], false);
   assert.ok(refused.stderr.includes('--limit'), refused.stderr);
+  report.copies = [];
+  for (const selection of [
+    { name: 'measured', flags: [] },
+    { name: 'explicit', flags: ['--concurrency', explicitConcurrency] },
+  ]) {
+    const destination = join(home, selection.name);
+    const endpoints = ['--from', 'local', '--from-path', store,
+      '--to', 'local', '--to-path', destination, '--prefix', 'queue/'];
+    command(['storage', 'copy', ...endpoints, ...selection.flags]);
+    const copied = snapshot(destination);
+    assert.deepEqual(copied, before, `${selection.name} copy must preserve every object's bytes`);
+    command(['storage', 'verify', ...endpoints, '--json']);
+    report.copies.push({ selection: selection.name, destination, objects: copied });
+  }
+  const refusedDestination = join(home, 'refused-copy');
+  const copyRefusal = command(['storage', 'copy', '--from', 'local', '--from-path', store,
+    '--to', 'local', '--to-path', refusedDestination, '--prefix', 'queue/',
+    '--concurrency', refusedConcurrency], false);
+  assert.ok(copyRefusal.stderr.includes('--concurrency'), copyRefusal.stderr);
+  assert.equal(existsSync(refusedDestination), false, 'invalid fan-out must be refused before opening the destination');
   report.after = snapshot();
   assert.deepEqual(report.after, before, 'inspection and argument refusals must not mutate stored objects');
   report.verdict = 'passed';

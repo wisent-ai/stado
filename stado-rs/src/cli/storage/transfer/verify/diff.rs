@@ -44,6 +44,7 @@ pub(in crate::cli::storage) async fn diff_prefix(
     source: &Arc<dyn BlobBackend>,
     destination: &Arc<dyn BlobBackend>,
     prefix: &str,
+    concurrency: usize,
 ) -> PrefixDiff {
     let mut diff = PrefixDiff {
         prefix: prefix.to_string(),
@@ -104,7 +105,7 @@ pub(in crate::cli::storage) async fn diff_prefix(
             .cloned(),
     )
     .map(|name| compare_body(Arc::clone(source), Arc::clone(destination), name))
-    .buffered(copy::default_concurrency())
+    .buffered(concurrency)
     .collect()
     .await;
     for check in body_checks {

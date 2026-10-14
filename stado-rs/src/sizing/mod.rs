@@ -106,7 +106,7 @@ async fn download_many(
     use futures::StreamExt;
     futures::stream::iter(paths)
         .map(|path| store.download_text(path))
-        .buffered(crate::queue::migrations::bulk_workers())
+        .buffered(crate::queue::migrations::bulk_workers()?)
         .collect::<Vec<Result<Option<String>, StorageError>>>()
         .await
         .into_iter()

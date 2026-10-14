@@ -83,6 +83,7 @@ pub(in crate::cli::storage) async fn verify(args: &StorageVerifyArgs) -> Result<
         args.ends.destination(),
         &args.prefix,
         args.json,
+        copy::default_concurrency()?,
     )
     .await
 }
@@ -92,6 +93,7 @@ pub(crate) async fn verify_between(
     to: Endpoint,
     requested_prefixes: &[String],
     as_json: bool,
+    concurrency: usize,
 ) -> Result<(), CmdError> {
     if from.describe() == to.describe() {
         return Err(CmdError::usage(format!(
@@ -104,8 +106,8 @@ pub(crate) async fn verify_between(
     let prefixes = selected_prefixes(requested_prefixes);
 
     let diffs: Vec<PrefixDiff> = futures::stream::iter(prefixes.iter())
-        .map(|prefix| diff_prefix(&source, &destination, prefix))
-        .buffered(copy::default_concurrency())
+        .map(|prefix| diff_prefix(&source, &destination, prefix, concurrency))
+        .buffered(concurrency)
         .collect()
         .await;
 

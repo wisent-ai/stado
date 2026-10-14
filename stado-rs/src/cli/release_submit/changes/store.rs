@@ -32,7 +32,7 @@ pub(super) async fn download(
 ) -> Result<Vec<Change>, CmdError> {
     let texts = futures::stream::iter(paths)
         .map(|path| async move { (path, store.download_text(path).await) })
-        .buffered(crate::queue::copy::default_concurrency())
+        .buffered(crate::queue::copy::default_concurrency()?)
         .collect::<Vec<_>>()
         .await;
     let mut entries = Vec::with_capacity(texts.len());

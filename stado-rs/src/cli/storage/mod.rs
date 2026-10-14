@@ -128,10 +128,12 @@ fn parse_storage_kind(raw: &str) -> Result<String, String> {
         })
 }
 
-/// [`copy::default_concurrency`] as the non-zero type the flag parses into;
-/// `buffered(0)` would make no progress, so zero is rejected at parse time.
-fn default_concurrency() -> NonZeroUsize {
-    NonZeroUsize::new(copy::default_concurrency()).expect("the crate fan-out budget is non-zero")
+/// Resolve an explicit nonzero fan-out or ask the OS before starting work.
+pub(crate) fn resolve_concurrency(requested: Option<NonZeroUsize>) -> Result<usize, CmdError> {
+    match requested {
+        Some(value) => Ok(value.get()),
+        None => copy::default_concurrency().map_err(CmdError::from),
+    }
 }
 
 // ---- shared rendering ----

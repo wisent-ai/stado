@@ -21,7 +21,7 @@ pub(in crate::cli::storage) async fn ls_prefix(
         blobs.truncate(limit);
     }
     let sizes = if args.size {
-        probe_sizes(backend, &blobs).await
+        probe_sizes(backend, &blobs, copy::default_concurrency()?).await
     } else {
         Vec::new()
     };
@@ -88,7 +88,11 @@ pub(in crate::cli::storage) async fn ls_prefix(
 /// bounded only when `--limit` is stated, and the fan-out is the crate's one bulk budget
 /// ([`copy::default_concurrency`], the OS's available parallelism) rather
 /// than a second concurrency style.
-async fn probe_sizes(backend: &Arc<dyn BlobBackend>, blobs: &[BlobInfo]) -> Vec<SizeProbe> {
+async fn probe_sizes(
+    backend: &Arc<dyn BlobBackend>,
+    blobs: &[BlobInfo],
+    concurrency: usize,
+) -> Vec<SizeProbe> {
     futures::stream::iter(blobs)
         .map(|blob| async move {
             match backend.download_bytes(&blob.name).await {
@@ -97,7 +101,7 @@ async fn probe_sizes(backend: &Arc<dyn BlobBackend>, blobs: &[BlobInfo]) -> Vec<
                 Err(err) => SizeProbe::Failed(err.to_string()),
             }
         })
-        .buffered(copy::default_concurrency())
+        .buffered(concurrency)
         .collect()
         .await
 }

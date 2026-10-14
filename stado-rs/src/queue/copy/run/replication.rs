@@ -29,6 +29,7 @@ pub async fn replicate_configured_backup() -> Result<Option<CopyReport>, Storage
     if let Some(refusal) = source_endpoint.cannot_replicate(&destination_endpoint) {
         return Err(StorageError::Other(refusal));
     }
+    let concurrency = default_concurrency()?;
     let source = source_endpoint.build().await?;
     let destination = destination_endpoint.build().await?;
     let report = copy(
@@ -36,7 +37,7 @@ pub async fn replicate_configured_backup() -> Result<Option<CopyReport>, Storage
         &destination,
         &CopyOptions {
             prefixes: Vec::new(),
-            concurrency: default_concurrency(),
+            concurrency,
         },
     )
     .await?;

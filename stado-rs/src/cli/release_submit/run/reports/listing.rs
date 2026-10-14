@@ -72,7 +72,6 @@ pub(crate) async fn recent_runs(
     )
     .await
 }
-
 /// The newest `limit` runs the filter admits, newest first. A run named by
 /// id is found however far back it is: the walk reads run objects until the
 /// filter is satisfied or the listing ends, which is what `release status
@@ -166,7 +165,7 @@ pub(crate) async fn matching_runs(
             }
         },
     ))
-    .buffered(crate::queue::migrations::bulk_workers())
+    .buffered(crate::queue::migrations::bulk_workers()?)
     .collect()
     .await;
     for (index, platform, found) in answers {

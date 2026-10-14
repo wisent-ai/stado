@@ -38,7 +38,7 @@ pub(super) async fn observations(
         .collect();
     let answers = futures::stream::iter(&batches)
         .map(|path| batch_observation(store, path, wanted))
-        .buffered(crate::queue::copy::default_concurrency())
+        .buffered(crate::queue::copy::default_concurrency()?)
         .collect::<Vec<_>>()
         .await;
     let mut observed = Observed::default();

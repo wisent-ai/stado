@@ -60,6 +60,7 @@ async fn migrate(args: &RecoveryMigrateArgs) -> Result<(), CmdError> {
     let source = args.ends.source();
     let destination = args.ends.destination();
     validate_args(args, &source, &destination)?;
+    let concurrency = storage::resolve_concurrency(args.concurrency)?;
     let prepared = prepare_config(args, &destination)?;
     if args.dry_run {
         print_plan(args, &source, &destination, &prepared);
@@ -87,7 +88,7 @@ async fn migrate(args: &RecoveryMigrateArgs) -> Result<(), CmdError> {
         println!("[2/9] using source without a managed billing window");
     }
 
-    let transfer_result = transfer(args, &source, &destination, &services).await;
+    let transfer_result = transfer(&source, &destination, &services, concurrency).await;
     let close_result = if billing_attempted {
         let project = required(args.gcp_project.as_deref(), "--gcp-project")?;
         println!("[6/9] closing GCP billing window before cutover");
@@ -142,10 +143,10 @@ async fn migrate(args: &RecoveryMigrateArgs) -> Result<(), CmdError> {
 }
 
 async fn transfer(
-    args: &RecoveryMigrateArgs,
     source: &Endpoint,
     destination: &Endpoint,
     services: &[ResolvedService],
+    concurrency: usize,
 ) -> Result<(), CmdError> {
     println!("[3/9] fencing and draining source {}", source.describe());
     let source_store = endpoint_store(source).await?;
@@ -159,14 +160,14 @@ async fn transfer(
         destination.clone(),
         CopyOptions {
             prefixes: Vec::new(),
-            concurrency: args.concurrency.get(),
+            concurrency,
         },
         false,
         false,
     )
     .await?;
     println!("[5/9] verifying names, metadata, and body bytes read-only");
-    storage::verify_between(source.clone(), destination.clone(), &[], false).await?;
+    storage::verify_between(source.clone(), destination.clone(), &[], false, concurrency).await?;
     Ok(())
 }
 

@@ -77,6 +77,7 @@ pub(super) async fn collect_from_index(
     if scan.window_full(out.len()) || scan.budget_spent(*scanned) {
         return Ok(());
     }
+    let workers = crate::queue::migrations::bulk_workers()?;
     // `from_head` opts out of the rotation in both directions: the walk
     // starts at the head and the cursor is not moved, so a priority-fidelity
     // read neither observes nor perturbs the claim loops sharing it.
@@ -116,12 +117,7 @@ pub(super) async fn collect_from_index(
         // it before anything could be cut.
         let markers: Vec<&String> = page.iter().filter(|path| is_marker(path)).collect();
         let marker_paths: Vec<String> = markers.iter().map(|path| (*path).clone()).collect();
-        let marker_bodies = download_many_or_none(
-            store,
-            &marker_paths,
-            crate::queue::migrations::bulk_workers(),
-        )
-        .await;
+        let marker_bodies = download_many_or_none(store, &marker_paths, workers).await;
         let mut entries: Vec<(&str, String)> = Vec::new();
         for (marker, body) in markers.iter().zip(marker_bodies) {
             // A marker body that vanished (its job left the queue between the
@@ -158,9 +154,7 @@ pub(super) async fn collect_from_index(
             .iter()
             .map(|(_, job_id)| format!("{prefix}/{job_id}.json"))
             .collect();
-        let bodies =
-            download_many_or_none(store, &job_paths, crate::queue::migrations::bulk_workers())
-                .await;
+        let bodies = download_many_or_none(store, &job_paths, workers).await;
         for ((marker, _), body) in entries.iter().zip(bodies) {
             // Once the wrapped leg reaches past the name the walk began at,
             // the whole index has been seen exactly once.
