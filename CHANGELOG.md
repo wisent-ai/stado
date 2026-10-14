@@ -36,6 +36,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **Quality checks audit the committed CLI command tree:** the release recipe builds its executable from the selected source and `--help` supplies the actual verbs; Brama refuses one-off names, duplicate operations and incomplete object lifecycles with the offending command and general primitive. Local disk maintenance now uses `stado space reclaim --local` (preview) or `--local --apply --reason TEXT`, and editor compiler settings use `stado product editor serve`; the former root janitor and Swift-specific command are removed. Desktop Releases shows the command-tree check and Disk offers the same local reclaim action. Real journeys live under `tests/quality/command_tree/` and `tests/disk_cleanup/`.
+
 - **Queue priority uses the job model's integer range, not a decimal index limit:** submissions and queued-job priority changes accept nonnegative signed integers. The ordered index encodes every byte, backfill replaces superseded keys under new coverage, and stale keys cannot admit a job at its former priority. Desktop Queue exposes the same priority mutation and refusals. The isolated real CLI journey is `tests/queue/priority.mjs`.
 
 - **A retained candidate failure holds the next promotion without a retry count:** the release agent no longer waits for repeated quarantines before preserving a candidate-affecting cause. A live condition proving recovery releases the next candidate; an unavailable check retains the hold and reports its command, status and output. CLI release status and Desktop Releases share the persisted diagnosis. The real admission journey is `tests/release/quarantine/admission.mjs`, requiring an isolated release fixture.
