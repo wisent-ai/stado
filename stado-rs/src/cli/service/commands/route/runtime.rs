@@ -28,6 +28,7 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
         RuntimeCommands::Update {
             name,
             host,
+            local_only,
             from_artifact,
             from_archive,
             rollback_to,
@@ -37,6 +38,7 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
             update(
                 &name,
                 &host,
+                local_only,
                 from_artifact.as_deref(),
                 from_archive.as_deref(),
                 rollback_to.as_deref(),

@@ -76,6 +76,9 @@ pub enum RuntimeCommands {
         name: String,
         #[arg(long)]
         host: String,
+        /// Keep a local release's reader convergence on this machine.
+        #[arg(long, hide = true, requires = "from_archive")]
+        local_only: bool,
         /// Published artifact to install.
         #[arg(long, conflicts_with = "from_archive")]
         from_artifact: Option<String>,

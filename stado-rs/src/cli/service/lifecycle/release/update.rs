@@ -6,6 +6,7 @@ use super::*;
 pub(crate) async fn update(
     name: &str,
     host: &str,
+    local_only: bool,
     reference: Option<&str>,
     archive: Option<&str>,
     rollback_to: Option<&str>,
@@ -46,6 +47,11 @@ pub(crate) async fn update(
             declared_matching(name, Some(host)).await?,
         )
     };
+    if local_only && !host_channel::target_is_this_host(&target) {
+        return Err(CmdError::refused(format!(
+            "{host}: service update was requested by a local release converge, but this registry target is not this machine; no remote command was started"
+        )));
+    }
     if services.is_empty() {
         return Err(CmdError::refused(format!(
             "{host} does not manage {name}; deploy it first"

@@ -6,17 +6,19 @@ import { once } from 'node:events';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// This journey replaces Stado only on a dedicated release host whose declared
-// service-local reader's real update command is held by its remote channel.
-// No simulated command, canned response or operator account is used.
+// This journey replaces Stado only on a dedicated release host. A real
+// service-local reader update stands while its channel is held; a separately
+// declared remote service proves local convergence refuses before opening SSH.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const binary = process.env.STADO_BIN;
 const host = process.env.STADO_TEST_DEDICATED_HOST;
 const version = process.env.STADO_TEST_RELEASE_VERSION;
 const revision = process.env.STADO_TEST_RELEASE_SOURCE_COMMIT;
 const reader = process.env.STADO_TEST_CONVERGE_READER;
-assert.ok(binary && host && version && revision && reader,
-  'STADO_BIN, STADO_TEST_DEDICATED_HOST, STADO_TEST_RELEASE_VERSION, STADO_TEST_RELEASE_SOURCE_COMMIT and STADO_TEST_CONVERGE_READER declare the isolated real journey');
+const remoteHost = process.env.STADO_TEST_REMOTE_HOST;
+const remoteReader = process.env.STADO_TEST_REMOTE_READER;
+assert.ok(binary && host && version && revision && reader && remoteHost && remoteReader,
+  'STADO_BIN, STADO_TEST_DEDICATED_HOST, STADO_TEST_RELEASE_VERSION, STADO_TEST_RELEASE_SOURCE_COMMIT, STADO_TEST_CONVERGE_READER, STADO_TEST_REMOTE_HOST and STADO_TEST_REMOTE_READER declare the isolated real journey');
 const program = realpathSync(binary);
 mkdirSync(join(root, '.build'), { recursive: true });
 const output = mkdtempSync(join(realpathSync(join(root, '.build')), 'install-converge-wait-'));
@@ -51,6 +53,14 @@ try {
   report.binary_sha256 = digest(readFileSync(program));
   assert.equal(succeeded(run(['registry', 'self', '--local', '--name-only'])), host,
     'the dedicated host must be this machine');
+  assert.notEqual(remoteHost, host, 'the remote refusal needs a distinct registry host');
+  const remoteRefusal = run(['service', 'update', remoteReader, '--host', remoteHost,
+    '--local-only', '--from-archive', join(output, 'absent-release.tar'), '--refresh-image', '--json']);
+  assert.ok(remoteRefusal.status && !remoteRefusal.signal && !remoteRefusal.error,
+    `a local-only update accepted the remote host: ${remoteRefusal.stderr}`);
+  assert.ok(remoteRefusal.stderr.includes(remoteHost) && remoteRefusal.stderr.includes('no remote command was started'),
+    `the refusal lost the remote host or the no-SSH decision: ${remoteRefusal.stderr}`);
+  report.remoteRefusal = { exit_status: remoteRefusal.status, stderr: remoteRefusal.stderr };
   report.before = status();
   const args = ['product', 'install', 'stado', '--surface', 'cli',
     '--release-version', version, '--source-commit', revision];

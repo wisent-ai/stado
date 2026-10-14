@@ -135,6 +135,7 @@ async fn converge_service_local_stado_readers(
                     &reader,
                     "--host",
                     &target.name,
+                    "--local-only",
                     "--from-archive",
                 ])
                 .arg(archive)
