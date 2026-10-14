@@ -9,10 +9,13 @@ use crate::common::{emit, Runtime};
 use super::{execute_revision, results, stage};
 
 pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
-    let manifest = match arguments.remove_one::<String>("manifest-path") {
+    let selected = arguments.remove_one::<String>("manifest-path");
+    let explicit_manifest = selected.is_some();
+    let manifest = match selected {
         Some(path) => PathBuf::from(path),
         None => PathBuf::from("Cargo.toml"),
     };
+    let all = arguments.get_flag("all");
     let json_output = arguments.get_flag("json");
     let revision = arguments.remove_one::<String>("revision");
     let operation = arguments
@@ -27,7 +30,14 @@ pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         if revision.is_some() || !forwarded.is_empty() {
             bail!("Cargo results reads the checkout's retained receipts; --revision and forwarded Cargo arguments do not apply");
         }
-        let answer = results::list(runtime, &manifest)?;
+        if all && explicit_manifest {
+            bail!("Cargo results --all reads the workspace; --manifest-path selects one checkout instead");
+        }
+        let answer = if all {
+            results::all(runtime)?
+        } else {
+            results::list(runtime, &manifest)?
+        };
         if json_output {
             emit(&answer)?;
         } else {
@@ -48,6 +58,11 @@ pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
             }
         }
         return Ok(libc::EXIT_SUCCESS);
+    }
+    if all {
+        bail!(
+            "Cargo --all applies only to results; {operation} runs against one selected manifest"
+        );
     }
     if operation == "stage" {
         return stage::stage(

@@ -9,13 +9,11 @@ use serde_json::{json, Value};
 
 use crate::common::Runtime;
 
-pub(super) fn list(runtime: &Runtime, requested: &Path) -> Result<Value> {
-    let (manifest, checkout, repository) = super::sources::manifest(runtime, requested)?;
-    let area = crate::common::runs::checkout_area(&runtime.home, &checkout)?.join("cargo");
+fn entries(area: &Path) -> Result<Vec<Value>> {
     let entries = match fs::read_dir(&area) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(json!({ "repository": repository, "manifest": manifest, "results": [] }));
+            return Ok(Vec::new());
         }
         Err(error) => {
             return Err(error)
@@ -44,6 +42,43 @@ pub(super) fn list(runtime: &Runtime, requested: &Path) -> Result<Value> {
             "failedOperation": report["failed_operation"], "error": report["error"] }),
         );
     }
-    results.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
+    Ok(results)
+}
+
+pub(super) fn list(runtime: &Runtime, requested: &Path) -> Result<Value> {
+    let (manifest, checkout, repository) = super::sources::manifest(runtime, requested)?;
+    let area = crate::common::runs::checkout_area(&runtime.home, &checkout)?.join("cargo");
+    let results = entries(&area)?;
     Ok(json!({ "repository": repository, "manifest": manifest, "results": results }))
+}
+
+/// Every canonical checkout in the selected workspace, without opening a
+/// manifest or starting Cargo. The retained receipt remains the only source
+/// of state, location and pinned revision.
+pub(super) fn all(runtime: &Runtime) -> Result<Value> {
+    let workspace = runtime.workspace.canonicalize().with_context(|| {
+        format!(
+            "reading canonical workspace {}",
+            runtime.workspace.display()
+        )
+    })?;
+    let mut results = Vec::new();
+    for entry in fs::read_dir(&workspace)
+        .with_context(|| format!("listing canonical checkouts under {}", workspace.display()))?
+    {
+        let entry = entry.with_context(|| {
+            format!("listing canonical checkouts under {}", workspace.display())
+        })?;
+        if !entry
+            .file_type()
+            .with_context(|| format!("inspecting checkout {}", entry.path().display()))?
+            .is_dir()
+        {
+            continue;
+        }
+        let area = crate::common::runs::checkout_area(&runtime.home, &entry.path())?.join("cargo");
+        results.extend(entries(&area)?);
+    }
+    results.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
+    Ok(json!({ "workspace": workspace, "results": results }))
 }

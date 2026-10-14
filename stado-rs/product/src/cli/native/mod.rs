@@ -41,6 +41,7 @@ pub fn cargo() -> Command {
              locked flags and compiler cache, so another session's uncommitted edit in the \
              checkout is not read; a commit the checkout does not hold is refused",
         ))
+        .arg(flag("all", "Read retained Cargo receipts across canonical workspace checkouts; results only"))
         .arg(flag("json", "Print retained source and execution evidence"))
         .arg(
             Arg::new("operation")

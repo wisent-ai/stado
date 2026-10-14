@@ -112,6 +112,18 @@ try {
     assert.equal(JSON.parse(readFileSync(result.path, 'utf8')).state, result.state,
       'The result list disagrees with its persisted receipt');
   }
+  const fleet = run(binary, ['product', 'cargo', '--all', '--json', 'results']);
+  success(fleet);
+  report.workspace_results = JSON.parse(fleet.stdout);
+  assert.equal(report.workspace_results.workspace, realpathSync(workspace),
+    'workspace receipt read selected a different source root');
+  for (const result of retained) {
+    assert.ok(report.workspace_results.results.some(row => row.path === result.path
+      && row.state === result.state), 'workspace read omitted or altered a checkout receipt');
+  }
+  const conflicting = run(binary, [...cargo, '--all', 'results']);
+  assert.ok(!succeeded(conflicting), 'workspace and checkout result selectors were accepted together');
+  assert.match(conflicting.stderr, /--all reads the workspace; --manifest-path selects one checkout/);
   const invalidRead = run(binary, [...cargo, '--revision', commit, 'results']);
   assert.ok(!succeeded(invalidRead), 'Cargo results accepted revision selection');
   assert.match(invalidRead.stderr, /--revision and forwarded Cargo arguments do not apply/);
