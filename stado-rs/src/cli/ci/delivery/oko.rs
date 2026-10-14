@@ -79,12 +79,15 @@ pub async fn authors(
     Ok(authors)
 }
 
-/// The words of one refused finding as Oko records it.
+/// The words of one refused finding as Oko records it, with the observable
+/// result that completes its repair (`--criterion`: Oko records no defect
+/// without one).
 pub struct Finding {
     pub title: String,
     pub surface: String,
     pub impact: &'static str,
     pub repair: &'static str,
+    pub criterion: String,
 }
 
 /// The finding a refused install of the delivery routine is.
@@ -103,6 +106,11 @@ pub fn install_refused(repository: &str, refused: &Refused) -> Finding {
         ),
         impact: "The delivery routine stops at this step: it and every later step of the plan stay uninstalled until a commit on main repairs every refusal",
         repair: "Repair every refusal named in the evidence in the source it names and commit it to main; the next pass of stado ci run resumes at this step",
+        criterion: format!(
+            "a later pass of stado ci run installs step {} from a commit of {repository} main that \
+             carries the repair, and `stado ci delivery` shows no refused step",
+            refused.step
+        ),
     }
 }
 
@@ -146,6 +154,8 @@ pub async fn record(
                 finding.repair,
                 "--found-in",
                 &found,
+                "--criterion",
+                &finding.criterion,
                 "--json",
             ],
             None,

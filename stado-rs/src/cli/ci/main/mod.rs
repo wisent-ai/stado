@@ -69,6 +69,10 @@ fn red_commit(repository: &str, product: &str, refused: &Refused) -> oko::Findin
         ),
         impact: "The delivery routine installs the last green commit of main, so this step stays at it until a later commit is green",
         repair: "Repair every refusal named in the evidence in the source it names and commit it to main; the next main check records the green commit as the repair",
+        criterion: format!(
+            "`stado ci run` records a later commit of {repository} main green for {product}'s \
+             declared gates"
+        ),
     }
 }
 
