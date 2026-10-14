@@ -198,17 +198,17 @@ async fn resolved_for(
 
 async fn resolve_once(service: &str, consumer: &str, json_output: bool) -> Result<(), CmdError> {
     let (resolved, _) = resolved_for(service, consumer).await?;
-    let report = json!({
-        "service": format!("stado://service/{}", resolved.name),
-        "generation": resolved.generation,
-        "capabilities": resolved.capabilities,
-    });
+    let uri = format!("stado://service/{}", resolved.name);
     if json_output {
+        let report = json!({
+            "service": uri,
+            "generation": resolved.generation,
+            "capabilities": resolved.capabilities,
+        });
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!(
-            "{} generation={} capabilities={}",
-            report["service"].as_str().unwrap_or_default(),
+            "{uri} generation={} capabilities={}",
             resolved.generation,
             resolved.capabilities.join(",")
         );
