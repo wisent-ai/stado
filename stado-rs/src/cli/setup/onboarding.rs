@@ -175,12 +175,18 @@ fn ordered_screens(definition: &Value) -> Result<Vec<&Value>, CmdError> {
 
 fn render(screen: &Value, index: usize, total: usize) {
     let presentation = &screen["presentation"];
+    // A screen whose definition gives no title or body says which: a blank
+    // line read as a screen meant to be blank.
+    let declared = |field: &str| match presentation[field].as_str() {
+        Some(text) => text.to_string(),
+        None => format!("(the onboarding definition gives this screen no {field})"),
+    };
     println!(
         "{}/{}  {}\n       {}",
         index + 1,
         total,
-        presentation["title"].as_str().unwrap_or_default(),
-        presentation["body"].as_str().unwrap_or_default()
+        declared("title"),
+        declared("body")
     );
     if let Some(command) = presentation.get("command").and_then(Value::as_str) {
         println!("       $ {command}");
