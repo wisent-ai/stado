@@ -70,7 +70,7 @@ fn room(path: &Path) -> Result<Room, String> {
 }
 
 fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<(), String> {
-    if destination.exists() {
+    if crate::primitives::presence::present(destination).map_err(|error| error.to_string())? {
         return Err(format!(
             "immutable release directory already exists: {}",
             destination.display()

@@ -53,11 +53,15 @@ pub(in crate::cli::web::builds) fn git_redirects(
     // Written afresh by each step: quality and build run in one work area,
     // and a second `git config` over a key that already holds two values
     // refuses rather than replacing them.
-    if config.exists() {
-        std::fs::remove_file(&config).map_err(|error| {
-            CmdError::click(format!("cannot replace {}: {error}", config.display()))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+    match std::fs::remove_file(&config) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(
+                CmdError::click(format!("cannot replace {}: {error}", config.display()))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind())),
+            )
+        }
     }
     let entry = vec![(
         "GIT_CONFIG_GLOBAL".to_string(),

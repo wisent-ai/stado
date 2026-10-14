@@ -101,7 +101,12 @@ pub(super) fn members(source: &Path) -> Result<Vec<PathBuf>, CmdError> {
         ),
     ];
     for (name, why) in required {
-        if !source.join(name).exists() {
+        let member = source.join(name);
+        let present = crate::primitives::presence::present(&member).map_err(|error| {
+            CmdError::click(error.to_string())
+                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
+        if !present {
             return Err(CmdError::click(format!(
                 "{} is missing after the build: {why}",
                 source.join(name).display()
