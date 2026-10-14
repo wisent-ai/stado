@@ -35,12 +35,16 @@ pub(super) fn install(
     unlock();
     let owned = control::adopt_transaction_blocking(None, request)?;
     if !owned.running {
+        // The host process may not have recorded how the worker ended yet;
+        // that is said, not printed as an empty cause.
+        let ended = match &owned.exit {
+            Some(exit) => exit.clone(),
+            None => "the host process recorded no exit for it".to_string(),
+        };
         return Err(format!(
-            "the host process started the transaction worker (pid {}) and it ended at once: {}; \
-             its log is {}",
-            owned.pid,
-            owned.exit.unwrap_or_default(),
-            launch.log_path
+            "the host process started the transaction worker (pid {}) and it ended at once: \
+             {ended}; its log is {}",
+            owned.pid, launch.log_path
         ));
     }
     Ok(())
