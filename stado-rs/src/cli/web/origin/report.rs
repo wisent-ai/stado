@@ -106,9 +106,9 @@ pub(crate) async fn status(name: Option<&str>, json_output: bool) -> Result<(), 
     .await;
     for mut row in examined {
         row["registry_observation"] = json!(registry_read);
-        let word = row["verdict"].as_str().unwrap_or("");
-        if word != VERDICT_SERVING {
-            broken.push(format!("{}: {word}", row["name"].as_str().unwrap_or("")));
+        let word = shown(&row["verdict"]);
+        if row["verdict"].as_str() != Some(VERDICT_SERVING) {
+            broken.push(format!("{}: {word}", shown(&row["name"])));
         }
         rows.push(row);
     }
@@ -121,10 +121,7 @@ pub(crate) async fn status(name: Option<&str>, json_output: bool) -> Result<(), 
                 Some(origin) if !origin.is_empty() => origin,
                 _ => "the public origin boundary",
             };
-            broken.push(format!(
-                "{subject}: {}",
-                row["verdict"].as_str().unwrap_or("")
-            ));
+            broken.push(format!("{subject}: {}", shown(&row["verdict"])));
             rows.push(row);
         }
     }
@@ -156,9 +153,19 @@ fn declared_names(declared: &[PublicOrigin]) -> String {
         .join(", ")
 }
 
+/// A report field as text, or `not reported` when the row does not carry it
+/// as text: printed as "", a verdict or state the examination never wrote
+/// read as a blank one.
+fn shown(value: &Value) -> String {
+    match value.as_str() {
+        Some(text) => text.to_string(),
+        None => "not reported".to_string(),
+    }
+}
+
 fn print_row(row: &Value) {
-    let text = |key: &str| row[key].as_str().unwrap_or("");
-    let nested = |section: &str, key: &str| row[section][key].as_str().unwrap_or("");
+    let text = |key: &str| shown(&row[key]);
+    let nested = |section: &str, key: &str| shown(&row[section][key]);
     println!(
         "{} {} {}",
         row["name"].as_str().unwrap_or("(undeclared)"),
@@ -193,11 +200,11 @@ fn print_row(row: &Value) {
         for read in reads {
             println!(
                 "  read {}: {} ({} ms) {} — {}",
-                read["operation"].as_str().unwrap_or(""),
-                read["state"].as_str().unwrap_or(""),
+                shown(&read["operation"]),
+                shown(&read["state"]),
                 read["elapsed_ms"],
-                read["source"].as_str().unwrap_or(""),
-                read["detail"].as_str().unwrap_or("")
+                shown(&read["source"]),
+                shown(&read["detail"])
             );
         }
     }
