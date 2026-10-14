@@ -153,12 +153,44 @@ fn a_service_declared_beside_its_placement_is_answered_on_this_host_and_said_as_
     let failure: Value = serde_json::from_slice(&refused.stdout)
         .expect("a JSON command refusal must retain the structured cause");
     assert_eq!(failure["error_code"], "refused", "{failure}");
+    assert_eq!(failure["details"]["route_state"], "refused", "{failure}");
+    assert_eq!(failure["details"]["service"], SERVICE, "{failure}");
+    assert_eq!(
+        failure["details"]["consumer"], refused_consumer,
+        "{failure}"
+    );
     assert!(
         failure["message"]
             .as_str()
             .expect("a refusal carries its cause")
             .contains(&refused_consumer),
         "the refusal lost the denied consumer: {failure}"
+    );
+    let missing_service = format!("{SERVICE}-undeclared");
+    let missing = deployment.run(&[
+        "service",
+        "directory",
+        "connect",
+        &missing_service,
+        "--consumer",
+        CONSUMER,
+        "--no-verify",
+        "--json",
+    ]);
+    assert!(
+        !missing.status.success(),
+        "an undeclared service got a route"
+    );
+    let missing: Value = serde_json::from_slice(&missing.stdout)
+        .expect("an undeclared service retains its structured refusal");
+    assert_eq!(missing["error_code"], "not_found", "{missing}");
+    assert_eq!(missing["details"]["route_state"], "undeclared", "{missing}");
+    assert_eq!(missing["details"]["service"], missing_service, "{missing}");
+    assert_eq!(missing["details"]["consumer"], CONSUMER, "{missing}");
+    assert_eq!(
+        deployment.connect()["url"],
+        placed["url"],
+        "refused discovery changed the admitted consumer's route"
     );
 
     let refused = deployment.run(&[
