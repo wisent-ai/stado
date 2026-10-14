@@ -177,7 +177,10 @@ pub(crate) struct CatalogIdentity {
 /// restart unchanged bytes and then compare them with the new global digest.
 /// The shared private-reader convergence installs the verified archive into
 /// those trees before it performs their lifecycle.
-pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service::ManagedService> {
+pub fn declared_units(
+    target: &ComputeTarget,
+    product: &Product,
+) -> Result<Vec<service::ManagedService>, DeployError> {
     let registry_units = service::declared_services(target);
     let mut resolved = Vec::new();
     for unit in &product.units {
@@ -218,9 +221,19 @@ pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service:
         }
     }
     for declared in registry_units {
+        // A unit whose owner cannot be read is not a unit of another
+        // product: read that way, a delivery left a unit running the old
+        // release unrestarted. The delivery refuses naming it instead.
         let runs_product = service::declared_owner(target, &declared)
-            .ok()
-            .flatten()
+            .map_err(|error| {
+                DeployError(format!(
+                    "{}: whether {} runs {} cannot be read, so the delivery cannot say which units it restarts: {error}",
+                    target.name,
+                    declared.unit_id(),
+                    product.name
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })?
             .is_some_and(|owner| owner.name == product.name);
         if !runs_product
             || (product.name == "stado" && service::is_service_local_stado_reader(&declared))
@@ -232,7 +245,7 @@ pub fn declared_units(target: &ComputeTarget, product: &Product) -> Vec<service:
         }
         resolved.push(declared);
     }
-    resolved
+    Ok(resolved)
 }
 
 /// Deliver one declared product to one canonical registry host.

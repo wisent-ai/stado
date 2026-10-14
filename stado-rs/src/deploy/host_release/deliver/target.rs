@@ -60,7 +60,7 @@ async fn release_target_inner(
 ) -> Result<Value, DeployError> {
     let plan = plan(target, request, self_store)?;
 
-    let units = declared_units(target, plan.product);
+    let units = declared_units(target, plan.product)?;
     let mut report = base_release_report(target, &plan, &units);
     let mut steps: Vec<Value> = Vec::new();
 
