@@ -61,22 +61,26 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
         Err(_) => return unavailable("enrollment store is unavailable"),
     };
     if let Some(current) = &existing {
-        let status = serde_json::from_str::<Value>(&current.content)
-            .ok()
-            .and_then(|document| {
-                document
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
-        if status != STATUS_PENDING {
+        // A record that cannot be read is not replaced either, and is said as
+        // unreadable: read as status "", it answered "already has a ''
+        // enrollment request".
+        let status = match serde_json::from_str::<Value>(&current.content) {
+            Err(error) => Err(format!("an enrollment request that is not JSON ({error})")),
+            Ok(document) => match document.get("status").and_then(Value::as_str) {
+                Some(status) => Ok(status.to_string()),
+                None => Err("an enrollment request naming no status".to_string()),
+            },
+        };
+        let held = match status {
+            Ok(status) if status == STATUS_PENDING => None,
+            Ok(status) => Some(format!("a '{status}' enrollment request")),
+            Err(unreadable) => Some(unreadable),
+        };
+        if let Some(held) = held {
             return send_json(
                 http_status(reqwest::StatusCode::CONFLICT),
                 &json!({
-                    "error": format!(
-                        "machine '{hostname}' already has a '{status}' enrollment request"
-                    )
+                    "error": format!("machine '{hostname}' already has {held}")
                 }),
             );
         }
