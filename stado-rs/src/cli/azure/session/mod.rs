@@ -110,7 +110,7 @@ pub(in crate::cli::azure) async fn refresh_operator_token(
     )?;
     let account = credential_field(role, "login_email")
         .await?
-        .unwrap_or_default();
+        .filter(|email| !email.is_empty());
     let response = crate::wait::request(
         reqwest::Client::new()
             .post(format!(

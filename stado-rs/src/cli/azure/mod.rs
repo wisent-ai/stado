@@ -128,5 +128,7 @@ pub async fn dispatch(command: CloudCommands) -> Result<(), CmdError> {
 struct OperatorToken {
     access_token: String,
     tenant_id: String,
-    account: String,
+    /// The sign-in the item recorded at `stado azure login`; `None` when it
+    /// recorded none, reported as such rather than as an empty account.
+    account: Option<String>,
 }
