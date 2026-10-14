@@ -40,8 +40,9 @@ pub struct CmdError {
     /// What the failure found, as data a caller acts on without parsing the
     /// sentence — each finding of a refused quality gate, for instance.
     /// Carried as `details` in the `--json` envelope; the sentence names the
-    /// same findings for a reader.
-    pub details: Option<serde_json::Value>,
+    /// same findings for a reader. Boxed: every `Result` of the CLI carries
+    /// this type, and the findings are rare.
+    pub details: Option<Box<serde_json::Value>>,
 }
 
 /// click `ClickException`'s exit code: "it ran and failed", the C library's
@@ -125,7 +126,7 @@ impl CmdError {
 
     /// Attach what the failure found as data, for the `--json` envelope.
     pub fn detailing(mut self, details: serde_json::Value) -> Self {
-        self.details = Some(details);
+        self.details = Some(Box::new(details));
         self
     }
 

@@ -34,7 +34,32 @@ pub fn serve_editor(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i3
                 })
                 .transpose()?;
             let report = instances::status(runtime, workspace.as_deref())?;
-            crate::common::emit(&report)?;
+            if arguments.get_flag("json") {
+                crate::common::emit(&report)?;
+            } else {
+                let instances = report["instances"]
+                    .as_array()
+                    .context("editor status has no instances array")?;
+                if instances.is_empty() {
+                    println!("No active editor connections.");
+                } else {
+                    println!("Workspace\tPID\tParent\tStarted\tAge (seconds)");
+                    for instance in instances {
+                        println!(
+                            "{}\t{}\t{}\t{}\t{}",
+                            instance["workspace"]
+                                .as_str()
+                                .context("editor instance workspace is missing")?,
+                            instance["pid"],
+                            instance["parent_pid"],
+                            instance["started_at"]
+                                .as_str()
+                                .context("editor instance start time is missing")?,
+                            instance["age_seconds"]
+                        );
+                    }
+                }
+            }
             Ok(libc::EXIT_SUCCESS)
         }
         _ => bail!("unsupported editor operation {operation}"),
