@@ -53,14 +53,35 @@ pub async fn read_run(
 /// run.
 pub async fn list_runs(store: &JobStorage) -> Result<Vec<String>, StorageError> {
     let prefix = format!("{RUN_PREFIX}/");
-    let paths = store.list_paths(&prefix, 0).await?;
-    Ok(paths
+    let blobs = store.list_blobs_with_meta(&prefix).await?;
+    Ok(blobs
         .iter()
-        .filter_map(|path| path.strip_prefix(&prefix))
+        .filter_map(|blob| blob.name.strip_prefix(&prefix))
         .filter(|name| !name.contains('/'))
         .filter_map(|name| name.strip_suffix(".json"))
         .map(str::to_string)
         .collect())
+}
+
+/// Written once a walk of every run has indexed each job any run retained.
+/// Every retention writes its job's index entry itself, so from then on a
+/// job the index does not name was retained by no run, and no reader walks
+/// the runs again. It sits directly under the run prefix without the run
+/// suffix, so neither a listing of runs nor one of the job index reads it.
+fn walked_path() -> String {
+    format!("{RUN_PREFIX}/retained-jobs-indexed")
+}
+
+/// Every job id one run manifest retains an outcome for.
+fn retained_ids(manifest: &Map<String, Value>) -> Vec<&str> {
+    manifest
+        .get("entries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.get("outcome").is_some())
+        .filter_map(|entry| entry.get("job_id").and_then(Value::as_str))
+        .collect()
 }
 
 /// The job a reaped run retained for `job_id`, stamped with the terminal
@@ -72,32 +93,43 @@ pub async fn list_runs(store: &JobStorage) -> Result<Vec<String>, StorageError> 
 ///
 /// The run is found through the index retention writes (`runs/jobs/<job
 /// id>`, [`crate::queue::runs::retained_job_index_path`]): one read of the
-/// index and one of that manifest. A job retained before the index existed
-/// has none, and only that case reads every run until the one that names
-/// the job; that reader then writes the index entry itself, because the
-/// reaper never revisits a run whose cleanup completed, so the next reader
-/// opens one manifest.
+/// index and one of that manifest. Jobs retained before the index existed
+/// have none, so the first reader that misses walks every run once, indexes
+/// every job each one retains and marks the walk done; until then every
+/// miss, a job still running included, read every run, and a release that
+/// asked after its own fresh jobs read hundreds of manifests each time.
 pub async fn retained_job(
     store: &JobStorage,
     job_id: &str,
 ) -> Result<Option<crate::models::Job>, StorageError> {
     let index = crate::queue::runs::retained_job_index_path(job_id);
-    let (runs, indexed) = match store.download_text(&index).await? {
-        Some(run_id) => (vec![run_id.trim().to_string()], true),
-        None => (list_runs(store).await?, false),
-    };
-    for run_id in runs {
-        let Some(manifest) = read_run(store, &run_id).await? else {
+    if let Some(run_id) = store.download_text(&index).await? {
+        let run_id = run_id.trim();
+        return match read_run(store, run_id).await? {
+            Some(manifest) => retained_in(&manifest, run_id, job_id),
+            None => Ok(None),
+        };
+    }
+    if store.download_text(&walked_path()).await?.is_some() {
+        return Ok(None);
+    }
+    let runs = list_runs(store).await?;
+    let mut found = None;
+    for run_id in &runs {
+        let Some(manifest) = read_run(store, run_id).await? else {
             continue;
         };
-        if let Some(job) = retained_in(&manifest, &run_id, job_id)? {
-            if !indexed {
-                crate::queue::runs::index_retained_job(store, job_id, &run_id).await?;
-            }
-            return Ok(Some(job));
+        for retained in retained_ids(&manifest) {
+            crate::queue::runs::index_retained_job(store, retained, run_id).await?;
+        }
+        if found.is_none() {
+            found = retained_in(&manifest, run_id, job_id)?;
         }
     }
-    Ok(None)
+    store
+        .create_text_if_absent(&walked_path(), &format!("{} runs walked", runs.len()))
+        .await?;
+    Ok(found)
 }
 
 /// Every retained job whose id starts with `prefix` (`job-` and the first
