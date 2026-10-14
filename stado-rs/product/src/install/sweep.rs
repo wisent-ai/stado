@@ -31,9 +31,13 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
                     .downcast_ref::<std::io::Error>()
                     .is_some_and(|e| e.kind() == std::io::ErrorKind::WouldBlock) =>
             {
-                emit(
-                    &json!({"state": "busy", "holder": fs::read_to_string(&path).unwrap_or_default()}),
-                )?;
+                // A holder record that cannot be read is said with its cause,
+                // not printed as an empty holder.
+                let holder = match fs::read_to_string(&path) {
+                    Ok(text) => json!(text),
+                    Err(error) => json!({ "unreadable": error.to_string() }),
+                };
+                emit(&json!({"state": "busy", "holder": holder}))?;
                 return Ok(0);
             }
             Err(error) => return Err(error),
