@@ -25,10 +25,8 @@ mod path;
 use path::{holder_of, leaf};
 
 const SET_RECEIPT_SCHEMA: &str = "stado.registry-set-receipt.v1";
-/// The directory whose readers count on its generation, and the field they
-/// count.
+/// The directory whose readers count on its generation.
 const DIRECTORY_KEY: &str = "service_directory";
-const DIRECTORY_GENERATION: &str = "generation";
 
 /// The value to write: JSON when the argument parses as JSON, the argument
 /// itself when it does not, so `--value 8789` is a number, `--value '"8789"'`
@@ -166,18 +164,12 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
     // every resolver believes it has already read: the validator refuses it,
     // and rightly. The number belongs to the change, so it moves with it here
     // rather than in a second command an operator has to remember.
+    // The shared advance every directory writer uses: a directory that is not
+    // an object, or a generation that is missing or not a whole number, is
+    // refused with the registry unchanged instead of restarting at one.
     if path.starts_with(DIRECTORY_KEY) {
-        let generation = document
-            .get(DIRECTORY_KEY)
-            .and_then(|directory| directory.get(DIRECTORY_GENERATION))
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        if let Some(Value::Object(fields)) = document.get_mut(DIRECTORY_KEY) {
-            fields.insert(
-                DIRECTORY_GENERATION.to_string(),
-                Value::from(generation.saturating_add(1)),
-            );
-        }
+        crate::service_resolution::advance_generation(&mut document)
+            .map_err(|error| CmdError::usage(format!("{error}; the registry was not changed")))?;
     }
     let replacement = select(&document, path)?;
     let payload = serde_json::to_string_pretty(&document)?;
