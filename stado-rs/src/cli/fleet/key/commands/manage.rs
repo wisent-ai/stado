@@ -4,7 +4,7 @@
 use crate::cli::CmdError;
 use crate::deploy::{CommandSpec, Runner};
 use crate::primitives::failure::FailureCode;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::super::channel_argv;
 use super::super::store::{
@@ -147,6 +147,7 @@ pub async fn ls(json_output: bool) -> Result<bool, CmdError> {
     let client = configured_client()?;
     let items = client.list_items().await?;
     let mut shown = Vec::new();
+    let mut lines = Vec::new();
     for item in items {
         if !item.id.starts_with(ITEM_PREFIX) {
             continue;
@@ -165,16 +166,29 @@ pub async fn ls(json_output: bool) -> Result<bool, CmdError> {
                     item.id
                 ))
             })?;
+        // A context that names no key type or fingerprint is said as such:
+        // null in JSON and "not recorded" in text, never a blank column.
         let described = |name: &str| {
             context
                 .get(name)
-                .and_then(|value| value.as_str().map(str::to_string))
-                .unwrap_or_default()
+                .and_then(Value::as_str)
+                .map(str::to_string)
         };
+        let (key_type, fingerprint) = (described("key_type"), described("fingerprint"));
+        let column = |value: &Option<String>| match value {
+            Some(text) => text.clone(),
+            None => "not recorded".to_string(),
+        };
+        lines.push(format!(
+            "{}\t{}\t{}",
+            item.id,
+            column(&key_type),
+            column(&fingerprint)
+        ));
         shown.push(json!({
             "item": item.id,
-            "key_type": described("key_type"),
-            "fingerprint": described("fingerprint"),
+            "key_type": key_type,
+            "fingerprint": fingerprint,
         }));
     }
     if json_output {
@@ -182,14 +196,8 @@ pub async fn ls(json_output: bool) -> Result<bool, CmdError> {
     } else if shown.is_empty() {
         println!("no SSH host keys in the credential store");
     } else {
-        for row in &shown {
-            let text = |name: &str| row[name].as_str().unwrap_or_default().to_string();
-            println!(
-                "{}\t{}\t{}",
-                text("item"),
-                text("key_type"),
-                text("fingerprint")
-            );
+        for line in &lines {
+            println!("{line}");
         }
     }
     Ok(true)
