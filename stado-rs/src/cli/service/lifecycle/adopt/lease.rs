@@ -121,26 +121,41 @@ fn retire_directory_routes(
     let names_retired = |reference: &str| {
         reference == removed.name || (!retired.is_empty() && reference == retired)
     };
+    // Whether a replacement takes the route over is read from the host's own
+    // record. A registry without it, or a record that does not parse, read as
+    // no replacement, and every route the retired unit served was withdrawn
+    // instead of handed over; such a registry is refused.
     let host_record = document
         .get("targets")
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+        .ok_or_else(|| {
+            CmdError::refused(
+                "the registry carries no targets list, so whether a replacement takes over \
+                 the retired unit's routes cannot be read",
+            )
+        })?
+        .iter()
         .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
-        .cloned();
-    let owner = match host_record
-        .clone()
-        .and_then(|record| serde_json::from_value::<crate::targets::ComputeTarget>(record).ok())
-    {
-        Some(target) => service::declared_owner(&target, removed).map_err(CmdError::declaration)?,
-        None => None,
-    };
+        .cloned()
+        .ok_or_else(|| {
+            CmdError::refused(format!(
+                "the registry holds no target {host}, so whether a replacement takes over \
+                 the retired unit's routes cannot be read"
+            ))
+        })?;
+    let target = serde_json::from_value::<crate::targets::ComputeTarget>(host_record.clone())
+        .map_err(|error| {
+            CmdError::refused(format!(
+                "the registry's record of {host} does not parse ({error}), so whether a \
+                 replacement takes over the retired unit's routes cannot be read"
+            ))
+        })?;
+    let owner = service::declared_owner(&target, removed).map_err(CmdError::declaration)?;
     let replacement = owner
         .map(|entry| crate::deploy::service_catalog::unit_of(&entry).to_string())
         .filter(|unit| {
             host_record
-                .as_ref()
-                .and_then(|target| target.get("services"))
+                .get("services")
                 .and_then(Value::as_array)
                 .is_some_and(|services| {
                     services.iter().filter_map(Value::as_object).any(|record| {
