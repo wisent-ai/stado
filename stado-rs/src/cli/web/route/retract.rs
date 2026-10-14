@@ -77,7 +77,16 @@ pub(crate) async fn retract(declared: &WebApiProduct) -> Result<Value, CmdError>
                 registrar_credential(edge)?,
             )
             .await?;
-            let removed = record["removed"].as_u64().unwrap_or_default() > 0;
+            // Read as zero, a report without its count called a removed
+            // record "unchanged".
+            let removed = record["removed"].as_u64().ok_or_else(|| {
+                CmdError::click(format!(
+                    "{}: the record removal reported no count of removed records: {record}",
+                    declared.hostname()
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
+            let removed = removed > 0;
             let routes: Vec<(String, Vec<String>)> = super::super::edge::stado_routes()
                 .await?
                 .into_iter()
