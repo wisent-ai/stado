@@ -65,7 +65,20 @@ pub(in crate::cli::service_verify) async fn judge_ownership(
         // The stable bind is held by the rollout's proxy by declaration, so
         // ownership-by-label is the wrong question for it. Checked before the
         // remote read: there is no answer worth paying a host round-trip for.
-        if declared_stable_port(registry, &finding.service, &finding.host) == Some(port) {
+        let stable = match declared_stable_port(registry, &finding.service, &finding.host) {
+            Ok(stable) => stable,
+            Err(unread) => {
+                // Whether the rollout's proxy holds this port by declaration
+                // is unknown, so a foreign holder could be that proxy.
+                finding.detail = format!(
+                    "{}; ownership is unjudged because the declared stable bind could not be \
+                     read: {unread}",
+                    finding.detail
+                );
+                continue;
+            }
+        };
+        if stable == Some(port) {
             finding.detail = format!(
                 "{}; {port} is the stable bind release_control declares for {} on {}, which the \
                  rollout's stable proxy holds rather than the service's own unit",
@@ -163,15 +176,37 @@ pub(in crate::cli::service_verify) async fn port_verdicts(
 /// `products` is keyed by PRODUCT and carries the logical `service` name, so
 /// the lookup is by that field rather than by the product key. A `replace`
 /// rollout declares no `stable_bind` and yields `None`, which leaves the
-/// ownership judgement exactly as it was.
-fn declared_stable_port(registry: &Registry, service: &str, host: &str) -> Option<u16> {
-    let control = crate::release_control::control(&registry.to_document()).ok()??;
-    let policy = control
+/// ownership judgement exactly as it was. A `release_control` that cannot be
+/// read, or a `stable_bind` that is not an address, is the error saying so:
+/// read as "none declared", the proxy's own port was judged as a foreign
+/// holder's.
+fn declared_stable_port(
+    registry: &Registry,
+    service: &str,
+    host: &str,
+) -> Result<Option<u16>, String> {
+    let Some(control) = crate::release_control::control(&registry.to_document())
+        .map_err(|error| format!("release_control is not readable: {error}"))?
+    else {
+        return Ok(None);
+    };
+    let Some(policy) = control
         .products
         .values()
-        .find(|policy| policy.service == service)?;
-    let bind = policy.targets.get(host)?.stable_bind.as_deref()?;
+        .find(|policy| policy.service == service)
+    else {
+        return Ok(None);
+    };
+    let Some(bind) = policy
+        .targets
+        .get(host)
+        .and_then(|target| target.stable_bind.as_deref())
+    else {
+        return Ok(None);
+    };
     bind.parse::<std::net::SocketAddr>()
-        .ok()
-        .map(|address| address.port())
+        .map(|address| Some(address.port()))
+        .map_err(|error| {
+            format!("release_control declares stable_bind {bind:?} for {service} on {host}, which is not an address: {error}")
+        })
 }
