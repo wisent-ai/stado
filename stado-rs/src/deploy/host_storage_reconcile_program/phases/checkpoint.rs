@@ -101,7 +101,14 @@ fn begin(
         &evidence,
         "checkpoint evidence",
     )?;
-    let files = |physical: &Value| physical["files"].as_array().map_or(0, Vec::len);
+    // A physical inventory without its files list is refused, not counted as
+    // a root holding no files in the receipt the rollback reads.
+    let files = |physical: &Value, label: &str| {
+        physical["files"]
+            .as_array()
+            .map(Vec::len)
+            .ok_or_else(|| format!("the {label} physical inventory carries no files list"))
+    };
     let receipt = json!({
         "schema": SCHEMA,
         "transaction": context.tx,
@@ -117,8 +124,8 @@ fn begin(
         "conflict_winner": winner,
         "backup_objects": backup_objects.len(),
         "primary_objects": primary_objects.len(),
-        "backup_physical_files": files(&backup_physical),
-        "primary_physical_files": files(&primary_physical),
+        "backup_physical_files": files(&backup_physical, "backup")?,
+        "primary_physical_files": files(&primary_physical, "primary")?,
         "physical_snapshot_exclusions": [],
         "snapshot_scope": "full_physical_roots",
         "handoff_scope": HANDOFF_SCOPE,
