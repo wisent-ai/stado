@@ -94,10 +94,23 @@ pub async fn show(
         let report = routes::answers(&target, &declared, role, &runner)
             .await
             .map_err(CmdError::from)?;
-        let probed = report["aliases"].as_array().cloned().into_iter().flatten();
+        // A report without its alias list, or an answer that names no alias,
+        // probed nothing this command can show: skipped, every alias printed
+        // as unprobed and none as not answering, though a probe was asked.
+        let probed = report["aliases"].as_array().ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: the gateway probe report lists no aliases: {report}",
+                target.name
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
         for answer in probed {
             let Some(alias) = answer.get("alias").and_then(Value::as_str) else {
-                continue;
+                return Err(CmdError::click(format!(
+                    "{}: the gateway probe answered without naming its alias: {answer}",
+                    target.name
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown));
             };
             // Brama's probe names the model that answered only for a request
             // a model served; a refusal or a transport error carries none.
@@ -150,8 +163,7 @@ pub async fn show(
             target.name,
             if live.is_some() { "present" } else { ABSENT }
         );
-        for row in &rows {
-            let alias = row["alias"].as_str().unwrap_or_default();
+        for (alias, row) in aliases.iter().zip(&rows) {
             let verdict = if row["agrees"] == json!(true) {
                 "agrees"
             } else {

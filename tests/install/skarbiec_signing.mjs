@@ -103,7 +103,9 @@ try {
   assert.equal(installed.signing.source, 'local keychain');
   assert.equal(installed.signing.keychain, catalogKeychain);
   const placed = join(home, '.stado', 'bin', 'skarbiec');
-  const actual = JSON.parse(success(run(stado, ['product', 'signing', 'inspect', placed, '--json'])));
+  const inspected = JSON.parse(success(run(stado, ['product', 'signing', 'inspect', placed, '--json'])));
+  assert.deepEqual(inspected.map(signature => signature.path), [placed], 'inspect did not report the requested binary');
+  const [actual] = inspected;
   assert.equal(actual.state, 'stable');
   assert.equal(actual.authority, identity, 'the declared keychain identity did not sign the placed binary');
   assert.equal(installed.signing.signatures[placed].identity, actual.authority);
