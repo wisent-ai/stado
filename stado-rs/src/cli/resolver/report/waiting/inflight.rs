@@ -66,8 +66,10 @@ impl Route<'_> {
                 url.authority()
             ),
             Self::Host(host) => format!(
-                "the host's own `stado resolver snapshot` is what answered nothing: `stado service \
-                 logs com.wisent.stado --host {host}` says what its unit is doing"
+                "the host's own `stado resolver snapshot` is what answered nothing: `stado host \
+                 exec {host} -- stado waits --json` lists what every Stado process there waits \
+                 on, and `stado service logs com.wisent.stado --host {host}` says what its unit \
+                 is doing"
             ),
         }
     }
