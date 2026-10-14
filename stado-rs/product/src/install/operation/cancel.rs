@@ -16,6 +16,12 @@ use std::path::Path;
 pub fn cancel(runtime: &Runtime, id: &str, surface: &str) -> Result<Value> {
     let lock = state::path(runtime, id, surface)?.with_extension("lock");
     if let Some(held) = holder(&lock)? {
+        if held["running"] != true {
+            bail!(
+                "{id}/{surface}: a held lock records pid {} born {}, observed {}; its process identity is unverified and no process was signalled",
+                held["pid"], held["started_at"], held["observed_start"]
+            );
+        }
         let pid = i32::try_from(held["pid"].as_u64().context("the holder names no pid")?)?;
         let signalled: Vec<Value> = children(pid)?
             .into_iter()

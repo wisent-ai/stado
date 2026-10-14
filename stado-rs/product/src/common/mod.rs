@@ -1,5 +1,5 @@
 mod archive;
-mod files;
+pub(crate) mod files;
 pub(crate) mod process;
 pub mod runs;
 
@@ -140,7 +140,7 @@ impl Runtime {
     /// holder is kept whatever it is doing and this process runs after it.
     pub fn surface_lock(&self, path: &std::path::Path) -> Result<std::fs::File> {
         if self.wait_for_writer {
-            lock_waiting(path)
+            files::lock_surface_waiting(path)
         } else {
             lock_superseding(path)
         }

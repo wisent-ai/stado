@@ -52,6 +52,8 @@ struct ProductsView: View {
                 }
                 Divider()
                 ScrollView {
+                    ProductLocksView(locks: store.locks, failure: store.lockFailure)
+                        .padding(WisentDesign.Space.x4)
                     NativeCapabilityActions(host: scope, fleet: fleetStore,
                         operations: NativeProductOperations.all)
                         .disabled(!fleetStore.isConfigured)
@@ -67,6 +69,7 @@ struct ProductsView: View {
         .task {
             if selectedHost.isEmpty { selectedHost = fleetStore.targets.first?.name ?? "" }
             if store.products.isEmpty { await store.refresh() }
+            else { await store.refreshLocks() }
         }
     }
 

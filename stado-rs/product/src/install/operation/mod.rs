@@ -23,6 +23,7 @@ pub use cancel::cancel;
 pub use perform::perform;
 
 use anyhow::{Context, Result};
+use fs2::FileExt;
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::path::Path;
@@ -34,37 +35,42 @@ use crate::state::{self, ProductState};
 /// The record a held lock carries, with whether its holder still runs;
 /// `None` when nothing holds the lock.
 fn holder(lock: &Path) -> Result<Option<Value>> {
-    let file = match OpenOptions::new().read(true).open(lock) {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = match options.open(lock) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(error).with_context(|| format!("{} cannot be opened", lock.display()))
         }
     };
-    // A shared hold this process can take means no installation holds the
-    // exclusive lock; it is given back at once.
-    if file.try_lock_shared().is_ok() {
-        file.unlock()
-            .with_context(|| format!("{} cannot be released", lock.display()))?;
-        return Ok(None);
+    match file.try_lock_shared() {
+        Ok(()) => {
+            file.unlock()
+                .with_context(|| format!("{} cannot be released", lock.display()))?;
+            return Ok(None);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) => return Err(error).with_context(|| format!("inspecting {}", lock.display())),
     }
-    let text =
-        fs::read_to_string(lock).with_context(|| format!("{} cannot be read", lock.display()))?;
-    let mut record: Value = serde_json::from_str(text.trim()).with_context(|| {
-        format!(
-            "{} is held but records no readable holder: {}",
-            lock.display(),
-            text.trim()
-        )
-    })?;
-    let pid = record["pid"]
-        .as_u64()
-        .with_context(|| format!("{} is held but names no pid", lock.display()))?;
-    let pid = i32::try_from(pid)
-        .with_context(|| format!("{} names pid {pid}, which is no process id", lock.display()))?;
-    record["running"] = json!(alive(pid));
-    record["lock"] = json!(lock.display().to_string());
-    Ok(Some(record))
+    let record = crate::common::files::read_lock_record(lock)?
+        .with_context(|| format!("{} is held but records no holder", lock.display()))?;
+    let observed = record.observed_start()?;
+    let running = record
+        .started_at
+        .as_ref()
+        .is_some_and(|start| observed.as_ref() == Some(start));
+    Ok(Some(json!({
+        "product": record.product, "pid": record.pid,
+        "started_at": record.started_at, "observed_start": observed,
+        "running": running, "lock": lock, "command": record.command,
+        "acquired_at": record.acquired_at, "phase": record.phase, "step": record.step,
+    })))
 }
 
 /// The holder a lock file records, as one clause for a refusal or a wait:

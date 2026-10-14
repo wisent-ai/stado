@@ -53,6 +53,34 @@ pub fn cargo() -> Command {
         )
         .arg(forwarded())
 }
+/// The operations `stado product cargo` runs on any tree: the values its
+/// declaration names for `operation`.
+pub(crate) fn cargo_operations() -> Vec<String> {
+    cargo()
+        .get_arguments()
+        .filter(|argument| argument.get_id() == "operation")
+        .flat_map(Arg::get_possible_values)
+        .map(|value| value.get_name().to_string())
+        .collect()
+}
+
+/// `stado product cargo` with its operation open beyond the declared values:
+/// a Cargo subcommand a quality gate of the built tree declares is admitted
+/// too, once the tree is known (`cargo::declared::admit`).
+pub(super) fn cargo_command() -> Command {
+    cargo().mut_arg("operation", |argument| {
+        argument
+            .value_parser(clap::builder::NonEmptyStringValueParser::new())
+            .long_help(
+                "build, check, test, run, metadata or stage on any tree, or any Cargo \
+                 subcommand a quality gate of the built tree's .wisent-release.json runs \
+                 (clippy; not fmt, which compiles nothing): read under --revision from that \
+                 committed revision. stage: \
+                 a locked release build of the forwarded --bin targets, each binary placed \
+                 at $WISENT_OUTPUT_DIR/<name> for a release manifest to stage",
+            )
+    })
+}
 
 /// The compiler cache every Cargo build Stado runs goes through.
 pub fn compiler_cache() -> Command {

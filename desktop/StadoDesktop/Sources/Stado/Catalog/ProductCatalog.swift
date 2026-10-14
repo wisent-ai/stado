@@ -149,6 +149,32 @@ struct ProductReadiness: Decodable, Sendable {
     let detail: String
 }
 
+struct ProductLocksEnvelope: Decodable, Sendable {
+    let locks: [ProductLock]
+}
+
+struct ProductLock: Decodable, Identifiable, Sendable {
+    let path: String
+    let product: String
+    let surface: String
+    let held: Bool?
+    let running: Bool?
+    let pid: Int?
+    let phase: String?
+    let step: String?
+    let acquiredAt: String?
+    let startedAt: String?
+    let observedStart: String?
+    let error: String?
+    var id: String { path }
+    enum CodingKeys: String, CodingKey {
+        case path, product, surface, held, running, pid, phase, step, error
+        case acquiredAt = "acquired_at"
+        case startedAt = "started_at"
+        case observedStart = "observed_start"
+    }
+}
+
 @MainActor
 final class ProductsStore: ObservableObject {
     @Published private(set) var products: [ProductCatalogEntry] = []
@@ -156,6 +182,8 @@ final class ProductsStore: ObservableObject {
     @Published private(set) var failure: String?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
     @Published private(set) var states: [String: ProductLifecycleState] = [:]
+    @Published private(set) var locks: [ProductLock] = []
+    @Published private(set) var lockFailure: String?
 
     private let cli: StadoCLI
 
@@ -182,6 +210,18 @@ final class ProductsStore: ObservableObject {
             failure = nil
         } catch {
             failure = Self.message(error)
+        }
+        await refreshLocks()
+    }
+
+    func refreshLocks() async {
+        do {
+            let report = try await cli.json(ProductLocksEnvelope.self,
+                                            arguments: ["product", "locks", "--json"])
+            locks = report.locks
+            lockFailure = nil
+        } catch {
+            lockFailure = Self.message(error)
         }
     }
 
@@ -214,6 +254,7 @@ final class ProductsStore: ObservableObject {
                     ? "\(product)/\(surface): termination requested; process still running at read-back"
                     : "\(product)/\(surface): cancellation signalled; reading current state")
                 await status(product: product, surface: surface, host: host)
+                await refreshLocks()
                 return
             }
             let state = try await cli.json(
@@ -225,6 +266,7 @@ final class ProductsStore: ObservableObject {
             )
             states[key(product, surface)] = state
             mutation = .succeeded("\(product) \(surface): \(state.status)")
+            await refreshLocks()
         } catch {
             mutation = .failed(Self.message(error))
         }

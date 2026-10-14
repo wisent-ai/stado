@@ -1,4 +1,5 @@
 use super::{flag, positional, value};
+use anyhow::Context;
 use clap::{Arg, ArgAction, ArgGroup, Command};
 
 fn surface(required: bool) -> Arg {
@@ -101,6 +102,46 @@ pub fn changes() -> Vec<Command> {
         installation("remove", "Remove only owned paths and the declared service surface", Shape::Changes),
         installation("rollback", "Restore exact retained installation bytes without rebuilding", Shape::Changes),
     ]
+}
+
+pub fn locks() -> Command {
+    Command::new("locks")
+        .about("List every product surface lock, its recorded owner, process identity, observed state and corruption")
+        .arg(flag("json", "Print the complete lock observations as JSON"))
+}
+
+pub fn report_locks(runtime: &crate::common::Runtime, as_json: bool) -> anyhow::Result<i32> {
+    let report = crate::common::files::locks_report(&runtime.home)?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        for row in report["locks"]
+            .as_array()
+            .context("lock report has no rows")?
+        {
+            let path = row["path"].as_str().context("lock row has no path")?;
+            if let Some(error) = row["error"].as_str() {
+                println!("{path}: unreadable or corrupt: {error}");
+                continue;
+            }
+            let state = match (row["held"].as_bool(), row["running"].as_bool()) {
+                (Some(true), Some(true)) => "held",
+                (Some(true), _) => "held with unverified process identity",
+                (_, Some(true)) => "released record",
+                _ => "stale record",
+            };
+            println!(
+                "{path}: {state}; pid {}, born {}, observed {}; phase {}, step {}; acquired {}",
+                row["pid"],
+                row["started_at"],
+                row["observed_start"],
+                row["phase"],
+                row["step"],
+                row["acquired_at"]
+            );
+        }
+    }
+    Ok(libc::EXIT_SUCCESS)
 }
 
 pub fn sync() -> Command {
