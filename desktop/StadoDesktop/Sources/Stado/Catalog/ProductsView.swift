@@ -122,6 +122,11 @@ struct ProductsView: View {
             trailing: state?.status
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                if let keychain = installation.signingKeychain {
+                    Text("Source installation signs with the catalog's local keychain: \(keychain). A missing keychain refuses before building; no Skarbiec signing role is read.")
+                        .font(WisentTypeScale.identifierSmall())
+                        .textSelection(.enabled)
+                }
                 if installation.surface == "cli" && installation.kind == "stado-release" {
                     TextField("Signed release version (optional)", text: Binding(
                         get: { releaseVersions[product.id, default: ""] },
@@ -138,6 +143,17 @@ struct ProductsView: View {
                     Text("Release \(release.coordinate.version) · \(release.coordinate.sourceRevision)")
                         .font(WisentTypeScale.identifierSmall())
                         .textSelection(.enabled)
+                }
+                if let signing = state?.signing {
+                    Text("Selected \(signing.source): \(signing.keychain); observed native signatures:")
+                        .textSelection(.enabled)
+                    ForEach(signing.signatures.keys.sorted(), id: \.self) { path in
+                        if let signature = signing.signatures[path] {
+                            Text("\(path): \(signature.identity) · team \(signature.team) · \(signature.identifier) · CDHash \(signature.cdhash)")
+                                .font(WisentTypeScale.identifierSmall())
+                                .textSelection(.enabled)
+                        }
+                    }
                 }
                 if let readiness = state?.readiness {
                     Text(readiness.detail).textSelection(.enabled)

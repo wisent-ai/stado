@@ -334,16 +334,19 @@ products:
     kind: stado-release
     repository: wisent-ai/skarbiec
     manifest: .wisent-release.json
+    signing_keychain: $HOME/Library/Keychains/login.keychain-db
   - surface: service
     kind: stado-release
     repository: wisent-ai/skarbiec
     host_config:
       secrets.skarbiec.url: $STADO_SERVICE_URL
     manifest: .wisent-release.json
+    signing_keychain: $HOME/Library/Keychains/login.keychain-db
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/skarbiec-desktop
     manifest: .wisent-desktop-release.json
+    signing_keychain: $HOME/Library/Keychains/login.keychain-db
   approved_by: operator
   approved_at: '2026-09-02T19:53:04Z'
   approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'

@@ -22,6 +22,11 @@ struct ProductInstallation: Decodable, Identifiable, Sendable {
     let surface: String
     let kind: String
     let repository: String
+    let signingKeychain: String?
+    enum CodingKeys: String, CodingKey {
+        case surface, kind, repository
+        case signingKeychain = "signing_keychain"
+    }
     var id: String { "\(surface)/\(repository)" }
 }
 
@@ -38,9 +43,10 @@ struct ProductLifecycleState: Decodable, Sendable {
     let installDecision: ProductInstallDecision?
     let cargoCache: ProductCargoCache?
     let dependencies: [ProductDependencyResult]?
+    let signing: ProductSigning?
 
     enum CodingKeys: String, CodingKey {
-        case product, surface, status, host, release, readiness
+        case product, surface, status, host, release, readiness, signing
         case sourceRevision = "source_revision"
         case installedAt = "installed_at"
         case installedPaths = "installed_paths"
@@ -83,6 +89,19 @@ struct ProductDependencyResult: Decodable, Identifiable, Sendable {
         case product, surface, reason, alternative
         case installDecision = "install_decision"
     }
+}
+
+struct ProductSigning: Decodable, Sendable {
+    let source: String
+    let keychain: String
+    let signatures: [String: ProductSignature]
+}
+
+struct ProductSignature: Decodable, Sendable {
+    let identity: String
+    let team: String
+    let identifier: String
+    let cdhash: String
 }
 
 struct ProductReleaseReceipt: Decodable, Sendable {

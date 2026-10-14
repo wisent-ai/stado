@@ -10,13 +10,14 @@
 //! named sources are refused with both names. Naming only an identity
 //! (`WISENT_CODESIGN_IDENTITY`, `--signing-identity`) chooses it from the
 //! user's keychain search list. Only when nothing is named does the fleet role
-//! apply, and its credential is read here, before the build: an unreachable
-//! Skarbiec refuses in seconds and names the keychain choice, instead of after
-//! a build of many minutes.
+//! apply, and its credential is read here before the build. A recipe-declared
+//! local keychain selects the installing machine's credential without a vault
+//! read, and an absent path refuses before the build.
 
 use super::secret;
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 /// The variable naming the operator's keychain.
 pub const KEYCHAIN_VARIABLE: &str = "WISENT_CODESIGN_KEYCHAIN";
@@ -118,6 +119,51 @@ impl Choice {
             .or_else(|| self.identity.clone())
             .or_else(|| environment(IDENTITY_VARIABLE))
     }
+
+    /// A catalog recipe may bind a source installation to a keychain on the
+    /// installing machine. A command-line or environment choice cannot replace
+    /// that declaration with the fleet role or another keychain.
+    pub fn for_recipe(&self, recipe: &Value, home: &Path) -> Result<Self> {
+        let Some(declared) = recipe.get("signing_keychain") else {
+            return Ok(self.clone());
+        };
+        let named = declared
+            .as_str()
+            .filter(|name| !name.is_empty())
+            .context("signing_keychain must name a local keychain")?;
+        let path = if let Some(relative) = named.strip_prefix("$HOME/") {
+            if relative.is_empty() || Path::new(relative).is_absolute() {
+                bail!("signing_keychain {named} must name a path inside $HOME");
+            }
+            home.join(relative)
+        } else {
+            PathBuf::from(named)
+        };
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            bail!("signing_keychain {named} must be an absolute path or $HOME/<path> without ..");
+        }
+        let selected = path.to_string_lossy().into_owned();
+        if let Some(other) = self.keychain() {
+            if other != selected {
+                bail!("signing_keychain {named} declares {selected}, but the invocation names {other}; no other signing source was tried");
+            }
+        }
+        let choice = Self::new(Some(&selected), self.identity.as_deref())?;
+        match Source::resolve(&choice, None)? {
+            Source::Keychain(_) => Ok(choice),
+            _ => bail!("signing_keychain {named} did not select its keychain"),
+        }
+    }
+
+    /// The effective keychain selected by a command line, environment or
+    /// catalog recipe. Receipts use this path, never credential bytes.
+    pub fn keychain_path(&self) -> Option<String> {
+        self.keychain()
+    }
 }
 
 impl Source {
@@ -157,9 +203,13 @@ impl Source {
             Self::read_role(&role, ROLE_VARIABLE)?
         } else if let Some(keychain) = keychain {
             let path = PathBuf::from(&keychain);
-            Self::Keychain(path.canonicalize().with_context(|| {
+            let resolved = path.canonicalize().with_context(|| {
                 format!("{KEYCHAIN_VARIABLE} names the keychain {keychain}, which cannot be read")
-            })?)
+            })?;
+            if !resolved.is_file() {
+                bail!("{KEYCHAIN_VARIABLE} names the keychain {keychain}, which is not a regular file");
+            }
+            Self::Keychain(resolved)
         } else if choice.identity(requested).is_some() {
             Self::SearchList
         } else {

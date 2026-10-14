@@ -59,9 +59,10 @@ pub fn installation(action: &'static str, about: &'static str, shape: Shape) -> 
             ))
             .arg(value(
                 "signing-keychain",
-                "Sign darwin native code with an identity from this keychain of your own \
-                 (WISENT_CODESIGN_KEYCHAIN for this invocation); the fleet's signing role is \
-                 then not read, and naming a role or a PEM pair as well is refused",
+                "Sign darwin native code with an identity from this local keychain \
+                 (WISENT_CODESIGN_KEYCHAIN for this invocation). A catalog recipe's \
+                 signing_keychain requires that exact keychain; a role or PEM pair cannot \
+                 replace it. The fleet signing role is not read",
             ))
             .arg(value(
                 "signing-identity",

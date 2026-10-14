@@ -1,6 +1,7 @@
 mod backups;
 pub mod lifecycle;
 pub(super) mod ownership;
+mod signer_report;
 
 use backups::sync_tree;
 pub use backups::{backup, backup_fingerprints};
@@ -71,6 +72,7 @@ pub fn commit(
     // Every placed file whose signing identity the operator changed, as
     // `previous` -> `new`, so the installation's receipt and report name it.
     let mut identity_changes = serde_json::Map::new();
+    let mut signer_report = signer_report::Report::new(runtime, plan.release.is_none());
     for placement in &plan.placements {
         destination(runtime, &placement.destination)?;
         paths::admit_name(&placement.destination, &placement.source, runtime)?;
@@ -100,6 +102,7 @@ pub fn commit(
                 identity_changes
                     .insert(placement.destination.to_string_lossy().into_owned(), change);
             }
+            signer_report.observe(placement)?;
         }
         let fingerprint = placement.fingerprint()?;
         if ownership::overlaps(&placement.destination, &shared) {
@@ -187,7 +190,7 @@ pub fn commit(
         bail!("installation recipe produced no owned files");
     }
     let fingerprints = Value::Object(fingerprints);
-    let state = if let Some(incomplete) = existing
+    let mut state = if let Some(incomplete) = existing
         .as_ref()
         .filter(|state| state.status == crate::state::InstallStatus::Installing)
     {
@@ -248,6 +251,7 @@ pub fn commit(
             extra,
         }
     };
+    signer_report.attach(&mut state);
     state.save(runtime)?;
     for placement in &plan.placements {
         destination(runtime, &placement.destination)?;

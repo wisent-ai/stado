@@ -94,13 +94,11 @@ pub fn installation(value: &str, surfaces: &Value) -> Result<Value> {
     if payload.is_empty() {
         return Ok(recipe);
     }
-    // A kind with more than one field takes FIELD=VALUE pairs when the payload
-    // opens with one of its fields; any other payload is the primary field.
-    let several_fields = recipe_kind.also_required().is_some() || recipe_kind.optional().is_some();
-    let explicit = several_fields
-        && payload
-            .split_once('=')
-            .is_some_and(|(field, _)| recipe_kind.allows(field));
+    // A payload opening with a declared field takes FIELD=VALUE pairs; any
+    // other payload is the recipe kind's primary field.
+    let explicit = payload
+        .split_once('=')
+        .is_some_and(|(field, _)| recipe_kind.allows(field));
     let parts = if explicit {
         payload
             .split(';')

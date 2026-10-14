@@ -202,11 +202,25 @@ pub fn perform(
             installed.save(runtime)?;
             return Ok(installed);
         }
+        let mut installing = runtime.clone();
+        if pin.is_none() && cfg!(target_os = "macos") {
+            installing.signing = runtime.signing.for_recipe(selected, &runtime.home)?;
+        }
+        let request = plan::planning::Request {
+            runtime: &installing,
+            product,
+            selected,
+            surface,
+            host,
+            pin,
+            source_commit,
+            id,
+        };
         let plan = plan::planning::select(&request, existing.as_ref())?;
         let scratch = plan.scratch.clone();
         let checkout = plan.source_directory.clone();
         let kept = plan.cache.clone();
-        let mut installed = transaction::commit(runtime, id, surface, host, selected, plan)?;
+        let mut installed = transaction::commit(&installing, id, surface, host, selected, plan)?;
         installed
             .extra
             .insert("install_decision".to_owned(), decision);

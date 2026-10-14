@@ -71,6 +71,7 @@ pub fn remove(
     current.installed_paths.clear();
     current.extra.remove("placement_fingerprints");
     current.extra.remove("prepared");
+    current.extra.remove("signing");
     current.release = None;
     current.source_revision = None;
     current.save(runtime)?;

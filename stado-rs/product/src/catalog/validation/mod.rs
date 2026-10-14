@@ -9,7 +9,10 @@ use crate::common::slug;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    path::{Component, Path},
+};
 
 mod public_status;
 mod service;
@@ -119,6 +122,23 @@ pub fn validate(document: &Value) -> Result<()> {
                     bail!("features only apply to cargo recipes");
                 }
                 strings(recipe, FEATURES)?;
+            }
+            if recipe.get("signing_keychain").is_some() {
+                let keychain = text(recipe, "signing_keychain")?;
+                let relative = keychain.strip_prefix("$HOME/");
+                let path = if let Some(relative) = relative {
+                    Path::new(relative)
+                } else {
+                    Path::new(keychain)
+                };
+                if (relative.is_none() && !path.is_absolute())
+                    || (relative.is_some() && (path.is_absolute() || path.as_os_str().is_empty()))
+                    || path
+                        .components()
+                        .any(|component| matches!(component, Component::ParentDir))
+                {
+                    bail!("{id}.{surface}.signing_keychain: name an absolute local keychain or $HOME/<path> without ..");
+                }
             }
             if let Some(commands) = recipe.get("after_install") {
                 for command in commands

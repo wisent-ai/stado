@@ -158,6 +158,7 @@ impl RecipeKind {
         field == self.primary()
             || self.also_required() == Some(field)
             || self.optional() == Some(field)
+            || field == SIGNING_KEYCHAIN
     }
 
     /// Installed by a language package manager into an isolated prefix.
@@ -180,6 +181,7 @@ pub const BINARIES: &str = "binaries";
 pub const PACKAGE: &str = "package";
 pub const ENTRYPOINTS: &str = "entrypoints";
 pub const FEATURES: &str = "features";
+pub const SIGNING_KEYCHAIN: &str = "signing_keychain";
 
 /// Whether a recipe field holds a comma-separated list.
 pub fn list_field(field: &str) -> bool {
