@@ -45,12 +45,18 @@ pub(super) fn api_error(status: u16, raw: &[u8]) -> BoxError {
         &[payload.get("code"), nested.and_then(|e| e.get("code"))],
         "http_error",
     );
+    // Box's own body when it names no message: a sentence written here read
+    // as Box's, and a body that was not JSON was dropped whole.
+    let unnamed = format!(
+        "Box answered HTTP {status} without a message: {}",
+        String::from_utf8_lossy(raw).trim()
+    );
     let message = first_truthy_str(
         &[
             payload.get("message"),
             nested.and_then(|e| e.get("message")),
         ],
-        "Box API request failed",
+        &unnamed,
     );
     let request_id = first_truthy_str(&[payload.get("requestId")], "");
     BoxApiError::new(
