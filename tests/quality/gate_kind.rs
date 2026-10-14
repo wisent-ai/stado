@@ -11,6 +11,9 @@
 //! naming the missing field. The checkout commits with the identity of the
 //! account running the test, and its manifest takes its schema version from
 //! Stado's own manifest.
+#[path = "push/mod.rs"]
+mod pushed_revisions;
+
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
