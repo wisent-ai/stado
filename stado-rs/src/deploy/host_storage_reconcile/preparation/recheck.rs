@@ -69,10 +69,17 @@ pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(
         }
     }
     for retained in &fence.transport_retained {
+        // A retained transport without its label names no unit to recheck;
+        // asked about "", launchd answered for nothing and the refusal read
+        // as a transport that stopped running.
         let label = retained
             .get("label")
             .and_then(Value::as_str)
-            .unwrap_or_default();
+            .filter(|label| !label.is_empty())
+            .ok_or_else(|| {
+                DeployError(format!("a retained transport records no label: {retained}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
         let state = crate::deploy::service_label_print::print_label(
             storage_target,
             label,
