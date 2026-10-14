@@ -87,6 +87,10 @@ pub async fn open(
             .await
             .map_err(CmdError::from)?
     };
+    let text = format!(
+        "{name}: open on {} -> {url} ({})",
+        marker.location, marker.marker
+    );
     let report = json!({
         "service": name,
         "authority": directory.authority,
@@ -98,13 +102,7 @@ pub async fn open(
     if as_json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        println!(
-            "{}: open on {} -> {} ({})",
-            name,
-            report["forward"]["location"].as_str().unwrap_or_default(),
-            url,
-            report["forward"]["marker"].as_str().unwrap_or_default(),
-        );
+        println!("{text}");
     }
     Ok(())
 }
