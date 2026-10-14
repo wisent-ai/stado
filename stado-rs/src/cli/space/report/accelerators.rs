@@ -20,9 +20,11 @@ pub(super) async fn accelerators_json(target: &crate::targets::ComputeTarget) ->
         Ok(publications) => publications,
         Err(error) => return json!({"error": error.to_string()}),
     };
-    let Some((consumer, publication)) = publications.iter().find(|(consumer, _)| {
-        crate::queue::capacity::consumer_names_target(&registry, target, consumer)
-    }) else {
+    let found = match crate::queue::capacity::publication_of(&registry, target, &publications) {
+        Ok(found) => found,
+        Err(error) => return json!({"error": error.to_string()}),
+    };
+    let Some((consumer, publication)) = found else {
         return json!({"error": format!("no capacity publication names {}", target.name)});
     };
     let now = chrono::Utc::now();

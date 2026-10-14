@@ -12,8 +12,8 @@ use crate::fleet_needs::{
     record_unmet, this_requester, Candidate, Requirement, UnmetPlacement, UnmetReason,
 };
 use crate::queue::capacity::{
-    consumer_id_for_target, consumer_names_target, publication_period, read_publications,
-    reservations, Publication,
+    consumer_id_for_target, publication_of, publication_period, read_publications, reservations,
+    Publication,
 };
 use crate::queue::JobStorage;
 use crate::targets::ComputeTarget;
@@ -86,10 +86,10 @@ pub async fn reserve_for_workload(
         .await
         .map_err(CmdError::from)?;
     let publications = read_publications(&store).await.map_err(CmdError::from)?;
-    let consumer_id = consumer_id_for_target(&registry, target, &publications);
-    let publication = publications
-        .iter()
-        .find(|(consumer, _)| consumer_names_target(&registry, target, consumer))
+    let consumer_id =
+        consumer_id_for_target(&registry, target, &publications).map_err(CmdError::from)?;
+    let publication = publication_of(&registry, target, &publications)
+        .map_err(CmdError::from)?
         .map(|(_, publication)| publication);
     if let Some(room) = publication.map(net_room).filter(|room| !room.stale) {
         if let Some(refusal) = refusal(kind, &wanted, target, &room) {

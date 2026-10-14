@@ -50,14 +50,20 @@ pub async fn dispatch(command: CapacityCommands) -> Result<(), CmdError> {
     }
 }
 
-fn host_row(registry: &Registry, consumer: &str, publication: &Publication) -> Value {
+/// The registry target a publication key names; none when no target does.
+/// An identity several targets declare is the refusal.
+fn host_target(registry: &Registry, consumer: &str) -> Result<Option<String>, CmdError> {
+    for candidate in &registry.targets {
+        if consumer_names_target(registry, candidate, consumer).map_err(CmdError::from)? {
+            return Ok(Some(candidate.name.clone()));
+        }
+    }
+    Ok(None)
+}
+
+fn host_row(target: Option<String>, consumer: &str, publication: &Publication) -> Value {
     let now = Utc::now();
     let payload = &publication.payload;
-    let target = registry
-        .targets
-        .iter()
-        .find(|target| consumer_names_target(registry, target, consumer))
-        .map(|target| target.name.clone());
     // A publication from before reservations existed held nothing.
     let nothing_held = serde_json::to_value(Reserved::default()).unwrap_or(Value::Null);
     json!({
@@ -106,10 +112,16 @@ async fn list(json_output: bool) -> Result<(), CmdError> {
         .await
         .map_err(CmdError::from)?;
     let publications = read_publications(&store).await.map_err(CmdError::from)?;
-    let hosts: Vec<Value> = publications
+    let hosts = publications
         .iter()
-        .map(|(consumer, publication)| host_row(&registry, consumer, publication))
-        .collect();
+        .map(|(consumer, publication)| {
+            Ok(host_row(
+                host_target(&registry, consumer)?,
+                consumer,
+                publication,
+            ))
+        })
+        .collect::<Result<Vec<Value>, CmdError>>()?;
     if json_output {
         println!(
             "{}",
@@ -187,13 +199,14 @@ async fn held(target: Option<&str>, json_output: bool) -> Result<(), CmdError> {
     let all = reservations::read_all(&store)
         .await
         .map_err(CmdError::from)?;
-    let rows: Vec<Value> = all
-        .iter()
-        .filter(|(consumer, _)| {
-            selected.is_none_or(|target| consumer_names_target(&registry, target, consumer))
-        })
-        .flat_map(|(_, list)| list.iter())
-        .map(|reservation| {
+    let mut rows: Vec<Value> = Vec::new();
+    for (consumer, list) in &all {
+        if let Some(target) = selected {
+            if !consumer_names_target(&registry, target, consumer).map_err(CmdError::from)? {
+                continue;
+            }
+        }
+        rows.extend(list.iter().map(|reservation| {
             let mut row = serde_json::to_value(reservation).unwrap_or(Value::Null);
             row["live"] = Value::from(reservation.is_live(now));
             row["expires_at"] = reservation
@@ -201,8 +214,8 @@ async fn held(target: Option<&str>, json_output: bool) -> Result<(), CmdError> {
                 .map(|stamp| Value::from(stamp.to_rfc3339()))
                 .unwrap_or(Value::Null);
             row
-        })
-        .collect();
+        }));
+    }
     if json_output {
         println!(
             "{}",

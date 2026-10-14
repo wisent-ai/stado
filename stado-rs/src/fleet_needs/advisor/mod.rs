@@ -21,7 +21,7 @@ use super::unmet::read_unmet;
 use crate::primitives::constants;
 use crate::queue::capacity::read_publications;
 use crate::queue::{JobStorage, StorageError};
-use crate::targets::{ComputeTarget, Registry};
+use crate::targets::Registry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -117,9 +117,10 @@ pub async fn advise(
         .iter()
         .filter(|target| target.kind == "local")
     {
-        let publication = publications
-            .iter()
-            .find(|(consumer, _)| consumer_names(registry, target, consumer))
+        // An identity several targets declare leaves this host's publication
+        // unknown; read as none, its needs would be advised as a silent host's.
+        let publication = crate::queue::capacity::publication_of(registry, target, &publications)
+            .map_err(|error| StorageError::Other(error.to_string()))?
             .map(|(_, publication)| publication);
         needs.extend(host::host_needs(target, publication, &unmet, now));
     }
@@ -138,12 +139,6 @@ pub async fn advise(
         window_days,
         needs,
     })
-}
-
-/// Whether a `<kind>-<hostname>` publication key names `target`, by the
-/// fleet's one hostname-to-target rule.
-fn consumer_names(registry: &Registry, target: &ComputeTarget, consumer: &str) -> bool {
-    crate::queue::capacity::consumer_names_target(registry, target, consumer)
 }
 
 pub(super) fn diag_number(payload: &Value, key: &str) -> Option<f64> {

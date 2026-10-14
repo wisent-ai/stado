@@ -138,40 +138,51 @@ impl PublishedReservations {
 /// Whether a `<kind>-<hostname>` publication key names `target`, by the
 /// fleet's one hostname-to-target rule ([`crate::targets::Registry::lookup_self`]).
 /// The hostname a host publishes is its own, which need not be its registry
-/// name, so string equality on the key is wrong on every renamed machine.
+/// name, so string equality on the key is wrong on every renamed machine. An
+/// identity the registry declares on several targets is the error: read as
+/// naming no target, a host's publication was taken for missing.
 pub fn consumer_names_target(
     registry: &crate::targets::Registry,
     target: &crate::targets::ComputeTarget,
     consumer_id: &str,
-) -> bool {
+) -> Result<bool, crate::targets::RegistryError> {
     let Some(identity) = consumer_id.strip_prefix(&format!("{}-", target.kind)) else {
-        return false;
+        return Ok(false);
     };
-    registry
-        .lookup_self(identity)
-        .ok()
-        .flatten()
-        .is_some_and(|found| found.name == target.name)
+    Ok(registry
+        .lookup_self(identity)?
+        .is_some_and(|found| found.name == target.name))
+}
+
+/// `target`'s publication and the consumer id it is keyed by; none when no
+/// key names it.
+pub fn publication_of<'a>(
+    registry: &crate::targets::Registry,
+    target: &crate::targets::ComputeTarget,
+    publications: &'a BTreeMap<String, Publication>,
+) -> Result<Option<(&'a String, &'a Publication)>, crate::targets::RegistryError> {
+    for (consumer, publication) in publications {
+        if consumer_names_target(registry, target, consumer)? {
+            return Ok(Some((consumer, publication)));
+        }
+    }
+    Ok(None)
 }
 
 /// The consumer id `target`'s agent publishes under: the key of its
 /// publication when one exists, else the id it would use, derived from its
-/// first declared hostname.
+/// first declared hostname, or its registry name when it declares none.
 pub fn consumer_id_for_target(
     registry: &crate::targets::Registry,
     target: &crate::targets::ComputeTarget,
     publications: &BTreeMap<String, Publication>,
-) -> String {
-    publications
-        .keys()
-        .find(|consumer| consumer_names_target(registry, target, consumer))
-        .cloned()
-        .unwrap_or_else(|| {
-            let host = target
-                .hostnames
-                .first()
-                .map(|host| crate::targets::normalize_hostname(host))
-                .unwrap_or_else(|| target.name.clone());
-            format!("{}-{host}", target.kind)
-        })
+) -> Result<String, crate::targets::RegistryError> {
+    if let Some((consumer, _)) = publication_of(registry, target, publications)? {
+        return Ok(consumer.clone());
+    }
+    let host = match target.hostnames.first() {
+        Some(host) => crate::targets::normalize_hostname(host),
+        None => target.name.clone(),
+    };
+    Ok(format!("{}-{host}", target.kind))
 }
