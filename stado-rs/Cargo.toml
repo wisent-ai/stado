@@ -252,6 +252,10 @@ name = "host-silence-refusal-in-flight"
 path = "../tests/host_silence/refusal_in_flight/main.rs"
 
 [[test]]
+name = "host-silence-silent-store-startup"
+path = "../tests/host_silence/silent_store_startup/main.rs"
+
+[[test]]
 name = "service-update-local-record"
 path = "../tests/service_update/local_record.rs"
 
