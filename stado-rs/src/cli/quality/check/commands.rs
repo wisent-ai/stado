@@ -218,7 +218,6 @@ pub(super) fn check(
     declared: &DeclaredGates,
     tree: &Path,
     area: &Path,
-    revision: &str,
     contract: &[(&str, String)],
     report: Report,
 ) -> Result<(), CmdError> {
@@ -234,7 +233,6 @@ pub(super) fn check(
     })?;
     let mut env = contract.to_vec();
     env.push(("WISENT_OUTPUT_DIR", output.to_string_lossy().into_owned()));
-    env.push(("WISENT_SOURCE_COMMIT", revision.to_owned()));
     for (name, value) in &declared.env {
         env.push((name, value.clone()));
     }

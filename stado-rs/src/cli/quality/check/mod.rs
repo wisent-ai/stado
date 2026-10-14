@@ -182,9 +182,16 @@ async fn check_tree(
         Some(version) => web::worker_contract(tree, version, &declared.platform)?,
         None => Vec::new(),
     };
-    let contract: Vec<(&str, String)> = contract
-        .iter()
-        .map(|(name, value)| (&**name, value.clone()))
+    // The exported tree has no Git checkout, so a gate that binds its
+    // evidence to the commit (a real journey's report) reads it from here,
+    // as the release worker states it to a build.
+    let contract: Vec<(&str, String)> = [("WISENT_SOURCE_COMMIT", revision.to_owned())]
+        .into_iter()
+        .chain(
+            contract
+                .iter()
+                .map(|(name, value)| (&**name, value.clone())),
+        )
         .chain(
             staged
                 .iter()
@@ -220,7 +227,7 @@ async fn check_tree(
                 tree.display()
             ))
         })?;
-        commands::check(&declared, tree, area, revision, &contract, report)?;
+        commands::check(&declared, tree, area, &contract, report)?;
     }
     Ok(Some(declared.product))
 }
