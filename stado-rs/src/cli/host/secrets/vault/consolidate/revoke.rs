@@ -31,31 +31,42 @@ pub async fn revoke_retired(host: &str, consumer: &str, json_output: bool) -> Re
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
-    let capabilities_of = |name: &str| -> Option<BTreeSet<String>> {
-        let grant = rows.iter().find(|row| row["consumer"] == name)?;
-        Some(
-            grant["capabilities"]
-                .as_array()?
-                .iter()
-                .map(|entry| {
-                    format!(
-                        "{}:{}#{}",
-                        entry["action"].as_str().unwrap_or_default(),
-                        entry["item"].as_str().unwrap_or_default(),
-                        entry["field"].as_str().unwrap_or_default()
-                    )
-                })
-                .collect(),
-        )
+    // A capability without its action or item cannot be compared: rendered
+    // with an empty item it named no held item, fell out of the coverage
+    // check below and let a revoke through that stado did not cover. Such a
+    // grant is refused, and an absent field is rendered absent, not as "#".
+    let capabilities_of = |name: &str| -> Result<Option<BTreeSet<String>>, CmdError> {
+        let Some(grant) = rows.iter().find(|row| row["consumer"] == name) else {
+            return Ok(None);
+        };
+        let Some(entries) = grant["capabilities"].as_array() else {
+            return Ok(None);
+        };
+        let mut rendered = BTreeSet::new();
+        for entry in entries {
+            let (Some(action), Some(item)) = (entry["action"].as_str(), entry["item"].as_str())
+            else {
+                return Err(CmdError::refused(format!(
+                    "{}: {name}'s grant lists a capability without its action or item, so its \
+                     coverage cannot be judged; nothing was revoked: {entry}",
+                    target.name
+                )));
+            };
+            rendered.insert(match entry["field"].as_str() {
+                Some(field) => format!("{action}:{item}#{field}"),
+                None => format!("{action}:{item}"),
+            });
+        }
+        Ok(Some(rendered))
     };
-    let retired = capabilities_of(consumer).ok_or_else(|| {
+    let retired = capabilities_of(consumer)?.ok_or_else(|| {
         CmdError::click(format!(
             "{}: no grant for {consumer}; nothing to revoke",
             target.name
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
-    let stado = capabilities_of("stado").ok_or_else(|| {
+    let stado = capabilities_of("stado")?.ok_or_else(|| {
         CmdError::click(format!(
             "{}: no grant for stado; consolidate before revoking",
             target.name
