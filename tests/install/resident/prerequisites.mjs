@@ -20,8 +20,18 @@ const home = join(output, 'home');
 mkdirSync(home, { recursive: true });
 const ciRecord = process.env.STADO_CI_MAIN_RECORD
   ? process.env.STADO_CI_MAIN_RECORD : join(operatorHome, '.stado', 'ci-main.json');
-const environment = { ...process.env, HOME: home, WISENT_WORKSPACE: dirname(root),
-  STADO_CI_MAIN_RECORD: ciRecord };
+const temporary = join(home, 'tmp');
+mkdirSync(temporary);
+const toolEnvironment = Object.fromEntries(['PATH', 'CARGO_HOME', 'RUSTUP_HOME'].map(name => {
+  const value = process.env[name];
+  assert.ok(value, `${name} is required`);
+  return [name, value];
+}));
+const environment = { ...toolEnvironment, HOME: home, TMPDIR: temporary,
+  WISENT_WORKSPACE: dirname(root), STADO_CI_MAIN_RECORD: ciRecord,
+  WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store'),
+  STADO_CONFIG: join(home, 'absent-config'),
+  WISENT_OUTPUT_DIR: join(output, 'commands') };
 const report = { result: 'failed', source_revision: revision, host, ci_record: ciRecord, commands: [] };
 const digest = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 function fingerprint(path) {
