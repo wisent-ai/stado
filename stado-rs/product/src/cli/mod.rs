@@ -56,12 +56,12 @@ pub fn augment(command: Command) -> Command {
         .subcommand(lifecycle::installation(
             "install",
             "Install one product surface from its canonical recipe or exact qualified release",
-            lifecycle::Shape::Builds,
+            lifecycle::Shape::BuildsWithPlan,
         ))
         .subcommand(lifecycle::installation(
             "update",
             "Update one product surface while retaining exact rollback bytes",
-            lifecycle::Shape::Builds,
+            lifecycle::Shape::BuildsWithPlan,
         ))
         .subcommand(lifecycle::installation(
             "finish",

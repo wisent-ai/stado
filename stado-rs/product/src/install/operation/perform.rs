@@ -12,10 +12,9 @@ use serde_json::{json, Value};
 /// `without` names products this machine does without. A dependency on one of
 /// them is skipped only when the catalogue gives it an `alternative`; any
 /// other is refused, so nothing is installed half-wired.
-// Every argument is a distinct coordinate of one installation: the runtime,
-// the catalogue, the product, its surface, the host, an exact coordinate, the
-// dependencies left out and the recursion stack; a struct would move the
-// same eight names one level out.
+// The caller names runtime, catalog, product, destination, source coordinate,
+// retained choices, prerequisite policy and recursion stack explicitly; this
+// operation does not need a second parameter object.
 #[allow(clippy::too_many_arguments)]
 pub fn perform(
     runtime: &Runtime,
@@ -25,6 +24,7 @@ pub fn perform(
     host: Option<&str>,
     coordinate: Option<Coordinate<'_>>,
     without: &[String],
+    with_prerequisites: bool,
     stack: &mut Vec<String>,
 ) -> Result<ProductState> {
     let id = catalog::text(product, "id")?;
@@ -68,6 +68,9 @@ pub fn perform(
     let is_dependency = !stack.is_empty();
     stack.push(node);
     let result = (|| {
+        let revision = plan::prerequisites::revision(runtime, product, surface, coordinate)?;
+        let required =
+            plan::prerequisites::requirements(runtime, document, product, surface, &revision)?;
         let lock = state::path(runtime, id, surface)?.with_extension("lock");
         let writer = operation::lock_surface(runtime, &lock, selected)?;
         let existing = ProductState::load(runtime, id, surface)?;
@@ -90,21 +93,34 @@ pub fn perform(
         // installation being replaced recorded holds, so `update` and `sync`
         // do not install what the user chose to do without.
         let without: Vec<String> = if without.is_empty() {
-            existing
+            match existing
                 .as_ref()
                 .and_then(|state| state.extra.get("without"))
                 .and_then(Value::as_array)
-                .map(|names| {
-                    names
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default()
+            {
+                Some(names) => names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
+                None => Vec::new(),
+            }
         } else {
             without.to_vec()
         };
+        super::prerequisites::install(
+            super::prerequisites::Request {
+                runtime,
+                document,
+                id,
+                surface,
+                without: &without,
+                with_prerequisites,
+                lock: &lock,
+            },
+            required,
+            stack,
+        )?;
         let mut dependencies = Vec::new();
         if let Some(declared) = product.get("dependencies") {
             for dependency in declared
@@ -162,6 +178,7 @@ pub fn perform(
                         None,
                         None,
                         &without,
+                        with_prerequisites,
                         stack,
                     )?;
                     dependencies.push(json!({"product": dependency_id, "surface": dependency_surface,

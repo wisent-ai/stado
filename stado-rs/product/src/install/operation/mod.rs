@@ -18,6 +18,7 @@
 mod after;
 mod cancel;
 mod perform;
+mod prerequisites;
 pub(in crate::install) use after::{after_install, lock_surface};
 pub use cancel::cancel;
 pub use perform::perform;

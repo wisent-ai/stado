@@ -2,6 +2,9 @@
   "schema_version": 1,
   "product": "stado",
   "releases": true,
+  "requires": [
+    { "product": "oko", "surface": "cli", "verb": "admit" }
+  ],
   "version_source": {
     "kind": "regex",
     "path": "stado-rs/Cargo.toml",

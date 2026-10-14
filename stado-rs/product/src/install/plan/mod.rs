@@ -4,6 +4,7 @@
 
 pub(crate) mod conflict;
 pub(super) mod planning;
+pub(super) mod prerequisites;
 pub(super) mod release;
 
 use crate::common::{copy_tree, sha256};

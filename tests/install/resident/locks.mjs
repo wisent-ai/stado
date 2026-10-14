@@ -13,14 +13,17 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const program = process.env.STADO_BIN;
 const revision = process.env.STADO_TEST_SOURCE_COMMIT;
 const host = process.env.STADO_TEST_DEDICATED_HOST;
-assert.ok(program && revision && host,
-  'STADO_BIN, STADO_TEST_SOURCE_COMMIT and STADO_TEST_DEDICATED_HOST are required');
+assert.ok(program && revision && host && process.env.HOME,
+  'STADO_BIN, STADO_TEST_SOURCE_COMMIT, STADO_TEST_DEDICATED_HOST and HOME are required');
 const output = join(root, '.build', 'install-locks', createHash('sha256')
   .update(`${revision}:${host}`).digest('hex'));
 const home = join(output, 'home');
 mkdirSync(home, { recursive: true });
-const environment = { ...process.env, HOME: home, WISENT_WORKSPACE: dirname(root) };
-const report = { result: 'failed', source_revision: revision, host, commands: [] };
+const ciRecord = process.env.STADO_CI_MAIN_RECORD
+  ? process.env.STADO_CI_MAIN_RECORD : join(process.env.HOME, '.stado', 'ci-main.json');
+const environment = { ...process.env, HOME: home, WISENT_WORKSPACE: dirname(root),
+  STADO_CI_MAIN_RECORD: ciRecord };
+const report = { result: 'failed', source_revision: revision, host, ci_record: ciRecord, commands: [] };
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 function run(arguments_, env = environment) {
   const result = spawnSync(program, arguments_, { cwd: root, env, encoding: 'utf8' });
@@ -65,7 +68,7 @@ try {
   assert.equal(stale.recorded_product, 'oko');
   report.before = before;
   const installed = run(['product', 'install', 'stado', '--surface', 'cli',
-    '--source-commit', revision, '--json']);
+    '--source-commit', revision, '--with-prerequisites', '--json']);
   succeeds(installed);
   assert.match(installed.stderr, /reclaiming released lock .*recorded product Some\("oko"\).*command/);
   const after = JSON.parse(succeeds(run(['product', 'status', 'stado', '--surface', 'cli', '--json'])));

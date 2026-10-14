@@ -24,7 +24,27 @@ pub struct NonReleaseManifest {
     pub schema_version: u32,
     pub product: String,
     pub releases: bool,
+    #[serde(default)]
+    pub provides: Vec<ProvidedVerb>,
+    #[serde(default)]
+    pub requires: Vec<RequiredVerb>,
     pub reason: String,
+}
+
+/// A product CLI operation promised by this source revision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvidedVerb {
+    pub verb: String,
+}
+
+/// Another product's operation this release calls.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequiredVerb {
+    pub product: String,
+    pub surface: String,
+    pub verb: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +53,10 @@ pub struct ReleasePipelineManifest {
     pub schema_version: u32,
     pub product: String,
     pub releases: bool,
+    #[serde(default)]
+    pub provides: Vec<ProvidedVerb>,
+    #[serde(default)]
+    pub requires: Vec<RequiredVerb>,
     pub version_source: VersionSource,
     pub platforms: BTreeMap<String, PlatformRecipe>,
     #[serde(default)]

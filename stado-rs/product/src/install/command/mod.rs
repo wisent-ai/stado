@@ -80,6 +80,17 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         )?;
         building.catalog_read = Some(read);
         let product = catalog::product(&document, id)?;
+        if args.has("--plan") {
+            let revision =
+                super::plan::prerequisites::revision(&building, product, surface, coordinate)?;
+            return Ok(serde_json::json!({
+                "product": id,
+                "surface": surface,
+                "chain": super::plan::prerequisites::chain(
+                    &building, &document, product, surface, &revision, &without
+                )?,
+            }));
+        }
         Ok(serde_json::to_value(perform(
             &building,
             &document,
@@ -88,6 +99,7 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
             host,
             coordinate,
             &without,
+            args.has("--with-prerequisites"),
             &mut Vec::new(),
         )?)?)
     };

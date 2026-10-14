@@ -211,6 +211,14 @@ struct ProductsView: View {
                         action("Cancel", symbol: "xmark.circle", product, installation, host, destructive: true)
                     }
                 }
+                ProductPrerequisitesView(store: store, product: product.id,
+                    surface: installation.surface, host: host,
+                    releaseVersion: releaseVersions[product.id], sourceCommit: sourceCommits[product.id]) { version, commit in
+                    decision = ProductDecision(verb: "install", product: product.id,
+                        productName: product.name, surface: installation.surface,
+                        host: host, destructive: false, releaseVersion: version,
+                        sourceCommit: commit, withPrerequisites: true)
+                }
             }
         }
     }
@@ -239,7 +247,8 @@ struct ProductsView: View {
                     productName: product.name, surface: installation.surface,
                     host: host, destructive: destructive,
                     releaseVersion: exact && !version.isEmpty ? version : nil,
-                    sourceCommit: exact && !commit.isEmpty ? commit : nil
+                    sourceCommit: exact && !commit.isEmpty ? commit : nil,
+                    withPrerequisites: false
                 )
             }
         )
@@ -254,10 +263,12 @@ struct ProductsView: View {
                     ? "Stado executes the canonical recipe from its product catalog."
                     : "Stado verifies the signed published release and its accepted source. It does not compile or re-sign its bytes. Both coordinates are required.",
                 value.surface == "service" ? "The service lifecycle is delegated back to Stado on \(value.host ?? "the selected host")." : "The installation is local to this Mac and its previous state is retained for rollback.",
+                value.withPrerequisites ? "Qualified provider revisions in the plan are installed before this product." : "Missing verb prerequisites are refused rather than installed implicitly.",
             ],
             listing: [StadoCLI.commandLine(ProductsStore.lifecycleArguments(
                 value.verb, product: value.product, surface: value.surface, host: value.host,
-                releaseVersion: value.releaseVersion, sourceCommit: value.sourceCommit
+                releaseVersion: value.releaseVersion, sourceCommit: value.sourceCommit,
+                withPrerequisites: value.withPrerequisites
             ))],
             actions: [
                 WisentAction("Cancel", kind: .primary) { decision = nil },
@@ -267,7 +278,8 @@ struct ProductsView: View {
                     Task {
                         await store.mutate(selected.verb, product: selected.product,
                                            surface: selected.surface, host: selected.host,
-                                           releaseVersion: selected.releaseVersion, sourceCommit: selected.sourceCommit)
+                                           releaseVersion: selected.releaseVersion, sourceCommit: selected.sourceCommit,
+                                           withPrerequisites: selected.withPrerequisites)
                     }
                 },
             ]
@@ -275,17 +287,6 @@ struct ProductsView: View {
     }
 }
 
-private struct ProductDecision: Identifiable {
-    let verb: String
-    let product: String
-    let productName: String
-    let surface: String
-    let host: String?
-    let destructive: Bool
-    let releaseVersion: String?
-    let sourceCommit: String?
-    var id: String { "\(verb)/\(product)/\(surface)/\(host ?? "local")" }
-}
 
 private enum ProductsLayout {
     /// Room for the catalog, provisioning, reconciliation, compiler and

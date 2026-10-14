@@ -18,6 +18,8 @@ pub enum Shape {
     Changes,
     /// Builds or places release bytes: takes release coordinates.
     Builds,
+    /// Builds a new source or release, or projects its provider-first plan.
+    BuildsWithPlan,
 }
 
 pub fn installation(action: &'static str, about: &'static str, shape: Shape) -> Command {
@@ -37,7 +39,7 @@ pub fn installation(action: &'static str, about: &'static str, shape: Shape) -> 
              already placing files is waited for",
         ))
     };
-    if shape == Shape::Builds {
+    let command = if matches!(shape, Shape::Builds | Shape::BuildsWithPlan) {
         command
             .arg(
                 value(
@@ -75,6 +77,19 @@ pub fn installation(action: &'static str, about: &'static str, shape: Shape) -> 
                 "check-arguments",
                 "Check this command line (required pairs such as --release-version with \
                  --source-commit, the product and the surface) and exit without installing",
+            ))
+    } else {
+        command
+    };
+    if shape == Shape::BuildsWithPlan {
+        command
+            .arg(flag(
+                "plan",
+                "Print the ordered prerequisite and target source revisions, installed state and reason without installing",
+            ))
+            .arg(flag(
+                "with-prerequisites",
+                "Install missing declared verbs from each provider's qualified last-green source revision before installing this product",
             ))
     } else {
         command

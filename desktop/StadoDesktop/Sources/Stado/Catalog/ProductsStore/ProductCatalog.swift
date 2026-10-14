@@ -118,66 +118,6 @@ struct ProductDependencyResult: Decodable, Identifiable, Sendable {
     }
 }
 
-struct ProductSigning: Decodable, Sendable {
-    let source: String
-    let keychain: String
-    let signatures: [String: ProductSignature]
-}
-
-struct ProductSignature: Decodable, Sendable {
-    let identity: String
-    let team: String
-    let identifier: String
-    let cdhash: String
-}
-
-struct ProductReleaseReceipt: Decodable, Sendable {
-    let coordinate: ProductReleaseCoordinate
-}
-
-struct ProductReleaseCoordinate: Decodable, Sendable {
-    let version: String
-    let sourceRevision: String
-    enum CodingKeys: String, CodingKey {
-        case version
-        case sourceRevision = "source_revision"
-    }
-}
-
-struct ProductReadiness: Decodable, Sendable {
-    let ready: Bool
-    let detail: String
-}
-
-struct ProductLocksEnvelope: Decodable, Sendable {
-    let locks: [ProductLock]
-}
-
-struct ProductLock: Decodable, Identifiable, Sendable {
-    let path: String
-    let product: String
-    let surface: String
-    let held: Bool?
-    let recordedProduct: String?
-    let command: String?
-    let running: Bool?
-    let pid: Int?
-    let phase: String?
-    let step: String?
-    let acquiredAt: String?
-    let startedAt: String?
-    let observedStart: String?
-    let error: String?
-    var id: String { path }
-    enum CodingKeys: String, CodingKey {
-        case path, product, surface, held, running, pid, phase, step, error, command
-        case recordedProduct = "recorded_product"
-        case acquiredAt = "acquired_at"
-        case startedAt = "started_at"
-        case observedStart = "observed_start"
-    }
-}
-
 @MainActor
 final class ProductsStore: ObservableObject {
     @Published private(set) var products: [ProductCatalogEntry] = []
@@ -187,6 +127,8 @@ final class ProductsStore: ObservableObject {
     @Published private(set) var states: [String: ProductLifecycleState] = [:]
     @Published private(set) var locks: [ProductLock] = []
     @Published private(set) var lockFailure: String?
+    @Published private(set) var plans: [ProductPlanKey: ProductPrerequisitePlan] = [:]
+    @Published private(set) var planFailures: [ProductPlanKey: String] = [:]
 
     private let cli: StadoCLI
 
@@ -194,11 +136,13 @@ final class ProductsStore: ObservableObject {
 
     static func catalogArguments() -> [String] { ["product", "catalog", "--json"] }
     static func lifecycleArguments(_ verb: String, product: String, surface: String, host: String?,
-                                   releaseVersion: String? = nil, sourceCommit: String? = nil) -> [String] {
+                                   releaseVersion: String? = nil, sourceCommit: String? = nil,
+                                   withPrerequisites: Bool = false) -> [String] {
         var values = ["product", verb, product, "--surface", surface]
         if let host, !host.isEmpty { values += ["--host", host] }
         if let releaseVersion { values += ["--release-version", releaseVersion] }
         if let sourceCommit { values += ["--source-commit", sourceCommit] }
+        if withPrerequisites { values.append("--with-prerequisites") }
         values.append("--json")
         return values
     }
@@ -228,6 +172,24 @@ final class ProductsStore: ObservableObject {
         }
     }
 
+    func plan(product: String, surface: String, host: String?,
+              releaseVersion: String? = nil, sourceCommit: String? = nil) async {
+        let name = ProductPlanKey(product: product, surface: surface, host: host,
+                                  releaseVersion: releaseVersion, sourceCommit: sourceCommit)
+        do {
+            let report = try await cli.json(ProductPrerequisitePlan.self,
+                arguments: Self.lifecycleArguments("install", product: product, surface: surface,
+                                                   host: host, releaseVersion: releaseVersion,
+                                                   sourceCommit: sourceCommit) + ["--plan"],
+                destination: surface == "service" ? .selected : .localDevice)
+            plans[name] = report
+            planFailures.removeValue(forKey: name)
+        } catch {
+            plans.removeValue(forKey: name)
+            planFailures[name] = Self.message(error)
+        }
+    }
+
     func status(product: String, surface: String, host: String?) async {
         do {
             let state = try await cli.json(
@@ -242,7 +204,8 @@ final class ProductsStore: ObservableObject {
     }
 
     func mutate(_ verb: String, product: String, surface: String, host: String?,
-                releaseVersion: String? = nil, sourceCommit: String? = nil) async {
+                releaseVersion: String? = nil, sourceCommit: String? = nil,
+                withPrerequisites: Bool = false) async {
         guard !mutation.isWorking else { return }
         mutation = .working("\(verb.capitalized) \(product) \(surface)")
         do {
@@ -263,13 +226,20 @@ final class ProductsStore: ObservableObject {
             let state = try await cli.json(
                 ProductLifecycleState.self,
                 arguments: Self.lifecycleArguments(verb, product: product, surface: surface, host: host,
-                                                   releaseVersion: releaseVersion, sourceCommit: sourceCommit),
+                                                   releaseVersion: releaseVersion, sourceCommit: sourceCommit,
+                                                   withPrerequisites: withPrerequisites),
                 confirmsMutation: true,
                 destination: surface == "service" ? .selected : .localDevice
             )
             states[key(product, surface)] = state
             mutation = .succeeded("\(product) \(surface): \(state.status)")
             await refreshLocks()
+            let planned = ProductPlanKey(product: product, surface: surface, host: host,
+                                         releaseVersion: releaseVersion, sourceCommit: sourceCommit)
+            if plans[planned] != nil {
+                await plan(product: product, surface: surface, host: host,
+                           releaseVersion: releaseVersion, sourceCommit: sourceCommit)
+            }
         } catch {
             mutation = .failed(Self.message(error))
         }

@@ -19,7 +19,8 @@ pub fn compiles(matches: &ArgMatches) -> bool {
             cargo.get_one::<String>("operation"),
             Some(operation) if operation == "results"
         ),
-        Some(("install" | "update" | "swift", _)) => true,
+        Some(("install" | "update", operation)) => !operation.get_flag("plan"),
+        Some(("swift", _)) => true,
         _ => false,
     }
 }
