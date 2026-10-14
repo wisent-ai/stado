@@ -65,6 +65,7 @@ pub(super) fn parse_marker(
         })?;
     let detail = fields
         .get(2)
-        .map_or_else(String::new, |detail| (*detail).to_string());
+        .copied()
+        .map_or_else(String::new, str::to_string);
     Ok((status.to_string(), detail))
 }
