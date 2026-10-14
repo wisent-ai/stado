@@ -185,11 +185,21 @@ pub(crate) fn load_state(
     target_name: &str,
 ) -> Result<HostReleaseState, String> {
     let path = state_path(target, product);
-    if !path.exists() {
-        return Ok(HostReleaseState::new(product, target_name));
-    }
-    let bytes = std::fs::read(&path)
-        .map_err(|error| format!("cannot read release state {}: {error}", path.display()))?;
+    // Only a state that does not exist is a new one: one that cannot be
+    // examined was read as new, and the next save wrote that empty state
+    // over the host's release history.
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(HostReleaseState::new(product, target_name))
+        }
+        Err(error) => {
+            return Err(format!(
+                "cannot read release state {}: {error}",
+                path.display()
+            ))
+        }
+    };
     parse_state_document(&bytes, product, target_name, &path.display().to_string())
 }
 

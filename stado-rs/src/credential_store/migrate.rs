@@ -115,18 +115,22 @@ fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
 
 fn persist_selector(locator: &str) -> Result<(), SkarbiecError> {
     let path = config_path_for_write()?;
-    let mut document = if path.exists() {
-        let body = std::fs::read_to_string(&path).map_err(|source| {
-            deployment(format!("cannot read config {}: {source}", path.display()))
-        })?;
-        serde_json::from_str::<Value>(&body).map_err(|source| {
+    // Only a config that does not exist starts empty: one that cannot be
+    // read was started empty too, and the write below replaced it whole.
+    let mut document = match std::fs::read_to_string(&path) {
+        Ok(body) => serde_json::from_str::<Value>(&body).map_err(|source| {
             deployment(format!(
                 "config {} is invalid JSON: {source}",
                 path.display()
             ))
-        })?
-    } else {
-        Value::Object(Map::new())
+        })?,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
+        Err(source) => {
+            return Err(deployment(format!(
+                "cannot read config {}: {source}",
+                path.display()
+            )))
+        }
     };
     let root = document
         .as_object_mut()

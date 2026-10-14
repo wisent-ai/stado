@@ -57,9 +57,19 @@ pub fn find_config_file() -> Result<Option<PathBuf>, ConfigError> {
         }
     };
     let override_ = override_.trim();
+    // Only a candidate that does not exist is passed over: one that cannot be
+    // examined was too, and Stado then ran on the next config or none.
+    let present = |candidate: &std::path::Path| match std::fs::metadata(candidate) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(ConfigError::Invalid {
+            path: candidate.to_path_buf(),
+            message: format!("cannot be examined: {error}"),
+        }),
+    };
     if !override_.is_empty() {
         let candidate = expand_tilde(override_);
-        if !candidate.exists() {
+        if !present(&candidate)? {
             return Err(ConfigError::Selected {
                 variable: FILE_ENV,
                 message: format!("names {}, which does not exist", candidate.display()),
@@ -69,7 +79,7 @@ pub fn find_config_file() -> Result<Option<PathBuf>, ConfigError> {
     }
     for entry in CANDIDATES {
         let candidate = expand_tilde(entry);
-        if candidate.exists() {
+        if present(&candidate)? {
             return Ok(Some(candidate));
         }
     }
