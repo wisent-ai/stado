@@ -4,11 +4,12 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use crate::monitor::host_silence;
 use crate::service_resolution::{self, ResolverAdapter, ResolverConfig};
 
+mod handover;
 mod resolve;
 mod session;
+mod tunnels;
 use crate::targets::{self, RegistryStore};
 
 use crate::cli::resolver::authority::tunnel::Tunnel;
@@ -61,81 +62,11 @@ pub(super) struct ResolverState {
 }
 
 impl ResolverState {
-    /// Open a channel and retain its session until the caller finishes copying.
-    ///
-    /// Connections through this adapter used to wait minutes while the
-    /// remote object API refused channels at once. Two things made that
-    /// queue: every refused channel dropped a healthy session, so the next
-    /// connection opened a new SSH session from scratch; and every open
-    /// ran while holding the one lock all services and consumers share, so
-    /// each connection waited for every handshake queued before it. A
-    /// session is now opened without the shared lock, and it is dropped only
-    /// when it is closed; a channel the service refuses leaves it in place and
-    /// is reported to the caller at once.
-    pub(super) async fn tunnel_connect(
-        &self,
-        active_host: &str,
-        paths: &[targets::SshConnectionPath],
-        host: &str,
-        port: u16,
-    ) -> Result<(russh::ChannelStream<russh::client::Msg>, Arc<Tunnel>), String> {
-        let key = format!("{active_host}|{host}:{port}");
-        // Preserve the existing single reconnect before any client bytes are sent.
-        for attempt in 0..2 {
-            let held = {
-                let mut tunnels = self.tunnels.lock().await;
-                match tunnels.get(&key).filter(|tunnel| tunnel.usable()) {
-                    Some(tunnel) => Some(Arc::clone(tunnel)),
-                    None => {
-                        tunnels.remove(&key);
-                        None
-                    }
-                }
-            };
-            let tunnel = match held {
-                Some(tunnel) => tunnel,
-                None => {
-                    let opened = Arc::new(Tunnel::open(paths).await?);
-                    let mut tunnels = self.tunnels.lock().await;
-                    // Another connection may have opened one meanwhile; keep
-                    // the first so every caller shares one session.
-                    let kept = tunnels
-                        .entry(key.clone())
-                        .or_insert_with(|| Arc::clone(&opened));
-                    Arc::clone(kept)
-                }
-            };
-            match tunnel.connect(host, port).await {
-                Ok(stream) => return Ok((stream, tunnel)),
-                // The session is alive: the service end refused this one
-                // channel, and a new session would be refused the same way.
-                Err(error) if tunnel.usable() => return Err(error),
-                Err(error) => {
-                    let mut tunnels = self.tunnels.lock().await;
-                    if tunnels
-                        .get(&key)
-                        .is_some_and(|current| Arc::ptr_eq(current, &tunnel))
-                    {
-                        tunnels.remove(&key);
-                    }
-                    if attempt == 1 {
-                        return Err(error);
-                    }
-                }
-            }
-        }
-        unreachable!("the loop returns on its last attempt")
-    }
-
     /// Reload the directory. `Some(config)` when the directory now declares
     /// another resolver configuration for this host, after the snapshot has
     /// been taken: the caller rebinds what changed and keeps serving.
     pub(super) async fn refresh(&self) -> Result<Option<ResolverConfig>, String> {
-        let source = self.source.read().await.clone();
-        let (document, store_version, generation) = source
-            .fetch(host_silence::READER_RESOLVER)
-            .await
-            .map_err(|error| error.to_string())?;
+        let (document, store_version, generation) = self.read_registry().await?;
         let serialized = serde_json::to_string(&document)
             .map_err(|error| format!("cannot serialize validated registry snapshot: {error}"))?;
         // A refused cache does not fail the refresh: the document this
@@ -147,11 +78,12 @@ impl ResolverState {
         }
         let next_source = snapshot_source(self.local_store.clone(), &document, &self.local_target)?;
         let next_config = service_resolution::resolver_config(&document, &self.local_target)?;
-        let changed = self
-            .config
-            .read()
-            .map(|current| *current != next_config)
-            .unwrap_or(true);
+        // A lock a panicking writer left poisoned still holds the last
+        // configuration it wrote; that is the one compared.
+        let changed = match self.config.read() {
+            Ok(current) => *current != next_config,
+            Err(poisoned) => *poisoned.into_inner() != next_config,
+        };
         let mut current = self.snapshot.write().await;
         if generation < current.directory_generation {
             return Err(format!(
@@ -203,9 +135,11 @@ impl ResolverState {
     }
 
     pub(super) fn gateway_url(&self, service: &str, consumer: &str) -> Option<String> {
-        self.adapters
-            .read()
-            .ok()?
+        let adapters = match self.adapters.read() {
+            Ok(adapters) => adapters,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        adapters
             .iter()
             .find(|adapter| adapter.service == service && adapter.consumer == consumer)
             .map(|adapter| format!("http://{}", adapter.bind))

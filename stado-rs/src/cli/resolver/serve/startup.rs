@@ -17,6 +17,9 @@ use crate::cli::resolver::directory::source::SnapshotSource;
 use crate::cli::resolver::report::published::publish;
 use crate::cli::resolver::report::published::PublishedState;
 
+/// The store version a registry served from this host's last-known-good copy
+/// carries: the copy names no store version of its own.
+pub(super) const LAST_KNOWN_GOOD_VERSION: &str = "last-known-good";
 /// Everything `serve` must read before it can bind one port.
 pub(super) struct Startup {
     pub(super) source: SnapshotSource,
@@ -52,7 +55,7 @@ async fn load_startup(
                     eprintln!(
                         "stado resolver recovery: registry authority failed ({authority_error}); bootstrapping routing from the last-known-good registry"
                     );
-                    (document, "last-known-good".to_string(), true)
+                    (document, LAST_KNOWN_GOOD_VERSION.to_string(), true)
                 }
             }
         }
@@ -61,7 +64,7 @@ async fn load_startup(
             eprintln!(
                 "stado resolver recovery: registry backend construction failed; bootstrapping routing from the last-known-good registry"
             );
-            (document, "last-known-good".to_string(), true)
+            (document, LAST_KNOWN_GOOD_VERSION.to_string(), true)
         }
     };
     let detected_target = current_target(&bootstrap)?;
