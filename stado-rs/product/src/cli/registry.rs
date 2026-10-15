@@ -97,7 +97,21 @@ pub fn command() -> Command {
                 "benchmark",
                 "Declare the benchmark that measures the rivals: {\"app\",\"suites\"} as JSON",
             ))
-            .arg(flag("remove-benchmark", "Remove the declared benchmark")),
+            .arg(flag("remove-benchmark", "Remove the declared benchmark"))
+            .arg(
+                value(
+                    "add-dependency",
+                    "Add or replace a product this one needs, and how it runs without it: {\"product\",\"surface\",\"for_surface\",\"alternative\",\"alternative_source\"} or {\"product\",\"surface\",\"for_surface\",\"bound_because\"} as JSON; replaces the need with the same product, surface and for_surface",
+                )
+                .action(ArgAction::Append),
+            )
+            .arg(
+                value(
+                    "remove-dependency",
+                    "Remove every declared need of this product",
+                )
+                .action(ArgAction::Append),
+            ),
         )
         .subcommand(
             Command::new("rm")

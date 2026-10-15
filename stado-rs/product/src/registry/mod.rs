@@ -13,7 +13,7 @@ use std::{
 
 pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     emit(&mutate(action, Arguments::from_matches(args), runtime)?)?;
-    Ok(0)
+    Ok(libc::EXIT_SUCCESS)
 }
 
 pub fn mutate(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value> {
@@ -23,10 +23,10 @@ pub fn mutate(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value>
         }
         args.required("--id")?
     } else {
-        if args.positional.len() != 1 {
+        let [id] = args.positional.as_slice() else {
             bail!("registry {action} requires one product ID");
-        }
-        args.positional[0].as_str()
+        };
+        id.as_str()
     };
     slug(id)?;
     if action == "rm" && !args.has("--yes") {
@@ -158,6 +158,23 @@ pub fn mutate(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value>
             .context("product record must be an object")?
             .remove("rivals");
     }
+    let removals = args.many("--remove-dependency");
+    let additions = args.many("--add-dependency");
+    if !removals.is_empty() || !additions.is_empty() {
+        if record.get("dependencies").is_none() {
+            record["dependencies"] = json!([]);
+        }
+        remove_needs(&mut record, removals)?;
+        for value in additions {
+            replace_need(&mut record, fields::dependency(value)?)?;
+        }
+        if record["dependencies"].as_array().is_some_and(Vec::is_empty) {
+            record
+                .as_object_mut()
+                .context("product record must be an object")?
+                .remove("dependencies");
+        }
+    }
     if args.has("--remove-benchmark") {
         record
             .as_object_mut()
@@ -223,6 +240,44 @@ fn replace(record: &mut Value, field: &str, identity: &str, row: Value) -> Resul
         rows[position] = row;
     } else {
         rows.push(row);
+    }
+    Ok(())
+}
+
+/// The fields that make one declared need of another product: the product,
+/// its surface, and the surface of this product that needs it.
+const NEED_IDENTITY: &[&str] = &["product", "surface", "for_surface"];
+
+/// Remove every declared need of each product in `names`; a product with no
+/// declared need is refused by name and nothing is written.
+fn remove_needs(record: &mut Value, names: &[String]) -> Result<()> {
+    let rows = record["dependencies"]
+        .as_array_mut()
+        .context("dependencies must be a list")?;
+    for name in names {
+        let before = rows.len();
+        rows.retain(|row| row["product"] != name.as_str());
+        if rows.len() == before {
+            bail!("no dependency on {name} is declared; nothing was changed");
+        }
+    }
+    Ok(())
+}
+
+/// Replace the declared need with the same product, surface and
+/// `for_surface` as `row`, or add `row` when there is none.
+fn replace_need(record: &mut Value, row: Value) -> Result<()> {
+    let rows = record["dependencies"]
+        .as_array_mut()
+        .context("dependencies must be a list")?;
+    let same = rows.iter().position(|old| {
+        NEED_IDENTITY
+            .iter()
+            .all(|field| old.get(*field) == row.get(*field))
+    });
+    match same {
+        Some(position) => rows[position] = row,
+        None => rows.push(row),
     }
     Ok(())
 }

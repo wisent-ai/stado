@@ -76,11 +76,35 @@ pub fn benchmark(value: &str) -> Result<Value> {
     object("--benchmark", value, &["app", "suites"])
 }
 
+/// One need of another product, in the catalog's own dependency fields; the
+/// catalog validation that runs on every write refuses an unknown product, an
+/// empty field, an `alternative_source` without an `alternative`, and a
+/// `bound_because` beside an `alternative`.
+pub fn dependency(value: &str) -> Result<Value> {
+    object(
+        "--add-dependency",
+        value,
+        &[
+            "product",
+            "surface",
+            "for_surface",
+            "alternative",
+            "alternative_source",
+            "bound_because",
+        ],
+    )
+}
+
 pub fn installation(value: &str, surfaces: &Value) -> Result<Value> {
     let (surface, recipe) = value
         .split_once('=')
         .context("installation requires SURFACE=KIND[:PAYLOAD]")?;
-    let (kind, payload) = recipe.split_once(':').unwrap_or((recipe, ""));
+    // The grammar makes the payload optional: `SURFACE=KIND` declares the
+    // recipe kind alone.
+    let (kind, payload) = match recipe.split_once(':') {
+        Some((kind, payload)) => (kind, Some(payload)),
+        None => (recipe, None),
+    };
     let repository = surfaces
         .as_array()
         .context("surfaces must be a list")?
@@ -91,9 +115,9 @@ pub fn installation(value: &str, surfaces: &Value) -> Result<Value> {
     let recipe_kind = crate::catalog::RecipeKind::parse(kind)
         .with_context(|| format!("unknown installation kind {kind}"))?;
     let mut recipe = json!({"surface": surface, "kind": kind, "repository": repository});
-    if payload.is_empty() {
+    let Some(payload) = payload.filter(|payload| !payload.is_empty()) else {
         return Ok(recipe);
-    }
+    };
     // A payload opening with a declared field takes FIELD=VALUE pairs; any
     // other payload is the recipe kind's primary field.
     let explicit = payload
