@@ -44,7 +44,9 @@ impl JobStorage {
                     return Ok(false);
                 }
             }
-            self.set_transition_state(&transition, "completed").await?;
+            if !self.set_transition_state(&transition, "completed").await? {
+                return Ok(false);
+            }
             return self.finish_completed_transition(&transition).await;
         }
         let source_path = format!("{}/{}.json", transition.from_prefix, job_id);
@@ -99,13 +101,17 @@ impl JobStorage {
                         transition.transition_id
                     )));
                 }
-                self.set_transition_state(&transition, "completed").await?;
+                if !self.set_transition_state(&transition, "completed").await? {
+                    return Ok(false);
+                }
                 return self.finish_completed_transition(&transition).await;
             }
         }
 
-        let mut installed_destination = None;
-        for _ in 0..16 {
+        // A destination another writer changed between the read and the
+        // write is read again; the loop ends when this transition's
+        // destination is installed or found already standing.
+        let destination = loop {
             let existing_versioned = self.read_text_versioned(&destination_path).await?;
             let Some(existing_versioned) = existing_versioned else {
                 if self
@@ -113,8 +119,7 @@ impl JobStorage {
                     .upload_text_if_absent(&destination_path, &transition.destination_job.to_json())
                     .await?
                 {
-                    installed_destination = Some(transition.destination_job.clone());
-                    break;
+                    break transition.destination_job.clone();
                 }
                 continue;
             };
@@ -128,10 +133,7 @@ impl JobStorage {
                     )
                     .await
                 {
-                    Ok(_) => {
-                        installed_destination = Some(transition.destination_job.clone());
-                        break;
-                    }
+                    Ok(_) => break transition.destination_job.clone(),
                     Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
                     Err(error) => return Err(error),
                 }
@@ -157,24 +159,13 @@ impl JobStorage {
                     )
                     .await
                 {
-                    Ok(_) => {
-                        installed_destination = Some(transition.destination_job.clone());
-                        break;
-                    }
+                    Ok(_) => break transition.destination_job.clone(),
                     Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => continue,
                     Err(error) => return Err(error),
                 }
-            } else {
-                installed_destination = Some(existing);
-                break;
             }
-        }
-        let destination = installed_destination.ok_or_else(|| {
-            StorageError::StorageConflict(format!(
-                "{destination_path} remained contended during transition {}",
-                transition.transition_id
-            ))
-        })?;
+            break existing;
+        };
         self.backend
             .set_metadata(&destination_path, &Self::job_metadata(&destination))
             .await?;
@@ -184,7 +175,9 @@ impl JobStorage {
             // would be invisible to a listing that walks only the index.
             self.write_priority_marker(&destination).await?;
         }
-        self.set_transition_state(&transition, "completed").await?;
+        if !self.set_transition_state(&transition, "completed").await? {
+            return Ok(false);
+        }
         self.finish_completed_transition(&transition).await
     }
 }

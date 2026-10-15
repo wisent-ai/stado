@@ -16,12 +16,13 @@ impl JobStorage {
     /// completed record between our final read and delete, and deleting by path
     /// would then erase that newer move. A named retired state keeps the reason
     /// in the durable record, stops later recovery from re-verifying settled
-    /// history, and remains replaceable by the next transition.
+    /// history, and remains replaceable by the next transition. A write that
+    /// loses a race reads the record again and decides on what it now holds.
     async fn retire_transition_record(
         &self,
         completed: &JobTransition,
     ) -> Result<(), StorageError> {
-        for _ in 0..16 {
+        loop {
             let Some((mut current, version)) = self.read_job_transition(&completed.job_id).await?
             else {
                 return Ok(());
@@ -52,12 +53,10 @@ impl JobStorage {
                 Err(error) => return Err(error),
             }
         }
-        Err(StorageError::StorageConflict(format!(
-            "durable transition {} remained contended while retiring",
-            completed.transition_id
-        )))
     }
 
+    /// Mark the fenced source of `transition` cleaned; a write that loses a
+    /// race reads the source again and decides on what it now holds.
     async fn retire_transition_source(
         &self,
         transition: &JobTransition,
@@ -65,7 +64,7 @@ impl JobStorage {
         let source_path = format!("{}/{}.json", transition.from_prefix, transition.job_id);
         let fence_state = transition_fence_state(&transition.transition_id);
         let cleaned_state = transition_cleaned_state(&transition.transition_id);
-        for _ in 0..16 {
+        loop {
             let Some(versioned) = self.read_text_versioned(&source_path).await? else {
                 return Ok(());
             };
@@ -95,10 +94,6 @@ impl JobStorage {
                 Err(error) => return Err(error),
             }
         }
-        Err(StorageError::StorageConflict(format!(
-            "source fence for transition {} remained contended",
-            transition.transition_id
-        )))
     }
 
     pub(super) async fn finish_completed_transition(
@@ -227,7 +222,9 @@ impl JobStorage {
                 == crate::queue::submit::immutable_job_projection(&transition.destination_job)
                 && destination.state == prefix_state(&transition.to_prefix)
             {
-                self.set_transition_state(transition, "completed").await?;
+                if !self.set_transition_state(transition, "completed").await? {
+                    return Ok(false);
+                }
                 return self.finish_completed_transition(transition).await;
             }
         }

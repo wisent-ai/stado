@@ -29,12 +29,18 @@ impl JobStorage {
         Ok(Some((transition, versioned.version)))
     }
 
+    /// Move `expected`'s record to `state`: true once it holds that state,
+    /// false when the job's record is no longer `expected`'s generation —
+    /// another caller finished that transition and a later one replaced it,
+    /// so nothing of `expected` is left for this caller to settle. A write
+    /// that loses a race with another writer of the same generation reads
+    /// the record again and decides on what it now holds.
     async fn set_transition_state(
         &self,
         expected: &JobTransition,
         state: &str,
-    ) -> Result<(), StorageError> {
-        for _ in 0..16 {
+    ) -> Result<bool, StorageError> {
+        loop {
             let Some((mut transition, version)) =
                 self.read_job_transition(&expected.job_id).await?
             else {
@@ -46,13 +52,10 @@ impl JobStorage {
             if transition.transition_id != expected.transition_id
                 || transition.owner != expected.owner
             {
-                return Err(StorageError::StorageConflict(format!(
-                    "durable transition generation changed for {}",
-                    expected.job_id
-                )));
+                return Ok(false);
             }
             if transition.state == state {
-                return Ok(());
+                return Ok(true);
             }
             transition.state = state.to_string();
             match self
@@ -63,14 +66,10 @@ impl JobStorage {
                 )
                 .await
             {
-                Ok(_) => return Ok(()),
+                Ok(_) => return Ok(true),
                 Err(StorageError::StorageConflict(_)) => continue,
                 Err(error) => return Err(error),
             }
         }
-        Err(StorageError::StorageConflict(format!(
-            "durable transition {} remained contended",
-            expected.transition_id
-        )))
     }
 }
