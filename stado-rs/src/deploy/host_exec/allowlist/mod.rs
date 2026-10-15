@@ -15,7 +15,7 @@ pub use candidates::{cargo_candidates, installed_program, program_candidates, PR
 pub use entries::APPROVED_COMMANDS;
 pub use programs::{
     ADB_PROGRAM, APPIUM_PROGRAM, GIT_PROGRAM, KIMI_CLI, NODE_PROGRAM, OKO_CLI, SKARBIEC_CLI,
-    STADO_CLI, TMUX_PROGRAM,
+    STADO_CLI, TAMA_CLI, TMUX_PROGRAM,
 };
 
 /// The punctuation an operator's word may contain on top of ASCII

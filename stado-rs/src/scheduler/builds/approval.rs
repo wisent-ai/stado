@@ -11,9 +11,16 @@ pub struct BuildIntent<'a> {
     pub platform: &'a str,
 }
 
+/// Ask Tama's build registry for the approval of `intent`, through the Tama a
+/// Stado install places (`TAMA_CLI`): the scheduler runs under a service
+/// unit whose `PATH` holds no `~/.stado/bin`.
 pub async fn verify(intent: &BuildIntent<'_>) -> Result<Value, String> {
+    let tama = crate::deploy::host_exec::installed_program(crate::deploy::host_exec::TAMA_CLI)
+        .map_err(|missing| {
+            format!("cannot verify recorded user build approval through Tama: {missing}")
+        })?;
     let output = crate::wait::output_async(
-        tokio::process::Command::new("tama")
+        tokio::process::Command::new(&tama)
             .args([
                 "build",
                 "approval",
@@ -26,7 +33,12 @@ pub async fn verify(intent: &BuildIntent<'_>) -> Result<Value, String> {
             .kill_on_drop(true),
     )
     .await
-    .map_err(|error| format!("cannot verify recorded user build approval through Tama: {error}"))?;
+    .map_err(|error| {
+        format!(
+            "cannot verify recorded user build approval through Tama at {}: {error}",
+            tama.display()
+        )
+    })?;
     if !output.status.success() {
         return Err(format!(
             "Tama refused the build exception ({}): {}",

@@ -3,7 +3,7 @@
 
 use super::programs::{
     ANDROID_DEBUG_BRIDGE, APPIUM_CLI, BRAMA_LAUNCHER, CADDY_PROXY, CARGO_CLI, CUA_DRIVER, GIT_CLI,
-    NODE_RUNTIME, NPM_CLI, OKO_CLI, TAILSCALE_PROGRAM, TMUX_CLI, UV_INSTALLER,
+    NODE_RUNTIME, NPM_CLI, OKO_CLI, TAILSCALE_PROGRAM, TAMA_CLI, TMUX_CLI, UV_INSTALLER,
 };
 
 /// Every absolute path a program in this table is installed at, for the
@@ -121,9 +121,10 @@ pub const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
             "~/.stado/services/brama/current/linux-amd64/bin/start-with-skarbiec",
         ],
     ),
-    // Oko, at the one path a Stado product install places it, so a unit
-    // without a login PATH resolves it and a missing install is named.
+    // Oko and Tama, at the one path a Stado product install places each, so a
+    // unit without a login PATH resolves them and a missing install is named.
     (OKO_CLI, &[OKO_CLI]),
+    (TAMA_CLI, &[TAMA_CLI]),
 ];
 
 /// Every absolute path this fleet installs one program at, in probe order, or

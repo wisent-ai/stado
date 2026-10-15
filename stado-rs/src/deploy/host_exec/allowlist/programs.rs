@@ -66,6 +66,11 @@ pub const SKARBIEC_CLI: &str = "~/.stado/bin/skarbiec";
 /// no `~/.stado/bin` on its `PATH`, so a bare `oko` there is not found.
 pub const OKO_CLI: &str = "~/.stado/bin/oko";
 
+/// Tama's CLI as a Stado product install places it. Stado's scheduler reads
+/// recorded build approvals through it, from a service unit whose `PATH`
+/// holds no `~/.stado/bin`.
+pub const TAMA_CLI: &str = "~/.stado/bin/tama";
+
 /// Brama's release launcher on a fleet host: the one program the gateway's
 /// unit runs, which, given arguments, runs Brama's own CLI with the gateway's
 /// vault, Skarbiec authority and workload identity instead of serving. An
