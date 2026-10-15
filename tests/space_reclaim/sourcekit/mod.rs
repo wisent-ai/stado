@@ -101,29 +101,43 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
         .expect("open actual lock");
     lock.try_lock()
         .expect("an answering SourceKit server must not hold the cleanup lock");
+    // A build waits for a pass that holds the lock and runs once it lets go;
+    // it is refused only while the janitor has asked running work for its
+    // turn, the request this journey writes as the janitor would, standing
+    // behind this live test process.
+    let turn = native.state_dir().join("space-reclaim-turn.json");
+    let requested_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock reads after the epoch")
+        .as_secs_f64();
+    let request = json!({
+        "requested_at": requested_at, "reason": "the isolated volume is under pressure",
+        "pid": std::process::id(),
+    });
+    fs::write(&turn, request.to_string())
+        .expect("write the janitor's turn request in the isolated home");
     let mut build = native.command(&[]);
     build.arg("product").arg("swift").arg("build");
     let refused = build.output().expect("execute refused build command");
     native.observe(
-        "build during cleanup",
+        "build while the janitor asks for its turn",
         json!({"command": "stado product swift build",
         "status": refused.status.code(), "stdout": String::from_utf8_lossy(&refused.stdout),
         "stderr": String::from_utf8_lossy(&refused.stderr)}),
     );
     assert!(
         !refused.status.success(),
-        "compilation must not start during cleanup"
+        "compilation must not start while the janitor waits for its turn"
     );
     let refusal = String::from_utf8_lossy(&refused.stderr);
     assert!(
-        refusal.contains("nothing was exported or built"),
+        refusal.contains("asked running work for its turn; nothing was exported or built"),
         "{refusal}"
     );
     assert!(
-        refusal.contains("ownership was not established"),
-        "{refusal}"
+        refusal.contains("the isolated volume is under pressure"),
+        "the refusal names the turn request it yields to: {refusal}"
     );
-    let turn = native.state_dir().join("space-reclaim-turn.json");
     fs::write(&turn, b"{").expect("write interrupted turn record in isolated home");
     let damaged = build
         .output()
