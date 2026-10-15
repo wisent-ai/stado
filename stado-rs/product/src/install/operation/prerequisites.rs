@@ -1,6 +1,9 @@
 //! Apply a release's cross-product verb requirements before building it.
 
-use super::super::{plan::prerequisites::Decision, Coordinate};
+use super::super::{
+    plan::prerequisites::{Decision, Enclosing},
+    Coordinate,
+};
 use crate::{catalog, common::Runtime};
 use anyhow::{bail, Result};
 use serde_json::Value;
@@ -19,7 +22,7 @@ pub(super) struct Request<'a> {
 pub(super) fn install(
     request: Request<'_>,
     required: Vec<Decision>,
-    stack: &mut Vec<String>,
+    stack: &mut Vec<Enclosing>,
 ) -> Result<()> {
     for requirement in required {
         let provider = &requirement.requirement.product;

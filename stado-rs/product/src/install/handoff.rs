@@ -19,6 +19,7 @@ use std::{
 
 use crate::{
     common::{capture, Runtime},
+    install::plan::prerequisites::{Enclosing, ENCLOSING_ENV},
     state::ProductState,
 };
 
@@ -77,16 +78,18 @@ pub(crate) fn staged_program(spec: &Value, id: &str) -> Result<String> {
 /// The outcome of an installation frame: a [`HandOff`] its build returned
 /// is finished now by the program the build made — after the frame let go of
 /// the surface's writer lock — and any other outcome is the frame's own.
+/// `enclosing` are the installations in progress this one is a dependency of.
 pub(crate) fn finished(
     result: Result<ProductState>,
     runtime: &Runtime,
     id: &str,
     surface: &str,
     host: Option<&str>,
+    enclosing: &[Enclosing],
 ) -> Result<ProductState> {
     match result {
         Err(error) => match error.downcast::<HandOff>() {
-            Ok(hand) => hand.finish(runtime, id, surface, host),
+            Ok(hand) => hand.finish(runtime, id, surface, host, enclosing),
             Err(error) => Err(error),
         },
         installed => installed,
@@ -117,13 +120,16 @@ impl std::error::Error for HandOff {}
 impl HandOff {
     /// Run `<binary> product finish` for `id` on `surface`, after this
     /// process let go of the surface's writer lock, and read the receipt it
-    /// recorded.
+    /// recorded. The installations in progress this one is a dependency of go
+    /// to the binary in `ENCLOSING_ENV`, so a verb one of them is about to
+    /// provide meets its requirement there as it did here.
     pub fn finish(
         &self,
         runtime: &Runtime,
         id: &str,
         surface: &str,
         host: Option<&str>,
+        enclosing: &[Enclosing],
     ) -> Result<ProductState> {
         let mut command = Command::new(&self.binary);
         command
@@ -138,6 +144,9 @@ impl HandOff {
             .arg(&self.revision)
             .args(runtime.signing.arguments())
             .stdin(Stdio::null());
+        if !enclosing.is_empty() {
+            command.env(ENCLOSING_ENV, serde_json::to_string(enclosing)?);
+        }
         eprintln!(
             "{id}: the build passed and is retained; {} finishes the installation \
              (stado product {FINISH})",

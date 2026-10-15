@@ -6,6 +6,7 @@ pub(crate) mod handoff;
 pub mod operation;
 pub use operation::perform;
 pub mod plan;
+pub use plan::prerequisites::Enclosing;
 mod recipes;
 mod services;
 mod settle;

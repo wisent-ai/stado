@@ -9,7 +9,7 @@ use crate::{
     state::{InstallStatus, ProductState},
 };
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 mod chain;
@@ -19,12 +19,51 @@ use contract::{first_provider, manifest, provides};
 
 const CI_RECORD: &str = "ci-main.json";
 const CI_RECORD_ENV: &str = "STADO_CI_MAIN_RECORD";
+/// The installations in progress a parent process hands to the binary that
+/// finishes one of their dependencies (`stado product finish`), as JSON.
+pub const ENCLOSING_ENV: &str = "STADO_PRODUCT_ENCLOSING";
 
 #[derive(Clone, Deserialize)]
 pub struct Requirement {
     pub product: String,
     pub surface: String,
     pub verb: String,
+}
+
+/// An installation in progress that the one being planned is a dependency
+/// of: the product and surface it installs and the revision it builds.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct Enclosing {
+    pub product: String,
+    pub surface: String,
+    pub revision: String,
+}
+
+impl Enclosing {
+    pub fn new(product: &str, surface: &str, revision: &str) -> Self {
+        Self {
+            product: product.to_owned(),
+            surface: surface.to_owned(),
+            revision: revision.to_owned(),
+        }
+    }
+
+    pub fn node(&self) -> String {
+        format!("{}/{}", self.product, self.surface)
+    }
+}
+
+/// The enclosing installations this process was handed in `ENCLOSING_ENV`;
+/// none when it was handed none, and a value that is not that list is
+/// refused naming the variable.
+fn handed() -> Result<Vec<Enclosing>> {
+    match std::env::var(ENCLOSING_ENV) {
+        Err(std::env::VarError::NotPresent) => Ok(Vec::new()),
+        Err(error) => bail!("{ENCLOSING_ENV} cannot be read: {error}"),
+        Ok(text) => serde_json::from_str(&text).with_context(|| {
+            format!("{ENCLOSING_ENV} holds no list of enclosing installations: {text}")
+        }),
+    }
 }
 
 pub struct Decision {
@@ -108,12 +147,18 @@ fn green(runtime: &Runtime, product: &str, surface: &str) -> Result<String> {
         .with_context(|| format!("{key} has no qualified last-green revision in {}; `stado ci delivery` names each step's last checked and last green commit and why", path.display()))
 }
 
+/// What each verb `product` requires at `revision` needs. A verb whose
+/// provider is an installation `enclosing` (or a parent process handed)
+/// names, and whose target revision declares it, is met by that revision:
+/// the enclosing installation places it once this dependency is done, so a
+/// product whose own dependency needs its new verb can still be installed.
 pub fn requirements(
     runtime: &Runtime,
     document: &Value,
     product: &Value,
     surface: &str,
     revision: &str,
+    enclosing: &[Enclosing],
 ) -> Result<Vec<Decision>> {
     let id = catalog::text(product, "id")?;
     let Some(path) = manifest_path(product, surface)? else {
@@ -127,6 +172,7 @@ pub fn requirements(
             own.product
         );
     }
+    let handed = handed()?;
     let mut decisions = Vec::new();
     for required in own.requires {
         let provider = catalog::product(document, &required.product)?;
@@ -147,6 +193,31 @@ pub fn requirements(
         let source_revision = installed
             .as_ref()
             .and_then(|state| state.source_revision.clone());
+        let in_progress = enclosing
+            .iter()
+            .chain(handed.iter())
+            .find(|frame| frame.product == required.product && frame.surface == required.surface);
+        if let Some(frame) = in_progress {
+            let promised = manifest(&root, &frame.revision, provider_path)?;
+            if promised.product == required.product && provides(&promised, &required.verb) {
+                let minimum =
+                    first_provider(&root, &frame.revision, provider_path, &required.verb)?;
+                let reason = format!(
+                    "the installation of {} at {} this one is a dependency of provides the verb and places it once this one is done",
+                    frame.node(),
+                    frame.revision
+                );
+                decisions.push(Decision {
+                    requirement: required,
+                    minimum,
+                    green: frame.revision.clone(),
+                    installed: source_revision,
+                    satisfied: true,
+                    reason,
+                });
+                continue;
+            }
+        }
         let (satisfied, reason) = match (installed.as_ref(), source_revision.as_deref()) {
             (Some(state), Some(revision)) if state.status == InstallStatus::Installed => {
                 match manifest(&root, revision, provider_path) {

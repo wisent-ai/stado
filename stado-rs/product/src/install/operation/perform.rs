@@ -1,7 +1,8 @@
 //! One product installation from an exact source or release coordinate.
 
 use super::super::{
-    handoff, operation, plan, recipe, services, settle, status, transaction, Coordinate,
+    handoff, operation, plan, plan::prerequisites::Enclosing, recipe, services, settle, status,
+    transaction, Coordinate,
 };
 use crate::catalog;
 use crate::common::{now, Runtime};
@@ -11,7 +12,8 @@ use serde_json::{json, Value};
 
 /// `without` names products this machine does without. A dependency on one of
 /// them is skipped only when the catalogue gives it an `alternative`; any
-/// other is refused, so nothing is installed half-wired.
+/// other is refused, so nothing is installed half-wired. `stack` holds the
+/// installations in progress this one is a dependency of, with their revisions.
 // The caller names runtime, catalog, product, destination, source coordinate,
 // retained choices, prerequisite policy and recursion stack explicitly; this
 // operation does not need a second parameter object.
@@ -25,7 +27,7 @@ pub fn perform(
     coordinate: Option<Coordinate<'_>>,
     without: &[String],
     with_prerequisites: bool,
-    stack: &mut Vec<String>,
+    stack: &mut Vec<Enclosing>,
 ) -> Result<ProductState> {
     let id = catalog::text(product, "id")?;
     let selected = recipe(product, surface)?;
@@ -62,15 +64,18 @@ pub fn perform(
         bail!("exact release coordinates install a CLI on the machine that runs this command; --host names a service host. No source build or host deployment was started");
     }
     let node = format!("{id}/{surface}");
-    if stack.contains(&node) {
-        bail!("product dependency cycle: {} -> {node}", stack.join(" -> "));
+    if stack.iter().any(|frame| frame.node() == node) {
+        let path: Vec<String> = stack.iter().map(Enclosing::node).collect();
+        bail!("product dependency cycle: {} -> {node}", path.join(" -> "));
     }
     let is_dependency = !stack.is_empty();
-    stack.push(node);
+    let enclosing = stack.clone();
+    let revision = plan::prerequisites::revision(runtime, product, surface, coordinate)?;
+    stack.push(Enclosing::new(id, surface, &revision));
     let result = (|| {
-        let revision = plan::prerequisites::revision(runtime, product, surface, coordinate)?;
-        let required =
-            plan::prerequisites::requirements(runtime, document, product, surface, &revision)?;
+        let required = plan::prerequisites::requirements(
+            runtime, document, product, surface, &revision, &enclosing,
+        )?;
         let lock = state::path(runtime, id, surface)?.with_extension("lock");
         let writer = operation::lock_surface(runtime, &lock, selected)?;
         let existing = ProductState::load(runtime, id, surface)?;
@@ -288,5 +293,5 @@ pub fn perform(
         Ok(installed)
     })();
     stack.pop();
-    handoff::finished(result, runtime, id, surface, host)
+    handoff::finished(result, runtime, id, surface, host, stack)
 }
