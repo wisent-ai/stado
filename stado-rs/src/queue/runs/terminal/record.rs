@@ -98,7 +98,9 @@ async fn record_terminal_outcome_inner(
         }
         Err(error) => return Err(StorageError::Other(error.to_string())),
     }
-    for _ in 0..16 {
+    // A lost swap means another writer changed the manifest: read it again
+    // and decide on what it now holds.
+    loop {
         let Some(versioned) = store.read_text_versioned(&path).await? else {
             return match missing_manifest {
                 MissingManifest::Allow => Ok(()),
@@ -188,10 +190,6 @@ async fn record_terminal_outcome_inner(
             Err(error) => return Err(error),
         }
     }
-    Err(StorageError::StorageConflict(format!(
-        "run manifest {run_id} remained contended while recording job {}",
-        job.job_id
-    )))
 }
 
 /// Where the run a retained job belongs to is named: `runs/jobs/<job id>`

@@ -20,9 +20,10 @@ impl JobStorage {
         // document is rewritten, so the rewrite never lands under a fence
         // another writer is about to retire — and an operator's own
         // `job set-priority` becomes a way to finish a transition the agent
-        // cannot.
+        // cannot. A lost swap means another writer changed the document:
+        // read it again and decide on what it now holds.
         self.recover_job_transition(job_id).await?;
-        for _ in 0..3 {
+        loop {
             let Some(versioned) = self.read_text_versioned(&path).await? else {
                 return Ok(None);
             };
@@ -57,9 +58,6 @@ impl JobStorage {
             }
             return Ok(Some(job));
         }
-        Err(StorageError::StorageConflict(format!(
-            "queue/{job_id}.json remained contended during rewrite"
-        )))
     }
 
     /// CAS-update one current queued generation's priority and marker.

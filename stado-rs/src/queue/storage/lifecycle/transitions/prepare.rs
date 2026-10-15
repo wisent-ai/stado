@@ -19,7 +19,12 @@ impl JobStorage {
         to_prefix: &str,
         expected_version: Option<&str>,
     ) -> Result<bool, StorageError> {
-        for _ in 0..16 {
+        // Every pass that does not return follows another writer's change: a
+        // lost install, or a recovery that settled the record. The one pass
+        // that can repeat without progress is a prepared record recovery
+        // leaves in place; seeing that same record version twice refuses.
+        let mut unsettled: Option<String> = None;
+        loop {
             self.recover_job_transition(&requested.job_id).await?;
             let source_path = format!("{from_prefix}/{}.json", requested.job_id);
             let Some(source_versioned) = self.read_text_versioned(&source_path).await? else {
@@ -101,6 +106,13 @@ impl JobStorage {
                 Some(active) => {
                     let existing: JobTransition = serde_json::from_str(&active.content)?;
                     if existing.state == "prepared" {
+                        if unsettled.as_deref() == Some(active.version.as_str()) {
+                            return Err(StorageError::StorageConflict(format!(
+                                "durable transition {} for job {} stays prepared: recovery left it unsettled twice",
+                                existing.transition_id, requested.job_id
+                            )));
+                        }
+                        unsettled = Some(active.version);
                         self.recover_job_transition(&requested.job_id).await?;
                         continue;
                     }
@@ -121,9 +133,5 @@ impl JobStorage {
                 return Ok(true);
             }
         }
-        Err(StorageError::StorageConflict(format!(
-            "job {} remained contended during lifecycle transition",
-            requested.job_id
-        )))
     }
 }

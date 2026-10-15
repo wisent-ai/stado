@@ -24,7 +24,9 @@ pub(crate) async fn migrate_v2_run_manifest(
 ) -> Result<Value, SubmitError> {
     validate_run_id(run_id)?;
     let path = format!("{RUN_PREFIX}/{run_id}.json");
-    for _ in 0..16 {
+    // A lost swap means another writer changed the manifest (possibly this
+    // same migration): read it again and decide on what it now holds.
+    loop {
         let versioned = store
             .read_text_versioned(&path)
             .await?
@@ -179,7 +181,4 @@ pub(crate) async fn migrate_v2_run_manifest(
             Err(error) => return Err(error.into()),
         }
     }
-    Err(SubmitError::Validation(format!(
-        "run manifest {run_id} remained contended during v2 migration"
-    )))
 }
