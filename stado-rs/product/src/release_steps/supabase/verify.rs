@@ -12,22 +12,17 @@ use super::super::output_dir;
 use super::super::python::safe_unpack;
 use super::{bundle_project_dir, BUNDLE};
 
-/// Run the Supabase CLI against the local stack, answering its combined
+/// Run the Supabase CLI `cli` against the local stack, answering its combined
 /// output; a failure carries that output, which names the migration file and
-/// statement Postgres refused.
-fn local(source: &Path, arguments: &[&str]) -> Result<()> {
+/// statement Postgres refused, or the Docker daemon the local stack needs.
+fn local(cli: &Path, source: &Path, arguments: &[&str]) -> Result<()> {
     let output = wait::output(
-        Command::new("supabase")
+        Command::new(cli)
             .args(arguments)
             .current_dir(source)
             .stdin(Stdio::null()),
     )
-    .with_context(|| {
-        format!(
-            "cannot run supabase {} (the runner needs the Supabase CLI and Docker)",
-            arguments.join(" ")
-        )
-    })?;
+    .with_context(|| format!("cannot run {} {}", cli.display(), arguments.join(" ")))?;
     if !output.status.success() {
         bail!(
             "supabase {} failed with {}: {}{}",
@@ -107,8 +102,11 @@ fn reassign_ports(
 }
 
 /// A port the host has free now, kept reserved by its listener in `reserved`.
+/// The listener binds the loopback address with port zero, which asks the
+/// system for one that is free.
 fn free_port(reserved: &mut Vec<std::net::TcpListener>) -> Result<i64> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+    let address = (std::net::Ipv4Addr::LOCALHOST, 0); // https://doc.rust-lang.org/std/net/struct.TcpListener.html#method.bind
+    let listener = std::net::TcpListener::bind(address)
         .context("cannot reserve a free host port for the scratch database")?;
     let port = listener.local_addr()?.port();
     reserved.push(listener);
@@ -134,13 +132,15 @@ pub fn verify(project_dir: &str) -> Result<i32> {
     let work = output.join(format!("supabase-verify-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&work)?;
     let result = (|| -> Result<()> {
+        let cli = super::cli::ensure()?;
         safe_unpack(&bundle, &work)?;
         let source = bundle_project_dir(&work, project_dir)?;
         // Only a database this run named can be stopped: until the scratch
         // project_id is written, nothing was started and nothing is stopped.
         let scratch = isolate(&source)?;
-        let started = local(&source, &["db", "start"]);
+        let started = local(&cli, &source, &["db", "start"]);
         let stopped = local(
+            &cli,
             &source,
             &["stop", "--no-backup", "--project-id", scratch.as_str()],
         );
@@ -152,5 +152,5 @@ pub fn verify(project_dir: &str) -> Result<i32> {
     result?;
     removed?;
     println!("every migration in {BUNDLE} applied to a scratch database");
-    Ok(0)
+    Ok(libc::EXIT_SUCCESS)
 }

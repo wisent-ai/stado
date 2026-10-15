@@ -1,0 +1,6 @@
+{
+  "schema": "stado.supabase-cli.v1",
+  "version": "2.114.0",
+  "distribution": "https://github.com/supabase/cli/releases/download",
+  "source": "The Supabase CLI release the operator's workstation runs through Homebrew, published at https://github.com/supabase/cli/releases/tag/v2.114.0. A schema release's post-build test starts a scratch database with it and its delivery pushes with it, and a Linux builder carries no Supabase CLI of its own, so every host that runs either installs this release from its GitHub release, verified against the release's checksums.txt; a newer release is adopted by changing it here."
+}

@@ -18,7 +18,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use stado_wait as wait;
 
-use crate::common::{capture, emit, sha256};
+use crate::common::emit;
+
+pub(crate) mod published;
 
 /// The declaration's path in the Stado repository, for messages.
 pub const DECLARATION_PATH: &str = "stado-rs/data/work/node-runtime.json";
@@ -68,36 +70,18 @@ fn root(home: &Path) -> PathBuf {
     home.join(".local/share/stado-node")
 }
 
-/// The declared release's `node` when it is installed and answers with it.
-fn installed(home: &Path, declaration: &Declaration) -> Option<PathBuf> {
+/// The declared release's `node` when it is installed and answers with it;
+/// `None` when it is absent or answers another version, which an install
+/// replaces. A `node` that is there and cannot be run is the error naming it.
+fn installed(home: &Path, declaration: &Declaration) -> Result<Option<PathBuf>> {
     let node = root(home).join(&declaration.version).join("bin/node");
-    let output = wait::output(Command::new(&node).arg("--version")).ok()?;
-    (output.status.success()
-        && String::from_utf8_lossy(&output.stdout).trim() == declaration.version)
-        .then_some(node)
-}
-
-fn fetch(url: &str, destination: &Path) -> Result<()> {
-    let output = capture(
-        Command::new("curl")
-            .args([
-                "--fail",
-                "--silent",
-                "--show-error",
-                "--location",
-                "--output",
-            ])
-            .arg(destination)
-            .arg(url),
-    )
-    .with_context(|| format!("fetching {url}"))?;
-    if !output.status.success() {
-        bail!(
-            "fetching {url}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+    if !node.is_file() {
+        return Ok(None);
     }
-    Ok(())
+    let output = wait::output(Command::new(&node).arg("--version"))
+        .with_context(|| format!("running {} --version", node.display()))?;
+    let answered = String::from_utf8_lossy(&output.stdout);
+    Ok((output.status.success() && answered.trim() == declaration.version).then_some(node))
 }
 
 /// Download, verify and unpack the declared release under the root.
@@ -106,44 +90,17 @@ fn install(home: &Path, declaration: &Declaration) -> Result<()> {
     let version = &declaration.version;
     let archive_name = format!("node-{version}-{platform}.tar.gz");
     let base = format!("{}/{version}", declaration.distribution);
-    let root = root(home);
-    let staging = root.join(format!(".install-{}", std::process::id()));
-    std::fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
-    let result = (|| -> Result<()> {
-        let archive = staging.join(&archive_name);
-        let sums = staging.join("SHASUMS256.txt");
-        fetch(&format!("{base}/{archive_name}"), &archive)?;
-        fetch(&format!("{base}/SHASUMS256.txt"), &sums)?;
-        let listed = std::fs::read_to_string(&sums)?;
-        let expected = listed
-            .lines()
-            .find_map(|line| line.strip_suffix(&format!("  {archive_name}")))
-            .with_context(|| format!("{base}/SHASUMS256.txt lists no {archive_name}"))?;
-        let actual = sha256(&archive)?;
-        if actual != expected {
-            bail!("{archive_name} has sha256 {actual}; {base}/SHASUMS256.txt lists {expected}");
-        }
-        let unpacked = capture(
-            Command::new("tar")
-                .arg("-xzf")
-                .arg(&archive)
-                .arg("-C")
-                .arg(&staging),
-        )?;
-        if !unpacked.status.success() {
-            bail!(
-                "unpacking {archive_name}: {}",
-                String::from_utf8_lossy(&unpacked.stderr).trim()
-            );
-        }
-        let tree = staging.join(format!("node-{version}-{platform}"));
-        let destination = root.join(version);
-        crate::common::files::remove_tree(&destination)?;
-        std::fs::rename(&tree, &destination)
-            .with_context(|| format!("placing {}", destination.display()))
-    })();
-    std::fs::remove_dir_all(&staging).with_context(|| format!("removing {}", staging.display()))?;
-    result
+    published::install(
+        &published::Published {
+            archive_url: format!("{base}/{archive_name}"),
+            sums_url: format!("{base}/SHASUMS256.txt"),
+            tree: Some(format!("node-{version}-{platform}")),
+            archive_name,
+        },
+        &root(home),
+        version,
+    )?;
+    Ok(())
 }
 
 /// Link every program the release ships into `~/.local/bin`.
@@ -169,10 +126,10 @@ fn link(home: &Path, declaration: &Declaration) -> Result<Vec<PathBuf>> {
 /// Install the declared release when it is absent or another, and link it.
 pub fn ensure(home: &Path) -> Result<Value> {
     let declaration = declaration()?;
-    if installed(home, &declaration).is_none() {
+    if installed(home, &declaration)?.is_none() {
         install(home, &declaration)?;
     }
-    let node = installed(home, &declaration).with_context(|| {
+    let node = installed(home, &declaration)?.with_context(|| {
         format!(
             "{} was installed but does not answer {}",
             root(home)
@@ -192,7 +149,7 @@ pub fn ensure(home: &Path) -> Result<Value> {
 pub fn status(home: &Path) -> Result<Value> {
     let declaration = declaration()?;
     let node = root(home).join(&declaration.version).join("bin/node");
-    let state = if installed(home, &declaration).is_some() {
+    let state = if installed(home, &declaration)?.is_some() {
         "ready"
     } else {
         "absent"

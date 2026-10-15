@@ -7,6 +7,7 @@
 //! migrations, a baseline of versions a hand-built database already holds);
 //! see [`history`].
 
+mod cli;
 mod history;
 mod progress;
 mod secrets;
@@ -28,16 +29,17 @@ use super::{output_dir, required, RECORD_SCHEMA};
 /// The bundle a Supabase product's build stages.
 const BUNDLE: &str = "supabase-source.tar";
 
-/// Run the Supabase CLI in `source` and answer its standard output. Without
-/// a database password the CLI signs in with a temporary login role it
-/// creates through the Management API, so the access token alone suffices.
+/// Run the declared Supabase CLI ([`cli`]) in `source` and answer its
+/// standard output. Without a database password the CLI signs in with a
+/// temporary login role it creates through the Management API, so the access
+/// token alone suffices.
 fn supabase(
     source: &Path,
     arguments: &[&str],
     token: &str,
     password: Option<&str>,
 ) -> Result<String> {
-    let mut command = Command::new("supabase");
+    let mut command = Command::new(cli::ensure()?);
     command
         .args(arguments)
         .current_dir(source)
@@ -205,7 +207,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         progress.run("write successful receipt", || {
             crate::common::atomic_json(&output.join("supabase-receipt.json"), &receipt)
         })?;
-        Ok(0)
+        Ok(libc::EXIT_SUCCESS)
     })();
     if let Err(recording) = progress.finish(&outcome) {
         return match outcome {

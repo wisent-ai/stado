@@ -159,6 +159,10 @@ name = "schema-release-journey"
 path = "../tests/schema_release/journey.rs"
 
 [[test]]
+name = "schema-release-supabase"
+path = "../tests/schema_release/supabase.rs"
+
+[[test]]
 name = "host-health"
 path = "../tests/host_health/beacon/main.rs"
 
