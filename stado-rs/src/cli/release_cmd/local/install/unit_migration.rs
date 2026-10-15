@@ -7,12 +7,16 @@ use std::process::Command;
 
 use crate::cli::CmdError;
 
+/// Only the host process runs as this machine's resident unit, so only its
+/// install migrates one: the product is the one the catalog names as the
+/// host process, never a name written here.
 pub(super) fn admit(
     candidate: &Path,
     product: &str,
     home: &Path,
 ) -> Result<Option<String>, CmdError> {
-    if product != "stado" {
+    let host = crate::deploy::service_catalog::host_process().map_err(CmdError::declaration)?;
+    if product != host.name {
         return Ok(None);
     }
     let label = crate::deploy::service_catalog::host_unit().map_err(CmdError::declaration)?;
