@@ -7,6 +7,8 @@ use crate::machine::contract::encoding::canonical_json;
 use crate::machine::MachineError;
 use crate::queue::{JobStorage, StorageError};
 
+/// Record `phase` on the reservation this submission owns. A lost swap reads
+/// the record again and decides on what it now holds.
 async fn renew_machine_request_lease(
     store: &JobStorage,
     record_path: &str,
@@ -14,7 +16,7 @@ async fn renew_machine_request_lease(
     expected_state: &str,
     phase: &str,
 ) -> Result<(), MachineError> {
-    for _ in 0..16 {
+    loop {
         let versioned = store
             .read_text_versioned(record_path)
             .await?
@@ -50,10 +52,6 @@ async fn renew_machine_request_lease(
             Err(error) => return Err(error.into()),
         }
     }
-    Err(MachineError::retryable(
-        "REQUEST_IN_PROGRESS",
-        "request lease renewal remained contended",
-    ))
 }
 
 pub(in crate::machine) async fn renew_machine_request_claim(

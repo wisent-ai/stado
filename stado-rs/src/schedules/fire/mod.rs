@@ -23,7 +23,7 @@ pub async fn fire_due_schedules(
     mut log: impl FnMut(&str),
     now: DateTime<Utc>,
 ) -> Result<i64, StorageError> {
-    let mut fired = 0;
+    let mut fired: Vec<String> = Vec::new();
     for schedule_id in list_schedule_ids(store).await? {
         let Some(sched) = read_schedule(store, &schedule_id).await? else {
             continue;
@@ -39,7 +39,7 @@ pub async fn fire_due_schedules(
             };
             match enqueue_pending_occurrence(store, claimed, &owner, now).await {
                 Ok(Some(job)) => {
-                    fired += 1;
+                    fired.push(job.job_id.clone());
                     log(&format!(
                         "schedule {schedule_id}: recovered durable occurrence as job {} (run {})",
                         job.job_id, job.run_id
@@ -95,7 +95,7 @@ pub async fn fire_due_schedules(
         };
         match enqueue_pending_occurrence(store, claimed, &owner, now).await {
             Ok(Some(job)) => {
-                fired += 1;
+                fired.push(job.job_id.clone());
                 log(&format!(
                     "schedule {schedule_id}: fired job {} (run {}); next_due={next_due}",
                     job.job_id, job.run_id
@@ -109,7 +109,12 @@ pub async fn fire_due_schedules(
             )),
         }
     }
-    Ok(fired)
+    i64::try_from(fired.len()).map_err(|error| {
+        StorageError::Other(format!(
+            "{} fired schedules do not fit the count: {error}",
+            fired.len()
+        ))
+    })
 }
 
 /// Manually fire a schedule through the same durable occurrence reservation as
@@ -158,8 +163,9 @@ pub async fn fire_schedule_now(
     // a crashed coordinator fire, typically. Finish it first, then reserve and
     // enqueue the occurrence this token names: returning that unrelated job as
     // the manual fire would report the requested work as done while it was
-    // never submitted.
-    for _ in 0..2 {
+    // never submitted. Each foreign occurrence finished is another writer's
+    // work settled, so the next pass reads again until this token's runs.
+    loop {
         let Some(sched) = read_schedule(store, schedule_id).await? else {
             return Ok(None);
         };
@@ -193,5 +199,4 @@ pub async fn fire_schedule_now(
             }
         }
     }
-    Ok(None)
 }

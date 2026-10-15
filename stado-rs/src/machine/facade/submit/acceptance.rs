@@ -41,7 +41,8 @@ impl MachineFacade {
             );
             result.insert("source_sha256".into(), Value::from(source_sha.as_str()));
         }
-        for _ in 0..16 {
+        // A lost swap reads the record again and decides on what it now holds.
+        loop {
             let versioned = self
                 .store
                 .read_text_versioned(record_path)
@@ -101,12 +102,5 @@ impl MachineFacade {
                 }
             }
         }
-        Err(MachineError::retryable(
-            "INTERNAL",
-            format!(
-                "job {} was submitted but its idempotency record remained contended",
-                job.job_id
-            ),
-        ))
     }
 }
