@@ -1,5 +1,7 @@
 //! Audit the CLI artifact built from the exact committed source being checked.
 
+mod help_grammar;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::os::unix::fs::PermissionsExt;
@@ -10,6 +12,7 @@ use serde::Deserialize;
 
 use super::super::{gates::DeclaredGates, run, Report};
 use crate::cli::CmdError;
+use help_grammar::clap_children;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -42,9 +45,12 @@ fn judgment(prompt: &str) -> Result<String, CmdError> {
 fn cli_product(product: &str) -> Result<bool, CmdError> {
     let catalog = stado_product::catalog::embedded()
         .map_err(|cause| CmdError::declaration(format!("product catalog: {cause:#}")))?;
-    let record = match stado_product::catalog::product(&catalog, product) {
-        Ok(record) => record,
-        Err(_) => return Ok(false),
+    let products = catalog["products"].as_array().ok_or_else(|| {
+        CmdError::declaration("product catalog: products is not an array".to_owned())
+    })?;
+    // A product the catalog does not carry declares no CLI surface to audit.
+    let Some(record) = products.iter().find(|record| record["id"] == product) else {
+        return Ok(false);
     };
     let surfaces = record["surfaces"].as_array().ok_or_else(|| {
         CmdError::declaration(format!(
@@ -81,35 +87,6 @@ fn help(binary: &Path, path: &[String]) -> Result<String, CmdError> {
     })
 }
 
-/// Read direct commands from Clap's advertised section. These labels belong
-/// to Clap's help grammar, not a behavioral keyword classifier. Other help
-/// grammars need the model to identify their direct commands.
-fn clap_children(help: &str) -> Option<BTreeSet<&str>> {
-    let mut lines = help.lines();
-    if !lines.by_ref().any(|line| line == "Commands:") {
-        return None;
-    }
-    let first = lines.clone().find(|line| !line.trim().is_empty())?;
-    let indentation = first.len() - first.trim_start().len();
-    let mut children = BTreeSet::new();
-    for line in lines {
-        if line.is_empty() {
-            continue;
-        }
-        if !line.starts_with(' ') {
-            break;
-        }
-        if line.len() - line.trim_start().len() == indentation {
-            children.extend(
-                line.split_whitespace()
-                    .next()
-                    .filter(|name| *name != "help"),
-            );
-        }
-    }
-    Some(children)
-}
-
 fn discover(
     binary: &Path,
     path: &mut Vec<String>,
@@ -138,7 +115,7 @@ fn discover(
         name.push(' ');
         name.push_str(component);
     }
-    let children = if let Some(advertised) = clap_children(&text) {
+    let children = if let Some(advertised) = clap_children(&text, &name) {
         advertised.into_iter().map(str::to_owned).collect()
     } else {
         let prompt = format!(
