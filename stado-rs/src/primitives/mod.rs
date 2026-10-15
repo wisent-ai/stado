@@ -17,4 +17,5 @@ pub mod procutil;
 pub mod removal;
 pub mod staging;
 pub mod testutil;
+pub mod tool_path;
 pub mod word;

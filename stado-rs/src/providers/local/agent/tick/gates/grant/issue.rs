@@ -96,10 +96,7 @@ pub(super) fn here(
             .arg("--until-revoked")
             .env("SKARBIEC_VAULT_FILE", vault)
             .env("GNUPGHOME", format!("{home}/.gnupg"))
-            .env(
-                "PATH",
-                "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-            )
+            .env("PATH", crate::primitives::tool_path::SEARCH_PATH)
             .env_remove("SKARBIEC_UNLOCK")
             .env_remove("SKARBIEC_UNLOCK_FILE"),
     );

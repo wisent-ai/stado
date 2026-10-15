@@ -9,9 +9,8 @@ use std::path::PathBuf;
 
 use super::Launch;
 use crate::deploy::host_storage_reconcile_host::home;
+use crate::primitives::tool_path::SEARCH_PATH;
 use crate::release_agent::rollout::serving::control;
-
-const SEARCH_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 /// Ask the host process to run the worker; `unlock` releases the operation
 /// lock at the moment the request is about to be sent.
