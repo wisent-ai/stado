@@ -14,8 +14,8 @@ pub use arguments::{home_rooted, PROBIERZ_RUN_ROOT_CREATE};
 pub use candidates::{cargo_candidates, installed_program, program_candidates, PROGRAM_CANDIDATES};
 pub use entries::APPROVED_COMMANDS;
 pub use programs::{
-    ADB_PROGRAM, APPIUM_PROGRAM, GIT_PROGRAM, KIMI_CLI, NODE_PROGRAM, SKARBIEC_CLI, STADO_CLI,
-    TMUX_PROGRAM,
+    ADB_PROGRAM, APPIUM_PROGRAM, GIT_PROGRAM, KIMI_CLI, NODE_PROGRAM, OKO_CLI, SKARBIEC_CLI,
+    STADO_CLI, TMUX_PROGRAM,
 };
 
 /// The punctuation an operator's word may contain on top of ASCII
@@ -43,7 +43,11 @@ impl ApprovedCommand {
     pub fn display(&self) -> String {
         let mut words: Vec<&str> = Vec::new();
         if let Some((program, arguments)) = self.argv.split_first() {
-            words.push(program.rsplit('/').next().unwrap_or(program));
+            // A program named without a directory is its own basename.
+            words.push(match program.rsplit_once('/') {
+                Some((_, basename)) => basename,
+                None => program,
+            });
             words.extend(arguments.iter().copied());
         }
         words.join(" ")
@@ -56,10 +60,14 @@ impl ApprovedCommand {
         let Some((program, _)) = self.argv.split_first() else {
             return &[];
         };
-        PROGRAM_CANDIDATES
+        match PROGRAM_CANDIDATES
             .iter()
             .find(|(named, _)| named == program)
-            .map_or(std::slice::from_ref(program), |(_, paths)| paths)
+        {
+            Some((_, paths)) => paths,
+            // A program the table does not list lives at its argv[0] alone.
+            None => std::slice::from_ref(program),
+        }
     }
 }
 

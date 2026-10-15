@@ -89,10 +89,14 @@ struct Defect<'a> {
     repair: &'a str,
 }
 
-/// Record `defect` against Stado through `oko defects record`. `Ok` with
-/// what Oko printed when it recorded the defect, `Err` with why it did not.
+/// Record `defect` against Stado through `oko defects record`, run from the
+/// path a Stado install places Oko at (`OKO_CLI`), since the unit that runs
+/// `stado serve` carries no login `PATH`. `Ok` with what Oko printed when it
+/// recorded the defect, `Err` with why it did not.
 fn record_defect(defect: &Defect<'_>) -> Result<String, String> {
-    let mut command = std::process::Command::new("oko");
+    let oko = crate::deploy::host_exec::installed_program(crate::deploy::host_exec::OKO_CLI)
+        .map_err(|missing| format!("oko defects record could not run: {missing}"))?;
+    let mut command = std::process::Command::new(&oko);
     command.args([
         "defects",
         "record",
@@ -121,7 +125,10 @@ fn record_defect(defect: &Defect<'_>) -> Result<String, String> {
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         )),
-        Err(error) => Err(format!("oko defects record could not run: {error}")),
+        Err(error) => Err(format!(
+            "oko defects record could not run {}: {error}",
+            oko.display()
+        )),
     }
 }
 
