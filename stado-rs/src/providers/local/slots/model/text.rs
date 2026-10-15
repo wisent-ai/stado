@@ -34,12 +34,16 @@ fn sort_keys(value: &Value) -> Value {
 }
 
 /// Python `Popen.returncode`: the exit code, or `-signum` when the child
-/// was killed by a signal.
+/// was killed by a signal. A status a wait hands back is one or the other;
+/// one that is neither is not read as a success.
 pub fn python_returncode(status: std::process::ExitStatus) -> i32 {
     use std::os::unix::process::ExitStatusExt;
-    match status.signal() {
-        Some(sig) => -sig,
-        None => status.code().unwrap_or(0),
+    match (status.code(), status.signal()) {
+        (Some(code), _) => code,
+        (None, Some(sig)) => -sig,
+        (None, None) => unreachable!(
+            "a finished child either exited or was ended by a signal, and {status} is neither"
+        ),
     }
 }
 
