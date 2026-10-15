@@ -23,8 +23,7 @@ use tokio::process::Command;
 
 use crate::cli::CmdError;
 
-/// Oko's program; Stado reads rulings through its CLI only.
-const OKO: &str = "oko";
+use crate::deploy::host_exec::{installed_program, OKO_CLI};
 
 /// The action class a ruling constrains that compiling a product is.
 pub const BUILD: &str = "build";
@@ -50,7 +49,7 @@ fn admitted_above(variable: &str) -> bool {
             Some((pid, _answer)) => pid != std::process::id().to_string(),
             None => false,
         },
-        Err(_) => false,
+        Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => false,
     }
 }
 
@@ -110,8 +109,14 @@ enum Decision {
 }
 
 async fn decision(words: &[&str]) -> Decision {
-    let shown = format!("{OKO} {}", words.join(" "));
-    let mut command = Command::new(OKO);
+    let oko = match installed_program(OKO_CLI) {
+        Ok(oko) => oko,
+        Err(missing) => {
+            return Decision::Unread(format!("oko {} did not run: {missing}", words.join(" ")))
+        }
+    };
+    let shown = format!("{} {}", oko.display(), words.join(" "));
+    let mut command = Command::new(&oko);
     command
         .args(words)
         .stdin(std::process::Stdio::null())
@@ -127,22 +132,21 @@ async fn decision(words: &[&str]) -> Decision {
         Ok(output) => output,
         Err(error) => return Decision::Unread(format!("{shown} did not run: {error}")),
     };
-    let verdict: Option<Value> = serde_json::from_slice(&output.stdout).ok();
-    let allowed = verdict
-        .as_ref()
-        .and_then(|verdict| verdict["allowed"].as_bool());
-    let reason = verdict
-        .as_ref()
-        .and_then(|verdict| verdict["reason"].as_str())
-        .map(str::to_owned);
-    match (allowed, reason) {
-        (Some(true), Some(reason)) => Decision::Allowed(reason),
-        (Some(false), Some(reason)) => Decision::Refused(reason),
-        _ => Decision::Unread(format!(
-            "{shown} exited {} without a verdict: {}",
+    let unread = |why: String| {
+        Decision::Unread(format!(
+            "{shown} exited {} without a verdict ({why}): {}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
-        )),
+        ))
+    };
+    let verdict: Value = match serde_json::from_slice(&output.stdout) {
+        Ok(verdict) => verdict,
+        Err(error) => return unread(format!("its output is not JSON: {error}")),
+    };
+    match (verdict["allowed"].as_bool(), verdict["reason"].as_str()) {
+        (Some(true), Some(reason)) => Decision::Allowed(reason.to_owned()),
+        (Some(false), Some(reason)) => Decision::Refused(reason.to_owned()),
+        _ => unread("its JSON states no boolean allowed and string reason".to_string()),
     }
 }
 

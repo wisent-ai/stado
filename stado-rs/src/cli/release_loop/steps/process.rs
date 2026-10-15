@@ -1,12 +1,22 @@
 //! The programs the delivery loop runs — Oko's CLI, git and cargo in a
-//! product checkout — each waited on through Stado's wait lines, so what the
-//! loop stands on is written before it stands there.
+//! product checkout — each resolved to the path this machine installs it at
+//! and waited on through Stado's wait lines, so what the loop stands on is
+//! written before it stands there.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tokio::process::Command;
 
 use crate::cli::CmdError;
+
+/// `program` at the path the fleet's program table declares for it
+/// (`installed_program`): a service unit's `PATH` holds none of
+/// `~/.stado/bin`, `~/.cargo/bin` or Homebrew's, so a bare name there is not
+/// found. A program the table does not declare is run as named.
+fn resolved(program: &str) -> Result<PathBuf, CmdError> {
+    crate::deploy::host_exec::installed_program(program)
+        .map_err(|missing| CmdError::click(format!("{program} cannot run: {missing}")))
+}
 
 /// `program args` run in `directory` (the caller's when none) to its end:
 /// its standard output on success, else a refusal naming the command, its
@@ -16,12 +26,13 @@ pub async fn run(
     args: &[&str],
     directory: Option<&Path>,
 ) -> Result<String, CmdError> {
-    let shown = format!("{program} {}", args.join(" "));
-    let place = directory.map_or_else(
-        || "the caller's directory".to_string(),
-        |directory| directory.display().to_string(),
-    );
-    let mut command = Command::new(program);
+    let program = resolved(program)?;
+    let shown = format!("{} {}", program.display(), args.join(" "));
+    let place = match directory {
+        Some(directory) => directory.display().to_string(),
+        None => "the caller's directory".to_string(),
+    };
+    let mut command = Command::new(&program);
     command
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -45,8 +56,9 @@ pub async fn run(
 /// Whether `program args` in `directory` exits zero; a program that cannot
 /// be started is a refusal, not a no.
 pub async fn succeeds(program: &str, args: &[&str], directory: &Path) -> Result<bool, CmdError> {
-    let shown = format!("{program} {}", args.join(" "));
-    let mut command = Command::new(program);
+    let program = resolved(program)?;
+    let shown = format!("{} {}", program.display(), args.join(" "));
+    let mut command = Command::new(&program);
     command
         .args(args)
         .current_dir(directory)
