@@ -62,10 +62,10 @@ fn execute(
         bail!("native test requires --test-product NAME; dependency test suites are not implicitly selected");
     }
     let root = source::package(runtime, requested)?;
-    let editor = editor
-        .map(crate::common::absolute)
-        .transpose()?
-        .unwrap_or_else(|| root.path.clone());
+    let editor = match editor {
+        Some(named) => crate::common::absolute(named)?,
+        None => root.path.clone(),
+    };
     if operation == "index" {
         index::configuration(&editor)?;
     }
@@ -108,7 +108,7 @@ fn execute(
         "stado_version": crate::build().version, "stado_source_revision": crate::build().source_revision, "state": "preparing_sources"});
     atomic_json(&evidence.join("result.json"), &report)?;
     let mut stdout = Vec::new();
-    let mut code = 1;
+    let mut code = libc::EXIT_FAILURE;
     let result = (|| -> Result<()> {
         report["swift_version"] = json!(String::from_utf8(
             checked(Command::new("swift").arg("--version"))?.stdout
@@ -161,10 +161,8 @@ fn execute(
         let output = capture(&mut command())?;
         io::stderr().write_all(&output.stderr)?;
         // SwiftPM prints its compiler errors on standard output, which
-        // `--json` replaces with this report. A failed `--json` build of
-        // oko-desktop said only `Swift build failed (exit status: 1)` and its
-        // evidence held no compiler line, so both streams are kept beside the
-        // report and a failure names where they are.
+        // `--json` replaces with this report, so both streams are kept
+        // beside the report and a failure names where they are.
         let compiler_stdout = evidence.join("swift.stdout.log");
         let compiler_stderr = evidence.join("swift.stderr.log");
         fs::write(&compiler_stdout, &output.stdout)?;
@@ -173,7 +171,10 @@ fn execute(
         stdout = output.stdout;
         report["exit_status"] = json!(output.status.code());
         if !output.status.success() {
-            code = output.status.code().unwrap_or(1);
+            // A SwiftPM ended by a signal has no exit code to hand on.
+            if let Some(exit) = output.status.code() {
+                code = exit;
+            }
             bail!(
                 "Swift {operation} failed ({}); the compiler's output is in {}",
                 output.status,
@@ -209,7 +210,7 @@ fn execute(
             let binary = PathBuf::from(String::from_utf8(binary.stdout)?.trim());
             report["index"] = index::publish(&root.path, &binary, &report, &editor)?;
         }
-        code = 0;
+        code = libc::EXIT_SUCCESS;
         Ok(())
     })();
     let cleanup = fs::remove_dir_all(&temporary)
@@ -223,8 +224,8 @@ fn execute(
     };
     report["completed_at"] = json!(now());
     if let Err(error) = result {
-        if code == 0 {
-            code = 1;
+        if code == libc::EXIT_SUCCESS {
+            code = libc::EXIT_FAILURE;
         }
         report["failed_operation"] = report["state"].clone();
         report["state"] = json!("failed");
@@ -264,7 +265,10 @@ pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     if editor.is_some() && operation != "index" {
         bail!("--editor-workspace is only supported by swift index");
     }
-    let package = package.unwrap_or(env::current_dir()?);
+    let package = match package {
+        Some(named) => named,
+        None => env::current_dir()?,
+    };
     if operation == "restore" {
         if !arguments.is_empty() {
             bail!("swift restore accepts no forwarded compiler arguments");
