@@ -196,9 +196,8 @@ fn a_service_declared_beside_its_placement_is_answered_on_this_host_and_said_as_
         "refused discovery changed the admitted consumer's route"
     );
 
-    // `registry import` only adopts records the canonical registry lacks, so
-    // the caller's adapter is taken away, and given back, through the one
-    // field it lives in.
+    // `registry import` only adopts records the registry lacks, so the caller's
+    // adapter is taken away, and given back, through the one field it lives in.
     let adapters = format!("targets.{THIS_HOST}.service_resolver.adapters");
     let declared =
         json!([{"service": SERVICE, "consumer": CONSUMER, "bind": &adapter_bind}]).to_string();
