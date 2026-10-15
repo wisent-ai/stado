@@ -77,7 +77,10 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
 
     let python = steps_matching(manifest, |argv| {
         argv.first().is_some_and(|program| {
-            let name = program.rsplit('/').next().unwrap_or(program);
+            let name = match program.rsplit_once('/') {
+                Some((_, last)) => last,
+                None => program.as_str(),
+            };
             name == "python" || name.starts_with("python3")
         })
     });
@@ -119,22 +122,27 @@ fn steps_matching(
 
 /// Every step whose program is a file in the checkout that the checkout does
 /// not hold: the path the step runs, directly (`scripts/x.sh`) or through an
-/// interpreter (`bash release/x.sh`). codespy, growth-tactics and OpenEnv
-/// kept running `scripts/stado_release.py` for three weeks after the
-/// scripts directories were removed, and no build of them could start.
+/// interpreter (`bash release/x.sh`). A step that runs a removed script
+/// cannot start in any build, so it is refused before anything is enrolled;
+/// a path that cannot be examined is named with its cause.
 pub(crate) fn missing_step_programs(
     manifest: &ReleasePipelineManifest,
     root: &std::path::Path,
 ) -> Vec<String> {
     let program = |argv: &[String]| -> Option<String> {
-        let first = argv.first()?;
-        let named = if first.contains('/') {
-            first
-        } else {
-            argv.get(1)
-                .filter(|word| word.contains('/') && !word.starts_with('-'))?
+        let named = match argv {
+            [first, ..] if first.contains('/') => first,
+            [_, second, ..] if second.contains('/') && !second.starts_with('-') => second,
+            _ => return None,
         };
-        (!named.starts_with('/') && !root.join(named).exists()).then(|| named.clone())
+        if named.starts_with('/') {
+            return None;
+        }
+        match crate::primitives::presence::present(&root.join(named)) {
+            Ok(true) => None,
+            Ok(false) => Some(named.clone()),
+            Err(error) => Some(format!("{named}, which cannot be examined: {error}")),
+        }
     };
     let mut missing = Vec::new();
     for (platform_name, platform) in &manifest.platforms {
