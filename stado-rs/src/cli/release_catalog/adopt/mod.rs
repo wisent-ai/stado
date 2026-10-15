@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use clap::{Args, ValueEnum};
 
 use crate::cli::CmdError;
+use crate::primitives::presence::present;
 use crate::release_pipeline::{self, PRODUCT_MANIFEST};
 
 mod cargo;
@@ -86,13 +87,13 @@ fn fill(template: &str, values: &[(&str, &str)]) -> String {
 
 fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
     let checkout = args.checkout.canonicalize()?;
-    if !checkout.join(".git").exists() {
+    if !present(&checkout.join(".git"))? {
         return Err(CmdError::refused(format!(
             "{} is not a git checkout; a release builds a pushed commit",
             checkout.display()
         )));
     }
-    if checkout.join(PRODUCT_MANIFEST).exists() {
+    if present(&checkout.join(PRODUCT_MANIFEST))? {
         return Err(CmdError::refused(format!(
             "{} already declares {PRODUCT_MANIFEST}; register it with `stado release catalog sync --root {}`",
             checkout.display(),
@@ -104,7 +105,12 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
         None => checkout
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+            .ok_or_else(|| {
+                CmdError::refused(format!(
+                    "{} has no directory name to call the product by; pass --product",
+                    checkout.display()
+                ))
+            })?,
     };
     // Preview can prepare a local checkout; apply must not register one that
     // cannot be pushed. An implicit product must agree with its origin's name.
@@ -128,13 +134,17 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
                 checkout.display()
             ))
         })?;
-        let repository = origin
-            .trim()
-            .trim_end_matches('/')
-            .rsplit(['/', ':'])
-            .next()
-            .unwrap_or_default();
-        let repository = repository.strip_suffix(".git").unwrap_or(repository);
+        // The repository is the origin's last path segment, the last word
+        // after a slash or an scp-style colon, without a .git suffix.
+        let trimmed = origin.trim().trim_end_matches('/');
+        let repository = match trimmed.rsplit_once(['/', ':']) {
+            Some((_, last)) => last,
+            None => trimmed,
+        };
+        let repository = match repository.strip_suffix(".git") {
+            Some(bare) => bare,
+            None => repository,
+        };
         if repository != product {
             return Err(CmdError::refused(format!(
                 "{} is named {product}, but origin {} names {repository}; pass --product {repository} \
@@ -148,13 +158,23 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
         Kind::Cargo => cargo::files(&checkout, &product)?,
         Kind::Npm => npm::files(&checkout, &product)?,
     };
-    if let Some(taken) = files.iter().find(|file| file.path.exists()) {
-        return Err(CmdError::refused(format!(
-            "{} already exists; adopt writes only files the checkout does not have",
-            taken.path.display()
-        )));
+    // A file adopt cannot examine is refused with its cause: taken for
+    // absent, adopt would write over whatever it holds.
+    for file in &files {
+        if present(&file.path)? {
+            return Err(CmdError::refused(format!(
+                "{} already exists; adopt writes only files the checkout does not have",
+                file.path.display()
+            )));
+        }
     }
-    let manifest = release_pipeline::parse_product_manifest(files[0].text.as_bytes())
+    let planned_manifest = files.first().ok_or_else(|| {
+        CmdError::click(format!(
+            "adopt planned no {PRODUCT_MANIFEST} for {}",
+            checkout.display()
+        ))
+    })?;
+    let manifest = release_pipeline::parse_product_manifest(planned_manifest.text.as_bytes())
         .map_err(CmdError::declaration)?;
     if super::product(&manifest) != product {
         return Err(CmdError::refused(format!(
@@ -172,30 +192,41 @@ fn write(files: &[Planned]) -> Result<(), CmdError> {
         std::fs::write(&file.path, &file.text)?;
         if file.executable {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&file.path, std::fs::Permissions::from_mode(0o755))?;
+            std::fs::set_permissions(
+                &file.path,
+                std::fs::Permissions::from_mode(crate::primitives::file_mode::program()),
+            )?;
         }
     }
     Ok(())
 }
 
-fn relative<'a>(checkout: &Path, path: &'a Path) -> std::borrow::Cow<'a, str> {
+/// `path` as the checkout names it. Adopt plans every file inside the
+/// checkout, so one outside it is an error in the plan, said with both paths.
+fn relative<'a>(checkout: &Path, path: &'a Path) -> Result<std::borrow::Cow<'a, str>, CmdError> {
     path.strip_prefix(checkout)
-        .unwrap_or(path)
-        .to_string_lossy()
+        .map(|inside| inside.to_string_lossy())
+        .map_err(|error| {
+            CmdError::click(format!(
+                "adopt planned {} outside {}: {error}",
+                path.display(),
+                checkout.display()
+            ))
+        })
 }
 
 pub(super) async fn run(args: AdoptArgs) -> Result<(), CmdError> {
     let (checkout, product, files) = plan(&args)?;
     if !args.apply {
         for file in &files {
-            println!("would write {}", relative(&checkout, &file.path));
+            println!("would write {}", relative(&checkout, &file.path)?);
         }
         println!("run again with --apply to write them and register {product}");
         return Ok(());
     }
     write(&files)?;
     for file in &files {
-        println!("wrote {}", relative(&checkout, &file.path));
+        println!("wrote {}", relative(&checkout, &file.path)?);
     }
     if let (Some(owner), Some(client)) = (&args.owner, &args.client) {
         let (targets, reloads) = (&args.targets, &args.reloads);
