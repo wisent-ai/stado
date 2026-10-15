@@ -43,12 +43,13 @@ fn validated_object_base_url(variable: &str, value: &str) -> Result<Option<url::
 pub(in crate::cli::storage) fn configured_object_base_url(
     variable: &str,
 ) -> Result<Option<url::Url>, CmdError> {
-    let value = match std::env::var(variable) {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => return Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            return Err(CmdError::click(format!("{variable} must be valid Unicode"))
-                .stating(crate::primitives::failure::FailureCode::Config));
+    let value = match crate::primitives::environment::declared(variable) {
+        Ok(Some(value)) => value,
+        Ok(None) => return Ok(None),
+        Err(cause) => {
+            return Err(
+                CmdError::click(cause).stating(crate::primitives::failure::FailureCode::Config)
+            );
         }
     };
     validated_object_base_url(variable, &value)

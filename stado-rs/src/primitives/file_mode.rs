@@ -15,6 +15,12 @@ pub fn owner_only_directory() -> u32 {
     widen(Mode::S_IRWXU.bits())
 }
 
+/// Read, write and run for the owner, read and run for everyone else: the
+/// mode of a program other users and services execute.
+pub fn program() -> u32 {
+    widen((Mode::S_IRWXU | Mode::S_IRGRP | Mode::S_IXGRP | Mode::S_IROTH | Mode::S_IXOTH).bits())
+}
+
 /// `mode_t` is already `u32` on Linux and narrower on Darwin, so the widening
 /// is a conversion on one platform and the identity on the other.
 #[cfg(target_os = "linux")]

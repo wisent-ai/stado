@@ -26,21 +26,27 @@ pub(in crate::cli::release_cmd) async fn install_local(
     args: &ReleaseInstallLocalArgs,
 ) -> Result<(), CmdError> {
     let name = if args.name.is_empty() {
-        args.member
-            .rsplit('/')
-            .next()
-            .unwrap_or(args.member.as_str())
-            .to_string()
+        match args.member.rsplit_once('/') {
+            Some((_, last)) => last.to_string(),
+            None => args.member.clone(),
+        }
     } else {
         args.name.clone()
+    };
+    // A delivery contract variable set to text that is not Unicode is
+    // refused by name, not read as unset.
+    let declared = |variable: &str| {
+        crate::primitives::environment::declared(variable).map_err(|cause| {
+            CmdError::click(cause).stating(crate::primitives::failure::FailureCode::Config)
+        })
     };
     // The version a delivery of this very product carries. Every product the
     // release agent delivers through this command is declared under the
     // host's `managed_versions` afterwards; before, only Stado was, so a
     // delivered Skarbiec left the host declaring the version it replaced and
     // `release version show` read the host as ahead of its declaration.
-    let delivered_version = if std::env::var("WISENT_PRODUCT").ok().as_deref() == Some(&name) {
-        let version = std::env::var("WISENT_VERSION").map_err(|_| {
+    let delivered_version = if declared("WISENT_PRODUCT")?.as_deref() == Some(name.as_str()) {
+        let version = declared("WISENT_VERSION")?.ok_or_else(|| {
             CmdError::click(format!("WISENT_VERSION is not set for the {name} delivery"))
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
@@ -56,10 +62,10 @@ pub(in crate::cli::release_cmd) async fn install_local(
         None
     };
     let stado_version = delivered_version.clone().filter(|_| name == "stado");
-    let archive = std::env::var("WISENT_RELEASE_ARCHIVE")
-        .map_err(|_| CmdError::click("WISENT_RELEASE_ARCHIVE is not set; this command is the delivery contract's local endpoint").stating(crate::primitives::failure::FailureCode::Config))?;
-    let expected = std::env::var("WISENT_RELEASE_SHA256")
-        .map_err(|_| CmdError::click("WISENT_RELEASE_SHA256 is not set; this command is the delivery contract's local endpoint").stating(crate::primitives::failure::FailureCode::Config))?;
+    let archive = declared("WISENT_RELEASE_ARCHIVE")?
+        .ok_or_else(|| CmdError::click("WISENT_RELEASE_ARCHIVE is not set; this command is the delivery contract's local endpoint").stating(crate::primitives::failure::FailureCode::Config))?;
+    let expected = declared("WISENT_RELEASE_SHA256")?
+        .ok_or_else(|| CmdError::click("WISENT_RELEASE_SHA256 is not set; this command is the delivery contract's local endpoint").stating(crate::primitives::failure::FailureCode::Config))?;
     install_archive(
         name.clone(),
         &args.member,
@@ -180,12 +186,14 @@ pub(in crate::cli::release_cmd) async fn install_archive(
         })?;
         {
             use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(
-                |error| {
-                    CmdError::click(format!("cannot mark {name} executable: {error}"))
-                        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-                },
-            )?;
+            std::fs::set_permissions(
+                &staged,
+                std::fs::Permissions::from_mode(crate::primitives::file_mode::program()),
+            )
+            .map_err(|error| {
+                CmdError::click(format!("cannot mark {name} executable: {error}"))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+            })?;
         }
     }
     // An incoming Stado reads this host's configuration with its own rules,
