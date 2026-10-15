@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::transcripts::TRANSCRIPT_ROOTS;
 
@@ -11,13 +12,20 @@ fn expand(candidate: &str, home: &str) -> PathBuf {
     PathBuf::from(candidate.replace("$HOME", home))
 }
 
-fn modified_epoch(path: &Path) -> u64 {
-    fs::metadata(path)
-        .and_then(|meta| meta.modified())
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
+/// When `path` was last written, or `None` when the file system cannot say.
+/// The cause is said on stderr, so an undated transcript is not taken for
+/// the oldest one in silence.
+fn modified(path: &Path) -> Option<SystemTime> {
+    match fs::metadata(path).and_then(|meta| meta.modified()) {
+        Ok(time) => Some(time),
+        Err(error) => {
+            eprintln!(
+                "transcripts: cannot read when {} was last written: {error}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// When the file was last written, as UTC ISO-8601; `None` when the file
@@ -25,14 +33,11 @@ fn modified_epoch(path: &Path) -> u64 {
 /// process: spawning `date` once per file cost a process for each of tens of
 /// thousands of transcripts.
 pub(in crate::transcripts) fn modified_iso(path: &Path) -> Option<String> {
-    fs::metadata(path)
-        .and_then(|meta| meta.modified())
-        .ok()
-        .map(|time| {
-            chrono::DateTime::<chrono::Utc>::from(time)
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string()
-        })
+    modified(path).map(|time| {
+        chrono::DateTime::<chrono::Utc>::from(time)
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string()
+    })
 }
 
 /// Collect the files under `root`. A root that does not exist holds no
@@ -83,6 +88,8 @@ pub fn transcript_files() -> Vec<PathBuf> {
     for root in TRANSCRIPT_ROOTS {
         walk(&expand(root, &home), &mut files);
     }
-    files.sort_by_key(|path| std::cmp::Reverse(modified_epoch(path)));
+    // Newest first; a file whose time cannot be read sorts after every
+    // dated one. Each file is dated once, however many times it is compared.
+    files.sort_by_cached_key(|path| std::cmp::Reverse(modified(path)));
     files
 }
