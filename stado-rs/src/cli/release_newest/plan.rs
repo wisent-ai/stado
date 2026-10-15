@@ -94,9 +94,7 @@ impl Planned {
 /// name that matches nothing is a refusal, not an empty run: a release that
 /// silently did nothing reads exactly like a release that worked.
 pub async fn plan(root: &Path, products: &[String]) -> Result<Vec<Planned>, CmdError> {
-    let mut checkouts = Vec::new();
-    scan(root, &mut checkouts)?;
-    checkouts.sort();
+    let checkouts = super::checkouts::declaring_checkouts(root)?;
     if checkouts.is_empty() {
         return Err(CmdError::click(format!(
             "{} holds no product checkout: nothing under it carries a {PRODUCT_MANIFEST}",
@@ -132,14 +130,16 @@ fn read(checkout: &Path, published: &Recorded) -> Planned {
     let product = match product_name(checkout) {
         Ok(name) => name,
         Err(refusal) => {
+            // A checkout whose manifest cannot be read is named by its
+            // directory, beside the refusal that says why.
             return Planned {
-                product: checkout
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| checkout.display().to_string()),
+                product: match checkout.file_name() {
+                    Some(name) => name.to_string_lossy().into_owned(),
+                    None => checkout.display().to_string(),
+                },
                 checkout: checkout.to_path_buf(),
                 standing: Standing::Unreadable { refusal },
-            }
+            };
         }
     };
     let standing = match standing(checkout, published) {
@@ -207,10 +207,11 @@ fn standing(checkout: &Path, published: &Recorded) -> Result<Standing, String> {
              reads a clean committed Git tree for it"
         ));
     }
-    let runs = published
-        .get(&(manifest.product.clone(), version.clone()))
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    // A version no run was recorded for has no runs to weigh.
+    let runs: &[RecordedRun] = match published.get(&(manifest.product.clone(), version.clone())) {
+        Some(runs) => runs,
+        None => &[],
+    };
     Ok(standing_from_runs(commit, version, uncommitted.len(), runs))
 }
 
@@ -265,36 +266,4 @@ fn standing_from_runs(
         version,
         uncommitted,
     }
-}
-
-/// Every checkout under `root` that declares a product.
-///
-/// The walk stops at a checkout: a release declaration belongs to the tree
-/// that holds it, and a dependency clone or a build directory inside that
-/// tree is not another product the operator checked out.
-fn scan(root: &Path, found: &mut Vec<PathBuf>) -> Result<(), CmdError> {
-    if root.join(PRODUCT_MANIFEST).is_file() {
-        found.push(root.to_path_buf());
-        return Ok(());
-    }
-    if root.join(".git").exists() {
-        return Ok(());
-    }
-    let mut entries: Vec<_> = std::fs::read_dir(root)?.collect::<Result<_, _>>()?;
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    for entry in entries {
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if matches!(
-            name.as_ref(),
-            ".build" | ".git" | "target" | "node_modules" | ".venv" | "dist" | "build"
-        ) {
-            continue;
-        }
-        scan(&entry.path(), found)?;
-    }
-    Ok(())
 }

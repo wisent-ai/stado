@@ -17,6 +17,7 @@
 //! AutoVersion, and the number it produced is already committed in the
 //! product's own source by the time a release is cut.
 
+mod checkouts;
 mod plan;
 mod report;
 
@@ -27,6 +28,7 @@ use clap::Args;
 use crate::cli::release_submit::SubmitChannel;
 use crate::cli::CmdError;
 
+pub use checkouts::declaring_checkouts;
 pub use plan::{plan, Planned, Standing};
 use report::print_plan;
 

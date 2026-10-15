@@ -81,7 +81,11 @@ pub async fn unpushed(root: &Path) -> Result<Vec<Unpushed>, CmdError> {
                 ))
             })?
             .path();
-        if path.join(".git").exists() {
+        // A workspace entry whose .git cannot be examined is refused naming
+        // it, never left out of the push as if it were no checkout.
+        if crate::primitives::presence::present(&path.join(".git"))
+            .map_err(|error| CmdError::click(format!("cannot list the workspace: {error}")))?
+        {
             checkouts.push(path);
         }
     }
