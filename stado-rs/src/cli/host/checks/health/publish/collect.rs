@@ -239,17 +239,29 @@ async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
 
     // The same volume the janitor measures and the same call it measures it
     // with, so a beacon and a reclaim pass can never disagree about free
-    // space. `stado host health` prints these two numbers; the old shell
-    // collector published a `df -h` line instead and both read as `-`.
+    // space. `stado host health` prints these two numbers. A volume whose
+    // free space cannot be read publishes no number, and its `disk` line
+    // says why instead of leaving the field out unexplained.
     let home = crate::config_file::expand_tilde("~");
-    if let Ok(free) = crate::providers::local::space_reclaim::free_bytes(&home) {
-        if let Some(object) = document.as_object_mut() {
-            let free_gb = free / crate::providers::local::space_reclaim::GIB;
-            object.insert("disk_avail_gb".to_string(), json!(free_gb));
-            object.insert(
-                "disk".to_string(),
-                Value::String(format!("{free_gb} GiB available on {}", home.display())),
-            );
+    if let Some(object) = document.as_object_mut() {
+        match crate::providers::local::space_reclaim::free_bytes(&home) {
+            Ok(free) => {
+                let free_gb = free / crate::providers::local::space_reclaim::GIB;
+                object.insert("disk_avail_gb".to_string(), json!(free_gb));
+                object.insert(
+                    "disk".to_string(),
+                    Value::String(format!("{free_gb} GiB available on {}", home.display())),
+                );
+            }
+            Err(error) => {
+                object.insert(
+                    "disk".to_string(),
+                    Value::String(format!(
+                        "free space on {} cannot be read: {error}",
+                        home.display()
+                    )),
+                );
+            }
         }
     }
     // The memory line is the host's own kernel reading, the same fields its
