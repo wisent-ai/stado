@@ -79,16 +79,11 @@ pub(crate) fn read_source(
         })?),
         None => None,
     };
-    if let Some(entries) = changelog
+    if let Some(refusal) = changelog
         .as_deref()
-        .and_then(stado_product::changelog::unreleased_entries)
-        .filter(|entries| !entries.is_empty())
+        .and_then(|text| stado_product::changelog::submission_refusal(text, &commit, version))
     {
-        return Err(CmdError::refused(format!(
-            "CHANGELOG.md at {commit} still holds {} Unreleased entries for {version}; run \
-             'stado product changelog --version {version}' in the version-bump commit and submit that commit",
-            entries.lines().filter(|line| line.starts_with("- ")).count()
-        )));
+        return Err(CmdError::refused(refusal));
     }
     Ok(SourceReading {
         root,

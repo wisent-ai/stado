@@ -9,10 +9,10 @@ use crate::common::Runtime;
 use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, Command};
 pub(crate) use native::cargo_operations;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn value(name: &'static str, help: &'static str) -> Arg {
-    Arg::new(name).long(name).help(help).num_args(1)
+    Arg::new(name).long(name).help(help).action(ArgAction::Set)
 }
 fn flag(name: &'static str, help: &'static str) -> Arg {
     Arg::new(name)
@@ -92,7 +92,7 @@ pub fn augment(command: Command) -> Command {
         .subcommand(
             Command::new("linkage")
                 .about("Prove each .app bundle's @rpath dependencies resolve inside it, as dyld resolves them")
-                .arg(clap::Arg::new("bundle").required(true).num_args(1..).help("A .app bundle; repeatable")),
+                .arg(clap::Arg::new("bundle").required(true).action(ArgAction::Append).help("A .app bundle; repeatable")),
         )
         .subcommand(
             Command::new("crx3")
@@ -115,12 +115,7 @@ pub fn augment(command: Command) -> Command {
         .subcommand(native::editor())
         .subcommand(native::surface())
         .subcommand(native::documentation())
-        .subcommand(
-            Command::new("changelog")
-                .about("Move CHANGELOG.md's Unreleased entries into changelog/ as the given release, in the version-bump commit")
-                .arg(clap::Arg::new("version").long("version").required(true).help("The release the entries go out in"))
-                .arg(clap::Arg::new("root").long("root").default_value(".").help("The repository checkout")),
-        )
+        .subcommand(crate::changelog::command::command())
 }
 
 /// Run one parsed `stado product` invocation as `build`, returning its exit status.
@@ -253,10 +248,10 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
                     .context("--engine is required")?,
                 arguments
                     .get_one::<String>("migrations")
-                    .map_or("migrations", String::as_str),
+                    .context("--migrations is missing")?,
                 arguments
                     .get_one::<String>("project-dir")
-                    .map_or(".", String::as_str),
+                    .context("--project-dir is missing")?,
             ),
             other => anyhow::bail!("unknown schema release operation {other}"),
         },
@@ -275,16 +270,7 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
                 .context("documentation operation is missing")?;
             crate::documentation::run(&action, arguments, &runtime)
         }
-        "changelog" => crate::changelog::run(
-            Path::new(
-                arguments
-                    .get_one::<String>("root")
-                    .context("changelog root is missing")?,
-            ),
-            arguments
-                .get_one::<String>("version")
-                .context("changelog version is missing")?,
-        ),
+        "changelog" => crate::changelog::command::run(&arguments),
         _ => unreachable!("Clap admitted an undeclared product command"),
     }
 }

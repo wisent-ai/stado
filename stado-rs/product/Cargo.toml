@@ -49,3 +49,8 @@ harness = false
 name = "product-compiles"
 path = "../../tests/product/compiles/main.rs"
 harness = false
+
+[[test]]
+name = "product-changelog"
+path = "../../tests/product/changelog/main.rs"
+harness = false

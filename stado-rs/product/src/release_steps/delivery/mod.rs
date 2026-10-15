@@ -47,12 +47,8 @@ pub fn run(action: &str, arguments: &clap::ArgMatches) -> Result<i32> {
             arguments
                 .get_one::<String>("engine")
                 .context("--engine is required")?,
-            arguments
-                .get_one::<String>("migrations")
-                .map_or("migrations", String::as_str),
-            arguments
-                .get_one::<String>("project-dir")
-                .map_or(".", String::as_str),
+            &text("migrations")?,
+            &text("project-dir")?,
         ),
         "testflight" => testflight::deliver(&text("ipa")?),
         "vercel-files" => vercel_files(
@@ -112,13 +108,18 @@ fn render(service_name: &str) -> Result<i32> {
             .query(&[("name", service_name), ("limit", "100")])
             .bearer_auth(&token),
     )?;
-    let exact: Vec<&Value> = services
+    let mut exact: Vec<&Value> = Vec::new();
+    for entry in services
         .as_array()
         .context("Render's service listing was not an array")?
-        .iter()
-        .map(|entry| entry.get("service").unwrap_or(entry))
-        .filter(|service| service["name"] == service_name && service["id"].is_string())
-        .collect();
+    {
+        let service = entry.get("service").with_context(|| {
+            format!("Render's service listing holds an entry without its service object: {entry}")
+        })?;
+        if service["name"] == service_name && service["id"].is_string() {
+            exact.push(service);
+        }
+    }
     let [service] = exact.as_slice() else {
         bail!(
             "Render holds {} services named {service_name}; exactly one is required",
@@ -155,7 +156,7 @@ fn render(service_name: &str) -> Result<i32> {
             "Render deploy {deploy_id} of {service_name} started (Render reported no status)"
         ),
     }
-    Ok(0)
+    Ok(libc::EXIT_SUCCESS)
 }
 
 fn files_under(directory: &Path, found: &mut Vec<PathBuf>) -> Result<()> {
@@ -291,5 +292,5 @@ fn vercel_files(bundle_name: &str, team: &str, project: &str, project_name: &str
     evidence.insert("ready_state".into(), json!("READY"));
     write_evidence("vercel-evidence.json", evidence)?;
     println!("Vercel deployment {id} is ready");
-    Ok(0)
+    Ok(libc::EXIT_SUCCESS)
 }
