@@ -15,7 +15,8 @@ use serde_json::{json, Value};
 
 use super::{fill, Planned, BIOME_FMT};
 use crate::cli::CmdError;
-use crate::release_pipeline::{GateKind, PRODUCT_MANIFEST};
+use crate::primitives::presence::present;
+use crate::release_pipeline::{GateKind, PRODUCT_MANIFEST, SCHEMA_VERSION};
 
 /// The platform a source bundle is built on; the bundle is the same bytes for
 /// every host that installs it.
@@ -24,7 +25,7 @@ const RUNNER: &str = "linux-amd64";
 const PACKAGE: &str = "package.json";
 /// Lock files npm, pnpm and yarn write beside the package; the one present is
 /// bundled so an install reproduces the tested tree.
-const LOCKS: [&str; 3] = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
+const LOCKS: &[&str] = &["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
 
 /// The manifest an npm package is released with.
 pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdError> {
@@ -45,7 +46,11 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
             path.display()
         ))
     })?;
-    let unscoped = name.rsplit('/').next().unwrap_or(name);
+    // A scoped name (`@scope/name`) is released under its last segment.
+    let unscoped = match name.rsplit_once('/') {
+        Some((_, last)) => last,
+        None => name,
+    };
     if unscoped != product {
         return Err(CmdError::refused(format!(
             "{PACKAGE} names the package {name:?}, but the product is {product}; pass --product {unscoped}"
@@ -66,11 +71,13 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
             path.display()
         )));
     }
-    if let Some(missing) = shipped.iter().find(|entry| !checkout.join(entry).exists()) {
-        return Err(CmdError::refused(format!(
-            "{} lists {missing:?} in files, which the checkout does not hold",
-            path.display()
-        )));
+    for entry in &shipped {
+        if !present(&checkout.join(entry))? {
+            return Err(CmdError::refused(format!(
+                "{} lists {entry:?} in files, which the checkout does not hold",
+                path.display()
+            )));
+        }
     }
     let bundle = format!("{product}-source.tar");
     let mut build = vec![
@@ -80,12 +87,19 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         "--name",
         bundle.as_str(),
     ];
-    let locks = LOCKS.iter().filter(|lock| checkout.join(lock).is_file());
+    // Every lock file the checkout holds is bundled; one that cannot be
+    // examined is refused with its cause rather than left out of the bundle.
+    let mut locks = Vec::new();
+    for lock in LOCKS {
+        if present(&checkout.join(lock))? {
+            locks.push(lock);
+        }
+    }
     for include in [PACKAGE].iter().chain(locks).chain(shipped.iter()) {
         build.extend(["--include", *include]);
     }
     let manifest = json!({
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "product": product,
         "releases": true,
         "version_source": {"kind": "json", "path": PACKAGE, "pointer": "/version"},
