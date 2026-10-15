@@ -35,14 +35,19 @@ pub struct Site {
     pub channel: Channel,
 }
 
-/// Every tracked file of `checkout` that is product code, by path.
+/// The object type git records for a submodule: the entry is another
+/// repository's commit, a directory in the working tree, not a file of this
+/// checkout.
+const SUBMODULE_OBJECT: &str = "commit";
+
+/// Every tracked file of `checkout` that is product code, by path. A
+/// submodule is another repository's code and is not read as this one's.
 fn tracked(checkout: &Path) -> Result<Vec<String>> {
-    let output = capture(
-        Command::new("git")
-            .arg("-C")
-            .arg(checkout)
-            .args(["ls-files", "-z"]),
-    )?;
+    let output = capture(Command::new("git").arg("-C").arg(checkout).args([
+        "ls-files",
+        "-z",
+        "--format=%(objecttype)%x09%(path)",
+    ]))?;
     if !output.status.success() {
         bail!(
             "git ls-files in {} failed ({}): {}",
@@ -53,16 +58,27 @@ fn tracked(checkout: &Path) -> Result<Vec<String>> {
     }
     let listing = String::from_utf8(output.stdout)
         .with_context(|| format!("git ls-files in {} is not UTF-8", checkout.display()))?;
-    Ok(listing
-        .split('\0')
-        .filter(|path| !path.is_empty() && !path.starts_with(TESTS))
-        .filter(|path| {
-            Path::new(path)
+    let mut files = Vec::new();
+    for entry in listing.split('\0').filter(|entry| !entry.is_empty()) {
+        let (object, path) = entry.split_once('\t').with_context(|| {
+            format!(
+                "git ls-files in {} answered {entry:?}, which is not \
+                 `<object type>\\t<path>`",
+                checkout.display()
+            )
+        })?;
+        if object == SUBMODULE_OBJECT
+            || path.starts_with(TESTS)
+            || Path::new(path)
                 .extension()
-                .is_none_or(|extension| extension != PROSE_EXTENSION)
-        })
-        .map(str::to_owned)
-        .collect())
+                .is_some_and(|extension| extension == PROSE_EXTENSION)
+        {
+            continue;
+        }
+        files.push(path.to_owned());
+    }
+    files.dedup();
+    Ok(files)
 }
 
 /// Every line of `repository`'s checkout that reaches one of `others`, by the
