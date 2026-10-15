@@ -122,6 +122,48 @@ pub fn wait_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, JanitorE
     Ok(Some(lock))
 }
 
+/// Wait, as a lock wait in the wait register, until no workload holds the
+/// cleanup lock: the moment the janitor's requested turn can be taken. The
+/// lock is taken exclusively and let go at once, so the caller runs the pass
+/// itself next; a turn request keeps new holds out in between, so nothing
+/// takes the lock back before that pass does. This is how an operation asked
+/// to wait for its turn waits, instead of being refused while the janitor
+/// waits for a schedule that may not come before the operator does.
+pub fn wait_for_janitor_turn(holder: &str) -> Result<(), JanitorError> {
+    let state_dir = ensure_state_dir(&secure_home(&crate::config_file::expand_tilde("~"))?)?;
+    let file = open_lock(&state_dir)?;
+    let path = state_dir.join(crate::providers::local::space_reclaim::janitor::LOCK_NAME);
+    let what = format!(
+        "the running workloads the disk janitor's turn waits on, for {holder} ({})",
+        workload_holders()
+    );
+    match crate::wait::blocking_on_lock(what, &path, || file.lock()) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => return Err(error.into()),
+        Err(cycle) => {
+            return Err(JanitorError::os(&format!(
+                "waiting for the cleanup lock {} would close a wait cycle: {cycle}",
+                path.display()
+            )))
+        }
+    }
+    file.unlock().map_err(JanitorError::from)
+}
+
+/// How many live workloads hold the cleanup lock now, as their records say:
+/// the active job count a pass run outside the agent reports.
+pub fn live_workload_count() -> Result<usize, JanitorError> {
+    let state_dir = ensure_state_dir(&secure_home(&crate::config_file::expand_tilde("~"))?)?;
+    let (workloads, unreadable) = holds::live(&state_dir);
+    match unreadable.first() {
+        Some(problem) => Err(JanitorError::os(&format!(
+            "a workload hold record cannot be read, so the running workloads are not known: \
+             {problem}"
+        ))),
+        None => Ok(workloads.len()),
+    }
+}
+
 /// Who keeps the janitor from its turn on this machine: each live shared
 /// hold with its acquisition timestamp, then the turn request and unread
 /// records. This is a diagnostic observation, not permission to steal a lock.

@@ -162,54 +162,8 @@ fn command_line_words(action: &str, arguments: &ArgMatches, host: &str) -> Vec<S
     positionals
 }
 
-/// The janitor's cleanup lock held in shared mode for the whole of a building
-/// operation run here, as every job the agent runs holds it, or `None` for an
-/// operation that builds nothing. Which operations build is the product
-/// crate's declaration (`stado_product::cli::compiles`): a language server
-/// that only answers an editor holds nothing for its life.
-///
-/// A product installation compiles into a per-workspace build directory the
-/// janitor finds tagged as a regenerable cache. Without the hold a pass under
-/// disk pressure deleted that directory mid-build, and the install failed
-/// copying a binary that no longer existed. A janitor that holds the lock is
-/// waited for, said as a lock wait, and the operation runs once the pass
-/// lets go; one that has asked for its turn refuses the operation naming the
-/// holds it waits on, before anything is exported or compiled.
-fn janitor_hold(
-    matches: &ArgMatches,
-) -> Result<Option<crate::providers::local::space_reclaim::WorkloadLock>, CmdError> {
-    let Some((action, arguments)) = matches.subcommand() else {
-        return Ok(None);
-    };
-    if !stado_product::cli::compiles(matches) {
-        return Ok(None);
-    }
-    let operation = given(arguments, "operation")?;
-    let mut holder = match operation {
-        Some(operation) => format!("stado product {action} {operation}"),
-        None => format!("stado product {action}"),
-    };
-    if let Ok(Some(product)) = arguments.try_get_one::<String>("positional") {
-        holder.push(' ');
-        holder.push_str(product);
-    }
-    if let Ok(Some(surface)) = arguments.try_get_one::<String>("surface") {
-        holder.push_str(" --surface ");
-        holder.push_str(surface);
-    }
-    match crate::providers::local::space_reclaim::wait_workload_lock(&holder) {
-        Ok(Some(lock)) => Ok(Some(lock)),
-        Ok(None) => Err(CmdError::refused(format!(
-            "{holder} builds into a directory the disk janitor reclaims, and the janitor has \
-             asked running work for its turn; nothing was exported or built. It waits on: {}",
-            crate::providers::local::space_reclaim::workload_holders()
-        ))),
-        Err(error) => Err(CmdError::click(format!(
-            "{holder} cannot take the disk janitor's cleanup lock, so a cleanup pass could \
-             delete its build directory while it compiles; nothing was exported or built: {error}"
-        ))),
-    }
-}
+mod janitor;
+use janitor::janitor_hold;
 
 pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     if let Some((host, words)) = remote_service_operation(&command.matches).await? {
@@ -221,7 +175,7 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     // Taken first and released when this function returns, after the
     // operation has answered: a build the janitor's cleanup holds is refused
     // for that reason before Oko is asked anything about it.
-    let _hold = janitor_hold(&command.matches)?;
+    let _hold = janitor_hold(&command.matches).await?;
     // An operation that compiles runs only while the operator's rulings allow
     // building this product, as Oko answers it; nothing here keeps the rule.
     if stado_product::cli::compiles(&command.matches) {
