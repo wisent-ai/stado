@@ -8,7 +8,6 @@
 //! (an address or a vault field that could not be read).
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -107,29 +106,19 @@ async fn secret(reference: &str) -> Result<String, String> {
     }
 }
 
-/// The address this host reaches `service` at: its forward marker
-/// (`~/.stado/forwards/<service>.local`), which `stado service directory
-/// publish` writes from the service directory.
+/// The address this host reaches `service` at: its forward marker, read the
+/// way every consumer reads it (`deploy::host_access::forward`), which
+/// `stado service directory publish` writes from the service directory.
 fn forwarded(service: &str) -> Result<String, String> {
-    let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
-        return Err(format!(
-            "HOME is not set, so the forward marker of {service} cannot be found"
-        ));
-    };
-    let marker = PathBuf::from(home)
-        .join(".stado")
-        .join("forwards")
-        .join(format!("{service}.local"));
-    let address = std::fs::read_to_string(&marker).map_err(|error| {
-        format!(
-            "the forward marker {} of {service} cannot be read ({error}); `stado service \
-             directory publish` writes it",
-            marker.display()
-        )
-    })?;
-    match address.trim() {
-        "" => Err(format!("the forward marker {} is empty", marker.display())),
-        address => Ok(address.to_owned()),
+    match crate::deploy::host_access::forward::read_local(service) {
+        Ok(Some(marker)) => Ok(marker.url),
+        Ok(None) => Err(format!(
+            "this host holds no forward marker for {service} (~/.stado/forwards/{service}.local); \
+             `stado service directory publish` writes it"
+        )),
+        Err(error) => Err(format!(
+            "the forward marker of {service} cannot be read: {error}"
+        )),
     }
 }
 
