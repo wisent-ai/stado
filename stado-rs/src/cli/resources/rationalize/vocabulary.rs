@@ -4,7 +4,8 @@
 //! report, the plan and the human table print.
 
 use serde::Serialize;
-use serde_json::Value;
+
+use crate::primitives::word;
 
 /// How severe a finding is, or how sure the audit is of it. Declaration
 /// order is report order: high first.
@@ -58,30 +59,20 @@ pub(super) enum ResourceType {
     ComputeReservation,
 }
 
-fn serde_word<T: Serialize>(
-    value: &T,
-    formatter: &mut std::fmt::Formatter<'_>,
-) -> std::fmt::Result {
-    match serde_json::to_value(value) {
-        Ok(Value::String(word)) => formatter.write_str(&word),
-        _ => Err(std::fmt::Error),
-    }
-}
-
 impl std::fmt::Display for Level {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        serde_word(self, formatter)
+        word::write(self, formatter)
     }
 }
 
 impl std::fmt::Display for Recommendation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        serde_word(self, formatter)
+        word::write(self, formatter)
     }
 }
 
 impl std::fmt::Display for ResourceType {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        serde_word(self, formatter)
+        word::write(self, formatter)
     }
 }

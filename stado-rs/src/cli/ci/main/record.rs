@@ -10,11 +10,12 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::ci::delivery::state::{home_file, write_json};
 use crate::cli::CmdError;
+use crate::primitives::document;
 
 const RECORD_ENV: &str = "STADO_CI_MAIN_RECORD";
 const RECORD_FILE: &str = "ci-main.json";
+const RECORD: &str = "main check record";
 
 /// One commit of `main` the check ran over.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,31 +58,18 @@ impl Record {
 
 /// The record's path: `STADO_CI_MAIN_RECORD`, else `~/.stado/ci-main.json`.
 pub fn path() -> Result<PathBuf, CmdError> {
-    home_file(RECORD_ENV, RECORD_FILE)
+    document::located(RECORD_ENV, RECORD_FILE, RECORD).map_err(CmdError::click)
 }
 
 /// The record as the last check left it; none written yet is the empty
 /// record, one that cannot be read or parsed is a refusal naming it.
 pub fn read() -> Result<Record, CmdError> {
-    let path = path()?;
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
-        Err(error) => {
-            return Err(CmdError::click(format!(
-                "reading the main check record {}: {error}",
-                path.display()
-            )))
-        }
-    };
-    serde_json::from_slice(&bytes).map_err(|error| {
-        CmdError::click(format!(
-            "the main check record {} is not a main check record: {error}",
-            path.display()
-        ))
-    })
+    match document::read(&path()?, RECORD).map_err(CmdError::click)? {
+        Some(record) => Ok(record),
+        None => Ok(Record::default()),
+    }
 }
 
 pub fn write(record: &Record) -> Result<(), CmdError> {
-    write_json(&path()?, record)
+    document::write(&path()?, record, RECORD).map_err(CmdError::click)
 }

@@ -8,11 +8,13 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::state::{home_file, write_json, Pushed, State};
+use super::state::{Pushed, State};
 use crate::cli::CmdError;
+use crate::primitives::document;
 
 const PLAN_ENV: &str = "STADO_DELIVERY_PLAN";
 const PLAN_FILE: &str = "delivery-plan.json";
+const PLAN: &str = "delivery plan";
 
 /// One product of the plan.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,29 +98,13 @@ impl Plan {
 
 /// The plan's path: `STADO_DELIVERY_PLAN`, else `~/.stado/delivery-plan.json`.
 pub fn path() -> Result<PathBuf, CmdError> {
-    home_file(PLAN_ENV, PLAN_FILE)
+    document::located(PLAN_ENV, PLAN_FILE, PLAN).map_err(CmdError::click)
 }
 
 /// The declared plan, or `None` when none is declared; one that cannot be
 /// read or parsed is a refusal naming it.
 pub fn read() -> Result<Option<Plan>, CmdError> {
-    let path = path()?;
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(CmdError::click(format!(
-                "reading the delivery plan {}: {error}",
-                path.display()
-            )))
-        }
-    };
-    serde_json::from_slice(&bytes).map(Some).map_err(|error| {
-        CmdError::click(format!(
-            "the delivery plan {} is not a delivery plan: {error}",
-            path.display()
-        ))
-    })
+    document::read(&path()?, PLAN).map_err(CmdError::click)
 }
 
 /// The declared plan, refused naming how to declare one when there is none.
@@ -252,7 +238,7 @@ pub async fn set(purpose: &str, steps: &[String], push: bool, json: bool) -> Res
         purpose: purpose.to_string(),
         declared_at: Utc::now(),
     };
-    write_json(&path()?, &plan)?;
+    document::write(&path()?, &plan, PLAN).map_err(CmdError::click)?;
     print(&plan, json)
 }
 

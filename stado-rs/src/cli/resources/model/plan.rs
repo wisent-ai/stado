@@ -109,10 +109,7 @@ impl From<crate::autonomy::model::SourceState> for SourceCoverage {
 
 impl std::fmt::Display for SourceCoverage {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 

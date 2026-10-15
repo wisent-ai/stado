@@ -10,41 +10,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::CmdError;
+use crate::primitives::document;
 
 const STATE_ENV: &str = "STADO_DELIVERY_STATE";
 const STATE_FILE: &str = "delivery-state.json";
-
-/// `$<env>` when set, else `~/.stado/<file>`, refused by name when neither
-/// can be read.
-pub(in crate::cli::ci) fn home_file(env: &str, file: &str) -> Result<PathBuf, CmdError> {
-    if let Some(explicit) = std::env::var_os(env).filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(explicit));
-    }
-    let home = std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "{file} has no place: neither {env} nor HOME is set"
-            ))
-        })?;
-    Ok(PathBuf::from(home).join(".stado").join(file))
-}
-
-/// Write `value` to `path` whole: staged beside it, then renamed over it.
-pub(in crate::cli::ci) fn write_json(
-    path: &PathBuf,
-    value: &impl Serialize,
-) -> Result<(), CmdError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| CmdError::click(format!("creating {}: {error}", parent.display())))?;
-    }
-    let staged = path.with_extension("json.writing");
-    std::fs::write(&staged, serde_json::to_vec_pretty(value)?)
-        .map_err(|error| CmdError::click(format!("writing {}: {error}", staged.display())))?;
-    std::fs::rename(&staged, path)
-        .map_err(|error| CmdError::click(format!("writing {}: {error}", path.display())))
-}
+const STATE: &str = "delivery state";
 
 /// The step a pass is installing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,33 +79,20 @@ pub struct State {
 /// The state's path: `STADO_DELIVERY_STATE`, else
 /// `~/.stado/delivery-state.json`.
 pub fn path() -> Result<PathBuf, CmdError> {
-    home_file(STATE_ENV, STATE_FILE)
+    document::located(STATE_ENV, STATE_FILE, STATE).map_err(CmdError::click)
 }
 
 /// The state as the last pass left it; none written yet is the empty state,
 /// one that cannot be read or parsed is a refusal naming it.
 pub fn read() -> Result<State, CmdError> {
-    let path = path()?;
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(State::default()),
-        Err(error) => {
-            return Err(CmdError::click(format!(
-                "reading the delivery state {}: {error}",
-                path.display()
-            )))
-        }
-    };
-    serde_json::from_slice(&bytes).map_err(|error| {
-        CmdError::click(format!(
-            "the delivery state {} is not a delivery state: {error}",
-            path.display()
-        ))
-    })
+    match document::read(&path()?, STATE).map_err(CmdError::click)? {
+        Some(state) => Ok(state),
+        None => Ok(State::default()),
+    }
 }
 
 pub fn write(state: &State) -> Result<(), CmdError> {
-    write_json(&path()?, state)
+    document::write(&path()?, state, STATE).map_err(CmdError::click)
 }
 
 /// The lock one pass holds for its whole run, beside the state: `None` when

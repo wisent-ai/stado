@@ -65,10 +65,7 @@ impl FenceStatus {
 /// The word the fence document carries, from the same serde mapping.
 impl std::fmt::Display for FenceStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 
@@ -137,10 +134,7 @@ impl ReceiptStatus {
 
 impl std::fmt::Display for ReceiptStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 

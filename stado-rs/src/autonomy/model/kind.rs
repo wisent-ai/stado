@@ -3,7 +3,6 @@
 //! stored snapshots, policy rules and canonical resource ids carry.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,9 +62,6 @@ impl ResourceKind {
 
 impl std::fmt::Display for ResourceKind {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }

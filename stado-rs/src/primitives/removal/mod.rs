@@ -36,9 +36,6 @@ impl RemovalStatus {
 /// The report word, from the same serde mapping.
 impl std::fmt::Display for RemovalStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }

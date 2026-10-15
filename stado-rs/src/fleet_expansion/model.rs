@@ -89,25 +89,15 @@ impl PlanStatus {
     }
 }
 
-fn serde_word<T: Serialize>(
-    value: &T,
-    formatter: &mut std::fmt::Formatter<'_>,
-) -> std::fmt::Result {
-    match serde_json::to_value(value) {
-        Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
-        _ => Err(std::fmt::Error),
-    }
-}
-
 impl std::fmt::Display for CandidateStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        serde_word(self, formatter)
+        crate::primitives::word::write(self, formatter)
     }
 }
 
 impl std::fmt::Display for PlanStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        serde_word(self, formatter)
+        crate::primitives::word::write(self, formatter)
     }
 }
 

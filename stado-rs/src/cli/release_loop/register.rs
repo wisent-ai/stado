@@ -12,10 +12,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::CmdError;
+use crate::primitives::document;
 
 /// Operator override for the register's location, absolute.
 const REGISTER_ENV: &str = "STADO_RELEASE_LOOP_REGISTER";
 const REGISTER_FILE: &str = "release-loop.json";
+const REGISTER: &str = "delivery loop register";
 
 /// Where one commit stands in the loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,64 +121,30 @@ pub struct Document {
 /// The register's path: `STADO_RELEASE_LOOP_REGISTER`, else
 /// `~/.stado/release-loop.json`.
 pub fn path() -> Result<PathBuf, CmdError> {
-    if let Some(explicit) = std::env::var_os(REGISTER_ENV).filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(explicit));
-    }
-    let home = std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "the delivery loop register has no place: neither {REGISTER_ENV} nor HOME is set"
-            ))
-        })?;
-    Ok(PathBuf::from(home).join(".stado").join(REGISTER_FILE))
+    document::located(REGISTER_ENV, REGISTER_FILE, REGISTER).map_err(CmdError::click)
 }
 
 /// Every entry, newest first. A register not written yet holds none; one
 /// that cannot be read or parsed is a refusal naming it.
 pub fn read() -> Result<Document, CmdError> {
-    let path = path()?;
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Document::default())
-        }
-        Err(error) => {
-            return Err(CmdError::click(format!(
-                "reading the delivery loop register {}: {error}",
-                path.display()
-            )))
-        }
+    let mut register = match document::read(&path()?, REGISTER).map_err(CmdError::click)? {
+        Some(register) => register,
+        None => Document::default(),
     };
-    let mut document: Document = serde_json::from_slice(&bytes).map_err(|error| {
-        CmdError::click(format!(
-            "the delivery loop register {} is not a register: {error}",
-            path.display()
-        ))
-    })?;
-    document
+    register
         .entries
         .sort_by_key(|entry| std::cmp::Reverse(entry.updated_at));
-    Ok(document)
+    Ok(register)
 }
 
 /// Write `entry` in place of the one for the same product and commit.
 pub fn keep(entry: &Entry) -> Result<(), CmdError> {
-    let path = path()?;
-    let mut document = read()?;
-    document
+    let mut register = read()?;
+    register
         .entries
-        .retain(|kept| !(kept.product == entry.product && kept.commit == entry.commit));
-    document.entries.push(entry.clone());
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| CmdError::click(format!("creating {}: {error}", parent.display())))?;
-    }
-    let staged = path.with_extension("json.writing");
-    std::fs::write(&staged, serde_json::to_vec_pretty(&document)?)
-        .map_err(|error| CmdError::click(format!("writing {}: {error}", staged.display())))?;
-    std::fs::rename(&staged, &path)
-        .map_err(|error| CmdError::click(format!("writing {}: {error}", path.display())))
+        .retain(|held| !(held.product == entry.product && held.commit == entry.commit));
+    register.entries.push(entry.clone());
+    document::write(&path()?, &register, REGISTER).map_err(CmdError::click)
 }
 
 /// The entry this loop already kept for `product` at `commit`.
