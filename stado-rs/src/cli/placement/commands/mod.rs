@@ -14,14 +14,22 @@ use crate::cli::CmdError;
 
 #[derive(Subcommand)]
 pub enum PlacementCommands {
-    /// Relocate one complete service group to another registered host.
+    /// Relocate one complete service group to another registered host, or,
+    /// with --authority, take the registry authority role on --to-host while
+    /// the declared authority does not answer.
     Move {
         /// Logical services naming one exact registry placement profile.
-        #[arg(required = true, num_args = 1..)]
+        #[arg(required_unless_present = "authority")]
         services: Vec<String>,
         /// Registered destination host.
         #[arg(long)]
         to_host: String,
+        /// Take the registry authority role on --to-host, run on that host:
+        /// promote its last-known-good registry under the next directory
+        /// generation, write it into the store it reads, and hand it to every
+        /// other registered host. Refused while the authority answers.
+        #[arg(long, conflicts_with = "services")]
+        authority: bool,
         /// Emit the committed transaction report as JSON.
         #[arg(long)]
         json: bool,
@@ -69,8 +77,12 @@ pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
         PlacementCommands::Move {
             services,
             to_host,
+            authority,
             json,
-        } => move_services(&services, &to_host, json).await,
+        } => match authority {
+            true => crate::cli::resolver::take_authority(&to_host, json).await,
+            false => move_services(&services, &to_host, json).await,
+        },
         PlacementCommands::Evict {
             service,
             host,

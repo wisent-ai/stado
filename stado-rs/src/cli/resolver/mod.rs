@@ -17,11 +17,13 @@ mod directory;
 mod relay;
 mod report;
 mod serve;
+mod takeover;
 
 pub use crate::cli::resolver::directory::document::canonical_document;
 pub use crate::cli::resolver::directory::document::canonical_document_or_last_good;
 pub use crate::cli::resolver::serve::serve;
 pub(crate) use report::serving::await_serving;
+pub(crate) use takeover::take_authority;
 
 pub(crate) use crate::cli::resolver::directory::document::{
     authority_snapshot, kept_last_good_document, last_good_document,

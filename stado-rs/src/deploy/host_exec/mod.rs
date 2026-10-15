@@ -58,7 +58,7 @@ mod run;
 pub use allowlist::{
     allowlist, approve, cargo_candidates, installed_program, is_shell_safe, program_candidates,
     ApprovedCommand, ADB_PROGRAM, APPIUM_PROGRAM, APPROVED_COMMANDS, GIT_PROGRAM, NODE_PROGRAM,
-    TMUX_PROGRAM,
+    STADO_CLI, TMUX_PROGRAM,
 };
 pub use refusal::ExecRefusal;
 pub use run::{exec_host, OK_STATUS};
