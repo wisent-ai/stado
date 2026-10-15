@@ -13,9 +13,33 @@ use crate::common::capture;
 
 /// Where the product's own tests live: what they call is not what the
 /// product needs to run.
-const TESTS: &str = "tests/";
+pub(super) const TESTS: &str = "tests/";
 /// Prose, not code: a product named in documentation is not called.
 const PROSE_EXTENSION: &str = "md";
+/// The forge's automation, a directory at any depth: what it runs builds
+/// and checks the product; it is not the product running.
+const FORGE_AUTOMATION: &str = ".github";
+/// Files git reads about the checkout itself: they name paths, never call
+/// anything.
+const GIT_METADATA: &[&str] = &[".gitignore", ".gitattributes", ".gitmodules"];
+/// The extension of an example a person copies: what it shows is read, if
+/// at all, by code that is read on its own.
+const EXAMPLE_EXTENSION: &str = "example";
+/// The records package managers write of the packages they resolved: a
+/// package named like a product is not that product, and a package the
+/// product imports is read where its code imports it.
+const LOCKFILES: &[&str] = &[
+    "Cargo.lock",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lock",
+    "Package.resolved",
+    "Gemfile.lock",
+    "poetry.lock",
+    "uv.lock",
+];
 /// A shell script, where a program is started by naming it first.
 const SHELL_EXTENSION: &str = "sh";
 /// What a line opens with when it is a comment, in the languages the
@@ -39,6 +63,27 @@ pub struct Site {
 /// repository's commit, a directory in the working tree, not a file of this
 /// checkout.
 const SUBMODULE_OBJECT: &str = "commit";
+
+/// Whether the tracked file at `path` is something the product never runs:
+/// its tests, prose, the forge's automation, git's metadata, an example to
+/// copy, or a package manager's lockfile.
+fn never_run(path: &str) -> bool {
+    let file = Path::new(path);
+    let named = |names: &[&str]| {
+        file.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| names.contains(&name))
+    };
+    path.starts_with(TESTS)
+        || file
+            .components()
+            .any(|component| component.as_os_str() == FORGE_AUTOMATION)
+        || named(GIT_METADATA)
+        || named(LOCKFILES)
+        || file
+            .extension()
+            .is_some_and(|extension| extension == PROSE_EXTENSION || extension == EXAMPLE_EXTENSION)
+}
 
 /// Every tracked file of `checkout` that is product code, by path. A
 /// submodule is another repository's code and is not read as this one's.
@@ -67,12 +112,7 @@ fn tracked(checkout: &Path) -> Result<Vec<String>> {
                 checkout.display()
             )
         })?;
-        if object == SUBMODULE_OBJECT
-            || path.starts_with(TESTS)
-            || Path::new(path)
-                .extension()
-                .is_some_and(|extension| extension == PROSE_EXTENSION)
-        {
+        if object == SUBMODULE_OBJECT || never_run(path) {
             continue;
         }
         files.push(path.to_owned());

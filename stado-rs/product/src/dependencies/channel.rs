@@ -6,6 +6,8 @@
 
 use serde::Serialize;
 
+use super::scan::TESTS;
+
 /// The way a source line reaches another product.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -130,12 +132,20 @@ impl Names {
 }
 
 /// Whether `line` starts `program`: a spawn call naming it, a quoted path
-/// ending in it, or, in a shell script, a command line beginning with it.
+/// ending in it, or, in a shell script, a command line beginning with it. A
+/// quoted path below `tests/` (a manifest's test target) names the product's
+/// own tests, not a program it starts.
 fn starts_program(line: &str, program: &str, shell: bool) -> bool {
     let quoted = format!("\"{program}\"");
     let path = format!("/{program}\"");
     let spawned =
         line.contains(&quoted) && Spawn::ALL.iter().any(|spawn| line.contains(spawn.opener()));
     let first = line.split_whitespace().next() == Some(program);
-    spawned || line.contains(&path) || (shell && first)
+    let pathed = line.match_indices(&path).any(|(at, _)| {
+        line[..=at]
+            .rsplit('"')
+            .next()
+            .is_none_or(|inside| !inside.starts_with(TESTS))
+    });
+    spawned || pathed || (shell && first)
 }

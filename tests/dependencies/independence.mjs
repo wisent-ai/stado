@@ -7,8 +7,10 @@ import { journey } from "./fixture.mjs";
 // and its answer, refusals and exit status are checked for every standing a
 // product the code reaches can have: undeclared, bound, unproven,
 // source-missing and independent, plus an absent checkout and an unknown
-// product. A comment line and a file under tests/ that name the other product
-// are not dependencies. Required: STADO_BIN, the Stado executable under test.
+// product. A comment line, a file under tests/, the forge's automation, git's
+// metadata, an example file, a lockfile and a manifest's test target that name
+// the other product are not dependencies. Required: STADO_BIN, the Stado
+// executable under test.
 await journey(
 	"independence",
 	"Real git checkouts of an isolated workspace read by the Stado under test against a catalog file, for every dependency standing",
@@ -22,6 +24,15 @@ await journey(
 				'// std::process::Command::new("gamma") is how gamma would be called\n',
 			"tests/calls.rs":
 				'fn t() { let _ = std::process::Command::new("gamma").status(); }\n',
+			// Files the product never runs: the forge's automation, git's
+			// metadata, an example to copy, a lockfile and a manifest's test
+			// target each name gamma without alpha calling it.
+			".github/workflows/ci.yml": "env:\n  GAMMA_TOKEN: example\n",
+			".gitignore": ".gamma/\n",
+			".env.example": "GAMMA_URL=\n",
+			"package-lock.json": '{"packages": {"node_modules/gamma": {}}}\n',
+			"Package.swift":
+				'let package = [.testTarget(name: "AlphaTests", path: "tests/gamma")]\n',
 		});
 		checkout("beta", { "src/main.rs": "fn main() {}\n" });
 
@@ -42,7 +53,7 @@ await journey(
 				(dependency) => dependency.product === "gamma",
 			),
 			false,
-			"a comment or a tests/ file was read as a dependency",
+			"a file the product never runs was read as a dependency",
 		);
 		assert.match(
 			found.answer.stderr,
