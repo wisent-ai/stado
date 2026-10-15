@@ -2,8 +2,9 @@
 //! other reader in this fleet resolves that program through.
 
 use super::programs::{
-    ANDROID_DEBUG_BRIDGE, APPIUM_CLI, BRAMA_LAUNCHER, CADDY_PROXY, CARGO_CLI, CUA_DRIVER, GIT_CLI,
-    NODE_RUNTIME, NPM_CLI, OKO_CLI, TAILSCALE_PROGRAM, TAMA_CLI, TMUX_CLI, UV_INSTALLER,
+    ANDROID_DEBUG_BRIDGE, APPIUM_CLI, BRAMA_LAUNCHER, CADDY_PROXY, CARGO_CLI, CUA_DRIVER,
+    DOCKER_CLI, GIT_CLI, NODE_RUNTIME, NPM_CLI, OKO_CLI, TAILSCALE_PROGRAM, TAMA_CLI, TMUX_CLI,
+    UV_INSTALLER,
 };
 
 /// Every absolute path a program in this table is installed at, for the
@@ -76,6 +77,14 @@ pub const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
     (
         TMUX_CLI,
         &[TMUX_CLI, "/usr/local/bin/tmux", "/usr/bin/tmux"],
+    ),
+    (
+        DOCKER_CLI,
+        &[
+            DOCKER_CLI,
+            "/usr/local/bin/docker",
+            "/opt/homebrew/bin/docker",
+        ],
     ),
     // Git, at real installations only. Homebrew first, then the Command Line
     // Tools' own git INSIDE the developer directory, then a Linux path.

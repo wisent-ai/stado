@@ -49,6 +49,12 @@ pub const TMUX_CLI: &str = "/opt/homebrew/bin/tmux";
 /// tmux's canonical name in [`super::PROGRAM_CANDIDATES`].
 pub const TMUX_PROGRAM: &str = TMUX_CLI;
 
+/// The Docker CLI, at the paths this fleet's hosts install it at. A Supabase
+/// schema release's post-build test starts its scratch database through the
+/// Supabase CLI, which needs a running Docker daemon on the builder; whether
+/// one runs there could not be asked at all.
+pub const DOCKER_CLI: &str = "/usr/bin/docker";
+
 /// The Kimi Code CLI. Its installed help defines the supported login flags;
 /// these entries inspect that interface without starting a login.
 pub const KIMI_CLI: &str = "~/.kimi-code/bin/kimi";

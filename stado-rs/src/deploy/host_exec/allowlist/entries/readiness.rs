@@ -2,7 +2,8 @@
 //! placement needs installed before it can claim a slot here.
 
 use super::super::programs::{
-    ANDROID_DEBUG_BRIDGE, APPIUM_CLI, CARGO_CLI, CUA_DRIVER, GIT_CLI, TMUX_CLI, UV_INSTALLER,
+    ANDROID_DEBUG_BRIDGE, APPIUM_CLI, CARGO_CLI, CUA_DRIVER, DOCKER_CLI, GIT_CLI, TMUX_CLI,
+    UV_INSTALLER,
 };
 use super::super::ApprovedCommand;
 
@@ -189,6 +190,15 @@ pub const READINESS_READS: &[ApprovedCommand] = &[
               back `not an approved host-exec command`, so both families refused every host and \
               the refusal read as a missing program. `-V` starts no server, attaches to no \
               session and writes nothing",
+    },
+    ApprovedCommand {
+        argv: &[DOCKER_CLI, "info"],
+        why: "reads whether this host's Docker daemon answers, and which server, from the paths \
+              this fleet installs the CLI at. A Supabase schema release's post-build test starts \
+              its scratch database through the Supabase CLI, which needs that daemon, and the \
+              test refuses with `the runner needs the Supabase CLI and Docker` without saying \
+              which one is missing. `info` takes no argument here, starts, stops and pulls \
+              nothing, and names no container, image or path",
     },
     ApprovedCommand {
         argv: &[UV_INSTALLER, "--version"],
