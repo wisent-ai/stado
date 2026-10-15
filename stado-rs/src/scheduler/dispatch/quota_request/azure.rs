@@ -46,10 +46,13 @@ pub async fn azure_request_increase_with_client(
             &format!("quota create_or_update {family_name}"),
         )
         .await?;
-    let name = resp
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or(family_name);
+    // The resource id is how the request is found again; an answer without
+    // one is not a quota ARM accepted, whatever family was asked for.
+    let name = resp.get("id").and_then(Value::as_str).ok_or_else(|| {
+        AzureError::Api(format!(
+            "quota create_or_update {family_name} in {location} answered without a resource id: {resp}"
+        ))
+    })?;
     Ok(json!({"name": name, "available": true}))
 }
 
