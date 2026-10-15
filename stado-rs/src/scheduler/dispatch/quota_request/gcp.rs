@@ -9,7 +9,7 @@ use super::quota_skus::{CatalogError, CloudQuotasClient};
 
 /// Cloud Quotas API dimensions[gpu_family] values for each accel we
 /// dispatch. Keep in sync with GCP_METRIC_TO_ACCEL in scheduler.quota.
-pub const GCP_ACCEL_TO_GPU_FAMILY: [(&str, &str); 4] = [
+pub const GCP_ACCEL_TO_GPU_FAMILY: &[(&str, &str)] = &[
     ("nvidia-tesla-t4", "NVIDIA_T4"),
     ("nvidia-l4", "NVIDIA_L4"),
     ("nvidia-tesla-a100", "NVIDIA_A100"),
@@ -71,11 +71,13 @@ pub async fn gcp_request_for_family(
             "name": resp.get("name").and_then(Value::as_str),
             "created": true,
         })),
-        Err(err) => {
-            let msg = err.to_string();
-            if !msg.contains("ALREADY_EXISTS") && !msg.to_lowercase().contains("already exists") {
-                return Err(err);
-            }
+        // Google answers ALREADY_EXISTS as HTTP 409 Conflict
+        // (https://cloud.google.com/apis/design/errors#handling_errors), so
+        // the status decides it, never words in the answer.
+        Err(CatalogError::Api {
+            status: Some(status),
+            ..
+        }) if status == reqwest::StatusCode::CONFLICT.as_u16() => {
             let mut update = body;
             update["name"] = json!(format!(
                 "projects/{}/locations/global/quotaPreferences/{pref_id}",
@@ -87,6 +89,7 @@ pub async fn gcp_request_for_family(
                 "created": false,
             }))
         }
+        Err(err) => Err(err),
     }
 }
 
