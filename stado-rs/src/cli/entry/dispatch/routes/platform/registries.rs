@@ -11,8 +11,19 @@ pub(super) async fn dispatch(command: RegistryCommands) -> Result<(), CmdError> 
             if_generation,
             force,
             allow_empty_fleet,
+            last_known_good,
             json,
-        } => registry::push(path, force, allow_empty_fleet, if_generation, json).await,
+        } => {
+            registry::push(
+                path,
+                force,
+                allow_empty_fleet,
+                if_generation,
+                last_known_good,
+                json,
+            )
+            .await
+        }
         RegistryCommands::Pull {
             with_generation,
             generation_only,

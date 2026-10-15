@@ -33,7 +33,10 @@ struct RegistryPushReceipt {
 }
 
 /// `stado registry push PATH|- [--if-generation TOKEN] [--force]
-/// [--allow-empty-fleet] [--json]` — upload an operator's document.
+/// [--allow-empty-fleet] [--last-known-good] [--json]` — upload an
+/// operator's document, or with `--last-known-good` hand it to this host's
+/// last-known-good copy while the registry authority does not answer
+/// ([`crate::cli::registry::handover`]).
 ///
 /// `if_generation` is the token an earlier [`pull`](crate::cli::registry::pull) handed back. With it the
 /// write is conditional on the read the edit was made against, so a
@@ -46,6 +49,7 @@ pub async fn push(
     force: bool,
     allow_empty_fleet: bool,
     if_generation: Option<String>,
+    last_known_good: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
     let from_stdin = path == "-";
@@ -73,6 +77,18 @@ pub async fn push(
     })?;
     if targets::strip_retired_resource_declarations(&mut document) {
         payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
+    }
+    // A handover is validated against this host's copy inside it: the store
+    // the other validation reads stands behind the authority that is silent.
+    if last_known_good {
+        let named = source.display().to_string();
+        return crate::cli::registry::handover::push_last_known_good(
+            &document,
+            &payload,
+            &named,
+            json_output,
+        )
+        .await;
     }
     // Ahead of every store call, as it has always been: a document that would
     // not validate never reaches the registry, whatever token it carries.

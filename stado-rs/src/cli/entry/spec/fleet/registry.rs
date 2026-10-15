@@ -46,6 +46,14 @@ pub(crate) enum RegistryCommands {
         /// fleet at all.
         #[arg(long)]
         allow_empty_fleet: bool,
+        /// Write the document into this host's last-known-good registry copy
+        /// instead of the store, while the registry authority does not
+        /// answer: this host's resolver adopts it on its next refresh. Refused
+        /// when the authority answers, when this host is the authority, and
+        /// when the document's service_directory.generation is not above the
+        /// copy's.
+        #[arg(long, conflicts_with_all = ["if_generation", "force", "allow_empty_fleet"])]
+        last_known_good: bool,
         /// Emit a `stado.registry-push-receipt.v1` object instead of the
         /// sentence, for both the write and the refusal.
         #[arg(long)]

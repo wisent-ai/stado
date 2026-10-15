@@ -24,7 +24,7 @@ pub use crate::cli::resolver::serve::serve;
 pub(crate) use report::serving::await_serving;
 
 pub(crate) use crate::cli::resolver::directory::document::{
-    authority_snapshot, last_good_document,
+    authority_snapshot, kept_last_good_document, last_good_document,
 };
 pub(crate) use crate::cli::resolver::directory::source::current_target;
 pub(crate) use crate::cli::resolver::directory::source::snapshot_source;
@@ -168,10 +168,13 @@ pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
 }
 
 fn logical_name(value: &str) -> Result<&str, CmdError> {
-    let value = value
-        .strip_prefix("stado://service/")
-        .unwrap_or(value)
-        .trim();
+    // Both spellings name the service: the bare logical name, and the
+    // stado://service/<name> address a workload uses.
+    let value = match value.strip_prefix("stado://service/") {
+        Some(name) => name,
+        None => value,
+    }
+    .trim();
     if value.is_empty() || value.contains('/') {
         return Err(CmdError::usage(
             "SERVICE must be one logical name or stado://service/<name>",

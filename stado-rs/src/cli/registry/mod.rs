@@ -8,7 +8,7 @@
 //! backend selected by `WC_STORAGE_BACKEND`. This keeps management commands
 //! on the same authority as the coordinator's registry reader.
 //!
-//! [`doctor`](fn@doctor) and [`beacon_age`] source liveness from the host beacons
+//! [`doctor()`] and [`beacon_age`] source liveness from the host beacons
 //! (`monitor/host_health.rs`) and the capacity broadcasts
 //! (`queue/capacity.rs`), never from ssh, so they cost one prefix listing
 //! and are safe to run on a loop.
@@ -34,6 +34,7 @@
 mod beacons;
 mod commands;
 mod doctor;
+mod handover;
 mod write;
 
 pub use crate::cli::registry::beacons::age::beacon_age;
