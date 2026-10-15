@@ -42,7 +42,7 @@ enum NativeRouteOperations {
         .init(id: "beside-list", title: "Read the services this host runs beside their placement", path: ["service", "directory", "beside"], hostPlacement: .none, mutates: false),
         .init(id: "beside-declare", title: "Declare a service this host runs for its own callers beside its placement", path: ["service", "directory", "beside"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),
-            .init(id: "url", label: "Loopback address of this host's own instance (http://127.0.0.1:<port>)", option: "--url", required: true),
+            .init(id: "url", label: "Loopback URL of this host's own instance, with its port", option: "--url", required: true),
         ]),
         .init(id: "beside-withdraw", title: "Take back a service this host declared beside its placement", path: ["service", "directory", "beside"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Service", required: true),
@@ -68,6 +68,9 @@ enum NativeRouteOperations {
             .init(id: "services", label: "Logical services naming one placement profile (one per line)", required: true, multiple: true),
             .init(id: "to_host", label: "Destination host declared by the profile", option: "--to-host", required: true),
         ]),
+        .init(id: "placement-take-authority", title: "Take the registry authority role on this API host while the authority does not answer", path: ["placement", "move"], hostPlacement: .none, fields: [
+            .init(id: "to_host", label: "This API host's registry target (the role is taken where the command runs)", option: "--to-host", required: true),
+        ], fixedArguments: ["--authority"]),
         .init(id: "placement-standby", title: "Prepare a registered host to stand by for a placement profile", path: ["placement", "standby"], hostPlacement: .option("--host"), fields: [
             .init(id: "profile", label: "Placement profile", required: true),
             .init(id: "reason", label: "Why this host must stand by (recorded beside every unit declared)", option: "--reason", required: true),
