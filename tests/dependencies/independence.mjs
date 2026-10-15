@@ -8,8 +8,9 @@ import { journey } from "./fixture.mjs";
 // product the code reaches can have: undeclared, bound, unproven,
 // source-missing and independent, plus an absent checkout and an unknown
 // product. A comment line, a file under tests/, the forge's automation, git's
-// metadata, an example file, a lockfile and a manifest's test target that name
-// the other product are not dependencies. Required: STADO_BIN, the Stado
+// metadata, an example file, a lockfile, a manifest's test target, release
+// tooling and the release manifest an installation declares that name the
+// other product are not dependencies. Required: STADO_BIN, the Stado
 // executable under test.
 await journey(
 	"independence",
@@ -25,14 +26,17 @@ await journey(
 			"tests/calls.rs":
 				'fn t() { let _ = std::process::Command::new("gamma").status(); }\n',
 			// Files the product never runs: the forge's automation, git's
-			// metadata, an example to copy, a lockfile and a manifest's test
-			// target each name gamma without alpha calling it.
+			// metadata, an example to copy, a lockfile, a manifest's test
+			// target, its release tooling and the release manifest its
+			// installation declares each name gamma without alpha calling it.
 			".github/workflows/ci.yml": "env:\n  GAMMA_TOKEN: example\n",
 			".gitignore": ".gamma/\n",
 			".env.example": "GAMMA_URL=\n",
 			"package-lock.json": '{"packages": {"node_modules/gamma": {}}}\n',
 			"Package.swift":
 				'let package = [.testTarget(name: "AlphaTests", path: "tests/gamma")]\n',
+			"Release/bundle/build-app.sh": "gamma sign alpha.app\n",
+			".wisent-release.json": '{"env": {"GAMMA_SIGN_IDENTITY": ""}}\n',
 		});
 		checkout("beta", { "src/main.rs": "fn main() {}\n" });
 

@@ -81,6 +81,19 @@ fn repositories(product: &Value) -> BTreeSet<String> {
         .collect()
 }
 
+/// The release manifests the product's installations declare for
+/// `repository`: how the product is built, not what it runs.
+fn manifests(product: &Value, repository: &str) -> Vec<String> {
+    product["installations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|installation| installation["repository"].as_str() == Some(repository))
+        .filter_map(|installation| installation["manifest"].as_str())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// How many of `sites` reach through each channel.
 fn per_channel(sites: &[Site]) -> BTreeMap<Channel, usize> {
     let mut grouped: BTreeMap<Channel, Vec<&Site>> = BTreeMap::new();
@@ -106,7 +119,8 @@ fn examine(runtime: &Runtime, product: &Value, everyone: &[Names]) -> Result<Rep
         let checkout = runtime.workspace.join(name);
         let present = crate::common::files::present(&checkout.join(".git"))?;
         if present {
-            for (other, found) in scan::sites(&repository, &checkout, &others)? {
+            let release = manifests(product, &repository);
+            for (other, found) in scan::sites(&repository, &checkout, &release, &others)? {
                 sites.entry(other).or_default().extend(found);
             }
         }

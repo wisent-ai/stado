@@ -40,6 +40,10 @@ const LOCKFILES: &[&str] = &[
     "poetry.lock",
     "uv.lock",
 ];
+/// The top-level directory, in any case, where a product keeps how it is
+/// built, signed and published: the catalog's installation recipe runs it,
+/// the product does not.
+const RELEASE_TOOLING: &str = "release";
 /// A shell script, where a program is started by naming it first.
 const SHELL_EXTENSION: &str = "sh";
 /// What a line opens with when it is a comment, in the languages the
@@ -66,8 +70,10 @@ const SUBMODULE_OBJECT: &str = "commit";
 
 /// Whether the tracked file at `path` is something the product never runs:
 /// its tests, prose, the forge's automation, git's metadata, an example to
-/// copy, or a package manager's lockfile.
-fn never_run(path: &str) -> bool {
+/// copy, a package manager's lockfile, its release tooling, or one of
+/// `manifests`, the release manifests the catalog's installations of this
+/// repository declare.
+fn never_run(path: &str, manifests: &[String]) -> bool {
     let file = Path::new(path);
     let named = |names: &[&str]| {
         file.file_name()
@@ -75,6 +81,10 @@ fn never_run(path: &str) -> bool {
             .is_some_and(|name| names.contains(&name))
     };
     path.starts_with(TESTS)
+        || manifests.iter().any(|manifest| manifest == path)
+        || path
+            .split_once('/')
+            .is_some_and(|(first, _)| first.eq_ignore_ascii_case(RELEASE_TOOLING))
         || file
             .components()
             .any(|component| component.as_os_str() == FORGE_AUTOMATION)
@@ -85,9 +95,10 @@ fn never_run(path: &str) -> bool {
             .is_some_and(|extension| extension == PROSE_EXTENSION || extension == EXAMPLE_EXTENSION)
 }
 
-/// Every tracked file of `checkout` that is product code, by path. A
-/// submodule is another repository's code and is not read as this one's.
-fn tracked(checkout: &Path) -> Result<Vec<String>> {
+/// Every tracked file of `checkout` that is product code, by path, leaving
+/// out what [`never_run`] names. A submodule is another repository's code and
+/// is not read as this one's.
+fn tracked(checkout: &Path, manifests: &[String]) -> Result<Vec<String>> {
     let output = capture(Command::new("git").arg("-C").arg(checkout).args([
         "ls-files",
         "-z",
@@ -112,7 +123,7 @@ fn tracked(checkout: &Path) -> Result<Vec<String>> {
                 checkout.display()
             )
         })?;
-        if object == SUBMODULE_OBJECT || never_run(path) {
+        if object == SUBMODULE_OBJECT || never_run(path, manifests) {
             continue;
         }
         files.push(path.to_owned());
@@ -122,16 +133,19 @@ fn tracked(checkout: &Path) -> Result<Vec<String>> {
 }
 
 /// Every line of `repository`'s checkout that reaches one of `others`, by the
-/// other product's id. A file that is not UTF-8 text holds no source line; a
-/// tracked file deleted from the working tree is no longer the product's
-/// code; any other file that cannot be read is refused by name.
+/// other product's id. `manifests` are the release manifests the catalog's
+/// installations of this repository declare, which are not product code. A
+/// file that is not UTF-8 text holds no source line; a tracked file deleted
+/// from the working tree is no longer the product's code; any other file that
+/// cannot be read is refused by name.
 pub fn sites(
     repository: &str,
     checkout: &Path,
+    manifests: &[String],
     others: &[&Names],
 ) -> Result<BTreeMap<String, Vec<Site>>> {
     let mut found: BTreeMap<String, Vec<Site>> = BTreeMap::new();
-    for file in tracked(checkout)? {
+    for file in tracked(checkout, manifests)? {
         let path = checkout.join(&file);
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,

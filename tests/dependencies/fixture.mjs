@@ -70,7 +70,7 @@ export async function journey(name, scope, testFile, body) {
 		);
 		return answer.stdout.trim();
 	}
-	function record(id, dependencies) {
+	function record(id, dependencies, installations) {
 		return {
 			id,
 			name: id,
@@ -83,9 +83,20 @@ export async function journey(name, scope, testFile, body) {
 			roadmap: [],
 			integrations: [],
 			surfaces: [{ kind: "cli", repository: `example-org/${id}` }],
+			...(installations ? { installations } : {}),
 			...(dependencies ? { dependencies } : {}),
 		};
 	}
+	// alpha's one installation declares the release manifest it is built
+	// from, which the instrument reads as how alpha is built, not what it runs.
+	const alphaInstallations = [
+		{
+			surface: "cli",
+			kind: "stado-release",
+			repository: "example-org/alpha",
+			manifest: ".wisent-release.json",
+		},
+	];
 	function catalog(alphaDependencies) {
 		// JSON is YAML, so the catalog file is written as JSON.
 		writeFileSync(
@@ -94,7 +105,7 @@ export async function journey(name, scope, testFile, body) {
 				schema_version: schema,
 				authority: { owner: "stado", rule: "test catalog" },
 				products: [
-					record("alpha", alphaDependencies),
+					record("alpha", alphaDependencies, alphaInstallations),
 					record("beta"),
 					record("gamma"),
 				],
