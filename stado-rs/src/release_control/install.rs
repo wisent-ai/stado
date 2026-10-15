@@ -3,7 +3,10 @@
 
 use std::fs::File;
 use std::io::Read;
+use std::num::NonZeroU64;
 use std::path::{Component, Path, PathBuf};
+
+use nix::sys::stat::Mode;
 
 use crate::release_control::{ProductReleasePolicy, ReleaseManifest, ReleaseTargetPolicy};
 
@@ -42,7 +45,10 @@ pub fn safe_extract_archive_file(
             archive_path.display()
         )
     })?;
-    if !metadata.is_file() || expected_bytes == 0 || metadata.len() != expected_bytes {
+    if !metadata.is_file()
+        || NonZeroU64::new(expected_bytes).is_none()
+        || metadata.len() != expected_bytes
+    {
         return Err("release archive size differs from its signed manifest".to_string());
     }
     safe_extract_archive_reader(file, destination)
@@ -95,11 +101,16 @@ fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<
         let entries = archive
             .entries()
             .map_err(|error| format!("cannot read release archive: {error}"))?;
-        let mut count = 0_u64;
-        let mut extracted_bytes = 0_u64;
-        for entry in entries {
-            count += 1;
-            if count > room.entries {
+        let mut held_entry = false;
+        // What the volume can still take once the files read so far land.
+        let mut bytes_left = room.bytes;
+        for (index, entry) in entries.enumerate() {
+            held_entry = true;
+            // `index` entries came before this one, so this entry is the
+            // `index + 1`th: more than the volume holds once `index` reaches it.
+            let before = u64::try_from(index)
+                .map_err(|error| format!("release entry count does not fit u64: {error}"))?;
+            if before >= room.entries {
                 return Err(format!(
                     "release archive holds more entries than the {} files {} can still hold",
                     room.entries,
@@ -141,18 +152,16 @@ fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<
                 ));
             }
             if kind.is_file() {
-                extracted_bytes = extracted_bytes
-                    .checked_add(entry.header().size().map_err(|error| {
-                        format!("invalid release entry size for {}: {error}", path.display())
-                    })?)
-                    .ok_or_else(|| "release archive expanded size overflowed".to_string())?;
-                if extracted_bytes > room.bytes {
-                    return Err(format!(
+                let size = entry.header().size().map_err(|error| {
+                    format!("invalid release entry size for {}: {error}", path.display())
+                })?;
+                bytes_left = bytes_left.checked_sub(size).ok_or_else(|| {
+                    format!(
                         "release archive expands beyond the {} bytes {} can still hold",
                         room.bytes,
                         parent.display()
-                    ));
-                }
+                    )
+                })?;
             }
             let output = staging.join(&path);
             if kind.is_dir() {
@@ -185,20 +194,43 @@ fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let source_mode = entry.header().mode().unwrap_or(0);
-                let executable = source_mode & 0o111 != 0;
-                let owner_only = source_mode & 0o077 == 0;
+                let archived_mode = entry.header().mode().map_err(|error| {
+                    format!("invalid release entry mode for {}: {error}", path.display())
+                })?;
+                let source_mode = nix::libc::mode_t::try_from(archived_mode)
+                    .map(Mode::from_bits_truncate)
+                    .map_err(|error| {
+                        format!(
+                            "release entry mode {archived_mode:o} for {} is not a file mode: {error}",
+                            path.display()
+                        )
+                    })?;
+                let executable =
+                    source_mode.intersects(Mode::S_IXUSR | Mode::S_IXGRP | Mode::S_IXOTH);
+                let owner_only = !source_mode.intersects(Mode::S_IRWXG | Mode::S_IRWXO);
+                // An executable keeps its sharing; owner-only stays owner-only;
+                // a data file is the owner's alone.
                 let mode = match (executable, owner_only) {
-                    (true, true) => 0o700,
-                    (true, false) => 0o755,
-                    (false, _) => 0o600,
+                    (true, true) => Mode::S_IRWXU,
+                    (true, false) => {
+                        Mode::S_IRWXU
+                            | Mode::S_IRGRP
+                            | Mode::S_IXGRP
+                            | Mode::S_IROTH
+                            | Mode::S_IXOTH
+                    }
+                    (false, _) => Mode::S_IRUSR | Mode::S_IWUSR,
                 };
-                std::fs::set_permissions(&output, std::fs::Permissions::from_mode(mode)).map_err(
-                    |error| format!("cannot set release mode {}: {error}", output.display()),
-                )?;
+                std::fs::set_permissions(
+                    &output,
+                    std::fs::Permissions::from_mode(u32::from(mode.bits())),
+                )
+                .map_err(|error| {
+                    format!("cannot set release mode {}: {error}", output.display())
+                })?;
             }
         }
-        if count == 0 {
+        if !held_entry {
             return Err("release archive is empty".to_string());
         }
         std::fs::rename(&staging, destination).map_err(|error| {
