@@ -3,59 +3,51 @@ set -eu
 
 usage() {
     cat <<'EOF'
-Usage: wisent-restart-app [--if-running] [--timeout SECONDS] APP.app
+Arguments: [--if-running] APP.app
 
 Sends SIGTERM through LaunchServices to the running macOS application identified
-by the bundle's CFBundleIdentifier, waits for it to exit, then launches the
-supplied updated bundle in the background. Without --if-running, a stopped app
-is launched.
+by the bundle's CFBundleIdentifier, waits until its process has exited, then
+launches the supplied updated bundle in the background. Without --if-running, a
+stopped app is launched. The wait has no limit: it is registered in the
+machine's register of open waits for as long as it lasts, so `stado waits`
+names the application this script stands on.
 EOF
 }
 
+refuse() {
+    printf '%s\n' "$*" >/dev/stderr
+    false
+}
+
 only_if_running=false
-timeout=15
-while [ "$#" -gt 0 ]; do
-    case "$1" in
+app_bundle=
+for argument do
+    case "$argument" in
         --if-running)
             only_if_running=true
-            shift
-            ;;
-        --timeout)
-            [ "$#" -ge 2 ] || { printf '%s\n' 'Missing value for --timeout.' >&2; exit 64; }
-            timeout=$2
-            shift 2
             ;;
         -h|--help)
             usage
-            exit 0
-            ;;
-        --)
-            shift
-            break
+            exit
             ;;
         -*)
-            printf 'Unknown option: %s\n' "$1" >&2
-            usage >&2
-            exit 64
+            usage >/dev/stderr
+            refuse "Unknown option: $argument"
             ;;
         *)
-            break
+            [ -z "$app_bundle" ] || { usage >/dev/stderr; refuse "Unexpected argument after $app_bundle: $argument"; }
+            app_bundle=$argument
             ;;
     esac
 done
 
-[ "$#" -eq 1 ] || { usage >&2; exit 64; }
-app_bundle=$1
+[ -n "$app_bundle" ] || { usage >/dev/stderr; refuse 'Missing APP.app: name the application bundle to restart.'; }
 info_plist="$app_bundle/Contents/Info.plist"
-[ -d "$app_bundle" ] || { printf 'Application bundle not found: %s\n' "$app_bundle" >&2; exit 66; }
-[ -f "$info_plist" ] || { printf 'Info.plist not found: %s\n' "$info_plist" >&2; exit 66; }
-case "$timeout" in
-    ''|*[!0-9]*) printf 'Timeout must be a positive integer: %s\n' "$timeout" >&2; exit 64 ;;
-esac
-[ "$timeout" -gt 0 ] || { printf '%s\n' 'Timeout must be greater than zero.' >&2; exit 64; }
+[ -d "$app_bundle" ] || refuse "Application bundle not found: $app_bundle"
+[ -f "$info_plist" ] || refuse "Info.plist not found: $info_plist"
 
 bundle_id=$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$info_plist")
-[ -n "$bundle_id" ] || { printf 'CFBundleIdentifier is empty in %s\n' "$info_plist" >&2; exit 65; }
+[ -n "$bundle_id" ] || refuse "CFBundleIdentifier is empty in $info_plist"
 
 running_asn() {
     /usr/bin/lsappinfo find bundleid="$bundle_id"
@@ -65,28 +57,20 @@ was_running=$(running_asn)
 if [ -z "$was_running" ]; then
     if [ "$only_if_running" = true ]; then
         printf 'Not running; skipped %s (%s)\n' "$app_bundle" "$bundle_id"
-        exit 0
+        exit
     fi
 else
+    pid=$(/usr/bin/lsappinfo info -only pid "$bundle_id" | /usr/bin/sed -n 's/^"pid"=//p')
+    [ -n "$pid" ] || refuse "LaunchServices lists $bundle_id as running ($was_running) but reports no process id for it"
     /usr/bin/lsappinfo kill "$bundle_id" >/dev/null
-    deadline=$(( $(/bin/date +%s) + timeout ))
-    while [ -n "$(running_asn)" ]; do
-        if [ "$(/bin/date +%s)" -ge "$deadline" ]; then
-            printf 'Application did not terminate within %ss: %s\n' "$timeout" "$bundle_id" >&2
-            exit 75
-        fi
-        /bin/sleep 0.1
-    done
+    registered=$(stado waits open --kind proces --what "$bundle_id (pid $pid) to exit" --where LaunchServices --pid "$$")
+    wait_id=$(printf '%s\n' "$registered" | /usr/bin/sed -n '/^registered /{s/^registered //;s/:.*//;p;}')
+    [ -n "$wait_id" ] || refuse "stado waits open answered without a wait id: $registered"
+    printf '%s\n' "$registered" >/dev/stderr
+    /usr/bin/caffeinate -w "$pid"
+    stado waits close "$wait_id" >/dev/stderr
 fi
 
 /usr/bin/open -g "$app_bundle"
-deadline=$(( $(/bin/date +%s) + timeout ))
-while [ -z "$(running_asn)" ]; do
-    if [ "$(/bin/date +%s)" -ge "$deadline" ]; then
-        printf 'Application did not launch within %ss: %s\n' "$timeout" "$app_bundle" >&2
-        exit 75
-    fi
-    /bin/sleep 0.1
-done
-
+[ -n "$(running_asn)" ] || refuse "open launched $app_bundle, but LaunchServices lists no running $bundle_id"
 printf 'Restarted %s (%s)\n' "$app_bundle" "$bundle_id"
