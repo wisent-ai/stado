@@ -36,9 +36,10 @@ pub(super) fn validate_request(
     Ok(())
 }
 
-/// How many requests this window has already allowed.
+/// How many requests this window has already allowed. `usize` is at most 64
+/// bits on every target Rust builds for, so the widening is lossless.
 pub(super) fn used(record: &Record) -> u64 {
-    u64::try_from(record.hits.len()).unwrap_or(u64::MAX)
+    record.hits.len() as u64
 }
 
 pub(super) fn record_id(
@@ -51,6 +52,8 @@ pub(super) fn record_id(
     format!("{client}/{namespace}/{key}/{limit}/{window_ms}")
 }
 
+/// A restored record is refused with the one property it breaks, so the
+/// state file that holds it can be repaired from the sentence alone.
 pub(super) fn validate_record(id: &str, record: &Record) -> Result<(), RateLimitError> {
     let configured = clients()
         .map_err(|error| RateLimitError::State(format!("invalid client policy: {error}")))?;
@@ -63,22 +66,31 @@ pub(super) fn validate_record(id: &str, record: &Record) -> Result<(), RateLimit
         limit: record.limit,
         window_ms: record.window_ms,
     };
-    if validate_request(client, &request).is_err()
-        || record.hits.is_empty()
-        || used(record) > record.limit
-        || NonZeroU64::new(record.reset_at).is_none()
-        || id
-            != record_id(
-                &record.client,
-                &record.namespace,
-                &record.key,
-                record.limit,
-                record.window_ms,
-            )
-    {
-        return Err(RateLimitError::State(format!(
-            "record {id:?} is not canonical"
+    let refused =
+        |why: String| RateLimitError::State(format!("record {id:?} is not canonical: {why}"));
+    validate_request(client, &request).map_err(|error| refused(error.to_string()))?;
+    if record.hits.is_empty() {
+        return Err(refused("it holds no hits".to_string()));
+    }
+    if used(record) > record.limit {
+        return Err(refused(format!(
+            "it holds {} hits over its limit of {}",
+            record.hits.len(),
+            record.limit
         )));
+    }
+    if NonZeroU64::new(record.reset_at).is_none() {
+        return Err(refused("its reset_at is zero".to_string()));
+    }
+    let expected = record_id(
+        &record.client,
+        &record.namespace,
+        &record.key,
+        record.limit,
+        record.window_ms,
+    );
+    if id != expected {
+        return Err(refused(format!("its fields name the record {expected:?}")));
     }
     Ok(())
 }
