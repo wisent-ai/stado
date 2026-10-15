@@ -118,8 +118,11 @@ pub(crate) fn execute_revision(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&evidence, fs::Permissions::from_mode(0o700))?;
-        fs::set_permissions(&scratch, fs::Permissions::from_mode(0o700))?;
+        // Read, write and search for the owner only, as POSIX names the bits.
+        #[allow(clippy::useless_conversion)] // mode_t is u16 on macOS, u32 on Linux
+        let owner_only = fs::Permissions::from_mode(u32::from(libc::S_IRWXU));
+        fs::set_permissions(&evidence, owner_only.clone())?;
+        fs::set_permissions(&scratch, owner_only)?;
     }
     let lockfile = scratch.join("Cargo.lock");
     let mut report = json!({"repository": identity, "manifest_path": manifest, "cargo_version": version,
@@ -127,7 +130,9 @@ pub(crate) fn execute_revision(
         "stado_version": crate::build().version, "stado_source_revision": crate::build().source_revision, "state": "preparing_sources"});
     atomic_json(&evidence.join("result.json"), &report)?;
     let mut stdout = Vec::new();
-    let mut code = 1;
+    // The command fails until Cargo's own success says otherwise; a Cargo
+    // that ran and failed hands on its exit code.
+    let mut code = libc::EXIT_FAILURE;
     let result = (|| -> Result<()> {
         let sources = sources::prepare(runtime, pinned.as_ref(), &manifest, &evidence, &scratch)?;
         report["sources"] = json!(sources.records);
@@ -156,13 +161,18 @@ pub(crate) fn execute_revision(
                 serde_json::to_string(&lockfile)?
             ),
         ]);
+        // Git transports stay off while Cargo fetches and resolves sources
+        // (below, `fetch` and `metadata`). The operation itself runs offline
+        // against the lockfile resolved here, so Cargo fetches nothing in it,
+        // and the program it builds and runs — a test that pushes to a local
+        // bare remote, a command that talks to a Git host — keeps the
+        // caller's transports.
         let command = |operation: &str| {
             let mut command = toolchain_command("cargo");
             command
                 .arg(operation)
                 .args(&options)
                 .current_dir(manifest.parent().unwrap())
-                .env("GIT_ALLOW_PROTOCOL", "")
                 .env("CARGO_NET_OFFLINE", "true")
                 .env("CARGO_RESOLVER_LOCKFILE_PATH", &lockfile)
                 .env("TMPDIR", &scratch);
@@ -189,7 +199,11 @@ pub(crate) fn execute_revision(
         )?;
         report["state"] = json!("resolving_canonical_sources");
         atomic_json(&evidence.join("result.json"), &report)?;
-        let graph = checked(command("metadata").args(["--format-version", "1"]))?;
+        let graph = checked(
+            command("metadata")
+                .args(["--format-version", "1"])
+                .env("GIT_ALLOW_PROTOCOL", ""),
+        )?;
         let graph: Value = serde_json::from_slice(&graph.stdout)?;
         checks::canonical_graph(runtime, pinned.as_ref(), &graph)?;
         atomic_json(&evidence.join("resolved-graph.json"), &graph)?;
@@ -233,7 +247,11 @@ pub(crate) fn execute_revision(
         report["exit_status"] = json!(output.status.code());
         report["process_status"] = json!(output.status.to_string());
         if !output.status.success() {
-            code = output.status.code().unwrap_or(1);
+            // A Cargo ended by a signal has no exit code to hand on: the
+            // command fails, and process_status above names the signal.
+            if let Some(exit) = output.status.code() {
+                code = exit;
+            }
             let named: Vec<String> = found.iter().map(ToString::to_string).collect();
             bail!(
                 "Cargo {operation} failed ({}){}",
@@ -247,7 +265,7 @@ pub(crate) fn execute_revision(
         report["state"] = json!("verifying_source_identity");
         atomic_json(&evidence.join("result.json"), &report)?;
         checks::sources_unchanged(&sources.records, &evidence, &scratch)?;
-        code = 0;
+        code = libc::EXIT_SUCCESS;
         Ok(())
     })();
     let cleanup = fs::remove_dir_all(&scratch)
@@ -261,8 +279,8 @@ pub(crate) fn execute_revision(
     };
     report["completed_at"] = json!(now());
     if let Err(error) = &result {
-        if code == 0 {
-            code = 1;
+        if code == libc::EXIT_SUCCESS {
+            code = libc::EXIT_FAILURE;
         }
         report["failed_operation"] = report["state"].clone();
         report["state"] = json!("failed");
