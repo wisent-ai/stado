@@ -92,10 +92,20 @@ pub(super) async fn fail_queued(
 /// line to be explained.
 pub(super) async fn relinquish(leases: &ProviderLeaseStore, lease: Option<ProviderLease>) {
     let Some(mut lease) = lease else { return };
-    // A lease whose owner is already gone (or whose stored owner fields no
-    // longer parse) has nothing to release.
-    if lease.owner_expired().unwrap_or(true) {
-        return;
+    // A lease whose owner is already gone has nothing to release. One whose
+    // stored owner fields no longer parse cannot be released either, and that
+    // is said like any other failed release: it stays held until it expires.
+    match lease.owner_expired() {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            let text = error.to_string().replace(['\r', '\n'], " ");
+            eprintln!(
+                "[box] provider lease owned by {} was not released: its owner fields do not parse: {text}",
+                lease.owner_id
+            );
+            return;
+        }
     }
     let (owner, token) = (lease.owner_id.clone(), lease.fence_token.clone());
     let result: Result<(), BoxDispatchError> = async {
