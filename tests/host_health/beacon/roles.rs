@@ -124,3 +124,50 @@ fn a_second_serve_of_the_same_role_is_refused_and_a_stray_is_ended_by_the_health
     );
     deployment.pass();
 }
+
+/// A beacon collected by hand reads the role register and ends nothing. Run
+/// under a HOME of its own, as a test or a second account runs it, it finds
+/// no role lock for this deployment's host process, so that process is one
+/// it would take for a stray: it is named under `unended_strays` and is
+/// still running after the collection.
+#[test]
+fn a_collection_run_by_hand_names_strays_and_ends_none() {
+    let mut deployment = Deployment::start();
+    deployment.serve();
+    let resident = deployment.child.as_ref().expect("the host process").id();
+    let reader_home = deployment.root.join("reader");
+    fs::create_dir_all(reader_home.join(".stado")).unwrap();
+    let collected = deployment
+        .command()
+        .env("HOME", &reader_home)
+        .args(["host", "beacon", "collect"])
+        .output()
+        .expect("the collection starts");
+    let said = String::from_utf8_lossy(&collected.stderr).into_owned();
+    deployment.report["collection_by_hand"] = json!({
+        "exit_status": collected.status.code(),
+        "stdout": String::from_utf8_lossy(&collected.stdout),
+        "stderr": said,
+    });
+    assert!(
+        collected.status.success(),
+        "stado host beacon collect: {said}"
+    );
+    let beacon: Value =
+        serde_json::from_slice(&collected.stdout).expect("the printed beacon is JSON");
+    assert!(
+        beacon["roles"]["unended_strays"]
+            .as_array()
+            .is_some_and(|found| found.iter().any(|stray| stray["pid"] == resident)),
+        "the host process, unaccounted for under the reader's HOME, is not named: {beacon}"
+    );
+    assert!(
+        beacon["roles"].get("ended_strays").is_none(),
+        "a collection by hand reported ending strays: {beacon}"
+    );
+    assert!(
+        alive(resident),
+        "the host process was ended by a collection run by hand"
+    );
+    deployment.pass();
+}

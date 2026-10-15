@@ -20,6 +20,11 @@ use crate::deploy::service::{
 };
 use crate::deploy::service_label_print::{inspect_label_carrying, LabelState};
 
+#[path = "acting.rs"]
+mod acting;
+
+use acting::{answering_entry, roles_and_strays, Strays};
+
 /// Read one declared identity's state the way an operator would read it, and
 /// keep the reason when the answer is not a state.
 fn unit_entry(state: &LabelState) -> Value {
@@ -73,9 +78,11 @@ fn unit_entry(state: &LabelState) -> Value {
 /// beacon from the registry's declarations and the init system's answers.
 ///
 /// Without `--publish` the document is printed and nothing is sent, so the
-/// collection can be read on a host that holds no beacon grant.
+/// collection can be read on a host that holds no beacon grant. Either way
+/// the role strays it finds are named under `roles.unended_strays` and left
+/// running: only the host process's own health pass ends them.
 pub async fn collect_beacon(publish: bool) -> Result<(), CmdError> {
-    let document = collect_document().await?;
+    let document = collect_document(Strays::Report).await?;
     super::publish_document(document, !publish).await
 }
 
@@ -97,7 +104,7 @@ pub async fn collect_beacons_every(period: std::time::Duration) -> Result<(), Cm
         // Every collection runs to completion. A delayed pass skips obsolete
         // scheduled ticks instead of cancelling work or bursting repeated probes.
         let started = std::time::Instant::now();
-        let collected = collect_document().await;
+        let collected = collect_document(Strays::End).await;
         // How long this collection took: the part of the next beacon's
         // promise the period alone does not cover, since the next one is
         // published only once its own collection finishes.
@@ -136,7 +143,7 @@ pub async fn collect_beacons_every(period: std::time::Duration) -> Result<(), Cm
     }
 }
 
-async fn collect_document() -> Result<Value, CmdError> {
+async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
     let hostname = crate::providers::vast::system_hostname();
     let target = crate::providers::local::agent::lookup_self_auto(&hostname)
         .await
@@ -237,7 +244,7 @@ async fn collect_document() -> Result<Value, CmdError> {
     let home = crate::config_file::expand_tilde("~");
     if let Ok(free) = crate::providers::local::space_reclaim::free_bytes(&home) {
         if let Some(object) = document.as_object_mut() {
-            let free_gb = free / i64::from(1024).pow(3);
+            let free_gb = free / crate::providers::local::space_reclaim::GIB;
             object.insert("disk_avail_gb".to_string(), json!(free_gb));
             object.insert(
                 "disk".to_string(),
@@ -259,10 +266,10 @@ async fn collect_document() -> Result<Value, CmdError> {
         // One process per role: the roles held on this host now, and the
         // Stado role processes nothing accounts for — a second copy of a
         // role, a build run from a checkout, a program since removed, a
-        // retired command — ended in this pass and published as such, so a
-        // stray never outlives one beacon and the register says what ran
-        // beside the declared units rather than `active` from an old read.
-        object.insert("roles".to_string(), roles_and_strays(&home)?);
+        // retired command. The health pass ends them and publishes them as
+        // ended, so a stray never outlives one beacon; a collection run by
+        // hand names them and ends none.
+        object.insert("roles".to_string(), roles_and_strays(&home, strays)?);
     }
     // The services of other hosts that hold this host's requests past the
     // bound, recovered from here when their own host did not act.
@@ -271,84 +278,4 @@ async fn collect_document() -> Result<Value, CmdError> {
         object.insert("peer_recoveries".to_string(), peers);
     }
     Ok(document)
-}
-
-fn roles_and_strays(home: &std::path::Path) -> Result<Value, CmdError> {
-    let held: Vec<Value> = crate::deploy::role_lock::holders(home)?
-        .into_iter()
-        .map(|holder| {
-            json!({
-                "role": holder.role,
-                "pid": holder.pid,
-                "program": holder.program,
-                "since": holder.since,
-            })
-        })
-        .collect();
-    let strays = crate::deploy::role_lock::strays(home)?;
-    let ended = crate::deploy::role_lock::end_strays(&strays)?;
-    for stray in &ended {
-        eprintln!(
-            "[stado serve host-health] ended stray pid {} ({}), running {}: {}",
-            stray.pid, stray.command, stray.running_for, stray.detail
-        );
-    }
-    Ok(json!({
-        "held": held,
-        "ended_strays": ended,
-    }))
-}
-
-/// The `answering` block of one unit: the declared question asked at the
-/// service's recorded listen port, the reading of it against the
-/// resolver's declared refresh interval, and, for a service that stands,
-/// the recovery this pass ran. `None` for a service whose catalog entry
-/// declares no question. A port the directory does not record, or a
-/// resolver that declares no interval, is said in the block instead of
-/// being guessed.
-async fn answering_entry(
-    hostname: &str,
-    target: &crate::targets::ComputeTarget,
-    service: &crate::deploy::service::ManagedService,
-    unit: &str,
-) -> Option<Value> {
-    let entry = match crate::deploy::service_catalog::lookup(&service.name) {
-        Ok(Some(entry)) => entry,
-        Ok(None) => return None,
-        Err(error) => return Some(json!({ "unreadable": error })),
-    };
-    entry.answering.as_ref()?;
-    let port = match crate::cli::directory::recorded_listen_port(&entry, &target.name).await {
-        Ok(Some(port)) => port,
-        Ok(None) => {
-            return Some(json!({
-                "unreadable": format!("the service directory records no listen port for {} on {hostname}", entry.name)
-            }))
-        }
-        Err(error) => return Some(json!({ "unreadable": error.to_string() })),
-    };
-    let bound_seconds = match crate::cli::resolver::declared_bound_seconds() {
-        Ok(Some(seconds)) => seconds,
-        Ok(None) => {
-            return Some(json!({
-                "unreadable": "this host's resolver declares no directory refresh interval, the bound a standing question is judged by"
-            }))
-        }
-        Err(unreadable) => return Some(json!({ "unreadable": unreadable })),
-    };
-    let reading = crate::deploy::service_answering::ask_and_read(&entry, port, bound_seconds)?;
-    let mut block = reading.document();
-    if reading.stands() {
-        let home = crate::config_file::expand_tilde("~");
-        let recovered = crate::deploy::service_answering::recover::recover(
-            &home, hostname, &entry, unit, &reading, None,
-        )
-        .await;
-        crate::deploy::service_answering::forget(&entry.name);
-        block["recovery"] = match recovered {
-            Ok(record) => record,
-            Err(error) => json!({ "refusal": error.to_string() }),
-        };
-    }
-    Some(block)
 }
