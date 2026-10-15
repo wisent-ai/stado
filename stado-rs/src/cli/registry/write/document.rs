@@ -118,7 +118,7 @@ pub async fn push_document_if(
         .map_err(|error| CmdError::click(error).stating(FailureCode::Config))?;
     let document: &Value = match renamed.as_ref() {
         Some(rewritten) => rewritten,
-        None => &*canonical,
+        None => &canonical,
     };
     warn_scoped_validation(validate_for_write(document).await?);
     let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
