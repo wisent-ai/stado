@@ -1,7 +1,6 @@
 //! The installation operation a product surface's lock stands for: which one
-//! runs and in what step (`stado product status`), ending it through its
-//! owner (`stado product cancel`), and the after-install steps that run
-//! without the lock.
+//! runs and in what step (`stado product status`), and the after-install
+//! steps that run without the lock.
 //!
 //! An installation holds `<products>/<product>/<surface>.lock` while it
 //! builds, places and records its files, and writes into it who holds it, in
@@ -16,11 +15,9 @@
 //! meanwhile.
 
 mod after;
-mod cancel;
 mod perform;
 mod prerequisites;
 pub(in crate::install) use after::{after_install, lock_surface};
-pub use cancel::cancel;
 pub use perform::perform;
 
 use anyhow::{Context, Result};
@@ -113,11 +110,23 @@ pub fn running(runtime: &Runtime, id: &str, surface: &str) -> Result<Value> {
     if let Some(held) = holder(&lock)? {
         return Ok(held);
     }
+    Ok(match post_placement(runtime, id, surface)? {
+        Some(operation) => operation,
+        None => Value::Null,
+    })
+}
+
+/// The after-install steps the surface's receipt records as running
+/// (`after_install_running`), with whether the process table still names the
+/// recorded PID with the recorded birth time; `None` when the receipt records
+/// none.
+fn post_placement(runtime: &Runtime, id: &str, surface: &str) -> Result<Option<Value>> {
+    let lock = state::path(runtime, id, surface)?.with_extension("lock");
     let Some(receipt) = ProductState::load(runtime, id, surface)? else {
-        return Ok(Value::Null);
+        return Ok(None);
     };
     let Some(marker) = receipt.extra.get("after_install_running") else {
-        return Ok(Value::Null);
+        return Ok(None);
     };
     let pid = i32::try_from(
         marker["pid"]
@@ -132,7 +141,43 @@ pub fn running(runtime: &Runtime, id: &str, surface: &str) -> Result<Value> {
     report["running"] = json!(observed.as_deref() == Some(expected));
     report["phase"] = json!("after_install");
     report["lock"] = json!(lock.display().to_string());
-    Ok(report)
+    Ok(Some(report))
+}
+
+/// An installation that placed its files lets go of the lock while its
+/// after-install steps run, so a newer installation of the same surface takes
+/// the lock at once; that is where it supersedes the older one too. Once this
+/// process holds the lock, an older installation the receipt records as
+/// running its after-install steps, whose PID the process table still names
+/// with the recorded birth time, is told to stop with its children, each said
+/// on stderr, so its steps (a converge of the readers of the binary it
+/// placed) do not finish after this installation's own. A recorded PID with
+/// another birth time is another process, and nothing is signalled.
+pub(super) fn stop_after_install(runtime: &Runtime, id: &str, surface: &str) -> Result<()> {
+    let Some(operation) = post_placement(runtime, id, surface)? else {
+        return Ok(());
+    };
+    if operation["running"] != true {
+        return Ok(());
+    }
+    let pid = i32::try_from(
+        operation["pid"]
+            .as_i64()
+            .context("after-install operation names no pid")?,
+    )?;
+    eprintln!(
+        "superseding the installation of {id}/{surface} by pid {pid}: it is running its after-install steps {}",
+        operation["steps"]
+    );
+    for told in children(pid)?
+        .into_iter()
+        .map(|(child, _)| child)
+        .chain([pid])
+        .map(stop)
+    {
+        eprintln!("  {told}");
+    }
+    Ok(())
 }
 
 /// The direct children of `pid` with their command lines, as the process

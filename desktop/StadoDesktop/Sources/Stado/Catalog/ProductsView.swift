@@ -25,49 +25,53 @@ struct ProductsView: View {
             scrolls: false,
             constrainsWidth: false
         ) {
-            VStack(spacing: 0) {
-                if let failure = store.failure {
-                    WisentErrorBanner(title: "Product catalog unavailable", detail: failure)
-                        .padding(WisentDesign.Space.x4)
-                }
-                if store.products.isEmpty {
-                    if store.isRefreshing {
-                        Group {
-                            let loadingTitle = "Reading products"
-                            WisentSectionBox(title: loadingTitle, detail: "The canonical Wisent product catalog is read through stado product catalog.") {
-                                WisentSkeletonList(label: loadingTitle)
+            // The operator sizes each pane by its divider: the product
+            // table against its inspector, and both against the operations.
+            VSplitView {
+                VStack {
+                    if let failure = store.failure {
+                        WisentErrorBanner(title: "Product catalog unavailable", detail: failure)
+                            .padding(WisentDesign.Space.x4)
+                    }
+                    if store.products.isEmpty {
+                        if store.isRefreshing {
+                            Group {
+                                let loadingTitle = "Reading products"
+                                WisentSectionBox(title: loadingTitle, detail: "The canonical Wisent product catalog is read through stado product catalog.") {
+                                    WisentSkeletonList(label: loadingTitle)
+                                }
                             }
+                                .padding(WisentDesign.Space.x6)
+                        } else {
+                            WisentEmptyPanel(title: "No product catalog", detail: "The selected Stado API host answered with no products; it may run a Stado older than 0.22.0, which read the catalog from another program.", symbol: "shippingbox")
+                                .padding(WisentDesign.Space.x6)
                         }
-                            .padding(WisentDesign.Space.x6)
+                        Spacer()
                     } else {
-                        WisentEmptyPanel(title: "No product catalog", detail: "The selected Stado API host answered with no products; it may run a Stado older than 0.22.0, which read the catalog from another program.", symbol: "shippingbox")
-                            .padding(WisentDesign.Space.x6)
-                    }
-                    Spacer()
-                } else {
-                    HStack(spacing: 0) {
-                        productList
-                        inspector
+                        HSplitView {
+                            productList
+                            inspector
+                        }
                     }
                 }
-                Divider()
-                ScrollView {
-                    ProductLocksView(locks: store.locks, failure: store.lockFailure)
-                        .padding(WisentDesign.Space.x4)
-                    NativeCapabilityActions(host: scope, fleet: fleetStore,
-                        operations: NativeProductOperations.all)
-                        .disabled(!fleetStore.isConfigured)
-                        .padding(WisentDesign.Space.x4)
+                VStack {
+                    ScrollView {
+                        ProductLocksView(locks: store.locks, failure: store.lockFailure)
+                            .padding(WisentDesign.Space.x4)
+                        NativeCapabilityActions(host: scope, fleet: fleetStore,
+                            operations: NativeProductOperations.all)
+                            .disabled(!fleetStore.isConfigured)
+                            .padding(WisentDesign.Space.x4)
+                    }
+                    WisentMutationBar(outcome: store.mutation) { store.clearMutation() }
+                        .padding(.horizontal, WisentDesign.Space.x4)
+                        .padding(store.mutation == .idle ? [] : .bottom, WisentDesign.Space.x3)
                 }
-                .frame(maxHeight: ProductsLayout.operationsHeight)
-                WisentMutationBar(outcome: store.mutation) { store.clearMutation() }
-                    .padding(.horizontal, WisentDesign.Space.x4)
-                    .padding(.bottom, store.mutation == .idle ? 0 : WisentDesign.Space.x3)
             }
         }
         .sheet(item: $decision) { value in decisionDialog(value) }
         .task {
-            if selectedHost.isEmpty { selectedHost = fleetStore.targets.first?.name ?? "" }
+            if selectedHost.isEmpty, let first = fleetStore.targets.first { selectedHost = first.name }
             if store.products.isEmpty { await store.refresh() }
             else { await store.refreshLocks() }
         }
@@ -75,14 +79,14 @@ struct ProductsView: View {
 
     private var productList: some View {
         ConsoleTable(head: [
-            ConsoleHeaderCell("Product", width: 180),
-            ConsoleHeaderCell("Surfaces", width: 170),
+            ConsoleHeaderCell("Product"),
+            ConsoleHeaderCell("Surfaces"),
             ConsoleHeaderCell("Description"),
         ]) {
             ForEach(store.products) { product in
                 ConsoleTableRow(isSelected: selection == product.id, select: { selection = product.id }) {
-                    ConsoleCell(text: product.name, width: 180, identifier: true, strong: true)
-                    ConsoleCell(text: product.installations.map(\.surface).joined(separator: ", "), width: 170)
+                    ConsoleCell(text: product.name, identifier: true, strong: true)
+                    ConsoleCell(text: product.installations.map(\.surface).joined(separator: ", "))
                     ConsoleCell(text: product.description)
                 }
             }
@@ -203,13 +207,10 @@ struct ProductsView: View {
                         .textSelection(.enabled)
                 }
                 HStack {
-                    action("Install", symbol: "arrow.down.circle", product, installation, host)
-                    action("Update", symbol: "arrow.triangle.2.circlepath", product, installation, host)
-                    action("Rollback", symbol: "arrow.uturn.backward", product, installation, host)
-                    action("Remove", symbol: "trash", product, installation, host, destructive: true)
-                    if state?.operation?.running == true {
-                        action("Cancel", symbol: "xmark.circle", product, installation, host, destructive: true)
-                    }
+                    action("Install", symbol: "arrow.down.circle", product, installation, host, pinsRelease: true)
+                    action("Update", symbol: "arrow.triangle.2.circlepath", product, installation, host, pinsRelease: true)
+                    action("Rollback", symbol: "arrow.uturn.backward", product, installation, host, pinsRelease: false)
+                    action("Remove", symbol: "trash", product, installation, host, pinsRelease: false, destructive: true)
                 }
                 ProductPrerequisitesView(store: store, product: product.id,
                     surface: installation.surface, host: host,
@@ -229,6 +230,7 @@ struct ProductsView: View {
         _ product: ProductCatalogEntry,
         _ installation: ProductInstallation,
         _ host: String?,
+        pinsRelease: Bool,
         destructive: Bool = false
     ) -> some View {
         WisentActionButton(
@@ -236,10 +238,9 @@ struct ProductsView: View {
                 verb,
                 symbol: symbol,
                 kind: destructive ? .plain : .secondary,
-                isEnabled: !store.mutation.isWorking && (installation.surface != "service" || !(host ?? "").isEmpty)
+                isEnabled: !store.mutation.isWorking && (installation.surface != "service" || host?.isEmpty == false)
             ) {
-                let exact = installation.surface == "cli" && installation.kind == "stado-release"
-                    && (verb == "Install" || verb == "Update")
+                let exact = pinsRelease && installation.surface == "cli" && installation.kind == "stado-release"
                 let version = releaseVersions[product.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                 let commit = sourceCommits[product.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                 decision = ProductDecision(
@@ -262,7 +263,7 @@ struct ProductsView: View {
                 value.releaseVersion == nil && value.sourceCommit == nil
                     ? "Stado executes the canonical recipe from its product catalog."
                     : "Stado verifies the signed published release and its accepted source. It does not compile or re-sign its bytes. Both coordinates are required.",
-                value.surface == "service" ? "The service lifecycle is delegated back to Stado on \(value.host ?? "the selected host")." : "The installation is local to this Mac and its previous state is retained for rollback.",
+                placement(value),
                 value.withPrerequisites ? "Qualified provider revisions in the plan are installed before this product." : "Missing verb prerequisites are refused rather than installed implicitly.",
             ],
             listing: [StadoCLI.commandLine(ProductsStore.lifecycleArguments(
@@ -285,11 +286,13 @@ struct ProductsView: View {
             ]
         )
     }
-}
 
-
-private enum ProductsLayout {
-    /// Room for the catalog, provisioning, reconciliation, compiler and
-    /// documentation operations under the product table.
-    static let operationsHeight: CGFloat = 220
+    /// Where the decision acts: a service surface carries the host it is
+    /// delegated to; every other surface carries none and is this Mac's.
+    private func placement(_ value: ProductDecision) -> String {
+        if let host = value.host {
+            return "The service lifecycle is delegated back to Stado on \(host)."
+        }
+        return "The installation is local to this Mac and its previous state is retained for rollback."
+    }
 }

@@ -42,6 +42,7 @@ function status() {
 }
 
 let installing;
+let newer;
 let failure;
 try {
   const source = spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
@@ -109,24 +110,42 @@ try {
   assert.equal(surfaceLock?.held, false,
     `after-install convergence must not hold the surface lock: ${JSON.stringify(surfaceLock)}`);
   report.surfaceLock = surfaceLock;
-  const cancelled = JSON.parse(succeeded(run(['product', 'cancel', 'stado', '--surface', 'cli', '--json'])));
-  assert.equal(cancelled.cancelled.operation.pid, operation.pid);
-  assert.ok(cancelled.cancelled.signalled.some(signal => signal.pid === operation.pid && signal.told_to_stop));
-  report.cancellation = cancelled;
+  // A newer installation of the same surface supersedes the holder past
+  // placement: the holder and its after-install children are told to stop,
+  // and the newer one installs and converges to its end.
+  newer = spawn(program, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  const second = { executable: program, arguments: args, stdout: '', stderr: '' };
+  report.commands.push(second);
+  newer.stdout.on('data', chunk => { second.stdout += chunk; });
+  newer.stderr.on('data', chunk => { second.stderr += chunk; });
+  const newerExit = once(newer, 'exit').then(([code, signal]) => {
+    second.exit_status = code;
+    second.signal = signal;
+    return { code, signal };
+  });
+  await Promise.race([
+    new Promise((resolve, reject) => {
+      newer.stderr.on('data', () => {
+        if (second.stderr.includes(`superseding the installation of stado/cli by pid ${operation.pid}: it is running its after-install steps`)) resolve();
+      });
+      newer.on('error', reject);
+    }),
+    newerExit.then(result => { throw new Error(`the newer install ended without superseding: ${JSON.stringify(result)} ${second.stderr}`); }),
+  ]);
   const ended = await exit;
-  assert.ok(ended.code || ended.signal, 'a cancelled real install must not report success');
+  assert.ok(ended.code || ended.signal, 'a superseded real install must not report success');
+  const finished = await newerExit;
+  assert.ok(!finished.code && !finished.signal, `the superseding install failed: ${second.stderr}`);
   const after = status();
-  assert.equal(after.operation.running, false, 'the operation no longer owns the recorded process');
+  assert.ok(!after.operation?.running, `no installation operation stands once the newer one ended: ${JSON.stringify(after.operation)}`);
   report.after = after;
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);
   failure = error;
 } finally {
-  if (installing && installing.exitCode === null && installing.signalCode === null) {
-    const cleanup = run(['product', 'cancel', 'stado', '--surface', 'cli', '--json']);
-    report.cleanup = { exit_status: cleanup.status, stderr: cleanup.stderr, stdout: cleanup.stdout };
-    if (cleanup.status || cleanup.error) installing.kill('SIGTERM');
+  for (const child of [installing, newer]) {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
   }
   report.finished_at = new Date().toISOString();
   writeFileSync(join(output, 'report.json'), `${JSON.stringify(report)}\n`);

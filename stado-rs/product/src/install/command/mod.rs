@@ -109,7 +109,6 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
             report["operation"] = super::operation::running(runtime, id, surface)?;
             report
         }
-        "cancel" => super::operation::cancel(runtime, id, surface)?,
         "install" => build(runtime)?,
         "update" => build(runtime)?,
         "finish" => build(runtime)?,

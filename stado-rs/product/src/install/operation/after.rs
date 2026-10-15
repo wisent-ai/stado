@@ -11,18 +11,24 @@ use std::path::Path;
 use crate::common::Runtime;
 use crate::state::ProductState;
 
-/// The surface's lock for an installation of `recipe`: an older holder past
-/// placement is stopped first (`stop_past_placement`), unless the caller
+/// The surface's lock for an installation of `recipe` on `(id, surface)`: an
+/// older holder past placement is stopped first (`stop_past_placement`), and
+/// once the lock is held an older installation still running its after-install
+/// steps without it is stopped too (`stop_after_install`), unless the caller
 /// asked to wait for whatever holds it (`--wait`).
 pub(in crate::install) fn lock_surface(
     runtime: &Runtime,
+    (id, surface): (&str, &str),
     lock: &Path,
     recipe: &Value,
 ) -> Result<File> {
-    if !runtime.wait_for_writer {
-        super::stop_past_placement(lock, recipe)?;
+    if runtime.wait_for_writer {
+        return runtime.surface_lock(lock);
     }
-    runtime.surface_lock(lock)
+    super::stop_past_placement(lock, recipe)?;
+    let writer = runtime.surface_lock(lock)?;
+    super::stop_after_install(runtime, id, surface)?;
+    Ok(writer)
 }
 
 /// The installation recorded in `installed` has placed and recorded its
@@ -54,15 +60,6 @@ pub(in crate::install) fn after_install(
     let outcomes = super::super::after_install::run(id, surface, host, steps, installed);
     let writer = runtime.surface_lock(lock)?;
     let current = ProductState::load(runtime, id, surface)?;
-    if let Some(cancelled) = current
-        .as_ref()
-        .and_then(|state| state.extra.get("cancelled"))
-        .filter(|value| value["operation"] == installed.extra["after_install_running"])
-    {
-        installed
-            .extra
-            .insert("cancelled".to_owned(), cancelled.clone());
-    }
     if serde_json::to_value(&current)? != serde_json::to_value(Some(&*installed))? {
         bail!(
             "another installation of {id}/{surface} recorded itself while this one's after-install steps \

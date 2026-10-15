@@ -77,7 +77,7 @@ pub fn perform(
             runtime, document, product, surface, &revision, &enclosing,
         )?;
         let lock = state::path(runtime, id, surface)?.with_extension("lock");
-        let writer = operation::lock_surface(runtime, &lock, selected)?;
+        let writer = operation::lock_surface(runtime, (id, surface), &lock, selected)?;
         let existing = ProductState::load(runtime, id, surface)?;
         let request = plan::planning::Request {
             runtime,

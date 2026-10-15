@@ -97,8 +97,7 @@ pub fn installation(action: &'static str, about: &'static str, shape: Shape) -> 
 }
 
 /// The verbs that read or change one installation without building it:
-/// `status` (with the operation holding its lock), `cancel` (ends that
-/// operation through its owner), `remove` and `rollback`.
+/// `status` (with the operation holding its lock), `remove` and `rollback`.
 pub fn changes() -> Vec<Command> {
     vec![
         installation(
@@ -106,13 +105,6 @@ pub fn changes() -> Vec<Command> {
             "Inspect recorded installation, source, signatures, actual readiness and the operation \
              holding its lock, with its step",
             Shape::Reads,
-        ),
-        installation(
-            "cancel",
-            "End the installation operation holding a product surface's lock: its owner and the \
-             step it runs are told to stop, the lock is waited for until it is let go, and the \
-             receipt records the cancelled operation and its step",
-            Shape::Changes,
         ),
         installation("remove", "Remove only owned paths and the declared service surface", Shape::Changes),
         installation("rollback", "Restore exact retained installation bytes without rebuilding", Shape::Changes),
@@ -187,10 +179,10 @@ pub fn signing() -> Command {
     Command::new("signing").about("Inspect and preserve stable Apple native code identity")
         .subcommand_required(true).arg_required_else_help(true)
         .subcommand(Command::new("inspect").about("Inspect actual signatures on files or bundles")
-            .arg(positional("PATH").num_args(1..).required(true)).arg(flag("json", "Print signature observations"))
+            .arg(positional("PATH").action(ArgAction::Append).required(true)).arg(flag("json", "Print signature observations"))
             .arg(flag("entitlements", "Read the actual signed entitlement dictionary")))
         .subcommand(Command::new("sign").about("Sign staged code and atomically replace only verified targets")
-            .arg(positional("PATH").num_args(1..).required(true))
+            .arg(positional("PATH").action(ArgAction::Append).required(true))
             .arg(value("product", "Product whose stable code identity is preserved"))
             .arg(value("identifier", "Exact identifier for one signing target"))
             .group(ArgGroup::new("code-identity").args(["product", "identifier"]).required(true).multiple(true))

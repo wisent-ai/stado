@@ -6,20 +6,19 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Real journey of an installation operation that holds a product surface's
-// lock, as another installation, `stado product status` and `stado product
-// cancel` see it. The Stado under test runs with HOME set to an isolated
-// directory under .build, so the receipts and locks it writes are never the
-// person's; the workspace is the real one, read for the product's checkout.
+// lock, as another installation and `stado product status` see it. The Stado
+// under test runs with HOME set to an isolated directory under .build, so the
+// receipts and locks it writes are never the person's; the workspace is the
+// real one, read for the product's checkout.
 //
 // 1. A source install of STADO_PRODUCT_TEST_PRODUCT (cli surface) at
 //    STADO_PRODUCT_TEST_COMMIT starts; `status --json` names it under
 //    `operation`: its pid, command, since when, phase and step.
-// 2. A second install of the same surface with --wait names that holder on
+// 2. A second install of the same request with --wait names that holder on
 //    stderr while it waits: pid, `running`, and the step.
-// 3. `cancel --json` ends the first through its owner: it names the holder
-//    and each process it told to stop; the first install's process ends; the
-//    receipt records `cancelled` with the holder's step.
-// 4. A second `cancel` is refused: nothing holds the surface.
+// 3. A newer installation, of the commit before it, supersedes the holder
+//    while it prepares: it says so on stderr, the holder ends on the stop it
+//    was told, and the newer one holds the surface's lock in its place.
 // Required: STADO_BIN, STADO_PRODUCT_TEST_PRODUCT, STADO_PRODUCT_TEST_SOURCE.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const product = process.env.STADO_PRODUCT_TEST_PRODUCT;
@@ -28,7 +27,7 @@ const stado = process.env.STADO_BIN;
 assert.ok(stado && product && source,
   'STADO_BIN, STADO_PRODUCT_TEST_PRODUCT and STADO_PRODUCT_TEST_SOURCE are required');
 mkdirSync(join(root, '.build'), { recursive: true });
-const output = mkdtempSync(join(realpathSync(join(root, '.build')), 'product-held-cancel-'));
+const output = mkdtempSync(join(realpathSync(join(root, '.build')), 'product-held-supersede-'));
 const workspace = dirname(realpathSync(source));
 const home = join(output, 'home');
 mkdirSync(join(home, '.stado'), { recursive: true });
@@ -45,6 +44,7 @@ function success(answer) {
   assert.ok(!answer.status && !answer.signal && !answer.error, answer.stderr || answer.error?.message || answer.signal);
   return answer.stdout.trim();
 }
+const children = [];
 function started(program, args) {
   const child = spawn(program, args, { cwd: root, env });
   const kept = { program, arguments: args, pid: child.pid, stderr: '' };
@@ -54,7 +54,13 @@ function started(program, args) {
     done(kept);
   }));
   report.commands.push(kept);
+  children.push(child);
   return { child, kept };
+}
+async function said(started, text) {
+  while (!started.kept.stderr.includes(text)) {
+    await new Promise(next => started.child.stderr.once('data', next));
+  }
 }
 let failure;
 try {
@@ -63,6 +69,7 @@ try {
   const binary = resolve(stado);
   report.stado = { path: binary, sha256: digest(readFileSync(binary)), version: success(run(binary, ['--version'])) };
   const commit = process.env.STADO_PRODUCT_TEST_COMMIT || success(run('git', ['-C', source, 'rev-parse', 'origin/main']));
+  const earlier = success(run('git', ['-C', source, 'rev-parse', `${commit}^`]));
   const lifecycle = verb => ['product', '--workspace', workspace, verb, product, '--surface', 'cli'];
   const install = [...lifecycle('install'), '--source-commit', commit];
 
@@ -77,32 +84,32 @@ try {
   assert.ok(operation.acquired_at && operation.command.includes('install'), JSON.stringify(operation));
 
   const second = started(binary, [...install, '--wait']);
-  while (!second.kept.stderr.includes(`held by pid ${first.child.pid} (running)`)) {
-    await new Promise(next => second.child.stderr.once('data', next));
-  }
+  await said(second, `held by pid ${first.child.pid} (running)`);
   assert.match(second.kept.stderr, /in step /, 'the waiting install does not name the holder\'s step');
-
-  const cancelled = JSON.parse(success(run(binary, [...lifecycle('cancel'), '--json'])));
-  report.cancelled = cancelled;
-  assert.equal(cancelled.cancelled.holder.pid, first.child.pid);
-  assert.ok(cancelled.cancelled.signalled.some(told => told.pid === first.child.pid && told.told_to_stop));
-  const ended = await first.child.ended;
-  assert.equal(ended.signal, 'SIGTERM', 'the cancelled install did not end on the stop it was told');
   second.child.kill('SIGTERM');
   await second.child.ended;
 
-  const receipt = JSON.parse(success(run(binary, [...lifecycle('status'), '--json'])));
-  assert.equal(receipt.cancelled.holder.pid, first.child.pid, 'the receipt does not record the cancelled operation');
-  assert.ok('step' in receipt.cancelled.holder);
-
-  const again = run(binary, [...lifecycle('cancel'), '--json']);
-  assert.ok(again.status && !again.error, 'a cancel with nothing to cancel was accepted');
-  assert.match(again.stderr, new RegExp(`no installation operation holds ${product}/cli`));
+  const newer = started(binary, [...lifecycle('install'), '--source-commit', earlier]);
+  await said(newer, 'superseding the installation');
+  assert.match(newer.kept.stderr, new RegExp(`superseding the installation .*${first.child.pid}.*: it is preparing, not placing files`));
+  const ended = await first.child.ended;
+  assert.equal(ended.signal, 'SIGTERM', 'the superseded install did not end on the stop it was told');
+  let holder = null;
+  while (holder?.pid !== newer.child.pid) {
+    holder = JSON.parse(success(run(binary, [...lifecycle('status'), '--json']))).operation;
+    assert.ok(holder === null || holder.pid !== first.child.pid || holder.running === false,
+      `the superseded holder still runs: ${JSON.stringify(holder)}`);
+    if (holder === null) await new Promise(next => newer.child.stderr.once('data', next));
+  }
+  report.superseded_by = holder;
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);
   failure = error;
 } finally {
+  for (const child of children) {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+  }
   report.finished_at = new Date().toISOString();
   writeFileSync(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   console.log(`${report.result}: ${join(output, 'report.json')}`);
