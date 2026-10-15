@@ -1,28 +1,22 @@
-//! The environment an untrusted workload inherits: the liveness bounds every
-//! job shell is given, the execution-runtime variables copied across, and the
-//! fan-out kept inside the cores the scheduler reserved.
+//! The environment an untrusted workload inherits: the execution-runtime
+//! variables copied across, the non-interactive git settings every job shell
+//! is given, the Stado program that runs it, and the fan-out kept inside the
+//! cores the scheduler reserved.
 
 use super::*;
 
-/// Liveness bounds inherited by every untrusted workload shell.
-///
-/// `git-remote-https` otherwise has no transfer-progress deadline: a live TCP
-/// connection that stops moving bytes keeps the job process, its CPU/RAM
-/// reservation, heartbeat lease, and space-reclaim hold forever. Git's
-/// documented low-speed pair makes each HTTPS attempt fail after two minutes
-/// below 1 KiB/s; callers that deliberately need another bound can still set
-/// either variable in the shell command itself.
-///
-/// Cargo fetches git dependencies through its built-in libgit2 unless told
-/// to run the git program, so neither bound nor `GIT_TERMINAL_PROMPT` reached
-/// a build's `Updating git repository …`: one such fetch sat for half an hour
-/// holding Cargo's package-cache lock, and every other Rust build on the host
-/// waited behind it. `CARGO_NET_GIT_FETCH_WITH_CLI` makes Cargo run `git`, so
-/// the same bounds end that fetch.
-const WORKLOAD_LIVENESS_ENV: &[(&str, &str)] = &[
-    ("GIT_HTTP_LOW_SPEED_LIMIT", "1024"),
-    ("GIT_HTTP_LOW_SPEED_TIME", "120"),
-    ("GIT_TERMINAL_PROMPT", "0"),
+/// Git settings every untrusted workload shell is given. A job has no
+/// terminal, so git must never stop to ask for credentials
+/// (`GIT_TERMINAL_PROMPT`, https://git-scm.com/docs/git#Documentation/git.txt-codeGITTERMINALPROMPTcode
+/// "If this Boolean environment variable is set to false, git will not prompt
+/// on the terminal"), and Cargo fetches git dependencies through the `git`
+/// program rather than its built-in libgit2 so that one git configuration
+/// governs every fetch (`CARGO_NET_GIT_FETCH_WITH_CLI`,
+/// https://doc.rust-lang.org/cargo/reference/config.html#netgit-fetch-with-cli).
+/// No transfer is ended by a clock here: a fetch that stops moving is visible
+/// in the job's own output and the agent's holds, and is cancelled by name.
+const WORKLOAD_GIT_ENV: &[(&str, &str)] = &[
+    ("GIT_TERMINAL_PROMPT", "false"),
     ("CARGO_NET_GIT_FETCH_WITH_CLI", "true"),
 ];
 
@@ -72,24 +66,38 @@ pub(crate) fn inherit_safe_agent_environment(command: &mut tokio::process::Comma
     // Foundation ignores HOME on macOS. Keep its declared runtime home when
     // present, otherwise align it with the HOME used by the workload's POSIX tools.
     #[cfg(target_os = "macos")]
-    if let Some(home) = std::env::var_os("CFFIXED_USER_HOME")
-        .filter(|value| !value.is_empty())
-        .or_else(|| std::env::var_os("HOME").filter(|value| !value.is_empty()))
     {
-        command.env("CFFIXED_USER_HOME", home);
+        let declared = std::env::var_os("CFFIXED_USER_HOME").filter(|value| !value.is_empty());
+        let home = std::env::var_os("HOME").filter(|value| !value.is_empty());
+        match (declared, home) {
+            (Some(declared), _) => {
+                command.env("CFFIXED_USER_HOME", declared);
+            }
+            (None, Some(home)) => {
+                command.env("CFFIXED_USER_HOME", home);
+            }
+            (None, None) => {}
+        }
     }
-    command.envs(WORKLOAD_LIVENESS_ENV.iter().copied());
+    command.envs(WORKLOAD_GIT_ENV.iter().copied());
 }
 
-/// Keep runtime fan-out inside the resources the scheduler reserved.
-pub(crate) fn apply_job_runtime_environment(command: &mut tokio::process::Command, job: &Job) {
+/// Keep runtime fan-out inside the resources the scheduler reserved, and name
+/// the Stado program that runs the job: the agent itself, so a job that calls
+/// Stado back (to upload what it produced) runs the same program rather than
+/// guessing where one is installed.
+pub(crate) fn apply_job_runtime_environment(
+    command: &mut tokio::process::Command,
+    job: &Job,
+    stado: &std::path::Path,
+) {
     // Correlate observations with the claimed execution, not a previous retry.
-    command.env(
-        "WC_JOB_STARTED_AT",
-        job.started_at.as_deref().unwrap_or_default(),
-    );
+    if let Some(started_at) = job.started_at.as_deref() {
+        command.env("WC_JOB_STARTED_AT", started_at);
+    }
     command.env(
         "CARGO_BUILD_JOBS",
         helpers::requested_cpu_cores(job).to_string(),
     );
+    command.env("STADO_BIN", stado);
 }

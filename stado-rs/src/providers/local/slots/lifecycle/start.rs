@@ -161,6 +161,9 @@ pub async fn start_slot(
             return Ok(None);
         }
     };
+    // The Stado program a job calls back is this agent; it is named before the
+    // job is claimed, so a failure to name it leaves the job queued.
+    let stado = std::env::current_exe()?;
     let log_file = open_agent_reserved_file(&work_dir.join("output/command_output.log"))?;
     let stdout_file = log_file.try_clone()?;
     let stderr_file = log_file.try_clone()?;
@@ -197,7 +200,7 @@ pub async fn start_slot(
     let full_command = build_job_command(&job);
     let mut command = tokio::process::Command::new("/bin/sh");
     inherit_safe_agent_environment(&mut command);
-    apply_job_runtime_environment(&mut command, &job);
+    apply_job_runtime_environment(&mut command, &job, &stado);
     command
         .arg("-c")
         .arg(&full_command)
@@ -246,18 +249,15 @@ pub async fn start_slot(
         }
     };
     let pid = child.id().expect("freshly spawned child has a pid") as i32;
-    log_fn(&format!(
-        "Started job {}: {}",
-        job.job_id,
-        head_chars(&job.command, 60)
-    ));
+    log_fn(&format!("Started job {}: {}", job.job_id, job.command));
     hold_awake_while_running(pid, &job.job_id, log_fn);
     write_heartbeat(store, &job.job_id).await?;
     let hb_task = start_heartbeat_task(store.clone(), job.job_id.clone(), pid);
     let slot = Slot {
         job,
         pid: Some(pid),
-        peak_vram_gb: 0,
+        // No VRAM sample has been taken for a job that has just been spawned.
+        peak_vram_gb: Default::default(),
     };
     Ok(Some(ActiveSlot {
         slot,
