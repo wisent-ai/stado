@@ -158,17 +158,20 @@ impl SnapshotSource {
                 return Err(sentence);
             }
         };
-        if output.exit_status != Some(0) {
-            let status = output
-                .exit_status
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "no exit status".to_string());
+        // SSH carries the exit status as a u32; zero is success, and a channel
+        // that closed without one did not succeed and is said as such.
+        let status = match output.exit_status {
+            Some(code) if std::num::NonZeroU32::new(code).is_none() => None,
+            Some(code) => Some(format!("registry authority exited with {code}")),
+            None => Some("registry authority closed its channel with no exit status".to_string()),
+        };
+        if let Some(status) = status {
             let detail = String::from_utf8_lossy(&output.stderr);
             let detail = detail.trim();
             let sentence = if detail.is_empty() {
-                format!("registry authority exited with {status}")
+                status
             } else {
-                format!("registry authority exited with {}: {}", status, detail)
+                format!("{status}: {detail}")
             };
             // Only the two transport branches publish. An authority that
             // answers with an unparseable snapshot is reachable and wrong,
