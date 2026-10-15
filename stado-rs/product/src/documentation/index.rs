@@ -110,15 +110,19 @@ fn groups(manifest: &Value) -> Result<Vec<Group>> {
             let name = group["name"]
                 .as_str()
                 .with_context(|| format!("{MANIFEST}: every group has a name"))?;
-            let categories = group["categories"]
-                .as_array()
-                .map(|list| {
-                    list.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
+            // A group without categories gathers only pages of its own name.
+            let categories = match &group["categories"] {
+                Value::Null => Vec::new(),
+                Value::Array(list) => list
+                    .iter()
+                    .map(|category| {
+                        category.as_str().map(str::to_string).with_context(|| {
+                            format!("{MANIFEST}: group {name} lists a category that is not text: {category}")
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                other => bail!("{MANIFEST}: group {name} categories is not a list: {other}"),
+            };
             Ok(Group {
                 name: name.to_string(),
                 categories,
@@ -160,11 +164,13 @@ fn build(root: &Path) -> Result<(Vec<Value>, Vec<Group>)> {
         if canonical != Some(url) {
             bail!("{source}: canonical URL {canonical:?} does not match {url:?}");
         }
-        let summary = page
+        let Some(summary) = page
             .select(&DESCRIPTION)
             .filter_map(|meta| meta.value().attr("content"))
             .next_back()
-            .unwrap_or_default();
+        else {
+            bail!("{source}: missing description");
+        };
         let mut article = Article::default();
         for element in page.select(&ARTICLE) {
             walk(element, false, false, &mut article);
@@ -179,7 +185,7 @@ fn build(root: &Path) -> Result<(Vec<Value>, Vec<Group>)> {
             .join(" ")
             .rsplit(" / ")
             .next()
-            .unwrap_or_default()
+            .with_context(|| format!("{source}: names no documentation category"))?
             .trim()
             .to_string();
         let Some(group) = groups
@@ -204,8 +210,13 @@ fn cards(root: &Path, groups: &[Group]) -> Result<String> {
     for group in groups {
         let mut cards = String::new();
         for (category, entry) in &group.members {
-            let field = |key: &str| html_escape(entry[key].as_str().unwrap_or_default());
-            let (title, summary, url) = (field("title"), field("summary"), field("url"));
+            let field = |key: &str| {
+                entry[key]
+                    .as_str()
+                    .map(html_escape)
+                    .with_context(|| format!("a {} card carries no {key} text", group.name))
+            };
+            let (title, summary, url) = (field("title")?, field("summary")?, field("url")?);
             cards.push_str(&format!(
                 "<a class=\"doc-card\" href=\"{url}\" data-doc-title=\"{title}\" \
                  data-doc-summary=\"{summary}\"><span>{}</span>\
@@ -224,7 +235,7 @@ fn cards(root: &Path, groups: &[Group]) -> Result<String> {
     let path = root.join(HOME);
     let current =
         fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    if current.matches(CARDS_START).count() != 1 || current.matches(CARDS_END).count() != 1 {
+    if !exactly_once(&current, CARDS_START) || !exactly_once(&current, CARDS_END) {
         bail!("{HOME} must declare exactly one generated card region");
     }
     let (before, remainder) = current.split_once(CARDS_START).expect("one start marker");
@@ -236,7 +247,12 @@ fn cards(root: &Path, groups: &[Group]) -> Result<String> {
 }
 
 pub fn report(root: Option<&str>, check: bool) -> Result<Value> {
-    let root = PathBuf::from(root.unwrap_or("."));
+    let root = match root {
+        Some(root) => PathBuf::from(root),
+        None => std::env::current_dir().context(
+            "no --root was named and the working directory, the root then, cannot be read",
+        )?,
+    };
     let (entries, groups) = build(&root)?;
     let outputs = [
         (
@@ -249,7 +265,14 @@ pub fn report(root: Option<&str>, check: bool) -> Result<Value> {
     for (name, expected) in &outputs {
         let path = root.join(name);
         if check {
-            if fs::read_to_string(&path).ok().as_deref() != Some(expected.as_str()) {
+            // An absent output is stale; one that exists and cannot be read
+            // is refused naming it, not counted stale without a cause.
+            let current = match fs::read_to_string(&path) {
+                Ok(current) => Some(current),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => bail!("cannot read {}: {error}", path.display()),
+            };
+            if current.as_deref() != Some(expected.as_str()) {
                 stale.push(*name);
             }
         } else {
@@ -267,4 +290,10 @@ pub fn report(root: Option<&str>, check: bool) -> Result<Value> {
             json!("run stado product documentation index to regenerate them")
         },
     }))
+}
+
+/// Whether `mark` occurs in `text` once and only once.
+fn exactly_once(text: &str, mark: &str) -> bool {
+    let mut found = text.match_indices(mark);
+    found.next().is_some() && found.next().is_none()
 }
