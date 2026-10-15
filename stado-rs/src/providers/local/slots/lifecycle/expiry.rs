@@ -69,7 +69,7 @@ pub async fn request_yield(
                 match crate::wait::output_async(&mut cmd).await {
                     Ok(out) => {
                         let rc = python_returncode(out.status);
-                        if rc != 0 {
+                        if !out.status.success() {
                             log_fn(&format!(
                                 "yield: on-yield hook {} failed with rc={rc}",
                                 job.job_id
@@ -111,7 +111,9 @@ pub async fn request_yield(
 
     slot.close_log();
 
-    job.yield_count += 1;
+    job.yield_count = job
+        .yield_count
+        .saturating_add(i64::from(std::num::NonZeroU8::MIN.get()));
     job.state = job_state::QUEUED.to_string();
     job.instance_ref = None;
     job.started_at = None;
@@ -148,6 +150,16 @@ pub(super) async fn terminate_cancelled_slot(
     ));
     match nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGTERM) {
         Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+        // Darwin answers EPERM, not ESRCH, for a group whose only members are
+        // zombies. Once the leader has exited no live member was left to
+        // signal, and the wait below reaps it; any other EPERM is refused.
+        Err(nix::errno::Errno::EPERM) if slot.child.try_wait()?.is_some() => {
+            log_fn(&format!(
+                "cancelled job process group {pgid} had already exited: SIGTERM found only \
+                 exited members (EPERM)"
+            ));
+            slot.paused = false;
+        }
         Err(error) => {
             return Err(std::io::Error::other(format!(
                 "SIGTERM to cancelled process group {pgid}: {error}"
