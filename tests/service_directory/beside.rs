@@ -196,17 +196,13 @@ fn a_service_declared_beside_its_placement_is_answered_on_this_host_and_said_as_
         "refused discovery changed the admitted consumer's route"
     );
 
-    let registry = deployment.root.join("registry.json");
-    let original = std::fs::read(&registry).unwrap();
-    let mut document: Value = serde_json::from_slice(&original).unwrap();
-    let caller = document["targets"]
-        .as_array_mut()
-        .unwrap()
-        .first_mut()
-        .unwrap();
-    caller["service_resolver"]["adapters"] = json!([]);
-    std::fs::write(&registry, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
-    deployment.cli(&["registry", "import", &registry.to_string_lossy()]);
+    // `registry import` only adopts records the canonical registry lacks, so
+    // the caller's adapter is taken away, and given back, through the one
+    // field it lives in.
+    let adapters = format!("targets.{THIS_HOST}.service_resolver.adapters");
+    let declared =
+        json!([{"service": SERVICE, "consumer": CONSUMER, "bind": &adapter_bind}]).to_string();
+    deployment.cli(&["registry", "set", "--path", &adapters, "--value", "[]"]);
     let refused = deployment.run(&[
         "service",
         "directory",
@@ -233,16 +229,21 @@ fn a_service_declared_beside_its_placement_is_answered_on_this_host_and_said_as_
         refused["details"]["machine"],
         machine.to_string_lossy().as_ref()
     );
-    std::fs::write(&registry, original).unwrap();
-    deployment.cli(&["registry", "import", &registry.to_string_lossy()]);
+    deployment.cli(&["registry", "set", "--path", &adapters, "--value", &declared]);
     assert_eq!(deployment.connect()["url"], placed["url"]);
+    // A full URL with a port, on a reserved domain that is not loopback.
+    let port = adapter_bind
+        .rsplit(':')
+        .next()
+        .expect("a bind names its port");
+    let elsewhere = format!("http://example.com:{port}");
     let refused = deployment.run(&[
         "service",
         "directory",
         "beside",
         SERVICE,
         "--url",
-        "http://example.com:8080",
+        &elsewhere,
     ]);
     let said = String::from_utf8_lossy(&refused.stderr).into_owned();
     assert!(
