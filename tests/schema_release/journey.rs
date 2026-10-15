@@ -1,8 +1,10 @@
-//! Real CLI, real SQLite files and an isolated PostgreSQL server. No fleet,
-//! operator database, provider response or compiler is simulated here.
+//! Real CLI, real SQLite files and an isolated PostgreSQL server, and the
+//! real Supabase CLI release Stado declares. No fleet, operator database,
+//! provider response or compiler is simulated here.
 mod fixture;
 #[cfg(unix)]
 mod postgres;
+mod supabase;
 
 use fixture::Run;
 use serde_json::Value;
@@ -131,7 +133,9 @@ fn postgres_delivers_only_verified_bytes_with_atomic_migration_history() {
     url.set_path("/schema_delivery");
     database.url = url.to_string();
     let (archive, digest) = run.release();
-    let command = deliver(&run, &archive, &"0".repeat(64), &database.url);
+    // A real digest of another file: well formed, and not the archive's.
+    let other = fixture::digest(&run.root.join("source.patch"));
+    let command = deliver(&run, &archive, &other, &database.url);
     run.refuse(command, "not the published");
     let mut command = deliver(&run, &archive, &digest, &database.url);
     command.env_remove("WISENT_VERSION");

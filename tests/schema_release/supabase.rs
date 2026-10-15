@@ -1,12 +1,11 @@
-//! Real CLI, the real Supabase CLI release Stado declares, fetched from its
-//! publisher into the run's own home, and the host's real Docker daemon.
-mod fixture;
+//! The Supabase engine with the real Supabase CLI release Stado declares,
+//! fetched from its publisher into the run's own home, and the host's real
+//! Docker daemon.
 
-use fixture::Run;
+use crate::fixture::Run;
+use crate::CREATE;
 use serde_json::Value;
 use std::fs;
-
-const CREATE: &str = "create table schema_records (id integer primary key, value text not null);\n";
 
 /// The Supabase engine installs the CLI Stado declares into the run's own
 /// home on first use and runs the bundle's migrations with it. Where the
