@@ -115,10 +115,8 @@ pub async fn relay_apple_challenge(
             "resource": resource,
         });
         if json_output {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&receipt).unwrap_or_default()
-            );
+            // A JSON value always prints; its alternate form is the pretty one.
+            println!("{receipt:#}");
         } else {
             println!(
                 "Apple challenge relay is ready from {holder_name}/{holder_user} to {}",
@@ -157,10 +155,7 @@ pub async fn relay_apple_challenge(
         "resource": resource,
     });
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&receipt).unwrap_or_default()
-        );
+        println!("{receipt:#}");
     } else {
         println!(
             "stored Apple challenge from {holder_name}/{holder_user} for {}",
