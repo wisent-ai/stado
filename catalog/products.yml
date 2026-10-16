@@ -468,6 +468,11 @@ products:
     for_surface: service
     alternative: MOST_TWILIO_ACCOUNT_SID, MOST_TWILIO_AUTH_TOKEN and MOST_TWILIO_FROM send through the owner Twilio account instead of the wisent-integrations boundary Stado serves, MOST_DATABASE_URL names the Postgres database instead of the fleet database, and with neither STADO_INTEGRATION_API_URL nor MOST_STADO_INTEGRATION_TOKEN set onboarding runs on the offline transport
     alternative_source: most/most-rs/crates/most-server/src/boot/composition/store.rs
+  - product: skarbiec
+    surface: service
+    for_surface: service
+    alternative: MOST_API_TOKEN_FILE names an owner-only file holding the API bearer, which Most checks requests against instead of redeeming one from the Skarbiec capability broker; the remote-worker and attachment-signing capabilities are consulted only when their capability ids are set
+    alternative_source: most/most-rs/crates/most-server/src/auth/mod.rs
 - id: stado
   name: Stado
   status: active
