@@ -9,7 +9,7 @@ use crate::queue::JobStorage;
 
 use super::super::presented;
 use super::super::redeem::verify;
-use super::super::refusals::{denied, refuse, unavailable};
+use super::super::refusals::{denied, refuse, store_failed, unavailable};
 
 /// `GET /api/fleet/invite/key` — the public half of the fleet's channel key
 /// for this invite's target, plus the exact `authorized_keys` line to append.
@@ -29,14 +29,21 @@ pub(in crate::dashboard) async fn invite_key(store: &JobStorage, request: &Reque
 
     let target = accepted.invite.target_name;
     let item = crate::cli::fleet::key::item_id(&target);
+    const KEY_STORE_UNAVAILABLE: &str = "enrollment key store is unavailable";
     let client = match crate::cli::fleet::key::configured_client() {
         Ok(client) => client,
-        Err(_) => return unavailable("enrollment key store is unavailable"),
+        Err(error) => {
+            let operation = format!("open the fleet key store for {item}");
+            return denied(store_failed(KEY_STORE_UNAVAILABLE, &operation, &error));
+        }
     };
     let stored = match client.read_declared_string(&item, "public_key").await {
         Ok(Some(value)) if !value.trim().is_empty() => value,
         Ok(_) => return unavailable("enrollment key is not available for this invite"),
-        Err(_) => return unavailable("enrollment key store is unavailable"),
+        Err(error) => {
+            let operation = format!("read {item}'s public key");
+            return denied(store_failed(KEY_STORE_UNAVAILABLE, &operation, &error));
+        }
     };
     // `ssh-keygen` leaves its own comment on the key, so the stored value is
     // "<type> <blob> [comment]". The machine appends one line naming the

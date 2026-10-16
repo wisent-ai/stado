@@ -30,6 +30,18 @@ pub(super) fn unavailable(message: &str) -> Response {
     )
 }
 
+/// A store the join could not use. The machine asking holds only an invite,
+/// so it is answered only `answer`; the operation and its cause go to this
+/// server's log, where the operator who has to repair the store reads them.
+pub(super) fn store_failed(
+    answer: &'static str,
+    operation: &str,
+    cause: &dyn std::fmt::Display,
+) -> Denial {
+    tracing::warn!(operation, cause = %cause, "a fleet join could not use its store: {answer}");
+    Denial::Unavailable(answer)
+}
+
 pub(super) fn denied(denial: Denial) -> Response {
     match denial {
         Denial::Refused => refuse(),

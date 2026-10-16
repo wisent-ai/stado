@@ -8,9 +8,11 @@ use crate::queue::{JobStorage, StorageError};
 use crate::targets::normalize_hostname;
 
 use super::super::redeem::{refund, spend, verify};
-use super::super::refusals::{denied, refuse, unavailable};
+use super::super::refusals::{denied, refuse, store_failed};
 use super::super::{presented, request_path, STATUS_PENDING};
 use super::report::{parse_report, valid_hostname};
+
+const STORE_UNAVAILABLE: &str = "enrollment store is unavailable";
 
 /// `POST /api/fleet/join` — record the machine's pending enrollment request
 /// and consume one use of the invite. Writes only under `enrollments/`; the
@@ -21,12 +23,17 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
     let content_type = request
         .header("content-type")
         .and_then(|value| value.split(';').next())
-        .map(str::trim)
-        .unwrap_or_default();
-    if content_type != "application/json" {
+        .map(str::trim);
+    if content_type != Some("application/json") {
+        let sent = match content_type {
+            Some(stated) => format!("Content-Type {stated:?}"),
+            None => "no Content-Type".to_string(),
+        };
         return send_json(
             http_status(reqwest::StatusCode::BAD_REQUEST),
-            &json!({"error": "join report requires Content-Type: application/json"}),
+            &json!({
+                "error": format!("join report requires Content-Type: application/json, and this request sent {sent}")
+            }),
         );
     }
     let report = match parse_report(&request.body, request.join_limits.field_bytes) {
@@ -58,7 +65,10 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
     let path = request_path(&hostname);
     let existing = match store.read_text_versioned(&path).await {
         Ok(existing) => existing,
-        Err(_) => return unavailable("enrollment store is unavailable"),
+        Err(error) => {
+            let operation = format!("read {path}");
+            return denied(store_failed(STORE_UNAVAILABLE, &operation, &error));
+        }
     };
     if let Some(current) = &existing {
         // A record that cannot be read is not replaced either, and is said as
@@ -120,9 +130,10 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
                 &json!({"error": format!("machine '{hostname}' is already enrolling")}),
             );
         }
-        Err(_) => {
+        Err(error) => {
             refund(store, &accepted, &spent).await;
-            return unavailable("enrollment store is unavailable");
+            let operation = format!("record {path}");
+            return denied(store_failed(STORE_UNAVAILABLE, &operation, &error));
         }
     }
     send_json(
