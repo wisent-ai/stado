@@ -10,7 +10,9 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Claimability {
     Claimable {
-        available_cpu_cores: i64,
+        /// The free cores the publication reports; `None` when it reports
+        /// none, which is not a host with no free core.
+        available_cpu_cores: Option<i64>,
     },
     Refusing {
         blockers: Vec<String>,
@@ -33,8 +35,11 @@ impl Claimability {
     pub fn describe(&self) -> String {
         match self {
             Self::Claimable {
-                available_cpu_cores,
-            } => format!("accepting jobs ({available_cpu_cores} CPU core(s) available)"),
+                available_cpu_cores: Some(available),
+            } => format!("accepting jobs ({available} CPU core(s) available)"),
+            Self::Claimable {
+                available_cpu_cores: None,
+            } => "accepting jobs (available CPU cores not published)".to_string(),
             Self::Refusing { blockers } if blockers.is_empty() => {
                 "not accepting jobs; no reason published".to_string()
             }
@@ -55,8 +60,7 @@ pub fn claimability(publication: &Value) -> Claimability {
         Some(true) => Claimability::Claimable {
             available_cpu_cores: publication
                 .get("available_cpu_cores")
-                .and_then(Value::as_i64)
-                .unwrap_or_default(),
+                .and_then(Value::as_i64),
         },
         Some(false) => Claimability::Refusing {
             blockers: publication_blockers(publication),
