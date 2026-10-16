@@ -762,6 +762,11 @@ products:
     surface: cli
     for_surface: cli
     bound_because: benchmark record hands each case the newest run lost to jeden pursue as a pursuit request, and apps/jeden and apps/jeden-desktop are the Jeden test plans; every other command and plan runs without Jeden
+  - product: skarbiec
+    surface: cli
+    for_surface: cli
+    alternative: the GAC app hook asks Skarbiec only for config values written as skarbiec://ITEM/FIELD; a config that holds the values themselves is read as written, with no Skarbiec call
+    alternative_source: probierz/probierz-rs/src/apphooks/gac/render.rs
 - id: tama
   name: Tama
   status: active
