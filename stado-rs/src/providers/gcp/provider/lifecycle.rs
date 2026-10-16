@@ -3,10 +3,12 @@
 //! idempotent delete, stop/start, existence and lifecycle-state reads, and
 //! the accelerator census.
 
+mod census;
+
 use std::collections::{BTreeMap, HashSet};
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::config;
 use crate::providers::gcp::client::GceError;
@@ -135,8 +137,8 @@ impl Provider for GcpProvider {
                     // and double-charged compute. Probe this zone before
                     // continuing: if the VM actually exists, return its ref
                     // instead of falling through.
-                    if let Ok(Some(status)) = client.instance_status(zone, name).await {
-                        if super::instance_booting_or_running(&status) {
+                    match client.instance_status(zone, name).await {
+                        Ok(Some(status)) if super::instance_booting_or_running(&status) => {
                             log(&format!(
                                 "Recovered {} (insert accepted, operation wait raised {}); \
                                  returning existing ref to prevent duplicate in another zone",
@@ -144,6 +146,19 @@ impl Provider for GcpProvider {
                                 gce_error_kind(&exc)
                             ));
                             return Ok(Some(Self::reference(name, zone)));
+                        }
+                        Ok(Some(status)) => {
+                            return Err(ProviderError::Value(format!(
+                                "GCE insert {name}@{zone} failed: {exc}; the existence probe found \
+                                 that VM in state {status}, so no other zone will be attempted"
+                            )));
+                        }
+                        Ok(None) => {}
+                        Err(probe) => {
+                            return Err(ProviderError::Value(format!(
+                                "GCE insert {name}@{zone} failed: {exc}; the existence probe \
+                                 failed too: {probe}; no other zone will be attempted"
+                            )));
                         }
                     }
                     log(&format!("Failed in {zone}: {exc}"));
@@ -215,7 +230,12 @@ impl Provider for GcpProvider {
         let Some(status) = state.client.instance_status(zone, name).await? else {
             return Ok(false);
         };
-        Ok(super::instance_booting_or_running(&status))
+        let phase = super::InstanceStatus::parse(&status).ok_or_else(|| {
+            ProviderError::Value(format!(
+                "GCE instance {instance_ref} returned unknown lifecycle status {status}; existence cannot be decided"
+            ))
+        })?;
+        Ok(phase.booting_or_running())
     }
 
     async fn instance_lifecycle_state(
@@ -249,35 +269,7 @@ impl Provider for GcpProvider {
     }
 
     async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError> {
-        let state = self.state().await?;
-        let filter = format!("name:{}-*", config::INSTANCE_PREFIX);
-        let instances = state.client.aggregated_instances(&filter).await?;
-        let mut counts: BTreeMap<String, i64> = BTreeMap::new();
-        for (_zone, instance) in instances {
-            let status = instance.get("status").and_then(Value::as_str).unwrap_or("");
-            if !super::instance_booting_or_running(status) {
-                continue;
-            }
-            if let Some(accelerators) = instance.get("guestAccelerators").and_then(Value::as_array)
-            {
-                for accel in accelerators {
-                    let atype = accel
-                        .get("acceleratorType")
-                        .and_then(Value::as_str)
-                        .and_then(|t| t.rsplit('/').next())
-                        .unwrap_or("");
-                    if atype.is_empty() {
-                        continue;
-                    }
-                    let count = accel
-                        .get("acceleratorCount")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(0);
-                    *counts.entry(atype.to_string()).or_insert(0) += count;
-                }
-            }
-        }
-        Ok(counts)
+        census::running_accelerators(self).await
     }
 }
 
