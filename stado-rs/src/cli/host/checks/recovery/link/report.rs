@@ -65,12 +65,9 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
 
     let (signal, published, scans) = super::probe::probe_beacon(&store, resolved).await?;
 
-    let from_link = |key: &str| {
-        published
-            .as_ref()
-            .and_then(|block| block.get(key).cloned())
-            .unwrap_or(Value::Null)
-    };
+    // A field of the published link block, null when the block or the field
+    // is absent: the report says what the beacon did not publish.
+    let from_link = |key: &str| json!(published.as_ref().and_then(|block| block.get(key)));
 
     // The beacon's own promise decides: no beacon, one that states no next
     // publication, or one whose promise has passed is stale. An absent
@@ -127,11 +124,13 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         blockers.push(format!("connection path probes failed: {detail}"));
     }
     for probe in connection_probes.iter().filter(|probe| !probe.reachable) {
+        let cause = match probe.error.as_deref() {
+            Some(error) => error,
+            None => "the probe recorded no error",
+        };
         blockers.push(format!(
-            "{} connection path {} did not answer: {}",
-            probe.name,
-            probe.destination,
-            probe.error.as_deref().unwrap_or("SSH probe failed")
+            "{} connection path {} did not answer: {cause}",
+            probe.name, probe.destination,
         ));
     }
     if published.is_none() {
