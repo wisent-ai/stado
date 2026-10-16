@@ -334,6 +334,15 @@ products:
     for_surface: service
     alternative: the Weles release carries its own Jeden binary under native/jeden/bin and the launcher refuses a payload without it, so Weles needs no separately installed Jeden
     alternative_source: weles/src/worker/weles-api-launcher/startup.mjs
+  - product: spis
+    surface: cli
+    for_surface: service
+    alternative: 'Weles never calls Spis: it applies the browser-evidence policy Spis captures under only when WELES_BROWSER_EVIDENCE_POLICY names it, and browses without it otherwise'
+    alternative_source: weles/src/agent/browser-evidence-policy/withheld-ledger.ts
+  - product: skrzynka
+    surface: cli
+    for_surface: service
+    bound_because: 'only the PARP login trajectory reaches Skrzynka: it reads the password-reset mail PARP sends to the account mailbox Skrzynka keeps, and every other Weles workflow runs without it'
 - id: skarbiec
   name: Skarbiec
   status: active
