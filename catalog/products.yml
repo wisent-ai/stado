@@ -894,6 +894,11 @@ products:
     for_surface: cli
     alternative: 'Tama never runs Weles: it reads Weles run output under WELES_RUN_OUTPUT_DIR or the Weles state directory only to check evidence a payload cites there, and its registry entries git-weles-pre-commit and git-weles-pre-push are the Weles repository git hooks, which git runs in that checkout; without Weles none of them applies'
     alternative_source: tama/rust/crates/tama-hook-tools/src/evidence/root.rs
+  - product: wisent-app
+    surface: web
+    for_surface: cli
+    alternative: 'Tama never calls the Wisent app: its lines are the registry entries of the git-wisent-enterprise-pre-commit and pre-push hooks, which check a Wisent Enterprise worktree, and the desktop build reading WISENT_APP_PROVISIONING_PROFILE, an optional signing profile for the Tama app bundle'
+    alternative_source: tama-desktop/Scripts/app_build/prepare.sh
 - id: byk
   name: Byk
   status: active
