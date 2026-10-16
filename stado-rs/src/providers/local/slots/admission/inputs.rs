@@ -24,11 +24,20 @@ pub(crate) async fn materialize_stado_inputs(
     }
 
     for (name, value) in inputs {
+        // Only an input that declares a stado_uri is a Stado object; the rest
+        // are other kinds of input. One that declares it as anything but text
+        // was passed over, and the job ran without the input it named.
         let Some(spec) = value.as_object() else {
             continue;
         };
-        let Some(uri) = spec.get("stado_uri").and_then(Value::as_str) else {
-            continue;
+        let uri = match spec.get("stado_uri") {
+            None => continue,
+            Some(Value::String(uri)) => uri.as_str(),
+            Some(other) => {
+                return Err(StorageError::Other(format!(
+                    "input {name} declares stado_uri {other}, which is not a Stado URI"
+                )))
+            }
         };
         let relative = spec
             .get("relative_path")
