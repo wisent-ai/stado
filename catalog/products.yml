@@ -1836,9 +1836,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/wisent-enterprise
-  description: 'The operated web console over the Wisent platform: representations,
-    activation analysis, classifiers, contrastive pairs, evaluation, models, deployment,
-    and the compute instances and jobs behind them.'
+  description: 'The operated web console over the Wisent platform: representations, activation analysis, classifiers, contrastive pairs, evaluation, models, deployment, and the compute instances and jobs behind them.'
   roadmap: []
   integrations: []
   evidence:
@@ -1859,6 +1857,15 @@ products:
     repository: wisent-ai/wisent-enterprise
     binaries:
     - wisent-enterprise
+  dependencies:
+  - product: weles
+    surface: service
+    for_surface: web
+    bound_because: the console Weles screens and app/api/weles routes read and diagnose Weles runs, which exist only in Weles; every other console screen runs without Weles
+  - product: ster
+    surface: cli
+    for_surface: web
+    bound_because: only the admin research humanizer route runs ster, to rewrite a passage with a Ster model; every other console screen runs without Ster
 - id: ugc
   name: UGC
   status: preview
