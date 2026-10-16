@@ -1956,6 +1956,10 @@ products:
     for_surface: web
     alternative: with no Echo collector configured (NEXT_PUBLIC_ECHO_ANALYTICS_COLLECTOR_URL, ECHO_MOBILE_ANALYTICS_COLLECTOR_URL) every analytics event and snapshot answers recorded false naming the missing variable, and the app runs on without Echo
     alternative_source: wisent-app/src/lib/analytics/echoServer.js
+  - product: stado
+    surface: service
+    for_surface: web
+    bound_because: the Wisent app keeps every user object (profile, character and room images, generated media) in the Stado object API under STADO_STORAGE_NAMESPACE, sends push notifications through Stado, and runs image, video, pose and LoRA generation and training on Stado machines through its GPU pool; no storage or compute path without Stado exists yet
 - id: preferences
   name: Preferences
   status: active
