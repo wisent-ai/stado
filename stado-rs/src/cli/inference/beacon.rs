@@ -23,20 +23,24 @@ fn unit_state(name: &str) -> String {
     }
 }
 
-fn gpu_memory_used() -> Option<String> {
+/// The GPU memory nvidia-smi reports in use, or why it could not be read.
+fn gpu_memory_used() -> Result<String, String> {
     let output = crate::wait::output(
         Command::new("nvidia-smi")
             .args(["--query-gpu=memory.used", "--format=csv,noheader,nounits"]),
     )
-    .ok()?;
-    output.status.success().then(|| {
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    })
+    .map_err(|error| format!("nvidia-smi could not run: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "nvidia-smi ended {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    match String::from_utf8_lossy(&output.stdout).lines().next() {
+        Some(line) => Ok(line.trim().to_string()),
+        None => Err("nvidia-smi printed no memory reading".to_string()),
+    }
 }
 
 pub fn local() -> Result<(), CmdError> {
@@ -51,10 +55,17 @@ pub fn local() -> Result<(), CmdError> {
     let mut entry = Map::new();
     entry.insert("state".to_string(), Value::String(state));
     entry.insert("gpu_mode".to_string(), json!(active.gpu_mode));
-    entry.insert(
-        "gpu_memory_used_mb".to_string(),
-        gpu_memory_used().map_or(Value::Null, Value::String),
-    );
+    // A reading that could not be taken is null with its cause beside it, so
+    // a host without the tool is not read as a GPU with nothing in use.
+    match gpu_memory_used() {
+        Ok(used) => {
+            entry.insert("gpu_memory_used_mb".to_string(), Value::String(used));
+        }
+        Err(cause) => {
+            entry.insert("gpu_memory_used_mb".to_string(), Value::Null);
+            entry.insert("gpu_memory_error".to_string(), Value::String(cause));
+        }
+    }
     entry.insert("engine".to_string(), json!(active.engine));
     entry.insert("model".to_string(), json!(active.model));
     entry.insert("revision".to_string(), json!(active.revision));
