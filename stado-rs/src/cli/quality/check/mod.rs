@@ -70,6 +70,11 @@ async fn export_check(
         &revision[..12.min(revision.len())]
     ));
     let scratch = run_area.join("source");
+    report.say(&format!(
+        "stado quality check: exporting committed revision {revision} from {} into {}",
+        checkout.display(),
+        scratch.display()
+    ));
     let sha256 = stado_product::export_committed_source(checkout, revision, &scratch)
         .map_err(|error| CmdError::unreachable(format!("cannot export {revision}: {error:#}")))?;
     let inputs_area = run_area.join("inputs");
@@ -178,6 +183,10 @@ async fn check_tree(
     if_declared: bool,
 ) -> Result<Option<String>, CmdError> {
     let revision = exported.revision;
+    report.say(&format!(
+        "stado quality check: reading declared gates of {revision} in {}",
+        tree.display()
+    ));
     let declared = match declared_gates(Some(&tree.to_string_lossy()), selection)? {
         Declaration::Gates(declared) => *declared,
         Declaration::Undeclared(reason) if if_declared => {
@@ -188,7 +197,15 @@ async fn check_tree(
         }
         Declaration::Undeclared(reason) => return Err(CmdError::refused(reason)),
     };
+    report.say(&format!(
+        "stado quality check: checking locked dependencies of {revision} in {}",
+        tree.display()
+    ));
     lockfile::check(tree, checkout, revision, report)?;
+    report.say(&format!(
+        "stado quality check: checking source modules of {revision} in {}",
+        tree.display()
+    ));
     modules::check(tree, checkout, revision)?;
     // A pin whose object was never stored, or was stored for a lock the
     // product has since moved past, is refused here, while the session that

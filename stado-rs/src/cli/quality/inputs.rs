@@ -29,6 +29,10 @@ pub(super) async fn stage(
 ) -> Result<Vec<(String, String)>, CmdError> {
     let mut variables = Vec::new();
     for (name, input) in &declared.inputs {
+        report.say(&format!(
+            "stado quality check: confirming release input {name} of {} is stored at {}",
+            declared.product, input.uri
+        ));
         // Asked first so an absent pin is refused as absent, naming the pin,
         // rather than as a failed download.
         crate::cli::storage::require_present(

@@ -1,11 +1,8 @@
-//! Why `cargo fetch` could not bring a git dependency, when the reason is
-//! on this machine: a manifest or the committed lock pins a commit that sits
-//! in the sibling checkout of its repository and on no branch of that
-//! checkout's remote. Cargo can only say the revision was not found on the
-//! remote; the repository to push first is what the person pushing needs,
-//! and only the canonical checkouts beside this one know it. A product that
-//! pinned such a commit built nowhere but on the one machine whose cache
-//! held it.
+//! Additional local evidence for a failed `cargo fetch`: a manifest or
+//! committed lock pins a commit found in a sibling checkout but absent from
+//! its remote-tracking branches. Those refs are only the checkout's observed
+//! state, not proof of what a remote currently holds. The fetch failure and
+//! Cargo's own cause remain in the refusal.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -96,10 +93,9 @@ fn repository_and_commit(source: &str) -> Option<(String, String)> {
 }
 
 /// One sentence for every git commit the manifests of `workspace` or its
-/// committed `lock` pin that the sibling checkout of its repository, beside
-/// `checkout`, holds while no branch of that checkout's remote contains it.
-/// Empty when every pinned commit is published or no sibling checkout of its
-/// repository exists.
+/// committed `lock` pin that a sibling checkout beside `checkout` holds but
+/// none of that checkout's remote-tracking branches contains. Empty when no
+/// such local observation can be made.
 pub(super) fn unpushed(lock: &[u8], workspace: &Path, checkout: &Path) -> Vec<String> {
     let Some(siblings) = checkout.parent() else {
         return Vec::new();
@@ -125,8 +121,8 @@ pub(super) fn unpushed(lock: &[u8], workspace: &Path, checkout: &Path) -> Vec<St
             let containing = git(&sibling, &["branch", "--remotes", "--contains", &commit])?;
             containing.trim().is_empty().then(|| {
                 format!(
-                    "{repository} {commit} is in {} and on no branch of its remote: push \
-                     {repository} before this repository",
+                    "{repository} {commit} is in {} but no remote-tracking branch there \
+                     contains it; publish the commit if this is the intended pin",
                     sibling.display()
                 )
             })

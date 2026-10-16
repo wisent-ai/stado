@@ -353,8 +353,7 @@ products:
   roadmap: []
   integrations:
   - product: weles
-    description: Skarbiec uses Weles admission workflows for credential lifecycle
-      operations.
+    description: Skarbiec uses Weles admission workflows for credential lifecycle operations.
     source: ARCHITECTURE.md:263-267
   evidence:
   - wisent-landing-new/src/data/productPortals.ts
@@ -385,8 +384,8 @@ products:
     manifest: .wisent-desktop-release.json
     signing_keychain: $HOME/Library/Keychains/login.keychain-db
   approved_by: operator
-  approved_at: '2026-09-02T19:53:04Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:04Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   service:
     installable: true
     unit: com.wisent.skarbiec
@@ -399,19 +398,19 @@ products:
       SKARBIEC_VAULT_FILE: $HOME/.stado/skarbiec.vault.json
       SKARBIEC_CAP_SOCKET: $HOME/.stado/skarbiec.vault.sock
       SKARBIEC_AUDIT_FILE: $HOME/.stado/skarbiec.audit.jsonl
-    summary: The credential and authentication vault; one process serves the HTTP
-      API, the capability socket every workload redeems through, and replication of
-      every bond the vault pulls.
-    # The question a client of the vault is asking is whether an item opens:
-    # /readyz decrypts the vault's canary item, so a gpg run standing behind a
-    # held keyring lock or a silent agent leaves it unanswered, while
-    # /v1/items/list decrypts nothing and answers as fast as ever.
+    summary: The credential and authentication vault; one process serves the HTTP API, the capability socket every workload redeems through, and replication of every bond the vault pulls.
     answering:
       method: GET
       path: /readyz
       repair:
       - crypto
       - audit-lock
+  dependencies:
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: 'a machine without Stado holds and serves its own vault: SKARBIEC_VAULT_FILE or the default ~/.local/share/skarbiec/skarbiec.vault.json is used when Stado declares no vault_file, and stado-wait is a library compiled in; only reaching a vault on another machine goes through a Stado forward file, and the autofill extension updates from Stado release host'
+    alternative_source: skarbiec/src/core/mod.rs
 - id: most
   name: Most
   status: active
