@@ -69,12 +69,16 @@ async fn verified_bindings(registry: &Registry, kind: &str, identity: &str) -> V
                 }
                 // The installed probe reads a named user's own preferences. Unknown
                 // means the host could not be asked, never that the account is absent.
-                APPLE_ACCOUNT if !probes_own_user(target, binding) => {
-                    let user = binding.user.as_deref().unwrap_or_default();
-                    observe_user_apple_accounts(&target.name, user)
+                // A binding with no user probes the channel's own user, so a
+                // binding here names one; were it ever without, the account
+                // stays unknown rather than asked for an empty user name.
+                APPLE_ACCOUNT if !probes_own_user(target, binding) => match binding.user.as_deref()
+                {
+                    Some(user) => observe_user_apple_accounts(&target.name, user)
                         .await
-                        .map(|found| found.iter().any(|entry| entry == identity))
-                }
+                        .map(|found| found.iter().any(|entry| entry == identity)),
+                    None => None,
+                },
                 APPLE_ACCOUNT => observe_apple_accounts(&target.name)
                     .await
                     .map(|found| found.iter().any(|entry| entry == identity)),
