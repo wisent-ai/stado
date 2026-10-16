@@ -51,7 +51,7 @@ pub use paths::{refusal_object_path, refusal_prefix, silence_object_path, silenc
 pub use records::{RefusalRecord, RefusalSummary, SilenceRecord};
 pub use store::{
     observe_beacon_age, observe_beacon_age_at, open_silence, record_refusal, refusal_summary,
-    refusals_since, report_refusal, report_refusal_detached, silences,
+    refusals_since, report_refusal_detached, silences,
 };
 pub use transitions::{
     beacon_is_silent, close_record, merge_observation, open_record, summarize_refusals,

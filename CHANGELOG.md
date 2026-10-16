@@ -22,3 +22,7 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+### Fixed
+
+- **A directory read that cannot reach its authority no longer waits on that authority's store to record the refusal:** the `authority_unreachable` refusal was written to the fleet store and awaited, and that store is served from the authority host the read had just failed to reach, so each failing read (every command that reads the registry) waited on that host a second time before its caller saw the refusal and added one more write to the queue in front of it. The record is now written detached, as the resolver's `directory_cache_stale` refusal already was: a one-shot command returns its refusal at once and loses its own copy if it exits first, and the resolver on the same machine, which reads the same authority, records the refusal from its long-lived process. `report_refusal`, the awaited publisher, is gone.

@@ -1,24 +1,23 @@
-//! A reader refusal whose record the fleet store refuses is said on stderr
-//! with the host, the reader, the reason and the store's own cause, and the
-//! read's own error stays the answer; because the dedupe marks a refusal
-//! recorded only once its record is written, the identical refusal raised
-//! again is written again instead of being dropped as already recorded.
+//! A registry read that cannot reach its authority answers with its own
+//! refusal, and a fleet store that will not take the refusal's record never
+//! replaces that answer. The record is written detached: a one-shot command
+//! that exits first loses its copy, and the resolver on the same machine
+//! records the same refusal from its long-lived process.
 //!
 //! The real `stado registry self` runs with an isolated `HOME` under the
 //! checkout's build directory and a last-known-good registry copy that names
 //! this machine as the reader and a host nobody can reach (`.invalid`) as the
-//! registry authority, so the authority read fails over SSH and publishes an
-//! `authority_unreachable` refusal about that host. The fleet store the
-//! refusal record goes to is a loopback listener this test owns, which resets
-//! every connection, so the record cannot be written. The read retries the
-//! authority once on a fresh session and raises the same refusal twice.
+//! registry authority, so the authority read fails over SSH and raises an
+//! `authority_unreachable` refusal about that host. The fleet store is a
+//! loopback listener this test owns that resets every connection after its
+//! request line, so neither the registry download nor the refusal's record
+//! lands.
 use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde_json::{json, Value};
-use stado::monitor::host_silence::REASON_AUTHORITY_UNREACHABLE;
 
 /// The reader is the first target of the shared directory template; the
 /// unreachable authority is its last.
@@ -48,7 +47,10 @@ impl Run {
         command
             .current_dir(&self.root)
             .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap())
+            .env(
+                "PATH",
+                std::env::var_os("PATH").expect("PATH names the programs stado runs"),
+            )
             .env("HOME", &self.root)
             .env("STADO_CONFIG", self.root.join("no-config.toml"))
             .env("TMPDIR", self.root.join("tmp"))
@@ -60,10 +62,7 @@ impl Run {
 
     /// A loopback port this machine hands out now, as the product binds one.
     fn free_port(&self) -> u16 {
-        let output = self
-            .stado()
-            .args(["host", "local", "port"])
-            .output()
+        let output = stado_wait::output(self.stado().args(["host", "local", "port"]))
             .expect("run the real stado");
         let printed = String::from_utf8_lossy(&output.stdout).into_owned();
         match printed.trim().parse() {
@@ -72,16 +71,26 @@ impl Run {
         }
     }
 
-    /// The fleet store the refusal record goes to: a loopback listener that
-    /// resets every connection after its request line, so no write lands.
+    /// The fleet store the registry read and the refusal record go to: a
+    /// loopback listener that resets every connection after its request
+    /// line, so nothing is read from it and no write lands.
     fn resetting_store(&self) -> String {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, self.free_port()))
             .expect("bind the loopback port this machine handed out");
-        let address = listener.local_addr().unwrap().to_string();
+        let address = listener
+            .local_addr()
+            .expect("the bound listener has an address")
+            .to_string();
         std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
+            for stream in listener.incoming() {
+                let stream = match stream {
+                    Ok(stream) => stream,
+                    Err(error) => panic!("the resetting store stopped accepting: {error}"),
+                };
                 let mut request_line = String::new();
-                let _ = BufReader::new(&stream).read_line(&mut request_line);
+                if let Err(error) = BufReader::new(&stream).read_line(&mut request_line) {
+                    eprintln!("the resetting store read no request line: {error}");
+                }
                 drop(stream);
             }
         });
@@ -93,8 +102,11 @@ impl Run {
     /// unreachable last target as the authority.
     fn write_last_good(&self) {
         let mut document: Value =
-            serde_json::from_str(include_str!("../service_directory/registry.json")).unwrap();
-        let targets = document["targets"].as_array_mut().unwrap();
+            serde_json::from_str(include_str!("../service_directory/registry.json"))
+                .expect("the shared directory template is JSON");
+        let targets = document["targets"]
+            .as_array_mut()
+            .expect("the shared directory template lists targets");
         if let Some(reader) = targets.first_mut() {
             reader["hostnames"] = json!([hostname()]);
             reader["services"] = json!([]);
@@ -109,31 +121,29 @@ impl Run {
         document["service_directory"]["services"] = json!({});
         std::fs::write(
             self.root.join(".stado/cache/registry-last-good.json"),
-            serde_json::to_vec_pretty(&document).unwrap(),
+            serde_json::to_vec_pretty(&document).expect("the copy serializes"),
         )
-        .unwrap();
+        .expect("write the last-known-good copy");
+        let read_at = chrono::DateTime::<chrono::Utc>::UNIX_EPOCH.to_rfc3339();
         std::fs::write(
             self.root.join(".stado/cache/registry-last-good.meta.json"),
-            serde_json::to_vec(&json!({
-                "read_at": "1970-01-01T00:00:00Z",
-                "generation": "example",
-            }))
-            .unwrap(),
+            serde_json::to_vec(&json!({"read_at": read_at, "generation": "example"}))
+                .expect("the copy's metadata serializes"),
         )
-        .unwrap();
+        .expect("write the last-known-good metadata");
     }
 
     fn registry_self(&self, store: &str) -> Output {
         let token = self.root.join("object-api.token");
-        std::fs::write(&token, "lost-refusal-probe").unwrap();
-        let output = self
-            .stado()
-            .args(["registry", "self", "--name-only"])
-            .env("WC_STORAGE_BACKEND", "stado")
-            .env("WC_STADO_STORAGE_URL", format!("http://{store}"))
-            .env("WC_STADO_STORAGE_TOKEN_FILE", &token)
-            .output()
-            .expect("run the real stado");
+        std::fs::write(&token, "lost-refusal-probe").expect("write the store token");
+        let output = stado_wait::output(
+            self.stado()
+                .args(["registry", "self", "--name-only"])
+                .env("WC_STORAGE_BACKEND", "stado")
+                .env("WC_STADO_STORAGE_URL", format!("http://{store}"))
+                .env("WC_STADO_STORAGE_TOKEN_FILE", &token),
+        )
+        .expect("run the real stado");
         std::fs::write(self.root.join("registry-self.stderr"), &output.stderr)
             .expect("keep the command's stderr beside the run");
         output
@@ -142,20 +152,26 @@ impl Run {
 
 impl Drop for Run {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        if let Err(error) = std::fs::remove_dir_all(&self.root) {
+            eprintln!(
+                "the run directory {} was not removed: {error}",
+                self.root.display()
+            );
+        }
     }
 }
 
 fn hostname() -> String {
-    let output = Command::new("hostname").output().unwrap();
+    let output =
+        stado_wait::output(&mut Command::new("hostname")).expect("run this machine's hostname");
     String::from_utf8(output.stdout)
-        .unwrap()
+        .expect("the hostname is UTF-8")
         .trim()
         .to_lowercase()
 }
 
 #[test]
-fn a_refusal_the_store_will_not_record_is_said_with_its_cause_and_written_again() {
+fn a_refusal_the_store_will_not_record_never_replaces_the_reads_own_error() {
     let run = Run::new();
     run.write_last_good();
     let store = run.resetting_store();
@@ -169,26 +185,6 @@ fn a_refusal_the_store_will_not_record_is_said_with_its_cause_and_written_again(
     assert!(
         said.contains(SSH_FAILED),
         "the read's own error stays the answer: {said}"
-    );
-    let lost = format!(
-        "refusal about {AUTHORITY} ({REASON_AUTHORITY_UNREACHABLE}) was not recorded in the fleet store: "
-    );
-    let lost_lines: Vec<&str> = said.lines().filter(|line| line.contains(&lost)).collect();
-    let Some((first, again)) = lost_lines.split_first() else {
-        panic!("a refusal record the store refused is said on stderr with the host and the reason: {said}");
-    };
-    assert!(
-        first.starts_with("stado: the ") && first.contains(" refusal about "),
-        "the lost-record line names the reader that refused: {first}"
-    );
-    let cause = first.split_once("in the fleet store: ").unwrap().1;
-    assert!(
-        !cause.trim().is_empty(),
-        "the store's own cause follows the sentence: {first}"
-    );
-    assert!(
-        !again.is_empty(),
-        "the identical refusal raised by the retried authority read is written again, not dropped as already recorded: {said}"
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),

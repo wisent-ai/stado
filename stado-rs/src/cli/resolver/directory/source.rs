@@ -38,7 +38,10 @@ impl SnapshotSource {
     /// [`host_silence::READER_RESOLVER`] for the serving loop and its
     /// background refresh, [`host_silence::READER_CLI`] for a one-shot
     /// command.
-    pub(crate) async fn fetch(&self, reader: &str) -> Result<(Value, String, u64), CmdError> {
+    pub(crate) async fn fetch(
+        &self,
+        reader: &'static str,
+    ) -> Result<(Value, String, u64), CmdError> {
         match self {
             Self::Local(store) => read_local_snapshot(store).await,
             // Each authority read owns a native connection independent of adapter traffic.
@@ -125,7 +128,7 @@ impl SnapshotSource {
         target: &str,
         paths: &[targets::SshConnectionPath],
         command: &str,
-        reader: &str,
+        reader: &'static str,
     ) -> Result<(Value, String, u64), String> {
         if paths.is_empty() {
             return Err("registry authority has no SSH connection path".to_string());
@@ -147,14 +150,14 @@ impl SnapshotSource {
         target: &str,
         ssh: &str,
         command: &str,
-        reader: &str,
+        reader: &'static str,
     ) -> Result<(Value, String, u64), String> {
         let remote_command = format!("{} resolver snapshot", crate::deploy::shlex_quote(command));
         let output = match execute(ssh, &remote_command).await {
             Ok(output) => output,
             Err(error) => {
                 let sentence = format!("registry authority SSH failed: {error:#}");
-                refuse_authority(target, reader, &sentence).await;
+                refuse_authority(target, reader, &sentence);
                 return Err(sentence);
             }
         };
@@ -177,7 +180,7 @@ impl SnapshotSource {
             // answers with an unparseable snapshot is reachable and wrong,
             // which is a different finding from a silent host and must not
             // be counted as one.
-            refuse_authority(target, reader, &sentence).await;
+            refuse_authority(target, reader, &sentence);
             return Err(sentence);
         }
         let payload: SnapshotPayload = serde_json::from_slice(&output.stdout)

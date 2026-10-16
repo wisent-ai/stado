@@ -1,7 +1,7 @@
 //! Refusals, published without replacing the caller's error: the
 //! per-refusal dedupe (one write in flight per refusal, marked only once a
 //! record is written), the store opened once per process for callers that
-//! hold none, and the three entry points a refusing component calls. A
+//! hold none, and the two entry points a refusing component calls. A
 //! record that is lost is said on stderr with its cause.
 
 use std::collections::HashMap;
@@ -86,7 +86,12 @@ impl Claim {
     /// not the one now in the store.
     fn settle(mut self, written: bool) -> Option<Self> {
         self.settled = true;
-        let mut table = RECORDINGS.lock().ok()?;
+        // A holder that panicked left the table as it was between whole
+        // updates; it is taken back rather than the next sentence dropped.
+        let mut table = match RECORDINGS.lock() {
+            Ok(table) => table,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let recording = table.entry(self.key.clone()).or_default();
         if written {
             recording.written = Some(self.sentence.clone());
@@ -246,30 +251,19 @@ async fn shared_store() -> Result<&'static JobStorage, crate::queue::StorageErro
     SHARED_STORE.get_or_try_init(JobStorage::new).await
 }
 
-/// [`record_refusal`] for a caller that holds no [`JobStorage`].
+/// Publish one reader refusal about `host` without the caller standing
+/// behind the write, for a caller that holds no [`JobStorage`].
 ///
-/// Opens the fleet store itself; a store that cannot be opened is said on
-/// stderr with its cause like any other lost record, because a refusal
-/// nobody recorded is an outage nobody can read afterwards.
-pub async fn report_refusal(host: &str, reader: &str, reason: &str, detail: &str) {
-    if let Some(claim) = Claim::take(refusal_key(host, reader, reason), detail) {
-        publish(claim, Destination::Shared, host, reader, reason).await;
-    }
-}
-
-/// [`report_refusal`] for a caller on a request path.
+/// Callers are refusing reads of a host that did not answer, and the fleet
+/// store this opens can be served from that same host: a caller that
+/// awaited the write would wait on that host a second time, and each one
+/// added a write to the queue in front of it. The write is detached. A
+/// one-shot command that exits first loses its copy, which the long-lived
+/// resolver on the same machine records from its own process; a record that
+/// cannot be written is said on stderr. The claim is taken before anything
+/// is spawned, so a refusal already recorded or being written costs no
+/// task.
 ///
-/// The resolver refuses EVERY resolution while its cache is stale, and a
-/// resolution is something a workload is blocking on. Making each of those
-/// refusals wait for a blob write would convert a fast, correct refusal into
-/// a slow one — the diagnostic changing the behaviour it was added to
-/// explain. The write is detached instead, which is right for a long-lived
-/// service and wrong for a one-shot command: a command that exits
-/// immediately after must `await` [`report_refusal`], or the process is gone
-/// before the task runs. The claim is taken before anything is spawned, so a
-/// refusal already recorded or being written costs no task.
-///
-/// Requires a Tokio runtime, which every caller of this already has.
 pub fn report_refusal_detached(
     host: String,
     reader: &'static str,
