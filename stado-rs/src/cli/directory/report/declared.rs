@@ -1,7 +1,7 @@
 //! The forward markers the directory declares for one machine, and the
 //! keeper that writes the ones missing or holding another address.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::cli::directory::document::{directory, endpoint_url, DIRECTORY_KEY};
 use crate::cli::directory::report::markers::{adapter_url, write_forward_marker};
@@ -34,6 +34,8 @@ pub(crate) fn declared_markers(document: &Value, target: &str) -> Result<Declare
         .ok_or_else(|| format!("{DIRECTORY_KEY}.services: must be an object"))?;
     // The target's own declaration, for the services the directory places
     // elsewhere. Read once: the adapter set does not change inside one run.
+    // A target the document does not declare has no resolver to read, which
+    // is said for each service rather than read as a resolver with none.
     let target_entry = document
         .get("targets")
         .and_then(Value::as_array)
@@ -41,9 +43,7 @@ pub(crate) fn declared_markers(document: &Value, target: &str) -> Result<Declare
             targets
                 .iter()
                 .find(|candidate| candidate.get("name").and_then(Value::as_str) == Some(target))
-        })
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+        });
     let mut markers = DeclaredMarkers {
         addressed: Vec::new(),
         skipped: Vec::new(),
@@ -57,7 +57,17 @@ pub(crate) fn declared_markers(document: &Value, target: &str) -> Result<Declare
             });
             continue;
         }
-        match adapter_url(&target_entry, name) {
+        let Some(target_entry) = target_entry else {
+            markers.skipped.push((
+                name.clone(),
+                format!(
+                    "{DIRECTORY_KEY} declares no endpoint for {target}, and {target} is not among \
+                     the document's targets, so no resolver adapter is read for {name}"
+                ),
+            ));
+            continue;
+        };
+        match adapter_url(target_entry, name) {
             Ok(Some(url)) => markers.addressed.push(DeclaredMarker {
                 service: name.clone(),
                 url,
