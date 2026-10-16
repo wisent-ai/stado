@@ -1098,13 +1098,11 @@ products:
   roadmap:
   - title: Add verified Gemini and Qwen adapters
     status: planned
-    outcome: Add streaming adapters only after the corresponding local transcript
-      formats are verified.
+    outcome: Add streaming adapters only after the corresponding local transcript formats are verified.
     source: https://transcript-lake.wisent.com/docs/integrations/
   integrations:
   - product: tama
-    description: Transcript Lake retains Tama hook-decision segments with session
-      records.
+    description: Transcript Lake retains Tama hook-decision segments with session records.
     source: https://transcript-lake.wisent.com/docs/integrations/
   evidence:
   - wisent-ai/transcript-lake/README.md
@@ -1123,8 +1121,8 @@ products:
     repository: wisent-ai/transcript-lake
     manifest: .wisent-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:08Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:08Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   service:
     installable: true
     unit: com.wisent.transcript-lake
@@ -1132,8 +1130,13 @@ products:
     args:
     - stream
     - --json
-    summary: The one Transcript Lake process per host, continuously streaming local
-      agent transcripts into the lake.
+    summary: The one Transcript Lake process per host, continuously streaming local agent transcripts into the lake.
+  dependencies:
+  - product: oko
+    surface: cli
+    for_surface: cli
+    alternative: Lake ingests, keeps and answers every read without Oko; projection rebuild writes the Oko projection under exports/oko without running it, and only projection refresh --target oko hands it to oko-cli
+    alternative_source: transcript-lake/src/commands/derived/mod.rs
 - id: kronika
   name: Kronika
   status: active
@@ -1144,13 +1147,11 @@ products:
   roadmap:
   - title: Add retained provenance and freshness
     status: planned
-    outcome: Preserve stable source-span provenance, freshness history and retained
-      document versions.
+    outcome: Preserve stable source-span provenance, freshness history and retained document versions.
     source: kronika/README.md:72-99
   - title: Add managed team documentation
     status: planned
-    outcome: Provide multi-repository orchestration, team review, organization search
-      and supported publishing as a managed service.
+    outcome: Provide multi-repository orchestration, team review, organization search and supported publishing as a managed service.
     source: kronika/README.md:31-35
   integrations:
   - product: brama
@@ -1170,8 +1171,24 @@ products:
     binaries:
     - kronika
   approved_by: operator
-  approved_at: '2026-09-02T19:53:08Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:08Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: cli
+    alternative: BRAMA_URL (or MODEL_ROUTER_URL) may name any OpenAI-compatible provider; with WISENT_APP_AGENT_ID unset the requests go unsigned, and BRAMA_API_KEY_ROLE names that provider bearer
+    alternative_source: kronika/src/cli.ts
+  - product: wisent-app
+    surface: service
+    for_surface: cli
+    alternative: 'WISENT_APP_AGENT_ID is optional: unset, Kronika signs nothing with a wisent-app agent identity and its model requests go unsigned'
+    alternative_source: kronika/src/cli.ts
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: KRONIKA_CREDENTIALS_FILE names an owner-only JSON file of role -> field -> value that answers every ROLE#FIELD reference instead of stado credentials get
+    alternative_source: kronika/src/cli/skarbiec.ts
 - id: rachuba
   name: Rachuba
   status: preview
