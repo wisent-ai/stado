@@ -78,11 +78,13 @@ pub(crate) async fn run_deliveries(
         let current = run.deliveries[&d.name].clone();
         if current.job_id.is_empty() {
             if d.required && required_failure.is_none() {
-                required_failure = Some(format!(
-                    "required delivery {} failed: {}",
-                    d.name,
-                    current.failure.clone().unwrap_or_default()
-                ));
+                required_failure = Some(match &current.failure {
+                    Some(failure) => format!("required delivery {} failed: {failure}", d.name),
+                    None => format!(
+                        "required delivery {} was never queued, and its record states no cause",
+                        d.name
+                    ),
+                });
             }
             continue;
         }

@@ -182,10 +182,12 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
                     "  {} {version}: build {build_id} {}: {failure}",
                     entry.product, outcome.state
                 ),
-                (None, failure) => println!(
-                    "  {} {version}: refused: {}",
-                    entry.product,
-                    failure.as_deref().unwrap_or_default()
+                (None, Some(failure)) => {
+                    println!("  {} {version}: refused: {failure}", entry.product)
+                }
+                (None, None) => println!(
+                    "  {} {version}: refused, and the refusal carried no cause",
+                    entry.product
                 ),
             }
         }
