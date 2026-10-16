@@ -256,8 +256,7 @@ products:
     - web-agent-v1
   integrations:
   - product: brama
-    description: Weles uses Brama when an authorized browser workflow needs model
-      reasoning.
+    description: Weles uses Brama when an authorized browser workflow needs model reasoning.
     source: weles/README.md:142-212
   - product: skarbiec
     description: Weles receives organization-scoped credentials through Skarbiec boundaries.
@@ -304,26 +303,37 @@ products:
     env:
       WELES_API_HOST: 0.0.0.0
       WELES_API_PORT: $STADO_LISTEN_PORT
-    summary: One Weles process per host serving the API and admission, the resident
-      task dispatcher that executes authorized browser workflows, and the keyword-planner
-      routes.
+    summary: One Weles process per host serving the API and admission, the resident task dispatcher that executes authorized browser workflows, and the keyword-planner routes.
     acquisition_scopes: $HOME/.stado/services/weles-admission/current/$STADO_PLATFORM/skarbiec-acquisition-scopes.conf
   approved_by: operator
-  approved_at: '2026-09-02T19:53:03Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:03Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   dependencies:
   - product: brama
     surface: service
     for_surface: service
-    alternative: WELES_MODEL_ENDPOINT and WELES_MODEL name an OpenAI-compatible provider
-      for Weles' model calls
+    alternative: WELES_MODEL_ENDPOINT and WELES_MODEL name an OpenAI-compatible provider for Weles' model calls
     alternative_source: weles/src/agent/jeden.ts
   - product: skarbiec
     surface: service
     for_surface: service
-    alternative: WELES_CREDENTIALS_FILE names an owner-only credentials file Weles reads
-      and writes instead of Skarbiec
+    alternative: WELES_CREDENTIALS_FILE names an owner-only credentials file Weles reads and writes instead of Skarbiec
     alternative_source: weles/src/secrets/scoped-service/local-file.ts
+  - product: oko
+    surface: cli
+    for_surface: service
+    alternative: a host with no oko records the Oko channel as not tried with that reason, and the operator request is paged through Stado alert channels instead
+    alternative_source: weles/src/operator/oko-ask.mjs
+  - product: wisent-app
+    surface: service
+    for_surface: service
+    alternative: WELES_MODEL_ENDPOINT names an OpenAI-compatible provider; Jeden then runs with JEDEN_MODEL_ENDPOINT and signs nothing with a wisent-app agent identity
+    alternative_source: weles/src/agent/jeden.ts
+  - product: jeden
+    surface: cli
+    for_surface: service
+    alternative: the Weles release carries its own Jeden binary under native/jeden/bin and the launcher refuses a payload without it, so Weles needs no separately installed Jeden
+    alternative_source: weles/src/worker/weles-api-launcher/startup.mjs
 - id: skarbiec
   name: Skarbiec
   status: active
