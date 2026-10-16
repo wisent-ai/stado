@@ -362,6 +362,11 @@ products:
     surface: cli
     for_surface: service
     bound_because: 'only the PARP login trajectory reaches Skrzynka: it reads the password-reset mail PARP sends to the account mailbox Skrzynka keeps, and every other Weles workflow runs without it'
+  - product: stado
+    surface: cli
+    for_surface: service
+    alternative: 'WELES_STANDALONE=1 runs Weles on a machine without Stado: the host is the only Weles host and its placement is not checked, and a host with no Stado binary and no WELES_STANDALONE is refused naming it. Without the Stado model router the agent model is WELES_MODEL at WELES_MODEL_ENDPOINT, any OpenAI-compatible provider. Trajectories that act through wisent-integrations refuse naming STADO_INTEGRATION_API_URL or WELES_STADO_INTEGRATION_TOKEN when unset, and the hosted public task API keeps task artifacts under stado://weles/ through the Stado object API'
+    alternative_source: weles/src/session/placement/service-placement.ts
 - id: skarbiec
   name: Skarbiec
   status: active
