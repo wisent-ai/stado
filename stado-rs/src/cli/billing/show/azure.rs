@@ -10,14 +10,8 @@ pub(super) fn print_azure(section: &Value) {
     if section.get("status").and_then(Value::as_str) != Some("ok") {
         println!(
             "Azure: {} — {}",
-            section
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("unavailable"),
-            section
-                .get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or("no detail")
+            text(section.get("status")),
+            text(section.get("detail"))
         );
         return;
     }
@@ -25,10 +19,7 @@ pub(super) fn print_azure(section: &Value) {
         "Azure credits: current={} estimated={} {}",
         text(section.get("available_balance")),
         text(section.get("estimated_balance")),
-        section
-            .get("currency")
-            .and_then(Value::as_str)
-            .unwrap_or("USD")
+        text(section.get("currency"))
     );
     println!(
         "Azure grant: amount={} used={}, valid {} — {}",
