@@ -253,6 +253,11 @@ products:
     for_surface: service
     alternative: 'Brama never calls the Wisent app: wisent-app is an agent identity Brama verifies request signatures for, whose signing secret the launcher reads from a Skarbiec item (the wisent-backend client signs as it), and the testing page names the agent variables a real test request signs with; no request goes from Brama to the Wisent app'
     alternative_source: brama/src/cli/launcher/identities/mod.rs
+  - product: skrzynka
+    surface: cli
+    for_surface: service
+    alternative: only subscription account discovery reads purchase receipts, through the skrzynka CLI; without SKRZYNKA_ORGANIZATION that step reports its refusal among the enrollment errors and the subscription reconciliation is skipped, while model routing and every gateway route run without Skrzynka
+    alternative_source: brama/src/subscription_dispatch/discovery/enroll.rs
 - id: weles
   name: Weles
   status: active
