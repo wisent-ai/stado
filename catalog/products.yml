@@ -737,6 +737,11 @@ products:
     surface: service
     for_surface: cli
     bound_because: 'only the Jeden test plans (apps/jeden and apps/jeden-desktop) name it: they hand the Jeden under test the WISENT_APP_AGENT_ID and secret it signs its Brama calls with, and every other plan runs without it'
+  - product: tama
+    surface: cli
+    for_surface: cli
+    alternative: Tama is asked only for the violation scans in the fleet status overview and the nightly script; without it the overview reports each scan as an error naming why tama violations find could not run, and the nightly script prints scan skipped, while every other command runs without Tama
+    alternative_source: probierz/probierz-rs/src/status/fleet/overview/scanner.rs
 - id: tama
   name: Tama
   status: active
