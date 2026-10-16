@@ -1282,8 +1282,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/skryba
-  description: Detector-directed text rewriting with a native Rust GRPO policy and
-    commissioned human rewrites.
+  description: Detector-directed text rewriting with a native Rust GRPO policy and commissioned human rewrites.
   roadmap: []
   integrations:
   - product: brama
@@ -1293,9 +1292,7 @@ products:
     description: Skryba commissions human rewrites through HandToHuman.
     source: skryba/README.md:15-20
   - product: ster
-    description: Skryba's `writing-style export` emits the SFT example set `ster tune
-      sft` reads and the contrastive pair set `ster tune dpo` reads; Ster owns the
-      local weights and trains the adapter.
+    description: Skryba's `writing-style export` emits the SFT example set `ster tune sft` reads and the contrastive pair set `ster tune dpo` reads; Ster owns the local weights and trains the adapter.
     source: skryba/src/writing_style.rs:97-123
   evidence:
   - wisent-ai/skryba/README.md
@@ -1320,27 +1317,27 @@ products:
   - product: brama
     surface: service
     for_surface: cli
-    alternative: SKRYBA_MODEL_SERVICE_URL (--model-service-url) names an OpenAI-compatible
-      model service and SKRYBA_MODEL_SERVICE_KEY_FILE an owner-only file holding its bearer;
-      the quality judge, the rewrite generator and the prose walk over a folder then post
-      to it unsigned in place of Brama
+    alternative: SKRYBA_MODEL_SERVICE_URL (--model-service-url) names an OpenAI-compatible model service and SKRYBA_MODEL_SERVICE_KEY_FILE an owner-only file holding its bearer; the quality judge, the rewrite generator and the prose walk over a folder then post to it unsigned in place of Brama
     alternative_source: skryba/src/app/brama/mod.rs
   - product: handtohuman
     surface: library
     for_surface: cli
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: SKRYBA_CREDENTIALS_FILE names an owner-only JSON file of role -> field -> value that answers every credential reference instead of stado credentials get
+    alternative_source: skryba/src/app/brama/credentials.rs
 - id: handtohuman
   name: HandToHuman
   status: active
   visibility: private
   family: standalone
   owner_repository: wisent-ai/handtohuman
-  description: Standardized human work with automatic staffing, recovery, delivery
-    evidence, and provider-independent task lifecycles.
+  description: Standardized human work with automatic staffing, recovery, delivery evidence, and provider-independent task lifecycles.
   roadmap: []
   integrations:
   - product: stado
-    description: HandToHuman submits compute work and places residential-egress workers
-      through Stado.
+    description: HandToHuman submits compute work and places residential-egress workers through Stado.
     source: handtohuman/README.md:78-86
   - product: skarbiec
     description: HandToHuman obtains scoped lease credentials from Skarbiec.
@@ -1365,9 +1362,19 @@ products:
     binaries:
     - handtohuman
   approved_by: operator
-  approved_at: '2026-09-03T01:51:39Z'
-  approval_note: 'Operator, 2026-09-02: "handtohuman i preferences nie sa wisentowe."
-    - placing it in a family is treating it as a product.'
+  approved_at: 2026-09-03T01:51:39Z
+  approval_note: 'Operator, 2026-09-02: "handtohuman i preferences nie sa wisentowe." - placing it in a family is treating it as a product.'
+  dependencies:
+  - product: skarbiec
+    surface: service
+    for_surface: cli
+    alternative: HANDTOHUMAN_STRIPE_KEY_FILE names an owner-only file with the owner Stripe key, and payments reach Stripe directly without the wisent-integrations bearer Skarbiec holds; HANDTOHUMAN_INTEGRATION_TOKEN carries that bearer instead when payments go through wisent-integrations
+    alternative_source: handtohuman/src/payments/core/direct.rs
+  - product: stado
+    surface: service
+    for_surface: cli
+    alternative: HANDTOHUMAN_STRIPE_KEY_FILE sends payments to Stripe directly instead of through wisent-integrations, and with neither STADO_INTEGRATION_API_URL nor HANDTOHUMAN_STADO_INTEGRATION_TOKEN set onboarding runs on the offline journey transport
+    alternative_source: handtohuman/src/payments/core/direct.rs
 - id: wisent-app
   name: Wisent App
   status: active
@@ -1435,18 +1442,14 @@ products:
   visibility: private
   family: standalone
   owner_repository: wisent-ai/preferences
-  description: Pairwise preference voting that ranks generators per category with
-    Bradley-Terry, builds a taste profile for each voter, and exports text choices
-    as Ster contrastive pairs.
+  description: Pairwise preference voting that ranks generators per category with Bradley-Terry, builds a taste profile for each voter, and exports text choices as Ster contrastive pairs.
   roadmap: []
   integrations:
   - product: ster
-    description: Preferences exports a voter's text choices as the contrastive pair
-      set Ster trains steering vectors from.
+    description: Preferences exports a voter's text choices as the contrastive pair set Ster trains steering vectors from.
     source: preferences/README.md
   - product: brama
-    description: Preferences verifies human identity against the same canonical Wisent
-      Supabase project Brama uses, and models are reached only through Brama.
+    description: Preferences verifies human identity against the same canonical Wisent Supabase project Brama uses, and models are reached only through Brama.
     source: preferences/README.md
   evidence:
   - wisent-ai/preferences/README.md
@@ -1463,9 +1466,14 @@ products:
     binaries:
     - preferences
   approved_by: operator
-  approved_at: '2026-09-03T01:51:39Z'
-  approval_note: 'Operator, 2026-09-02: "handtohuman i preferences nie sa wisentowe."
-    - placing it in a family is treating it as a product.'
+  approved_at: 2026-09-03T01:51:39Z
+  approval_note: 'Operator, 2026-09-02: "handtohuman i preferences nie sa wisentowe." - placing it in a family is treating it as a product.'
+  dependencies:
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: PREFERENCES_CREDENTIALS_FILE names an owner-only JSON file of role -> field -> value that answers the bearer references instead of stado credentials get
+    alternative_source: preferences/src/cli/client.mjs
 - id: humanmaxx
   name: HumanMaxx
   status: preview
