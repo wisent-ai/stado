@@ -62,7 +62,7 @@ fn pending_row(document: &Value) -> Value {
         "hostname": text("hostname"),
         "os": text("os"),
         "arch": text("arch"),
-        "kind": text("kind").unwrap_or("local"),
+        "kind": text("kind"),
         "target_name": request_target_name(document),
         "status": STATUS_PENDING,
         "requested_at": text("requested_at"),
@@ -86,7 +86,7 @@ pub async fn pending(as_json: bool) -> Result<bool, CmdError> {
     // hostname, was skipped, and the listing could say "no pending join
     // requests" over a machine waiting to join. Each is listed with its reason;
     // only a request that records another decision is left out.
-    let mut unreadable = Vec::new();
+    let mut unreadable: Vec<(String, String)> = Vec::new();
     for blob in &blobs {
         let Some(text) = store.download_text(&blob.name).await? else {
             continue;
@@ -94,8 +94,7 @@ pub async fn pending(as_json: bool) -> Result<bool, CmdError> {
         let document = match serde_json::from_str::<Value>(&text) {
             Ok(document) => document,
             Err(error) => {
-                unreadable
-                    .push(json!({"request": blob.name, "reason": format!("not JSON: {error}")}));
+                unreadable.push((blob.name.clone(), format!("not JSON: {error}")));
                 continue;
             }
         };
@@ -107,26 +106,24 @@ pub async fn pending(as_json: bool) -> Result<bool, CmdError> {
                     .and_then(Value::as_str)
                     .is_some_and(|status| status != STATUS_PENDING);
                 if !decided {
-                    unreadable.push(json!({"request": blob.name, "reason": reason}));
+                    unreadable.push((blob.name.clone(), reason));
                 }
             }
         }
     }
     if as_json {
+        let unreadable: Vec<Value> = unreadable
+            .iter()
+            .map(|(request, reason)| json!({ "request": request, "reason": reason }))
+            .collect();
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({ "pending": shown, "unreadable": unreadable }))?
         );
         return Ok(unreadable.is_empty());
     }
-    for entry in &unreadable {
-        println!(
-            "unreadable request {}: {}",
-            entry["request"].as_str().map_or("(unnamed)", |name| name),
-            entry["reason"]
-                .as_str()
-                .map_or("(no reason)", |reason| reason)
-        );
+    for (request, reason) in &unreadable {
+        println!("unreadable request {request}: {reason}");
     }
     if shown.is_empty() {
         println!("no pending join requests");
