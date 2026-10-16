@@ -73,7 +73,7 @@ enum NativeRouteOperations {
         ], fixedArguments: ["--authority"]),
         .init(id: "placement-standby", title: "Prepare a registered host to stand by for a placement profile", path: ["placement", "standby"], hostPlacement: .option("--host"), fields: [
             .init(id: "profile", label: "Placement profile", required: true),
-            .init(id: "reason", label: "Why this host must stand by (recorded beside every unit declared)", option: "--reason", required: true),
+            .init(id: "reason", label: "Why this host must stand by (carried in the receipt; each unit is staged, not run)", option: "--reason", required: true),
         ]),
     ]
 }

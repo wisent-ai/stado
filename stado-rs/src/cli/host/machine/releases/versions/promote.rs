@@ -182,10 +182,12 @@ pub async fn promote_version(
         let undeclared = match object.get("release_platform") {
             None | Some(Value::Null) => true,
             Some(Value::String(declared)) => declared.is_empty(),
-            Some(other) => return Err(CmdError::click(format!(
+            Some(other) => {
+                return Err(CmdError::click(format!(
                 "target {name:?} declares release_platform {other}, which is not a platform name"
             ))
-            .stating(crate::primitives::failure::FailureCode::Config)),
+                .stating(crate::primitives::failure::FailureCode::Config))
+            }
         };
         if undeclared {
             object.insert("release_platform".to_string(), json!(observed));
