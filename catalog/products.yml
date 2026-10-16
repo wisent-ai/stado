@@ -1584,9 +1584,7 @@ products:
   visibility: private
   family: standalone
   owner_repository: wisent-ai/ai-text-detector-web
-  description: An AI-pattern score for text that shows its evidence and its limits;
-    the web app at app.aiwritecheck.com and the product site at aiwritecheck.com,
-    its own brand.
+  description: An AI-pattern score for text that shows its evidence and its limits; the web app at app.aiwritecheck.com and the product site at aiwritecheck.com, its own brand.
   roadmap: []
   integrations: []
   evidence:
@@ -1608,15 +1606,24 @@ products:
     repository: wisent-ai/ai-text-detector-web
     binaries:
     - aiwritecheck
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: web
+    alternative: AIWRITECHECK_MODEL_ENDPOINT and AIWRITECHECK_MODEL name an OpenAI-compatible provider every analysis then asks directly, with AIWRITECHECK_MODEL_KEY as its bearer when the provider takes one
+    alternative_source: ai-text-detector-web/src/lib/brama.ts
+  - product: brama
+    surface: service
+    for_surface: cli
+    alternative: AIWRITECHECK_MODEL_ENDPOINT and AIWRITECHECK_MODEL name an OpenAI-compatible provider every analysis then asks directly, with AIWRITECHECK_MODEL_KEY as its bearer when the provider takes one
+    alternative_source: ai-text-detector-web/src/lib/brama.ts
 - id: undetectabletext
   name: UndetectableText
   status: active
   visibility: private
   family: standalone
   owner_repository: wisent-ai/ai-text-generator-web
-  description: Turns stiff AI copy into natural writing without losing the facts;
-    the web app at app.undetectabletext.com and the product site at undetectabletext.com,
-    its own brand.
+  description: Turns stiff AI copy into natural writing without losing the facts; the web app at app.undetectabletext.com and the product site at undetectabletext.com, its own brand.
   roadmap: []
   integrations: []
   evidence:
@@ -1638,6 +1645,17 @@ products:
     repository: wisent-ai/ai-text-generator-web
     binaries:
     - undetectabletext
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: web
+    alternative: UNDETECTABLETEXT_MODEL_ENDPOINT and UNDETECTABLETEXT_MODEL name an OpenAI-compatible provider every rewrite then asks directly, with UNDETECTABLETEXT_MODEL_KEY as its bearer when the provider takes one
+    alternative_source: ai-text-generator-web/src/lib/brama.ts
+  - product: brama
+    surface: service
+    for_surface: cli
+    alternative: UNDETECTABLETEXT_MODEL_ENDPOINT and UNDETECTABLETEXT_MODEL name an OpenAI-compatible provider every rewrite then asks directly, with UNDETECTABLETEXT_MODEL_KEY as its bearer when the provider takes one
+    alternative_source: ai-text-generator-web/src/lib/brama.ts
 - id: turbot
   name: Turbot
   status: preview
