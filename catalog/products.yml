@@ -857,6 +857,11 @@ products:
     surface: web
     for_surface: web
     bound_because: competitor deep analysis requires the Wisent app agent secret WISENT_APP_AGENT_AUTH_SECRET for its text and vision model gateway; its readiness names the secret when missing and runCompetitorAnalysis refuses with a configuration error, while the rest of Echo runs without the Wisent app
+  - product: stado
+    surface: service
+    for_surface: web
+    alternative: ECHO_OBJECT_DIR keeps Echo objects in a local directory instead of the Stado object API; without STADO_INTEGRATION_API_URL and ECHO_STADO_INTEGRATION_TOKEN the provider integrations (competitor search, mobile analytics credentials, SMS verification) report themselves unconfigured. LoRA training and SmoothMix video run only as Stado machine jobs, and model calls go to the router STADO_MODEL_ROUTER_URL names with ECHO_STADO_MODEL_ROUTER_TOKEN
+    alternative_source: echo-web/src/lib/storage/local-objects.ts
 - id: probierz
   name: Probierz
   status: active
