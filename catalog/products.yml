@@ -611,8 +611,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/lem
-  description: Research and conference-management harness for producing and validating
-    papers.
+  description: Research and conference-management harness for producing and validating papers.
   roadmap: []
   integrations:
   - product: brama
@@ -648,8 +647,14 @@ products:
     repository: wisent-ai/lem-desktop
     manifest: .wisent-desktop-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:05Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:05Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
+  dependencies:
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: 'Lem never calls Stado: its one Stado line removes STADO_MODEL_ROUTER_TOKEN from the environment of the commands the figure-quality evaluator starts, so the model-router bearer never reaches them; Lem runs the same without Stado'
+    alternative_source: lem/Sources/LemCore/FigureQualityEvaluator/LemFigureQualityEvaluator+FigurePreambleFile.swift
 - id: echo
   name: Echo
   status: active
