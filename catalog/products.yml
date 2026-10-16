@@ -258,6 +258,11 @@ products:
     for_surface: service
     alternative: only subscription account discovery reads purchase receipts, through the skrzynka CLI; without SKRZYNKA_ORGANIZATION that step reports its refusal among the enrollment errors and the subscription reconciliation is skipped, while model routing and every gateway route run without Skrzynka
     alternative_source: brama/src/subscription_dispatch/discovery/enroll.rs
+  - product: stado
+    surface: cli
+    for_surface: service
+    alternative: brama serve --local-credentials-stdin runs Brama on its standalone in-memory provider credential store, managed through /v1/admin/credentials, as Brama Desktop does with keys from the macOS Keychain; the release launcher scripts, workload registration, version gate, Stado journey service and resolver-state readiness belong to a gateway Stado launches
+    alternative_source: brama/src/cli/serving.rs
 - id: weles
   name: Weles
   status: active
