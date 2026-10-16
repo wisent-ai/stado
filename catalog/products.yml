@@ -1525,8 +1525,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/wisent-app
-  description: The operated customer-facing application for discovering, creating
-    and running every Wisent AI capability under one account, on the web and on iOS.
+  description: The operated customer-facing application for discovering, creating and running every Wisent AI capability under one account, on the web and on iOS.
   roadmap: []
   integrations: []
   evidence:
@@ -1580,6 +1579,12 @@ products:
     method: GET
     url: https://bobloo.com/readyz
     expect_status: OK
+  dependencies:
+  - product: echo
+    surface: web
+    for_surface: web
+    alternative: with no Echo collector configured (NEXT_PUBLIC_ECHO_ANALYTICS_COLLECTOR_URL, ECHO_MOBILE_ANALYTICS_COLLECTOR_URL) every analytics event and snapshot answers recorded false naming the missing variable, and the app runs on without Echo
+    alternative_source: wisent-app/src/lib/analytics/echoServer.js
 - id: preferences
   name: Preferences
   status: active
