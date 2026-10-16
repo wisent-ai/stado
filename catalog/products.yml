@@ -52,18 +52,15 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/jeden
-  description: Private, local-first coding-agent harness with controlled tools and
-    durable sessions.
+  description: Private, local-first coding-agent harness with controlled tools and durable sessions.
   roadmap:
   - title: Freeze the production contracts
     status: planned
-    outcome: Version the capability, operation, session, Brama, Weles, SDK, release,
-      marketplace and worker contracts before parallel implementation.
+    outcome: Version the capability, operation, session, Brama, Weles, SDK, release, marketplace and worker contracts before parallel implementation.
     source: jeden/roadmap/roadmap.yaml:69-111
   - title: Ship one canonical session service
     status: planned
-    outcome: Serve TUI, CLI, RPC, ACP, SDK and headless clients through one protocol
-      and one typed session ledger.
+    outcome: Serve TUI, CLI, RPC, ACP, SDK and headless clients through one protocol and one typed session ledger.
     source: jeden/roadmap/roadmap.yaml:93-107
   - title: Complete production certification
     status: planned
@@ -114,22 +111,43 @@ products:
     repository: wisent-ai/jeden-desktop
     manifest: .wisent-desktop-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:03Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:03Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   dependencies:
   - product: brama
     surface: service
     for_surface: cli
-    alternative: JEDEN_MODEL_ENDPOINT (with JEDEN_MODEL_KEY when the provider takes one)
-      names an OpenAI-compatible provider every model call then goes to, unsigned and
-      without leases
+    alternative: JEDEN_MODEL_ENDPOINT (with JEDEN_MODEL_KEY when the provider takes one) names an OpenAI-compatible provider every model call then goes to, unsigned and without leases
     alternative_source: jeden/rust/agent/credential/mod.rs
   - product: stado
     surface: cli
     for_surface: cli
-    alternative: a BRAMA_URL the caller exports, or JEDEN_MODEL_ENDPOINT, answers the model
-      route without asking Stado's service directory
+    alternative: a BRAMA_URL the caller exports, or JEDEN_MODEL_ENDPOINT, answers the model route without asking Stado's service directory
     alternative_source: jeden/rust/agent/credential/mod.rs
+  - product: tama
+    surface: cli
+    for_surface: cli
+    alternative: with no Tama registry under the home, or JEDEN_TAMA_REGISTRY or hooks.tamaRegistry set to an empty path, Jeden runs every turn without Tama hooks
+    alternative_source: jeden/rust/hooks/tama/mod.rs
+  - product: oko
+    surface: cli
+    for_surface: cli
+    alternative: an answered ask is delivered to the waiting Jeden sessions without Oko; the Oko twin delivery fails with Oko reason and the answer still stands
+    alternative_source: jeden/rust/completion/asks/answer.rs
+  - product: transcript-lake
+    surface: cli
+    for_surface: cli
+    alternative: pursue reads Transcript Lake only when it may run commands (--allow-command or --yolo); every other pursuit and turn runs without it
+    alternative_source: jeden/rust/autonomy.rs
+  - product: wisent-app
+    surface: service
+    for_surface: cli
+    alternative: JEDEN_MODEL_ENDPOINT (with JEDEN_MODEL_KEY when the provider takes one) sends every model call to an OpenAI-compatible provider unsigned, so no wisent-app agent identity signs it
+    alternative_source: jeden/rust/agent/credential/mod.rs
+  - product: weles
+    surface: service
+    for_surface: cli
+    bound_because: jeden billing sets up and reads payment methods of a Weles account; it is the CLI face of Weles billing, and every other Jeden command runs without Weles
 - id: brama
   name: Brama
   status: active
