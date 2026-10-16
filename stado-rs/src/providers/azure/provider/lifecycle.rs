@@ -4,9 +4,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use async_trait::async_trait;
-use serde_json::Value;
 
-use crate::catalog::AZURE_VM_TO_ACCEL;
 use crate::config;
 use crate::providers::{Lifecycle, Provider, ProviderError};
 
@@ -15,6 +13,9 @@ use super::super::builders::{nic_skip_error, vm_body, vm_skip_error};
 use super::super::network;
 use super::super::power::{lifecycle, vm_is_alive};
 use super::{log, py_bool, AzureProvider};
+
+#[path = "fleet.rs"]
+mod fleet;
 
 #[async_trait]
 impl Provider for AzureProvider {
@@ -139,10 +140,12 @@ impl Provider for AzureProvider {
                     return Ok(Some(Self::reference(name, location)));
                 }
                 Err(err) => {
-                    let msg = err.to_string();
-                    if msg.to_lowercase().contains("already exists") {
-                        return Ok(Some(Self::reference(name, location)));
+                    if let Some(reference) =
+                        Self::standing_after_refusal(client, rg, name, location, &err).await?
+                    {
+                        return Ok(Some(reference));
                     }
+                    let msg = err.to_string();
                     log(&format!("VM create failed in {location}: {err}"));
                     // Roll back the NIC we just created so we don't leak
                     // it.
@@ -259,34 +262,6 @@ impl Provider for AzureProvider {
     /// `{accel_type: count}` for all live wisent-* VMs across the
     /// resource group.
     async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError> {
-        let state = self.state().await?;
-        let vms = state
-            .client
-            .list_vms(config::azure_resource_group())
-            .await?;
-        let mut counts: BTreeMap<String, i64> = BTreeMap::new();
-        let prefix = format!("{}-", config::INSTANCE_PREFIX);
-        for vm in &vms {
-            let name = vm.get("name").and_then(Value::as_str).unwrap_or("");
-            if !name.starts_with(&prefix) {
-                continue;
-            }
-            // Cheap state probe: list() doesn't include instance_view by
-            // default, so trust the tag we stamped at create-time. A VM
-            // in the resource group with the wisent_managed tag and a
-            // known GPU SKU consumes quota until we delete it; counting
-            // it as running is the safe direction.
-            let sku = vm
-                .get("properties")
-                .and_then(|p| p.get("hardwareProfile"))
-                .and_then(|h| h.get("vmSize"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let Some((accel, n)) = AZURE_VM_TO_ACCEL.get(sku) else {
-                continue;
-            };
-            *counts.entry((*accel).to_string()).or_insert(0) += n;
-        }
-        Ok(counts)
+        self.running_counts().await
     }
 }

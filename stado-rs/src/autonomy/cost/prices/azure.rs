@@ -72,38 +72,34 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
             .into_iter()
             .flatten()
         {
-            let rate = item
-                .get("retailPrice")
-                .or_else(|| item.get("unitPrice"))
-                .and_then(Value::as_f64)
-                .unwrap_or_default();
-            if rate <= 0.0 {
-                continue;
-            }
-            let description = item
-                .get("productName")
-                .and_then(Value::as_str)
-                .unwrap_or("Azure VM")
-                .to_string();
-            let price_type = item.get("type").and_then(Value::as_str).unwrap_or("");
-            let lowered_description = description.to_ascii_lowercase();
-            if price_type != "Consumption"
-                || lowered_description.contains("windows")
-                || lowered_description.contains("reservation")
-            {
-                continue;
-            }
-            let meter = item.get("meterName").and_then(Value::as_str).unwrap_or("");
-            // A price row is only usable with the meter it bills, the unit it
-            // is quoted per and its currency. One without them was priced as
-            // meter "unknown", per hour, in dollars; it is now left out, and
-            // the source says how many rows it left out and which fields
-            // they lacked.
+            // A price row is only usable with what it prices, the kind of
+            // price it is, the meter it bills, the unit it is quoted per and
+            // its currency. One without them was priced as meter "unknown",
+            // per hour, in dollars, or as a product named "Azure VM"; it is
+            // now left out, and the source says how many rows it left out and
+            // which fields they lacked.
+            let rate = item.get("retailPrice").and_then(Value::as_f64);
+            let product = item.get("productName").and_then(Value::as_str);
+            let price_type = item.get("type").and_then(Value::as_str);
+            let meter = item.get("meterName").and_then(Value::as_str);
             let meter_id = item.get("meterId").and_then(Value::as_str);
             let unit = item.get("unitOfMeasure").and_then(Value::as_str);
             let currency = item.get("currencyCode").and_then(Value::as_str);
-            let (Some(meter_id), Some(unit), Some(currency)) = (meter_id, unit, currency) else {
+            let (
+                Some(rate),
+                Some(product),
+                Some(price_type),
+                Some(meter),
+                Some(meter_id),
+                Some(unit),
+                Some(currency),
+            ) = (rate, product, price_type, meter, meter_id, unit, currency)
+            else {
                 let absent: Vec<&str> = [
+                    ("retailPrice", rate.is_none()),
+                    ("productName", product.is_none()),
+                    ("type", price_type.is_none()),
+                    ("meterName", meter.is_none()),
                     ("meterId", meter_id.is_none()),
                     ("unitOfMeasure", unit.is_none()),
                     ("currencyCode", currency.is_none()),
@@ -114,6 +110,15 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
                 rows_without.push(absent.join("+"));
                 continue;
             };
+            // A free meter prices nothing, and only pay-as-you-go Linux
+            // capacity is compared: reservations, dev/test and Windows
+            // licences price something else.
+            let priced = rate.is_normal() && rate.is_sign_positive();
+            let windows = product.split(' ').any(|word| word == "Windows");
+            if !priced || price_type != "Consumption" || windows {
+                continue;
+            }
+            let description = product.to_string();
             source.quotes.push(PriceQuote {
                 provider: ProviderId::Azure,
                 sku: meter_id.to_string(),
@@ -128,13 +133,7 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
                     .map(str::to_string),
                 accelerator_type: infer_accelerator(&format!("{description} {meter}")),
                 family: None,
-                purchase_option: if meter.to_ascii_lowercase().contains("spot")
-                    || meter.to_ascii_lowercase().contains("low priority")
-                    || item
-                        .get("skuName")
-                        .and_then(Value::as_str)
-                        .is_some_and(|sku| sku.to_ascii_lowercase().contains("spot"))
-                {
+                purchase_option: if spot_price(item.get("skuName").and_then(Value::as_str)) {
                     "spot".to_string()
                 } else {
                     "on_demand".to_string()
@@ -178,4 +177,18 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
         source.error = Some("Azure Retail Prices returned no VM prices".to_string());
     }
     source
+}
+
+/// Whether a retail price is a Spot (formerly Low Priority) price. The
+/// Retail Prices API carries no priority field: Microsoft documents that a
+/// Spot price's `skuName` carries the word `Spot`, its former Low Priority
+/// prices the words `Low Priority`, and the API's values are case-sensitive
+/// (https://learn.microsoft.com/en-us/azure/virtual-machines/spot-vms,
+/// https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices).
+/// A word inside another word, or the same letters in another case, is not
+/// that word.
+fn spot_price(sku_name: Option<&str>) -> bool {
+    sku_name.is_some_and(|sku| {
+        sku.split(' ').any(|word| word == "Spot") || sku.ends_with(" Low Priority")
+    })
 }
