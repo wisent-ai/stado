@@ -72,15 +72,24 @@ pub fn register_verified(
                 "target '{name}' is already registered"
             )));
         }
-        let declared_platform = target
-            .get("release_platform")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !declared_platform.is_empty() && declared_platform != release_platform {
-            return Err(CmdError::refused(format!(
-                "target '{name}' declares release_platform {declared_platform}, \
-                 but enrollment observed {release_platform}"
-            )));
+        // An undeclared or empty platform is the legacy declaration this
+        // repairs; one declared as anything but text is not a platform, and
+        // was read as undeclared and overwritten without a word.
+        match target.get("release_platform") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(declared))
+                if declared.is_empty() || declared == release_platform => {}
+            Some(Value::String(declared)) => {
+                return Err(CmdError::refused(format!(
+                    "target '{name}' declares release_platform {declared}, \
+                     but enrollment observed {release_platform}"
+                )));
+            }
+            Some(other) => {
+                return Err(CmdError::refused(format!(
+                    "target '{name}' declares release_platform {other}, which is not a platform name"
+                )));
+            }
         }
         target["ssh"] = Value::String(destination.to_string());
         target["kind"] = Value::String(kind.to_string());
