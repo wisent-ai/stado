@@ -11,7 +11,7 @@ use std::os::unix::fs::symlink;
 use native::Native;
 
 #[test]
-fn dispatched_results_are_reclaimed_without_taking_release_records_or_inputs() {
+fn dispatched_results_and_a_build_output_are_reclaimed_without_taking_release_records_or_inputs() {
     let native = Native::new("probierz-results");
     let store = native.home.join(".stado/local-storage/ecosystem/probierz");
     let result = store.join("results/journey/output.tar");
@@ -22,11 +22,19 @@ fn dispatched_results_are_reclaimed_without_taking_release_records_or_inputs() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, b"retained source bytes").unwrap();
     }
+    // A build output beside the evidence: the same triggered pass takes both,
+    // so reclaiming evidence never stands in for the build-cache cleaner.
+    let output = native.home.join("work/repo/target");
+    native.cache(&output);
     let user_data = native.fill_with_user_data();
     let report = native.cleanup();
     assert_eq!(report["rule"]["triggered"], true, "{report}");
     assert!(!result.exists(), "dispatched result survived: {report}");
     assert!(!run.exists(), "run evidence survived: {report}");
+    assert!(
+        !output.exists(),
+        "a build output survived the pass: {report}"
+    );
     assert_eq!(
         fs::read(&release).unwrap(),
         b"retained source bytes",

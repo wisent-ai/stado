@@ -16,7 +16,6 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 
-use fs2::FileExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -112,8 +111,7 @@ fn a_wait_whose_process_was_killed_is_ended_by_the_next_reading() {
         .create(true)
         .open(store.lock_of("registry.json"))
         .expect("open the store's registry lock");
-    held.lock_exclusive()
-        .expect("hold the store's registry lock");
+    held.lock().expect("hold the store's registry lock");
 
     let mut child = store.spawn(&["registry", "host", "show", "example-host", "--path", "kind"]);
     let mut stderr = BufReader::new(child.stderr.take().expect("stado's stderr")).lines();
