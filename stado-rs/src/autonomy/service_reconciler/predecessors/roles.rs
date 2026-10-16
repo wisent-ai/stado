@@ -18,17 +18,47 @@ use super::Replacement;
 /// The sentence for a declaration that runs a catalog product's program
 /// under a label that is not that product's unit, for every product but the
 /// host Stado process, whose units are judged role by role in
-/// [`taken_over`]. `None` otherwise, including when the host cannot be read.
+/// [`taken_over`]. `None` otherwise; when the host, the declaration's owner
+/// or the host process cannot be read, that is said on stderr with its
+/// cause, since the unit is then judged as not replaced.
 pub(in crate::autonomy::service_reconciler) async fn replaced(
     declared: &ManagedService,
 ) -> Option<String> {
-    let target = crate::deploy::host_channel::canonical_target(&declared.host)
-        .await
-        .ok()?;
-    let owner = service::declared_owner(&target, declared).ok()??;
-    let host = crate::deploy::service_catalog::host_process().ok()?;
+    let unit = declared.unit_id();
+    let unknown = |what: String| {
+        eprintln!("stado autonomy: whether {unit} was replaced is not known: {what}");
+    };
+    let target = match crate::deploy::host_channel::canonical_target(&declared.host).await {
+        Ok(target) => target,
+        Err(error) => {
+            unknown(format!(
+                "its host {} cannot be resolved: {error}",
+                declared.host
+            ));
+            return None;
+        }
+    };
+    let owner = match service::declared_owner(&target, declared) {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return None,
+        Err(error) => {
+            unknown(format!(
+                "the product that owns its program cannot be read: {error}"
+            ));
+            return None;
+        }
+    };
+    let host = match crate::deploy::service_catalog::host_process() {
+        Ok(host) => host,
+        Err(error) => {
+            unknown(format!(
+                "the host Stado process cannot be read from the catalog: {error}"
+            ));
+            return None;
+        }
+    };
     (owner.name != host.name)
-        .then(|| crate::deploy::service_catalog::retired_sentence(declared.unit_id(), &owner))
+        .then(|| crate::deploy::service_catalog::retired_sentence(unit, &owner))
 }
 
 /// `Some(detail)` when `declared` does the work of a role of a replacement
@@ -56,9 +86,16 @@ pub(in crate::autonomy::service_reconciler) async fn taken_over(
         if running.host != declared.host {
             continue;
         }
-        let target = crate::deploy::host_channel::canonical_target(&running.host)
-            .await
-            .ok()?;
+        let target = match crate::deploy::host_channel::canonical_target(&running.host).await {
+            Ok(target) => target,
+            Err(error) => {
+                eprintln!(
+                    "stado autonomy: whether {unit} was taken over is not known: its host {} cannot be resolved: {error}",
+                    running.host
+                );
+                return None;
+            }
+        };
         let Some(role) =
             service::declared_role(&target, entry, active.then_some(running), declared, runner)
                 .await
@@ -94,7 +131,17 @@ pub(in crate::autonomy::service_reconciler) async fn retake(
     target: &crate::targets::ComputeTarget,
     runner: &Runner,
 ) -> Option<Result<String, String>> {
-    let host = crate::deploy::service_catalog::host_process().ok()?;
+    // A host process the catalog cannot name leaves unknown whether this unit
+    // must be retired again, which is the failure this answer reports.
+    let host = match crate::deploy::service_catalog::host_process() {
+        Ok(host) => host,
+        Err(error) => {
+            return Some(Err(format!(
+                "whether {} must be retired again is not known: the host Stado process cannot be read from the catalog: {error}",
+                declared.unit_id()
+            )))
+        }
+    };
     let role = service::declared_role(target, &host, None, declared, runner).await?;
     if !crate::deploy::service_catalog::api_role(&role) {
         return None;
