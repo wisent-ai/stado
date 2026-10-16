@@ -175,12 +175,15 @@ pub fn perform(
                         &lock,
                         &format!("dependency {dependency_id}/{dependency_surface}"),
                     )?;
+                    // A service dependency runs beside its dependent, on the
+                    // host the installation names (this one, checked above).
+                    let dependency_host = host.filter(|_| dependency_surface == "service");
                     let dependency_state = perform(
                         runtime,
                         document,
                         dependency_product,
                         dependency_surface,
-                        None,
+                        dependency_host,
                         None,
                         &without,
                         with_prerequisites,
