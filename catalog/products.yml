@@ -1140,6 +1140,16 @@ products:
     for_surface: cli
     alternative: without Tama, oko sessions agents lists every session and reports tamaFailure with the reason the abandonment marks could not be read, and only the proactive routine that delivers Tama rule proposals refuses its pass naming Tama; nothing else in Oko reaches Tama
     alternative_source: oko/rust/src/pty/client/agents/tama/mod.rs
+  - product: skarbiec
+    surface: cli
+    for_surface: cli
+    alternative: 'OKO_DATABASE_URL and OKO_DATABASE_ANON_KEY reach the database with no Skarbiec read, so tasks, defects and the registers run without Skarbiec; only the features that hold a service credential read it from Skarbiec: calendar accounts (from the broker or the vault SKARBIEC_VAULT_FILE names, through the skarbiec CLI), GitHub repository execution, Ultrareach sends and the PTY relay'
+    alternative_source: oko/rust/src/database/resolved.rs
+  - product: needher
+    surface: service
+    for_surface: cli
+    alternative: 'Oko never calls Needher: its one Needher line is in evaluation data (Evaluation/auto-goals/intent-eval.jsonl), the quoted text of a session that names it'
+    alternative_source: oko/Evaluation/auto-goals/intent-eval.jsonl
 - id: singularity
   name: Singularity
   status: active
