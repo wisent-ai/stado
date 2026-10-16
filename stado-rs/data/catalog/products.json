@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "products": [
     {
       "name": "stado",
@@ -35,7 +34,7 @@
       "why": "the credential service and CLI; the always-on daemon owns fleet secret delivery",
       "source": {
         "product": "skarbiec",
-        "member": "skarbiec"
+        "member": "bin/skarbiec"
       },
       "platforms": [
         "darwin-arm64",

@@ -83,10 +83,6 @@ pub const DECLARATION_PATH: &str = "stado-rs/data/catalog/products.json";
 /// [`crate::data_dir`] at runtime only ever worked on the build machine.
 const DECLARATION: &str = include_str!("../../../data/catalog/products.json");
 
-/// The declaration schema this build understands. A document from the future
-/// is refused rather than partially honoured.
-pub const SCHEMA_VERSION: u64 = 2;
-
 /// The platform coordinate segments this fleet publishes for at all.
 ///
 /// A closed vocabulary, and not a product list: the platform is a path

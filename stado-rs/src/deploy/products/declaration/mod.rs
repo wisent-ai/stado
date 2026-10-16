@@ -16,11 +16,11 @@ pub use unit::Unit;
 // The declaration
 // ---------------------------------------------------------------------------
 
-/// The whole document.
+/// The whole document. It is compiled into the build that reads it, so the
+/// shape is the one this build declares and carries no schema stamp.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Declaration {
-    pub schema_version: u64,
     pub products: Vec<Product>,
 }
 

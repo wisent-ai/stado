@@ -1,9 +1,7 @@
 //! Every refusal a well-shaped declaration document can still earn.
 
 use super::declaration::{Declaration, Install, Readback};
-use super::{
-    DECLARATION_PATH, PLATFORMS, SCHEMA_VERSION, TARGET_PLACEHOLDER, UNIT_LAUNCHD, UNIT_SYSTEMD,
-};
+use super::{DECLARATION_PATH, PLATFORMS, TARGET_PLACEHOLDER, UNIT_LAUNCHD, UNIT_SYSTEMD};
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -44,12 +42,6 @@ fn unit_path(value: &str) -> bool {
 /// the product and the field, because the reader is somebody adding a product
 /// and the useful answer is which line to fix.
 pub fn validate(declaration: &Declaration) -> Result<(), String> {
-    if declaration.schema_version != SCHEMA_VERSION {
-        return Err(format!(
-            "{DECLARATION_PATH} declares schema_version {}, and this build reads {SCHEMA_VERSION}",
-            declaration.schema_version
-        ));
-    }
     if declaration.products.is_empty() {
         return Err(format!("{DECLARATION_PATH} declares no products"));
     }
@@ -65,12 +57,9 @@ pub fn validate(declaration: &Declaration) -> Result<(), String> {
                 "name must be a bare token of letters, digits, '.', '_' and '-'".to_string(),
             ));
         }
-        if declaration
-            .products
+        if declaration.products[..index]
             .iter()
-            .filter(|other| other.name == entry.name)
-            .count()
-            != 1
+            .any(|earlier| earlier.name == entry.name)
         {
             return Err(refuse("name is declared twice".to_string()));
         }
@@ -94,20 +83,14 @@ pub fn validate(declaration: &Declaration) -> Result<(), String> {
         if entry.platforms.is_empty() {
             return Err(refuse("platforms must name at least one".to_string()));
         }
-        for platform in &entry.platforms {
+        for (position, platform) in entry.platforms.iter().enumerate() {
             if !PLATFORMS.contains(&platform.as_str()) {
                 return Err(refuse(format!(
                     "platform {platform:?} is not one of {}",
                     PLATFORMS.join(", ")
                 )));
             }
-            if entry
-                .platforms
-                .iter()
-                .filter(|other| *other == platform)
-                .count()
-                != 1
-            {
+            if entry.platforms[..position].contains(platform) {
                 return Err(refuse(format!("platform {platform:?} is declared twice")));
             }
         }
@@ -117,21 +100,15 @@ pub fn validate(declaration: &Declaration) -> Result<(), String> {
                     .to_string(),
             ));
         }
-        for preserved in entry.install.preserve() {
+        let preserved_paths = entry.install.preserve();
+        for (position, preserved) in preserved_paths.iter().enumerate() {
             if !safe_relative_path(preserved) {
                 return Err(refuse(format!(
                     "preserved path {preserved:?} must be relative to the install root, with no \
                      '..' component"
                 )));
             }
-            if entry
-                .install
-                .preserve()
-                .iter()
-                .filter(|other| *other == preserved)
-                .count()
-                != 1
-            {
+            if preserved_paths[..position].contains(preserved) {
                 return Err(refuse(format!(
                     "preserved path {preserved:?} is declared twice"
                 )));
@@ -199,12 +176,9 @@ pub fn validate(declaration: &Declaration) -> Result<(), String> {
                      '{{target}}'"
                 )));
             }
-            if entry
-                .units
+            if entry.units[..unit_index]
                 .iter()
-                .filter(|other| other.label_for("target") == label)
-                .count()
-                != 1
+                .any(|earlier| earlier.label_for("target") == label)
             {
                 return Err(refuse(format!(
                     "units[{unit_index}].label {label:?} is declared more than once"
