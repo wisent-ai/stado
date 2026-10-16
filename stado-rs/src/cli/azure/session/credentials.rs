@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use super::super::{CmdError, ARM_SCOPE, AZURE_CLI_CLIENT_ID};
+use super::super::{CmdError, AZURE_CLI_CLIENT_ID};
 
 fn credential_client() -> Result<crate::skarbiec::Client, CmdError> {
     let credentials = crate::credential_store::admin_credentials().map_err(CmdError::from)?;
@@ -47,12 +47,15 @@ pub(super) async fn store_operator_item(
         "tenant_id": tenant,
         "client_id": AZURE_CLI_CLIENT_ID,
         "refresh_token": refresh_token,
-        "scope": token_body.get("scope").and_then(Value::as_str).unwrap_or(ARM_SCOPE),
         "credential_status": "ready",
         "tags": ["wisent", "azure", "operator", "oauth-refresh"]
     });
-    // `client_info` is stored only when the token endpoint returned it: an
-    // empty string read back as an answer Azure never gave.
+    // `scope` and `client_info` are stored only when the token endpoint
+    // returned them: a scope filled in from the one requested, or an empty
+    // string, read back as a grant Azure never stated.
+    if let Some(scope) = token_body.get("scope").and_then(Value::as_str) {
+        value["scope"] = json!(scope);
+    }
     if let Some(info) = token_body.get("client_info").and_then(Value::as_str) {
         value["client_info"] = json!(info);
     }
