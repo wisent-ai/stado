@@ -8,9 +8,9 @@ use serde_json::Value;
 use crate::cli::fleet::invite::{self, Invite};
 use crate::queue::{JobStorage, StorageError};
 
-/// Compared against when no digest could be loaded, so an unknown id costs
-/// the same hash and the same comparison as a known one.
-const ABSENT_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+use super::refusals::store_failed;
+
+const STORE_UNAVAILABLE: &str = "enrollment store is unavailable";
 
 // ---------------------------------------------------------------------------
 // Invite verification
@@ -36,34 +36,62 @@ pub(super) struct Accepted {
 /// spent, exhausted, expired — collapses into `Denial::Refused` after the
 /// same work: one store read, one digest, one constant-time comparison. There
 /// is no early return between the read and the verdict, and the status itself
-/// is decided by `invite::effective_status`, never re-derived here.
+/// is decided by `invite::effective_status`, never re-derived here. A store
+/// that cannot be read, or an invite document it holds that cannot be
+/// parsed, is logged with its cause for the operator.
 pub(super) async fn verify(store: &JobStorage, id: &str, secret: &str) -> Result<Accepted, Denial> {
-    let stored = match store.read_text_versioned(&invite::invite_path(id)).await {
+    let path = invite::invite_path(id);
+    let stored = match store.read_text_versioned(&path).await {
         Ok(stored) => stored,
-        Err(_) => return Err(Denial::Unavailable("enrollment store is unavailable")),
+        Err(error) => {
+            return Err(store_failed(
+                STORE_UNAVAILABLE,
+                &format!("read {path}"),
+                &error,
+            ));
+        }
     };
-    let (content, version) = match stored {
-        Some(versioned) => (versioned.content, versioned.version),
-        None => (String::new(), String::new()),
-    };
-    let parsed = serde_json::from_str::<Value>(&content)
-        .ok()
-        .and_then(|document| invite::parse_invite(&document).ok());
-
-    // A missing invite still pays for a digest and a comparison; skipping
-    // them would make "no such id" the fast answer.
-    let expected = parsed
-        .as_ref()
-        .map(|invite| invite.secret_sha256.as_str())
-        .unwrap_or(ABSENT_DIGEST);
-    let secret_ok = invite::digests_match(expected, &invite::secret_digest(secret));
-    let usable = parsed.as_ref().is_some_and(|invite| {
-        invite.id == id && invite::effective_status(invite, Utc::now()) == invite::STATUS_OPEN
+    let found = stored.and_then(|versioned| {
+        readable(&path, &versioned.content).map(|invite| Accepted {
+            invite,
+            version: versioned.version,
+        })
     });
 
-    match parsed {
-        Some(invite) if secret_ok & usable => Ok(Accepted { invite, version }),
+    // A missing invite still pays for a digest and a comparison; skipping
+    // them would make "no such id" the fast answer. With no stored digest the
+    // presented one is compared with itself, and the verdict below refuses
+    // it because there is no invite to accept.
+    let presented = invite::secret_digest(secret);
+    let expected = match &found {
+        Some(accepted) => accepted.invite.secret_sha256.as_str(),
+        None => presented.as_str(),
+    };
+    let secret_ok = invite::digests_match(expected, &presented);
+    let usable = found.as_ref().is_some_and(|accepted| {
+        accepted.invite.id == id
+            && invite::effective_status(&accepted.invite, Utc::now()) == invite::STATUS_OPEN
+    });
+
+    match found {
+        Some(accepted) if secret_ok & usable => Ok(accepted),
         _ => Err(Denial::Refused),
+    }
+}
+
+/// The invite a stored document holds, or `None` with the reason logged: a
+/// document that is not an invite refuses every token presented for it, and
+/// only the operator can repair it.
+fn readable(path: &str, content: &str) -> Option<Invite> {
+    let parsed = serde_json::from_str::<Value>(content)
+        .map_err(|error| format!("not JSON: {error}"))
+        .and_then(|document| invite::parse_invite(&document));
+    match parsed {
+        Ok(invite) => Some(invite),
+        Err(cause) => {
+            tracing::warn!(path, cause = %cause, "a stored fleet invite cannot be read, so it refuses every join");
+            None
+        }
     }
 }
 
@@ -74,18 +102,19 @@ pub(super) async fn spend(store: &JobStorage, accepted: &Accepted) -> Result<Val
     let next = invite::with_one_use_spent(&accepted.invite);
     let document = invite::invite_document(&next);
     let body = serde_json::to_string_pretty(&document)
-        .map_err(|_| Denial::Unavailable("enrollment store is unavailable"))?;
+        .map_err(|error| store_failed(STORE_UNAVAILABLE, "serialise the spent invite", &error))?;
+    let path = invite::invite_path(&accepted.invite.id);
     match store
-        .compare_and_swap_text(
-            &invite::invite_path(&accepted.invite.id),
-            &accepted.version,
-            &body,
-        )
+        .compare_and_swap_text(&path, &accepted.version, &body)
         .await
     {
         Ok(_) => Ok(document),
         Err(StorageError::StorageConflict(_) | StorageError::NotFound(_)) => Err(Denial::Refused),
-        Err(_) => Err(Denial::Unavailable("enrollment store is unavailable")),
+        Err(error) => Err(store_failed(
+            STORE_UNAVAILABLE,
+            &format!("spend a use of {path}"),
+            &error,
+        )),
     }
 }
 
@@ -102,11 +131,13 @@ pub(super) async fn refund(store: &JobStorage, accepted: &Accepted, spent: &Valu
         Ok(None) => return,
         Err(error) => return unrefunded(accepted, &error.to_string()),
     };
-    if serde_json::from_str::<Value>(&current.content)
-        .ok()
-        .as_ref()
-        != Some(spent)
-    {
+    let held = match serde_json::from_str::<Value>(&current.content) {
+        Ok(held) => held,
+        Err(error) => {
+            return unrefunded(accepted, &format!("the stored invite is not JSON: {error}"));
+        }
+    };
+    if &held != spent {
         return;
     }
     let restored = invite::invite_document(&accepted.invite);
