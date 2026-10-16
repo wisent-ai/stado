@@ -1091,6 +1091,11 @@ products:
     surface: service
     for_surface: cli
     bound_because: 'only a task Oko routes through the Brama proxy to a harness that speaks Brama own contract (the proxiedRuntimes of pty/broker/routing.json, jeden and omp) names it: Oko hands that session the agent identity oko as WISENT_APP_AGENT_ID beside the lease it runs on; sessions on every other harness, and Oko itself, run without it'
+  - product: tama
+    surface: cli
+    for_surface: cli
+    alternative: without Tama, oko sessions agents lists every session and reports tamaFailure with the reason the abandonment marks could not be read, and only the proactive routine that delivers Tama rule proposals refuses its pass naming Tama; nothing else in Oko reaches Tama
+    alternative_source: oko/rust/src/pty/client/agents/tama/mod.rs
 - id: singularity
   name: Singularity
   status: active
