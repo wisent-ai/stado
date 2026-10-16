@@ -16,7 +16,6 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use fs2::FileExt;
 use sha2::{Digest, Sha256};
 
 struct Store {
@@ -89,16 +88,19 @@ fn a_registry_read_behind_a_held_store_lock_names_the_lock_before_it_blocks() {
         .create(true)
         .open(&lock_path)
         .expect("open the store's registry lock");
-    held.lock_exclusive()
-        .expect("hold the store's registry lock");
+    held.lock().expect("hold the store's registry lock");
 
     let mut child = store.spawn(&["registry", "host", "show", "example-host", "--path", "kind"]);
     let mut stderr = BufReader::new(child.stderr.take().expect("stado's stderr"));
     let mut said = Vec::new();
     let started = loop {
         let mut line = String::new();
-        let read = stderr.read_line(&mut line).expect("read stado's stderr");
-        assert!(read > 0, "stado ended before saying it waits: {said:?}");
+        stderr.read_line(&mut line).expect("read stado's stderr");
+        // read_line leaves the line empty only at the end of stado's stderr.
+        assert!(
+            !line.is_empty(),
+            "stado ended before saying it waits: {said:?}"
+        );
         said.push(line.clone());
         if line.starts_with("czekam: exclusive lock on the local store's registry.json") {
             break line;
