@@ -517,8 +517,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/stado
-  description: Fleet control plane for queues, jobs, placement, leases, hosts, declared
-    services, and the Wisent product catalog with every product's installation and signing.
+  description: Fleet control plane for queues, jobs, placement, leases, hosts, declared services, and the Wisent product catalog with every product's installation and signing.
   roadmap:
   - title: Add AWS managed autoscaling
     status: planned
@@ -530,40 +529,31 @@ products:
     source: https://stado.wisent.com/docs/integrations
   - title: Earn from the idle GPU on a compute marketplace
     status: in_progress
-    outcome: List the idle GPU automatically on Vast.ai and withdraw the offer when
-      fleet work returns; the capability ships and awaits its credential.
+    outcome: List the idle GPU automatically on Vast.ai and withdraw the offer when fleet work returns; the capability ships and awaits its credential.
     source: https://stado.wisent.com/docs/vast
   - title: Sell tokens from the fleet's own inference endpoint
     status: planned
-    outcome: Publish the OpenAI-compatible deployment behind a public origin with
-      declared prices, throughput and rate limits, so model output is sold per token
-      while yieldable mode keeps the board available to fleet work.
+    outcome: Publish the OpenAI-compatible deployment behind a public origin with declared prices, throughput and rate limits, so model output is sold per token while yieldable mode keeps the board available to fleet work.
     source: https://stado.wisent.com/docs/earning
   - title: Operate a customer's own fleet
     status: planned
-    outcome: Run enrollment, placement, delivery, declared repair and evidence for
-      machines and cloud accounts the customer owns, with the provider's cost and
-      the management fee separately visible.
+    outcome: Run enrollment, placement, delivery, declared repair and evidence for machines and cloud accounts the customer owns, with the provider's cost and the management fee separately visible.
     source: https://stado.wisent.com/docs/earning
   - title: Sell macOS builds, signing and updates
     status: planned
-    outcome: Offer the publisher runner, Developer ID signing, notarization and
-      Sparkle publication as a paid surface per release or per repository.
+    outcome: Offer the publisher runner, Developer ID signing, notarization and Sparkle publication as a paid surface per release or per repository.
     source: https://stado.wisent.com/docs/earning
   - title: Sell interactive GPU sessions
     status: planned
-    outcome: Charge for a streamed display session on a fleet GPU, which a container
-      marketplace cannot serve.
+    outcome: Charge for a streamed display session on a fleet GPU, which a container marketplace cannot serve.
     source: https://stado.wisent.com/docs/earning
   - title: Sell browser work with a verifiable receipt
     status: planned
-    outcome: Charge per authorized browser run whose signed receipt an independent
-      client verifies.
+    outcome: Charge per authorized browser run whose signed receipt an independent client verifies.
     source: https://stado.wisent.com/docs/earning
   - title: Host releases and updates for other products
     status: planned
-    outcome: Offer the immutable object plane, channels, promotion, rollback and
-      public hostnames as a subscription for a product whose updates Stado carries.
+    outcome: Offer the immutable object plane, channels, promotion, rollback and public hostnames as a subscription for a product whose updates Stado carries.
     source: https://stado.wisent.com/docs/earning
   - title: Sell disposable isolated environments
     status: planned
@@ -571,8 +561,7 @@ products:
     source: https://stado.wisent.com/docs/earning
   - title: Sell cloud cost reduction as a service
     status: planned
-    outcome: Charge for attributed cost, forecast, anomaly and savings reporting with
-      autonomy budgets that block new cloud spend, against a customer's own accounts.
+    outcome: Charge for attributed cost, forecast, anomaly and savings reporting with autonomy budgets that block new cloud spend, against a customer's own accounts.
     source: https://stado.wisent.com/docs/earning
   integrations:
   - product: skarbiec
@@ -594,7 +583,14 @@ products:
     repository: wisent-ai/stado
     manifest: .wisent-release.json
     after_install:
-    - [stado, release, local, converge, --archive, '{release_archive}', --sha256, '{release_archive_sha256}']
+    - - stado
+      - release
+      - local
+      - converge
+      - --archive
+      - '{release_archive}'
+      - --sha256
+      - '{release_archive_sha256}'
   - surface: service
     kind: stado-release
     repository: wisent-ai/stado
@@ -605,8 +601,8 @@ products:
     command: desktop/StadoDesktop/release/bundle/build-app.sh
     bundle_path: desktop/StadoDesktop/.build/Stado.app
   approved_by: operator
-  approved_at: '2026-09-02T19:53:04Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:04Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   service:
     installable: true
     unit: com.wisent.stado
@@ -628,10 +624,88 @@ products:
   - product: skarbiec
     surface: service
     for_surface: service
-    alternative: STADO_CREDENTIALS_STORE=file://<owner-only path> (persisted as credentials.store)
-      selects the owner-only file credential store; alert channels and every other
-      credential read then answer from it without Skarbiec
+    alternative: STADO_CREDENTIALS_STORE=file://<owner-only path> (persisted as credentials.store) selects the owner-only file credential store; alert channels and every other credential read then answer from it without Skarbiec
     alternative_source: stado/stado-rs/src/credential_store/mod.rs
+  - product: aiwritecheck
+    surface: web
+    for_surface: cli
+    alternative: 'Stado never calls aiwritecheck: its aiwritecheck lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without aiwritecheck runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: echo
+    surface: cli
+    for_surface: cli
+    alternative: 'Stado never calls echo: its echo lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without echo runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: film
+    surface: cli
+    for_surface: cli
+    alternative: 'Stado never calls film: its film lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without film runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: glina
+    surface: cli
+    for_surface: cli
+    alternative: 'Stado never calls glina: its glina lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without glina runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: handtohuman
+    surface: cli
+    for_surface: cli
+    alternative: 'Stado never calls handtohuman: its handtohuman lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without handtohuman runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: kronika
+    surface: cli
+    for_surface: cli
+    alternative: 'Stado never calls kronika: its kronika lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without kronika runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: kupiec
+    surface: service
+    for_surface: cli
+    alternative: 'Stado never calls kupiec: its kupiec lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without kupiec runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: las
+    surface: cli
+    for_surface: cli
+    alternative: 'Stado never calls las: its las lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without las runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: most
+    surface: service
+    for_surface: cli
+    alternative: 'Stado never calls most: its most lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without most runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: obraz
+    surface: cli
+    for_surface: cli
+    alternative: 'Stado never calls obraz: its obraz lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without obraz runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: preferences
+    surface: web
+    for_surface: cli
+    alternative: 'Stado never calls preferences: its preferences lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without preferences runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: singularity
+    surface: cli
+    for_surface: cli
+    alternative: 'Stado never calls singularity: its singularity lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without singularity runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: skryba
+    surface: cli
+    for_surface: cli
+    alternative: 'Stado never calls skryba: its skryba lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without skryba runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: skrzynka
+    surface: service
+    for_surface: cli
+    alternative: 'Stado never calls skrzynka: its skrzynka lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without skrzynka runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: ugc
+    surface: web
+    for_surface: cli
+    alternative: 'Stado never calls ugc: its ugc lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without ugc runs every other product the same'
+    alternative_source: stado/catalog/products.yml
+  - product: undetectabletext
+    surface: web
+    for_surface: cli
+    alternative: 'Stado never calls undetectabletext: its undetectabletext lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without undetectabletext runs every other product the same'
+    alternative_source: stado/catalog/products.yml
 - id: lem
   name: Lem
   status: active
