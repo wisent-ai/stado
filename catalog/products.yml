@@ -715,6 +715,11 @@ products:
     surface: service
     for_surface: web
     bound_because: 'Echo pose and character image generation renders only on Obraz: the civitai instance, pose improve and pose regenerate routes call Obraz; the rest of Echo runs without Obraz'
+  - product: las
+    surface: web
+    for_surface: web
+    alternative: 'landing revalidation is optional: without LAS_REVALIDATION_URL and LAS_REVALIDATION_SECRET it answers delivered false naming that it is not configured, and Echo publishes without Las'
+    alternative_source: echo-web/src/lib/blog/revalidate.ts
 - id: probierz
   name: Probierz
   status: active
