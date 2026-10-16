@@ -1872,10 +1872,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/creator-portal
-  description: 'Commissioning user-generated content from real creators: discovery,
-    briefs, rights, assets, statistics and payment records. Creators sign up and are
-    paid through the creator portal; the campaign ledger and its CLI are packages
-    of the estate rather than records here.'
+  description: 'Commissioning user-generated content from real creators: discovery, briefs, rights, assets, statistics and payment records. Creators sign up and are paid through the creator portal; the campaign ledger and its CLI are packages of the estate rather than records here.'
   roadmap: []
   integrations: []
   evidence:
@@ -1897,6 +1894,11 @@ products:
     manifest: Cargo.toml
     binaries:
     - ugc-cli
+  dependencies:
+  - product: weles
+    surface: service
+    for_surface: cli
+    bound_because: 'only ugc weles enqueue and ugc weles status reach Weles: they queue and read a Weles task for a creator account; every other ugc command runs without Weles'
 - id: transcript-label-trainer
   name: Transcript Label Trainer
   status: active
