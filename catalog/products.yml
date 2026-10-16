@@ -2405,6 +2405,16 @@ products:
     surface: cli
     for_surface: cli
     bound_because: 'only the remote job scripts training/goal-model, training/lifecycle-model and training/humanizer-model/run.sh run ster: they train the goal, lifecycle and humanizer adapters with ster tune; the local tfidf and Hugging Face training of run needs no Ster'
+  - product: brama
+    surface: service
+    for_surface: cli
+    alternative: run trains a job locally and evaluate --no-judge scores it without a model judge, so training and evaluation run without Brama; autolabel, discover, the evaluation judge, lifecycle and humanizer audits and goal audit prompts ask models through Brama and refuse naming the missing setting
+    alternative_source: transcript-label-trainer/src/cli/prog_group/prog.rs
+  - product: wisent-app
+    surface: web
+    for_surface: cli
+    alternative: 'the trainer never calls the Wisent app: WISENT_APP_AGENT_ID and WISENT_APP_AGENT_AUTH_SECRET (or the Skarbiec role TLT_BRAMA_AGENT_ROLE) name the agent identity its Brama requests are signed as, read only by the Brama-backed commands'
+    alternative_source: transcript-label-trainer/src/brama/brama_client.rs
 - id: compute-marketplace
   name: Compute Marketplace
   status: preview
