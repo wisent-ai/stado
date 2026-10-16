@@ -422,13 +422,11 @@ products:
   roadmap:
   - title: Add Twilio RCS transport
     status: planned
-    outcome: Add an executable RCS adapter only after provider approval and the capability,
-      credential, cost and failure contracts are defined.
+    outcome: Add an executable RCS adapter only after provider approval and the capability, credential, cost and failure contracts are defined.
     source: https://most.wisent.com/docs/integrations
   - title: Publish the first immutable release
     status: planned
-    outcome: Replace unsupported source-only production installation with an immutable
-      public release.
+    outcome: Replace unsupported source-only production installation with an immutable public release.
     source: most/README.md:153-158
   integrations: []
   evidence:
@@ -455,8 +453,8 @@ products:
     repository: wisent-ai/most-desktop
     manifest: .wisent-desktop-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:04Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:04Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   public_status:
   - component: messaging
     title: Messaging
@@ -464,6 +462,12 @@ products:
     service: most
     path: /healthz
     expect_status: OK
+  dependencies:
+  - product: stado
+    surface: service
+    for_surface: service
+    alternative: MOST_TWILIO_ACCOUNT_SID, MOST_TWILIO_AUTH_TOKEN and MOST_TWILIO_FROM send through the owner Twilio account instead of the wisent-integrations boundary Stado serves, MOST_DATABASE_URL names the Postgres database instead of the fleet database, and with neither STADO_INTEGRATION_API_URL nor MOST_STADO_INTEGRATION_TOKEN set onboarding runs on the offline transport
+    alternative_source: most/most-rs/crates/most-server/src/boot/composition/store.rs
 - id: stado
   name: Stado
   status: active
