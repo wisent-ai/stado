@@ -233,13 +233,13 @@ pub fn remove_service(
         })?;
     // Position over the array itself, not over a filtered view: a record
     // that is not an object still occupies a slot, and an index taken from
-    // a filtered sequence would delete the wrong one.
-    let found = declared.iter().position(|record| {
-        record
-            .as_object()
-            .is_some_and(|record| ManagedService::from_record(host, record).matches(unit))
+    // a filtered sequence would delete the wrong one. The service matched
+    // is the one returned, so the removed record is never read twice.
+    let found = declared.iter().enumerate().find_map(|(index, record)| {
+        let service = ManagedService::from_record(host, record.as_object()?);
+        service.matches(unit).then_some((index, service))
     });
-    let Some(index) = found else {
+    let Some((index, removed)) = found else {
         return Err(DeployError(format!(
             "{} is not a registry-managed service on {}",
             py_str_repr(unit),
@@ -247,12 +247,8 @@ pub fn remove_service(
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound));
     };
-    let removed = declared.remove(index);
+    declared.remove(index);
     let now_empty = declared.is_empty();
-    let removed = removed
-        .as_object()
-        .map(|record| ManagedService::from_record(host, record))
-        .unwrap_or_default();
     if now_empty {
         entry.remove(SERVICES_KEY);
     }
