@@ -720,6 +720,10 @@ products:
     for_surface: web
     alternative: 'landing revalidation is optional: without LAS_REVALIDATION_URL and LAS_REVALIDATION_SECRET it answers delivered false naming that it is not configured, and Echo publishes without Las'
     alternative_source: echo-web/src/lib/blog/revalidate.ts
+  - product: wisent-app
+    surface: web
+    for_surface: web
+    bound_because: competitor deep analysis requires the Wisent app agent secret WISENT_APP_AGENT_AUTH_SECRET for its text and vision model gateway; its readiness names the secret when missing and runCompetitorAnalysis refuses with a configuration error, while the rest of Echo runs without the Wisent app
 - id: probierz
   name: Probierz
   status: active
