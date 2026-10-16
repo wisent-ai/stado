@@ -1274,8 +1274,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/spis
-  description: Evidence-grade open reference corpus of real interfaces, with provenance,
-    hashes, and measured state for every record.
+  description: Evidence-grade open reference corpus of real interfaces, with provenance, hashes, and measured state for every record.
   roadmap: []
   integrations:
   - product: weles
@@ -1301,6 +1300,35 @@ products:
     kind: desktop-release
     repository: wisent-ai/spis-desktop
     manifest: .wisent-desktop-release.json
+  dependencies:
+  - product: jeden
+    surface: cli
+    for_surface: cli
+    bound_because: only the capture plan capture-plans/cli-products.json names it, as one of the Wisent product CLIs Spis captures as examples; capturing that example needs the CLI, and every other capture runs without it
+  - product: probierz
+    surface: cli
+    for_surface: cli
+    bound_because: only the capture plan capture-plans/cli-products.json names it, as one of the Wisent product CLIs Spis captures as examples; capturing that example needs the CLI, and every other capture runs without it
+  - product: singularity
+    surface: cli
+    for_surface: cli
+    bound_because: only the capture plan capture-plans/cli-products.json names it, as one of the Wisent product CLIs Spis captures as examples; capturing that example needs the CLI, and every other capture runs without it
+  - product: skarbiec
+    surface: cli
+    for_surface: cli
+    bound_because: only the capture plan capture-plans/cli-products.json names it, as one of the Wisent product CLIs Spis captures as examples; capturing that example needs the CLI, and every other capture runs without it
+  - product: transcript-label-trainer
+    surface: cli
+    for_surface: cli
+    bound_because: only the capture plan capture-plans/cli-products.json names it, as one of the Wisent product CLIs Spis captures as examples; capturing that example needs the CLI, and every other capture runs without it
+  - product: transcript-lake
+    surface: cli
+    for_surface: cli
+    bound_because: only the capture plan capture-plans/cli-products.json names it, as one of the Wisent product CLIs Spis captures as examples; capturing that example needs the CLI, and every other capture runs without it
+  - product: oko
+    surface: cli
+    for_surface: cli
+    bound_because: the capture plan capture-plans/cli-products.json names it as one of the Wisent product CLIs Spis captures as examples, and the recorded terminal cast tui-examples/references/14-htop/media/product-motion.cast holds the word as captured text; capturing that example needs the CLI, and every other capture runs without it
 - id: glina
   name: Glina
   status: active
