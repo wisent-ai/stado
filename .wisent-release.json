@@ -61,22 +61,6 @@
           "kind": "lint"
         },
         {
-          "name": "editor-reclaim",
-          "argv": [
-            "cargo", "test", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
-            "--test", "space-reclaim", "sourcekit::"
-          ],
-          "kind": "test"
-        },
-        {
-          "name": "service-directory-beside",
-          "argv": [
-            "cargo", "test", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
-            "--test", "service-directory-beside"
-          ],
-          "kind": "test"
-        },
-        {
           "name": "committed-lock-attribution",
           "argv": [
             "cargo", "test", "--locked", "--manifest-path", "stado-rs/product/Cargo.toml",
@@ -91,6 +75,29 @@
           "deploy/release/build_stado.sh"
         ]
       },
+      "tests": [
+        {
+          "name": "editor-reclaim",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "space-reclaim", "sourcekit::"
+          ]
+        },
+        {
+          "name": "probierz-evidence-reclaim",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "space-reclaim-evidence"
+          ]
+        },
+        {
+          "name": "service-directory-beside",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "service-directory-beside"
+          ]
+        }
+      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }
@@ -148,14 +155,6 @@
           "kind": "lint"
         },
         {
-          "name": "service-directory-beside",
-          "argv": [
-            "cargo", "test", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
-            "--test", "service-directory-beside"
-          ],
-          "kind": "test"
-        },
-        {
           "name": "committed-lock-attribution",
           "argv": [
             "cargo", "test", "--locked", "--manifest-path", "stado-rs/product/Cargo.toml",
@@ -170,6 +169,15 @@
           "deploy/release/build_stado.sh"
         ]
       },
+      "tests": [
+        {
+          "name": "service-directory-beside",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "service-directory-beside"
+          ]
+        }
+      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }

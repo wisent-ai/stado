@@ -106,6 +106,20 @@ fs2 = "0.4"
 name = "stado"
 path = "src/bin/stado.rs"
 
+# stado::wait: the built stado waiting on a really held resource says so on
+# stderr before it blocks, and `stado waits` reads the register of open waits.
+[[test]]
+name = "wait-held-lock"
+path = "../tests/wait/held_lock.rs"
+
+[[test]]
+name = "wait-ended-process"
+path = "../tests/wait/ended_process.rs"
+
+[[test]]
+name = "wait-registered"
+path = "../tests/wait/registered.rs"
+
 [[test]]
 name = "release-destinations-journey"
 path = "../tests/release_destinations/journey.rs"
@@ -189,6 +203,10 @@ path = "../tests/host_health/linux_link.rs"
 [[test]]
 name = "space-reclaim"
 path = "../tests/space_reclaim/lifecycle.rs"
+
+[[test]]
+name = "space-reclaim-evidence"
+path = "../tests/space_reclaim/evidence/results.rs"
 
 [[test]]
 name = "submission-removed-extractor"

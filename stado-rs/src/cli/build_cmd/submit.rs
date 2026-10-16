@@ -17,6 +17,9 @@ use crate::release_pipeline::{
 
 use super::record::ensure_build;
 
+mod platforms;
+use platforms::restrict_platforms;
+
 const OBJECT_API_CATALOG_SERVICE: &str = "stado";
 const OBJECT_API_REASON: &str =
     "build submission requires the canonical object store before its first write";
@@ -163,13 +166,10 @@ pub(crate) async fn enroll_source(reading: &SourceReading) -> Result<(), CmdErro
         &reading.manifest.product,
         &release_catalog::missing_step_programs(&reading.manifest, &reading.root),
     )?;
-    release_catalog::enroll(&reading.manifest).await?;
-    // Such a platform still builds and publishes; it is named here because no
-    // build of it can qualify a task, which would otherwise surface only as
-    // `awaiting_tests` after the build.
     if let Some(refusal) = reading.manifest.unqualifiable_refusal() {
-        eprintln!("warning: {refusal}");
+        return Err(CmdError::declaration(refusal));
     }
+    release_catalog::enroll(&reading.manifest).await?;
     Ok(())
 }
 
@@ -192,6 +192,7 @@ pub(crate) async fn upload_source(
         &staged.archive,
         "application/gzip",
         &meta,
+        &reading.root.join(".build/release-input"),
     )
     .await?;
     release_catalog::publish_entry(
@@ -207,55 +208,6 @@ pub(crate) async fn upload_source(
     Ok(())
 }
 
-/// The same reading narrowed to `platforms`: the manifest keeps only those
-/// platforms and the deliveries that run on them, and is what the build
-/// records, so its jobs, its enrollment and any release of it cover exactly
-/// these platforms. A platform the manifest does not declare, or a kept
-/// delivery that waits on a dropped one, is refused before anything is written.
-fn restrict_platforms(
-    mut reading: SourceReading,
-    platforms: &[String],
-) -> Result<SourceReading, CmdError> {
-    let declared: Vec<String> = reading.manifest.platforms.keys().cloned().collect();
-    if let Some(unknown) = platforms
-        .iter()
-        .find(|platform| !declared.contains(platform))
-    {
-        return Err(CmdError::usage(format!(
-            "{} declares no platform {unknown}; declared: {}",
-            reading.manifest.product,
-            declared.join(", ")
-        )));
-    }
-    let manifest = &mut reading.manifest;
-    manifest
-        .platforms
-        .retain(|platform, _| platforms.contains(platform));
-    let dropped: Vec<String> = manifest
-        .deliveries
-        .iter()
-        .filter(|delivery| !platforms.contains(&delivery.platform))
-        .map(|delivery| delivery.name.clone())
-        .collect();
-    manifest
-        .deliveries
-        .retain(|delivery| platforms.contains(&delivery.platform));
-    if let Some((delivery, waits_on)) = manifest.deliveries.iter().find_map(|delivery| {
-        delivery
-            .after
-            .iter()
-            .find(|name| dropped.contains(name))
-            .map(|name| (delivery.name.clone(), name.clone()))
-    }) {
-        return Err(CmdError::usage(format!(
-            "delivery {delivery} waits on {waits_on}, which runs on a platform this build leaves out; build that platform too"
-        )));
-    }
-    reading.manifest_bytes = serde_json::to_vec_pretty(&reading.manifest)?;
-    reading.product = ProductManifest::Release(reading.manifest.clone());
-    Ok(reading)
-}
-
 pub(super) async fn submit(args: &BuildSubmitArgs) -> Result<(), CmdError> {
     let reading = crate::wait::blocking(
         crate::wait::Kind::Process,
@@ -268,6 +220,9 @@ pub(super) async fn submit(args: &BuildSubmitArgs) -> Result<(), CmdError> {
     } else {
         restrict_platforms(reading, &args.platforms)?
     };
+    if let Some(refusal) = reading.manifest.unqualifiable_refusal() {
+        return Err(CmdError::declaration(refusal));
+    }
     ensure_object_store().await?;
     let staged = snapshot_source(&reading)?;
     let (build, enqueue_failure) = ensure_build(&reading, &staged, &args.version).await?;

@@ -6,29 +6,49 @@ use std::collections::BTreeMap;
 
 use crate::cli::storage;
 use crate::cli::CmdError;
+use crate::primitives::failure::FailureCode;
 use crate::queue::storage::JobStorage;
 use crate::release_control;
 use crate::release_pipeline::PipelineChannel;
 
+/// The hexadecimal characters a run or build identity keeps of its SHA-256:
+/// 128 bits, the length of a UUID, https://www.rfc-editor.org/rfc/rfc9562#section-4
+const IDENTITY_HEX: usize = 32;
+
+/// Write `bytes` at `uri` once. An object already there must hold the same
+/// bytes. Only a read that states the object is absent
+/// (`FailureCode::NotFound`) lets the write go on: a store that did not
+/// answer, or refused the read, is returned as it is, so it is never taken
+/// for absence. The bytes are staged under `scratch`, the checkout's own
+/// build area, not the system's temporary directory.
 pub(crate) async fn immutable(
     uri: &str,
     bytes: &[u8],
     kind: &str,
     meta: &BTreeMap<String, String>,
+    scratch: &std::path::Path,
 ) -> Result<(), CmdError> {
     match storage::fetch_object_from_writer(uri).await {
-        Ok(v) if v == bytes => return Ok(()),
+        Ok(existing) if existing == bytes => return Ok(()),
         Ok(_) => {
             return Err(CmdError::refused(format!(
                 "immutable object differs: {uri}"
             )))
         }
-        Err(_) => {}
+        Err(error) if matches!(error.failure, Some(FailureCode::NotFound)) => {}
+        Err(error) => return Err(error),
     }
-    let f = tempfile::NamedTempFile::new()?;
-    std::fs::write(f.path(), bytes)?;
-    storage::store_object_with_metadata(uri, &f.path().display().to_string(), kind, true, meta)
-        .await?;
+    std::fs::create_dir_all(scratch)?;
+    let staged = tempfile::NamedTempFile::new_in(scratch)?;
+    std::fs::write(staged.path(), bytes)?;
+    storage::store_object_with_metadata(
+        uri,
+        &staged.path().display().to_string(),
+        kind,
+        true,
+        meta,
+    )
+    .await?;
     Ok(())
 }
 pub(crate) fn run_path(product: &str, id: &str, leaf: &str) -> String {
@@ -120,7 +140,7 @@ pub(crate) fn identity(
 ) -> String {
     release_control::sha256_bytes(
         format!("{product}\0{version}\0{channel:?}\0{source}\0{manifest}").as_bytes(),
-    )[..32]
+    )[..IDENTITY_HEX]
         .into()
 }
 /// A build's identity has no channel in it: the channel is the release's
@@ -128,6 +148,6 @@ pub(crate) fn identity(
 pub(crate) fn build_identity(product: &str, version: &str, source: &str, manifest: &str) -> String {
     release_control::sha256_bytes(
         format!("build\0{product}\0{version}\0{source}\0{manifest}").as_bytes(),
-    )[..32]
+    )[..IDENTITY_HEX]
         .into()
 }
