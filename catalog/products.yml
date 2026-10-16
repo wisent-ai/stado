@@ -2039,7 +2039,8 @@ products:
   - product: brama
     surface: service
     for_surface: cli
-    bound_because: an inbound creator message is recorded only with the intent Brama judges for it (receive_message calls judged_intent through BRAMA_URL, UGC_BRAMA_AGENT_ID and UGC_BRAMA_SIGNING_SECRET_SOURCE and refuses a missing setting by name), and ugc brama health and analyze are Brama commands; campaigns, creators, outbound messages and publications run without Brama. No operator-stated intent replaces the judgement yet
+    alternative: ugc-cli standalone conversation-receive --intent INTENT records an inbound creator message with the intent the operator states, moving the conversation as Brama's judgement would, without asking Brama or reading its settings; campaigns, creators, outbound messages and publications never reach Brama, and only ugc brama health and analyze are Brama commands
+    alternative_source: ugc-cli/src/standalone/classify_intent_group/intent.rs
 - id: transcript-label-trainer
   name: Transcript Label Trainer
   status: active
