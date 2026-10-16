@@ -668,6 +668,10 @@ products:
     surface: web
     for_surface: web
     bound_because: 'only the cron automations needher-captions-loop, needher-captions-publish and needher-lifestyle-loop reach it: they write and publish the content of the Need Her accounts Echo runs; every other Echo screen, route and automation runs without it'
+  - product: probierz
+    surface: cli
+    for_surface: web
+    bound_because: 'only the onboarding proof step reaches it: it verifies an evidence receipt Probierz signed, against the key PROBIERZ_RECEIPT_PUBLIC_KEY_FINGERPRINT names; every other Echo screen and route runs without Probierz'
 - id: probierz
   name: Probierz
   status: active
