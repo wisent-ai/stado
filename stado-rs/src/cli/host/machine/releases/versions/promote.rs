@@ -88,10 +88,15 @@ pub async fn promote_version(
         if report.get("status").and_then(Value::as_str)
             != Some(crate::deploy::host_inventory::OK_STATUS)
         {
-            let detail = report
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("host inventory did not complete");
+            // Only the status is quoted: the report has not passed the
+            // sanitizer check yet, so its other fields are not shown.
+            let detail = match report.get("error").and_then(Value::as_str) {
+                Some(error) => error.to_string(),
+                None => format!(
+                    "host inventory ended with status {} and states no error",
+                    report["status"]
+                ),
+            };
             return Err(CmdError::click(format!(
                 "cannot verify release_platform for {name:?}: {detail}"
             ))
@@ -171,12 +176,18 @@ pub async fn promote_version(
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
-        if object
-            .get("release_platform")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .is_empty()
-        {
+        // An undeclared or empty platform is filled from the inventory; one
+        // declared as anything but text is not a platform, and was read as
+        // undeclared and overwritten without a word.
+        let undeclared = match object.get("release_platform") {
+            None | Some(Value::Null) => true,
+            Some(Value::String(declared)) => declared.is_empty(),
+            Some(other) => return Err(CmdError::click(format!(
+                "target {name:?} declares release_platform {other}, which is not a platform name"
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config)),
+        };
+        if undeclared {
             object.insert("release_platform".to_string(), json!(observed));
         }
         let versions = object
