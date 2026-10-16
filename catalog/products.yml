@@ -1037,6 +1037,11 @@ products:
     for_surface: cli
     alternative: 'Tama never calls the Wisent app: its lines are the registry entries of the git-wisent-enterprise-pre-commit and pre-push hooks, which check a Wisent Enterprise worktree, and the desktop build reading WISENT_APP_PROVISIONING_PROFILE, an optional signing profile for the Tama app bundle'
     alternative_source: tama-desktop/Scripts/app_build/prepare.sh
+  - product: wisent-enterprise
+    surface: web
+    for_surface: cli
+    alternative: 'Tama never calls Wisent Enterprise: its lines are the hook registry entries git-wisent-enterprise-pre-commit and pre-push, which run in a Wisent Enterprise checkout to refuse a dirty worktree; a machine without that checkout runs every other Tama hook the same'
+    alternative_source: tama/shared-hooks/registry.json
 - id: byk
   name: Byk
   status: active
