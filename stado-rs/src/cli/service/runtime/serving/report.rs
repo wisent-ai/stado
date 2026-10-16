@@ -57,14 +57,23 @@ pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError>
         }
         let mut wanted: Vec<u16> = ports.to_vec();
         if wanted.is_empty() {
-            if let Some(port) = directory_port(name, host).await? {
+            // NAME may be a product or unit name the directory keys
+            // differently; the unit the host declares for it is what the
+            // directory's `managed_service` names, so that label resolves
+            // the endpoint when NAME itself does not.
+            let declared_port = match directory_port(name, host).await? {
+                Some(port) => Some(port),
+                None => directory_port(declared.unit_id(), host).await?,
+            };
+            if let Some(port) = declared_port {
                 wanted.push(port);
             }
         }
         if wanted.is_empty() {
             return Err(CmdError::click(format!(
-                "the service directory declares no endpoint for {name:?} on {host}, so which \
-                 port it must serve is unknown; name it with --port <n>"
+                "the service directory declares no endpoint for {name:?} or its unit {:?} on \
+                 {host}, so which port it must serve is unknown; name it with --port <n>",
+                declared.unit_id()
             ))
             .stating(crate::primitives::failure::FailureCode::Config));
         }
