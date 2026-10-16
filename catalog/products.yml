@@ -1242,6 +1242,11 @@ products:
     for_surface: cli
     alternative: Lake ingests, keeps and answers every read without Oko; projection rebuild writes the Oko projection under exports/oko without running it, and only projection refresh --target oko hands it to oko-cli
     alternative_source: transcript-lake/src/commands/derived/mod.rs
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: 'Transcript Lake never calls a Stado service: its one Stado line is the stado-wait crate in Cargo.toml, a library compiled into the lake binary, so a machine without Stado runs it the same'
+    alternative_source: transcript-lake/Cargo.toml
 - id: kronika
   name: Kronika
   status: active
