@@ -976,16 +976,14 @@ products:
   roadmap:
   - title: Add the managed organization catalogue
     status: planned
-    outcome: Provide organization catalogue, governance distribution and fleet operation
-      without disabling the local federation when no managed grant exists.
+    outcome: Provide organization catalogue, governance distribution and fleet operation without disabling the local federation when no managed grant exists.
     source: las/README.md:461-470
   integrations:
   - product: weles
     description: Las exposes approved Weles capabilities through its federated catalogue.
     source: las/README.md:12-38
   - product: skarbiec
-    description: Las exposes approved Skarbiec capabilities through its federated
-      catalogue.
+    description: Las exposes approved Skarbiec capabilities through its federated catalogue.
     source: las/README.md:12-38
   - product: tama
     description: Las exposes approved Tama capabilities through its federated catalogue.
@@ -1003,8 +1001,7 @@ products:
     description: Las exposes approved Most capabilities through its federated catalogue.
     source: las/README.md:12-38
   - product: probierz
-    description: Las exposes approved Probierz capabilities through its federated
-      catalogue.
+    description: Las exposes approved Probierz capabilities through its federated catalogue.
     source: las/README.md:12-38
   - product: byk
     description: Las exposes approved Byk capabilities through its federated catalogue.
@@ -1028,8 +1025,104 @@ products:
     - las
     - las-mcp
   approved_by: operator
-  approved_at: '2026-09-02T19:53:06Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:06Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
+  dependencies:
+  - product: aiwritecheck
+    surface: web
+    for_surface: cli
+    alternative: 'Las never calls aiwritecheck: its aiwritecheck lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: byk
+    surface: desktop
+    for_surface: cli
+    alternative: 'Las never calls byk: its byk lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: echo
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls echo: its echo lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: film
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls film: its film lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: glina
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls glina: its glina lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: handtohuman
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls handtohuman: its handtohuman lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: kronika
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls kronika: its kronika lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: lem
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls lem: its lem lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: obraz
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls obraz: its obraz lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: preferences
+    surface: web
+    for_surface: cli
+    alternative: 'Las never calls preferences: its preferences lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: probierz
+    surface: service
+    for_surface: cli
+    alternative: 'Las never calls probierz: its probierz lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: skryba
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls skryba: its skryba lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: skrzynka
+    surface: service
+    for_surface: cli
+    alternative: 'Las never calls skrzynka: its skrzynka lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: spis
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls spis: its spis lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: ster
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls ster: its ster lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: tama
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls tama: its tama lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: undetectabletext
+    surface: web
+    for_surface: cli
+    alternative: 'Las never calls undetectabletext: its undetectabletext lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: weles
+    surface: service
+    for_surface: cli
+    alternative: 'Las never calls weles: its weles lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
+  - product: wisent-app
+    surface: web
+    for_surface: cli
+    alternative: 'Las never calls wisent-app: its wisent-app lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
+    alternative_source: las/src/dependencies/register.mjs
 - id: skrzynka
   name: Skrzynka
   status: active
