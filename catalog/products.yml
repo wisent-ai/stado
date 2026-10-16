@@ -248,6 +248,11 @@ products:
     for_surface: service
     alternative: 'Brama never calls Weles: weles is a client alias Brama serves. Outside standalone mode a declared ingress credential table must hold a weles client entitled to best and weles, which is configuration, not a running Weles; in standalone mode, or with no table, Brama starts without it'
     alternative_source: brama/src/core/server/lifecycle/mod.rs
+  - product: wisent-app
+    surface: web
+    for_surface: service
+    alternative: 'Brama never calls the Wisent app: wisent-app is an agent identity Brama verifies request signatures for, whose signing secret the launcher reads from a Skarbiec item (the wisent-backend client signs as it), and the testing page names the agent variables a real test request signs with; no request goes from Brama to the Wisent app'
+    alternative_source: brama/src/cli/launcher/identities/mod.rs
 - id: weles
   name: Weles
   status: active
