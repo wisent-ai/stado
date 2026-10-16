@@ -104,7 +104,17 @@ pub(in crate::cli::directory) async fn endpoint(
     // service is; handing back an address with no indication that nobody has
     // confirmed it since the machine was last awake is how a valid declaration
     // routed twelve days of work into a closed laptop.
-    let observed = observations::describe(&observations::service_fact(name, &target));
+    //
+    // The newest look is the fact's, not this address's: `connect` may have
+    // reached the service through a resolver adapter rather than the endpoint
+    // printed here. So what that look saw, and from where, is printed beside
+    // its age, and a look at another address is not read as this one's.
+    let freshness = observations::freshness(&observations::service_fact(name, &target));
+    let observed = observations::render(&freshness);
+    let last_look = match &freshness {
+        observations::Freshness::Seen(row) => Some(row),
+        observations::Freshness::Never => None,
+    };
     if as_json {
         println!(
             "{}",
@@ -114,19 +124,32 @@ pub(in crate::cli::directory) async fn endpoint(
                 "active_host": active,
                 "url": url,
                 "observed": observed,
+                "last_look": last_look.map(|row| json!({
+                    "state": row.state,
+                    "detail": row.detail,
+                    "vantage": row.vantage,
+                    "at": row.at,
+                })),
             }))?
         );
         return Ok(());
     }
+    let seen = match last_look {
+        Some(row) => format!(
+            "observed {observed} from {}: {}, {}",
+            row.vantage, row.state, row.detail
+        ),
+        None => format!("observed {observed}"),
+    };
     match url {
         Some(url) => {
-            println!("{name} {placed}, reached from {target} at {url} (observed {observed})")
+            println!("{name} {placed}, reached from {target} at {url} ({seen})")
         }
         // Not a default and not an error: an undeclared endpoint means nobody
         // has said how this machine reaches the service, and inventing a
         // loopback address here is what sends a client to the wrong process.
         None => {
-            println!("{name} {placed}; {DIRECTORY_KEY} declares no endpoint for {target}")
+            println!("{name} {placed}; {DIRECTORY_KEY} declares no endpoint for {target} ({seen})")
         }
     }
     Ok(())
