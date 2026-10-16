@@ -53,17 +53,19 @@ pub enum PlacementCommands {
     },
     /// Make a registered host a place this profile may move to: deliver each
     /// service's program (a managed program now; a release-controlled tree
-    /// through the host's own agent), assert each unit from the service
-    /// catalog, and write the host into the profile and the directory once
-    /// every unit is declared. Idempotent; a pass that stops at a pending
-    /// rollout says so, and the next pass continues.
+    /// through the host's own agent), stage each unit rendered from the
+    /// service catalog where the move starts it (installed, not loaded, not
+    /// declared), and write the host into the profile and the directory once
+    /// every unit is staged. Idempotent; a unit already running on the host is
+    /// refused as a second active copy, and a pass that stops at a pending
+    /// rollout says so and the next pass continues.
     Standby {
         /// The placement profile to prepare the host for.
         profile: String,
         /// Registered host that must stand by for it.
         #[arg(long)]
         host: String,
-        /// Why this host must stand by; recorded beside every unit declared.
+        /// Why this host must stand by for the profile.
         #[arg(long)]
         reason: String,
         /// Emit the receipt as JSON.

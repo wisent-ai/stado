@@ -1,11 +1,11 @@
 //! What a profile needs on a host, read from the service catalog, and the
 //! one registry commit that writes the host into the profile and the
-//! directory once the host declares every unit.
+//! directory once every unit is staged on it.
 
 use serde_json::{json, Map, Value};
 
 use crate::cli::CmdError;
-use crate::deploy::service::{self, SOURCE_REGISTRY};
+use crate::deploy::service;
 use crate::placement::PlacementProfile;
 use crate::targets::ComputeTarget;
 
@@ -116,87 +116,80 @@ fn classify(program: &str) -> Option<ProgramKind> {
     )
 }
 
-/// The unit the registry declares on `target` for one logical service, when
-/// it declares one from the registry's own source. A service catalog that
-/// cannot be read is the error: without its unit label a unit the registry
-/// declares under that label would be taken for none.
-fn declared_unit<'a>(
-    declared: &'a [service::ManagedService],
+/// The port a standby unit of `logical` listens on, from the service
+/// directory: the address it names for `target` (as a standby, or as an
+/// endpoint), else the address of the host the profile is placed on, which a
+/// move keeps. `None` when the directory routes the service nowhere; a
+/// directory address that carries no port is refused by name.
+pub(super) fn standby_port(
+    document: &Value,
     logical: &str,
-) -> Result<Option<&'a service::ManagedService>, CmdError> {
-    let unit_label = match crate::deploy::service_catalog::lookup(logical) {
-        Ok(entry) => entry.and_then(|entry| entry.unit),
-        Err(cause) => {
-            return Err(CmdError::click(format!(
-                "the service catalog could not be read for {logical}, so whether its unit is \
-                 declared is unknown: {cause}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config))
-        }
+    target: &str,
+    placed_on: &str,
+) -> Result<Option<u16>, CmdError> {
+    let Some(route) = document
+        .get("service_directory")
+        .and_then(|directory| directory.get("services"))
+        .and_then(|services| services.get(logical))
+    else {
+        return Ok(None);
     };
-    Ok(declared.iter().find(|managed| {
-        managed.source == SOURCE_REGISTRY
-            && (managed.matches(logical)
-                || unit_label
-                    .as_deref()
-                    .is_some_and(|label| managed.matches(label)))
-    }))
+    let address = ["standby", "endpoints"]
+        .iter()
+        .find_map(|map| route.get(*map).and_then(|hosts| hosts.get(target)))
+        .or_else(|| {
+            route
+                .get("endpoints")
+                .and_then(|hosts| hosts.get(placed_on))
+        });
+    let Some(address) = address else {
+        return Ok(None);
+    };
+    let url = address.get("url").and_then(Value::as_str).ok_or_else(|| {
+        CmdError::declaration(format!(
+            "directory service {logical} names an address for {target} or {placed_on} without a \
+             url"
+        ))
+    })?;
+    let parsed = url::Url::parse(url).map_err(|error| {
+        CmdError::declaration(format!("directory service {logical} url {url}: {error}"))
+    })?;
+    parsed.port().map(Some).ok_or_else(|| {
+        CmdError::declaration(format!(
+            "directory service {logical} url {url} names no port, so the standby unit has none \
+             to listen on"
+        ))
+    })
 }
 
-/// Whether the host already sits in the profile with every unit declared.
-pub(super) fn already_declared(
-    profile: &PlacementProfile,
-    target: &ComputeTarget,
-    plan: &Plan,
-) -> Result<bool, CmdError> {
-    if !profile.hosts.contains_key(&target.name) {
-        return Ok(false);
-    }
-    let declared = service::declared_services(target);
-    for service in &plan.services {
-        if declared_unit(&declared, &service.logical)?.is_none() {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// Write `target` into the profile with the units the registry now declares
-/// on it and the placed host's probes, and into the directory as a standby
-/// endpoint for each of the profile's services. One compare-and-swapped
-/// commit; a document that already says so is left alone.
+/// Write `target` into the profile with the units it now holds staged and
+/// the placed host's probes, and into the directory as a standby address for
+/// each service the directory does not already name it under. One
+/// compare-and-swapped commit; a document that already says so is left
+/// alone.
 pub(super) async fn commit_host(
     profile: &PlacementProfile,
     placed_on: &str,
     target: &ComputeTarget,
-    plan: &Plan,
+    staged: &[super::UnitReceipt],
 ) -> Result<String, CmdError> {
     let profile_name = profile.name.clone();
     let target_name = target.name.clone();
     let placed_on = placed_on.to_string();
-    let logicals: Vec<String> = plan.services.iter().map(|s| s.logical.clone()).collect();
+    let kind = if target.release_platform.starts_with("darwin") {
+        service::KIND_LAUNCHD
+    } else {
+        service::KIND_SYSTEMD
+    };
+    let mut units = Map::new();
+    for unit in staged {
+        units.insert(
+            unit.service.clone(),
+            json!({ "kind": kind, "name": unit.label, "path": unit.path, "unit": unit.label }),
+        );
+    }
+    let logicals: Vec<String> = staged.iter().map(|unit| unit.service.clone()).collect();
     crate::cli::registry::commit_document(move |current| {
-        let registry = super::super::candidates::parse_registry(current)?;
-        let live_target = super::super::candidates::target(&registry, &target_name)?;
-        let declared = service::declared_services(live_target);
-        let mut units = Map::new();
-        for logical in &logicals {
-            let managed = declared_unit(&declared, logical)?.ok_or_else(|| {
-                CmdError::declaration(format!(
-                    "{target_name} no longer declares a unit for {logical}; the profile is not \
-                     written half"
-                ))
-            })?;
-            units.insert(
-                logical.clone(),
-                json!({
-                    "kind": managed.kind,
-                    "name": managed.unit_id(),
-                    "path": managed.path,
-                    "unit": managed.unit_id(),
-                }),
-            );
-        }
         let mut next = current.clone();
         let profiles = next
             .get_mut("placement_profiles")
@@ -223,10 +216,16 @@ pub(super) async fn commit_host(
             .get(&placed_on)
             .and_then(|template| template.get("probes"))
             .cloned()
-            .unwrap_or_else(|| Value::Array(Vec::new()));
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "placement profile {profile_name:?} declares no probes for its placed host \
+                     {placed_on}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         hosts.insert(
             target_name.clone(),
-            json!({ "probes": probes, "units": Value::Object(units) }),
+            json!({ "probes": probes, "units": Value::Object(units.clone()) }),
         );
         if let Some(services) = next
             .get_mut("service_directory")
@@ -237,10 +236,19 @@ pub(super) async fn commit_host(
                 let Some(route) = services.get_mut(logical).and_then(Value::as_object_mut) else {
                     continue;
                 };
+                // The directory names each placement host exactly once, as an
+                // endpoint or as a standby address.
+                let named = ["endpoints", "standby"].iter().any(|map| {
+                    route
+                        .get(*map)
+                        .and_then(|hosts| hosts.get(&target_name))
+                        .is_some()
+                });
                 let Some(serving) = route
                     .get("endpoints")
                     .and_then(|endpoints| endpoints.get(&placed_on))
                     .cloned()
+                    .filter(|_| !named)
                 else {
                     continue;
                 };

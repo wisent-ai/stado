@@ -25,6 +25,63 @@ pub(crate) struct EnsureOptions<'a> {
     pub(crate) as_json: bool,
 }
 
+/// A unit a placement standby asks for: rendered from the same declaration
+/// an ensure renders, staged on the host as a move expects it, and neither
+/// loaded nor declared.
+pub(crate) struct Standby {
+    /// The port the directory names for the service on the standby host, or
+    /// on the host the profile is placed on when it names none there: the
+    /// address the service keeps when it moves. `None` for a service the
+    /// directory routes nowhere.
+    pub(crate) listen_port: Option<u16>,
+}
+
+/// What one `ensure` pass left on the host and in the registry.
+pub(crate) struct EnsureReceipt {
+    pub(crate) host: String,
+    pub(crate) name: String,
+    pub(crate) label: String,
+    pub(crate) domain: String,
+    pub(crate) action: String,
+    pub(crate) pid: Option<u32>,
+    pub(crate) audited: Option<String>,
+    pub(crate) predecessors: Vec<service::PredecessorRetirement>,
+    /// The unit file the pass left on the host.
+    pub(crate) path: String,
+}
+
+/// The standby half of a pass: the unit written where a move starts it and
+/// left unloaded. Nothing is declared, retired or recorded: the move carries
+/// the declaration from the placed host when it starts this unit.
+async fn stage(
+    target: &crate::targets::ComputeTarget,
+    name: &str,
+    plan: &service::DeployPlan,
+    runner: &crate::deploy::Runner,
+) -> Result<EnsureReceipt, CmdError> {
+    let report = service::stage_service(target, plan, runner)
+        .await
+        .map_err(CmdError::from)?;
+    if !report.succeeded(service::STATUS_STAGED) {
+        return Err(CmdError::refused(format!(
+            "{}: {name} was not staged as a standby unit: {}",
+            target.name,
+            report.failure()
+        )));
+    }
+    Ok(EnsureReceipt {
+        host: target.name.clone(),
+        name: name.to_string(),
+        label: plan.label.clone(),
+        domain: report.domain.clone(),
+        action: service::STATUS_STAGED.to_string(),
+        pid: None,
+        audited: None,
+        predecessors: Vec::new(),
+        path: report.detail.clone(),
+    })
+}
+
 /// What one `ensure` pass writes: the declaration the document ends up
 /// carrying, and the audit record of the pass that put it there.
 async fn persist_ensure_record(

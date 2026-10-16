@@ -10,8 +10,8 @@
 //! between declared hosts, so the fleet's largest machine is not a place it
 //! can move to.
 //!
-//! This command is those six steps as one idempotent pass, each step named
-//! in the receipt and refused by name:
+//! This command is those steps as one idempotent pass, each step named in
+//! the receipt and refused by name:
 //!
 //! 1. the profile's services are resolved through the service catalog, and
 //!    each is classified by what its program is: a managed program under
@@ -21,13 +21,17 @@
 //!    `$HOME/.stado/services/<product>/current` (rolled out by the host's
 //!    own agent once the product's release control names the host);
 //! 2. the deliveries are declared and, for managed programs, performed;
-//! 3. every unit is asserted through the same `service ensure` an operator
-//!    runs, rendered from the catalog for the host's platform;
-//! 4. only when every unit is declared on the host is the host written into
-//!    the profile, with the units the registry now declares and the placed
-//!    host's probes, and into the directory as a standby endpoint for each
-//!    service — a host with some of a profile's units is a split profile no
-//!    move accepts, so it is never written half.
+//! 3. every unit is rendered by the same pass `service ensure` runs, from
+//!    the catalog for the host's platform, and staged: written where the
+//!    move starts it, left unloaded, and not declared on the host. A move
+//!    refuses a destination that already runs the service, and its commit
+//!    is what carries the declaration from the placed host, so a declared
+//!    or running unit on a standby host is a second active copy;
+//! 4. only when every unit is staged is the host written into the profile,
+//!    with the units it now holds and the placed host's probes, and into the
+//!    directory as a standby address for each service the directory does not
+//!    already name it under — a host with some of a profile's units is a
+//!    split profile no move accepts, so it is never written half.
 //!
 //! A pass that stops early (a tree not yet rolled out) reports where it
 //! stopped; the next pass continues from there.
@@ -44,12 +48,10 @@ pub use deliver::Delivery;
 
 /// The words a standby pass ends with.
 pub mod words {
-    /// The host already declares every unit of the profile and sits in it.
-    pub const ALREADY_DECLARED: &str = "already_declared";
     /// A release-controlled tree is declared for the host but its agent has
-    /// not rolled it out yet; the units that depend on it were not asserted.
+    /// not rolled it out yet; the units that depend on it were not staged.
     pub const AWAITING_RELEASE_ROLLOUT: &str = "awaiting_release_rollout";
-    /// Every unit is asserted and the host is written into the profile and
+    /// Every unit is staged and the host is written into the profile and
     /// the directory.
     pub const DECLARED: &str = "declared";
 }
@@ -60,6 +62,8 @@ pub struct StandbyReport {
     pub host: String,
     pub placed_on: String,
     pub platform: String,
+    /// Why the operator asked this host to stand by.
+    pub reason: String,
     pub outcome: String,
     pub deliveries: Vec<Delivery>,
     pub units: Vec<UnitReceipt>,
@@ -72,7 +76,8 @@ pub struct UnitReceipt {
     pub service: String,
     pub label: String,
     pub action: String,
-    pub pid: Option<u32>,
+    /// The unit file staged on the host.
+    pub path: String,
 }
 
 /// Prepare `host` for `profile`. See the module doc for the steps.
@@ -94,13 +99,9 @@ pub(crate) async fn standby(
         );
     }
     for unit in &report.units {
-        let pid = match unit.pid {
-            Some(pid) => pid.to_string(),
-            None => "not reported".to_string(),
-        };
         println!(
-            "{}\t{}\t{}\t{}\tpid {pid}",
-            report.host, unit.service, unit.label, unit.action
+            "{}\t{}\t{}\t{}\t{}",
+            report.host, unit.service, unit.label, unit.action, unit.path
         );
     }
     println!(
@@ -118,8 +119,8 @@ pub(crate) async fn prepare(
 ) -> Result<StandbyReport, CmdError> {
     if reason.trim().is_empty() {
         return Err(CmdError::usage(
-            "--reason must say why this host must stand by for the profile; it is recorded \
-             beside every unit the pass declares",
+            "--reason must say why this host must stand by for the profile; the receipt carries \
+             it",
         ));
     }
     let (document, _generation) = registry::fetch_versioned_document().await?;
@@ -149,6 +150,7 @@ pub(crate) async fn prepare(
         host: target.name.clone(),
         placed_on: placed_on.clone(),
         platform: target.release_platform.clone(),
+        reason: reason.to_string(),
         outcome: String::new(),
         deliveries: Vec::new(),
         units: Vec::new(),
@@ -157,14 +159,6 @@ pub(crate) async fn prepare(
     };
 
     let plan = template::plan(&profile, &placed, &target)?;
-    if template::already_declared(&profile, &target, &plan)? {
-        report.outcome = words::ALREADY_DECLARED.to_string();
-        report.detail = format!(
-            "{} declares every unit of {} and sits in the profile",
-            target.name, profile.name
-        );
-        return Ok(report);
-    }
 
     // Step 2: deliveries. A managed program is delivered here; a release-
     // controlled tree is declared for the host's agent to roll out.
@@ -179,9 +173,11 @@ pub(crate) async fn prepare(
         report.deliveries.push(delivery);
     }
 
-    // Step 3: units, in the profile's start order. A unit whose tree is
-    // still rolling out is not asserted: `ensure` would render a program
-    // that is not on the host yet and fail the postcondition.
+    // Step 3: units, in the profile's start order, staged: written where the
+    // move starts them and left unloaded and undeclared, because the move
+    // refuses a destination that already runs the service and carries the
+    // declaration over itself. A unit whose tree is still rolling out is not
+    // staged: it would render a program that is not on the host yet.
     for logical in &profile.start_order {
         let Some(service) = plan.services.iter().find(|s| &s.logical == logical) else {
             continue;
@@ -201,7 +197,12 @@ pub(crate) async fn prepare(
             as_launch_agent: false,
             as_json: true,
         };
-        let receipt = match crate::cli::service::ensure_unit(options).await {
+        let standby = crate::cli::service::lifecycle::declare::ensure::Standby {
+            listen_port: template::standby_port(&document, logical, &target.name, &placed_on)?,
+        };
+        let staged =
+            crate::cli::service::lifecycle::declare::ensure::run::stage_unit(options, standby);
+        let receipt = match staged.await {
             Ok(receipt) => receipt,
             // A release-controlled tree the agent has not staged yet renders
             // a program that is not on the host: that is the rollout still
@@ -224,7 +225,7 @@ pub(crate) async fn prepare(
             service: logical.clone(),
             label: receipt.label,
             action: receipt.action,
-            pid: receipt.pid,
+            path: receipt.path,
         });
     }
     if !awaiting.is_empty() {
@@ -239,9 +240,9 @@ pub(crate) async fn prepare(
         return Ok(report);
     }
 
-    // Step 4: the host into the profile and the directory, from what the
-    // registry now declares on it, in one compare-and-swapped commit.
-    let generation = template::commit_host(&profile, &placed_on, &target, &plan).await?;
+    // Step 4: the host into the profile with the units it now holds, and into
+    // the directory, in one compare-and-swapped commit.
+    let generation = template::commit_host(&profile, &placed_on, &target, &report.units).await?;
     report.detail = format!(
         "{} may now move to {} (registry generation {generation})",
         profile.name, target.name

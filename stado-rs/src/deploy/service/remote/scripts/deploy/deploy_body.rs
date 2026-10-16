@@ -1,8 +1,14 @@
-/// `service deploy`: write the rendered unit, then bootstrap it. Both
-/// renderings travel in the same program and the host picks, so a deploy
-/// costs one round trip and never depends on a local guess about the
-/// remote OS.
-pub(crate) const DEPLOY_BODY: &str = "program=@PROGRAM@
+//! `service deploy` writes the rendered unit, then bootstraps it; a standby
+//! stage writes the same unit and leaves it unloaded. Both renderings travel
+//! in the same program and the host picks, so either costs one round trip and
+//! never depends on a local guess about the remote OS. The writing is one
+//! text shared by both bodies, so a staged unit is byte for byte the unit a
+//! deploy or a move would start.
+
+use std::sync::LazyLock;
+
+/// The declared program has to be on the host and executable.
+const PROGRAM_PRESENT: &str = "program=@PROGRAM@
 if [ ! -f \"$program\" ]; then
   say 'program_missing' \"$program\"
   exit 0
@@ -13,8 +19,11 @@ if [ ! -x \"$program\" ]; then
     exit 0
   }
 fi
-if [ \"$os\" = \"Darwin\" ]; then
-  /bin/mkdir -p \"$HOME/Library/LaunchAgents\" \"$HOME/.stado/logs\" >/dev/null 2>&1 || exit 1
+";
+
+/// The Darwin unit and its log, written owner-only at `$unit_path`.
+const DARWIN_WRITE: &str =
+    "  /bin/mkdir -p \"$HOME/Library/LaunchAgents\" \"$HOME/.stado/logs\" >/dev/null 2>&1 || exit 1
   /bin/chmod u=rwx,go= \"$HOME/.stado/logs\" || exit 1
   log=\"$HOME/.stado/logs/$unit.log\"
   : >> \"$log\" || exit 1
@@ -27,7 +36,22 @@ if [ \"$os\" = \"Darwin\" ]; then
   /usr/bin/sed \"s/__STADO_HOME__/$escaped_home/g\" \"$template\" > \"$unit_path\" || exit 1
   /bin/rm -f \"$template\"
   /bin/chmod u=rw,go= \"$unit_path\" || exit 1
-  $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
+";
+
+/// The systemd unit, written owner-only at `$unit_path`.
+const LINUX_WRITE: &str = "  /bin/mkdir -p \"$HOME/.config/systemd/user\" >/dev/null 2>&1 || true
+  template=\"$unit_path.template.$$\"
+  /bin/cat > \"$template\" <<'@HEREDOC@'
+@LINUX_UNIT@
+@HEREDOC@
+  escaped_home=$(/usr/bin/printf '%s' \"$HOME\" | /usr/bin/sed 's/[\\/&]/\\\\&/g')
+  account=$(/usr/bin/id -un)
+  /usr/bin/sed -e \"s/__STADO_HOME__/$escaped_home/g\" -e \"s/__STADO_USER__/$account/g\" \"$template\" > \"$unit_path\" || exit 1
+  /bin/rm -f \"$template\"
+  /bin/chmod u=rw,go= \"$unit_path\" || exit 1
+";
+
+const DARWIN_BOOTSTRAP: &str = "  $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
   # `retire` leaves the label disabled, and launchd refuses to bootstrap a
   # disabled label with `5: Input/output error` — so a retire followed by a
   # deploy of the same name could never load, leaving a unit down between
@@ -47,18 +71,9 @@ if [ \"$os\" = \"Darwin\" ]; then
   $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
   $launch kickstart -k \"$domain/$unit\" >/dev/null 2>&1 || true
   say 'deployed' \"$unit_path\"
-else
-  /bin/mkdir -p \"$HOME/.config/systemd/user\" >/dev/null 2>&1 || true
-  template=\"$unit_path.template.$$\"
-  /bin/cat > \"$template\" <<'@HEREDOC@'
-@LINUX_UNIT@
-@HEREDOC@
-  escaped_home=$(/usr/bin/printf '%s' \"$HOME\" | /usr/bin/sed 's/[\\/&]/\\\\&/g')
-  account=$(/usr/bin/id -un)
-  /usr/bin/sed -e \"s/__STADO_HOME__/$escaped_home/g\" -e \"s/__STADO_USER__/$account/g\" \"$template\" > \"$unit_path\" || exit 1
-  /bin/rm -f \"$template\"
-  /bin/chmod u=rw,go= \"$unit_path\" || exit 1
-  # A user unit lives inside the user's systemd instance, and without linger
+";
+
+const LINUX_ENABLE: &str = "  # A user unit lives inside the user's systemd instance, and without linger
   # that instance ends with the login session that created it — on rtx every
   # user-scoped service (beacon, agent, router) died seconds after the deploy
   # channel closed, and the host read as down. A system unit belongs to the
@@ -73,5 +88,41 @@ else
   detail=$(stado_systemctl enable --now \"$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'deployed' \"$unit_path\"; else say 'enable_failed' \"$rc $detail\"; fi
-fi
 ";
+
+/// A standby unit is never written over a running one: a unit the init system
+/// runs on the standby host is a second active copy, which a move refuses.
+const DARWIN_UNLOADED: &str = "  if $launch print \"$domain/$unit\" >/dev/null 2>&1; then
+    say 'loaded' \"$domain/$unit runs on this host; a standby unit is installed and not loaded\"
+    exit 0
+  fi
+";
+
+const LINUX_UNLOADED: &str = "  if stado_systemctl is-active --quiet \"$unit\"; then
+    say 'loaded' \"$unit is active on this host; a standby unit is installed and not started\"
+    exit 0
+  fi
+";
+
+/// The init system reads the staged definition, still without starting it.
+const LINUX_RELOAD: &str = "  detail=$(stado_systemctl daemon-reload 2>&1) || {
+    say 'reload_failed' \"$detail\"
+    exit 0
+  }
+";
+
+/// `service deploy`: write the rendered unit, then bootstrap it.
+pub(crate) static DEPLOY_BODY: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{PROGRAM_PRESENT}if [ \"$os\" = \"Darwin\" ]; then\n{DARWIN_WRITE}{DARWIN_BOOTSTRAP}else\n{LINUX_WRITE}{LINUX_ENABLE}fi\n"
+    )
+});
+
+/// A standby stage: write the rendered unit where a move starts it and leave
+/// it unloaded. It reports `staged` with the unit path, or `loaded` when the
+/// unit already runs here, which is refused before anything is written.
+pub(crate) static STAGE_BODY: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{PROGRAM_PRESENT}if [ \"$os\" = \"Darwin\" ]; then\n{DARWIN_UNLOADED}{DARWIN_WRITE}  say 'staged' \"$unit_path\"\nelse\n{LINUX_UNLOADED}{LINUX_WRITE}{LINUX_RELOAD}  say 'staged' \"$unit_path\"\nfi\n"
+    )
+});

@@ -137,3 +137,43 @@ pub async fn deploy_service(
     report.name_unloaded(&plan.label, "deploy");
     Ok(report)
 }
+
+/// The word a stage reports when the unit is installed and not loaded.
+pub const STATUS_STAGED: &str = "staged";
+
+/// A standby stage on one host: write the rendered unit where a placement
+/// move starts it, and leave it unloaded. The move requires exactly this on
+/// its destination — the unit file present, nothing running under it — and
+/// moves the registry declaration itself, so nothing here is declared.
+///
+/// A unit already loaded on the host is refused before anything is written,
+/// and the end state is checked: the unit is not running when the stage
+/// ends. A system-domain unit is refused: it is written through sudo by the
+/// ensure pass, which loads it.
+pub async fn stage_service(
+    target: &ComputeTarget,
+    plan: &DeployPlan,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    if plan.force_daemon {
+        return Err(DeployError(format!(
+            "{} runs in the system domain on {}; a standby stage writes per-login units only",
+            plan.label, target.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
+    }
+    let body = STAGE_BODY
+        .replace("@HEREDOC@", UNIT_HEREDOC)
+        .replace("@PROGRAM@", &shlex_quote(&plan.program))
+        .replace("@DARWIN_UNIT@", plan.darwin_unit.trim_end_matches('\n'))
+        .replace("@LINUX_UNIT@", plan.linux_unit.trim_end_matches('\n'));
+    let prelude = remote_prelude(&plan.label, &plan.unit, "")?;
+    run_remote_checked(
+        target,
+        &prelude,
+        &body,
+        &end_state(STOPPED_DESCRIBE, STOPPED_PROBE),
+        runner,
+    )
+    .await
+}

@@ -2,18 +2,6 @@
 
 use super::*;
 
-/// What one `ensure` pass left on the host and in the registry.
-pub(crate) struct EnsureReceipt {
-    pub(crate) host: String,
-    pub(crate) name: String,
-    pub(crate) label: String,
-    pub(crate) domain: String,
-    pub(crate) action: String,
-    pub(crate) pid: Option<u32>,
-    pub(crate) audited: Option<String>,
-    pub(crate) predecessors: Vec<service::PredecessorRetirement>,
-}
-
 /// Idempotently assert one service from the declared program and the host's
 /// observed unit. The same receipt serves the CLI and internal callers.
 pub(crate) async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
@@ -55,10 +43,23 @@ pub(crate) async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// The pass itself, for every caller that asserts a unit and reads the
-/// receipt rather than printing it: `service ensure`, and placement standby
-/// preparing a host for a profile.
+/// The pass itself, for callers that assert a unit and read the receipt.
 pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureReceipt, CmdError> {
+    pass(options, None).await
+}
+
+/// The same pass for placement standby: the unit is staged, not run.
+pub(crate) async fn stage_unit(
+    options: EnsureOptions<'_>,
+    standby: Standby,
+) -> Result<EnsureReceipt, CmdError> {
+    pass(options, Some(standby)).await
+}
+
+async fn pass(
+    options: EnsureOptions<'_>,
+    standby: Option<Standby>,
+) -> Result<EnsureReceipt, CmdError> {
     let reason = options.reason.trim();
     if reason.is_empty() {
         return Err(CmdError::usage(
@@ -124,14 +125,14 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
                 .as_deref()
                 .is_some_and(|unit| candidate.matches(unit))
     });
-    // The port is read from, or assigned into, the service directory before
-    // the unit is rendered, so the unit and every consumer's marker name the
-    // same number and no port is written in the catalog.
-    let listen_port = match catalog_entry.as_ref() {
-        Some(entry) => {
+    // The port is read from, or assigned into, the service directory before the unit is
+    // rendered, so the unit and every consumer's marker name the same number.
+    let listen_port = match (catalog_entry.as_ref(), standby.as_ref()) {
+        (_, Some(standby)) => standby.listen_port,
+        (Some(entry), None) => {
             crate::cli::directory::listen_port_for(entry, &target, &production_runner()).await?
         }
-        None => None,
+        (None, None) => None,
     };
     let (mut unit, unit_env) = program::resolved_unit(
         &target,
@@ -239,6 +240,9 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         &runner,
     )
     .await?;
+    if standby.is_some() {
+        return stage(&target, options.name, &plan, &runner).await;
+    }
     let (retired, mut predecessors) =
         predecessors::retire_before_ensure(&target, catalog_entry.as_ref(), &runner).await?;
     let outcome =
@@ -252,15 +256,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     let persisted =
         persist_ensure_record(&record, &already, &replaced, &outcome, &plan, reason, &host).await;
     let audited = persisted.map_err(|mut error| {
-        let cause = error
-            .message
-            .as_deref()
-            .unwrap_or("registry operation failed");
-        error.failure = Some(
-            error
-                .failure
-                .unwrap_or(crate::primitives::failure::FailureCode::Unknown),
-        );
+        let cause = error.to_string();
         let said = if outcome.report.detail.is_empty() {
             String::new()
         } else {
@@ -298,5 +294,6 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         pid,
         audited,
         predecessors,
+        path: record.path.clone(),
     })
 }
