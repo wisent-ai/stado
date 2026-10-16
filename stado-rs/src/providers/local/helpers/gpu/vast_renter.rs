@@ -16,12 +16,16 @@ pub const VAST_API: &str = "https://console.vast.ai/api/v0";
 /// `Err` propagation (and `error_for_status`, matching urllib's raise on
 /// HTTP errors).
 pub async fn vast_has_renter() -> anyhow::Result<bool> {
-    let api_key = crate::skarbiec::read_string("vast", "api_key")
-        .await?
-        .unwrap_or_default();
-    if api_key.is_empty() {
-        return Ok(false);
-    }
+    // The check runs only where Vast is an enabled provider; there a key
+    // that is absent or empty cannot say whether a renter holds the machine,
+    // and read as "no renter" it let the agent claim on top of one.
+    let api_key = match crate::skarbiec::read_string("vast", "api_key").await? {
+        Some(key) if !key.trim().is_empty() => key,
+        Some(_) | None => anyhow::bail!(
+            "Vast is an enabled provider, but Skarbiec holds no vast api_key, so whether a renter \
+             holds this machine cannot be asked; store the key or disable the Vast provider"
+        ),
+    };
     let body: serde_json::Value = crate::wait::request(
         reqwest::Client::new()
             .get(format!("{VAST_API}/instances?owner=me"))
