@@ -1329,6 +1329,10 @@ products:
     surface: cli
     for_surface: cli
     bound_because: the capture plan capture-plans/cli-products.json names it as one of the Wisent product CLIs Spis captures as examples, and the recorded terminal cast tui-examples/references/14-htop/media/product-motion.cast holds the word as captured text; capturing that example needs the CLI, and every other capture runs without it
+  - product: weles
+    surface: service
+    for_surface: cli
+    bound_because: 'web captures drive their browser through Weles, the one browser boundary Wisent journeys run in: the web capture worker, the vendored weles-client bridge and the worker runtime bindings that hand it a Weles bearer; CLI, TUI, desktop and mobile captures run without Weles'
 - id: glina
   name: Glina
   status: active
