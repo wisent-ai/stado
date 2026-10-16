@@ -57,10 +57,12 @@ pub(super) fn parse_declaration() -> Result<GithubIdentity, String> {
         ));
     }
     if identity.reality_check.contains("{repository}") {
-        let repository = identity
-            .reality_check_repository
-            .as_deref()
-            .unwrap_or_default();
+        let Some(repository) = identity.reality_check_repository.as_deref() else {
+            return Err(format!(
+                "{DECLARATION_PATH} reality_check names {{repository}}, but no \
+                 reality_check_repository is declared to fill it"
+            ));
+        };
         exact(repository, "reality_check_repository")?;
         if repository.contains('/') {
             return Err(format!(
