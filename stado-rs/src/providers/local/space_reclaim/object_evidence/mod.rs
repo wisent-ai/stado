@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::num::NonZeroUsize;
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::janitor::state::report::{CleanerReport, CleanupReport};
 use super::{ifmt, safefs, IFDIR, IFREG};
