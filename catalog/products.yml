@@ -1486,14 +1486,11 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/skryba
-  description: Detector-directed text rewriting with a native Rust GRPO policy and commissioned human rewrites.
+  description: Detector-directed text rewriting with a native Rust GRPO policy.
   roadmap: []
   integrations:
   - product: brama
     description: Skryba generates rewrite candidates through Brama.
-    source: skryba/README.md:15-20
-  - product: handtohuman
-    description: Skryba commissions human rewrites through HandToHuman.
     source: skryba/README.md:15-20
   - product: ster
     description: Skryba's `writing-style export` emits the SFT example set `ster tune sft` reads and the contrastive pair set `ster tune dpo` reads; Ster owns the local weights and trains the adapter.
@@ -1523,9 +1520,6 @@ products:
     for_surface: cli
     alternative: SKRYBA_MODEL_SERVICE_URL (--model-service-url) names an OpenAI-compatible model service and SKRYBA_MODEL_SERVICE_KEY_FILE an owner-only file holding its bearer; the quality judge, the rewrite generator and the prose walk over a folder then post to it unsigned in place of Brama
     alternative_source: skryba/src/app/brama/mod.rs
-  - product: handtohuman
-    surface: library
-    for_surface: cli
   - product: stado
     surface: cli
     for_surface: cli
