@@ -194,9 +194,12 @@ pub(super) async fn continue_run(
                 .map(|record| (platform.clone(), record.failure.clone()))
         })
     {
+        let cause = match failure {
+            Some(failure) => failure,
+            None => "the build failed and its record states no cause".to_string(),
+        };
         let error = CmdError::click(format!(
-            "{platform}: {}; `stado release resume {}` builds it again",
-            failure.unwrap_or_else(|| "the build failed".to_string()),
+            "{platform}: {cause}; `stado release resume {}` builds it again",
             run.run_id
         ))
         .stating(crate::primitives::failure::FailureCode::Refused);
@@ -226,25 +229,22 @@ pub(super) async fn continue_run(
         newer_than(&store, &run).await?
     };
     if let Some(newer) = newer {
-        run.state = ReleaseRunState::Superseded;
-        run.failure = Some(if already_published {
+        let reason = if already_published {
             format!(
                 "superseded by release run {newer} after publication; {newer} delivers from here"
             )
         } else {
             format!("superseded by release run {newer} before publication")
-        });
+        };
+        run.state = ReleaseRunState::Superseded;
+        run.failure = Some(reason.clone());
         save(&mut run).await?;
         if json {
             println!("{}", serde_json::to_string_pretty(&run)?)
         } else {
             println!(
-                "release run {} product={} version={} state={:?}: {}",
-                run.run_id,
-                run.product,
-                run.version,
-                run.state,
-                run.failure.as_deref().unwrap_or_default()
+                "release run {} product={} version={} state={:?}: {reason}",
+                run.run_id, run.product, run.version, run.state,
             )
         }
         return Ok(());
