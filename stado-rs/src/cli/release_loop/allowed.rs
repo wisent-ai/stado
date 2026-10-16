@@ -16,7 +16,10 @@
 //! the operator's rulings refusing; an `oko` that gives no verdict at all (it
 //! cannot be started, or it is an Oko without the `admit` verb) is said as
 //! that, with its own words, since a ruling that was never read decided
-//! nothing.
+//! nothing. A machine with no Oko installed at any of its declared paths has
+//! no register of rulings at all: Stado runs without Oko like every product
+//! runs without the others, so the action is admitted, saying that no Oko is
+//! installed and so no ruling governs it.
 
 use serde_json::Value;
 use tokio::process::Command;
@@ -79,6 +82,9 @@ pub async fn refusal(action: &str, product: Option<&str>, purposes: &[&str]) -> 
     };
     let answer = match decision(&words).await {
         Decision::Allowed(reason) => reason,
+        Decision::Absent(cause) => {
+            format!("no Oko is installed on this machine ({cause}), so no ruling governs {scope}")
+        }
         Decision::Refused(reason) => {
             return Err(format!(
                 "{scope} is not run: the operator's rulings do not allow it now ({reason})"
@@ -101,6 +107,9 @@ pub async fn refusal(action: &str, product: Option<&str>, purposes: &[&str]) -> 
 enum Decision {
     /// Allowed, with the reason Oko gives.
     Allowed(String),
+    /// No Oko is installed at any of its declared paths, with where it was
+    /// looked for.
+    Absent(String),
     /// Not allowed, with the reason quoting the ruling.
     Refused(String),
     /// No verdict: the program could not be run, or it answered something
@@ -109,9 +118,12 @@ enum Decision {
 }
 
 async fn decision(words: &[&str]) -> Decision {
-    let oko = match installed_program(OKO_CLI) {
-        Ok(oko) => oko,
-        Err(missing) => {
+    // A home that is not known is not a machine without Oko: where Oko would
+    // be installed was never looked at.
+    let oko = match (installed_program(OKO_CLI), std::env::var_os("HOME")) {
+        (Ok(oko), _) => oko,
+        (Err(missing), Some(_)) => return Decision::Absent(missing),
+        (Err(missing), None) => {
             return Decision::Unread(format!("oko {} did not run: {missing}", words.join(" ")))
         }
     };
