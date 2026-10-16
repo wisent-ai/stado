@@ -102,3 +102,21 @@ pub fn admit(scan: &str) -> Result<Verdict, String> {
         Ok(Verdict::Admitted(admission))
     }
 }
+
+/// Admit `scan` whatever the load, because it is the relief the load is
+/// waiting for: the janitor's build-cache walk on a volume at its full
+/// threshold. Skipping it for load left a busy host full for good, every
+/// pass ending blocked and the build trees refused. The reading is recorded
+/// as an admission, which ends the scan's standing skip, and returned so the
+/// pass can say what load it walked under.
+pub fn admit_relief(scan: &str) -> Result<Admission, String> {
+    let load = load_one_minute()?;
+    let (ceiling, ceiling_source) = ceiling()?;
+    let admission = Admission {
+        load,
+        ceiling,
+        ceiling_source,
+    };
+    super::record::admitted(scan, &admission)?;
+    Ok(admission)
+}

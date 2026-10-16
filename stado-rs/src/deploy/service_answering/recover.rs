@@ -1,10 +1,8 @@
 //! What a host does with a service that stands: the declared repair steps
 //! of its repair declaration that the answering declaration names, in order,
 //! then the declared restart through the same path `stado service restart`
-//! takes, then an alert and an attempt to append the recovery record.
-//! A failed append is returned as a recording refusal; an alert sent before
-//! that attempt never asserts that the register already holds the event.
-//! The host acts on the beacon pass that found it standing. The next
+//! takes, then the record and the alert. No manual step: the host that runs
+//! the service acts on the beacon pass that found it standing, and the next
 //! pass asks the new process afresh. Another host whose resolver holds the
 //! service's requests past the same bound acts through this same path on
 //! the host that runs it ([`Peer`]), since the steps are fixed host payloads
@@ -28,7 +26,7 @@ use crate::cli::CmdError;
 use crate::deploy::service_catalog::CatalogService;
 
 /// The alert's subject.
-const SUBJECT: &str = "Stado attempted recovery of a service that stopped answering";
+const SUBJECT: &str = "Stado recovered a service that stopped answering";
 
 /// What another host saw stand: the host whose resolver held the service's
 /// requests, and the oldest held request's own sentence.
@@ -106,7 +104,7 @@ pub async fn recover(
         None => format!(
             "{host}: {} ({unit}) answered nothing on {} {} for {waited_seconds}s, past the \
              {bound_seconds}s bound; {} request(s) stood on this host's resolver; repair \
-             {repaired}; restart {restart_word}. `stado service recoveries` lists this event only if recording succeeds.",
+             {repaired}; restart {restart_word}. `stado service recoveries` holds the record.",
             entry.name,
             declared.method,
             declared.path,
@@ -114,9 +112,9 @@ pub async fn recover(
         ),
         Some(peer) => format!(
             "{host}: {} ({unit}) held {}'s requests for {waited_seconds}s, past the \
-             {bound_seconds}s bound, and {host} did not recover it itself: {}; recovery attempted from {} \
+             {bound_seconds}s bound, and {host} did not recover it itself: {}; recovered from {} \
              over its registry SSH channel; repair {repaired}; restart {restart_word}. `stado \
-             service recoveries` on {} lists this event only if recording succeeds.",
+             service recoveries` on {} holds the record.",
             entry.name, peer.observer, peer.sentence, peer.observer, peer.observer,
         ),
     };
@@ -143,9 +141,6 @@ pub async fn recover(
         alert: Value::Array(alert),
         observed_by: peer.map(|peer| peer.observer.to_string()),
     };
-    let mut report = json!(recovery);
-    if let Err(error) = register::append(home, &recovery) {
-        report["recording_refusal"] = json!(error.to_string());
-    }
-    Ok(report)
+    register::append(home, &recovery)?;
+    Ok(json!(recovery))
 }

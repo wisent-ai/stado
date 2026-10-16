@@ -87,9 +87,12 @@ pub const SCAN: &str = "build_caches";
 /// as regenerable.
 ///
 /// Every criterion — the tag, the reserved roots, the ownership and device
-/// checks — is applied to each directory the level-order walk reaches. The
-/// walk is admitted only under the host's load ceiling (a refused pass is
-/// counted as `load_above_ceiling` and published by the beacon), runs at
+/// checks — is applied to each directory the level-order walk reaches. An
+/// enforcing walk runs only on a volume at the rule's full threshold, where
+/// it is the relief, so it runs whatever the load
+/// ([`crate::deploy::host_scan::admit_relief`]); a preview is admitted only
+/// under the host's load ceiling (a refused preview is counted as
+/// `load_above_ceiling` and published by the beacon). Either runs at
 /// background priority, and reports the bytes of a cache whose root is
 /// unchanged from the memory kept in `state_dir` instead of reading the
 /// tree again; a preview, or a pass with no state directory, remembers
@@ -122,21 +125,28 @@ pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
         }
     };
     placement::place_cargo_builds(home, report);
-    match crate::deploy::host_scan::admit(SCAN) {
-        Ok(verdict) if verdict.admitted() => {}
-        Ok(verdict) => {
-            let admission = verdict.admission();
-            report.skip_builds("load_above_ceiling", frontier.len() as i64);
-            report.add_error(
-                "build_caches",
-                &JanitorError::os(&format!(
-                    "the walk was skipped: the one-minute load average {} is above the \
-                     ceiling {} ({:?})",
-                    admission.load, admission.ceiling, admission.ceiling_source
-                )),
-            );
-            return;
-        }
+    let admitted = if enforcing {
+        crate::deploy::host_scan::admit_relief(SCAN).map(|_| true)
+    } else {
+        crate::deploy::host_scan::admit(SCAN).map(|verdict| {
+            if !verdict.admitted() {
+                let admission = verdict.admission();
+                report.skip_builds("load_above_ceiling", frontier.len() as i64);
+                report.add_error(
+                    "build_caches",
+                    &JanitorError::os(&format!(
+                        "the preview walk was skipped: the one-minute load average {} is above \
+                         the ceiling {} ({:?})",
+                        admission.load, admission.ceiling, admission.ceiling_source
+                    )),
+                );
+            }
+            verdict.admitted()
+        })
+    };
+    match admitted {
+        Ok(true) => {}
+        Ok(false) => return,
         Err(error) => {
             report.add_error(
                 "build_caches",
@@ -167,7 +177,7 @@ pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
         {
             consent::Gated::Opened(root_fd) => root_fd,
             consent::Gated::Pending => {
-                report.skip_builds("consent_pending", 1);
+                report.skip_builds("consent_pending", frontier.len() as i64);
                 return Ok(());
             }
         };
@@ -203,15 +213,15 @@ pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
 
 /// The home could not be opened, said so that an operator can act.
 ///
-/// A bare `PermissionError (Operation not permitted (os error 1))` with
-/// `scanned_items: 0` beside it names neither the root nor the reason. On
-/// macOS that errno is the one the
+/// A bare `PermissionError (Operation not permitted (os error …))` beside a
+/// scan that counted no item names neither the root nor the reason. On
+/// macOS `EPERM` is the errno the
 /// operating system returns for a folder behind its own privacy consent —
 /// `~/Documents` among them — which is a different repair from a mode bit:
 /// the process needs Full Disk Access, or the declaration needs a root the
 /// fleet's own agent may read.
 fn refused_root(root: &Path, error: &std::io::Error) -> JanitorError {
-    let privacy = cfg!(target_os = "macos") && error.raw_os_error() == Some(1);
+    let privacy = cfg!(target_os = "macos") && error.raw_os_error() == Some(nix::libc::EPERM);
     let remedy = if privacy {
         "the operating system's privacy protection refuses it to this process: grant Full Disk \
          Access to the agent that runs the janitor, or reclaim the checkouts' rebuildable trees \

@@ -10,12 +10,14 @@
 //! core count this process measures when nothing is declared), runs at
 //! background I/O priority, and a skipped scan is recorded here so the
 //! beacon publishes it and `stado host health` shows it, instead of the
-//! scan silently not happening.
+//! scan silently not happening. The one exception is the janitor's walk on a
+//! volume at its full threshold ([`admit_relief`]): it frees the disk the
+//! load is filling, so it runs at background priority whatever the load.
 
 pub mod admission;
 pub mod priority;
 pub mod record;
 
-pub use admission::{admit, Admission, Verdict};
+pub use admission::{admit, admit_relief, Admission, Verdict};
 pub use priority::{background_prefix, Throttled};
 pub use record::{published, Skip};
