@@ -767,6 +767,10 @@ products:
     for_surface: cli
     alternative: the GAC app hook asks Skarbiec only for config values written as skarbiec://ITEM/FIELD; a config that holds the values themselves is read as written, with no Skarbiec call
     alternative_source: probierz/probierz-rs/src/apphooks/gac/render.rs
+  - product: stado
+    surface: cli
+    for_surface: cli
+    bound_because: 'Probierz reaches Stado for work on the fleet and on Stado itself: stado:<target> runs submitted, collected and provisioned through Stado (evidence remote and the MCP Stado job tools), fleet evidence retention and the fleet status overview in Stado object store, the host inventory read from Stado registry, the benchmark commands that keep rivals and benchmarks in Stado product catalog, app hooks that reach integrations through STADO_INTEGRATION_API_URL, and the plans that qualify Stado; the authoring commands name STADO_MODEL_ROUTER_URL, which may be any model service as the Brama declaration says'
 - id: tama
   name: Tama
   status: active
