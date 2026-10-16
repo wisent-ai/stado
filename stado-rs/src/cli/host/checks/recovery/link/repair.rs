@@ -51,10 +51,10 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
         )));
     };
     if diagnosis_code != "verifier_unavailable" {
-        let detail = diagnosis
-            .get("detail")
-            .and_then(Value::as_str)
-            .unwrap_or("the publisher log names no supported repair");
+        let detail = match diagnosis.get("detail").and_then(Value::as_str) {
+            Some(detail) => detail,
+            None => "the diagnosis states no detail",
+        };
         return Err(CmdError::refused(format!(
             "{}: automatic link repair refused because the diagnosed publisher state is \
              {diagnosis_code}: {detail}",
@@ -84,13 +84,15 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     let newer = signal.reported_at != previous_reported_at;
     let fresh = signal.verdict == crate::deploy::host_state::ping::Verdict::Ok;
     if !(newer && fresh) {
+        let reported = match signal.reported_at.as_deref() {
+            Some(at) => format!("was reported at {at}"),
+            None => "states no report time".to_string(),
+        };
         return Err(CmdError::click(format!(
             "{}: reconciled the dashboard verifier on {authority}, and the host has not published \
-             a fresh beacon since: the newest is {:?}s old and was reported at {}. The repair \
-             is proven by the host's next beacon; read it with the same check.",
-            resolved.name,
-            signal.age_seconds,
-            signal.reported_at.as_deref().unwrap_or("an unknown time")
+             a fresh beacon since: the newest is {:?}s old and {reported}. The repair is proven \
+             by the host's next beacon; read it with the same check.",
+            resolved.name, signal.age_seconds,
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
