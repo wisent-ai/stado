@@ -1123,6 +1123,41 @@ products:
     for_surface: cli
     alternative: 'Las never calls wisent-app: its wisent-app lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
     alternative_source: las/src/dependencies/register.mjs
+  - product: jeden
+    surface: cli
+    for_surface: cli
+    alternative: Las federates the jeden MCP surface only when its checkout, signed release and declared environment are present; otherwise las list shows it unconfigured with the refusal of the step that failed, LAS_ONLY and LAS_SKIP can leave it out, and every other surface runs
+    alternative_source: las/src/registry/surfaces.mjs
+  - product: most
+    surface: service
+    for_surface: cli
+    alternative: Las federates the most MCP surface only when its checkout, signed release and declared environment are present; otherwise las list shows it unconfigured with the refusal of the step that failed, LAS_ONLY and LAS_SKIP can leave it out, and every other surface runs
+    alternative_source: las/src/registry/surfaces.mjs
+  - product: singularity
+    surface: cli
+    for_surface: cli
+    alternative: Las federates the singularity MCP surface only when its checkout, signed release and declared environment are present; otherwise las list shows it unconfigured with the refusal of the step that failed, LAS_ONLY and LAS_SKIP can leave it out, and every other surface runs
+    alternative_source: las/src/registry/surfaces.mjs
+  - product: skarbiec
+    surface: service
+    for_surface: cli
+    alternative: Las federates the skarbiec MCP surface only when its checkout, signed release and declared environment are present; otherwise las list shows it unconfigured with the refusal of the step that failed, LAS_ONLY and LAS_SKIP can leave it out, and every other surface runs
+    alternative_source: las/src/registry/surfaces.mjs
+  - product: brama
+    surface: service
+    for_surface: cli
+    alternative: 'Las never calls brama for its own work: the Las Native Apps console for brama reports the local posture of a brama checkout (files present and source counts), and on a machine without brama those checks show missing while the Las CLI and every other surface run'
+    alternative_source: las/src/registry/surfaces.mjs
+  - product: oko
+    surface: cli
+    for_surface: cli
+    alternative: 'Las never calls Oko for its own work: the Byk console of Las Native Apps reports the local posture of an oko checkout (files present and source counts), and on a machine without Oko those checks show missing while the Las CLI and every other surface run'
+    alternative_source: las/src/registry/surfaces.mjs
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: onboarding reads its journey bundle from the Stado journey service only when STADO_INTEGRATION_API_URL and LAS_STADO_INTEGRATION_TOKEN are set, and otherwise uses the bundle it saved or the canonical bundle shipped with Las; federation and the register run without Stado
+    alternative_source: las/src/onboarding/journey.mjs
 - id: skrzynka
   name: Skrzynka
   status: active
