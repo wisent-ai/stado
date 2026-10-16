@@ -225,6 +225,7 @@ pub(crate) fn execute_revision(
             process.args(["--format-version", "1"]);
         }
         process.args(arguments);
+        process.envs(pinned.iter().flat_map(|pinned| pinned.source_contract()));
         report["argv"] = json!(std::iter::once(process.get_program())
             .chain(process.get_args())
             .map(|v| v.to_string_lossy())

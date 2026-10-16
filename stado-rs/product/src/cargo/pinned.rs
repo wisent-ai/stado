@@ -35,6 +35,21 @@ impl Pinned {
             "pinned": true,
         })
     }
+
+    /// The source the release worker states to a build, stated for this
+    /// export: its tree has no Git checkout, so a test that binds its
+    /// evidence to the commit reads the tree, the commit and the archive
+    /// digest from here, as it does on a worker.
+    pub(super) fn source_contract(&self) -> Vec<(&'static str, String)> {
+        vec![
+            (
+                "WISENT_SOURCE_DIR",
+                self.exported.to_string_lossy().into_owned(),
+            ),
+            ("WISENT_SOURCE_COMMIT", self.commit.clone()),
+            ("WISENT_SOURCE_SHA256", self.archive_sha256.clone()),
+        ]
+    }
 }
 
 /// Export `commit` of the canonical checkout `root` into the checkout's build
