@@ -772,14 +772,16 @@ products:
     repository: wisent-ai/tama
     manifest: .wisent-release.json
     after_install:
-    - [tama, hooks, release]
+    - - tama
+      - hooks
+      - release
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/tama-desktop
     manifest: .wisent-desktop-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:06Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:06Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   dependencies:
   - product: tama
     surface: cli
@@ -787,31 +789,23 @@ products:
   - product: stado
     surface: cli
     for_surface: cli
-    alternative: without Stado installed, quality-check runs the gates the checkout declares
-      in .wisent-release.json itself and block-internal-names judges this account's own
-      names and says the fleet registry and vault are not here; the build-consent and
-      source-build readers answer nothing for a Stado that is absent
+    alternative: without Stado installed, quality-check runs the gates the checkout declares in .wisent-release.json itself and block-internal-names judges this account's own names and says the fleet registry and vault are not here; the build-consent and source-build readers answer nothing for a Stado that is absent
     alternative_source: tama/rust/crates/tama-hook-tools/src/programs/review/quality/declared.rs
   - product: oko
     surface: cli
     for_surface: cli
-    alternative: without Oko installed, the session's own task-scope declaration
-      (tama task scope set with --task or --defect) is the register; require-task-scope
-      names it as the entry, block-stop-with-open-work refuses the stop while it still
-      names work and passes once tama task scope clear removed it, the gates that read
-      Oko's defect and task registers (block-off-task-work, block-one-off-repairs,
-      block-text-outside-tool-calls, the open-work reminder) read nothing for an Oko
-      that is absent, and the operator's rulings come from Oko's register file, no
-      file being no ruling
+    alternative: without Oko installed, the session's own task-scope declaration (tama task scope set with --task or --defect) is the register; require-task-scope names it as the entry, block-stop-with-open-work refuses the stop while it still names work and passes once tama task scope clear removed it, the gates that read Oko's defect and task registers (block-off-task-work, block-one-off-repairs, block-text-outside-tool-calls, the open-work reminder) read nothing for an Oko that is absent, and the operator's rulings come from Oko's register file, no file being no ruling
     alternative_source: tama/rust/crates/tama-hook-tools/src/assignment/open_defects/mod.rs
   - product: brama
     surface: service
     for_surface: cli
-    alternative: the judged hooks and review-push read the attestation each commit and each
-      turn end carries against the standard tama attestation standard prints, with no model
-      asked (tama model-provider set --none declares it); a hook that only asks a model a
-      question about a text finds nothing and says so in its log
+    alternative: the judged hooks and review-push read the attestation each commit and each turn end carries against the standard tama attestation standard prints, with no model asked (tama model-provider set --none declares it); a hook that only asks a model a question about a text finds nothing and says so in its log
     alternative_source: tama/rust/crates/tama-hook-tools/src/ports/task_attestation/mod.rs
+  - product: weles
+    surface: cli
+    for_surface: cli
+    alternative: 'Tama never runs Weles: it reads Weles run output under WELES_RUN_OUTPUT_DIR or the Weles state directory only to check evidence a payload cites there, and its registry entries git-weles-pre-commit and git-weles-pre-push are the Weles repository git hooks, which git runs in that checkout; without Weles none of them applies'
+    alternative_source: tama/rust/crates/tama-hook-tools/src/evidence/root.rs
 - id: byk
   name: Byk
   status: active
