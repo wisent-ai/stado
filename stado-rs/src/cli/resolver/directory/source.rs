@@ -75,6 +75,17 @@ impl SnapshotSource {
                         )))
                     }
                 }
+                // Said before it is sent: a command ended at the interval
+                // never reaches the abandonment below, and the next reader
+                // finds this read standing instead of sending its own.
+                match crate::cli::resolver::declared_bound_seconds() {
+                    Ok(Some(seconds)) => super::unanswered::asking(target, seconds),
+                    Ok(None) => {}
+                    Err(unreadable) => eprintln!(
+                        "stado: the read of the registry authority {target} is sent without \
+                         being kept as in flight: {unreadable}"
+                    ),
+                }
                 let reads = async {
                     let first = Self::fetch_authority_paths(target, ssh, command, reader).await;
                     let first_error = match first {
@@ -97,8 +108,12 @@ impl SnapshotSource {
                 .await
                 {
                     Ok(read) => {
+                        // A read that ended, answered or refused, is no
+                        // longer in flight.
                         if read.is_ok() {
                             super::unanswered::forget(target);
+                        } else {
+                            super::unanswered::answered(target);
                         }
                         read
                     }
