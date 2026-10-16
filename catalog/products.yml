@@ -927,11 +927,21 @@ products:
       PATH: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
       SUPABASE_URL: https://alvaewvbyxpgwdpugnxy.supabase.co
       SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsdmFld3ZieXhwZ3dkcHVnbnh5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTc5NDcsImV4cCI6MjA5Njk3Mzk0N30.xkkJ36ZTwtqyVZLFju0vc9S25grTuKbj9ILKlsXdUPA
-    summary: Skrzynka loopback mail API and push (IMAP IDLE) mail reception; credentials
-      remain in the account's Skarbiec vault.
+    summary: Skrzynka loopback mail API and push (IMAP IDLE) mail reception; credentials remain in the account's Skarbiec vault.
   approved_by: operator
-  approved_at: '2026-09-02T19:53:07Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:07Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
+  dependencies:
+  - product: skarbiec
+    surface: cli
+    for_surface: service
+    alternative: SKRZYNKA_CREDENTIALS_FILE names an owner-only JSON file of item id to the same skarbiec.item.v2 object Skarbiec stores, which answers the get, list, set-json, retag and version verbs the mailbox resolver uses
+    alternative_source: skrzynka/src/skarbiec/local/mod.rs
+  - product: skarbiec
+    surface: cli
+    for_surface: cli
+    alternative: SKRZYNKA_CREDENTIALS_FILE names an owner-only JSON file of item id to the same skarbiec.item.v2 object Skarbiec stores, which answers the get, list, set-json, retag and version verbs the mailbox resolver uses
+    alternative_source: skrzynka/src/skarbiec/local/mod.rs
 - id: oko
   name: Oko
   status: active
@@ -1222,8 +1232,7 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/glina
-  description: AI-sculpted game assets. Brama-modeled Blender sculpting with a verified
-    GLB quality gate.
+  description: AI-sculpted game assets. Brama-modeled Blender sculpting with a verified GLB quality gate.
   roadmap: []
   integrations:
   - product: skarbiec
@@ -1261,21 +1270,23 @@ products:
   - product: brama
     surface: service
     for_surface: cli
-    alternative: models.openai_compatible (url, bearer, model) in the pipeline config names
-      any OpenAI-compatible provider in place of models.brama
+    alternative: models.openai_compatible (url, bearer, model) in the pipeline config names any OpenAI-compatible provider in place of models.brama
     alternative_source: glina/pipeline/sculpt/llm.js
   - product: skarbiec
     surface: service
     for_surface: cli
-    alternative: GLINA_CREDENTIALS_FILE names an owner-only JSON file of role -> field ->
-      value that answers every role:// reference without Skarbiec
+    alternative: GLINA_CREDENTIALS_FILE names an owner-only JSON file of role -> field -> value that answers every role:// reference without Skarbiec
     alternative_source: glina/pipeline/host/credentials.js
   - product: stado
     surface: cli
     for_surface: cli
-    alternative: GLINA_CREDENTIALS_FILE answers the role:// references stado credentials
-      get would read
+    alternative: GLINA_CREDENTIALS_FILE answers the role:// references stado credentials get would read
     alternative_source: glina/pipeline/host/credentials.js
+  - product: weles
+    surface: cli
+    for_surface: cli
+    alternative: browser.playwright_mcp in the pipeline config drives the Playwright MCP server instead of Weles for every browser step
+    alternative_source: glina/pipeline/browser/bridge.js
 - id: skryba
   name: Skryba
   status: active
