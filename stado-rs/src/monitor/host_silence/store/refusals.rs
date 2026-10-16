@@ -51,28 +51,38 @@ struct Claim {
     settled: bool,
 }
 
+/// The refusal table, also after a thread panicked holding it.
+///
+/// Every update of a [`Recording`] is whole, so a holder that panicked left
+/// the table between updates. Skipping the table on a poisoned lock instead
+/// turned off the dedupe for the rest of the process: every refusal opened
+/// its own write, which is the burst the table exists to prevent, and a
+/// write that ended unsettled left its refusal marked as being written, so
+/// it was never written again.
+fn recordings() -> std::sync::MutexGuard<'static, HashMap<RefusalKey, Recording>> {
+    match RECORDINGS.lock() {
+        Ok(table) => table,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 impl Claim {
     /// Claim the write of `detail`, unless its record is already in the
     /// store or a write of this refusal stands; a different sentence raised
     /// meanwhile is kept and written by that write's caller once it ends.
-    ///
-    /// A poisoned lock means another thread panicked mid-update; the
-    /// refusal is then written rather than dropped, because losing the
-    /// evidence is worse than writing one extra blob.
     fn take(key: RefusalKey, detail: &str) -> Option<Self> {
-        if let Ok(mut table) = RECORDINGS.lock() {
-            let recording = table.entry(key.clone()).or_default();
-            if let Some(writing) = &recording.writing {
-                if writing != detail {
-                    recording.next = Some(detail.to_string());
-                }
-                return None;
+        let mut table = recordings();
+        let recording = table.entry(key.clone()).or_default();
+        if let Some(writing) = &recording.writing {
+            if writing != detail {
+                recording.next = Some(detail.to_string());
             }
-            if recording.written.as_deref() == Some(detail) {
-                return None;
-            }
-            recording.writing = Some(detail.to_string());
+            return None;
         }
+        if recording.written.as_deref() == Some(detail) {
+            return None;
+        }
+        recording.writing = Some(detail.to_string());
         Some(Self {
             key,
             sentence: detail.to_string(),
@@ -86,12 +96,7 @@ impl Claim {
     /// not the one now in the store.
     fn settle(mut self, written: bool) -> Option<Self> {
         self.settled = true;
-        // A holder that panicked left the table as it was between whole
-        // updates; it is taken back rather than the next sentence dropped.
-        let mut table = match RECORDINGS.lock() {
-            Ok(table) => table,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut table = recordings();
         let recording = table.entry(self.key.clone()).or_default();
         if written {
             recording.written = Some(self.sentence.clone());
@@ -115,10 +120,8 @@ impl Drop for Claim {
         if self.settled {
             return;
         }
-        if let Ok(mut table) = RECORDINGS.lock() {
-            if let Some(recording) = table.get_mut(&self.key) {
-                recording.writing = None;
-            }
+        if let Some(recording) = recordings().get_mut(&self.key) {
+            recording.writing = None;
         }
     }
 }
