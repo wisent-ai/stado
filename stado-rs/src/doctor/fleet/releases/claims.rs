@@ -108,16 +108,15 @@ pub(super) async fn claim_only_verdict(
         Some(revision.as_str()),
     ) {
         Ok(Some(run)) => {
-            let state = run
-                .state
-                .as_ref()
-                .map(|state| state.phase())
-                .unwrap_or_default();
+            let state = match &run.state {
+                Some(state) => format!("still {}", state.phase()),
+                None => "open with no recorded state".to_string(),
+            };
             return (
                 Status::Unmeasured,
                 format!(
                     "{scope} is publishing now: its claim binds it to {revision}, and release \
-                     run {} for that revision is still {state}",
+                     run {} for that revision is {state}",
                     run.run_id
                 ),
             );
