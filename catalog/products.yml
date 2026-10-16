@@ -1009,6 +1009,11 @@ products:
     for_surface: cli
     alternative: SKRZYNKA_CREDENTIALS_FILE names an owner-only JSON file of item id to the same skarbiec.item.v2 object Skarbiec stores, which answers the get, list, set-json, retag and version verbs the mailbox resolver uses
     alternative_source: skrzynka/src/skarbiec/local/mod.rs
+  - product: skarbiec
+    surface: cli
+    for_surface: desktop
+    alternative: Skrzynka Desktop runs the skrzynka CLI and only explains the Skarbiec failure codes it reports; that CLI answers from SKRZYNKA_CREDENTIALS_FILE without Skarbiec, and then no Skarbiec code is reported
+    alternative_source: skrzynka/src/skarbiec/local/mod.rs
 - id: oko
   name: Oko
   status: active
