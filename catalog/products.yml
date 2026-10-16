@@ -706,6 +706,38 @@ products:
     for_surface: cli
     alternative: 'Stado never calls undetectabletext: its undetectabletext lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without undetectabletext runs every other product the same'
     alternative_source: stado/catalog/products.yml
+  - product: oko
+    surface: cli
+    for_surface: cli
+    bound_because: every model judgement Stado asks (mail, sizing, quality checks, quota replies, the operator console) goes through oko gateway send, Oko owning the Brama bearer and route, and an integration stop a host reports is recorded as an Oko defect through oko defects record; installing, updating and placing products does not call Oko
+  - product: brama
+    surface: service
+    for_surface: cli
+    bound_because: 'Stado places and checks Brama as a fleet service: the inference routes, the Brama host precheck and model-review gateway accounts, and the host-exec allowlist entries that run it; model judgements reach Brama through Oko'
+  - product: tama
+    surface: cli
+    for_surface: cli
+    bound_because: a build past the fleet build budget is admitted only on an approval read from the Tama verified build registry through the Tama CLI a Stado install places (TAMA_CLI); a build within the budget is scheduled without Tama
+  - product: weles
+    surface: service
+    for_surface: cli
+    bound_because: 'Stado runs Weles workloads: the weles runner reads its activity and recordings, browser tasks and sign-in go to a placed Weles runtime, and placement policy installs it; the other products run without Weles'
+  - product: jeden
+    surface: cli
+    for_surface: cli
+    bound_because: 'Stado runs Jeden workloads: the jeden runner attaches to and detaches Jeden pursuits and hands them the Brama agent signing secret, and fleet-shape orphan detection reads them; the other products run without Jeden'
+  - product: wisent-app
+    surface: web
+    for_surface: cli
+    bound_because: the detached Jeden runner hands its pursuit WISENT_APP_AGENT_AUTH_SECRET, the agent identity Brama verifies; Stado never calls the Wisent app
+  - product: probierz
+    surface: service
+    for_surface: cli
+    bound_because: 'Stado installs and runs Probierz on hosts: the host precheck release installer signs as the Probierz agent, and host-exec admits the Probierz run root and its service commands; the other products run without Probierz'
+  - product: compute-marketplace
+    surface: service
+    for_surface: cli
+    bound_because: the initial host storage preparation gate reads the GitHub Actions runners of the wisent-backend and brama repositories, besides the repository being prepared, and refuses when it cannot read them; Stado never runs compute-marketplace itself
 - id: lem
   name: Lem
   status: active
