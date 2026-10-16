@@ -883,8 +883,13 @@ products:
     binaries:
     - byk
   approved_by: operator
-  approved_at: '2026-09-02T19:53:06Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:06Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
+  dependencies:
+  - product: stado
+    surface: service
+    for_surface: web
+    bound_because: 'Byk trading agents are Stado machine jobs: the web app spawns, reads, deregisters and deletes them through the Stado machine and object APIs (lib/stado.ts and app/api/agents), and the agent job (bin/agent) reads the model router and integration addresses Stado injects into it'
 - id: las
   name: Las
   status: active
