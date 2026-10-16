@@ -1010,23 +1010,19 @@ products:
   roadmap:
   - title: Ship the evidence-locked daily digest
     status: planned
-    outcome: Produce daily highlights and a decision journal from user-authored transcript
-      evidence.
+    outcome: Produce daily highlights and a decision journal from user-authored transcript evidence.
     source: https://oko.wisent.com/docs/transcript-intelligence
   - title: Turn repeated friction into reviewed proposals
     status: planned
-    outcome: Add frustration analytics, company-context proposals and approved hook
-      or automation proposals.
+    outcome: Add frustration analytics, company-context proposals and approved hook or automation proposals.
     source: https://oko.wisent.com/docs/transcript-intelligence
   - title: Connect cost to real outcomes
     status: planned
-    outcome: Join recorded cost with proven goal completion and feed per-task success
-      rates back into model routing.
+    outcome: Join recorded cost with proven goal completion and feed per-task success rates back into model routing.
     source: https://oko.wisent.com/docs/transcript-intelligence
   integrations:
   - product: transcript-lake
-    description: Oko rebuilds its session catalogue and search projection from Transcript
-      Lake.
+    description: Oko rebuilds its session catalogue and search projection from Transcript Lake.
     source: https://oko.wisent.com/docs/integrations
   - product: brama
     description: Oko routes transcript-intelligence model work through Brama.
@@ -1064,8 +1060,8 @@ products:
     repository: wisent-ai/oko-desktop
     manifest: .wisent-desktop-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:07Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:07Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   service:
     installable: true
     unit: com.wisent.oko
@@ -1074,25 +1070,27 @@ products:
     - serve
     env:
       PATH: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-    summary: The one Oko process per host (oko serve), which owns the PTY broker; autonomy,
-      the Slack responder, catalogue synchronisation and task handover are Oko routines
-      Stado schedules.
+    summary: The one Oko process per host (oko serve), which owns the PTY broker; autonomy, the Slack responder, catalogue synchronisation and task handover are Oko routines Stado schedules.
   dependencies:
   - product: brama
     surface: service
     for_surface: service
-    alternative: oko model-service set declares an OpenAI-compatible service every model
-      call then asks; without any model service, what each message is, is recorded with
-      oko tasks kind and a task is closed with oko tasks close or Close on Oko Desktop
+    alternative: oko model-service set declares an OpenAI-compatible service every model call then asks; without any model service, what each message is, is recorded with oko tasks kind and a task is closed with oko tasks close or Close on Oko Desktop
     alternative_source: oko/rust/src/tasks/judge/provider.rs
   - product: stado
     surface: cli
     for_surface: cli
-    alternative: the mail channel is Oko's own, sent through the provider oko contact mail set
-      declared, and oko-ios through the database's push function; every other paged channel
-      of oko asks ask (skrzynka, slack, telegram, …) is one Stado pages through and is refused
-      by name without it
+    alternative: the mail channel is Oko's own, sent through the provider oko contact mail set declared, and oko-ios through the database's push function; every other paged channel of oko asks ask (skrzynka, slack, telegram, …) is one Stado pages through and is refused by name without it
     alternative_source: oko/rust/src/asks/mail/mod.rs
+  - product: jeden
+    surface: cli
+    for_surface: cli
+    alternative: Jeden is one of the agent harnesses Oko lists, starts, reads transcripts of and routes tasks to; with it absent Oko runs every session on the other declared harnesses
+    alternative_source: oko/rust/src/agent/harnesses.json
+  - product: wisent-app
+    surface: service
+    for_surface: cli
+    bound_because: 'only a task Oko routes through the Brama proxy to a harness that speaks Brama own contract (the proxiedRuntimes of pty/broker/routing.json, jeden and omp) names it: Oko hands that session the agent identity oko as WISENT_APP_AGENT_ID beside the lease it runs on; sessions on every other harness, and Oko itself, run without it'
 - id: singularity
   name: Singularity
   status: active
