@@ -1395,6 +1395,15 @@ products:
     surface: service
     for_surface: cli
     bound_because: 'web captures drive their browser through Weles, the one browser boundary Wisent journeys run in: the web capture worker, the vendored weles-client bridge and the worker runtime bindings that hand it a Weles bearer; CLI, TUI, desktop and mobile captures run without Weles'
+  - product: preferences
+    surface: cli
+    for_surface: cli
+    alternative: 'Spis never calls Preferences: its one Preferences line is a crawl rule in a recorded reference crawl state, the path pattern ^/forums/preferences of a crawled documentation site'
+    alternative_source: spis/documentation-site-examples/references/19-apple-developer-documentation/crawl/attempt-1-8beb7438d983df23/state.json
+  - product: stado
+    surface: service
+    for_surface: cli
+    bound_because: every crawl command (crawl, crawl-cli, crawl-docs, crawl-mobile, crawl-desktop, crawl-web and crawl-tui) submits its crawl as a Stado job and keeps its attempts at stado:// URIs; the catalog, reference-record, docs-site and evidence commands work on the checked-in records without Stado
 - id: glina
   name: Glina
   status: active
