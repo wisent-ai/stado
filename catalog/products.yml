@@ -1183,8 +1183,7 @@ products:
   visibility: private
   family: wisent
   owner_repository: wisent-ai/singularity
-  description: Autonomous digital being that creates value, earns revenue, learns,
-    self-modifies, and creates child beings.
+  description: Autonomous digital being that creates value, earns revenue, learns, self-modifies, and creates child beings.
   roadmap: []
   integrations:
   - product: brama
@@ -1218,8 +1217,8 @@ products:
     repository: wisent-ai/singularity
     manifest: .wisent-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:08Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:08Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   service:
     installable: true
     unit: com.wisent.singularity
@@ -1227,9 +1226,38 @@ products:
     args:
     - ticket
     - launch
-    summary: The one Singularity process per host, the ecosystem owner launched under
-      its signed ticket; each host states its keys, policy and resources as
-      SINGULARITY_LAUNCH_* with stado service env-set.
+    summary: The one Singularity process per host, the ecosystem owner launched under its signed ticket; each host states its keys, policy and resources as SINGULARITY_LAUNCH_* with stado service env-set.
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: cli
+    bound_because: 'Brama is the being model cognition: every decision cycle calls BRAMA_BASE_URL signed with the Brama HMAC secret and authorized with the Brama bearer, and both are required at start'
+  - product: las
+    surface: cli
+    for_surface: cli
+    bound_because: 'Las supplies the being tool catalogue: the runtime spawns LAS_COMMAND as an MCP child, verifies its signed release manifest and refreshes the required surfaces every cycle'
+  - product: most
+    surface: service
+    for_surface: cli
+    alternative: 'Most is optional: with neither MOST_BASE_URL nor a Most token file the runtime has no Most endpoint and runs without it; a token without an address is refused'
+    alternative_source: singularity/src/config/runtime.rs
+  - product: wisent-app
+    surface: web
+    for_surface: cli
+    alternative: BRAMA_HMAC_SECRET_FILE or a bootstrap handoff supplies the Brama signing secret; WISENT_APP_AGENT_AUTH_SECRET is read only when neither is given
+    alternative_source: singularity/src/config/runtime.rs
+  - product: jeden
+    surface: cli
+    for_surface: cli
+    bound_because: 'the being carries out its initiatives as Jeden pursuits: it runs the jeden CLI with its model and a per-being pursuit state root, and the repository surface reads the Jeden repository policy and state directory'
+  - product: stado
+    surface: cli
+    for_surface: cli
+    bound_because: the ecosystem store lives in the fleet database singularity, reached only through the stado-database connector (stado database resolve and the Skarbiec route); no direct database address is read yet
+  - product: skarbiec
+    surface: service
+    for_surface: cli
+    bound_because: the fleet database credential is read through the Skarbiec route of the stado-database connector, and the Skarbiec capability policy variables are handed to the Las child
 - id: transcript-lake
   name: Transcript Lake
   status: active
