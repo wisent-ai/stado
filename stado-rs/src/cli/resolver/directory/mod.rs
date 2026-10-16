@@ -40,7 +40,7 @@ pub(crate) async fn read_local_document(
         .map_err(|error| {
             let mut error = CmdError::from(error);
             if let Some(message) = error.message.as_mut() {
-                message.insert_str(0, "registry read failed: ");
+                *message = format!("registry read failed: {message}");
             }
             error
         })?
@@ -75,7 +75,11 @@ pub(crate) async fn read_local_snapshot(
 /// The resolver reads the store on its own interval and holds the result;
 /// this command only asks for it, in one registered wait on a loopback
 /// address, and is refused at once with the reason when no live resolver
-/// publishes one or the one it holds is past its declared max-stale.
+/// publishes one or the one it holds is past its declared max-stale. A
+/// resolver that accepts the request and answers nothing is given up at its
+/// own refresh interval: the reader over SSH gives up at that interval too,
+/// and a snapshot command left waiting after it is a process and a
+/// connection the authority keeps for nobody.
 pub(super) async fn emit_snapshot() -> Result<(), CmdError> {
     use crate::cli::resolver::report::published::{published_state, publisher_running, state_path};
     use crate::primitives::failure::FailureCode;
@@ -108,6 +112,11 @@ pub(super) async fn emit_snapshot() -> Result<(), CmdError> {
         "http://{bind}{}",
         crate::cli::resolver::serve::SNAPSHOT_PATH
     );
+    let route = url::Url::parse(&url).map_err(|error| {
+        refused(format!(
+            "the resolver's API address {url} is not a URL: {error}"
+        ))
+    })?;
     let did_not_answer =
         |error: reqwest::Error| refused(format!("the resolver at {url} did not answer: {error}"));
     // A loopback address is this host's own resolver: no proxy a shell's
@@ -116,26 +125,30 @@ pub(super) async fn emit_snapshot() -> Result<(), CmdError> {
         .no_proxy()
         .build()
         .map_err(did_not_answer)?;
-    let response = crate::wait::send(
+    let sent = crate::wait::send(
         crate::wait::Kind::Network,
         "the resolver's held registry generation",
         client.get(&url),
-    )
-    .await
-    .map_err(did_not_answer)?;
+    );
+    let response =
+        crate::cli::resolver::unless_held(crate::cli::resolver::Route::Resolver(&route), sent)
+            .await
+            .map_err(refused)?
+            .map_err(did_not_answer)?;
     let status = response.status();
     let body = response.text().await.map_err(did_not_answer)?;
     if !status.is_success() {
-        let detail = serde_json::from_str::<Value>(&body).ok().and_then(|value| {
-            value
-                .get("error")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
-        return Err(refused(match detail {
-            Some(detail) => detail,
-            None => format!("the resolver at {url} answered {status}: {body}"),
-        }));
+        let detail = match serde_json::from_str::<Value>(&body) {
+            Ok(value) => match value.get("error").and_then(Value::as_str) {
+                Some(error) => error.to_string(),
+                None => format!("the resolver at {url} answered {status}: {body}"),
+            },
+            Err(error) => format!(
+                "the resolver at {url} answered {status} with a body that is not JSON \
+                 ({error}): {body}"
+            ),
+        };
+        return Err(refused(detail));
     }
     // Checked as every reader of the authority checks it, so this command
     // never prints a document its readers would refuse.

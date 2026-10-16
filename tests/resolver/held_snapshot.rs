@@ -7,8 +7,12 @@
 //! --resolver`. Expected: the snapshot prints the imported generation; with
 //! the store moved away it still prints it, because nothing reads the store;
 //! with the resolver stopped it is refused at once, naming the process that
-//! is not running. Before, the snapshot read the store itself, and on an
-//! authority whose store stood every host's registry read stood behind it.
+//! is not running; and with a published resolver whose API accepts the
+//! request and answers nothing it ends by itself at the published refresh
+//! interval, naming that API. Before, the snapshot read the store itself,
+//! and on an authority whose store stood every host's registry read stood
+//! behind it; then it asked the resolver with no measure, and every reader
+//! that gave up over SSH left one snapshot process waiting on the authority.
 use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
@@ -228,5 +232,34 @@ fn the_authority_snapshot_answers_from_the_running_resolver_and_never_reads_the_
             "the resolver that published its state (pid {pid}) is not running"
         )),
         "the refusal names the resolver that is not running: {said}"
+    );
+
+    // A published resolver that accepts the request and answers nothing: the
+    // state names a live process (this test) and an API bind this test holds
+    // and never answers on. The test holds no clock: the command must end by
+    // itself, at the refresh interval the state publishes.
+    let silent = std::net::TcpListener::bind(deployment.free_bind()).unwrap();
+    let bind = silent.local_addr().unwrap().to_string();
+    let state_path = deployment.root.join(".stado/resolver-state.json");
+    let mut state: Value = serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+    assert!(
+        state["refresh_seconds"].is_u64(),
+        "the resolver publishes the interval its readers are measured by: {state}"
+    );
+    state["pid"] = json!(std::process::id());
+    state["api_bind"] = json!(bind);
+    std::fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+    let abandoned = deployment.run("snapshot-silent", &["resolver", "snapshot"]);
+    drop(silent);
+    let said = String::from_utf8_lossy(&abandoned.stderr).into_owned();
+    assert!(
+        !abandoned.status.success(),
+        "a snapshot whose resolver answers nothing is refused: {said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "the resolver answering at {bind} accepted the request and answered nothing"
+        )),
+        "the refusal names the resolver API that answered nothing: {said}"
     );
 }

@@ -26,11 +26,14 @@ use std::time::Duration;
 
 use super::declared_refresh_seconds;
 
-/// What a request in flight rides: one of this host's adapter binds, or the
-/// channel to one host.
+/// What a request in flight rides: one of this host's adapter binds, the
+/// channel to one host, or this host's own resolver API.
 pub(crate) enum Route<'a> {
     Address(&'a url::Url),
     Host(&'a str),
+    /// The resolver's own API, asked for the registry generation it holds.
+    /// It is no adapter, so no published wait names a request to it.
+    Resolver(&'a url::Url),
 }
 
 impl Route<'_> {
@@ -38,6 +41,7 @@ impl Route<'_> {
         match self {
             Self::Address(url) => super::held_at(url),
             Self::Host(host) => super::host::held_on_host(host),
+            Self::Resolver(_) => Ok(None),
         }
     }
 
@@ -45,6 +49,7 @@ impl Route<'_> {
         match self {
             Self::Address(url) => url.to_string(),
             Self::Host(host) => host.to_string(),
+            Self::Resolver(url) => url.to_string(),
         }
     }
 
@@ -52,9 +57,16 @@ impl Route<'_> {
     /// nothing published held is abandoned at once. A request through an
     /// adapter is in the resolver's own list the moment its first byte goes
     /// up, and the next tick names it from there; the authority's snapshot
-    /// over SSH is in no list, so the interval is its only measure.
+    /// over SSH and a request to the resolver's own API are in no list, so
+    /// the interval is their only measure. A snapshot command that waited on
+    /// its resolver without one outlived the SSH reader that started it, and
+    /// hundreds of them held the authority's connections.
     fn unlisted(&self) -> bool {
-        matches!(self, Self::Host(_))
+        match self {
+            Self::Address(_) => false,
+            Self::Host(_) => true,
+            Self::Resolver(_) => true,
+        }
     }
 
     /// Where the answer to a request that outlasted the interval is: the
@@ -70,6 +82,12 @@ impl Route<'_> {
                  exec {host} -- stado waits --json` lists what every Stado process there waits \
                  on, and `stado service logs com.wisent.stado --host {host}` says what its unit \
                  is doing"
+            ),
+            Self::Resolver(url) => format!(
+                "the resolver answering at {} accepted the request and answered nothing: \
+                 `stado waits --json` lists what it waits on, and `stado service logs \
+                 com.wisent.stado` says what its unit is doing",
+                url.authority()
             ),
         }
     }
