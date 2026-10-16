@@ -88,7 +88,9 @@ pub(in crate::cli::storage) async fn stat(args: &StorageStatArgs) -> Result<(), 
             rows.push(vec!["size".to_string(), size.to_string()]);
         }
         rows.push(vec!["updated_at".to_string(), render_stamp(updated)]);
-        rows.push(vec!["version".to_string(), version.unwrap_or_default()]);
+        if let Some(version) = version {
+            rows.push(vec!["version".to_string(), version]);
+        }
         rows.push(vec!["metadata".to_string(), render_metadata(&metadata)]);
         if let Some(detail) = &detail {
             rows.push(vec!["detail".to_string(), detail.clone()]);
