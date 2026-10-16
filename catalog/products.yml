@@ -12,18 +12,14 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/ster
-  description: Native representation reading, direction learning, evaluation and activation
-    steering.
+  description: Native representation reading, direction learning, evaluation and activation steering.
   roadmap: []
   integrations:
   - product: preferences
-    description: Ster trains steering vectors from the contrastive pair sets Preferences
-      exports as format ster-pairs.
+    description: Ster trains steering vectors from the contrastive pair sets Preferences exports as format ster-pairs.
     source: preferences/src/lib/validate.ts:134-145
   - product: skryba
-    description: Ster trains a LoRA adapter from the writer's own prose Skryba exports
-      — `ExampleSet` deserializes the file `ster tune sft` takes, and `PairSet` deserializes
-      the pairs `ster tune dpo` takes.
+    description: Ster trains a LoRA adapter from the writer's own prose Skryba exports — `ExampleSet` deserializes the file `ster tune sft` takes, and `PairSet` deserializes the pairs `ster tune dpo` takes.
     source: ster/src/tune.rs:304-315
   evidence:
   - wisent-landing-new/src/data/productPortals.ts
@@ -44,8 +40,19 @@ products:
     repository: wisent-ai/ster-desktop
     manifest: .wisent-desktop-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:02Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:02Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: cli
+    alternative: pairs synthesize writes pairs with the local model by default (--generator local), pairs add authors them by hand, and decisions import reads labelled decisions from a JSONL file; only pairs synthesize --generator brama and decisions synthesize ask a hosted writer through Brama, and steering itself is always local
+    alternative_source: ster/src/cli/decisions/mod.rs
+  - product: stado
+    surface: cli
+    for_surface: desktop
+    alternative: Ster Desktop finds the ster CLI on PATH, in ~/.local/bin, /opt/homebrew/bin or /usr/local/bin as well as in ~/.stado/bin, so a ster installed without Stado is found
+    alternative_source: ster-desktop/Sources/SterDesktop/Client/RequestProcess.swift
 - id: jeden
   name: Jeden
   status: active
