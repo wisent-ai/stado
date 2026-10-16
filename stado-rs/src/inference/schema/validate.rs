@@ -227,11 +227,15 @@ pub fn validate(document: &Value) -> Result<(), String> {
         // The alias's declared purpose, else the one its own name carries. An
         // agent alias declares none, so it keeps the namespace rule and keeps
         // being refused.
-        let namespace = registry
-            .alias_purposes
-            .get(alias)
-            .map(String::as_str)
-            .unwrap_or_else(|| alias.split('/').next().unwrap_or_default());
+        let namespace = match registry.alias_purposes.get(alias) {
+            Some(declared) => declared.as_str(),
+            // The part before the first slash; an alias without one is its
+            // own namespace.
+            None => match alias.split_once('/') {
+                Some((namespace, _)) => namespace,
+                None => alias.as_str(),
+            },
+        };
         if namespace != purpose {
             return Err(format!(
                 "registry.inference.{table}.{alias}: model '{destination}' is declared \
