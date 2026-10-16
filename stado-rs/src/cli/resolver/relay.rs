@@ -208,8 +208,12 @@ async fn carry(
         Ok(stream) => stream,
         Err(cause) => {
             let refusal = format!("stado resolver relay: not relayed to {host}:{port}: {cause}\n");
-            let _ = client.write_all(refusal.as_bytes()).await;
-            return Err(cause);
+            return match client.write_all(refusal.as_bytes()).await {
+                Ok(()) => Err(cause),
+                Err(error) => Err(format!(
+                    "{cause}; the refusal could not be written to the client either: {error}"
+                )),
+            };
         }
     };
     tokio::io::copy_bidirectional(&mut client, &mut upstream)
