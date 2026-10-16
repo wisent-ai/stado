@@ -48,11 +48,6 @@ products:
     for_surface: cli
     alternative: pairs synthesize writes pairs with the local model by default (--generator local), pairs add authors them by hand, and decisions import reads labelled decisions from a JSONL file; only pairs synthesize --generator brama and decisions synthesize ask a hosted writer through Brama, and steering itself is always local
     alternative_source: ster/src/cli/decisions/mod.rs
-  - product: stado
-    surface: cli
-    for_surface: desktop
-    alternative: Ster Desktop finds the ster CLI on PATH, in ~/.local/bin, /opt/homebrew/bin or /usr/local/bin as well as in ~/.stado/bin, so a ster installed without Stado is found
-    alternative_source: ster-desktop/Sources/SterDesktop/Client/RequestProcess.swift
 - id: jeden
   name: Jeden
   status: active
@@ -243,16 +238,6 @@ products:
   - product: brama
     surface: cli
     for_surface: service
-  - product: weles
-    surface: service
-    for_surface: service
-    alternative: 'Brama never calls Weles: weles is a client alias Brama serves. Outside standalone mode a declared ingress credential table must hold a weles client entitled to best and weles, which is configuration, not a running Weles; in standalone mode, or with no table, Brama starts without it'
-    alternative_source: brama/src/core/server/lifecycle/mod.rs
-  - product: wisent-app
-    surface: web
-    for_surface: service
-    alternative: 'Brama never calls the Wisent app: wisent-app is an agent identity Brama verifies request signatures for, whose signing secret the launcher reads from a Skarbiec item (the wisent-backend client signs as it), and the testing page names the agent variables a real test request signs with; no request goes from Brama to the Wisent app'
-    alternative_source: brama/src/cli/launcher/identities/mod.rs
   - product: skrzynka
     surface: cli
     for_surface: service
@@ -444,12 +429,6 @@ products:
       repair:
       - crypto
       - audit-lock
-  dependencies:
-  - product: stado
-    surface: cli
-    for_surface: cli
-    alternative: 'a machine without Stado holds and serves its own vault: SKARBIEC_VAULT_FILE or the default ~/.local/share/skarbiec/skarbiec.vault.json is used when Stado declares no vault_file, and stado-wait is a library compiled in; only reaching a vault on another machine goes through a Stado forward file, and the autofill extension updates from Stado release host'
-    alternative_source: skarbiec/src/core/mod.rs
 - id: most
   name: Most
   status: active
@@ -626,118 +605,6 @@ products:
     for_surface: service
     alternative: STADO_CREDENTIALS_STORE=file://<owner-only path> (persisted as credentials.store) selects the owner-only file credential store; alert channels and every other credential read then answer from it without Skarbiec
     alternative_source: stado/stado-rs/src/credential_store/mod.rs
-  - product: aiwritecheck
-    surface: web
-    for_surface: cli
-    alternative: 'Stado never calls aiwritecheck: its aiwritecheck lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without aiwritecheck runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: echo
-    surface: cli
-    for_surface: cli
-    alternative: 'Stado never calls echo: its echo lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without echo runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: film
-    surface: cli
-    for_surface: cli
-    alternative: 'Stado never calls film: its film lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without film runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: glina
-    surface: cli
-    for_surface: cli
-    alternative: 'Stado never calls glina: its glina lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without glina runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: handtohuman
-    surface: cli
-    for_surface: cli
-    alternative: 'Stado never calls handtohuman: its handtohuman lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without handtohuman runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: kronika
-    surface: cli
-    for_surface: cli
-    alternative: 'Stado never calls kronika: its kronika lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without kronika runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: kupiec
-    surface: service
-    for_surface: cli
-    alternative: 'Stado never calls kupiec: its kupiec lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without kupiec runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: las
-    surface: cli
-    for_surface: cli
-    alternative: 'Stado never calls las: its las lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without las runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: most
-    surface: service
-    for_surface: cli
-    alternative: 'Stado never calls most: its most lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without most runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: obraz
-    surface: cli
-    for_surface: cli
-    alternative: 'Stado never calls obraz: its obraz lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without obraz runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: preferences
-    surface: web
-    for_surface: cli
-    alternative: 'Stado never calls preferences: its preferences lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without preferences runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: singularity
-    surface: cli
-    for_surface: cli
-    alternative: 'Stado never calls singularity: its singularity lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without singularity runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: skryba
-    surface: cli
-    for_surface: cli
-    alternative: 'Stado never calls skryba: its skryba lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without skryba runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: skrzynka
-    surface: service
-    for_surface: cli
-    alternative: 'Stado never calls skrzynka: its skrzynka lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without skrzynka runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: ugc
-    surface: web
-    for_surface: cli
-    alternative: 'Stado never calls ugc: its ugc lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without ugc runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: undetectabletext
-    surface: web
-    for_surface: cli
-    alternative: 'Stado never calls undetectabletext: its undetectabletext lines are catalog data, the product entries and dependency declarations in catalog/products.yml that stado product reads; a catalog without undetectabletext runs every other product the same'
-    alternative_source: stado/catalog/products.yml
-  - product: oko
-    surface: cli
-    for_surface: cli
-    bound_because: every model judgement Stado asks (mail, sizing, quality checks, quota replies, the operator console) goes through oko gateway send, Oko owning the Brama bearer and route, and an integration stop a host reports is recorded as an Oko defect through oko defects record; installing, updating and placing products does not call Oko
-  - product: brama
-    surface: service
-    for_surface: cli
-    bound_because: 'Stado places and checks Brama as a fleet service: the inference routes, the Brama host precheck and model-review gateway accounts, and the host-exec allowlist entries that run it; model judgements reach Brama through Oko'
-  - product: tama
-    surface: cli
-    for_surface: cli
-    bound_because: a build past the fleet build budget is admitted only on an approval read from the Tama verified build registry through the Tama CLI a Stado install places (TAMA_CLI); a build within the budget is scheduled without Tama
-  - product: weles
-    surface: service
-    for_surface: cli
-    bound_because: 'Stado runs Weles workloads: the weles runner reads its activity and recordings, browser tasks and sign-in go to a placed Weles runtime, and placement policy installs it; the other products run without Weles'
-  - product: jeden
-    surface: cli
-    for_surface: cli
-    bound_because: 'Stado runs Jeden workloads: the jeden runner attaches to and detaches Jeden pursuits and hands them the Brama agent signing secret, and fleet-shape orphan detection reads them; the other products run without Jeden'
-  - product: wisent-app
-    surface: web
-    for_surface: cli
-    bound_because: the detached Jeden runner hands its pursuit WISENT_APP_AGENT_AUTH_SECRET, the agent identity Brama verifies; Stado never calls the Wisent app
-  - product: probierz
-    surface: service
-    for_surface: cli
-    bound_because: 'Stado installs and runs Probierz on hosts: the host precheck release installer signs as the Probierz agent, and host-exec admits the Probierz run root and its service commands; the other products run without Probierz'
-  - product: compute-marketplace
-    surface: service
-    for_surface: cli
-    bound_because: the initial host storage preparation gate reads the GitHub Actions runners of the wisent-backend and brama repositories, besides the repository being prepared, and refuses when it cannot read them; Stado never runs compute-marketplace itself
 - id: lem
   name: Lem
   status: active
@@ -782,12 +649,6 @@ products:
   approved_by: operator
   approved_at: 2026-09-02T19:53:05Z
   approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
-  dependencies:
-  - product: stado
-    surface: cli
-    for_surface: cli
-    alternative: 'Lem never calls Stado: its one Stado line removes STADO_MODEL_ROUTER_TOKEN from the environment of the commands the figure-quality evaluator starts, so the model-router bearer never reaches them; Lem runs the same without Stado'
-    alternative_source: lem/Sources/LemCore/FigureQualityEvaluator/LemFigureQualityEvaluator+FigurePreambleFile.swift
 - id: echo
   name: Echo
   status: active
@@ -830,16 +691,6 @@ products:
     surface: cli
     for_surface: web
     bound_because: 'only the onboarding proof step reaches it: it verifies an evidence receipt Probierz signed, against the key PROBIERZ_RECEIPT_PUBLIC_KEY_FINGERPRINT names; every other Echo screen and route runs without Probierz'
-  - product: competitors
-    surface: cli
-    for_surface: web
-    alternative: 'Echo never runs the competitors CLI: its Competitors lines are the label and path of its own /competitors dashboard page in the sidebar and the column list'
-    alternative_source: echo-web/src/components/layout/Sidebar.tsx
-  - product: trends
-    surface: cli
-    for_surface: web
-    alternative: 'Echo never runs the trends CLI: its trends lines are links to its own /trends dashboard pages'
-    alternative_source: echo-web/src/app/(dashboard)/(tools)/(trends)/trends/page.tsx
   - product: film
     surface: service
     for_surface: web
@@ -1027,21 +878,6 @@ products:
     for_surface: cli
     alternative: the judged hooks and review-push read the attestation each commit and each turn end carries against the standard tama attestation standard prints, with no model asked (tama model-provider set --none declares it); a hook that only asks a model a question about a text finds nothing and says so in its log
     alternative_source: tama/rust/crates/tama-hook-tools/src/ports/task_attestation/mod.rs
-  - product: weles
-    surface: cli
-    for_surface: cli
-    alternative: 'Tama never runs Weles: it reads Weles run output under WELES_RUN_OUTPUT_DIR or the Weles state directory only to check evidence a payload cites there, and its registry entries git-weles-pre-commit and git-weles-pre-push are the Weles repository git hooks, which git runs in that checkout; without Weles none of them applies'
-    alternative_source: tama/rust/crates/tama-hook-tools/src/evidence/root.rs
-  - product: wisent-app
-    surface: web
-    for_surface: cli
-    alternative: 'Tama never calls the Wisent app: its lines are the registry entries of the git-wisent-enterprise-pre-commit and pre-push hooks, which check a Wisent Enterprise worktree, and the desktop build reading WISENT_APP_PROVISIONING_PROFILE, an optional signing profile for the Tama app bundle'
-    alternative_source: tama-desktop/Scripts/app_build/prepare.sh
-  - product: wisent-enterprise
-    surface: web
-    for_surface: cli
-    alternative: 'Tama never calls Wisent Enterprise: its lines are the hook registry entries git-wisent-enterprise-pre-commit and pre-push, which run in a Wisent Enterprise checkout to refuse a dirty worktree; a machine without that checkout runs every other Tama hook the same'
-    alternative_source: tama/shared-hooks/registry.json
 - id: byk
   name: Byk
   status: active
@@ -1144,101 +980,6 @@ products:
   approved_at: 2026-09-02T19:53:06Z
   approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   dependencies:
-  - product: aiwritecheck
-    surface: web
-    for_surface: cli
-    alternative: 'Las never calls aiwritecheck: its aiwritecheck lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: byk
-    surface: desktop
-    for_surface: cli
-    alternative: 'Las never calls byk: its byk lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: echo
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls echo: its echo lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: film
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls film: its film lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: glina
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls glina: its glina lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: handtohuman
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls handtohuman: its handtohuman lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: kronika
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls kronika: its kronika lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: lem
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls lem: its lem lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: obraz
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls obraz: its obraz lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: preferences
-    surface: web
-    for_surface: cli
-    alternative: 'Las never calls preferences: its preferences lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: probierz
-    surface: service
-    for_surface: cli
-    alternative: 'Las never calls probierz: its probierz lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: skryba
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls skryba: its skryba lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: skrzynka
-    surface: service
-    for_surface: cli
-    alternative: 'Las never calls skrzynka: its skrzynka lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: spis
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls spis: its spis lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: ster
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls ster: its ster lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: tama
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls tama: its tama lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: undetectabletext
-    surface: web
-    for_surface: cli
-    alternative: 'Las never calls undetectabletext: its undetectabletext lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: weles
-    surface: service
-    for_surface: cli
-    alternative: 'Las never calls weles: its weles lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
-  - product: wisent-app
-    surface: web
-    for_surface: cli
-    alternative: 'Las never calls wisent-app: its wisent-app lines are entries of the dependency register src/dependencies/register.json, data that las dependencies prints and checks against the source each entry cites'
-    alternative_source: las/src/dependencies/register.mjs
   - product: jeden
     surface: cli
     for_surface: cli
@@ -1258,16 +999,6 @@ products:
     surface: service
     for_surface: cli
     alternative: Las federates the skarbiec MCP surface only when its checkout, signed release and declared environment are present; otherwise las list shows it unconfigured with the refusal of the step that failed, LAS_ONLY and LAS_SKIP can leave it out, and every other surface runs
-    alternative_source: las/src/registry/surfaces.mjs
-  - product: brama
-    surface: service
-    for_surface: cli
-    alternative: 'Las never calls brama for its own work: the Las Native Apps console for brama reports the local posture of a brama checkout (files present and source counts), and on a machine without brama those checks show missing while the Las CLI and every other surface run'
-    alternative_source: las/src/registry/surfaces.mjs
-  - product: oko
-    surface: cli
-    for_surface: cli
-    alternative: 'Las never calls Oko for its own work: the Byk console of Las Native Apps reports the local posture of an oko checkout (files present and source counts), and on a machine without Oko those checks show missing while the Las CLI and every other surface run'
     alternative_source: las/src/registry/surfaces.mjs
   - product: stado
     surface: cli
@@ -1448,11 +1179,6 @@ products:
     for_surface: cli
     alternative: 'OKO_DATABASE_URL and OKO_DATABASE_ANON_KEY reach the database with no Skarbiec read, so tasks, defects and the registers run without Skarbiec; only the features that hold a service credential read it from Skarbiec: calendar accounts (from the broker or the vault SKARBIEC_VAULT_FILE names, through the skarbiec CLI), GitHub repository execution, Ultrareach sends and the PTY relay'
     alternative_source: oko/rust/src/database/resolved.rs
-  - product: needher
-    surface: service
-    for_surface: cli
-    alternative: 'Oko never calls Needher: its one Needher line is in evaluation data (Evaluation/auto-goals/intent-eval.jsonl), the quoted text of a session that names it'
-    alternative_source: oko/Evaluation/auto-goals/intent-eval.jsonl
 - id: singularity
   name: Singularity
   status: active
@@ -1583,11 +1309,6 @@ products:
     for_surface: cli
     alternative: Lake ingests, keeps and answers every read without Oko; projection rebuild writes the Oko projection under exports/oko without running it, and only projection refresh --target oko hands it to oko-cli
     alternative_source: transcript-lake/src/commands/derived/mod.rs
-  - product: stado
-    surface: cli
-    for_surface: cli
-    alternative: 'Transcript Lake never calls a Stado service: its one Stado line is the stado-wait crate in Cargo.toml, a library compiled into the lake binary, so a machine without Stado runs it the same'
-    alternative_source: transcript-lake/Cargo.toml
 - id: kronika
   name: Kronika
   status: active
@@ -1726,11 +1447,6 @@ products:
     surface: service
     for_surface: cli
     bound_because: 'web captures drive their browser through Weles, the one browser boundary Wisent journeys run in: the web capture worker, the vendored weles-client bridge and the worker runtime bindings that hand it a Weles bearer; CLI, TUI, desktop and mobile captures run without Weles'
-  - product: preferences
-    surface: cli
-    for_surface: cli
-    alternative: 'Spis never calls Preferences: its one Preferences line is a crawl rule in a recorded reference crawl state, the path pattern ^/forums/preferences of a crawled documentation site'
-    alternative_source: spis/documentation-site-examples/references/19-apple-developer-documentation/crawl/attempt-1-8beb7438d983df23/state.json
   - product: stado
     surface: service
     for_surface: cli
@@ -2003,11 +1719,6 @@ products:
     for_surface: cli
     alternative: PREFERENCES_CREDENTIALS_FILE names an owner-only JSON file of role -> field -> value that answers the bearer references instead of stado credentials get
     alternative_source: preferences/src/cli/client.mjs
-  - product: ster
-    surface: cli
-    for_surface: cli
-    alternative: 'Preferences never runs Ster: its Ster lines are the example script examples/training/export-and-train-ster.sh, which shows a user turning their exported pairs into a steering vector with ster on PATH; the export it starts from is the Preferences CLI alone'
-    alternative_source: preferences/examples/training/export-and-train-ster.sh
 - id: humanmaxx
   name: HumanMaxx
   status: preview
