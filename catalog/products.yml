@@ -742,6 +742,10 @@ products:
     for_surface: cli
     alternative: Tama is asked only for the violation scans in the fleet status overview and the nightly script; without it the overview reports each scan as an error naming why tama violations find could not run, and the nightly script prints scan skipped, while every other command runs without Tama
     alternative_source: probierz/probierz-rs/src/status/fleet/overview/scanner.rs
+  - product: weles
+    surface: cli
+    for_surface: cli
+    bound_because: the web surface drives pages through weles mcp, the browser Wisent journeys run in, and apps/weles is the test plan of Weles itself; the mobile, desktop and CLI surfaces run without Weles
 - id: tama
   name: Tama
   status: active
