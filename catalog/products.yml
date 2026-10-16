@@ -2093,6 +2093,10 @@ products:
     surface: service
     for_surface: cli
     bound_because: 'only ugc weles enqueue and ugc weles status reach Weles: they queue and read a Weles task for a creator account; every other ugc command runs without Weles'
+  - product: brama
+    surface: service
+    for_surface: cli
+    bound_because: an inbound creator message is recorded only with the intent Brama judges for it (receive_message calls judged_intent through BRAMA_URL, UGC_BRAMA_AGENT_ID and UGC_BRAMA_SIGNING_SECRET_SOURCE and refuses a missing setting by name), and ugc brama health and analyze are Brama commands; campaigns, creators, outbound messages and publications run without Brama. No operator-stated intent replaces the judgement yet
 - id: transcript-label-trainer
   name: Transcript Label Trainer
   status: active
