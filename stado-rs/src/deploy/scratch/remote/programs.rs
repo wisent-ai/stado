@@ -43,9 +43,7 @@ if [ -z "$HOME_DIR" ] || [ ! -d "$HOME_DIR" ]; then
 fi
 
 /usr/bin/install -d -m 700 -o "$USERNAME" "$HOME_DIR/.ssh"
-/bin/cat "$SOURCE_KEYS" > "$HOME_DIR/.ssh/authorized_keys"
-/usr/sbin/chown "$USERNAME" "$HOME_DIR/.ssh/authorized_keys"
-/bin/chmod 600 "$HOME_DIR/.ssh/authorized_keys"
+/usr/bin/install -m 600 -o "$USERNAME" "$SOURCE_KEYS" "$HOME_DIR/.ssh/authorized_keys"
 
 if [ ! -s "$HOME_DIR/.ssh/authorized_keys" ]; then
     echo "authorized keys for $USERNAME are empty after the copy" >&2
