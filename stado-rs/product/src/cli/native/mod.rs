@@ -7,7 +7,7 @@ pub use delivery::{deliver, schema};
 pub(super) fn forwarded() -> Arg {
     Arg::new("forward")
         .value_name("ARGUMENTS")
-        .num_args(0..)
+        .num_args(..)
         .trailing_var_arg(true)
         .allow_hyphen_values(true)
         .help("Arguments passed to the real compiler after the operation")
@@ -43,6 +43,12 @@ pub fn cargo() -> Command {
         ))
         .arg(flag("all", "Read retained Cargo receipts across canonical workspace checkouts; results only"))
         .arg(flag("json", "Print retained source and execution evidence"))
+        .arg(flag(
+            "wait",
+            "When the disk janitor has asked running work for its turn, wait for that work, run \
+             the janitor's pass and then build, instead of being refused before anything is \
+             exported or built",
+        ))
         .arg(
             Arg::new("operation")
                 .required(true)
