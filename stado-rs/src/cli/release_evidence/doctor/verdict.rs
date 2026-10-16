@@ -156,7 +156,7 @@ pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
                 // is what the agent will ask before spending a candidate, and
                 // is the same command an operator can run by hand.
                 "held": held,
-                "hold_ground": if held { "repeated" } else { "pending_condition_check" },
+                "hold_ground": if held { "cause_holds_candidate" } else { "pending_condition_check" },
                 "condition_check": predicate
                     .as_ref()
                     .map(|check| format!("skarbiec {}", check.args.join(" "))),
