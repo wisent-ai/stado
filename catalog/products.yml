@@ -1695,6 +1695,11 @@ products:
     for_surface: cli
     alternative: PREFERENCES_CREDENTIALS_FILE names an owner-only JSON file of role -> field -> value that answers the bearer references instead of stado credentials get
     alternative_source: preferences/src/cli/client.mjs
+  - product: ster
+    surface: cli
+    for_surface: cli
+    alternative: 'Preferences never runs Ster: its Ster lines are the example script examples/training/export-and-train-ster.sh, which shows a user turning their exported pairs into a steering vector with ster on PATH; the export it starts from is the Preferences CLI alone'
+    alternative_source: preferences/examples/training/export-and-train-ster.sh
 - id: humanmaxx
   name: HumanMaxx
   status: preview
