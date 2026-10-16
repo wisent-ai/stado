@@ -267,7 +267,7 @@ pub fn requirements(
         } else {
             green(runtime, &required.product, &required.surface).with_context(|| {
                 format!(
-                    "{} {} needs verb {}; {installed_text}; a pass of the delivery routine (`stado ci run`, with the provider's step in `stado ci plan`) qualifies a provider revision",
+                    "{} {} needs verb {}; {installed_text}, which does not serve it: {reason}; a pass of the delivery routine (`stado ci run`, with the provider's step in `stado ci plan`) qualifies a provider revision",
                     required.product, required.surface, required.verb
                 )
             })?
