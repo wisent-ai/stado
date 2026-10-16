@@ -2014,17 +2014,13 @@ products:
   roadmap: []
   integrations:
   - product: stado
-    description: Stado places this trainer's label-model training and lake root, and
-      its capability model names the trainer as the reader of both declared registry
-      keys.
+    description: Stado places this trainer's label-model training and lake root, and its capability model names the trainer as the reader of both declared registry keys.
     source: stado/stado-rs/src/capabilities.rs:1421-1437
   - product: oko
-    description: Oko's local goal lifecycle classifier defers to the lifecycle output
-      schema this repository owns.
+    description: Oko's local goal lifecycle classifier defers to the lifecycle output schema this repository owns.
     source: oko/Sources/OkoKit/Goals/LocalGoalLifecycleClassifier.swift:615-619
   - product: jeden
-    description: Jeden vendors the goal lifecycle system prompt this repository owns
-      and requires it byte-identical.
+    description: Jeden vendors the goal lifecycle system prompt this repository owns and requires it byte-identical.
     source: jeden/rust/goal_lifecycle.rs:21-24
   evidence:
   - wisent-ai/transcript-label-trainer/README.md
@@ -2043,10 +2039,18 @@ products:
     features:
     - hf
   approved_by: operator
-  approved_at: '2026-09-03T23:30:00Z'
-  approval_note: 'Operator, 2026-09-03: "releases: false is not an argument against
-    cataloguing" - the catalogue already carries kind: cargo products built from a
-    checkout, and "it is a product in everything but the record".'
+  approved_at: 2026-09-03T23:30:00Z
+  approval_note: 'Operator, 2026-09-03: "releases: false is not an argument against cataloguing" - the catalogue already carries kind: cargo products built from a checkout, and "it is a product in everything but the record".'
+  dependencies:
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: run without --compute-target trains and evaluates the job locally with no Stado call; only run --compute-target and the goal-model, lifecycle-model and humanizer-model commands, which train on a Stado GPU target, submit Stado jobs
+    alternative_source: transcript-label-trainer/src/cli/prog_group/prog.rs
+  - product: ster
+    surface: cli
+    for_surface: cli
+    bound_because: 'only the remote job scripts training/goal-model, training/lifecycle-model and training/humanizer-model/run.sh run ster: they train the goal, lifecycle and humanizer adapters with ster tune; the local tfidf and Hugging Face training of run needs no Ster'
 - id: compute-marketplace
   name: Compute Marketplace
   status: preview
