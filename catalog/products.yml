@@ -178,31 +178,41 @@ products:
     kind: stado-release
     repository: wisent-ai/brama
     manifest: .wisent-release.json
-    # Every account the pool buys reaches the coding-agent harness on the
-    # machine the CLI is installed on; a machine without omp answers that
-    # nothing is signed in there.
     after_install:
-    - [stado, schedule, create, --id, '{install_id:hand-over}', --converge, --pinned-host, '{host}', --cron, '* * * * *', 'PATH="$HOME/.stado/bin:$PATH" brama subscription hand-over claude-code --harness omp']
+    - - stado
+      - schedule
+      - create
+      - --id
+      - '{install_id:hand-over}'
+      - --converge
+      - --pinned-host
+      - '{host}'
+      - --cron
+      - '* * * * *'
+      - PATH="$HOME/.stado/bin:$PATH" brama subscription hand-over claude-code --harness omp
   - surface: service
     kind: stado-release
     repository: wisent-ai/brama
     manifest: .wisent-release.json
-    # The pass is an admin call the gateway admits from its brama-desktop
-    # client only, and that client's bearer is the token of the item playing
-    # brama-desktop-model-router, the role the gateway's own launcher loads it
-    # from; the schedule runs on the vault owner, so it reads the same item.
-    # --converge: the id is this recipe's own, so a schedule an older recipe
-    # declared under it is brought to this one on the next install or
-    # `stado repair brama --step declarations`, not refused.
     after_install:
-    - [stado, schedule, create, --id, '{install_id:maintain}', --converge, --pinned-host, '{host}', --cron, '* * * * *', '"$HOME"/.stado/services/brama/current/*/bin/brama maintain --gateway-consumer brama-desktop --bearer-role brama-desktop-model-router']
+    - - stado
+      - schedule
+      - create
+      - --id
+      - '{install_id:maintain}'
+      - --converge
+      - --pinned-host
+      - '{host}'
+      - --cron
+      - '* * * * *'
+      - '"$HOME"/.stado/services/brama/current/*/bin/brama maintain --gateway-consumer brama-desktop --bearer-role brama-desktop-model-router'
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/brama-desktop
     manifest: .wisent-desktop-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:03Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:03Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   service:
     installable: true
     program: $HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec
@@ -212,8 +222,7 @@ products:
       BRAMA_WISENT_AUTH_URL: https://alvaewvbyxpgwdpugnxy.supabase.co
       BRAMA_WISENT_AUTH_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsdmFld3ZieXhwZ3dkcHVnbnh5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTc5NDcsImV4cCI6MjA5Njk3Mzk0N30.xkkJ36ZTwtqyVZLFju0vc9S25grTuKbj9ILKlsXdUPA
     unit: com.wisent.brama
-    summary: The authenticated provider-neutral gateway every Wisent model call goes
-      through.
+    summary: The authenticated provider-neutral gateway every Wisent model call goes through.
     answering:
       method: POST
       path: /v1/chat/completions
@@ -222,13 +231,16 @@ products:
   - product: skarbiec
     surface: service
     for_surface: service
-    alternative: BRAMA_LOCAL_CREDENTIALS_FILE in ~/.config/brama/service.env names an
-      owner-only provider-to-credential file; the service then starts in standalone mode
-      without Skarbiec
+    alternative: BRAMA_LOCAL_CREDENTIALS_FILE in ~/.config/brama/service.env names an owner-only provider-to-credential file; the service then starts in standalone mode without Skarbiec
     alternative_source: brama/src/release/bin/start-with-skarbiec
   - product: brama
     surface: cli
     for_surface: service
+  - product: weles
+    surface: service
+    for_surface: service
+    alternative: 'Brama never calls Weles: weles is a client alias Brama serves. Outside standalone mode a declared ingress credential table must hold a weles client entitled to best and weles, which is configuration, not a running Weles; in standalone mode, or with no table, Brama starts without it'
+    alternative_source: brama/src/core/server/lifecycle/mod.rs
 - id: weles
   name: Weles
   status: active
