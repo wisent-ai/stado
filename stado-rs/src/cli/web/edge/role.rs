@@ -57,15 +57,17 @@ pub(crate) async fn run(caddy: PathBuf, caddyfile: PathBuf) -> Result<(), CmdErr
             ))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
+    // A child that has already exited has no pid; it is named as such, not
+    // as pid zero.
+    let pid = match child.id() {
+        Some(pid) => format!("pid {pid}"),
+        None => "an exited child".to_string(),
+    };
     eprintln!(
-        "[stado serve edge] {} serving {} (pid {})",
+        "[stado serve edge] {} serving {} ({pid})",
         caddy.display(),
         caddyfile.display(),
-        child.id().unwrap_or_default()
     );
-    let pid = child
-        .id()
-        .map_or_else(|| "an exited child".to_string(), |pid| format!("pid {pid}"));
     let status = crate::wait::until(
         crate::wait::Kind::Process,
         format!(
