@@ -697,6 +697,24 @@ products:
     surface: cli
     for_surface: web
     bound_because: 'only the onboarding proof step reaches it: it verifies an evidence receipt Probierz signed, against the key PROBIERZ_RECEIPT_PUBLIC_KEY_FINGERPRINT names; every other Echo screen and route runs without Probierz'
+  - product: competitors
+    surface: cli
+    for_surface: web
+    alternative: 'Echo never runs the competitors CLI: its Competitors lines are the label and path of its own /competitors dashboard page in the sidebar and the column list'
+    alternative_source: echo-web/src/components/layout/Sidebar.tsx
+  - product: trends
+    surface: cli
+    for_surface: web
+    alternative: 'Echo never runs the trends CLI: its trends lines are links to its own /trends dashboard pages'
+    alternative_source: echo-web/src/app/(dashboard)/(tools)/(trends)/trends/page.tsx
+  - product: film
+    surface: service
+    for_surface: web
+    bound_because: 'Echo video generation renders only on Film: Veo scenes, explainer animation and batch video start Film jobs at FILM_URL with FILM_SECRET and read the rendered URL back; the rest of Echo runs without Film, and a video request without FILM_URL is refused by name'
+  - product: obraz
+    surface: service
+    for_surface: web
+    bound_because: 'Echo pose and character image generation renders only on Obraz: the civitai instance, pose improve and pose regenerate routes call Obraz; the rest of Echo runs without Obraz'
 - id: probierz
   name: Probierz
   status: active
