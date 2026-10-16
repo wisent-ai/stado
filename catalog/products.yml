@@ -705,8 +705,8 @@ products:
     repository: wisent-ai/probierz-desktop
     manifest: .wisent-desktop-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:05Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:05Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
   service:
     installable: true
     unit: com.wisent.probierz
@@ -716,34 +716,27 @@ products:
     - serve
     - --bind
     - 127.0.0.1:$STADO_LISTEN_PORT
-    summary: The one Probierz process per host, the failure intake that desktop applications
-      post wisent-errors envelopes to; it needs no harness directory.
+    summary: The one Probierz process per host, the failure intake that desktop applications post wisent-errors envelopes to; it needs no harness directory.
   dependencies:
   - product: brama
     surface: service
     for_surface: service
-    alternative: the failure intake needs no model; repair drafting (probierz repair) and the
-      other authoring commands ask the model service STADO_MODEL_ROUTER_URL names, Brama or
-      any other service answering /v1/chat/completions with the bearer
-      STADO_MODEL_ROUTER_TOKEN carries, unsigned when no agent identity is declared; with
-      none declared the repair is refused naming the setting
+    alternative: the failure intake needs no model; repair drafting (probierz repair) and the other authoring commands ask the model service STADO_MODEL_ROUTER_URL names, Brama or any other service answering /v1/chat/completions with the bearer STADO_MODEL_ROUTER_TOKEN carries, unsigned when no agent identity is declared; with none declared the repair is refused naming the setting
     alternative_source: probierz/probierz-rs/src/authoring/spec/draft.rs
   - product: trends
     surface: cli
     for_surface: cli
-    alternative: probierz benchmark scout --evidence FILE reads the topic's trend verdict and
-      observations from one JSON file in the shape trends detect and trends observations
-      answer, and the cycle's policy names evidenceDir, a directory of <topic>.json files
-      it scouts from without watching, ingesting or listing through Trends; every other
-      command runs without it
+    alternative: probierz benchmark scout --evidence FILE reads the topic's trend verdict and observations from one JSON file in the shape trends detect and trends observations answer, and the cycle's policy names evidenceDir, a directory of <topic>.json files it scouts from without watching, ingesting or listing through Trends; every other command runs without it
     alternative_source: probierz/probierz-rs/src/benchmark/scout/named.rs
   - product: competitors
     surface: cli
     for_surface: cli
-    alternative: the same --evidence FILE and evidenceDir files carry the candidate products
-      in the shape competitors discover answers, so scout and cycle normalise nothing
-      through Competitors; every other command runs without it
+    alternative: the same --evidence FILE and evidenceDir files carry the candidate products in the shape competitors discover answers, so scout and cycle normalise nothing through Competitors; every other command runs without it
     alternative_source: probierz/probierz-rs/src/benchmark/scout/named.rs
+  - product: wisent-app
+    surface: service
+    for_surface: cli
+    bound_because: 'only the Jeden test plans (apps/jeden and apps/jeden-desktop) name it: they hand the Jeden under test the WISENT_APP_AGENT_ID and secret it signs its Brama calls with, and every other plan runs without it'
 - id: tama
   name: Tama
   status: active
