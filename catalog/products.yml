@@ -661,8 +661,13 @@ products:
     repository: wisent-ai/echo-desktop
     manifest: .wisent-desktop-release.json
   approved_by: operator
-  approved_at: '2026-09-02T19:53:05Z'
-  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+  approved_at: 2026-09-02T19:53:05Z
+  approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
+  dependencies:
+  - product: needher
+    surface: web
+    for_surface: web
+    bound_because: 'only the cron automations needher-captions-loop, needher-captions-publish and needher-lifestyle-loop reach it: they write and publish the content of the Need Her accounts Echo runs; every other Echo screen, route and automation runs without it'
 - id: probierz
   name: Probierz
   status: active
