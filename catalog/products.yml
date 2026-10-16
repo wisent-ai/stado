@@ -70,17 +70,14 @@ products:
     source: jeden/roadmap/roadmap.yaml:115-551
   integrations:
   - product: brama
-    description: Jeden sends every model request through Brama.
-    source: jeden/README.md:80-95
+    description: Jeden sends its model requests through Brama unless JEDEN_MODEL_ENDPOINT names an OpenAI-compatible provider it calls directly.
+    source: jeden/README.md:21-40
   - product: weles
     description: Jeden delegates identity and account operations to Weles.
     source: jeden/roadmap/roadmap.yaml:87-91
   - product: stado
     description: Stado selects the execution host and carries Jeden's attached stream.
     source: https://stado.wisent.com/docs
-  - product: skarbiec
-    description: Jeden acquires its own scoped credentials from Skarbiec.
-    source: https://skarbiec.wisent.com/docs
   - product: tama
     description: Tama supplies the coding-agent policy enforced around Jeden sessions.
     source: jeden/README.md:80-95
