@@ -17,27 +17,26 @@ impl BoxHttpTransport {
             ));
         }
         let base_url = base_url.trim_end_matches('/');
-        let parsed = url::Url::parse(base_url).map_err(|_| {
-            BoxError::configuration(
-                "BOX_API_URL must be an HTTPS API base without query or fragment",
-            )
+        let parsed = url::Url::parse(base_url).map_err(|error| {
+            BoxError::configuration(format!(
+                "BOX_API_URL must be an HTTPS API base without query or fragment; {base_url:?} is not a URL: {error}"
+            ))
         })?;
-        if parsed.scheme() != "https"
-            || parsed.host_str().is_none_or(|h| h.is_empty())
-            || parsed.query().is_some()
-            || parsed.fragment().is_some()
-        {
+        let host = match parsed.host_str() {
+            Some(host) if !host.is_empty() => host,
+            Some(_) | None => {
+                return Err(BoxError::configuration(format!(
+                    "BOX_API_URL must be an HTTPS API base without query or fragment; {base_url:?} names no host"
+                )))
+            }
+        };
+        if parsed.scheme() != "https" || parsed.query().is_some() || parsed.fragment().is_some() {
             return Err(BoxError::configuration(
                 "BOX_API_URL must be an HTTPS API base without query or fragment",
             ));
         }
-        // Rebuild scheme://netloc + path without trailing slash (Python
-        // urlunsplit((scheme, netloc, path.rstrip("/"), "", ""))).
-        let mut normalized = format!(
-            "{}://{}",
-            parsed.scheme(),
-            parsed.host_str().unwrap_or_default()
-        );
+        // Rebuild scheme://netloc + path without trailing slash.
+        let mut normalized = format!("{}://{host}", parsed.scheme());
         if let Some(port) = parsed.port() {
             normalized.push_str(&format!(":{port}"));
         }
