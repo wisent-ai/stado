@@ -2082,3 +2082,14 @@ products:
   approved_by: operator
   approved_at: 2026-10-07T06:32:02Z
   approval_note: 'Operator, 2026-10-07, asking for the product: ''do we have a wisent-ai rust crm or not'', ''like salesforce but better'', ''pls build''.'
+  dependencies:
+  - product: stado
+    surface: cli
+    for_surface: service
+    alternative: KUPIEC_DATABASE_URL names a Postgres, MySQL or existing sqlite:// database that stado-database opens directly, without asking Stado for the fleet database
+    alternative_source: kupiec/src/store/mod.rs
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: KUPIEC_DATABASE_URL names a Postgres, MySQL or existing sqlite:// database that stado-database opens directly, without asking Stado for the fleet database
+    alternative_source: kupiec/src/store/mod.rs

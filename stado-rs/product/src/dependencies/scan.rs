@@ -4,7 +4,6 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
-use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::Command;
 
@@ -25,6 +24,14 @@ const GIT_METADATA: &[&str] = &[".gitignore", ".gitattributes", ".gitmodules"];
 /// The extension of an example a person copies: what it shows is read, if
 /// at all, by code that is read on its own.
 const EXAMPLE_EXTENSION: &str = "example";
+/// A directory of examples a person copies, at any depth: as an example
+/// file, what it shows is not the product running.
+const EXAMPLES: &str = "examples";
+/// The top-level directory, in any case, where a product keeps its
+/// documentation: a product named there is described, not called.
+const DOCUMENTATION: &str = "docs";
+/// The number of a file's first line, as compilers and editors report it.
+const FIRST_LINE: usize = 1; // https://www.gnu.org/prep/standards/html_node/Errors.html ("Line numbers should start from 1 at the beginning of the file")
 /// The records package managers write of the packages they resolved: a
 /// package named like a product is not that product, and a package the
 /// product imports is read where its code imports it.
@@ -69,10 +76,10 @@ pub struct Site {
 const SUBMODULE_OBJECT: &str = "commit";
 
 /// Whether the tracked file at `path` is something the product never runs:
-/// its tests, prose, the forge's automation, git's metadata, an example to
-/// copy, a package manager's lockfile, its release tooling, or one of
-/// `manifests`, the release manifests the catalog's installations of this
-/// repository declare.
+/// its tests, prose, its documentation, the forge's automation, git's
+/// metadata, an example to copy, a package manager's lockfile, its release
+/// tooling, or one of `manifests`, the release manifests the catalog's
+/// installations of this repository declare.
 fn never_run(path: &str, manifests: &[String]) -> bool {
     let file = Path::new(path);
     let named = |names: &[&str]| {
@@ -82,12 +89,12 @@ fn never_run(path: &str, manifests: &[String]) -> bool {
     };
     path.starts_with(TESTS)
         || manifests.iter().any(|manifest| manifest == path)
-        || path
-            .split_once('/')
-            .is_some_and(|(first, _)| first.eq_ignore_ascii_case(RELEASE_TOOLING))
-        || file
-            .components()
-            .any(|component| component.as_os_str() == FORGE_AUTOMATION)
+        || path.split_once('/').is_some_and(|(first, _)| {
+            first.eq_ignore_ascii_case(RELEASE_TOOLING) || first.eq_ignore_ascii_case(DOCUMENTATION)
+        })
+        || file.components().any(|component| {
+            component.as_os_str() == FORGE_AUTOMATION || component.as_os_str() == EXAMPLES
+        })
         || named(GIT_METADATA)
         || named(LOCKFILES)
         || file
@@ -158,7 +165,7 @@ pub fn sites(
         let shell = Path::new(&file)
             .extension()
             .is_some_and(|extension| extension == SHELL_EXTENSION);
-        for (number, line) in (NonZeroUsize::MIN.get()..).zip(text.lines()) {
+        for (number, line) in (FIRST_LINE..).zip(text.lines()) {
             let line = line.trim();
             if COMMENT_OPENERS
                 .iter()
