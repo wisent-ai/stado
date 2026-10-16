@@ -348,16 +348,6 @@ products:
     for_surface: service
     alternative: WELES_MODEL_ENDPOINT names an OpenAI-compatible provider; Jeden then runs with JEDEN_MODEL_ENDPOINT and signs nothing with a wisent-app agent identity
     alternative_source: weles/src/agent/jeden.ts
-  - product: jeden
-    surface: cli
-    for_surface: service
-    alternative: the Weles release carries its own Jeden binary under native/jeden/bin and the launcher refuses a payload without it, so Weles needs no separately installed Jeden
-    alternative_source: weles/src/worker/weles-api-launcher/startup.mjs
-  - product: spis
-    surface: cli
-    for_surface: service
-    alternative: 'Weles never calls Spis: it applies the browser-evidence policy Spis captures under only when WELES_BROWSER_EVIDENCE_POLICY names it, and browses without it otherwise'
-    alternative_source: weles/src/agent/browser-evidence-policy/withheld-ledger.ts
   - product: skrzynka
     surface: cli
     for_surface: service
@@ -796,10 +786,6 @@ products:
     surface: cli
     for_surface: cli
     bound_because: the web surface drives pages through weles mcp, the browser Wisent journeys run in, and apps/weles is the test plan of Weles itself; the mobile, desktop and CLI surfaces run without Weles
-  - product: echo
-    surface: web
-    for_surface: cli
-    bound_because: 'only the Echo test plans (apps/echo, apps/echo-web and apps/echo-web-gui) name it: they are how Probierz qualifies Echo, and every other plan runs without it'
   - product: skrzynka
     surface: web
     for_surface: cli
@@ -990,11 +976,6 @@ products:
     for_surface: cli
     alternative: Las federates the most MCP surface only when its checkout, signed release and declared environment are present; otherwise las list shows it unconfigured with the refusal of the step that failed, LAS_ONLY and LAS_SKIP can leave it out, and every other surface runs
     alternative_source: las/src/registry/surfaces.mjs
-  - product: singularity
-    surface: cli
-    for_surface: cli
-    alternative: Las federates the singularity MCP surface only when its checkout, signed release and declared environment are present; otherwise las list shows it unconfigured with the refusal of the step that failed, LAS_ONLY and LAS_SKIP can leave it out, and every other surface runs
-    alternative_source: las/src/registry/surfaces.mjs
   - product: skarbiec
     surface: service
     for_surface: cli
@@ -1160,20 +1141,10 @@ products:
     for_surface: cli
     alternative: the mail channel is Oko's own, sent through the provider oko contact mail set declared, and oko-ios through the database's push function; every other paged channel of oko asks ask (skrzynka, slack, telegram, …) is one Stado pages through and is refused by name without it
     alternative_source: oko/rust/src/asks/mail/mod.rs
-  - product: jeden
-    surface: cli
-    for_surface: cli
-    alternative: Jeden is one of the agent harnesses Oko lists, starts, reads transcripts of and routes tasks to; with it absent Oko runs every session on the other declared harnesses
-    alternative_source: oko/rust/src/agent/harnesses.json
   - product: wisent-app
     surface: service
     for_surface: cli
     bound_because: 'only a task Oko routes through the Brama proxy to a harness that speaks Brama own contract (the proxiedRuntimes of pty/broker/routing.json, jeden and omp) names it: Oko hands that session the agent identity oko as WISENT_APP_AGENT_ID beside the lease it runs on; sessions on every other harness, and Oko itself, run without it'
-  - product: tama
-    surface: cli
-    for_surface: cli
-    alternative: without Tama, oko sessions agents lists every session and reports tamaFailure with the reason the abandonment marks could not be read, and only the proactive routine that delivers Tama rule proposals refuses its pass naming Tama; nothing else in Oko reaches Tama
-    alternative_source: oko/rust/src/pty/client/agents/tama/mod.rs
   - product: skarbiec
     surface: cli
     for_surface: cli
@@ -1672,11 +1643,6 @@ products:
     url: https://bobloo.com/readyz
     expect_status: OK
   dependencies:
-  - product: echo
-    surface: web
-    for_surface: web
-    alternative: with no Echo collector configured (NEXT_PUBLIC_ECHO_ANALYTICS_COLLECTOR_URL, ECHO_MOBILE_ANALYTICS_COLLECTOR_URL) every analytics event and snapshot answers recorded false naming the missing variable, and the app runs on without Echo
-    alternative_source: wisent-app/src/lib/analytics/echoServer.js
   - product: stado
     surface: service
     for_surface: web
