@@ -7,26 +7,27 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// Run `git` in `checkout`; what it printed when it succeeded.
-fn git(checkout: &Path, args: &[&str]) -> Option<String> {
+/// Run `git` in `checkout` and return what it answered, whatever its exit:
+/// the caller reads the exit as the answer it asked for. Refused only when
+/// git could not be run at all.
+fn git(checkout: &Path, args: &[&str]) -> Result<std::process::Output, String> {
     let mut command = Command::new("git");
     command.arg("-C").arg(checkout).args(args);
-    match crate::wait::output(&mut command) {
-        Ok(output) if output.status.success() => {
-            Some(String::from_utf8_lossy(&output.stdout).into_owned())
-        }
-        _ => None,
-    }
+    crate::wait::output(&mut command).map_err(|error| {
+        format!(
+            "git {} in {} could not run: {error}",
+            args.join(" "),
+            checkout.display()
+        )
+    })
 }
 
 /// The git sources the workspace's own manifests declare, as Cargo states
-/// them (`git+<url>?rev=<rev>`), read without resolving the graph. A
-/// workspace whose manifests cannot be read declares none here: the lock's
-/// sources are still read, and the fetch failure is reported either way.
-fn manifest_sources(workspace: &Path) -> Vec<String> {
-    let Ok(cargo) = super::super::installed("cargo") else {
-        return Vec::new();
-    };
+/// them (`git+<url>?rev=<rev>`), read without resolving the graph; refused,
+/// with Cargo's own words, when the manifests cannot be read that way.
+fn manifest_sources(workspace: &Path) -> Result<Vec<String>, String> {
+    let cargo = super::super::installed("cargo")
+        .map_err(|error| format!("the manifests' git sources cannot be read: {error}"))?;
     let mut command = Command::new(cargo);
     command
         .args([
@@ -40,21 +41,39 @@ fn manifest_sources(workspace: &Path) -> Vec<String> {
         .current_dir(workspace)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let Ok(output) = crate::wait::output(&mut command) else {
-        return Vec::new();
-    };
-    let Ok(metadata) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
-        return Vec::new();
-    };
-    metadata["packages"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let output = crate::wait::output(&mut command).map_err(|error| {
+        format!(
+            "cargo metadata --no-deps in {} could not run: {error}",
+            workspace.display()
+        )
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo metadata --no-deps in {} failed with {}: {}",
+            workspace.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        format!(
+            "cargo metadata --no-deps in {} answered no JSON: {error}",
+            workspace.display()
+        )
+    })?;
+    let packages = metadata["packages"].as_array().ok_or_else(|| {
+        format!(
+            "cargo metadata --no-deps in {} lists no packages",
+            workspace.display()
+        )
+    })?;
+    Ok(packages
+        .iter()
         .flat_map(|package| package["dependencies"].as_array().into_iter().flatten())
         .filter_map(|dependency| dependency["source"].as_str())
         .filter_map(|source| source.strip_prefix("git+"))
         .map(str::to_owned)
-        .collect()
+        .collect())
 }
 
 /// The git sources the committed `lock` pins (`git+<url>?…#<commit>`).
@@ -94,38 +113,61 @@ fn repository_and_commit(source: &str) -> Option<(String, String)> {
 
 /// One sentence for every git commit the manifests of `workspace` or its
 /// committed `lock` pin that a sibling checkout beside `checkout` holds but
-/// none of that checkout's remote-tracking branches contains. Empty when no
-/// such local observation can be made.
-pub(super) fn unpushed(lock: &[u8], workspace: &Path, checkout: &Path) -> Vec<String> {
-    let Some(siblings) = checkout.parent() else {
-        return Vec::new();
-    };
+/// none of that checkout's remote-tracking branches contains; empty when no
+/// sibling holds such a commit. Refused, saying why, when that cannot be
+/// read: the manifests, git or the sibling's branches do not answer.
+pub(super) fn unpushed(
+    lock: &[u8],
+    workspace: &Path,
+    checkout: &Path,
+) -> Result<Vec<String>, String> {
+    let siblings = checkout.parent().ok_or_else(|| {
+        format!(
+            "{} is in no directory that could hold sibling checkouts",
+            checkout.display()
+        )
+    })?;
     let mut pinned: Vec<(String, String)> = lock_sources(lock)
         .into_iter()
-        .chain(manifest_sources(workspace))
+        .chain(manifest_sources(workspace)?)
         .filter_map(|source| repository_and_commit(&source))
         .collect();
     pinned.sort();
     pinned.dedup();
-    pinned
-        .into_iter()
-        .filter_map(|(repository, commit)| {
-            let sibling = siblings.join(&repository);
-            if !sibling.is_dir() {
-                return None;
-            }
-            git(
-                &sibling,
-                &["cat-file", "-e", &format!("{commit}^{{commit}}")],
-            )?;
-            let containing = git(&sibling, &["branch", "--remotes", "--contains", &commit])?;
-            containing.trim().is_empty().then(|| {
-                format!(
-                    "{repository} {commit} is in {} but no remote-tracking branch there \
-                     contains it; publish the commit if this is the intended pin",
-                    sibling.display()
-                )
-            })
-        })
-        .collect()
+    let mut found = Vec::new();
+    for (repository, commit) in pinned {
+        let sibling = siblings.join(&repository);
+        // No sibling checkout, or one that does not hold the commit, has
+        // nothing local to say about it.
+        if !sibling.is_dir() {
+            continue;
+        }
+        let object = format!("{commit}^{{commit}}");
+        if !git(&sibling, &["cat-file", "-e", &object])?
+            .status
+            .success()
+        {
+            continue;
+        }
+        let containing = git(&sibling, &["branch", "--remotes", "--contains", &commit])?;
+        if !containing.status.success() {
+            return Err(format!(
+                "git branch --remotes --contains {commit} in {} failed with {}: {}",
+                sibling.display(),
+                containing.status,
+                String::from_utf8_lossy(&containing.stderr).trim()
+            ));
+        }
+        if String::from_utf8_lossy(&containing.stdout)
+            .trim()
+            .is_empty()
+        {
+            found.push(format!(
+                "{repository} {commit} is in {} but no remote-tracking branch there contains \
+                 it; publish the commit if this is the intended pin",
+                sibling.display()
+            ));
+        }
+    }
+    Ok(found)
 }

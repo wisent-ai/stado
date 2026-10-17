@@ -234,27 +234,25 @@ pub(super) fn check(
         if !fetched.status.success() {
             // Local checkout evidence supplements the failed operation;
             // remote-tracking refs alone do not prove what the remote holds.
-            let unpushed = unpushed::unpushed(&committed, &workspace, checkout);
-            if !unpushed.is_empty() {
-                return Err(CmdError::refused(format!(
-                    "stado quality check: cargo fetch --manifest-path Cargo.toml failed with {} \
-                     in {} for {} at {revision}, so whether its Cargo.lock resolves was not \
-                     asked: {}. The sibling checkout also shows: {}",
-                    fetched.status,
-                    workspace.display(),
-                    shown.display(),
-                    String::from_utf8_lossy(&fetched.stderr).trim(),
-                    unpushed.join("; ")
-                )));
-            }
-            return Err(CmdError::click(format!(
+            let failed = format!(
                 "stado quality check: cargo fetch --manifest-path Cargo.toml failed with {} in \
                  {} for {} at {revision}, so whether its Cargo.lock resolves was not asked: {}",
                 fetched.status,
                 workspace.display(),
                 shown.display(),
                 String::from_utf8_lossy(&fetched.stderr).trim()
-            )));
+            );
+            return Err(match unpushed::unpushed(&committed, &workspace, checkout) {
+                Ok(found) if found.is_empty() => CmdError::click(failed),
+                Ok(found) => CmdError::refused(format!(
+                    "{failed}. The sibling checkout also shows: {}",
+                    found.join("; ")
+                )),
+                Err(cause) => CmdError::click(format!(
+                    "{failed}. Whether a sibling checkout holds a pinned commit could not be \
+                     read: {cause}"
+                )),
+            });
         }
         report.say(&format!(
             "stado quality check: running cargo metadata --locked --offline for {} at {revision}",
