@@ -3,9 +3,9 @@
 //! An installed Stado whose stop proves its install failed — its own rules
 //! refuse the configuration the release before it served, or the same build
 //! stops again on this host (`runtime::stops::failed_install`) — cannot
-//! serve on this host however often its supervisor restarts it: a release
-//! crash-looped for a day, taking every adapter of the workstation with it,
-//! and nothing stopped it or put the previous release back. So the failing
+//! serve on this host however often its supervisor restarts it, and every
+//! adapter of the host goes down with it until something puts the previous
+//! release back. So the failing
 //! release records itself as failed on this host, beside its retained
 //! archive, and reinstalls the release that ran before it (the one whose
 //! retained copy is byte for byte `~/.stado/bin/stado.previous`) through
