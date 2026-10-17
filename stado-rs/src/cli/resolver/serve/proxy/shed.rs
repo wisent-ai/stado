@@ -55,21 +55,24 @@ pub(in crate::cli::resolver::serve) struct Shed {
     pub(in crate::cli::resolver::serve) unsheddable: usize,
 }
 
-/// End every wait older than `refresh_seconds` with `reason`.
-pub(super) fn shed_held(refresh_seconds: u64, reason: &str) -> Shed {
+/// Tell the relay of every wait in `waits` to end with `reason`; a wait whose
+/// relay listens on no ender (a channel still opening) is counted unsheddable.
+fn end(waits: Vec<(u64, WaitingOpen)>, reason: &str) -> Shed {
     let enders = enders();
-    let mut ended = Vec::new();
-    let mut unsheddable = Vec::new();
-    for (key, open) in waiting::session::older_than(refresh_seconds) {
-        match enders.get(&key) {
-            Some(ender) if ender.send(Some(reason.to_string())).is_ok() => ended.push(open),
-            _ => unsheddable.push(open),
-        }
-    }
+    let (ended, unsheddable): (Vec<_>, Vec<_>) = waits.into_iter().partition(|(key, _)| {
+        enders
+            .get(key)
+            .is_some_and(|ender| ender.send(Some(reason.to_string())).is_ok())
+    });
     Shed {
-        ended,
+        ended: ended.into_iter().map(|(_, open)| open).collect(),
         unsheddable: unsheddable.len(),
     }
+}
+
+/// End every wait older than `refresh_seconds` with `reason`.
+pub(super) fn shed_held(refresh_seconds: u64, reason: &str) -> Shed {
+    end(waiting::session::older_than(refresh_seconds), reason)
 }
 
 /// End every wait on adapter `bind` to `endpoint` on `host` that rides a
@@ -80,19 +83,7 @@ pub(in crate::cli::resolver::serve) fn shed_replaced(
     endpoint: &str,
     reason: &str,
 ) -> Shed {
-    let enders = enders();
-    let mut ended = Vec::new();
-    let mut unsheddable = Vec::new();
-    for (key, open) in waiting::session::on_replaced(bind, host, endpoint) {
-        match enders.get(&key) {
-            Some(ender) if ender.send(Some(reason.to_string())).is_ok() => ended.push(open),
-            _ => unsheddable.push(open),
-        }
-    }
-    Shed {
-        ended,
-        unsheddable: unsheddable.len(),
-    }
+    end(waiting::session::on_replaced(bind, host, endpoint), reason)
 }
 
 /// Whether an accept error is the process out of file descriptors: the one
