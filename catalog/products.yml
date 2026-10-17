@@ -1694,6 +1694,11 @@ products:
     surface: service
     for_surface: web
     bound_because: the Wisent app keeps every user object (profile, character and room images, generated media) in the Stado object API under STADO_STORAGE_NAMESPACE, sends push notifications through Stado, and runs image, video, pose and LoRA generation and training on Stado machines through its GPU pool; no storage or compute path without Stado exists yet
+  - product: echo
+    surface: service
+    for_surface: web
+    alternative: 'Echo is the analytics collector the app reports to: with NEXT_PUBLIC_ECHO_ANALYTICS_COLLECTOR_URL (and the mobile collector URL) unset, every tracked event answers recorded false naming the unset variable and the app runs on, and the admin snapshot cron routes then answer 502 with that answer; the ECHO_ snapshot secrets are only among the secrets those routes accept'
+    alternative_source: wisent-app/src/lib/analytics/echoServer.js
 - id: preferences
   name: Preferences
   status: active
