@@ -5,15 +5,13 @@
 //! resolver's adapters ride their own native SSH session to the same host
 //! for every service placed there. When those connections stand, the
 //! resolver records each wait. The command channel is a new connection,
-//! and a session that stands does not make a new one stand: the host
-//! answered a fresh SSH session at once while every relayed request on the
-//! resolver's session stood for hours, and refusing the command left the
-//! one diagnostic of the host unsent. So the reading is said beside the
-//! command and names the host, its standing services, the endpoint and
-//! since when; the command is refused only when no declared path to the
-//! host answers either. The measure is the resolver's own: a wait longer
-//! than the refresh interval the target declares, the same reading
-//! `held_at` applies to one adapter.
+//! and a session that stands does not make a new one stand, so a held
+//! session is no reason to leave a command to the host unsent: the reading
+//! is said beside the command and names the host, its standing services,
+//! the endpoint and since when; the command is refused only when no
+//! declared path to the host answers either. The measure is the resolver's
+//! own: a wait longer than the refresh interval the target declares, the
+//! same reading `held_at` applies to one adapter.
 //!
 //! [`stood_elsewhere`] reads the same waits the other way round: not
 //! whether a command to one host would stand, but which service on which
@@ -174,7 +172,8 @@ pub(crate) fn stood_elsewhere(this_host: &str) -> Result<Vec<Stood>, String> {
         let Some(waited) = age_seconds(&open.since) else {
             continue;
         };
-        if u64::try_from(waited).is_ok_and(|seconds| seconds > bound_seconds) {
+        // A wait whose start lies ahead of this host's clock has not stood.
+        if waited > 0 && waited.unsigned_abs() > bound_seconds {
             routes
                 .entry((open.service.clone(), open.active_host.clone()))
                 .or_default()
@@ -190,7 +189,7 @@ pub(crate) fn stood_elsewhere(this_host: &str) -> Result<Vec<Stood>, String> {
                 service,
                 host,
                 since: oldest.since.clone(),
-                waited_seconds: u64::try_from(waited).ok()?,
+                waited_seconds: waited.unsigned_abs(),
                 bound_seconds,
                 held,
                 sentence: unanswered(&oldest, waited),
