@@ -421,6 +421,17 @@ products:
       repair:
       - crypto
       - audit-lock
+  dependencies:
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: SKARBIEC_VAULT_FILE names the vault Skarbiec opens directly, and it then reads no Stado config, forward file or owner route; with no Stado config on the machine the vault under the user data directory is opened. Only reaching a Skarbiec on another machine reads the skarbiec.local forward Stado's service directory writes, stado-wait is a library compiled into the binary, and the autofill extension takes its updates from the release feed on stado.wisent.com
+    alternative_source: skarbiec/src/core/mod.rs
+  - product: stado
+    surface: cli
+    for_surface: desktop
+    alternative: SKARBIEC_URL names the Skarbiec service Skarbiec Desktop talks to, and then the forward Stado's service directory writes is not read; with neither, the app shows the refusal naming both
+    alternative_source: skarbiec-desktop/Sources/SkarbiecDesktop/Backend/BackendClientError.swift
 - id: most
   name: Most
   status: active
