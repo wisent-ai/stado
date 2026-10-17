@@ -120,6 +120,15 @@ fn pushed_revisions(checkout: &Path, report: Report) -> Result<BTreeSet<String>,
             ));
             continue;
         }
+        // A notes ref holds notes about commits, not a source tree; the commits
+        // it annotates are checked where their own branch is pushed. Git keeps
+        // notes under this namespace: https://git-scm.com/docs/git-notes
+        if remote_ref.starts_with("refs/notes/") {
+            report.say(&format!(
+                "stado quality check: {remote_ref} holds notes, not a source tree; nothing to check"
+            ));
+            continue;
+        }
         let revision = resolve(checkout, local_oid)?;
         report.say(&format!(
             "stado quality check: push {local_ref} -> {remote_ref} selects {revision}"

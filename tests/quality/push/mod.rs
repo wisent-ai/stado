@@ -198,6 +198,46 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
         "deletion changed another remote ref"
     );
 
+    // A notes commit carries notes about commits, not a product tree: pushing
+    // it with a bad HEAD succeeds, says so, and publishes the notes.
+    fixture.success(
+        fixture
+            .git()
+            .arg("notes")
+            .arg("--ref=attestation")
+            .arg("add")
+            .arg("--message=checked where its branch is pushed")
+            .arg(&good),
+    );
+    let noted = fixture.success(
+        fixture
+            .git()
+            .arg("push")
+            .arg("origin")
+            .arg("refs/notes/attestation"),
+    );
+    let transcript = format!(
+        "{}{}",
+        String::from_utf8_lossy(&noted.stdout),
+        String::from_utf8_lossy(&noted.stderr)
+    );
+    assert!(
+        transcript.contains("refs/notes/attestation holds notes, not a source tree"),
+        "the notes push was not said to hold notes: {transcript}"
+    );
+    let local_notes = fixture.success(fixture.git().arg("rev-parse").arg("refs/notes/attestation"));
+    let remote_notes = fixture.success(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&fixture.remote)
+            .arg("rev-parse")
+            .arg("refs/notes/attestation"),
+    );
+    assert_eq!(
+        remote_notes.stdout, local_notes.stdout,
+        "the remote does not hold the pushed notes"
+    );
+
     // A real blob exists but is not a commit: explicit revision selection
     // refuses it instead of quietly choosing HEAD or another source tree.
     let blob = fixture.success(
