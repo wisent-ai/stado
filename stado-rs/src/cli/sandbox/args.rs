@@ -15,11 +15,66 @@ pub struct CreateArgs {
     #[arg(long)]
     pub ttl_seconds: Option<i64>,
     /// Start without the account's environment variables.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "environment")]
     pub no_env: bool,
     /// Start from this named snapshot instead of a fresh disk.
     #[arg(long)]
     pub from: Option<String>,
+    /// Start with this environment's variables, secret files and
+    /// repositories instead of the account's default one.
+    #[arg(long)]
+    pub environment: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct EnvironmentId {
+    /// The environment id `stado sandbox environment list` printed.
+    pub environment: String,
+}
+
+#[derive(Args, Debug)]
+pub struct EnvironmentName {
+    /// The new environment's name.
+    pub name: String,
+}
+
+#[derive(Args, Debug)]
+pub struct EnvironmentKey {
+    /// The environment id `stado sandbox environment list` printed.
+    pub environment: String,
+    /// The variable's name; `set-var` reads its value from standard input,
+    /// so the value never stands on a command line.
+    pub key: String,
+}
+
+#[derive(Args, Debug)]
+pub struct SecretFileArgs {
+    /// The environment id `stado sandbox environment list` printed.
+    pub environment: String,
+    /// Where the secret file lands in every new sandbox.
+    pub path: String,
+    /// The local file whose text it holds.
+    #[arg(long)]
+    pub from: std::path::PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct SecretPath {
+    /// The environment id `stado sandbox environment list` printed.
+    pub environment: String,
+    /// The secret file's path in every new sandbox.
+    pub path: String,
+}
+
+#[derive(Args, Debug)]
+pub struct RepositoryArgs {
+    /// The environment id `stado sandbox environment list` printed.
+    pub environment: String,
+    /// The GitHub repository's id, as Boat's repository list gives it.
+    pub repository: String,
+    /// The branch cloned; without it the request names none.
+    #[arg(long)]
+    pub base_branch: Option<String>,
 }
 
 #[derive(Args, Debug)]

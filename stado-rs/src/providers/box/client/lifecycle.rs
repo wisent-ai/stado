@@ -53,16 +53,21 @@ impl BoxClient {
 
     /// POST /sandboxes. `ttl_seconds=None` sends an explicit JSON null, which
     /// Boat reads as "never stop by itself"; `from` names the named snapshot
-    /// the sandbox starts from, and without it the request names none.
+    /// the sandbox starts from and `environment` the environment it starts
+    /// with, and without either the request names none.
     pub async fn create_box(
         &self,
         ttl_seconds: Option<i64>,
         no_env: bool,
         from: Option<&str>,
+        environment: Option<&str>,
     ) -> Result<BoxInfo, BoxError> {
         let mut body = json!({"ttlSeconds": ttl_seconds, "noEnv": no_env});
         if let Some(snapshot) = from {
             body["from"] = Value::from(snapshot);
+        }
+        if let Some(environment) = environment {
+            body["environment"] = Value::from(environment);
         }
         let value = self
             .transport

@@ -90,9 +90,19 @@ pub(super) async fn create(provider: &BoxProvider, args: &CreateArgs) -> Result<
     if args.from.as_deref() == Some("") {
         return Err(CmdError::usage("--from is given with no named snapshot"));
     }
+    if args.environment.as_deref() == Some("") {
+        return Err(CmdError::usage(
+            "--environment is given with no environment id",
+        ));
+    }
     let info = provider
         .client
-        .create_box(Some(ttl_seconds), args.no_env, args.from.as_deref())
+        .create_box(
+            Some(ttl_seconds),
+            args.no_env,
+            args.from.as_deref(),
+            args.environment.as_deref(),
+        )
         .await
         .map_err(failure)?;
     print(&sandbox(&info))

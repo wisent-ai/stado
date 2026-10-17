@@ -5,11 +5,14 @@
 //! OpenAPI document names for that operation.
 //!
 //! The verbs live beside this entry point: `lifecycle` (limits, create,
-//! fetch, list, update, release), `commands` (command, SSH key, interrupt,
-//! public URL for a port), and the payload readers `files` (file, artifact,
-//! event, named snapshot) and `prompts` (prompt submission and status).
+//! fetch, list, update, release), `commands` (command, background command,
+//! SSH key, interrupt, public and desktop URLs, usage), `environments`
+//! (environments, their variables, secret files and repositories), and the
+//! payload readers `files` (file, artifact, event, snapshot, named
+//! snapshot) and `prompts` (prompt submission, status and steer).
 
 mod commands;
+mod environments;
 mod files;
 mod lifecycle;
 mod prompts;

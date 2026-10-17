@@ -20,6 +20,7 @@ enum NativeSandboxOperations {
                 .init(id: "ttl", label: "Lifetime in seconds (blank: boat.ttl_seconds)", option: "--ttl-seconds"),
                 .init(id: "no-env", label: "Start without the account's environment variables", option: "--no-env", flag: true),
                 .init(id: "from", label: "Named snapshot to start from (blank: a fresh disk)", option: "--from"),
+                .init(id: "environment", label: "Environment id to start with (blank: the account's default)", option: "--environment"),
             ], jsonOutput: false),
         .init(id: "sandbox-exec", title: "Run a command line in a sandbox",
             path: ["sandbox", "exec"], hostPlacement: .none, fields: [
@@ -164,6 +165,43 @@ enum NativeSandboxOperations {
                 .init(id: "snapshot", label: "Snapshot id", required: true),
                 .init(id: "path", label: "Path in the snapshot", required: true),
                 .init(id: "to", label: "New file on the machine running Stado", option: "--to", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-environment-list", title: "List the environments",
+            path: ["sandbox", "environment", "list"], hostPlacement: .none, mutates: false, jsonOutput: false),
+        .init(id: "sandbox-environment-create", title: "Create an empty environment",
+            path: ["sandbox", "environment", "create"], hostPlacement: .none, fields: [
+                .init(id: "name", label: "Environment name", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-environment-delete", title: "Delete an environment",
+            path: ["sandbox", "environment", "delete"], hostPlacement: .none, fields: [
+                .init(id: "environment", label: "Environment id", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-environment-set-var", title: "Set an environment variable",
+            path: ["sandbox", "environment", "set-var"], hostPlacement: .none, fields: [
+                .init(id: "environment", label: "Environment id", required: true),
+                .init(id: "key", label: "Variable name", required: true),
+            ], payload: .standardInput(label: "The variable's value, one line", initial: ""), jsonOutput: false),
+        .init(id: "sandbox-environment-rm-var", title: "Remove an environment variable",
+            path: ["sandbox", "environment", "rm-var"], hostPlacement: .none, fields: [
+                .init(id: "environment", label: "Environment id", required: true),
+                .init(id: "key", label: "Variable name", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-environment-set-file", title: "Set an environment secret file",
+            path: ["sandbox", "environment", "set-file"], hostPlacement: .none, fields: [
+                .init(id: "environment", label: "Environment id", required: true),
+                .init(id: "path", label: "Path in every new sandbox", required: true),
+                .init(id: "from", label: "File on the machine running Stado", option: "--from", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-environment-rm-file", title: "Remove an environment secret file",
+            path: ["sandbox", "environment", "rm-file"], hostPlacement: .none, fields: [
+                .init(id: "environment", label: "Environment id", required: true),
+                .init(id: "path", label: "Path in every new sandbox", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-environment-add-repo", title: "Clone a GitHub repository into every new sandbox",
+            path: ["sandbox", "environment", "add-repo"], hostPlacement: .none, fields: [
+                .init(id: "environment", label: "Environment id", required: true),
+                .init(id: "repository", label: "Repository id from Boat's repository list", required: true),
+                .init(id: "branch", label: "Branch (blank: the request names none)", option: "--base-branch"),
             ], jsonOutput: false),
     ]
 }

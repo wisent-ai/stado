@@ -15,6 +15,7 @@
 
 mod agent;
 mod args;
+mod environments;
 mod snapshots;
 mod verbs;
 
@@ -81,6 +82,30 @@ pub enum SandboxCommands {
     /// under a name, from which `create --from` starts new sandboxes.
     #[command(subcommand)]
     Snapshot(SnapshotCommands),
+    /// Manage environments: the variables, secret files and repositories
+    /// every new sandbox started with one gets.
+    #[command(subcommand)]
+    Environment(EnvironmentCommands),
+}
+
+#[derive(Subcommand)]
+pub enum EnvironmentCommands {
+    /// List the environments.
+    List,
+    /// Create an empty environment.
+    Create(EnvironmentName),
+    /// Delete an environment.
+    Delete(EnvironmentId),
+    /// Set a variable; its value is the one line on standard input.
+    SetVar(EnvironmentKey),
+    /// Remove a variable.
+    RmVar(EnvironmentKey),
+    /// Set a secret file from a local file's text.
+    SetFile(SecretFileArgs),
+    /// Remove a secret file.
+    RmFile(SecretPath),
+    /// Clone a GitHub repository into every new sandbox.
+    AddRepo(RepositoryArgs),
 }
 
 #[derive(Subcommand)]
@@ -151,6 +176,18 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
                 snapshots::tree(&provider, &snapshot.snapshot).await
             }
             SnapshotCommands::Get(args) => snapshots::get(&provider, &args).await,
+        },
+        SandboxCommands::Environment(sub) => match sub {
+            EnvironmentCommands::List => environments::list(&provider).await,
+            EnvironmentCommands::Create(named) => {
+                environments::create(&provider, &named.name).await
+            }
+            EnvironmentCommands::Delete(args) => environments::delete(&provider, &args).await,
+            EnvironmentCommands::SetVar(args) => environments::set_var(&provider, &args).await,
+            EnvironmentCommands::RmVar(args) => environments::remove_var(&provider, &args).await,
+            EnvironmentCommands::SetFile(args) => environments::set_file(&provider, &args).await,
+            EnvironmentCommands::RmFile(args) => environments::remove_file(&provider, &args).await,
+            EnvironmentCommands::AddRepo(args) => environments::add_repo(&provider, &args).await,
         },
     }
 }

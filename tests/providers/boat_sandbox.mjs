@@ -18,8 +18,11 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    command fail the CLI with its exit, starts a command in the background,
 //    finds it running and stops it, keeps the sandbox's usage, reads its
 //    desktop URL, downloads the file and is refused a second download over
-//    it, renames the sandbox and reads the name back,
-//    reads its events, gives STADO_BOAT_TEST_PORT a public URL, saves the
+//    it, renames the sandbox and reads the name back, reads its events,
+//    creates an environment, sets a variable in it from standard input (an
+//    empty one is refused), starts a sandbox with it that prints the
+//    variable, deletes that sandbox, removes the variable and deletes the
+//    environment, gives STADO_BOAT_TEST_PORT a public URL, saves the
 //    disk as a named snapshot, finds it listed and shown, deletes it and no
 //    longer finds it listed, forks the sandbox and reads the token on the
 //    fork, deletes the fork, stops the original, finds the file in its latest
@@ -41,8 +44,8 @@ const report = { started_at: new Date().toISOString(), commands: [], result: 'fa
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 // A clean exit: no spawn error, no signal, and a status that is zero (falsy).
 const exitedCleanly = answer => !answer.error && !answer.signal && !answer.status;
-function run(program, args, env = process.env) {
-  const answer = spawnSync(program, args, { cwd: root, env, encoding: 'utf8' });
+function run(program, args, env = process.env, input = undefined) {
+  const answer = spawnSync(program, args, { cwd: root, env, encoding: 'utf8', input });
   report.commands.push({ program, arguments: args, config: env.STADO_CONFIG, exit_status: answer.status,
     signal: answer.signal, error: answer.error?.message, stdout: answer.stdout, stderr: answer.stderr });
   return answer;
@@ -128,6 +131,22 @@ try {
   const events = sandbox(['events', original.id, '--sort', 'asc']);
   assert.ok(Array.isArray(events.events), `events answered no list: ${JSON.stringify(events)}`);
   assert.ok(events.events.length, `the sandbox that ran commands has no events: ${JSON.stringify(events)}`);
+
+  const environmentName = `stado-sandbox-${token}`;
+  const created = sandbox(['environment', 'create', environmentName]);
+  const environment = created.environments.find(row => row.name === environmentName);
+  assert.ok(environment?.id, `environment create did not list ${environmentName}: ${JSON.stringify(created)}`);
+  success(run(binary, ['sandbox', 'environment', 'set-var', environment.id, 'STADO_SANDBOX_TOKEN'], process.env, `${token}\n`));
+  refused(run(binary, ['sandbox', 'environment', 'set-var', environment.id, 'STADO_SANDBOX_TOKEN'], process.env, ''),
+    'standard input holds no value for STADO_SANDBOX_TOKEN');
+  const configured = sandbox(['create', '--ttl-seconds', lifetime, '--environment', environment.id]);
+  const printedVariable = sandbox(['exec', configured.id, 'printenv STADO_SANDBOX_TOKEN']);
+  assert.ok(printedVariable.stdout.includes(token), `a sandbox of ${environment.id} does not hold its variable`);
+  assert.deepEqual(sandbox(['delete', configured.id]), { deleted: configured.id });
+  sandbox(['environment', 'rm-var', environment.id, 'STADO_SANDBOX_TOKEN']);
+  sandbox(['environment', 'delete', environment.id]);
+  assert.ok(!sandbox(['environment', 'list']).environments.some(row => row.id === environment.id),
+    `environment ${environment.id} is still listed after its deletion`);
 
   const hosted = sandbox(['host', original.id, port]);
   assert.ok(String(hosted.url).startsWith('https://'), `host answered no HTTPS URL: ${JSON.stringify(hosted.port)}`);

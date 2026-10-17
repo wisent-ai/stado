@@ -230,7 +230,7 @@ impl BoxClient {
 /// One path segment for `value` under `collection`, encoded so a slash or a
 /// query mark in it cannot address another resource; an empty value names
 /// nothing and is refused naming `what`.
-fn segment_path(collection: &str, value: &str, what: &str) -> Result<String, BoxError> {
+pub(super) fn segment_path(collection: &str, value: &str, what: &str) -> Result<String, BoxError> {
     if value.is_empty() {
         return Err(BoxError::value(format!("{what} is required")));
     }

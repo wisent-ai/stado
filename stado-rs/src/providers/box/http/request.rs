@@ -67,6 +67,26 @@ impl BoxHttpTransport {
         Ok(payload)
     }
 
+    /// A JSON answer of an environment change, whose envelope is
+    /// `success=true` instead of `ok` and a type, as Boat's OpenAPI document
+    /// gives it for those operations.
+    pub async fn request_change(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        query: &[(&str, String)],
+    ) -> Result<Map<String, Value>, BoxError> {
+        let raw = self.send(method, path, body, query, &[]).await?;
+        let payload = parse_json(&raw)?;
+        if payload.get("success") != Some(&Value::Bool(true)) {
+            return Err(BoxError::transport(format!(
+                "Boat answered {method} {path} without success=true"
+            )));
+        }
+        Ok(payload)
+    }
+
     /// Execute the request and return the raw body, mapping HTTP error
     /// statuses to [`BoxApiError`](super::super::BoxApiError) and network
     /// failures to [`BoxError::Transport`].
