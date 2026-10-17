@@ -101,6 +101,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
         PlatformCommands::Recovery(sub) => recovery::dispatch(sub).await,
         PlatformCommands::Storage(sub) => storage::dispatch(sub).await,
         PlatformCommands::Instances(sub) => instances::dispatch(sub).await,
+        PlatformCommands::Sandbox(sub) => sandbox::dispatch(sub).await,
         PlatformCommands::Secrets(sub) => secrets::dispatch(sub).await,
         PlatformCommands::Queue(sub) => queue::dispatch(sub).await,
         PlatformCommands::Alerts(sub) => alerts::dispatch(sub).await,

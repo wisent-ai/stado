@@ -4,7 +4,8 @@ import WisentDesignSystem
 /// Which clouds and GPU vendors rent agent machines for this fleet: the
 /// same reads and writes `stado capabilities`, `stado instances list`,
 /// `stado doctor`, `stado config` and `stado credentials item put` offer,
-/// each answered with the CLI's own receipt.
+/// and the Boat sandboxes `stado sandbox` drives, each answered with the
+/// CLI's own receipt.
 struct ComputeProvidersView: View {
     @ObservedObject var fleetStore: FleetControlStore
     let scope: String
@@ -25,6 +26,14 @@ struct ComputeProvidersView: View {
                 ) {
                     NativeCapabilityActions(host: "", fleet: fleetStore,
                         operations: NativeComputeProviderOperations.all)
+                        .disabled(!fleetStore.isConfigured)
+                }
+                WisentSectionBox(
+                    title: "Sandboxes",
+                    detail: "The Boat sandboxes this deployment's key reaches, driven as an agent drives them: create one, run a command line in it, read and write its files, fork it, stop and resume it, delete it. They use the boat provider's settings and its cloud-boat credential; a sandbox created here lives boat.ttl_seconds unless a lifetime is given."
+                ) {
+                    NativeCapabilityActions(host: "", fleet: fleetStore,
+                        operations: NativeSandboxOperations.all)
                         .disabled(!fleetStore.isConfigured)
                 }
             }

@@ -23,6 +23,10 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+### Added
+
+- **`stado sandbox` drives Boat sandboxes directly, as an agent does:** `list`, `show`, `create [--ttl-seconds] [--no-env]`, `exec <id> [--cwd] '<command line>'`, `read <id> <path> --encoding`, `write <id> <path> --from <file> --encoding`, `fork`, `stop`, `resume` and `delete`, each one Boat Public API v1 call through the boat provider's own client and settings, printed as JSON. A command that does not succeed fails `exec` naming its exit code, signal or limit; a refusal Boat answered keeps its status, code and request id as the error's details, reported `not_found` for a sandbox Boat does not hold. Stado Desktop's Compute providers screen has the same operations under Sandboxes.
+
 ### Changed
 
 - **The sandbox provider is Boat, and Stado speaks Boat Public API v1:** Box was renamed Boat, and its legacy API (`ascii.dev/api/box/v1`, `/boxes`) answers with a `Sunset` notice. The provider id is now `boat` (the `box` and `box-ascii` names are gone), its settings are `boat.ttl_seconds`, `boat.release_mode` and `boat.api_url` in the profile with the environment overrides `BOAT_TTL_SECONDS`, `BOAT_RELEASE_MODE` and `BOAT_API_URL` (the `BOX_*` variables are no longer read), and its key is the Skarbiec item tagged `stado:role:cloud-boat`, which a workload grant may not carry. Requests go to `https://boat.dev/api/v1/sandboxes` with Boat's own response types; a deletion carries the confirmation Boat requires and accepts Boat's background deletion; a sandbox Boat cancelled for want of a machine fails its job by name; an account at its active-sandbox limit is refused with both counts; and an answer that echoes the API key has it replaced by `[REDACTED]` before it becomes an error.

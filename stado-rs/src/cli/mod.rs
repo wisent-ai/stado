@@ -58,6 +58,7 @@ pub mod resolver;
 pub mod resources;
 pub mod route;
 pub mod runner;
+pub mod sandbox;
 pub mod scratch;
 pub mod secrets;
 pub mod seed_enrol;

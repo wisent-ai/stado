@@ -124,6 +124,10 @@ pub(crate) enum PlatformCommands {
     /// Inspect and reap live agent VMs across the configured cloud providers.
     #[command(subcommand)]
     Instances(instances::InstancesCommands),
+    /// Drive Boat sandboxes directly: create, run, read, write, fork, stop,
+    /// resume and delete.
+    #[command(subcommand)]
+    Sandbox(sandbox::SandboxCommands),
 
     /// Transactional outage recovery: fence, migrate, verify, and cut over.
     #[command(subcommand)]
