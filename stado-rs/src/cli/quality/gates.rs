@@ -82,9 +82,10 @@ pub(super) fn selected_gates(
     }
 }
 
-/// What the manifest at `root` declares for `selection`. A manifest that
-/// cannot be read, does not parse, or names no platform this host runs is
-/// refused; one that declares no such gate is answered with why.
+/// What the committed tree at `root` declares for `selection`. An absent
+/// manifest has no gates; a present manifest that cannot be read or parsed,
+/// or names no platform this host runs, is refused; one that declares no
+/// such gate is answered with why.
 pub(super) fn declared_gates(
     root: Option<&str>,
     selection: Selection,
@@ -97,14 +98,35 @@ pub(super) fn declared_gates(
         })?,
     };
     let manifest_path = root.join(MANIFEST);
-    let bytes = std::fs::read(&manifest_path).map_err(|error| {
-        CmdError::click(format!(
-            "cannot read {}: {error}; `stado quality` runs the formatting a product \
-             declares, so it needs the product's own manifest",
-            manifest_path.display()
-        ))
-        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })?;
+    let bytes = match std::fs::read(&manifest_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                match std::fs::symlink_metadata(&manifest_path) {
+                    Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(Declaration::Undeclared(format!(
+                            "{} is absent, so it declares no quality gate",
+                            manifest_path.display()
+                        )));
+                    }
+                    Err(inspect) => {
+                        return Err(CmdError::click(format!(
+                            "cannot inspect {} after reading it failed: {inspect}",
+                            manifest_path.display()
+                        ))
+                        .stating(crate::cli::entry::error::io_failure_code(inspect.kind())));
+                    }
+                    Ok(_) => {}
+                }
+            }
+            return Err(CmdError::click(format!(
+                "cannot read {}: {error}; `stado quality` runs the formatting a product \
+                 declares, so it needs the product's own manifest",
+                manifest_path.display()
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind())));
+        }
+    };
     let ProductManifest::Release(manifest) =
         release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?
     else {
@@ -173,7 +195,7 @@ fn recipe_for_this_host(
 ) -> Result<(&str, &PlatformRecipe), CmdError> {
     let here =
         crate::cli::fleet::enroll::release_platform(std::env::consts::OS, std::env::consts::ARCH)
-            .unwrap_or_default();
+            .map_err(CmdError::refused)?;
     if let Some((name, recipe)) = platforms.get_key_value(here) {
         return Ok((name.as_str(), recipe));
     }
