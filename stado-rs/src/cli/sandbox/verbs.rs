@@ -22,7 +22,7 @@ pub(super) fn provider() -> Result<BoxProvider, CmdError> {
 /// keeps its status, code and request id as details, stated `not_found` for
 /// a sandbox Boat does not hold and `infra_down` when Boat says a retry can
 /// help.
-fn failure(error: BoxError) -> CmdError {
+pub(super) fn failure(error: BoxError) -> CmdError {
     match error {
         BoxError::Configuration(message) => CmdError::declaration(message),
         BoxError::Value(message) => CmdError::usage(message),
@@ -43,7 +43,7 @@ fn failure(error: BoxError) -> CmdError {
 }
 
 /// One sandbox as the verbs print it.
-fn sandbox(info: &BoxInfo) -> Value {
+pub(super) fn sandbox(info: &BoxInfo) -> Value {
     json!({
         "id": info.box_id,
         "name": info.name,
@@ -61,7 +61,7 @@ fn sandbox(info: &BoxInfo) -> Value {
     })
 }
 
-fn print(value: &Value) -> Result<(), CmdError> {
+pub(super) fn print(value: &Value) -> Result<(), CmdError> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }

@@ -1,6 +1,8 @@
 //! `stado sandbox` — the Boat sandboxes this deployment's key can reach, as
-//! an agent or a script drives them: list and show, create, run a command,
-//! read and write a file, fork, stop, resume and delete.
+//! an agent or a script drives them: list and show, create and rename, run a
+//! command, read, write and download files, hand a coding agent a prompt and
+//! follow it, read the sandbox's events, add an SSH key, fork, stop, resume
+//! and delete.
 //!
 //! The scheduler rents a sandbox per job and owns its whole life; these verbs
 //! are the same Boat Public API v1 calls handed to a caller directly, through
@@ -10,9 +12,10 @@
 //! call states its own lifetime. Every answer is printed as JSON; a refusal
 //! Boat gave keeps its status, code and request id in the error.
 
+mod agent;
 mod verbs;
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 
 use super::CmdError;
 
@@ -40,6 +43,106 @@ pub enum SandboxCommands {
     Resume(EnvArgs),
     /// Delete a sandbox and its data for good.
     Delete(SandboxId),
+    /// Rename a sandbox, or change or clear when it stops by itself.
+    Update(UpdateArgs),
+    /// Hand the coding agent in a sandbox a prompt and print the prompt run.
+    Prompt(PromptArgs),
+    /// Print a prompt run's status.
+    PromptStatus(PromptRunId),
+    /// Interrupt every conversation running in a sandbox.
+    Interrupt(SandboxId),
+    /// Print one page of a sandbox's events and the cursor of the next.
+    Events(EventsArgs),
+    /// Allow an OpenSSH public key into a sandbox.
+    SshKey(SshKeyArgs),
+    /// Download a file or folder from a sandbox into a new local file.
+    Download(DownloadArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct UpdateArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// The sandbox's new name.
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Stop the sandbox by itself after this many seconds; a value that is
+    /// not positive is refused.
+    #[arg(long, conflicts_with = "no_auto_stop")]
+    pub ttl_seconds: Option<i64>,
+    /// Never stop the sandbox by itself.
+    #[arg(long)]
+    pub no_auto_stop: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PromptArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// What the coding agent is asked to do.
+    pub prompt: String,
+    /// The agent provider Boat runs the prompt with, as Boat's API names it.
+    #[arg(long)]
+    pub provider: String,
+    /// The provider's model; without it the request names none.
+    #[arg(long)]
+    pub model: Option<String>,
+    /// The reasoning effort; without it the request names none.
+    #[arg(long)]
+    pub reasoning_effort: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct PromptRunId {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// The prompt id `stado sandbox prompt` printed.
+    pub prompt_id: String,
+}
+
+/// The order Boat lists events in; each value is the word Boat's API takes.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum EventOrder {
+    Asc,
+    Desc,
+}
+
+#[derive(Args, Debug)]
+pub struct EventsArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// Oldest or newest event first.
+    #[arg(long, value_enum)]
+    pub sort: EventOrder,
+    /// The cursor a previous page printed as nextCursor; without it the
+    /// first page.
+    #[arg(long)]
+    pub cursor: Option<String>,
+    /// Only events of this type, as Boat's API names it; without it every
+    /// type.
+    #[arg(long = "type")]
+    pub event_type: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct SshKeyArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// A local OpenSSH public key file (ssh-...).
+    #[arg(long)]
+    pub public_key_file: std::path::PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct DownloadArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// Path of the file or folder in the sandbox.
+    pub path: String,
+    /// The local file the download is written to; one that exists is
+    /// refused, never overwritten.
+    #[arg(long)]
+    pub to: std::path::PathBuf,
 }
 
 #[derive(Args, Debug)]
@@ -118,5 +221,12 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
         SandboxCommands::Stop(sandbox) => verbs::stop(&provider, &sandbox.id).await,
         SandboxCommands::Resume(args) => verbs::resume(&provider, &args).await,
         SandboxCommands::Delete(sandbox) => verbs::delete(&provider, &sandbox.id).await,
+        SandboxCommands::Update(args) => agent::update(&provider, &args).await,
+        SandboxCommands::Prompt(args) => agent::prompt(&provider, &args).await,
+        SandboxCommands::PromptStatus(run) => agent::prompt_status(&provider, &run).await,
+        SandboxCommands::Interrupt(sandbox) => agent::interrupt(&provider, &sandbox.id).await,
+        SandboxCommands::Events(args) => agent::events(&provider, &args).await,
+        SandboxCommands::SshKey(args) => agent::ssh_key(&provider, &args).await,
+        SandboxCommands::Download(args) => agent::download(&provider, &args).await,
     }
 }

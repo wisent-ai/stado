@@ -15,8 +15,11 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    lifetime of the sandboxes this journey creates. It creates a sandbox,
 //    refuses a lifetime that is not positive, writes a file with a fresh
 //    token and reads it back, runs a command that prints it, sees a failing
-//    command fail the CLI with its exit, forks the sandbox and reads the
-//    token on the fork, deletes the fork, stops the original and deletes it.
+//    command fail the CLI with its exit, downloads the file and is refused
+//    a second download over it, renames the sandbox and reads the name back,
+//    reads its events, forks the sandbox and reads the token on the fork,
+//    deletes the fork, stops the original and deletes it. Prompting the
+//    coding agent needs an agent provider's account and is not run here.
 //    The last `show` of each sandbox is kept as the observed final state.
 // STADO_BIN selects the Stado under test. Without STADO_BIN or
 // STADO_BOAT_TEST_TTL_SECONDS the journey is blocked, never passed. The
@@ -92,6 +95,19 @@ try {
   assert.ok(printed.stdout.includes(token), `cat did not print the token: ${JSON.stringify(printed)}`);
   refused(run(binary, ['sandbox', 'exec', original.id, 'false']), `the command in sandbox ${original.id} exited with`);
   refused(run(binary, ['sandbox', 'exec', original.id, '--cwd', '', 'true']), '--cwd names no directory');
+
+  const downloaded = join(output, 'downloaded.bin');
+  sandbox(['download', original.id, file, '--to', downloaded]);
+  assert.ok(readFileSync(downloaded).includes(token), `downloading ${file} did not bring the token back`);
+  refused(run(binary, ['sandbox', 'download', original.id, file, '--to', downloaded]), `to ${downloaded}`);
+
+  const named = `stado-sandbox-${token}`;
+  assert.equal(sandbox(['update', original.id, '--name', named]).name, named, 'update did not rename the sandbox');
+  assert.equal(sandbox(['show', original.id]).name, named, 'show does not read the new name back');
+
+  const events = sandbox(['events', original.id, '--sort', 'asc']);
+  assert.ok(Array.isArray(events.events), `events answered no list: ${JSON.stringify(events)}`);
+  assert.ok(events.events.length, `the sandbox that ran commands has no events: ${JSON.stringify(events)}`);
 
   const fork = sandbox(['fork', original.id]);
   assert.ok(fork.id && fork.id !== original.id, `fork answered no new sandbox: ${JSON.stringify(fork)}`);
