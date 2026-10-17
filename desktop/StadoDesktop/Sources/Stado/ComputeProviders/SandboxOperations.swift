@@ -93,6 +93,16 @@ enum NativeSandboxOperations {
                 .init(id: "id", label: "Sandbox id", required: true),
                 .init(id: "prompt-id", label: "Prompt id", required: true),
             ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-steer", title: "Give the coding agent's running turn an extra instruction",
+            path: ["sandbox", "steer"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "message", label: "Instruction", required: true),
+                .init(id: "conversation", label: "Conversation id (blank: the most recently active one)", option: "--conversation"),
+            ], jsonOutput: false),
+        .init(id: "sandbox-desktop", title: "Get the URL that streams a sandbox's desktop",
+            path: ["sandbox", "desktop"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+            ], jsonOutput: false),
         .init(id: "sandbox-interrupt", title: "Interrupt every conversation in a sandbox",
             path: ["sandbox", "interrupt"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),

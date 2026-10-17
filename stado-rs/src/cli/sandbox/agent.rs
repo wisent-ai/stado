@@ -15,7 +15,7 @@ use crate::providers::BoxProvider;
 use super::verbs::{failure, print, sandbox};
 use super::{
     CmdError, DownloadArgs, EventsArgs, HostArgs, ProcessArgs, PromptArgs, PromptRunId,
-    SnapshotSaveArgs, SshKeyArgs, UpdateArgs,
+    SnapshotSaveArgs, SshKeyArgs, SteerArgs, UpdateArgs,
 };
 
 /// An optional argument as the client takes it: the stated value, or no
@@ -200,6 +200,23 @@ pub(super) async fn process_stop(
 
 pub(super) async fn usage(provider: &BoxProvider, id: &str) -> Result<(), CmdError> {
     let answer = provider.client.usage(id).await.map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn steer(provider: &BoxProvider, args: &SteerArgs) -> Result<(), CmdError> {
+    if args.conversation.as_deref() == Some("") {
+        return Err(CmdError::usage("--conversation is given with no value"));
+    }
+    let answer = provider
+        .client
+        .steer(&args.id, &args.message, args.conversation.as_deref())
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn desktop(provider: &BoxProvider, id: &str) -> Result<(), CmdError> {
+    let answer = provider.client.desktop_url(id).await.map_err(failure)?;
     print(&Value::Object(answer))
 }
 

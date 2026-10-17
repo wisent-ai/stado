@@ -16,9 +16,9 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    refuses a lifetime that is not positive, writes a file with a fresh
 //    token and reads it back, runs a command that prints it, sees a failing
 //    command fail the CLI with its exit, starts a command in the background,
-//    finds it running and stops it, keeps the sandbox's usage, downloads the
-//    file and is refused a second download over it, renames the sandbox and
-//    reads the name back,
+//    finds it running and stops it, keeps the sandbox's usage, reads its
+//    desktop URL, downloads the file and is refused a second download over
+//    it, renames the sandbox and reads the name back,
 //    reads its events, gives STADO_BOAT_TEST_PORT a public URL, saves the
 //    disk as a named snapshot, finds it listed and shown, deletes it and no
 //    longer finds it listed, forks the sandbox and reads the token on the
@@ -110,6 +110,9 @@ try {
   sandbox(['process', 'stop', original.id, background]);
   report.stopped_process = sandbox(['process', 'status', original.id, background]);
   report.usage = sandbox(['usage', original.id]);
+  const desktop = sandbox(['desktop', original.id]);
+  assert.ok(desktop.desktopUrl === null || String(desktop.desktopUrl).startsWith('https://'),
+    `desktop answered a URL that is not HTTPS: ${JSON.stringify(desktop.mode)}`);
 
   const downloaded = join(output, 'downloaded.bin');
   sandbox(['download', original.id, file, '--to', downloaded]);

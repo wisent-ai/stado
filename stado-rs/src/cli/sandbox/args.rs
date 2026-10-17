@@ -149,6 +149,18 @@ pub struct PromptRunId {
     pub prompt_id: String,
 }
 
+#[derive(Args, Debug)]
+pub struct SteerArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// The extra instruction for the running turn.
+    pub message: String,
+    /// The conversation whose running turn is steered; without it Boat
+    /// steers the sandbox's most recently active conversation.
+    #[arg(long)]
+    pub conversation: Option<String>,
+}
+
 /// The order Boat lists events in; each value is the word Boat's API takes.
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum EventOrder {

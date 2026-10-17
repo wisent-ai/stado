@@ -1,5 +1,5 @@
-//! Boat command, detached command, SSH-key, interrupt, public URL and usage
-//! verbs.
+//! Boat command, detached command, SSH-key, interrupt, public URL, desktop
+//! URL and usage verbs.
 
 use serde_json::{json, Map, Value};
 
@@ -177,6 +177,20 @@ impl BoxClient {
                 None,
                 &[],
                 &["sandbox.usage"],
+            )
+            .await
+    }
+
+    /// POST /sandboxes/{id}/desktop: the URL that streams the sandbox's
+    /// desktop. It carries a secret; whoever has it sees the desktop.
+    pub async fn desktop_url(&self, box_id: &str) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "POST",
+                &format!("{}/desktop", Self::box_path(box_id)?),
+                Some(&json!({})),
+                &[],
+                &["desktop.url"],
             )
             .await
     }

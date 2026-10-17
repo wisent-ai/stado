@@ -1,4 +1,4 @@
-//! Boat prompt submission and prompt-run status payload readers.
+//! Boat prompt submission, prompt-run status and steer payload readers.
 
 use serde_json::{json, Map, Value};
 
@@ -105,5 +105,34 @@ impl BoxClient {
             done: jbool(run.get("done")),
             raw: run,
         })
+    }
+
+    /// POST /sandboxes/{id}/steer: an extra instruction for the running turn
+    /// of `conversation`, or of the sandbox's most recently active one when
+    /// none is named.
+    pub async fn steer(
+        &self,
+        box_id: &str,
+        message: &str,
+        conversation: Option<&str>,
+    ) -> Result<Map<String, Value>, BoxError> {
+        if message.is_empty() {
+            return Err(BoxError::value(
+                "a steer for a Boat sandbox needs a message",
+            ));
+        }
+        let mut body = json!({"message": message});
+        if let Some(conversation) = conversation {
+            body["conversation"] = Value::from(conversation);
+        }
+        self.transport
+            .request_json(
+                "POST",
+                &format!("{}/steer", Self::box_path(box_id)?),
+                Some(&body),
+                &[],
+                &["prompt.steered"],
+            )
+            .await
     }
 }

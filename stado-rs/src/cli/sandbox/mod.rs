@@ -60,6 +60,12 @@ pub enum SandboxCommands {
     Prompt(PromptArgs),
     /// Print a prompt run's status.
     PromptStatus(PromptRunId),
+    /// Give the running turn of a sandbox's coding agent an extra
+    /// instruction; it keeps what it was doing.
+    Steer(SteerArgs),
+    /// Print the URL that streams a sandbox's desktop; whoever has it sees
+    /// the desktop.
+    Desktop(SandboxId),
     /// Interrupt every conversation running in a sandbox.
     Interrupt(SandboxId),
     /// Print one page of a sandbox's events and the cursor of the next.
@@ -117,6 +123,8 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
         SandboxCommands::Update(args) => agent::update(&provider, &args).await,
         SandboxCommands::Prompt(args) => agent::prompt(&provider, &args).await,
         SandboxCommands::PromptStatus(run) => agent::prompt_status(&provider, &run).await,
+        SandboxCommands::Steer(args) => agent::steer(&provider, &args).await,
+        SandboxCommands::Desktop(sandbox) => agent::desktop(&provider, &sandbox.id).await,
         SandboxCommands::Interrupt(sandbox) => agent::interrupt(&provider, &sandbox.id).await,
         SandboxCommands::Events(args) => agent::events(&provider, &args).await,
         SandboxCommands::SshKey(args) => agent::ssh_key(&provider, &args).await,
