@@ -86,20 +86,12 @@ impl SnapshotSource {
                          being kept as in flight: {unreadable}"
                     ),
                 }
+                // One read: a failure is the read's answer, said whole, and
+                // the reader goes on to its copy with it.
                 let reads = async {
-                    let first = Self::fetch_authority_paths(target, ssh, command, reader).await;
-                    let first_error = match first {
-                        Ok(snapshot) => return Ok(snapshot),
-                        Err(error) => error,
-                    };
                     Self::fetch_authority_paths(target, ssh, command, reader)
                         .await
-                        .map_err(|retry_error| {
-                            CmdError::unreachable(format!(
-                                "{first_error}; second authority read on a fresh SSH session \
-                                 failed: {retry_error}"
-                            ))
-                        })
+                        .map_err(CmdError::unreachable)
                 };
                 match crate::cli::resolver::unless_held(
                     crate::cli::resolver::Route::Host(target),
