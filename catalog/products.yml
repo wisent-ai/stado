@@ -1048,6 +1048,21 @@ products:
     for_surface: cli
     alternative: onboarding reads its journey bundle from the Stado journey service only when STADO_INTEGRATION_API_URL and LAS_STADO_INTEGRATION_TOKEN are set, and otherwise uses the bundle it saved or the canonical bundle shipped with Las; federation and the register run without Stado
     alternative_source: las/src/onboarding/journey.mjs
+  - product: singularity
+    surface: cli
+    for_surface: cli
+    alternative: Las federates the singularity finance MCP surface only when its checkout, signed release and declared environment are present; otherwise las list shows it unconfigured with the refusal of the step that failed, LAS_ONLY and LAS_SKIP can leave it out, and every other surface runs
+    alternative_source: las/src/registry/surfaces.mjs
+  - product: brama
+    surface: cli
+    for_surface: desktop
+    alternative: the Las Brama window only reads the brama checkout for file and directory presence and counts (crate manifest, MCP source, gateway modules, debug binary, migrations) and runs nothing of Brama; without that checkout each check is shown unavailable with the cause the file system gave, and every other Las window runs
+    alternative_source: las/desktop/LasNativeApps/Sources/SurfaceConsole/SurfaceLoader.swift
+  - product: oko
+    surface: cli
+    for_surface: desktop
+    alternative: the Las Byk window only reads the oko checkout for file and directory presence and counts (package manifest, MCP, goal and telemetry sources, debug binary) and runs nothing of Oko; without that checkout each check is shown unavailable with the cause the file system gave, and every other Las window runs
+    alternative_source: las/desktop/LasNativeApps/Sources/SurfaceConsole/SurfaceLoader.swift
 - id: skrzynka
   name: Skrzynka
   status: active
