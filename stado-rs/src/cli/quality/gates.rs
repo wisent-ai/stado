@@ -120,7 +120,7 @@ pub(super) fn declared_gates(
                 }
             }
             return Err(CmdError::click(format!(
-                "cannot read {}: {error}; `stado quality` runs the formatting a product \
+                "cannot read {}: {error}; `stado quality` runs the quality gates a product \
                  declares, so it needs the product's own manifest",
                 manifest_path.display()
             ))
