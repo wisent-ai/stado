@@ -97,6 +97,29 @@ fn not_passed(item: &Value) -> bool {
         .is_some_and(|conclusion| conclusion != SUCCESS)
 }
 
+/// The `key` list of one forge answer about `what`, refused when the answer
+/// holds none, or holds fewer entries than the `total_count` beside it says
+/// the forge has: a list cut at the forge's page would read as all of it.
+fn listing<'a>(answer: &'a Value, key: &str, what: &str) -> Result<&'a [Value], CmdError> {
+    let items = answer[key].as_array().ok_or_else(|| {
+        CmdError::click(format!(
+            "the forge's answer for {what} holds no {key} list: {answer}"
+        ))
+        .stating(FailureCode::InfraDown)
+    })?;
+    if let Some(total) = answer["total_count"].as_u64() {
+        if total > items.len() as u64 {
+            return Err(CmdError::click(format!(
+                "the forge lists {} of the {total} {key} of {what} on its first page, so the \
+                 answer would leave the rest out",
+                items.len()
+            ))
+            .stating(FailureCode::InfraDown));
+        }
+    }
+    Ok(items)
+}
+
 /// The jobs of `run_id` that did not succeed, each with the step that
 /// failed in it.
 async fn failed_jobs(
@@ -111,26 +134,29 @@ async fn failed_jobs(
         &format!("the jobs of run {run_id}"),
     )
     .await?;
-    Ok(jobs["jobs"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|job| not_passed(job))
-        .map(|job| {
-            let failed_step = job["steps"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|step| not_passed(step))
-                .map(|step| json!({ "name": step["name"], "conclusion": step["conclusion"], "number": step["number"] }));
-            json!({
-                "name": job["name"],
-                "conclusion": job["conclusion"],
-                "url": job["html_url"],
-                "failedStep": failed_step,
-            })
-        })
-        .collect())
+    let mut failed = Vec::new();
+    for job in listing(&jobs, "jobs", &format!("run {run_id}"))? {
+        if !not_passed(job) {
+            continue;
+        }
+        let steps = job["steps"].as_array().ok_or_else(|| {
+            CmdError::click(format!(
+                "the forge's job {} of run {run_id} holds no steps list",
+                job["name"]
+            ))
+            .stating(FailureCode::InfraDown)
+        })?;
+        let failed_step = steps.iter().find(|step| not_passed(step)).map(|step| {
+            json!({ "name": step["name"], "conclusion": step["conclusion"], "number": step["number"] })
+        });
+        failed.push(json!({
+            "name": job["name"],
+            "conclusion": job["conclusion"],
+            "url": job["html_url"],
+            "failedStep": failed_step,
+        }));
+    }
+    Ok(failed)
 }
 
 /// The newest run of one workflow, of `revision` when given: the forge
@@ -211,13 +237,9 @@ pub async fn status_document(product: &str, revision: Option<&str>) -> Result<Va
         &format!("the workflows of {repository}"),
     )
     .await?;
-    let workflows: Vec<&Value> = listed["workflows"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .collect();
+    let workflows = listing(&listed, "workflows", &repository)?;
     let mut rows = Vec::with_capacity(workflows.len());
-    for workflow in &workflows {
+    for workflow in workflows {
         rows.push(newest_run(&request, &repository, workflow, revision).await?);
     }
     let finding = workflows
