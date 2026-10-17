@@ -78,8 +78,9 @@ const SUBMODULE_OBJECT: &str = "commit";
 /// Whether the tracked file at `path` is something the product never runs:
 /// its tests, prose, its documentation, the forge's automation, git's
 /// metadata, an example to copy, a package manager's lockfile, its release
-/// tooling, or one of `manifests`, the release manifests the catalog's
-/// installations of this repository declare.
+/// tooling, or one of `manifests`, the files the caller names as not run (the
+/// release manifests the catalog's installations of this repository declare,
+/// and the catalog itself when it lives in this checkout).
 fn never_run(path: &str, manifests: &[String]) -> bool {
     let file = Path::new(path);
     let named = |names: &[&str]| {
@@ -140,8 +141,8 @@ fn tracked(checkout: &Path, manifests: &[String]) -> Result<Vec<String>> {
 }
 
 /// Every line of `repository`'s checkout that reaches one of `others`, by the
-/// other product's id. `manifests` are the release manifests the catalog's
-/// installations of this repository declare, which are not product code. A
+/// other product's id. `manifests` are the files of this checkout the caller
+/// names as not product code: its release manifests and the catalog. A
 /// file that is not UTF-8 text holds no source line; a tracked file deleted
 /// from the working tree is no longer the product's code; any other file that
 /// cannot be read is refused by name.

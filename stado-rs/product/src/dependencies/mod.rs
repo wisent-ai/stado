@@ -81,17 +81,30 @@ fn repositories(product: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-/// The release manifests the product's installations declare for
-/// `repository`: how the product is built, not what it runs.
-fn manifests(product: &Value, repository: &str) -> Vec<String> {
-    product["installations"]
+/// The files of `repository`'s checkout that are not code the product runs:
+/// the release manifests the product's installations declare for it (how
+/// the product is built), and the catalog this command judges against when
+/// it lives in that checkout (it declares every product's names, programs
+/// and environment; naming them there is the declaration being read, not a
+/// call any product makes).
+fn not_run(
+    runtime: &Runtime,
+    product: &Value,
+    repository: &str,
+    checkout: &std::path::Path,
+) -> Vec<String> {
+    let mut files: Vec<String> = product["installations"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|installation| installation["repository"].as_str() == Some(repository))
         .filter_map(|installation| installation["manifest"].as_str())
         .map(str::to_owned)
-        .collect()
+        .collect();
+    if let Ok(inside) = runtime.catalog.strip_prefix(checkout) {
+        files.extend(inside.to_str().map(str::to_owned));
+    }
+    files
 }
 
 /// How many of `sites` reach through each channel.
@@ -119,7 +132,7 @@ fn examine(runtime: &Runtime, product: &Value, everyone: &[Names]) -> Result<Rep
         let checkout = runtime.workspace.join(name);
         let present = crate::common::files::present(&checkout.join(".git"))?;
         if present {
-            let release = manifests(product, &repository);
+            let release = not_run(runtime, product, &repository, &checkout);
             for (other, found) in scan::sites(&repository, &checkout, &release, &others)? {
                 sites.entry(other).or_default().extend(found);
             }
@@ -187,6 +200,8 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         reports.push(examine(runtime, product, &everyone)?);
     }
     report::print(&reports, arguments.get_flag("json"))?;
-    let succeeded = reports.iter().all(|report| report.independent);
-    Ok(i32::from(!succeeded))
+    Ok(match reports.iter().all(|report| report.independent) {
+        true => libc::EXIT_SUCCESS,
+        false => libc::EXIT_FAILURE,
+    })
 }

@@ -9,14 +9,27 @@ import { journey } from "./fixture.mjs";
 // source-missing and independent, plus an absent checkout and an unknown
 // product. A comment line, a file under tests/, the forge's automation, git's
 // metadata, an example file, a lockfile, a manifest's test target, release
-// tooling and the release manifest an installation declares that name the
+// tooling, the release manifest an installation declares and the catalog
+// itself, kept in the product's own checkout as Stado keeps it, that name the
 // other product are not dependencies. Required: STADO_BIN, the Stado
 // executable under test.
 await journey(
 	"independence",
 	"Real git checkouts of an isolated workspace read by the Stado under test against a catalog file, for every dependency standing",
 	import.meta.url,
-	({ SUCCESS, checkout, catalog, dependencies, reached, invoke }) => {
+	({
+		SUCCESS,
+		workspace,
+		run,
+		success,
+		checkout,
+		catalog,
+		catalogIn,
+		commit,
+		dependencies,
+		reached,
+		invoke,
+	}) => {
 		checkout("alpha", {
 			"src/main.rs":
 				'fn main() {\n    let _ = std::process::Command::new("beta").status();\n}\n',
@@ -151,6 +164,34 @@ await journey(
 		assert.equal(
 			reached(found, "beta").alternative_source,
 			"alpha/src/standalone.rs",
+		);
+
+		// The catalog the command judges against, kept in alpha's own
+		// checkout and naming gamma's environment there, is the declaration
+		// being read, not a call alpha makes.
+		const alphaCheckout = `${workspace}/alpha`;
+		catalogIn("alpha", "catalog/products.yml");
+		catalog(
+			[
+				{
+					product: "beta",
+					surface: "cli",
+					alternative: "alpha runs its own copy",
+					alternative_source: "alpha/src/standalone.rs",
+				},
+			],
+			{ authority: { owner: "stado", rule: "GAMMA_URL is where gamma answers" } },
+		);
+		success(run("git", ["-C", alphaCheckout, "add", "catalog/products.yml"]));
+		commit(alphaCheckout, "Keep the catalog in alpha");
+		found = dependencies("alpha");
+		assert.equal(found.answer.status, SUCCESS, found.answer.stderr);
+		assert.equal(
+			found.report.dependencies.some(
+				(dependency) => dependency.product === "gamma",
+			),
+			false,
+			"the catalog in the product's own checkout was read as a call",
 		);
 
 		found = dependencies("gamma");

@@ -36,7 +36,7 @@ export async function journey(name, scope, testFile, body) {
 	);
 	const home = join(output, "home");
 	const workspace = join(home, "workspace");
-	const catalogPath = join(output, "products.yml");
+	let catalogPath = join(output, "products.yml");
 	const isolated = { ...process.env, HOME: home, WISENT_WORKSPACE: workspace };
 	const report = {
 		started_at: new Date().toISOString(),
@@ -97,13 +97,16 @@ export async function journey(name, scope, testFile, body) {
 			manifest: ".wisent-release.json",
 		},
 	];
-	function catalog(alphaDependencies) {
-		// JSON is YAML, so the catalog file is written as JSON.
+	function catalog(alphaDependencies, declares = {}) {
+		// JSON is YAML, so the catalog file is written as JSON. `declares`
+		// adds catalog-level declarations, such as the environment the real
+		// catalog names for each product.
 		writeFileSync(
 			catalogPath,
 			JSON.stringify({
 				schema_version: schema,
 				authority: { owner: "stado", rule: "test catalog" },
+				...declares,
 				products: [
 					record("alpha", alphaDependencies, alphaInstallations),
 					record("beta"),
@@ -112,20 +115,32 @@ export async function journey(name, scope, testFile, body) {
 			}),
 		);
 	}
+	// Moves the catalog into the checkout `name` at `file`, as the real
+	// catalog lives in Stado's own repository; later invocations read it there.
+	function catalogIn(name, file) {
+		catalogPath = join(workspace, name, file);
+		mkdirSync(dirname(catalogPath), { recursive: true });
+	}
 	function commit(path, message) {
+		// The operator's global Git configuration, its hooks path included,
+		// never judges the fixture's own history.
 		success(
-			run("git", [
-				"-C",
-				path,
-				"-c",
-				"user.name=Dependencies test",
-				"-c",
-				"user.email=deps@example.invalid",
-				"commit",
-				"--quiet",
-				"-m",
-				message,
-			]),
+			run(
+				"git",
+				[
+					"-C",
+					path,
+					"-c",
+					"user.name=Dependencies test",
+					"-c",
+					"user.email=deps@example.invalid",
+					"commit",
+					"--quiet",
+					"-m",
+					message,
+				],
+				{ ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" },
+			),
 		);
 	}
 	function checkout(name, files) {
@@ -183,6 +198,7 @@ export async function journey(name, scope, testFile, body) {
 			run,
 			success,
 			catalog,
+			catalogIn,
 			commit,
 			checkout,
 			invoke,
