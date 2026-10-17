@@ -369,6 +369,11 @@ products:
     for_surface: service
     alternative: 'WELES_STANDALONE=1 runs Weles on a machine without Stado: the host is the only Weles host and its placement is not checked, and a host with no Stado binary and no WELES_STANDALONE is refused naming it. Without the Stado model router the agent model is WELES_MODEL at WELES_MODEL_ENDPOINT, any OpenAI-compatible provider. Trajectories that act through wisent-integrations refuse naming STADO_INTEGRATION_API_URL or WELES_STADO_INTEGRATION_TOKEN when unset, and the hosted public task API keeps task artifacts under stado://weles/ through the Stado object API'
     alternative_source: weles/src/session/placement/service-placement.ts
+  - product: spis
+    surface: cli
+    for_surface: service
+    alternative: 'Weles never calls Spis: SPIS_BROWSER_EVIDENCE_POLICY is a browser-evidence policy Weles applies only to a run whose WELES_BROWSER_EVIDENCE_POLICY names its version, as a Spis caller sets it; every other run is driven without it'
+    alternative_source: weles/src/agent/browser-evidence-policy/withheld-ledger.ts
 - id: skarbiec
   name: Skarbiec
   status: active
@@ -846,6 +851,10 @@ products:
     surface: cli
     for_surface: cli
     bound_because: 'Probierz reaches Stado for work on the fleet and on Stado itself: stado:<target> runs submitted, collected and provisioned through Stado (evidence remote and the MCP Stado job tools), fleet evidence retention and the fleet status overview in Stado object store, the host inventory read from Stado registry, the benchmark commands that keep rivals and benchmarks in Stado product catalog, app hooks that reach integrations through STADO_INTEGRATION_API_URL, and the plans that qualify Stado; the authoring commands name STADO_MODEL_ROUTER_URL, which may be any model service as the Brama declaration says'
+  - product: echo
+    surface: web
+    for_surface: cli
+    bound_because: 'only apps/echo-web and apps/echo-web-gui name it: they are the test plans Echo is qualified with, so they exist for Echo, and every other plan runs without it'
 - id: tama
   name: Tama
   status: active
