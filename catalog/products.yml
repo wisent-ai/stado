@@ -732,6 +732,16 @@ products:
     for_surface: web
     alternative: ECHO_OBJECT_DIR keeps Echo objects in a local directory instead of the Stado object API; without STADO_INTEGRATION_API_URL and ECHO_STADO_INTEGRATION_TOKEN the provider integrations (competitor search, mobile analytics credentials, SMS verification) report themselves unconfigured. LoRA training and SmoothMix video run only as Stado machine jobs, and model calls go to the router STADO_MODEL_ROUTER_URL names with ECHO_STADO_MODEL_ROUTER_TOKEN
     alternative_source: echo-web/src/lib/storage/local-objects.ts
+  - product: trends
+    surface: cli
+    for_surface: web
+    alternative: 'Echo starts no Trends program: /trends is the route of Echo''s own trends pages, which the sidebar, the briefs page and the trend pages link to, and they read Echo''s own data'
+    alternative_source: echo-web/src/app/(dashboard)/(tools)/(trends)/trends/page.tsx
+  - product: competitors
+    surface: cli
+    for_surface: cli
+    alternative: 'Echo starts no Competitors program: /api/geo/competitors is Echo''s own route for the GEO competitors a user adds to a product, which echo-cli geo competitors and Echo Desktop call, and /competitors is Echo''s own trends-and-competition page'
+    alternative_source: echo/cli/geo/insight.mjs
 - id: probierz
   name: Probierz
   status: active
