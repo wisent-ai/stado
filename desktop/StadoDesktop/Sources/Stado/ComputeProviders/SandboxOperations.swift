@@ -147,5 +147,23 @@ enum NativeSandboxOperations {
             path: ["sandbox", "snapshot", "delete"], hostPlacement: .none, fields: [
                 .init(id: "name", label: "Snapshot name", required: true),
             ], jsonOutput: false),
+        .init(id: "sandbox-snapshot-history", title: "List every snapshot of a sandbox",
+            path: ["sandbox", "snapshot", "history"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-snapshot-latest", title: "Show the snapshot resume and fork start from",
+            path: ["sandbox", "snapshot", "latest"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-snapshot-tree", title: "List the files a snapshot holds",
+            path: ["sandbox", "snapshot", "tree"], hostPlacement: .none, fields: [
+                .init(id: "snapshot", label: "Snapshot id", required: true),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-snapshot-get", title: "Take a file or folder out of a snapshot",
+            path: ["sandbox", "snapshot", "get"], hostPlacement: .none, fields: [
+                .init(id: "snapshot", label: "Snapshot id", required: true),
+                .init(id: "path", label: "Path in the snapshot", required: true),
+                .init(id: "to", label: "New file on the machine running Stado", option: "--to", required: true),
+            ], jsonOutput: false),
     ]
 }

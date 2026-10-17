@@ -172,15 +172,78 @@ impl BoxClient {
             )
             .await
     }
+
+    /// GET /sandboxes/{id}/snapshots: every snapshot of a sandbox's disk.
+    pub async fn sandbox_snapshots(&self, box_id: &str) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "GET",
+                &format!("{}/snapshots", Self::box_path(box_id)?),
+                None,
+                &[],
+                &["snapshot.list"],
+            )
+            .await
+    }
+
+    /// GET /sandboxes/{id}/snapshots/latest: the snapshot resume and fork
+    /// start from, null when the sandbox has none.
+    pub async fn latest_snapshot(&self, box_id: &str) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "GET",
+                &format!("{}/snapshots/latest", Self::box_path(box_id)?),
+                None,
+                &[],
+                &["snapshot.latest"],
+            )
+            .await
+    }
+
+    /// GET /snapshots/{snapshot}/tree: the files and folders a snapshot
+    /// holds, with their sizes, as a flat list.
+    pub async fn snapshot_tree(&self, snapshot: &str) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "GET",
+                &format!("{}/tree", snapshot_path(snapshot)?),
+                None,
+                &[],
+                &["snapshot.tree"],
+            )
+            .await
+    }
+
+    /// GET /snapshots/{snapshot}/files: a file's bytes, or a folder as a
+    /// tar, from a snapshot; the sandbox need not run.
+    pub async fn snapshot_file(&self, snapshot: &str, path: &str) -> Result<Vec<u8>, BoxError> {
+        self.transport
+            .request_binary(
+                "GET",
+                &format!("{}/files", snapshot_path(snapshot)?),
+                &[("path", path.to_string())],
+            )
+            .await
+    }
 }
 
-/// The path of one named snapshot, its name encoded as one path segment so
-/// a name holding a slash or a query mark cannot address another resource.
-/// Which names Boat accepts is Boat's to say; an empty one names none.
-fn named_snapshot_path(name: &str) -> Result<String, BoxError> {
-    if name.is_empty() {
-        return Err(BoxError::value("a named snapshot needs a name"));
+/// One path segment for `value` under `collection`, encoded so a slash or a
+/// query mark in it cannot address another resource; an empty value names
+/// nothing and is refused naming `what`.
+fn segment_path(collection: &str, value: &str, what: &str) -> Result<String, BoxError> {
+    if value.is_empty() {
+        return Err(BoxError::value(format!("{what} is required")));
     }
-    let segment: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect();
-    Ok(format!("/named-snapshots/{segment}"))
+    let segment: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
+    Ok(format!("{collection}/{segment}"))
+}
+
+/// The path of one named snapshot; which names Boat accepts is Boat's to say.
+fn named_snapshot_path(name: &str) -> Result<String, BoxError> {
+    segment_path("/named-snapshots", name, "a named snapshot's name")
+}
+
+/// The path of one snapshot by the id Boat answered for it.
+fn snapshot_path(snapshot: &str) -> Result<String, BoxError> {
+    segment_path("/snapshots", snapshot, "a snapshot id")
 }

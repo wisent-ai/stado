@@ -4,14 +4,13 @@
 //! give a port a public URL, and keep its disk as a named snapshot. Each is
 //! one Boat Public API v1 call through the provider's client.
 
-use std::io::Write;
-
 use clap::ValueEnum;
 use serde_json::{json, Value};
 
 use crate::providers::r#box::{BoxPromptRun, TtlUpdate};
 use crate::providers::BoxProvider;
 
+use super::snapshots::write_new;
 use super::verbs::{failure, print, sandbox};
 use super::{
     CmdError, DownloadArgs, EventsArgs, HostArgs, ProcessArgs, PromptArgs, PromptRunId,
@@ -140,23 +139,11 @@ pub(super) async fn download(provider: &BoxProvider, args: &DownloadArgs) -> Res
         .download_artifact(&args.id, &args.path)
         .await
         .map_err(failure)?;
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&args.to)
-        .and_then(|mut file| {
-            file.write_all(&bytes)?;
-            file.sync_all()
-        });
-    written.map_err(|error| {
-        CmdError::click(format!(
-            "cannot write {} of sandbox {} to {}: {error}",
-            args.path,
-            args.id,
-            args.to.display()
-        ))
-        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })?;
+    write_new(
+        &args.to,
+        &bytes,
+        &format!("{} of sandbox {}", args.path, args.id),
+    )?;
     print(&json!({
         "sandbox": args.id,
         "path": args.path,

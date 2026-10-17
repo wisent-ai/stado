@@ -95,6 +95,24 @@ pub struct SnapshotName {
 }
 
 #[derive(Args, Debug)]
+pub struct SnapshotId {
+    /// The snapshot id `snapshot history` or `snapshot latest` printed.
+    pub snapshot: String,
+}
+
+#[derive(Args, Debug)]
+pub struct SnapshotGetArgs {
+    /// The snapshot id `snapshot history` or `snapshot latest` printed.
+    pub snapshot: String,
+    /// Path of the file or folder in the snapshot; a folder comes as a tar.
+    pub path: String,
+    /// The local file it is written to; one that exists is refused, never
+    /// overwritten.
+    #[arg(long)]
+    pub to: std::path::PathBuf,
+}
+
+#[derive(Args, Debug)]
 pub struct HostArgs {
     /// The sandbox id Boat answered at create, fork or list.
     pub id: String,

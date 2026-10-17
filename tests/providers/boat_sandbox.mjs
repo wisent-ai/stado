@@ -22,8 +22,10 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    reads its events, gives STADO_BOAT_TEST_PORT a public URL, saves the
 //    disk as a named snapshot, finds it listed and shown, deletes it and no
 //    longer finds it listed, forks the sandbox and reads the token on the
-//    fork, deletes the fork, stops the original and deletes it. Prompting the
-//    coding agent needs an agent provider's account and is not run here.
+//    fork, deletes the fork, stops the original, finds the file in its latest
+//    snapshot's tree and takes it back out of that snapshot with the token,
+//    and deletes it. Prompting the coding agent (and steering it) needs an
+//    agent provider's account and is not run here.
 //    The last `show` of each sandbox is kept as the observed final state.
 // STADO_BIN selects the Stado under test. Without STADO_BIN,
 // STADO_BOAT_TEST_TTL_SECONDS or STADO_BOAT_TEST_PORT the journey is blocked,
@@ -150,6 +152,14 @@ try {
 
   sandbox(['stop', original.id]);
   report.stopped = sandbox(['show', original.id]);
+  report.snapshots = sandbox(['snapshot', 'history', original.id]);
+  const latest = sandbox(['snapshot', 'latest', original.id]).snapshot;
+  assert.ok(latest?.id, `the stopped sandbox has no latest snapshot: ${JSON.stringify(latest)}`);
+  const tree = sandbox(['snapshot', 'tree', latest.id]);
+  assert.ok(tree.entries.some(entry => entry.path.endsWith(file)), `snapshot ${latest.id} does not list ${file}`);
+  const restored = join(output, 'restored.bin');
+  sandbox(['snapshot', 'get', latest.id, file, '--to', restored]);
+  assert.ok(readFileSync(restored).includes(token), `the file taken out of snapshot ${latest.id} lost the token`);
   assert.deepEqual(sandbox(['delete', original.id]), { deleted: original.id });
   report.final = {
     original: run(binary, ['sandbox', 'show', original.id]),

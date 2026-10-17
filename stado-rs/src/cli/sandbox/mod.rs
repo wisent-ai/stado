@@ -15,6 +15,7 @@
 
 mod agent;
 mod args;
+mod snapshots;
 mod verbs;
 
 use clap::Subcommand;
@@ -92,6 +93,15 @@ pub enum SnapshotCommands {
     Show(SnapshotName),
     /// Delete a named snapshot for good.
     Delete(SnapshotName),
+    /// List every snapshot of one sandbox's disk.
+    History(SandboxId),
+    /// Show the snapshot a sandbox's resume and fork start from.
+    Latest(SandboxId),
+    /// List the files and folders a snapshot holds, with their sizes.
+    Tree(SnapshotId),
+    /// Write a file or folder (as a tar) of a snapshot into a new local
+    /// file; the sandbox need not run.
+    Get(SnapshotGetArgs),
 }
 
 #[derive(Subcommand)]
@@ -135,6 +145,12 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
             SnapshotCommands::List => agent::snapshot_list(&provider).await,
             SnapshotCommands::Show(named) => agent::snapshot_show(&provider, &named.name).await,
             SnapshotCommands::Delete(named) => agent::snapshot_delete(&provider, &named.name).await,
+            SnapshotCommands::History(sandbox) => snapshots::history(&provider, &sandbox.id).await,
+            SnapshotCommands::Latest(sandbox) => snapshots::latest(&provider, &sandbox.id).await,
+            SnapshotCommands::Tree(snapshot) => {
+                snapshots::tree(&provider, &snapshot.snapshot).await
+            }
+            SnapshotCommands::Get(args) => snapshots::get(&provider, &args).await,
         },
     }
 }
