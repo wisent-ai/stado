@@ -40,6 +40,14 @@ pub enum TtlUpdate {
     Set(i64),
 }
 
+/// Which signed URL a sandbox serves for one of its files: one a GET
+/// downloads the file from, or one a PUT of the bytes writes it through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileUrl {
+    Download,
+    Upload,
+}
+
 impl BoxClient {
     /// Build a client with a validated transport.
     pub fn new(api_key: &str, base_url: &str) -> Result<Self, BoxError> {

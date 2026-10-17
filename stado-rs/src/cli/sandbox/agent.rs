@@ -1,13 +1,14 @@
 //! The `stado sandbox` verbs an agent uses beyond a sandbox's life: rename
 //! it or change when it stops, hand its coding agent a prompt and follow the
-//! run, interrupt it, read its events, allow an SSH key, download a file,
-//! give a port a public URL, and keep its disk as a named snapshot. Each is
-//! one Boat Public API v1 call through the provider's client.
+//! run, interrupt it, read its events, allow an SSH key, download a file or
+//! sign a URL for moving one, give a port a public URL, and keep its disk as
+//! a named snapshot. Each is one Boat Public API v1 call through the
+//! provider's client.
 
-use clap::ValueEnum;
+use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
 
-use crate::providers::r#box::{BoxPromptRun, TtlUpdate};
+use crate::providers::r#box::{BoxPromptRun, FileUrl, TtlUpdate};
 use crate::providers::BoxProvider;
 
 use super::snapshots::write_new;
@@ -150,6 +151,46 @@ pub(super) async fn download(provider: &BoxProvider, args: &DownloadArgs) -> Res
         "to": args.to.display().to_string(),
         "bytes": bytes.len(),
     }))
+}
+
+/// What a signed file URL does: a GET of it downloads the file, a PUT of
+/// the bytes to it writes the file.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum UrlMethod {
+    Download,
+    Upload,
+}
+
+#[derive(Args, Debug)]
+pub struct FileUrlArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// The file's path, absolute or under the sandbox's work directory.
+    pub path: String,
+    /// Whether the URL downloads the file or uploads it.
+    #[arg(long, value_enum)]
+    pub method: UrlMethod,
+    /// How many seconds the URL stays valid; without it Boat's own lifetime.
+    #[arg(long)]
+    pub ttl_seconds: Option<i64>,
+}
+
+pub(super) async fn file_url(provider: &BoxProvider, args: &FileUrlArgs) -> Result<(), CmdError> {
+    if let Some(refused) = args.ttl_seconds.filter(|seconds| !seconds.is_positive()) {
+        return Err(CmdError::usage(format!(
+            "--ttl-seconds {refused} is not a positive number of seconds a URL can stay valid"
+        )));
+    }
+    let operation = match args.method {
+        UrlMethod::Download => FileUrl::Download,
+        UrlMethod::Upload => FileUrl::Upload,
+    };
+    let answer = provider
+        .client
+        .file_url(&args.id, &args.path, args.ttl_seconds, operation)
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
 }
 
 pub(super) async fn host(provider: &BoxProvider, args: &HostArgs) -> Result<(), CmdError> {

@@ -20,7 +20,7 @@ pub mod types;
 /// sibling resolve against.
 pub use adapter::{BoxProvider, ReleaseMode};
 pub use client::BoxClient;
-pub use client::TtlUpdate;
+pub use client::{FileUrl, TtlUpdate};
 pub use http::BoxHttpTransport;
 pub use types::{
     BoxApiError, BoxCommandResult, BoxError, BoxEventPage, BoxInfo, BoxLimits, BoxPromptRun,

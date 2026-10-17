@@ -15,7 +15,10 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    lifetime of the sandboxes this journey creates. It creates a sandbox,
 //    refuses a lifetime that is not positive, writes a file with a fresh
 //    token and reads it back, is refused a recover of the sandbox that just
-//    answered (sandbox_is_reachable), runs a command that prints it, finds
+//    answered (sandbox_is_reachable), puts the token into a second file
+//    through a signed upload URL and gets it back through a signed download
+//    URL (a lifetime that is not positive is refused), runs a command that
+//    prints it, finds
 //    that command in the sandbox's history and the token in its stored
 //    output (an empty --query is refused), reads its processes and
 //    conversations, sees a failing command fail the CLI with its exit,
@@ -106,6 +109,23 @@ try {
   // A sandbox that just answered a read is reachable, so Boat refuses to
   // power-cycle it and the CLI keeps Boat's code.
   refused(run(binary, ['sandbox', 'recover', original.id]), 'sandbox_is_reachable');
+
+  // A signed upload URL takes the bytes with a plain PUT and a signed
+  // download URL gives them back with a plain GET, neither carrying the key;
+  // a lifetime that is not positive is refused before any request.
+  const carried = `stado-sandbox-url-${token}.txt`;
+  const upload = sandbox(['file-url', original.id, carried, '--method', 'upload']);
+  assert.equal(upload.method, 'PUT', `the upload URL is not a PUT: ${JSON.stringify(upload)}`);
+  const put = await fetch(upload.url, { method: 'PUT', body: token });
+  report.upload_status = put.status;
+  assert.ok(put.ok, `the PUT to the signed upload URL answered ${put.status}`);
+  const download = sandbox(['file-url', original.id, carried, '--method', 'download']);
+  assert.equal(download.method, 'GET', `the download URL is not a GET: ${JSON.stringify(download)}`);
+  const got = await fetch(download.url);
+  report.download_status = got.status;
+  assert.equal(await got.text(), token, 'the signed download URL did not give back the uploaded bytes');
+  refused(run(binary, ['sandbox', 'file-url', original.id, carried, '--method', 'download', `--ttl-seconds=-${lifetime}`]),
+    'is not a positive number of seconds a URL can stay valid');
 
   const printed = sandbox(['exec', original.id, `cat ${file}`]);
   assert.equal(printed.success, true, `cat did not succeed: ${JSON.stringify(printed)}`);

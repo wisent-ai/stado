@@ -25,6 +25,7 @@ mod verbs;
 
 use clap::Subcommand;
 
+pub use agent::FileUrlArgs;
 pub use args::*;
 pub use history::{CommandRef, HistoryArgs, LogsArgs};
 
@@ -87,6 +88,10 @@ pub enum SandboxCommands {
     SshKey(SshKeyArgs),
     /// Download a file or folder from a sandbox into a new local file.
     Download(DownloadArgs),
+    /// Print a short-lived URL the sandbox serves for one file: a GET of it
+    /// downloads the file, a PUT of the bytes writes it, with no size limit
+    /// and no key. The URL is a secret until it expires.
+    FileUrl(FileUrlArgs),
     /// Give a port inside a sandbox a stable public HTTPS URL.
     Host(HostArgs),
     /// Save, list, show and delete named snapshots: a sandbox's disk kept
@@ -180,6 +185,7 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
         SandboxCommands::Command(args) => history::command(&provider, &args).await,
         SandboxCommands::Logs(args) => history::logs(&provider, &args).await,
         SandboxCommands::Processes(sandbox) => history::processes(&provider, &sandbox.id).await,
+        SandboxCommands::FileUrl(args) => agent::file_url(&provider, &args).await,
         SandboxCommands::Read(args) => verbs::read(&provider, &args).await,
         SandboxCommands::Write(args) => verbs::write(&provider, &args).await,
         SandboxCommands::Fork(args) => verbs::fork(&provider, &args).await,

@@ -1,10 +1,10 @@
 //! Boat command, detached command, SSH-key, interrupt, public URL, desktop
-//! URL, sharing and usage verbs.
+//! URL, signed file URL, sharing and usage verbs.
 
 use serde_json::{json, Map, Value};
 
 use super::super::types::{jbool, jstr, parse_sandbox_envelope, BoxCommandResult, BoxError};
-use super::BoxClient;
+use super::{BoxClient, FileUrl};
 
 impl BoxClient {
     /// POST /sandboxes/{id}/commands. The commands Stado sends return at
@@ -191,6 +191,40 @@ impl BoxClient {
                 Some(&json!({})),
                 &[],
                 &["desktop.url"],
+            )
+            .await
+    }
+
+    /// POST /sandboxes/{id}/files/download-url or upload-url: a URL the
+    /// sandbox serves itself for the file at `path`, which a plain GET
+    /// downloads whole or a plain PUT of the bytes writes, with no size limit
+    /// and no key. `ttl_seconds` of `None` leaves its lifetime to Boat. The
+    /// URL is a secret until it expires.
+    pub async fn file_url(
+        &self,
+        box_id: &str,
+        path: &str,
+        ttl_seconds: Option<i64>,
+        operation: FileUrl,
+    ) -> Result<Map<String, Value>, BoxError> {
+        if path.is_empty() {
+            return Err(BoxError::value("a sandbox path is required for a file URL"));
+        }
+        let mut body = json!({"path": path});
+        if let Some(ttl) = ttl_seconds {
+            body["ttlSeconds"] = Value::from(ttl);
+        }
+        let (segment, answer) = match operation {
+            FileUrl::Download => ("download-url", "file.download_url"),
+            FileUrl::Upload => ("upload-url", "file.upload_url"),
+        };
+        self.transport
+            .request_json(
+                "POST",
+                &format!("{}/files/{segment}", Self::box_path(box_id)?),
+                Some(&body),
+                &[],
+                &[answer],
             )
             .await
     }

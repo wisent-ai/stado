@@ -164,6 +164,13 @@ enum NativeSandboxOperations {
                 .init(id: "path", label: "Path in the sandbox", required: true),
                 .init(id: "to", label: "New file on the machine running Stado", option: "--to", required: true),
             ], jsonOutput: false),
+        .init(id: "sandbox-file-url", title: "Sign a URL that downloads or uploads one sandbox file",
+            path: ["sandbox", "file-url"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "path", label: "Path in the sandbox", required: true),
+                .init(id: "method", label: "The URL", option: "--method", required: true, choices: ["download", "upload"], initial: "download"),
+                .init(id: "ttl", label: "Seconds the URL stays valid (blank: Boat's own lifetime)", option: "--ttl-seconds"),
+            ], jsonOutput: false),
         .init(id: "sandbox-host", title: "Give a port in a sandbox a public HTTPS URL",
             path: ["sandbox", "host"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
