@@ -374,6 +374,10 @@ products:
     for_surface: service
     alternative: 'Weles never calls Spis: SPIS_BROWSER_EVIDENCE_POLICY is a browser-evidence policy Weles applies only to a run whose WELES_BROWSER_EVIDENCE_POLICY names its version, as a Spis caller sets it; every other run is driven without it'
     alternative_source: weles/src/agent/browser-evidence-policy/withheld-ledger.ts
+  - product: jeden
+    surface: cli
+    for_surface: service
+    bound_because: 'Weles asks every model question by running the jeden program (callJeden): the agent loop and its observation step, vision escalation and recorded vision, capture diagnosis, the trajectory writer and the trajectories that ask a model; Jeden then reaches Brama or the provider WELES_MODEL_ENDPOINT names, and no model path without Jeden exists'
 - id: skarbiec
   name: Skarbiec
   status: active
