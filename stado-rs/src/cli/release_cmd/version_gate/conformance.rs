@@ -59,17 +59,24 @@ struct Fixtures {
     refuse: Vec<Value>,
 }
 
-/// The fixtures between the first pair of ``` fences, or the whole text when
-/// it is already JSON.
+/// The fixtures document: the whole text when it is JSON, otherwise the
+/// first fenced block below its fence line.
 fn cases(text: &str) -> Result<Fixtures, String> {
-    if let Ok(fixtures) = serde_json::from_str(text) {
-        return Ok(fixtures);
+    // A text that is JSON is the document itself, and what it lacks is said;
+    // a text that is not JSON carries the document in a fence.
+    if let Ok(document) = serde_json::from_str::<Value>(text) {
+        return serde_json::from_value(document)
+            .map_err(|error| format!("the fixtures are not valid: {error}"));
     }
-    let mut blocks = text.split("```");
-    let block = blocks
-        .nth(1)
-        .ok_or("the fixtures file has no fenced block")?;
-    let body = block.split_once('\n').map_or(block, |(_, rest)| rest);
+    let (_, opened) = text
+        .split_once("```")
+        .ok_or("the fixtures file is not JSON and has no fenced block")?;
+    let (block, _) = opened
+        .split_once("```")
+        .ok_or("the fixtures file's fenced block is never closed")?;
+    let (_, body) = block
+        .split_once('\n')
+        .ok_or("the fixtures file's fenced block holds nothing below its fence line")?;
     serde_json::from_str(body)
         .map_err(|error| format!("the fenced fixtures are not valid: {error}"))
 }
