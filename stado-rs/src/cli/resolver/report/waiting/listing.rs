@@ -15,11 +15,14 @@ use super::{age_seconds, published, Phase, WaitingOpen};
 /// once while that client still held an accepted connection with nothing on
 /// it.
 pub(super) fn unanswered(open: &WaitingOpen, waited: i64) -> String {
-    let holder = match open.client.rsplit_once(':') {
-        Some((_, port)) => format!(
-            " held by the client at {}: `lsof -nP -i :{port}` names the process still holding \
-             it",
-            open.client
+    let holder = match open
+        .client
+        .as_deref()
+        .and_then(|client| client.rsplit_once(':').map(|(_, port)| (client, port)))
+    {
+        Some((client, port)) => format!(
+            " held by the client at {client}: `lsof -nP -i :{port}` names the process still \
+             holding it"
         ),
         None => String::new(),
     };
@@ -117,4 +120,20 @@ pub(in crate::cli::resolver::report) fn report(
         });
     }
     (listed, blockers)
+}
+
+/// The waits this host's resolver holds to `service`, each as JSON with
+/// how long it has waited, for a recovery record that names the requests
+/// the service held; a list that cannot be read answers its own failure.
+pub(crate) fn held_to_service(service: &str) -> Result<Vec<Value>, String> {
+    Ok(published()?
+        .into_iter()
+        .filter(|open| open.service == service)
+        .map(|open| {
+            let waited = age_seconds(&open.since);
+            let mut row = json!(open);
+            row["waited_seconds"] = json!(waited);
+            row
+        })
+        .collect())
 }

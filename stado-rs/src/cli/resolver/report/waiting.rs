@@ -24,6 +24,7 @@ mod listing;
 pub(in crate::cli::resolver) mod session;
 
 pub(crate) use host::held_at;
+pub(crate) use listing::held_to_service;
 pub(super) use listing::report;
 use listing::unanswered;
 
@@ -32,7 +33,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 use super::probe::age_seconds;
 use super::published::{now_iso, state_path};
@@ -77,10 +77,10 @@ pub(crate) struct WaitingOpen {
     pub(crate) phase: Phase,
     /// The loopback address the client connected from: the one fact that
     /// ties the held connection to the process holding it (`lsof -i
-    /// :<port>` names it), so a hook that ended hours ago is told from one
-    /// still waiting. Empty in a list an older resolver published.
-    #[serde(default)]
-    pub(crate) client: String,
+    /// :<port>` names it). Absent when the accepted socket could not name
+    /// its peer, and in a list a resolver published before it recorded one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) client: Option<String>,
     /// When the resolver replaced the SSH session this wait rides with a new
     /// one to the same host ([`session::replaced`]); absent while it is the
     /// session new connections ride.
@@ -97,7 +97,9 @@ pub(crate) struct WaitingOpen {
 }
 
 static WAITING: Mutex<BTreeMap<u64, WaitingOpen>> = Mutex::new(BTreeMap::new());
-static NEXT: AtomicU64 = AtomicU64::new(0);
+/// The key the next wait is recorded under: keys count up one per wait from
+/// the smallest nonzero one, so no two waits of this process share one.
+static NEXT: AtomicU64 = AtomicU64::new(std::num::NonZeroU64::MIN.get());
 
 fn waiting_path() -> Option<std::path::PathBuf> {
     state_path().map(|path| path.with_file_name(WAITING_FILE))
@@ -138,7 +140,7 @@ pub(crate) struct Began<'a> {
     pub(crate) active_host: &'a str,
     pub(crate) endpoint: &'a str,
     pub(crate) phase: Phase,
-    pub(crate) client: &'a str,
+    pub(crate) client: Option<&'a str>,
     pub(crate) request: Option<String>,
 }
 
@@ -154,10 +156,11 @@ pub(crate) fn begin(began: Began<'_>) -> (u64, usize) {
         client,
         request,
     } = began;
-    let key = NEXT.fetch_add(1, Ordering::SeqCst);
-    let mut opens = WAITING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let key = NEXT.fetch_add(std::num::NonZeroU64::MIN.get(), Ordering::SeqCst);
+    let mut opens = match WAITING.lock() {
+        Ok(opens) => opens,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     opens.insert(
         key,
         WaitingOpen {
@@ -168,7 +171,7 @@ pub(crate) fn begin(began: Began<'_>) -> (u64, usize) {
             endpoint: endpoint.to_string(),
             since: now_iso(),
             phase,
-            client: client.to_string(),
+            client: client.map(str::to_string),
             session_replaced_at: None,
             request,
         },
@@ -188,9 +191,10 @@ pub(crate) fn start() {
 
 /// Record a wait as over, answered or refused; returns how many still wait.
 pub(crate) fn end(key: u64) -> usize {
-    let mut opens = WAITING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut opens = match WAITING.lock() {
+        Ok(opens) => opens,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     opens.remove(&key);
     publish(&opens);
     opens.len()
@@ -230,22 +234,6 @@ fn published() -> Result<Vec<WaitingOpen>, String> {
     })
 }
 
-/// The waits this host's resolver holds to `service`, each as JSON with
-/// how long it has waited, for a recovery record that names the requests
-/// the service held; a list that cannot be read answers its own failure.
-pub(crate) fn held_to_service(service: &str) -> Result<Vec<Value>, String> {
-    Ok(published()?
-        .into_iter()
-        .filter(|open| open.service == service)
-        .map(|open| {
-            let waited = age_seconds(&open.since);
-            let mut row = json!(open);
-            row["waited_seconds"] = json!(waited);
-            row
-        })
-        .collect())
-}
-
 /// The directory refresh interval this host's resolver declares: the one
 /// measure of a wait that stands. `None` without a resolver configuration.
 pub(crate) fn declared_bound_seconds() -> Result<Option<u64>, String> {
@@ -258,10 +246,7 @@ pub(crate) fn declared_bound_seconds() -> Result<Option<u64>, String> {
 /// on this machine has published one — none runs, or the state left behind
 /// names no interval — the interval this machine's own registry record
 /// declares for its resolver, read from the last-known-good copy and never
-/// from another host. Without it a request to a host that accepted and
-/// answers nothing, the authority's snapshot over SSH, was waited on without
-/// end by every registry reader, an install's converge among them. `None`
-/// only when neither names one.
+/// from another host. `None` only when neither names one.
 fn declared_refresh_seconds() -> Result<Option<u64>, String> {
     let published = super::published::published_state();
     if let Some(seconds) = published.and_then(|state| state.refresh_seconds) {
@@ -302,9 +287,6 @@ fn declared_refresh_seconds() -> Result<Option<u64>, String> {
 /// was accepted: a wait on an answer begins when the request goes up, but
 /// the client has held its accepted connection from the accept on, through
 /// the channel open before it, and that is what the held measure counts.
-/// A wait on an answer that counted only from the request stood minutes
-/// in the list after the client had held its connection far longer, most
-/// of it opening the channel, and no reader abandoned it.
 pub(crate) fn since_accepted(key: u64, accepted: &str) {
     let mut opens = match WAITING.lock() {
         Ok(opens) => opens,

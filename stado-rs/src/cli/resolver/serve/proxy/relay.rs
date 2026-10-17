@@ -28,8 +28,8 @@ pub(super) struct Hold {
     adapter: ResolverAdapter,
     active_host: String,
     endpoint: String,
-    /// The loopback address the client connected from.
-    client: String,
+    /// The loopback address the client connected from, when its socket named it.
+    client: Option<String>,
     /// When the client was accepted: its wait on an answer counts from here.
     accepted: String,
     key: Mutex<Option<u64>>,
@@ -46,7 +46,7 @@ impl Hold {
         adapter: ResolverAdapter,
         active_host: String,
         endpoint: String,
-        client: String,
+        client: Option<String>,
     ) -> Arc<Self> {
         let (ender, _listening) = watch::channel(None);
         Arc::new(Self {
@@ -82,7 +82,7 @@ impl Hold {
             active_host: &self.active_host,
             endpoint: &self.endpoint,
             phase: Phase::Answer,
-            client: &self.client,
+            client: self.client.as_deref(),
             request: request.clone(),
         });
         waiting::since_accepted(taken, &self.accepted);
@@ -92,14 +92,14 @@ impl Hold {
             Some(line) => format!(" (`{line}`)"),
             None => String::new(),
         };
+        let from = match &self.client {
+            Some(address) => format!(" from {address}"),
+            None => " from a client whose address could not be read".to_string(),
+        };
         eprintln!(
-            "stado resolver service={} consumer={} request{asked} from {} sent to {} on {:?}; \
+            "stado resolver service={} consumer={} request{asked}{from} sent to {} on {:?}; \
              {waiting} open(s) now waiting for an answer",
-            self.adapter.service,
-            self.adapter.consumer,
-            self.client,
-            self.endpoint,
-            self.active_host
+            self.adapter.service, self.adapter.consumer, self.endpoint, self.active_host
         );
     }
 

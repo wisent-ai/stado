@@ -61,8 +61,8 @@ fn shed_or_fail(
     let shed = shed::shed_held(refresh_seconds, &reason);
     for open in &shed.ended {
         eprintln!(
-            "stado resolver adapter service={} consumer={} shed the wait of {} to {} on {:?} \
-             held since {}",
+            "stado resolver adapter service={} consumer={} shed the wait of client {:?} to {} \
+             on {:?} held since {}",
             open.service, open.consumer, open.client, open.endpoint, open.active_host, open.since
         );
     }

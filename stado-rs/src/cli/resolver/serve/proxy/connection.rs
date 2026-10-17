@@ -33,15 +33,15 @@ pub(super) async fn proxy_connection(
 ) -> Result<(), String> {
     // The client's own address is the one fact that ties a held connection
     // to the process holding it; a client whose address cannot be read is
-    // recorded without one rather than refused.
+    // recorded with none, said here, rather than refused.
     let client_address = match client.peer_addr() {
-        Ok(address) => address.to_string(),
+        Ok(address) => Some(address.to_string()),
         Err(error) => {
             eprintln!(
                 "stado resolver service={} consumer={} client address unreadable: {error}",
                 adapter.service, adapter.consumer
             );
-            String::new()
+            None
         }
     };
     let (client_read, mut client_write) = client.into_split();
@@ -170,7 +170,7 @@ pub(super) async fn proxy_connection(
             active_host: &resolved.active_host,
             endpoint: &endpoint,
             phase: Phase::Open,
-            client: &client_address,
+            client: client_address.as_deref(),
             request: None,
         });
         let started = std::time::Instant::now();
