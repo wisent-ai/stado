@@ -56,6 +56,9 @@ pub(crate) fn report_from(output: CommandOutput) -> RemoteReport {
 /// a marker with the wrong arity falls through instead of being mis-read.
 pub fn parse_markers(stdout: &str) -> RemoteReport {
     let mut report = RemoteReport::default();
+    // A malformed adopt line outlives the probe's own status line after it:
+    // the probe saying it probed does not make the words it wrote readable.
+    let mut malformed = None;
     for line in stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
             ["STADO_HOST", os, domain, unit, path] => {
@@ -74,17 +77,34 @@ pub fn parse_markers(stdout: &str) -> RemoteReport {
                 report.domain_reason = (*reason).to_string();
             }
             ["STADO_ADOPT", file_state, unit_state] => {
-                report.file_state = <UnitFilePresence as serde::Deserialize>::deserialize(
-                    Value::String((*file_state).to_string()),
-                )
-                .ok();
-                report.unit_state = <UnitLoad as serde::Deserialize>::deserialize(Value::String(
+                let file = <UnitFilePresence as serde::Deserialize>::deserialize(Value::String(
+                    (*file_state).to_string(),
+                ));
+                let unit = <UnitLoad as serde::Deserialize>::deserialize(Value::String(
                     (*unit_state).to_string(),
-                ))
-                .ok();
+                ));
+                match (file, unit) {
+                    (Ok(file), Ok(unit)) => {
+                        report.file_state = Some(file);
+                        report.unit_state = Some(unit);
+                    }
+                    (Err(error), _) | (_, Err(error)) => {
+                        // A word the adopt probe does not write says nothing
+                        // about the unit: the report is a failed probe naming
+                        // it, not a unit read as absent or unloaded.
+                        malformed = Some(format!(
+                            "the adopt probe reported unit file {file_state:?} and unit \
+                             {unit_state:?}, which it does not write: {error}"
+                        ));
+                    }
+                }
             }
             _ => {}
         }
+    }
+    if let Some(detail) = malformed {
+        report.status = host_channel::FAILED_STATUS.to_string();
+        report.detail = detail;
     }
     report
 }
@@ -96,7 +116,12 @@ pub fn parse_markers(stdout: &str) -> RemoteReport {
 pub fn split_marker_body<'a>(stdout: &'a str, marker: &str) -> Option<(&'a str, &'a str)> {
     let mut rest = stdout;
     loop {
-        let (line, tail) = rest.split_once('\n').unwrap_or((rest, ""));
+        // A line ends at its newline, or at the end of stdout when it is the
+        // last one; then nothing follows it.
+        let (line, tail) = match rest.split_once('\n') {
+            Some(parts) => parts,
+            None => (rest, &rest[rest.len()..]),
+        };
         if let Some(field) = line
             .strip_prefix(marker)
             .and_then(|head| head.strip_prefix('\t'))
@@ -117,11 +142,15 @@ pub fn split_marker_body<'a>(stdout: &'a str, marker: &str) -> Option<(&'a str, 
 /// tails carry no such marker — the journal merges the streams — and pass
 /// through whole.
 pub(crate) fn split_error_section(tail: &str) -> (&str, Option<(&str, &str)>) {
-    let Some(index) = tail.find("\nSTADO_ERR\t") else {
+    let Some((before, section)) = tail.split_once("\nSTADO_ERR\t") else {
         return (tail, None);
     };
-    let section = &tail[index + 1..];
-    let (line, error_body) = section.split_once('\n').unwrap_or((section, ""));
-    let error_origin = line.strip_prefix("STADO_ERR\t").unwrap_or_default();
-    (&tail[..index + 1], Some((error_origin, error_body)))
+    // The marker line ends at its newline, or at the end of the tail when it
+    // is the last line; then the stderr tail is empty.
+    let (error_origin, error_body) = match section.split_once('\n') {
+        Some(parts) => parts,
+        None => (section, &section[section.len()..]),
+    };
+    // The stdout tail keeps the newline that ended its last line.
+    (&tail[..=before.len()], Some((error_origin, error_body)))
 }
