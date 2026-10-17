@@ -6,7 +6,8 @@
 //! commands with their stored output and its processes, add an SSH key,
 //! give a port a URL, keep the disk as a named snapshot, fork, stop (or
 //! force a stop whose save fails), power-cycle one that stopped answering,
-//! share one with its organization, resume and delete.
+//! share one with its organization, resume and delete, and register the
+//! webhooks Boat posts every sandbox's lifecycle events to.
 //!
 //! The scheduler rents a sandbox per job and owns its whole life; these verbs
 //! are the same Boat Public API v1 calls handed to a caller directly, through
@@ -22,12 +23,14 @@ mod environments;
 mod history;
 mod snapshots;
 mod verbs;
+mod webhooks;
 
 use clap::Subcommand;
 
 pub use agent::FileUrlArgs;
 pub use args::*;
 pub use history::{CommandRef, HistoryArgs, LogsArgs};
+pub use webhooks::WebhookCommands;
 
 use super::CmdError;
 
@@ -115,6 +118,10 @@ pub enum SandboxCommands {
     /// Print the processes of a sandbox, busiest first, or the last sample
     /// Boat kept of a stopped one.
     Processes(SandboxId),
+    /// Manage the account's webhooks: the HTTPS endpoints Boat posts sandbox
+    /// lifecycle events to, and their signing secrets.
+    #[command(subcommand)]
+    Webhook(WebhookCommands),
 }
 
 #[derive(Subcommand)]
@@ -228,5 +235,6 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
             EnvironmentCommands::RmFile(args) => environments::remove_file(&provider, &args).await,
             EnvironmentCommands::AddRepo(args) => environments::add_repo(&provider, &args).await,
         },
+        SandboxCommands::Webhook(sub) => webhooks::dispatch(&provider, sub).await,
     }
 }

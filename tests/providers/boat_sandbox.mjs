@@ -12,7 +12,10 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    refuses before any request, naming boat.ttl_seconds.
 // 2. With the operator's configuration (boat settings and the Skarbiec item
 //    tagged stado:role:cloud-boat), STADO_BOAT_TEST_TTL_SECONDS is the
-//    lifetime of the sandboxes this journey creates. It creates a sandbox,
+//    lifetime of the sandboxes this journey creates. It registers
+//    STADO_BOAT_TEST_WEBHOOK_URL as a webhook (an empty name is refused),
+//    lists, renames, shows, rotates and deletes it and is refused it after,
+//    then it creates a sandbox,
 //    refuses a lifetime that is not positive, writes a file with a fresh
 //    token and reads it back, is refused a recover of the sandbox that just
 //    answered (sandbox_is_reachable), puts the token into a second file
@@ -38,7 +41,9 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    agent provider's account and is not run here.
 //    The last `show` of each sandbox is kept as the observed final state.
 // STADO_BIN selects the Stado under test. Without STADO_BIN,
-// STADO_BOAT_TEST_TTL_SECONDS or STADO_BOAT_TEST_PORT the journey is blocked,
+// STADO_BOAT_TEST_TTL_SECONDS, STADO_BOAT_TEST_PORT or
+// STADO_BOAT_TEST_WEBHOOK_URL (a public HTTPS endpoint the journey may
+// register as a webhook and remove again) the journey is blocked,
 // never passed. The report keeps every command, exit status and output under
 // .build/; a failure is rethrown after the report is written.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -47,6 +52,7 @@ const output = mkdtempSync(join(realpathSync(join(root, '.build')), 'providers-b
 const stado = process.env.STADO_BIN;
 const lifetime = process.env.STADO_BOAT_TEST_TTL_SECONDS;
 const port = process.env.STADO_BOAT_TEST_PORT;
+const hook = process.env.STADO_BOAT_TEST_WEBHOOK_URL;
 const report = { started_at: new Date().toISOString(), commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 // A clean exit: no spawn error, no signal, and a status that is zero (falsy).
@@ -78,10 +84,11 @@ function withoutBoatOverrides(document) {
 try {
   report.source_revision = success(run('git', ['rev-parse', 'HEAD']));
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
-  if (!stado || !lifetime || !port) {
+  if (!stado || !lifetime || !port || !hook) {
     report.result = 'blocked';
-    throw new Error(`The Boat sandbox journey requires STADO_BIN, STADO_BOAT_TEST_TTL_SECONDS and STADO_BOAT_TEST_PORT; missing: ${[
+    throw new Error(`The Boat sandbox journey requires STADO_BIN, STADO_BOAT_TEST_TTL_SECONDS, STADO_BOAT_TEST_PORT and STADO_BOAT_TEST_WEBHOOK_URL; missing: ${[
       !stado && 'STADO_BIN', !lifetime && 'STADO_BOAT_TEST_TTL_SECONDS', !port && 'STADO_BOAT_TEST_PORT',
+      !hook && 'STADO_BOAT_TEST_WEBHOOK_URL',
     ].filter(Boolean).join(', ')}`);
   }
   assert.equal(success(run('git', ['status', '--porcelain', '--untracked-files=all'])), '',
@@ -94,6 +101,27 @@ try {
   refused(run(binary, ['sandbox', 'list'], withoutBoatOverrides({ providers: ['boat'] })), 'boat.ttl_seconds');
 
   const sandbox = args => JSON.parse(success(run(binary, ['sandbox', ...args])));
+
+  // A webhook is registered with its one-time signing secret, found listed,
+  // renamed, given a new secret and deleted, after which Boat no longer has
+  // it; an empty --name is refused before any request.
+  refused(run(binary, ['sandbox', 'webhook', 'create', hook, '--event', 'sandbox.ready', '--name', '']),
+    '--name is given with no value');
+  const created = sandbox(['webhook', 'create', hook, '--event', 'sandbox.ready,sandbox.error']);
+  const webhook = created.webhook?.id;
+  assert.ok(webhook && created.secret?.startsWith('whsec_'), `create answered no webhook and secret: ${JSON.stringify(created)}`);
+  report.webhook = webhook;
+  assert.ok(sandbox(['webhook', 'list']).webhooks.some(entry => entry.id === webhook), `${webhook} is not listed`);
+  const renamed = `stado journey ${randomUUID()}`;
+  sandbox(['webhook', 'update', webhook, '--name', renamed]);
+  assert.equal(sandbox(['webhook', 'show', webhook]).webhook.name, renamed, `${webhook} did not keep its new name`);
+  const rotated = sandbox(['webhook', 'rotate', webhook]);
+  assert.ok(rotated.secret?.startsWith('whsec_') && rotated.secret !== created.secret,
+    `rotate answered no new secret: ${JSON.stringify(rotated)}`);
+  sandbox(['webhook', 'delete', webhook]);
+  report.webhook_deleted = true;
+  refused(run(binary, ['sandbox', 'webhook', 'show', webhook]), 'Boat API HTTP 404');
+
   refused(run(binary, ['sandbox', 'create', `--ttl-seconds=-${lifetime}`]), 'is not a positive number of seconds');
   const original = sandbox(['create', '--ttl-seconds', lifetime]);
   assert.ok(original.id, `create answered no sandbox id: ${JSON.stringify(original)}`);
@@ -231,8 +259,13 @@ try {
   report.error = String(error);
   throw error;
 } finally {
+  // A webhook a failed run registered is removed, so it does not keep
+  // receiving the account's events.
+  if (report.webhook && !report.webhook_deleted) {
+    report.webhook_cleanup = run(report.stado.path, ['sandbox', 'webhook', 'delete', report.webhook]).status;
+  }
   report.finished_at = new Date().toISOString();
-  report.scope = 'Boat sandbox CLI: configuration refusal, and the full lifecycle of a real sandbox and its fork';
+  report.scope = 'Boat sandbox CLI: configuration refusal, a webhook\'s lifecycle, and the full lifecycle of a real sandbox and its fork';
   writeFileSync(join(output, 'report.json'), `${JSON.stringify(report)}\n`, { mode: constants.S_IRUSR | constants.S_IWUSR });
   console.log(`${report.result}: ${join(output, 'report.json')}`);
 }

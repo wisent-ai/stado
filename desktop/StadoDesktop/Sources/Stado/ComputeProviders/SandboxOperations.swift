@@ -248,5 +248,32 @@ enum NativeSandboxOperations {
                 .init(id: "repository", label: "Repository id from Boat's repository list", required: true),
                 .init(id: "branch", label: "Branch (blank: the request names none)", option: "--base-branch"),
             ], jsonOutput: false),
+        .init(id: "sandbox-webhook-list", title: "List the webhooks Boat posts lifecycle events to",
+            path: ["sandbox", "webhook", "list"], hostPlacement: .none, mutates: false, jsonOutput: false),
+        .init(id: "sandbox-webhook-create", title: "Register a webhook and show its signing secret once",
+            path: ["sandbox", "webhook", "create"], hostPlacement: .none, fields: [
+                .init(id: "url", label: "Public HTTPS endpoint on port 443", required: true),
+                .init(id: "event", label: "Events, comma-separated: sandbox.ready, sandbox.error, sandbox.archived, sandbox.hydrated, sandbox.degraded, sandbox.recovered", option: "--event", required: true),
+                .init(id: "name", label: "Name (blank: the request names none)", option: "--name"),
+            ], jsonOutput: false),
+        .init(id: "sandbox-webhook-show", title: "Show one webhook",
+            path: ["sandbox", "webhook", "show"], hostPlacement: .none, fields: [
+                .init(id: "webhook", label: "Webhook id", required: true),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-webhook-update", title: "Change a webhook's name, URL or events",
+            path: ["sandbox", "webhook", "update"], hostPlacement: .none, fields: [
+                .init(id: "webhook", label: "Webhook id", required: true),
+                .init(id: "url", label: "New endpoint URL (blank: unchanged)", option: "--url"),
+                .init(id: "event", label: "Events from now on, comma-separated (blank: unchanged)", option: "--event"),
+                .init(id: "name", label: "New name (blank: unchanged)", option: "--name"),
+            ], jsonOutput: false),
+        .init(id: "sandbox-webhook-delete", title: "Delete a webhook and its queued deliveries",
+            path: ["sandbox", "webhook", "delete"], hostPlacement: .none, fields: [
+                .init(id: "webhook", label: "Webhook id", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-webhook-rotate", title: "Replace a webhook's signing secret and show the new one",
+            path: ["sandbox", "webhook", "rotate"], hostPlacement: .none, fields: [
+                .init(id: "webhook", label: "Webhook id", required: true),
+            ], jsonOutput: false),
     ]
 }
