@@ -1,12 +1,14 @@
 import Foundation
 
-/// The Boat sandbox operations `stado sandbox` has, through the selected
-/// endpoint's operator command channel: list and show, create (also from a
-/// named snapshot) and update, run a command line, read, write and download
-/// a file, prompt the coding agent and read the run, interrupt it, read
-/// events, allow an SSH key, give a port a public URL, save, list, show and
-/// delete named snapshots, fork, stop, resume and delete. Each answers with
-/// the JSON the CLI prints; the writes run behind the review dialog.
+/// The Boat sandbox operations `stado sandbox` has on one sandbox, through
+/// the selected endpoint's operator command channel: list and show, create
+/// (also from a named snapshot or a share code) and update, run a command
+/// line and read what ran, read, write, download and sign URLs for files,
+/// prompt and steer the coding agent, read events and AI usage, give a port
+/// a public URL, keep and share named snapshots, fork, stop, recover, share,
+/// resume and delete; the account-wide environments and webhooks follow from
+/// `NativeSandboxAccountOperations`. Each answers with the JSON the CLI
+/// prints; the writes run behind the review dialog.
 enum NativeSandboxOperations {
     static let all: [NativeCapabilityOperation] = [
         .init(id: "sandbox-list", title: "List every Boat sandbox the key reaches",
@@ -153,6 +155,16 @@ enum NativeSandboxOperations {
             path: ["sandbox", "processes"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
             ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-ai-usage", title: "Read the AI requests a sandbox made through Boat's proxy",
+            path: ["sandbox", "ai-usage"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "days", label: "Days of history, today included (blank: Boat's own span)", option: "--days"),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-ai-access", title: "Let a sandbox's AI requests through, or refuse them",
+            path: ["sandbox", "ai-access"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "state", label: "AI requests", option: "--state", required: true, choices: ["allowed", "blocked"], initial: "allowed"),
+            ], jsonOutput: false),
         .init(id: "sandbox-ssh-key", title: "Allow an OpenSSH public key into a sandbox",
             path: ["sandbox", "ssh-key"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
@@ -224,69 +236,5 @@ enum NativeSandboxOperations {
                 .init(id: "name", label: "Named snapshot", required: true),
                 .init(id: "share", label: "Share id", required: true),
             ], jsonOutput: false),
-        .init(id: "sandbox-environment-list", title: "List the environments",
-            path: ["sandbox", "environment", "list"], hostPlacement: .none, mutates: false, jsonOutput: false),
-        .init(id: "sandbox-environment-create", title: "Create an empty environment",
-            path: ["sandbox", "environment", "create"], hostPlacement: .none, fields: [
-                .init(id: "name", label: "Environment name", required: true),
-            ], jsonOutput: false),
-        .init(id: "sandbox-environment-delete", title: "Delete an environment",
-            path: ["sandbox", "environment", "delete"], hostPlacement: .none, fields: [
-                .init(id: "environment", label: "Environment id", required: true),
-            ], jsonOutput: false),
-        .init(id: "sandbox-environment-set-var", title: "Set an environment variable",
-            path: ["sandbox", "environment", "set-var"], hostPlacement: .none, fields: [
-                .init(id: "environment", label: "Environment id", required: true),
-                .init(id: "key", label: "Variable name", required: true),
-            ], payload: .standardInput(label: "The variable's value, one line", initial: ""), jsonOutput: false),
-        .init(id: "sandbox-environment-rm-var", title: "Remove an environment variable",
-            path: ["sandbox", "environment", "rm-var"], hostPlacement: .none, fields: [
-                .init(id: "environment", label: "Environment id", required: true),
-                .init(id: "key", label: "Variable name", required: true),
-            ], jsonOutput: false),
-        .init(id: "sandbox-environment-set-file", title: "Set an environment secret file",
-            path: ["sandbox", "environment", "set-file"], hostPlacement: .none, fields: [
-                .init(id: "environment", label: "Environment id", required: true),
-                .init(id: "path", label: "Path in every new sandbox", required: true),
-                .init(id: "from", label: "File on the machine running Stado", option: "--from", required: true),
-            ], jsonOutput: false),
-        .init(id: "sandbox-environment-rm-file", title: "Remove an environment secret file",
-            path: ["sandbox", "environment", "rm-file"], hostPlacement: .none, fields: [
-                .init(id: "environment", label: "Environment id", required: true),
-                .init(id: "path", label: "Path in every new sandbox", required: true),
-            ], jsonOutput: false),
-        .init(id: "sandbox-environment-add-repo", title: "Clone a GitHub repository into every new sandbox",
-            path: ["sandbox", "environment", "add-repo"], hostPlacement: .none, fields: [
-                .init(id: "environment", label: "Environment id", required: true),
-                .init(id: "repository", label: "Repository id from Boat's repository list", required: true),
-                .init(id: "branch", label: "Branch (blank: the request names none)", option: "--base-branch"),
-            ], jsonOutput: false),
-        .init(id: "sandbox-webhook-list", title: "List the webhooks Boat posts lifecycle events to",
-            path: ["sandbox", "webhook", "list"], hostPlacement: .none, mutates: false, jsonOutput: false),
-        .init(id: "sandbox-webhook-create", title: "Register a webhook and show its signing secret once",
-            path: ["sandbox", "webhook", "create"], hostPlacement: .none, fields: [
-                .init(id: "url", label: "Public HTTPS endpoint on port 443", required: true),
-                .init(id: "event", label: "Events, comma-separated: sandbox.ready, sandbox.error, sandbox.archived, sandbox.hydrated, sandbox.degraded, sandbox.recovered", option: "--event", required: true),
-                .init(id: "name", label: "Name (blank: the request names none)", option: "--name"),
-            ], jsonOutput: false),
-        .init(id: "sandbox-webhook-show", title: "Show one webhook",
-            path: ["sandbox", "webhook", "show"], hostPlacement: .none, fields: [
-                .init(id: "webhook", label: "Webhook id", required: true),
-            ], mutates: false, jsonOutput: false),
-        .init(id: "sandbox-webhook-update", title: "Change a webhook's name, URL or events",
-            path: ["sandbox", "webhook", "update"], hostPlacement: .none, fields: [
-                .init(id: "webhook", label: "Webhook id", required: true),
-                .init(id: "url", label: "New endpoint URL (blank: unchanged)", option: "--url"),
-                .init(id: "event", label: "Events from now on, comma-separated (blank: unchanged)", option: "--event"),
-                .init(id: "name", label: "New name (blank: unchanged)", option: "--name"),
-            ], jsonOutput: false),
-        .init(id: "sandbox-webhook-delete", title: "Delete a webhook and its queued deliveries",
-            path: ["sandbox", "webhook", "delete"], hostPlacement: .none, fields: [
-                .init(id: "webhook", label: "Webhook id", required: true),
-            ], jsonOutput: false),
-        .init(id: "sandbox-webhook-rotate", title: "Replace a webhook's signing secret and show the new one",
-            path: ["sandbox", "webhook", "rotate"], hostPlacement: .none, fields: [
-                .init(id: "webhook", label: "Webhook id", required: true),
-            ], jsonOutput: false),
-    ]
+    ] + NativeSandboxAccountOperations.all
 }

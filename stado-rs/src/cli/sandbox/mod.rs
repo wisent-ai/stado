@@ -29,7 +29,7 @@ use clap::Subcommand;
 
 pub use agent::FileUrlArgs;
 pub use args::*;
-pub use history::{CommandRef, HistoryArgs, LogsArgs};
+pub use history::{AiAccessArgs, AiUsageArgs, CommandRef, HistoryArgs, LogsArgs};
 pub use snapshots::ShareRef;
 pub use webhooks::WebhookCommands;
 
@@ -119,6 +119,12 @@ pub enum SandboxCommands {
     /// Print the processes of a sandbox, busiest first, or the last sample
     /// Boat kept of a stopped one.
     Processes(SandboxId),
+    /// Print the AI requests a sandbox's agents made through Boat's proxy,
+    /// per day, credential and model, their tokens and cost, and whether it
+    /// is blocked.
+    AiUsage(AiUsageArgs),
+    /// Let a sandbox's requests through Boat's AI proxy, or refuse them.
+    AiAccess(AiAccessArgs),
     /// Manage the account's webhooks: the HTTPS endpoints Boat posts sandbox
     /// lifecycle events to, and their signing secrets.
     #[command(subcommand)]
@@ -202,6 +208,8 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
         SandboxCommands::Command(args) => history::command(&provider, &args).await,
         SandboxCommands::Logs(args) => history::logs(&provider, &args).await,
         SandboxCommands::Processes(sandbox) => history::processes(&provider, &sandbox.id).await,
+        SandboxCommands::AiUsage(args) => history::ai_usage(&provider, &args).await,
+        SandboxCommands::AiAccess(args) => history::ai_access(&provider, &args).await,
         SandboxCommands::FileUrl(args) => agent::file_url(&provider, &args).await,
         SandboxCommands::Read(args) => verbs::read(&provider, &args).await,
         SandboxCommands::Write(args) => verbs::write(&provider, &args).await,

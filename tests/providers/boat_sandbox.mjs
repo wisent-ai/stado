@@ -24,7 +24,8 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    prints it, finds
 //    that command in the sandbox's history and the token in its stored
 //    output (an empty --query is refused), reads its processes and
-//    conversations, sees a failing command fail the CLI with its exit,
+//    conversations and its AI usage, sees a failing command fail the CLI
+//    with its exit,
 //    starts a command in the background,
 //    finds it running and stops it, keeps the sandbox's usage, reads its
 //    desktop URL, downloads the file and is refused a second download over
@@ -177,6 +178,9 @@ try {
   assert.ok(Array.isArray(processes.processes), `processes answered no list: ${JSON.stringify(processes)}`);
   assert.ok(Array.isArray(sandbox(['conversations', original.id]).conversations),
     'conversations answered no list');
+  const ai = sandbox(['ai-usage', original.id]);
+  assert.ok(ai.sandboxId === original.id && typeof ai.blocked === 'boolean' && Array.isArray(ai.usage),
+    `ai-usage answered no usage of ${original.id}: ${JSON.stringify(ai)}`);
 
   const started = sandbox(['exec', original.id, '--detach', 'tail -f /dev/null']);
   assert.ok(Number.isSafeInteger(started.processId), `exec --detach answered no process id: ${JSON.stringify(started)}`);

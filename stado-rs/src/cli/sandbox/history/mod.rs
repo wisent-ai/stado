@@ -1,7 +1,9 @@
 //! The `stado sandbox` verbs that read what ran in a sandbox: its agent
 //! conversations, the history of its commands and other processes, one
-//! command and its stored output, and its processes. Boat keeps the history
-//! and its output, so they are read also while the sandbox is stopped.
+//! command and its stored output, its processes, and the AI requests its
+//! agents made through Boat's proxy, which can be blocked. Boat keeps the
+//! history and its output, so they are read also while the sandbox is
+//! stopped.
 
 use clap::{Args, ValueEnum};
 use serde_json::Value;
@@ -35,6 +37,31 @@ pub enum OutputStream {
 pub enum OutputEncoding {
     Utf8,
     Base64,
+}
+
+/// Whether a sandbox's requests through Boat's AI proxy are let through.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum AiAccess {
+    Allowed,
+    Blocked,
+}
+
+#[derive(Args, Debug)]
+pub struct AiUsageArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// Days of history, today included; without it Boat's own span.
+    #[arg(long)]
+    pub days: Option<u32>,
+}
+
+#[derive(Args, Debug)]
+pub struct AiAccessArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// Let its AI requests through, or refuse them.
+    #[arg(long, value_enum)]
+    pub state: AiAccess,
 }
 
 #[derive(Args, Debug)]
@@ -135,5 +162,27 @@ pub(super) async fn logs(provider: &BoxProvider, args: &LogsArgs) -> Result<(), 
 
 pub(super) async fn processes(provider: &BoxProvider, id: &str) -> Result<(), CmdError> {
     let answer = provider.client.processes(id).await.map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn ai_usage(provider: &BoxProvider, args: &AiUsageArgs) -> Result<(), CmdError> {
+    let answer = provider
+        .client
+        .ai_usage(&args.id, args.days)
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn ai_access(provider: &BoxProvider, args: &AiAccessArgs) -> Result<(), CmdError> {
+    let blocked = match args.state {
+        AiAccess::Allowed => false,
+        AiAccess::Blocked => true,
+    };
+    let answer = provider
+        .client
+        .set_ai_access(&args.id, blocked)
+        .await
+        .map_err(failure)?;
     print(&Value::Object(answer))
 }

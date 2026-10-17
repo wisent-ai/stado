@@ -1,5 +1,5 @@
 //! Boat command, detached command, SSH-key, interrupt, public URL, desktop
-//! URL, signed file URL, sharing and usage verbs.
+//! URL, signed file URL, sharing, usage, and AI usage and access verbs.
 
 use serde_json::{json, Map, Value};
 
@@ -178,6 +178,41 @@ impl BoxClient {
                 &[],
                 &["sandbox.usage"],
             )
+            .await
+    }
+
+    /// GET /sandboxes/{id}/ai-usage: the AI requests Boat's proxy made for
+    /// the sandbox per UTC day, credential and model, their tokens and cost,
+    /// and whether it is blocked; `days` of `None` leaves the span to Boat.
+    pub async fn ai_usage(
+        &self,
+        box_id: &str,
+        days: Option<u32>,
+    ) -> Result<Map<String, Value>, BoxError> {
+        let mut parameters = Vec::new();
+        if let Some(days) = days {
+            parameters.push(("days", days.to_string()));
+        }
+        let path = format!("{}/ai-usage", Self::box_path(box_id)?);
+        let accepted = ["sandbox.ai_usage"];
+        self.transport
+            .request_json("GET", &path, None, &parameters, &accepted)
+            .await
+    }
+
+    /// PUT /sandboxes/{id}/ai-access: block or allow the sandbox's requests
+    /// through Boat's AI proxy, running or stopped; a sandbox holding real
+    /// keys is not affected.
+    pub async fn set_ai_access(
+        &self,
+        box_id: &str,
+        blocked: bool,
+    ) -> Result<Map<String, Value>, BoxError> {
+        let path = format!("{}/ai-access", Self::box_path(box_id)?);
+        let body = json!({"blocked": blocked});
+        let accepted = ["sandbox.ai_access_updated"];
+        self.transport
+            .request_json("PUT", &path, Some(&body), &[], &accepted)
             .await
     }
 
