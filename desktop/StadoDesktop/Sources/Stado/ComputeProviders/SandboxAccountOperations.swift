@@ -38,6 +38,12 @@ enum NativeSandboxAccountOperations {
                 .init(id: "environment", label: "Environment id", required: true),
                 .init(id: "path", label: "Path in every new sandbox", required: true),
             ], jsonOutput: false),
+        .init(id: "sandbox-environment-repos", title: "List the GitHub repositories Boat can clone",
+            path: ["sandbox", "environment", "repos"], hostPlacement: .none, fields: [
+                .init(id: "query", label: "Text the name contains (blank: every repository)", option: "--query"),
+                .init(id: "sync", label: "Read the repositories from GitHub again first", option: "--sync", flag: true),
+                .init(id: "cursor", label: "Cursor of the previous page (blank: first page)", option: "--cursor"),
+            ], mutates: false, jsonOutput: false),
         .init(id: "sandbox-environment-add-repo", title: "Clone a GitHub repository into every new sandbox",
             path: ["sandbox", "environment", "add-repo"], hostPlacement: .none, fields: [
                 .init(id: "environment", label: "Environment id", required: true),

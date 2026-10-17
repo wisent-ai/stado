@@ -29,6 +29,7 @@ use clap::Subcommand;
 
 pub use agent::FileUrlArgs;
 pub use args::*;
+pub use environments::RepositoryListArgs;
 pub use history::{AiAccessArgs, AiUsageArgs, CommandRef, HistoryArgs, LogsArgs};
 pub use snapshots::ShareRef;
 pub use webhooks::WebhookCommands;
@@ -147,6 +148,9 @@ pub enum EnvironmentCommands {
     SetFile(SecretFileArgs),
     /// Remove a secret file.
     RmFile(SecretPath),
+    /// List the GitHub repositories Boat can clone, with the id `add-repo`
+    /// takes, and the ones already selected.
+    Repos(RepositoryListArgs),
     /// Clone a GitHub repository into every new sandbox.
     AddRepo(RepositoryArgs),
 }
@@ -255,6 +259,7 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
             EnvironmentCommands::SetFile(args) => environments::set_file(&provider, &args).await,
             EnvironmentCommands::RmFile(args) => environments::remove_file(&provider, &args).await,
             EnvironmentCommands::AddRepo(args) => environments::add_repo(&provider, &args).await,
+            EnvironmentCommands::Repos(args) => environments::repositories(&provider, &args).await,
         },
         SandboxCommands::Webhook(sub) => webhooks::dispatch(&provider, sub).await,
     }

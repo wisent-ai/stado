@@ -30,7 +30,8 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    finds it running and stops it, keeps the sandbox's usage, reads its
 //    desktop URL, downloads the file and is refused a second download over
 //    it, renames the sandbox and reads the name back, reads its events,
-//    creates an environment, sets a variable in it from standard input (an
+//    creates an environment, reads the GitHub repositories Boat can clone,
+//    sets a variable in it from standard input (an
 //    empty one is refused), starts a sandbox with it that prints the
 //    variable, deletes that sandbox, removes the variable and deletes the
 //    environment, gives STADO_BOAT_TEST_PORT a public URL, saves the
@@ -110,16 +111,16 @@ try {
   // it; an empty --name is refused before any request.
   refused(run(binary, ['sandbox', 'webhook', 'create', hook, '--event', 'sandbox.ready', '--name', '']),
     '--name is given with no value');
-  const created = sandbox(['webhook', 'create', hook, '--event', 'sandbox.ready,sandbox.error']);
-  const webhook = created.webhook?.id;
-  assert.ok(webhook && created.secret?.startsWith('whsec_'), `create answered no webhook and secret: ${JSON.stringify(created)}`);
+  const registered = sandbox(['webhook', 'create', hook, '--event', 'sandbox.ready,sandbox.error']);
+  const webhook = registered.webhook?.id;
+  assert.ok(webhook && registered.secret?.startsWith('whsec_'), `create answered no webhook and secret: ${JSON.stringify(registered)}`);
   report.webhook = webhook;
   assert.ok(sandbox(['webhook', 'list']).webhooks.some(entry => entry.id === webhook), `${webhook} is not listed`);
   const renamed = `stado journey ${randomUUID()}`;
   sandbox(['webhook', 'update', webhook, '--name', renamed]);
   assert.equal(sandbox(['webhook', 'show', webhook]).webhook.name, renamed, `${webhook} did not keep its new name`);
   const rotated = sandbox(['webhook', 'rotate', webhook]);
-  assert.ok(rotated.secret?.startsWith('whsec_') && rotated.secret !== created.secret,
+  assert.ok(rotated.secret?.startsWith('whsec_') && rotated.secret !== registered.secret,
     `rotate answered no new secret: ${JSON.stringify(rotated)}`);
   sandbox(['webhook', 'delete', webhook]);
   report.webhook_deleted = true;
@@ -212,6 +213,9 @@ try {
   const created = sandbox(['environment', 'create', environmentName]);
   const environment = created.environments.find(row => row.name === environmentName);
   assert.ok(environment?.id, `environment create did not list ${environmentName}: ${JSON.stringify(created)}`);
+  const repositories = sandbox(['environment', 'repos']);
+  assert.ok(Array.isArray(repositories.installations) && Array.isArray(repositories.selectedRepositories),
+    `environment repos answered no installations and selection: ${JSON.stringify(repositories)}`);
   success(run(binary, ['sandbox', 'environment', 'set-var', environment.id, 'STADO_SANDBOX_TOKEN'], process.env, `${token}\n`));
   refused(run(binary, ['sandbox', 'environment', 'set-var', environment.id, 'STADO_SANDBOX_TOKEN'], process.env, ''),
     'standard input holds no value for STADO_SANDBOX_TOKEN');

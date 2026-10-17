@@ -152,4 +152,24 @@ impl BoxClient {
             )
             .await
     }
+
+    /// GET /repos: the GitHub repositories Boat can clone, grouped by
+    /// installation, with each one's `databaseId` that `repository` above
+    /// takes, and the ones already selected. `query` filters by name, `sync`
+    /// reads GitHub again first, and an empty `cursor` asks for the first
+    /// page.
+    pub async fn repositories(
+        &self,
+        query: &str,
+        sync: bool,
+        cursor: &str,
+    ) -> Result<Map<String, Value>, BoxError> {
+        let mut parameters = vec![("q", query.to_string()), ("cursor", cursor.to_string())];
+        if sync {
+            parameters.push(("sync", sync.to_string()));
+        }
+        self.transport
+            .request_json("GET", "/repos", None, &parameters, &["repos.list"])
+            .await
+    }
 }

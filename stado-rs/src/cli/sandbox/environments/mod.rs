@@ -7,12 +7,41 @@
 
 use std::io::Read;
 
+use clap::Args;
 use serde_json::Value;
 
 use crate::providers::BoxProvider;
 
+use super::agent::stated;
 use super::verbs::{failure, print};
 use super::{CmdError, EnvironmentId, EnvironmentKey, RepositoryArgs, SecretFileArgs, SecretPath};
+
+#[derive(Args, Debug)]
+pub struct RepositoryListArgs {
+    /// Only repositories whose name contains this text, in any case.
+    #[arg(long)]
+    pub query: Option<String>,
+    /// Read the repositories from GitHub again before answering.
+    #[arg(long)]
+    pub sync: bool,
+    /// The cursor a previous page printed; without it the first page.
+    #[arg(long)]
+    pub cursor: Option<String>,
+}
+
+pub(super) async fn repositories(
+    provider: &BoxProvider,
+    args: &RepositoryListArgs,
+) -> Result<(), CmdError> {
+    let query = stated(args.query.as_deref(), "--query")?;
+    let cursor = stated(args.cursor.as_deref(), "--cursor")?;
+    let answer = provider
+        .client
+        .repositories(query, args.sync, cursor)
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
+}
 
 pub(super) async fn list(provider: &BoxProvider) -> Result<(), CmdError> {
     let answer = provider.client.environments().await.map_err(failure)?;
