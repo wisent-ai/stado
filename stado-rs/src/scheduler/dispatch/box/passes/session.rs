@@ -1,7 +1,7 @@
 //! The three entry points that mint a unique owner id per invocation before
-//! touching a fence: Python `cancel_box_job`, `cancel_box_for_legacy_move`
-//! and `run_box_tick`. Each holds an [`OwnerInvocation`] while it works, so
-//! its leases are live exactly as long as the invocation runs.
+//! touching a fence: `cancel_box_job`, `cancel_box_for_legacy_move` and
+//! `run_box_tick`. Each holds an [`OwnerInvocation`] while it works, so its
+//! leases are live exactly as long as the invocation runs.
 
 use uuid::Uuid;
 
@@ -15,8 +15,8 @@ use super::admit::dispatch_box_jobs;
 use super::reconcile::reconcile_box_jobs;
 use super::support::{relinquish, BoxDispatchError};
 
-/// Python `cancel_box_job`: cancel the process or prompt, then release
-/// the fenced resource.
+/// Cancel the process or prompt in the job's Boat sandbox, then release the
+/// fenced sandbox.
 pub async fn cancel_box_job(
     store: &JobStorage,
     provider: &BoxProvider,
@@ -26,15 +26,11 @@ pub async fn cancel_box_job(
     let leases = ProviderLeaseStore::new(store.clone());
     let session_owner = format!("{owner_id}:{}", Uuid::new_v4().simple());
     let _invocation = OwnerInvocation::begin(&session_owner);
-    let ttl = if job.box_ttl_seconds != 0 {
-        job.box_ttl_seconds
-    } else {
-        provider.ttl_seconds
-    };
+    let ttl = provider.ttl_for(job);
     let mut lease = leases
         .acquire(
             &job.job_id,
-            crate::capabilities::ProviderId::Box.as_str(),
+            crate::capabilities::ProviderId::Boat.as_str(),
             &session_owner,
             ttl,
         )
@@ -45,10 +41,9 @@ pub async fn cancel_box_job(
     result
 }
 
-/// Python `cancel_box_for_legacy_move`: the fenced bridge used by
-/// `BoxProvider.delete_instance` when a running/ job still references the
-/// box. It does not relinquish: the lease ends Released, and its owner is
-/// gone once this invocation returns.
+/// The fenced bridge `BoxProvider::delete_instance` takes when a running/
+/// job still references the sandbox. It does not relinquish: the lease ends
+/// Released, and its owner is gone once this invocation returns.
 pub async fn cancel_box_for_legacy_move(
     store: &JobStorage,
     provider: &BoxProvider,
@@ -58,15 +53,11 @@ pub async fn cancel_box_for_legacy_move(
     let leases = ProviderLeaseStore::new(store.clone());
     let session_owner = format!("{owner_id}:{}", Uuid::new_v4().simple());
     let _invocation = OwnerInvocation::begin(&session_owner);
-    let ttl = if job.box_ttl_seconds != 0 {
-        job.box_ttl_seconds
-    } else {
-        provider.ttl_seconds
-    };
+    let ttl = provider.ttl_for(job);
     let mut lease = leases
         .acquire(
             &job.job_id,
-            crate::capabilities::ProviderId::Box.as_str(),
+            crate::capabilities::ProviderId::Boat.as_str(),
             &session_owner,
             ttl,
         )
@@ -102,7 +93,7 @@ pub async fn cancel_box_for_legacy_move(
     Ok(())
 }
 
-/// Python `run_box_tick`: unique owner per invocation; reconcile before
+/// One Boat tick: a unique owner per invocation; reconcile before
 /// allocating.
 pub async fn run_box_tick(
     store: &JobStorage,

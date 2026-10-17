@@ -83,7 +83,7 @@ impl BoxRuntime<'_> {
         let exit_code: i64 = exit_text
             .trim()
             .parse()
-            .map_err(|_| BoxError::transport("Box command exit file is invalid"))?;
+            .map_err(|_| BoxError::transport("the Boat command exit file is not an exit code"))?;
         for stream in Stream::BOTH {
             let path = stream.path(&paths);
             let content = match self.provider.client.read_file(&box_id, path, "utf-8").await {
@@ -108,7 +108,7 @@ impl BoxRuntime<'_> {
             if success {
                 ""
             } else {
-                "Box command or verification failed"
+                "the Boat command or its verification failed"
             },
         )
         .await?;
@@ -124,7 +124,7 @@ impl BoxRuntime<'_> {
     ) -> Result<bool, BoxDispatchError> {
         if lease.prompt_id.is_empty() {
             return Err(BoxDispatchError::runtime(
-                "Box prompt lease omitted prompt id",
+                "the Boat prompt lease recorded no prompt id",
             ));
         }
         let box_id = lease.provider_resource_id.clone();
@@ -150,7 +150,7 @@ impl BoxRuntime<'_> {
             .await?;
         self.keepalive(lease).await?;
         let success = run.status == PromptStatus::Finished;
-        let error = format!("Box prompt {}", run.status);
+        let error = format!("Boat prompt {}", run.status);
         self.complete(job, lease, success, if success { "" } else { &error })
             .await?;
         Ok(true)

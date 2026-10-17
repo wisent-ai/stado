@@ -45,7 +45,7 @@ define_providers! {
     Gcp => ("gcp", []),
     Azure => ("azure", []),
     Aws => ("aws", []),
-    Box => ("box", ["box-ascii"]),
+    Boat => ("boat", []),
     Local => ("local", []),
     Vast => ("vast", []),
     Arkane => ("arkane", ["arkane-cloud"]),
@@ -91,8 +91,8 @@ impl ProviderId {
             Self::Azure => Some(
                 "Azure: agent VM inventory is complete; managed disks, public IPs, reservations, and non-Stado resources are not enumerated",
             ),
-            Self::Box => Some(
-                "Box: externally owned marketplace capacity has no standing VM inventory",
+            Self::Boat => Some(
+                "Boat: sandboxes are created per job and released with it; there is no standing VM inventory",
             ),
             Self::Arkane
             | Self::Crusoe

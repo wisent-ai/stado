@@ -23,6 +23,10 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+### Changed
+
+- **The sandbox provider is Boat, and Stado speaks Boat Public API v1:** Box was renamed Boat, and its legacy API (`ascii.dev/api/box/v1`, `/boxes`) answers with a `Sunset` notice. The provider id is now `boat` (the `box` and `box-ascii` names are gone), its settings are `boat.ttl_seconds`, `boat.release_mode` and `boat.api_url` in the profile with the environment overrides `BOAT_TTL_SECONDS`, `BOAT_RELEASE_MODE` and `BOAT_API_URL` (the `BOX_*` variables are no longer read), and its key is the Skarbiec item tagged `stado:role:cloud-boat`, which a workload grant may not carry. Requests go to `https://boat.dev/api/v1/sandboxes` with Boat's own response types; a deletion carries the confirmation Boat requires and accepts Boat's background deletion; a sandbox Boat cancelled for want of a machine fails its job by name; an account at its active-sandbox limit is refused with both counts; and an answer that echoes the API key has it replaced by `[REDACTED]` before it becomes an error.
+
 ### Fixed
 
 - **The Desktop's read-only judgement and the quota responder's billing judgement read a choice, not a line's first word:** both asked a model through `oko gateway send` to answer one line and took the line's first word as the verdict, so a model that framed its answer otherwise was read as the other option. Both now ask through `oko gateway object` for one object whose `choice` is one of the named options (`READ` or `CHANGES`, `BILLING` or `OTHER`) with its reason, bound to a strict JSON Schema; an answer outside the options is the error. The quota responder also refuses a ticket listed without a name and a clock before the Unix epoch by name, instead of replying to ticket "" or stamping its reply at zero.

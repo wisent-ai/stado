@@ -9,8 +9,8 @@ use serde_json::{Map, Value};
 
 use super::errors::BoxError;
 
-/// A box's lifecycle state as the Box API names it. A state this list does
-/// not hold is `Unknown`: neither active nor serving, and the box record
+/// A sandbox's lifecycle state as Boat names it. A state this list does not
+/// hold is `Unknown`: neither active nor serving, and the sandbox record
 /// keeps the word itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -25,12 +25,15 @@ pub enum BoxState {
     Archiving,
     Archived,
     Error,
+    /// A create or fork that got no machine: Boat removed it, reports it
+    /// once and then answers that it does not exist.
+    Cancelled,
     #[serde(other)]
     Unknown,
 }
 
 impl BoxState {
-    /// The box holds a machine: it is starting, serving or being archived.
+    /// The sandbox holds a machine: it is starting, serving or stopping.
     pub fn active(self) -> bool {
         match self {
             Self::Init
@@ -41,11 +44,11 @@ impl BoxState {
             | Self::Idle
             | Self::Running
             | Self::Archiving => true,
-            Self::Archived | Self::Error | Self::Unknown => false,
+            Self::Archived | Self::Error | Self::Cancelled | Self::Unknown => false,
         }
     }
 
-    /// The box accepts work now.
+    /// The sandbox accepts work now.
     pub fn serving(self) -> bool {
         match self {
             Self::Ready | Self::Idle | Self::Running => true,
@@ -56,12 +59,13 @@ impl BoxState {
             | Self::Archiving
             | Self::Archived
             | Self::Error
+            | Self::Cancelled
             | Self::Unknown => false,
         }
     }
 
-    /// What the state means for the box's life: an archived box has given
-    /// its machine back, so it is ended, not stopped.
+    /// What the state means for the sandbox's life: a stopped (archived)
+    /// sandbox has given its machine back, so it is ended, not stopped.
     pub fn phase(self) -> crate::providers::LifecyclePhase {
         use crate::providers::LifecyclePhase;
         match self {
@@ -72,7 +76,9 @@ impl BoxState {
             | Self::Ready
             | Self::Idle
             | Self::Running => LifecyclePhase::Running,
-            Self::Archiving | Self::Archived | Self::Error => LifecyclePhase::Ended,
+            Self::Archiving | Self::Archived | Self::Error | Self::Cancelled => {
+                LifecyclePhase::Ended
+            }
             Self::Unknown => LifecyclePhase::Unknown,
         }
     }
@@ -102,7 +108,10 @@ impl BoxInfo {
     pub fn lifecycle(&self) -> BoxState {
         match BoxState::deserialize(Value::String(self.state.clone())) {
             Ok(state) => state,
-            Err(_) => BoxState::Unknown,
+            Err(error) => unreachable!(
+                "BoxState reads every word through its `other` variant, yet {:?} was refused: {error}",
+                self.state
+            ),
         }
     }
 }
@@ -123,21 +132,18 @@ impl PromptStatus {
     /// The status `word` names, refused naming the word when it is none.
     pub fn read(word: &str) -> Result<Self, BoxError> {
         Self::deserialize(Value::String(word.to_string())).map_err(|error| {
-            BoxError::transport(format!("Box prompt status {word:?} is invalid: {error}"))
+            BoxError::transport(format!("Boat prompt status {word:?} is invalid: {error}"))
         })
     }
 }
 
 impl std::fmt::Display for PromptStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 
-/// Python `BoxLimits`.
+/// What `GET /limits` says about starting a sandbox now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoxLimits {
     pub can_start: bool,
@@ -145,7 +151,6 @@ pub struct BoxLimits {
     pub max_active_boxes: i64,
     pub billing_status: String,
     pub blocked_reason: String,
-    pub credit_balance_seconds: i64,
 }
 
 /// Python `BoxCommandResult`.

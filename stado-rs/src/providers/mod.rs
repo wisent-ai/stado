@@ -30,7 +30,7 @@ pub use r#box::BoxProvider;
 /// names and shape rejections, provider-specific exceptions otherwise.
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
-    /// Box provider failures (configuration/transport/API/value).
+    /// Boat provider failures (configuration/transport/API/value).
     #[error(transparent)]
     Box(#[from] r#box::BoxError),
     /// GCP (GCE REST) failures.
@@ -76,11 +76,12 @@ pub struct InstanceRemovalObservation {
 
 /// Python `providers.base.Provider`.
 ///
-/// `instance_ref` is the `"name@zone"`-style opaque handle returned by
-/// [`Provider::create_instance`] (the box provider uses the raw box id).
+/// `instance_ref` is the opaque handle [`Provider::create_instance`] returns:
+/// the instance name and its zone joined by an at sign, or the raw sandbox
+/// id for the Boat provider.
 #[async_trait]
 pub trait Provider: Send + Sync {
-    /// Create instance. Returns the `"name@zone"` ref, or `None` on
+    /// Create instance. Returns the instance ref, or `None` on
     /// capacity exhaustion. When `preemptible` is true the instance is
     /// launched as Spot/Preemptible — cheaper but can be terminated by the
     /// provider at any time.
@@ -184,7 +185,7 @@ pub trait Provider: Send + Sync {
     /// Return `{accel_type: count}` for all wisent-* instances.
     async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError>;
 
-    /// Return `(name@zone, age_seconds)` for running agent VMs. Optional —
+    /// Return `(instance ref, age_seconds)` for running agent VMs. Optional —
     /// default empty (providers without a VM fleet); the dead-agent reaper
     /// then has nothing to reap.
     async fn list_running_instance_refs_with_age(
@@ -254,7 +255,7 @@ pub fn get_provider(name: &str) -> Result<Arc<dyn Provider>, ProviderError> {
         .ok_or_else(|| ProviderError::Value(format!("Unknown provider: {name}")))?;
     require_enabled(variant.id)?;
     match variant.adapter {
-        RuntimeAdapter::Compute(ComputeAdapter::Box) => Ok(Arc::new(BoxProvider::from_env()?)),
+        RuntimeAdapter::Compute(ComputeAdapter::Boat) => Ok(Arc::new(BoxProvider::from_env()?)),
         // Credentials and storage resolve on the first API call.
         RuntimeAdapter::Compute(ComputeAdapter::Gcp) => Ok(Arc::new(gcp::GcpProvider::from_env())),
         RuntimeAdapter::Compute(ComputeAdapter::Aws) => Ok(Arc::new(aws::AwsProvider::from_env())),

@@ -1,8 +1,7 @@
-//! Box workload start: READY -> STARTING -> RUNNING.
-//!
-//! Port of `stado/scheduler/dispatch/box/runtime.py`.
+//! Boat workload start: READY -> STARTING -> RUNNING.
 
 use crate::models::Job;
+use crate::providers::r#box::types::HTTP_NOT_FOUND;
 use crate::providers::r#box::BoxError;
 use crate::queue::leases::{LeaseState, ProviderLease};
 
@@ -31,7 +30,7 @@ impl BoxRuntime<'_> {
             state if state == LeaseState::Starting.as_str() => false,
             other => {
                 return Err(BoxDispatchError::value(format!(
-                    "cannot start Box workload from {other}"
+                    "cannot start a Boat workload from {other}"
                 )));
             }
         };
@@ -60,7 +59,7 @@ impl BoxRuntime<'_> {
                 .await
             {
                 Ok(_) => {}
-                Err(BoxError::Api(api)) if api.status == 404 => fresh = true,
+                Err(BoxError::Api(api)) if api.status == HTTP_NOT_FOUND => fresh = true,
                 Err(err) => return Err(err.into()),
             }
         }
@@ -101,7 +100,7 @@ impl BoxRuntime<'_> {
             self.fail(
                 job,
                 lease,
-                "Box launch marker exists without a live or completed process",
+                "the Boat launch marker exists without a live or completed process",
                 false,
             )
             .await?;
@@ -117,10 +116,10 @@ impl BoxRuntime<'_> {
         format!("[stado-operation:{}]", lease.operation_id)
     }
 
-    /// Python `_start_prompt`. A prompt is submitted only when the box's
-    /// whole prompt log carries no prompt marked with this operation: a
-    /// submission the box accepted is in its log, so an earlier attempt that
-    /// never reached the box is submitted now instead of waiting on a clock.
+    /// A prompt is submitted only when the sandbox's whole prompt log carries
+    /// no prompt marked with this operation: a submission the sandbox
+    /// accepted is in its log, so an earlier attempt that never reached it is
+    /// submitted now instead of waiting on a clock.
     async fn start_prompt(
         &self,
         job: &mut Job,
@@ -128,7 +127,7 @@ impl BoxRuntime<'_> {
     ) -> Result<bool, BoxDispatchError> {
         if job.prompt.is_empty() || job.prompt_provider.is_empty() {
             return Err(BoxDispatchError::value(
-                "box-prompt requires prompt and prompt_provider",
+                "a box-prompt job requires prompt and prompt_provider",
             ));
         }
         let box_id = lease.provider_resource_id.clone();
@@ -136,8 +135,11 @@ impl BoxRuntime<'_> {
         let mut prompt_id = lease.prompt_id.clone();
         if prompt_id.is_empty() {
             let mut keepalive = self.keepalive_handle(lease);
-            prompt_id =
-                recover_prompt_id(&self.provider.client, &box_id, &marker, &mut keepalive).await?;
+            if let Some(recovered) =
+                recover_prompt_id(&self.provider.client, &box_id, &marker, &mut keepalive).await?
+            {
+                prompt_id = recovered;
+            }
         }
         if prompt_id.is_empty() {
             let run = self
@@ -157,7 +159,7 @@ impl BoxRuntime<'_> {
             self.fail(
                 job,
                 lease,
-                "Box accepted the prompt without returning its id",
+                "Boat accepted the prompt without returning its id",
                 false,
             )
             .await?;

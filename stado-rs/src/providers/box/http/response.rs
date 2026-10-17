@@ -7,7 +7,7 @@
 use serde_json::{Map, Value};
 
 use super::super::types::{
-    first_truthy_str, required_dict, safe_text, BoxApiError, BoxError, TRANSIENT_HTTP,
+    first_truthy_str, required_dict, safe_text, transient_status, BoxApiError, BoxError,
 };
 
 /// The whole response body.
@@ -22,33 +22,39 @@ pub(super) fn parse_json(raw: &[u8]) -> Result<Map<String, Value>, BoxError> {
         return Ok(Map::new());
     }
     let text =
-        std::str::from_utf8(raw).map_err(|_| BoxError::transport("Box returned invalid JSON"))?;
-    let value: Value =
-        serde_json::from_str(text).map_err(|_| BoxError::transport("Box returned invalid JSON"))?;
+        std::str::from_utf8(raw).map_err(|_| BoxError::transport("Boat returned invalid JSON"))?;
+    let value: Value = serde_json::from_str(text)
+        .map_err(|_| BoxError::transport("Boat returned invalid JSON"))?;
     required_dict(value, "JSON")
 }
 
 /// Python `_raise_http_error`: code/message resolve payload -> nested error
 /// object -> defaults.
 pub(super) fn api_error(status: u16, raw: &[u8]) -> BoxError {
-    let payload: Map<String, Value> = if raw.is_empty() {
-        Map::new()
+    let parsed = if raw.is_empty() {
+        Ok(Value::Object(Map::new()))
     } else {
-        std::str::from_utf8(raw)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(text).ok())
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default()
+        serde_json::from_slice::<Value>(raw)
+    };
+    // A body that is not a JSON object names no code or message; the
+    // sentence below then carries the body and why it could not be read.
+    let (payload, unreadable) = match parsed {
+        Ok(Value::Object(object)) => (object, String::new()),
+        Ok(other) => (
+            Map::new(),
+            format!(" (the body is JSON but not an object: {other})"),
+        ),
+        Err(error) => (Map::new(), format!(" (the body is not JSON: {error})")),
     };
     let nested = payload.get("error").and_then(Value::as_object);
     let code = first_truthy_str(
         &[payload.get("code"), nested.and_then(|e| e.get("code"))],
         "http_error",
     );
-    // Box's own body when it names no message: a sentence written here read
-    // as Box's, and a body that was not JSON was dropped whole.
+    // Boat's own body when it names no message: a sentence written here read
+    // as Boat's, and a body that was not JSON was dropped whole.
     let unnamed = format!(
-        "Box answered HTTP {status} without a message: {}",
+        "Boat answered HTTP {status} without a message: {}{unreadable}",
         String::from_utf8_lossy(raw).trim()
     );
     let message = first_truthy_str(
@@ -64,7 +70,7 @@ pub(super) fn api_error(status: u16, raw: &[u8]) -> BoxError {
         &code,
         &message,
         &request_id,
-        TRANSIENT_HTTP.contains(&status),
+        transient_status(status),
     )
     .into()
 }
@@ -78,7 +84,7 @@ pub(super) fn transport_error(err: reqwest::Error) -> BoxError {
         "transport_error"
     };
     BoxError::transport(format!(
-        "Box transport failed: {}",
+        "Boat transport failed: {}",
         safe_text(kind, "transport_error")
     ))
 }

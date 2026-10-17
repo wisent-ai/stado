@@ -43,7 +43,7 @@ pub fn setting(vendor: GpuCloudVendor, key: &str) -> Result<String, GpuCloudErro
             vendor.display_name()
         )));
     }
-    Ok(crate::config::gpu_cloud_setting(vendor.provider(), key)
+    Ok(crate::config::compute_setting(vendor.provider(), key)
         .trim()
         .to_string())
 }

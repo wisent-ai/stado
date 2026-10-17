@@ -56,6 +56,15 @@ pub(in crate::capabilities) const AWS_COMPUTE_CONFIG: &[ConfigField] = &[
     ConfigField::scalar("ami-id", "AWS_AMI_ID", "aws.ami_id"),
 ];
 
+/// The Boat sandbox provider: how long a sandbox it creates lives before
+/// Boat stops it, what releasing one does (`stop` or `delete`), and an API
+/// base other than Boat's public one.
+pub(in crate::capabilities) const BOAT_COMPUTE_CONFIG: &[ConfigField] = &[
+    ConfigField::scalar("api-url", "BOAT_API_URL", "boat.api_url"),
+    ConfigField::scalar("ttl-seconds", "BOAT_TTL_SECONDS", "boat.ttl_seconds").required(),
+    ConfigField::scalar("release-mode", "BOAT_RELEASE_MODE", "boat.release_mode").required(),
+];
+
 pub(in crate::capabilities) const GCS_CONFIG: &[ConfigField] =
     &[
         ConfigField::scalar("bucket", "WC_BUCKET", "storage.gcs.bucket")

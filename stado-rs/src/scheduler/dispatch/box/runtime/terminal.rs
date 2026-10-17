@@ -114,7 +114,7 @@ impl BoxRuntime<'_> {
         } else {
             job.state = job_state::FAILED.to_string();
             job.error = Some(if lease.last_error.is_empty() {
-                "Box workload failed".to_string()
+                "the Boat workload failed and its lease recorded no error".to_string()
             } else {
                 lease.last_error.clone()
             });

@@ -1,5 +1,8 @@
-//! Shared Box-dispatch state: the per-tick bounds, the layer error type, and
-//! the failure/relinquish helpers every pass in this tree calls.
+//! Shared Boat-dispatch state: the read of a prefix's Boat jobs, the layer
+//! error type, and the failure/relinquish helpers every pass in this tree
+//! calls.
+
+use futures::{StreamExt, TryStreamExt};
 
 use crate::models::{job_state, Job};
 use crate::providers::r#box::BoxError;
@@ -7,6 +10,25 @@ use crate::queue::leases::{LeaseError, LeaseState, ProviderLease, ProviderLeaseS
 use crate::queue::{JobStorage, StorageError};
 
 use super::super::runtime::now_iso;
+
+/// Every Boat job under `prefix`, each read once, with the store's measured
+/// worker count in flight. A tick advances every Boat job it finds, so no
+/// window is chosen; a job between two prefixes reads as absent and is
+/// picked up by the next tick.
+pub(super) async fn boat_jobs(store: &JobStorage, prefix: &str) -> Result<Vec<Job>, StorageError> {
+    let ids = store.list_job_ids(prefix).await?;
+    let workers = crate::queue::migrations::bulk_workers()?;
+    let read: Vec<Option<Job>> = futures::stream::iter(&ids)
+        .map(|id| store.read_job(prefix, id))
+        .buffered(workers)
+        .try_collect()
+        .await?;
+    Ok(read
+        .into_iter()
+        .flatten()
+        .filter(|job| crate::capabilities::ProviderId::Boat.matches(&job.provider))
+        .collect())
+}
 
 /// Python `_RENEWED_STATES`.
 pub(super) fn renewed_state(state: &str) -> bool {
@@ -58,7 +80,7 @@ impl BoxDispatchError {
     /// Python `type(exc).__name__` for the failure log line.
     fn type_name(&self) -> &'static str {
         match self {
-            BoxDispatchError::Box(_) => "BoxError",
+            BoxDispatchError::Box(_) => "BoatError",
             BoxDispatchError::Lease(_) => "LeaseError",
             BoxDispatchError::Storage(_) => "StorageError",
             BoxDispatchError::Value(_) => "ValueError",
@@ -67,10 +89,10 @@ impl BoxDispatchError {
     }
 }
 
-/// Python `_log_failure`.
+/// One failed job of a Boat pass, said on stderr.
 pub(super) fn log_failure(job_id: &str, exc: &BoxDispatchError) {
     let text: String = exc.to_string().replace(['\r', '\n'], " ");
-    eprintln!("[box] job={job_id} {}: {text}", exc.type_name());
+    eprintln!("[boat] job={job_id} {}: {text}", exc.type_name());
 }
 
 /// Python `_fail_queued`.
@@ -101,7 +123,7 @@ pub(super) async fn relinquish(leases: &ProviderLeaseStore, lease: Option<Provid
         Err(error) => {
             let text = error.to_string().replace(['\r', '\n'], " ");
             eprintln!(
-                "[box] provider lease owned by {} was not released: its owner fields do not parse: {text}",
+                "[boat] provider lease owned by {} was not released: its owner fields do not parse: {text}",
                 lease.owner_id
             );
             return;
@@ -117,6 +139,6 @@ pub(super) async fn relinquish(leases: &ProviderLeaseStore, lease: Option<Provid
     .await;
     if let Err(error) = result {
         let text = error.to_string().replace(['\r', '\n'], " ");
-        eprintln!("[box] provider lease owned by {owner} was not released: {text}");
+        eprintln!("[boat] provider lease owned by {owner} was not released: {text}");
     }
 }

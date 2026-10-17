@@ -1,11 +1,10 @@
-//! Box by ASCII provider adapter for fixed-shape Linux sandboxes.
+//! The Boat provider adapter for Boat sandboxes (Boat Public API v1).
 //!
-//! Port of `stado/providers/box/__init__.py`. The provider is a lifecycle
-//! adapter: admission goes through `targets::box_capabilities`, capacity is
-//! preflighted against the account limits endpoint, TTL renews via PATCH,
-//! and release is stop-or-delete per `BOX_RELEASE_MODE`. Legacy
-//! `delete_instance` calls on a box still referenced by a running/ job
-//! bridge through the fenced cancel path
+//! The provider is a lifecycle adapter: admission goes through
+//! `targets::box_capabilities`, capacity is preflighted against the account
+//! limits endpoint, the sandbox's auto-stop renews via PATCH, and release is
+//! stop-or-delete per `boat.release_mode`. A deletion of a sandbox a
+//! running/ job still references bridges through the fenced cancel path
 //! (`scheduler::dispatch::box::cancel_box_for_legacy_move`).
 
 mod adapter;

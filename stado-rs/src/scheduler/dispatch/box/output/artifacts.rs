@@ -17,7 +17,7 @@ fn safe_artifact_path(value: &str) -> Result<String, BoxDispatchError> {
     let bad = path.is_empty() || path.starts_with('/') || path.split('/').any(|part| part == "..");
     if bad {
         return Err(BoxDispatchError::value(
-            "Box artifact path must be relative and contained",
+            "a Boat artifact path must be relative and contained",
         ));
     }
     Ok(path.to_string())

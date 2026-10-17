@@ -18,7 +18,7 @@ pub enum ResolvedProvider {
         /// The provider client.
         provider: Arc<dyn Provider>,
     },
-    /// A Box provider (box/box-ascii): the lease state machine tick.
+    /// The Boat provider: the lease state machine tick.
     Box {
         /// Provider name from `WC_PROVIDERS`.
         name: String,
@@ -49,7 +49,7 @@ pub fn resolve_providers() -> Vec<ResolvedProvider> {
                 crate::capabilities::ComputeAdapter::ExistingHost,
             ) => continue,
             crate::capabilities::RuntimeAdapter::Compute(
-                crate::capabilities::ComputeAdapter::Box,
+                crate::capabilities::ComputeAdapter::Boat,
             ) => match BoxProvider::from_env() {
                 Ok(provider) => out.push(ResolvedProvider::Box {
                     name: variant.id.to_string(),

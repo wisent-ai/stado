@@ -59,7 +59,7 @@ impl Default for PlacementPolicy {
                 ProviderId::Gcp,
                 ProviderId::Azure,
                 ProviderId::Aws,
-                ProviderId::Box,
+                ProviderId::Boat,
                 ProviderId::Vast,
             ]
             .into_iter()

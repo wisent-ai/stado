@@ -1,20 +1,14 @@
-//! Box command, SSH-key, and interrupt verbs.
-//!
-//! Port of the command half of `stado/providers/box/client.py`.
+//! Boat command, SSH-key, and interrupt verbs.
 
 use serde_json::{json, Map, Value};
 
 use super::super::types::{jbool, jstr, BoxCommandResult, BoxError};
 use super::BoxClient;
 
-/// The longest a command may run inside one call, as the Box API defines
-/// it (its accepted `timeoutSeconds` window is 1..=60). The commands Stado
-/// sends return at once (launch in the background, signal a group), so every
-/// call offers the API's whole window rather than a value of its own.
-const API_COMMAND_WINDOW_SECONDS: i64 = 60;
-
 impl BoxClient {
-    /// POST /boxes/{id}/commands with the API's whole command window.
+    /// POST /sandboxes/{id}/commands. The commands Stado sends return at
+    /// once (launch in the background, signal a group), so the request names
+    /// no limit of its own; the work they start runs detached.
     pub async fn execute_command(
         &self,
         box_id: &str,
@@ -22,9 +16,9 @@ impl BoxClient {
         cwd: &str,
     ) -> Result<BoxCommandResult, BoxError> {
         if command.is_empty() {
-            return Err(BoxError::value("Box command is required"));
+            return Err(BoxError::value("a Boat sandbox command is required"));
         }
-        let mut body = json!({"command": command, "timeoutSeconds": API_COMMAND_WINDOW_SECONDS});
+        let mut body = json!({"command": command});
         if !cwd.is_empty() {
             body["cwd"] = Value::from(cwd);
         }
@@ -51,15 +45,17 @@ impl BoxClient {
         })
     }
 
-    /// POST /boxes/{id}/sshkey; the key must look like an OpenSSH public
-    /// key (Python `ValueError`).
+    /// POST /sandboxes/{id}/sshkey; the key must look like an OpenSSH public
+    /// key.
     pub async fn configure_ssh_key(
         &self,
         box_id: &str,
         public_key: &str,
     ) -> Result<Map<String, Value>, BoxError> {
         if !public_key.starts_with("ssh-") {
-            return Err(BoxError::value("OpenSSH public key is required"));
+            return Err(BoxError::value(
+                "an OpenSSH public key (ssh-...) is required for a Boat sandbox",
+            ));
         }
         let body = json!({"key": public_key});
         self.transport
@@ -68,12 +64,12 @@ impl BoxClient {
                 &format!("{}/sshkey", Self::box_path(box_id)?),
                 Some(&body),
                 &[],
-                &["sshkey.configured", "box.sshkey"],
+                &["ssh_key.configured"],
             )
             .await
     }
 
-    /// POST /boxes/{id}/interrupt.
+    /// POST /sandboxes/{id}/interrupt: every conversation on the sandbox.
     pub async fn interrupt(&self, box_id: &str) -> Result<Map<String, Value>, BoxError> {
         self.transport
             .request_json(
@@ -81,7 +77,7 @@ impl BoxClient {
                 &format!("{}/interrupt", Self::box_path(box_id)?),
                 None,
                 &[],
-                &["box.interrupted"],
+                &["sandbox.interrupted"],
             )
             .await
     }

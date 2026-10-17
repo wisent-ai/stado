@@ -1,7 +1,7 @@
 //! The request path: binary bodies and JSON envelopes, read whole.
 //!
-//! Python `request(..., binary=True)` and `request(..., binary=False)`
-//! over the shared `send` that resolves the bearer token.
+//! Binary and JSON requests over the shared `send`, which resolves the
+//! bearer token from the vault on every call.
 
 use serde_json::{Map, Value};
 
@@ -9,20 +9,23 @@ use super::super::types::BoxError;
 use super::response::{api_error, parse_json, read_body, transport_error};
 use super::BoxHttpTransport;
 
+/// The field of the Boat credential item that holds the account's API key.
+const CREDENTIAL_FIELD: &str = "api_key";
+
 impl BoxHttpTransport {
-    /// Python `request(..., binary=True)`: raw body, no ok/type validation
-    /// (artifacts are not JSON envelopes).
+    /// A raw body, with no `ok` or `type` validation: artifacts are not JSON
+    /// envelopes.
     pub async fn request_binary(
         &self,
         method: &str,
         path: &str,
         query: &[(&str, String)],
     ) -> Result<Vec<u8>, BoxError> {
-        self.send(method, path, None, query).await
+        self.send(method, path, None, query, &[]).await
     }
 
-    /// Python `request(..., binary=False)`: JSON envelope with the `ok=true`
-    /// and expected-`type` contract enforced.
+    /// A JSON envelope with the `ok=true` and expected-`type` contract
+    /// enforced.
     pub async fn request_json(
         &self,
         method: &str,
@@ -31,15 +34,35 @@ impl BoxHttpTransport {
         query: &[(&str, String)],
         expected_types: &[&str],
     ) -> Result<Map<String, Value>, BoxError> {
-        let raw = self.send(method, path, body, query).await?;
+        self.request_json_headed(method, path, body, query, &[], expected_types)
+            .await
+    }
+
+    /// [`Self::request_json`] with request headers an operation requires,
+    /// such as the confirmation a permanent deletion carries.
+    pub async fn request_json_headed(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        query: &[(&str, String)],
+        headers: &[(&str, &str)],
+        expected_types: &[&str],
+    ) -> Result<Map<String, Value>, BoxError> {
+        let raw = self.send(method, path, body, query, headers).await?;
         let payload = parse_json(&raw)?;
         if payload.get("ok") != Some(&Value::Bool(true)) {
-            return Err(BoxError::transport("Box success response lacks ok=true"));
+            return Err(BoxError::transport(format!(
+                "Boat answered {method} {path} without ok=true"
+            )));
         }
+        let answered = payload.get("type").and_then(Value::as_str);
         if !expected_types.is_empty()
-            && !expected_types.contains(&payload.get("type").and_then(Value::as_str).unwrap_or(""))
+            && !answered.is_some_and(|kind| expected_types.contains(&kind))
         {
-            return Err(BoxError::transport("Box response has an unexpected type"));
+            return Err(BoxError::transport(format!(
+                "Boat answered {method} {path} with type {answered:?}, not one of {expected_types:?}"
+            )));
         }
         Ok(payload)
     }
@@ -53,17 +76,25 @@ impl BoxHttpTransport {
         path: &str,
         body: Option<&Value>,
         query: &[(&str, String)],
+        headers: &[(&str, &str)],
     ) -> Result<Vec<u8>, BoxError> {
         let api_key = if self.api_key.is_empty() {
-            crate::skarbiec::read_string("box", "api_key")
+            let role =
+                crate::capabilities::cloud_credential_role(crate::capabilities::ProviderId::Boat);
+            match crate::skarbiec::read_string(&role, CREDENTIAL_FIELD)
                 .await
                 .map_err(|err| BoxError::configuration(err.to_string()))?
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    BoxError::configuration(
-                        "Skarbiec item stado-box field api_key is required for Box provider",
-                    )
-                })?
+            {
+                Some(value) if !value.is_empty() => value,
+                Some(_) | None => {
+                    return Err(BoxError::configuration(format!(
+                        "no live Skarbiec item tagged stado:role:{role} carries a non-empty \
+                         field {CREDENTIAL_FIELD}; store the Boat API key with stado credentials \
+                         item put --host <vault host> --role {role} --type api-key and the JSON \
+                         object on standard input"
+                    )))
+                }
+            }
         } else {
             self.api_key.clone()
         };
@@ -74,8 +105,10 @@ impl BoxHttpTransport {
             .request(method, self.url(path, query))
             .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
             .header(reqwest::header::ACCEPT, "application/json");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
         if let Some(body) = body {
-            // Python json.dumps(body, separators=(",", ":")) — compact.
             let data = serde_json::to_vec(body).map_err(|err| BoxError::value(err.to_string()))?;
             request = request
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -84,10 +117,13 @@ impl BoxHttpTransport {
         let response = crate::wait::request(request)
             .await
             .map_err(transport_error)?;
-        let status = response.status().as_u16();
+        let status = response.status();
         let raw = read_body(response).await?;
-        if !(200..300).contains(&status) {
-            return Err(api_error(status, &raw));
+        if !status.is_success() {
+            // An answer that echoes the bearer must not carry it into an
+            // error, a log or a job record.
+            let shown = String::from_utf8_lossy(&raw).replace(api_key.as_str(), "[REDACTED]");
+            return Err(api_error(status.as_u16(), shown.as_bytes()));
         }
         Ok(raw)
     }

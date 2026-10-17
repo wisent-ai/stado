@@ -1,6 +1,6 @@
-//! The generic `Provider` surface of the Box adapter.
+//! The generic `Provider` surface of the Boat adapter.
 //!
-//! Python `create_instance`, `delete_instance`, `instance_exists`,
+//! `create_instance`, `delete_instance`, `instance_exists`,
 //! `instance_lifecycle_state` and `list_running_instances`, together with
 //! the dispatch-error lift that `delete_instance` needs for its fenced
 //! cancel bridge.
@@ -11,12 +11,12 @@ use async_trait::async_trait;
 
 use crate::providers::{Provider, ProviderError};
 
-use super::super::types::BoxError;
+use super::super::types::{BoxError, HTTP_NOT_FOUND};
 use super::BoxProvider;
 
-/// Map the box-dispatch layer's error onto the provider error surface:
-/// Box/storage failures keep their native variants; lease conflicts and
-/// Python-style ValueError/RuntimeError collapse to the Value arm.
+/// Map the Boat-dispatch layer's error onto the provider error surface:
+/// Boat and storage failures keep their native variants; lease conflicts
+/// and argument or runtime failures collapse to the Value arm.
 fn box_dispatch_to_provider_error(
     err: crate::scheduler::dispatch::r#box::BoxDispatchError,
 ) -> ProviderError {
@@ -30,10 +30,9 @@ fn box_dispatch_to_provider_error(
 
 #[async_trait]
 impl Provider for BoxProvider {
-    /// Python `create_instance`: the generic provider fields are a shape
-    /// contract; a fitting request returns the new box id as the instance
-    /// ref. Note: unlike GCP (which returns None on capacity exhaustion),
-    /// Python Box raises `BoxConfigurationError` from preflight — preserved.
+    /// The generic provider fields are a shape contract; a fitting request
+    /// returns the new sandbox id as the instance ref. An account that
+    /// cannot start a sandbox is refused by the preflight with Boat's reason.
     async fn create_instance(
         &self,
         _name: &str,
@@ -56,28 +55,24 @@ impl Provider for BoxProvider {
         ) {
             return Err(ProviderError::Value(message));
         }
-        Ok(Some(self.create_box(None).await?.box_id))
+        Ok(Some(self.create_box(self.ttl_seconds).await?.box_id))
     }
 
-    /// Python `delete_instance`: bridge the legacy CLI deletion call
-    /// through the fenced cancel path when a running/ job still references
-    /// this box; otherwise delete the box directly.
+    /// Bridge a deletion through the fenced cancel path when a running/ job
+    /// still references this sandbox; otherwise delete the sandbox directly.
     async fn delete_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
         let store = crate::queue::JobStorage::with_bucket(crate::config::bucket()).await?;
-        // Find a running/ job that still references this box. A manual
-        // scan instead of JobStorage::list_jobs: the latter's
-        // buffer_unordered closure trips rustc's "FnOnce is not general
-        // enough" check when instantiated inside an async-trait method.
+        // Find a running/ job that still references this sandbox, one job at
+        // a time: a buffered read's closure trips rustc's "FnOnce is not
+        // general enough" check when instantiated inside an async-trait
+        // method, and the scan stops at the first match.
         let mut found: Option<crate::models::Job> = None;
-        for path in store.list_paths("running/", 0).await? {
-            // Strict-raise on corrupt JSON, like Python list_jobs.
-            let Some(text) = store.download_text(&path).await? else {
+        for job_id in store.list_job_ids("running").await? {
+            let Some(candidate) = store.read_job("running", &job_id).await? else {
                 continue;
             };
-            let candidate =
-                crate::models::Job::from_json(&text).map_err(crate::queue::StorageError::Json)?;
             if candidate.state == crate::models::job_state::RUNNING
-                && crate::capabilities::ProviderId::Box.matches(&candidate.provider)
+                && crate::capabilities::ProviderId::Boat.matches(&candidate.provider)
                 && candidate.instance_ref.as_deref() == Some(instance_ref)
             {
                 found = Some(candidate);
@@ -88,8 +83,8 @@ impl Provider for BoxProvider {
             self.client.delete_box(instance_ref).await?;
             return Ok(());
         };
-        // Fenced cancel bridge: the Python path guarantees the scheduler
-        // can't race a legacy delete against a live dispatch.
+        // Fenced cancel bridge: the scheduler cannot race a deletion against
+        // a live dispatch.
         let owner = format!("cli:{}", std::process::id());
         crate::scheduler::dispatch::r#box::cancel_box_for_legacy_move(
             &store, self, &mut job, &owner,
@@ -98,17 +93,18 @@ impl Provider for BoxProvider {
         .map_err(box_dispatch_to_provider_error)
     }
 
-    /// Python `instance_exists`: alive iff the box state is active; 404 is
-    /// False.
+    /// Alive while the sandbox state is active; a sandbox Boat no longer
+    /// holds is not alive.
     async fn instance_exists(&self, instance_ref: &str) -> Result<bool, ProviderError> {
         match self.client.get_box(instance_ref).await {
             Ok(info) => Ok(info.lifecycle().active()),
-            Err(BoxError::Api(api)) if api.status == 404 => Ok(false),
+            Err(BoxError::Api(api)) if api.status == HTTP_NOT_FOUND => Ok(false),
             Err(err) => Err(err.into()),
         }
     }
 
-    /// The box's state word and its meaning; 404 is None.
+    /// The sandbox's state word and its meaning; `None` once Boat no longer
+    /// holds it.
     async fn instance_lifecycle_state(
         &self,
         instance_ref: &str,
@@ -118,23 +114,27 @@ impl Provider for BoxProvider {
                 phase: info.lifecycle().phase(),
                 word: info.state,
             })),
-            Err(BoxError::Api(api)) if api.status == 404 => Ok(None),
+            Err(BoxError::Api(api)) if api.status == HTTP_NOT_FOUND => Ok(None),
             Err(err) => Err(err.into()),
         }
     }
 
-    /// Python `list_running_instances`: `{"box-cpu": count}` over the
-    /// running-state boxes, empty when none.
+    /// `{"box-cpu": count}` over the serving sandboxes, empty when none.
     async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError> {
-        let count = self
+        let serving = self
             .client
             .list_boxes()
             .await?
             .iter()
             .filter(|b| b.lifecycle().serving())
-            .count() as i64;
+            .count();
         let mut out = BTreeMap::new();
-        if count > 0 {
+        if let Some(serving) = std::num::NonZeroUsize::new(serving) {
+            let count = i64::try_from(serving.get()).map_err(|error| {
+                ProviderError::Value(format!(
+                    "{serving} serving Boat sandboxes do not fit a count: {error}"
+                ))
+            })?;
             out.insert("box-cpu".to_string(), count);
         }
         Ok(out)

@@ -139,7 +139,7 @@ pub(in crate::cli::resources::inventory) async fn inspect_compute(
                 "physical local hosts are represented in host_registry, not a cloud VM fleet",
             ),
             Some(crate::capabilities::RuntimeAdapter::Compute(
-                crate::capabilities::ComputeAdapter::Box
+                crate::capabilities::ComputeAdapter::Boat
                 | crate::capabilities::ComputeAdapter::VastHost,
             )) => (
                 ProviderCoverage::External,

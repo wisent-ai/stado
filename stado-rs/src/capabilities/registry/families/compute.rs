@@ -2,8 +2,8 @@
 
 use crate::capabilities::catalog::ProviderId;
 use crate::capabilities::config::variants::{
-    AWS_COMPUTE_CONFIG, AZURE_COMPUTE_CONFIG, AZURE_STORAGE_CONFIG, GCP_COMPUTE_CONFIG, GCS_CONFIG,
-    LOCAL_STORAGE_CONFIG, S3_CONFIG, STADO_OBJECT_STORAGE_CONFIG,
+    AWS_COMPUTE_CONFIG, AZURE_COMPUTE_CONFIG, AZURE_STORAGE_CONFIG, BOAT_COMPUTE_CONFIG,
+    GCP_COMPUTE_CONFIG, GCS_CONFIG, LOCAL_STORAGE_CONFIG, S3_CONFIG, STADO_OBJECT_STORAGE_CONFIG,
 };
 use crate::capabilities::registry::CapabilityVariant;
 use crate::capabilities::runtime::{
@@ -77,15 +77,15 @@ pub(in crate::capabilities::registry) const COMPUTE: &[CapabilityVariant] = &[
         config: AWS_COMPUTE_CONFIG,
     },
     CapabilityVariant {
-        id: ProviderId::Box.as_str(),
-        aliases: ProviderId::Box.aliases(),
-        provider: Some(ProviderId::Box),
+        id: ProviderId::Boat.as_str(),
+        aliases: ProviderId::Boat.aliases(),
+        provider: Some(ProviderId::Boat),
         implementation: "providers::box::BoxProvider",
-        summary: "Lease externally managed fixed-shape boxes.",
+        summary: "Create, renew and release Boat sandboxes.",
         configurable: true,
         constructible: true,
-        adapter: RuntimeAdapter::Compute(ComputeAdapter::Box),
-        config: &[],
+        adapter: RuntimeAdapter::Compute(ComputeAdapter::Boat),
+        config: BOAT_COMPUTE_CONFIG,
     },
     CapabilityVariant {
         id: ProviderId::Local.as_str(),
@@ -231,14 +231,14 @@ pub(in crate::capabilities::registry) const EXECUTION: &[CapabilityVariant] = &[
         config: AWS_COMPUTE_CONFIG,
     },
     CapabilityVariant {
-        id: ProviderId::Box.as_str(),
-        aliases: ProviderId::Box.aliases(),
-        provider: Some(ProviderId::Box),
+        id: ProviderId::Boat.as_str(),
+        aliases: ProviderId::Boat.aliases(),
+        provider: Some(ProviderId::Boat),
         implementation: "providers::local::agent + providers::box",
-        summary: "Agent bootstrapped on an externally managed box.",
+        summary: "Command or agent-prompt jobs run inside a Boat sandbox.",
         configurable: true,
         constructible: false,
-        adapter: RuntimeAdapter::Execution(ExecutionAdapter::Box),
+        adapter: RuntimeAdapter::Execution(ExecutionAdapter::Boat),
         config: &[],
     },
     CapabilityVariant {

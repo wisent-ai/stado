@@ -1,42 +1,53 @@
-//! Parsing of the Box envelope into a `BoxInfo` record.
+//! Parsing of a Boat sandbox record into a `BoxInfo`.
 //!
-//! Python `parse_box_info`, the one reader that rejects a response whose id
-//! does not conform to the box-id pattern.
+//! The one reader that rejects a response whose id does not conform to the
+//! sandbox-id pattern.
 
 use serde_json::{Map, Value};
 
 use super::super::constants::box_id_pattern;
 use super::super::errors::BoxError;
 use super::super::records::BoxInfo;
-use super::coercion::{jbool, jstr, required_dict};
+use super::coercion::{jbool, jstr};
 
-/// Python `parse_box_info`: unwrap the `"box"` envelope when present,
-/// require a pattern-conforming id, default every other field.
-pub fn parse_box_info(payload: &Map<String, Value>) -> Result<BoxInfo, BoxError> {
-    let box_value = payload
-        .get("box")
-        .cloned()
-        .unwrap_or(Value::Object(payload.clone()));
-    let boxed = required_dict(box_value, "box")?;
-    let box_id = jstr(boxed.get("id"));
+/// The sandbox an answer carries under its `sandbox` key, as create, get,
+/// update, fork, stop and resume answer.
+pub fn parse_sandbox_envelope(payload: &Map<String, Value>) -> Result<BoxInfo, BoxError> {
+    match payload.get("sandbox") {
+        Some(Value::Object(record)) => parse_box_info(record),
+        Some(other) => Err(BoxError::transport(format!(
+            "Boat answered {} with a sandbox that is not an object: {other}",
+            jstr(payload.get("type"))
+        ))),
+        None => Err(BoxError::transport(format!(
+            "Boat answered {} without the sandbox it acted on",
+            jstr(payload.get("type"))
+        ))),
+    }
+}
+
+/// One sandbox record: a pattern-conforming id is required, every other
+/// field is read as Boat sent it.
+pub fn parse_box_info(record: &Map<String, Value>) -> Result<BoxInfo, BoxError> {
+    let box_id = jstr(record.get("id"));
     if !box_id_pattern().is_match(&box_id) {
-        return Err(BoxError::transport(
-            "Box response contains an invalid box id",
-        ));
+        return Err(BoxError::transport(format!(
+            "Boat answered a sandbox whose id {box_id:?} is not a Boat sandbox id"
+        )));
     }
     Ok(BoxInfo {
         box_id,
-        name: jstr(boxed.get("name")),
-        state: jstr(boxed.get("state")),
-        ip: jstr(boxed.get("ip")),
-        url: jstr(boxed.get("url")),
-        subdomain: jstr(boxed.get("subdomain")),
-        created_at: jstr(boxed.get("createdAt")),
-        updated_at: jstr(boxed.get("updatedAt")),
-        archive_after: jstr(boxed.get("archiveAfter")),
-        snapshot_available: jbool(boxed.get("snapshotAvailable")),
-        snapshot_completed_at: jstr(boxed.get("snapshotCompletedAt")),
-        last_snapshot_attempt_at: jstr(boxed.get("lastSnapshotAttemptAt")),
-        last_snapshot_status: jstr(boxed.get("lastSnapshotStatus")),
+        name: jstr(record.get("name")),
+        state: jstr(record.get("state")),
+        ip: jstr(record.get("ip")),
+        url: jstr(record.get("url")),
+        subdomain: jstr(record.get("subdomain")),
+        created_at: jstr(record.get("createdAt")),
+        updated_at: jstr(record.get("updatedAt")),
+        archive_after: jstr(record.get("archiveAfter")),
+        snapshot_available: jbool(record.get("snapshotAvailable")),
+        snapshot_completed_at: jstr(record.get("snapshotCompletedAt")),
+        last_snapshot_attempt_at: jstr(record.get("lastSnapshotAttemptAt")),
+        last_snapshot_status: jstr(record.get("lastSnapshotStatus")),
     })
 }

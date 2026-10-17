@@ -1,6 +1,4 @@
-//! Box file, artifact, and event payload readers.
-//!
-//! Port of the file/artifact/event half of `stado/providers/box/client.py`.
+//! Boat file, artifact, and event payload readers.
 
 use serde_json::{json, Map, Value};
 
@@ -8,7 +6,7 @@ use super::super::types::{jbool, jstr, BoxError, BoxEventPage};
 use super::BoxClient;
 
 impl BoxClient {
-    /// GET /boxes/{id}/files.
+    /// GET /sandboxes/{id}/files.
     pub async fn read_file(
         &self,
         box_id: &str,
@@ -29,7 +27,7 @@ impl BoxClient {
             .await
     }
 
-    /// PUT /boxes/{id}/files.
+    /// PUT /sandboxes/{id}/files.
     pub async fn write_file(
         &self,
         box_id: &str,
@@ -44,12 +42,12 @@ impl BoxClient {
                 &format!("{}/files", Self::box_path(box_id)?),
                 Some(&body),
                 &[],
-                &["file.written", "file.write"],
+                &["file.written"],
             )
             .await
     }
 
-    /// GET /boxes/{id}/artifacts (binary).
+    /// GET /sandboxes/{id}/artifacts (binary).
     pub async fn download_artifact(&self, box_id: &str, path: &str) -> Result<Vec<u8>, BoxError> {
         self.transport
             .request_binary(
@@ -60,7 +58,8 @@ impl BoxClient {
             .await
     }
 
-    /// GET /boxes/{id}/events, one page of the server's own size.
+    /// GET /sandboxes/{id}/events, one page of the server's own size. An
+    /// answer without `pageInfo` is the last page.
     pub async fn list_events(
         &self,
         box_id: &str,
@@ -82,24 +81,36 @@ impl BoxClient {
                 &["events.list"],
             )
             .await?;
-        let events_value = value
-            .get("events")
-            .and_then(Value::as_array)
-            .ok_or_else(|| BoxError::transport("Box events response has invalid events"))?;
-        let mut events = Vec::with_capacity(events_value.len());
-        for event in events_value {
-            events.push(
-                event
-                    .as_object()
-                    .cloned()
-                    .ok_or_else(|| BoxError::transport("Box events response has invalid events"))?,
-            );
+        let rows = match value.get("events") {
+            Some(Value::Array(rows)) => rows,
+            Some(other) => {
+                return Err(BoxError::transport(format!(
+                    "Boat answered the events of {box_id} with events that are not a list: {other}"
+                )))
+            }
+            None => {
+                return Err(BoxError::transport(format!(
+                    "Boat answered the events of {box_id} without events"
+                )))
+            }
+        };
+        let mut events = Vec::with_capacity(rows.len());
+        for event in rows {
+            let Value::Object(event) = event else {
+                return Err(BoxError::transport(format!(
+                    "Boat answered the events of {box_id} with an event that is not an object: {event}"
+                )));
+            };
+            events.push(event.clone());
         }
-        let page = value.get("pageInfo").and_then(Value::as_object);
+        let (next_cursor, has_more) = match value.get("pageInfo").and_then(Value::as_object) {
+            Some(page) => (jstr(page.get("nextCursor")), jbool(page.get("hasMore"))),
+            None => (String::new(), false),
+        };
         Ok(BoxEventPage {
             events,
-            next_cursor: page.map(|p| jstr(p.get("nextCursor"))).unwrap_or_default(),
-            has_more: page.is_some_and(|p| jbool(p.get("hasMore"))),
+            next_cursor,
+            has_more,
         })
     }
 }

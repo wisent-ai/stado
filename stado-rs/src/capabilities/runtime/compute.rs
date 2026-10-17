@@ -7,7 +7,7 @@ pub enum ComputeAdapter {
     Gcp,
     Azure,
     Aws,
-    Box,
+    Boat,
     ExistingHost,
     VastHost,
     /// A GPU or cloud compute vendor rented through the shared
@@ -28,7 +28,7 @@ impl ComputeAdapter {
         match self {
             Self::Gcp | Self::Azure | Self::Aws => true,
             Self::GpuCloud(vendor) => crate::providers::gpu_cloud::profile(vendor).boots_agent(),
-            Self::Box | Self::ExistingHost | Self::VastHost => false,
+            Self::Boat | Self::ExistingHost | Self::VastHost => false,
         }
     }
 
@@ -38,7 +38,7 @@ impl ComputeAdapter {
     pub const fn holds_cloud_credential(self) -> bool {
         matches!(
             self,
-            Self::Gcp | Self::Azure | Self::Aws | Self::GpuCloud(_)
+            Self::Gcp | Self::Azure | Self::Aws | Self::Boat | Self::GpuCloud(_)
         )
     }
     pub const fn provider(self) -> ProviderId {
@@ -46,7 +46,7 @@ impl ComputeAdapter {
             Self::Gcp => ProviderId::Gcp,
             Self::Azure => ProviderId::Azure,
             Self::Aws => ProviderId::Aws,
-            Self::Box => ProviderId::Box,
+            Self::Boat => ProviderId::Boat,
             Self::ExistingHost => ProviderId::Local,
             Self::VastHost => ProviderId::Vast,
             Self::GpuCloud(vendor) => vendor.provider(),

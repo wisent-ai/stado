@@ -34,7 +34,7 @@ pub(crate) async fn request_provider_removal(
     };
     if !instance.agent {
         if job_state::is_terminal(&job.state)
-            && !crate::capabilities::ProviderId::Box.matches(&instance.provider)
+            && !crate::capabilities::ProviderId::Boat.matches(&instance.provider)
         {
             return Ok(None);
         }
@@ -52,7 +52,7 @@ pub(crate) async fn request_provider_removal(
                 instance.instance_ref
             )));
         };
-        if !crate::capabilities::ProviderId::Box.matches(&lease.provider)
+        if !crate::capabilities::ProviderId::Boat.matches(&lease.provider)
             || lease.job_id != job_id
             || lease.provider != instance.provider
             || lease.provider_resource_id != instance.instance_ref
@@ -62,7 +62,7 @@ pub(crate) async fn request_provider_removal(
                 .is_err()
         {
             return Err(failure(format!(
-                "refusing to delete {}: no current dedicated Box lease matching cancellation ownership",
+                "refusing to delete {}: no current dedicated Boat lease matching cancellation ownership",
                 instance.instance_ref
             )));
         }

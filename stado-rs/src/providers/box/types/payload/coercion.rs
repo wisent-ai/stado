@@ -1,37 +1,36 @@
-//! Python-shaped coercion of Box JSON values.
-//!
-//! Python `required_dict`, the truthiness and `str()` rules, and the
-//! `str(...)` / `int(...)` / `bool(...)` field readers the `client` sibling
-//! uses on every response dict.
+//! Reading Boat's JSON values: the object check, truthiness and text.
+
+use std::num::FpCategory;
 
 use serde_json::{Map, Value};
 
 use super::super::errors::BoxError;
 
-/// Python `required_dict`.
+/// `value` as an object, refused naming the answer it came in.
 pub fn required_dict(value: Value, context: &str) -> Result<Map<String, Value>, BoxError> {
     match value {
         Value::Object(map) => Ok(map),
-        _ => Err(BoxError::transport(format!(
-            "Box {context} response is not an object"
+        other => Err(BoxError::transport(format!(
+            "Boat's {context} answer is not an object: {other}"
         ))),
     }
 }
 
-/// Python truthiness of the JSON value (None/False/0/""/[]/{} are falsy).
+/// Whether a JSON value counts as present: null, false, a zero, an empty
+/// text, list or object do not.
 pub(crate) fn py_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::Number(n) => n.as_f64().is_some_and(|f| f.classify() != FpCategory::Zero),
         Value::String(s) => !s.is_empty(),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
     }
 }
 
-/// Python `str(value)`: strings pass through, null becomes "None",
-/// booleans become "True"/"False", containers their JSON form.
+/// A JSON value as text: strings pass through, null reads `None`, booleans
+/// `True`/`False`, containers their JSON form.
 pub(crate) fn py_str(value: &Value) -> String {
     match value {
         Value::Null => "None".to_string(),
@@ -42,7 +41,8 @@ pub(crate) fn py_str(value: &Value) -> String {
     }
 }
 
-/// Python `str(value.get(key) or "")`: falsy values map to "".
+/// The text of a present value, empty for one that is absent or does not
+/// count as present.
 pub(crate) fn jstr(value: Option<&Value>) -> String {
     match value {
         Some(v) if py_truthy(v) => py_str(v),
@@ -50,42 +50,13 @@ pub(crate) fn jstr(value: Option<&Value>) -> String {
     }
 }
 
-/// Python `int(value.get(key) or "<default>")`: falsy -> default, floats
-/// truncate, strings parse (Python `int()` strips whitespace).
-pub(crate) fn jint_or(value: Option<&Value>, default: i64) -> Result<i64, BoxError> {
-    let Some(value) = value.filter(|v| py_truthy(v)) else {
-        return Ok(default);
-    };
-    match value {
-        // An integer is taken whole; a float truncates as Python's int()
-        // does; a number neither reads as is refused instead of read as 0.
-        Value::Number(n) => match (n.as_i64(), n.as_f64()) {
-            (Some(integer), _) => Ok(integer),
-            (None, Some(float)) => Ok(float as i64),
-            (None, None) => Err(BoxError::value(format!(
-                "int() argument is a number Box sent that reads as neither an integer nor a float: {n}"
-            ))),
-        },
-        Value::String(s) => s.trim().parse::<i64>().map_err(|_| {
-            BoxError::value(format!(
-                "invalid literal for int() with base 10: {:?}",
-                s.trim()
-            ))
-        }),
-        other => Err(BoxError::value(format!(
-            "int() argument must be a string or a number, not {}",
-            py_str(other)
-        ))),
-    }
-}
-
-/// Python `bool(value.get(key))`.
+/// Whether the value is present and counts as true.
 pub(crate) fn jbool(value: Option<&Value>) -> bool {
     value.is_some_and(py_truthy)
 }
 
-/// First truthy value rendered with [`py_str`], else `default_text` (Python
-/// `v1 or v2 or "<default>"` chains in error-payload parsing).
+/// The first present value as text, else `default_text`, the sentence the
+/// caller states for an answer that named none of them.
 pub(crate) fn first_truthy_str(values: &[Option<&Value>], default_text: &str) -> String {
     for value in values.iter().flatten() {
         if py_truthy(value) {

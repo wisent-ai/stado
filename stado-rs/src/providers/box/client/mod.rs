@@ -1,10 +1,8 @@
-//! Typed operations for Box Public API v1.
+//! Typed operations for Boat Public API v1.
 //!
-//! Port of `stado/providers/box/client.py`. Python subclasses the
-//! transport; here [`BoxClient`] composes a [`BoxHttpTransport`]. Every
-//! method validates its arguments exactly where the Python raises
-//! `ValueError` ([`BoxError::Value`]) and preserves the endpoint paths,
-//! expected response types, and cursor-pagination contract.
+//! [`BoxClient`] composes a [`BoxHttpTransport`]. Every method validates
+//! its arguments before the request and checks the response type Boat's
+//! OpenAPI document names for that operation.
 //!
 //! The verbs live beside this entry point: `lifecycle` (limits, create,
 //! fetch, list, update, release), `commands` (command, SSH key,
@@ -19,16 +17,16 @@ mod prompts;
 use super::http::BoxHttpTransport;
 use super::types::{box_id_pattern, BoxError};
 
-/// Python `BoxClient`: lifecycle, command, file, event, artifact, and
-/// prompt operations over the bounded transport.
+/// Lifecycle, command, file, event, artifact, and prompt operations over
+/// the transport.
 #[derive(Debug, Clone)]
 pub struct BoxClient {
     transport: BoxHttpTransport,
 }
 
-/// Python `int | None | object` sentinel for `update_box(ttl_seconds=...)`:
-/// `NotProvided` omits the key, `Clear` sends JSON null, `Set` sends a
-/// value.
+/// The auto-stop an update sets: `NotProvided` omits the key, `Clear` sends
+/// JSON null (Boat then never stops the sandbox by itself), `Set` sends a
+/// number of seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TtlUpdate {
     NotProvided,
@@ -37,8 +35,7 @@ pub enum TtlUpdate {
 }
 
 impl BoxClient {
-    /// Build a client with a validated transport (Python constructor
-    /// default: `base_url=DEFAULT_BOX_API_URL`).
+    /// Build a client with a validated transport.
     pub fn new(api_key: &str, base_url: &str) -> Result<Self, BoxError> {
         Ok(BoxClient {
             transport: BoxHttpTransport::new(api_key, base_url)?,
@@ -55,16 +52,18 @@ impl BoxClient {
         &self.transport
     }
 
-    /// Python `validate_box_id` (`ValueError` on a non-conforming id).
+    /// The sandbox id, refused when it is not a Boat sandbox id.
     pub fn validate_box_id(box_id: &str) -> Result<&str, BoxError> {
         if !box_id_pattern().is_match(box_id) {
-            return Err(BoxError::value("invalid Box id"));
+            return Err(BoxError::value(format!(
+                "{box_id:?} is not a Boat sandbox id"
+            )));
         }
         Ok(box_id)
     }
 
     fn box_path(box_id: &str) -> Result<String, BoxError> {
-        Ok(format!("/boxes/{}", Self::validate_box_id(box_id)?))
+        Ok(format!("/sandboxes/{}", Self::validate_box_id(box_id)?))
     }
 
     /// Build a client whose API key is read from Skarbiec by the transport.

@@ -12,7 +12,7 @@ pub enum ExecutionAdapter {
     Gcp,
     Azure,
     Aws,
-    Box,
+    Boat,
     Vast,
     /// An agent on a machine rented from a GPU cloud vendor.
     GpuCloud(GpuCloudVendor),
@@ -29,7 +29,7 @@ impl ExecutionAdapter {
             Self::Gcp => ProviderId::Gcp,
             Self::Azure => ProviderId::Azure,
             Self::Aws => ProviderId::Aws,
-            Self::Box => ProviderId::Box,
+            Self::Boat => ProviderId::Boat,
             Self::Vast => ProviderId::Vast,
             Self::GpuCloud(vendor) => vendor.provider(),
         }

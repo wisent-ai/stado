@@ -1,13 +1,36 @@
-//! Box lifecycle verbs: limits, create, fetch, list, update, and release.
-//!
-//! Port of the lifecycle half of `stado/providers/box/client.py`.
+//! Boat sandbox lifecycle verbs: limits, create, fetch, list, update, stop,
+//! resume, fork and delete.
 
 use serde_json::{json, Map, Value};
 
 use super::super::types::{
-    jbool, jint_or, jstr, parse_box_info, BoxError, BoxInfo, BoxLimits, HTTP_NOT_FOUND,
+    jbool, jstr, parse_box_info, parse_sandbox_envelope, BoxError, BoxInfo, BoxLimits,
+    HTTP_NOT_FOUND,
 };
 use super::{BoxClient, TtlUpdate};
+
+/// The header a permanent deletion carries, equal to the sandbox id it
+/// deletes; Boat refuses the deletion without it.
+const CONFIRM_DELETE_HEADER: &str = "X-Ascii-Confirm-Delete";
+
+/// One integer field Boat's answer is documented to carry, refused by name
+/// when it is absent or not an integer.
+fn required_integer(
+    payload: &Map<String, Value>,
+    key: &str,
+    answer: &str,
+) -> Result<i64, BoxError> {
+    match payload.get(key) {
+        Some(value) => value.as_i64().ok_or_else(|| {
+            BoxError::transport(format!(
+                "Boat answered {answer} with {key} {value}, which is not an integer"
+            ))
+        }),
+        None => Err(BoxError::transport(format!(
+            "Boat answered {answer} without {key}"
+        ))),
+    }
+}
 
 impl BoxClient {
     /// GET /limits.
@@ -18,19 +41,18 @@ impl BoxClient {
             .await?;
         Ok(BoxLimits {
             can_start: jbool(value.get("canStart")),
-            active_boxes: jint_or(value.get("activeBoxes"), 0)?,
-            max_active_boxes: jint_or(value.get("maxActiveBoxes"), 0)?,
+            active_boxes: required_integer(&value, "activeSandboxes", "GET /limits")?,
+            max_active_boxes: required_integer(&value, "maxActiveSandboxes", "GET /limits")?,
             billing_status: jstr(value.get("billingStatus")),
             blocked_reason: super::super::types::first_truthy_str(
                 &[value.get("startBlockedReason"), value.get("blockedReason")],
                 "",
             ),
-            credit_balance_seconds: jint_or(value.get("creditBalanceSeconds"), 0)?,
         })
     }
 
-    /// POST /boxes. `ttl_seconds=None` sends an explicit JSON null, like
-    /// Python `{"ttlSeconds": None, "noEnv": True}`.
+    /// POST /sandboxes. `ttl_seconds=None` sends an explicit JSON null, which
+    /// Boat reads as "never stop by itself".
     pub async fn create_box(
         &self,
         ttl_seconds: Option<i64>,
@@ -39,12 +61,12 @@ impl BoxClient {
         let body = json!({"ttlSeconds": ttl_seconds, "noEnv": no_env});
         let value = self
             .transport
-            .request_json("POST", "/boxes", Some(&body), &[], &["box.created"])
+            .request_json("POST", "/sandboxes", Some(&body), &[], &["sandbox.created"])
             .await?;
-        parse_box_info(&value)
+        parse_sandbox_envelope(&value)
     }
 
-    /// GET /boxes/{id}.
+    /// GET /sandboxes/{id}.
     pub async fn get_box(&self, box_id: &str) -> Result<BoxInfo, BoxError> {
         let value = self
             .transport
@@ -53,52 +75,65 @@ impl BoxClient {
                 &Self::box_path(box_id)?,
                 None,
                 &[],
-                &["box.info", "box.get"],
+                &["sandbox.info"],
             )
             .await?;
-        parse_box_info(&value)
+        parse_sandbox_envelope(&value)
     }
 
-    /// GET /boxes with cursor pagination (Python `list_boxes`).
+    /// GET /sandboxes, every page. An answer without `pageInfo` is the only
+    /// page there is.
     pub async fn list_boxes(&self) -> Result<Vec<BoxInfo>, BoxError> {
-        let mut boxes: Vec<BoxInfo> = Vec::new();
+        let mut sandboxes: Vec<BoxInfo> = Vec::new();
         let mut cursor = String::new();
         loop {
             let value = self
                 .transport
                 .request_json(
                     "GET",
-                    "/boxes",
+                    "/sandboxes",
                     None,
                     &[("cursor", cursor.clone()), ("sort", "asc".to_string())],
-                    &["box.list"],
+                    &["sandbox.list"],
                 )
                 .await?;
-            let rows = value
-                .get("boxes")
-                .and_then(Value::as_array)
-                .ok_or_else(|| BoxError::transport("Box list response has invalid boxes"))?;
+            let rows = match value.get("sandboxes") {
+                Some(Value::Array(rows)) => rows,
+                Some(other) => {
+                    return Err(BoxError::transport(format!(
+                        "Boat answered GET /sandboxes with sandboxes that are not a list: {other}"
+                    )))
+                }
+                None => {
+                    return Err(BoxError::transport(
+                        "Boat answered GET /sandboxes without sandboxes",
+                    ))
+                }
+            };
             for row in rows {
-                let row = row
-                    .as_object()
-                    .ok_or_else(|| BoxError::transport("Box list response has invalid boxes"))?;
-                boxes.push(parse_box_info(row)?);
+                let Value::Object(record) = row else {
+                    return Err(BoxError::transport(format!(
+                        "Boat answered GET /sandboxes with a sandbox that is not an object: {row}"
+                    )));
+                };
+                sandboxes.push(parse_box_info(record)?);
             }
-            let page = value.get("pageInfo").and_then(Value::as_object);
-            if !page.is_some_and(|p| jbool(p.get("hasMore"))) {
-                return Ok(boxes);
+            let Some(page) = value.get("pageInfo").and_then(Value::as_object) else {
+                return Ok(sandboxes);
+            };
+            if !jbool(page.get("hasMore")) {
+                return Ok(sandboxes);
             }
-            cursor = page.map(|p| jstr(p.get("nextCursor"))).unwrap_or_default();
+            cursor = jstr(page.get("nextCursor"));
             if cursor.is_empty() {
                 return Err(BoxError::transport(
-                    "Box list pagination omitted next cursor",
+                    "Boat answered GET /sandboxes with more pages and no next cursor",
                 ));
             }
         }
     }
 
-    /// PATCH /boxes/{id}; at least one field is required (Python
-    /// `ValueError("Box update requires at least one field")`).
+    /// PATCH /sandboxes/{id}; at least one field is required.
     pub async fn update_box(
         &self,
         box_id: &str,
@@ -119,7 +154,9 @@ impl BoxClient {
             }
         }
         if body.is_empty() {
-            return Err(BoxError::value("Box update requires at least one field"));
+            return Err(BoxError::value(
+                "a Boat sandbox update names at least a name or an auto-stop",
+            ));
         }
         let value = self
             .transport
@@ -128,13 +165,13 @@ impl BoxClient {
                 &Self::box_path(box_id)?,
                 Some(&Value::Object(body)),
                 &[],
-                &["box.updated", "box.info"],
+                &["sandbox.updated", "sandbox.info"],
             )
             .await?;
-        parse_box_info(&value)
+        parse_sandbox_envelope(&value)
     }
 
-    /// POST /boxes/{id}/stop.
+    /// POST /sandboxes/{id}/stop.
     pub async fn stop_box(&self, box_id: &str) -> Result<Map<String, Value>, BoxError> {
         self.transport
             .request_json(
@@ -142,12 +179,12 @@ impl BoxClient {
                 &format!("{}/stop", Self::box_path(box_id)?),
                 None,
                 &[],
-                &["box.stopping", "box.action"],
+                &["sandbox.stopping"],
             )
             .await
     }
 
-    /// POST /boxes/{id}/resume; `no_env=None` sends no body.
+    /// POST /sandboxes/{id}/resume; `no_env=None` sends no body.
     pub async fn resume_box(
         &self,
         box_id: &str,
@@ -160,12 +197,12 @@ impl BoxClient {
                 &format!("{}/resume", Self::box_path(box_id)?),
                 body.as_ref(),
                 &[],
-                &["box.resuming", "box.action"],
+                &["sandbox.resuming"],
             )
             .await
     }
 
-    /// POST /boxes/{id}/fork; `no_env=None` sends no body.
+    /// POST /sandboxes/{id}/fork; `no_env=None` sends no body.
     pub async fn fork_box(&self, box_id: &str, no_env: Option<bool>) -> Result<BoxInfo, BoxError> {
         let body = no_env.map(|flag| json!({"noEnv": flag}));
         let value = self
@@ -175,23 +212,26 @@ impl BoxClient {
                 &format!("{}/fork", Self::box_path(box_id)?),
                 body.as_ref(),
                 &[],
-                &["box.forking"],
+                &["sandbox.forking"],
             )
             .await?;
-        parse_box_info(&value)
+        parse_sandbox_envelope(&value)
     }
 
-    /// DELETE /boxes/{id}; a 404 is an idempotent success (Python swallows
-    /// `BoxAPIError` with status 404).
+    /// DELETE /sandboxes/{id}, confirmed with the sandbox's own id. Boat
+    /// accepts the deletion and erases the data in the background; a
+    /// sandbox Boat no longer holds is already deleted.
     pub async fn delete_box(&self, box_id: &str) -> Result<(), BoxError> {
+        let path = Self::box_path(box_id)?;
         match self
             .transport
-            .request_json(
+            .request_json_headed(
                 "DELETE",
-                &Self::box_path(box_id)?,
+                &path,
                 None,
                 &[],
-                &["box.deleted"],
+                &[(CONFIRM_DELETE_HEADER, box_id)],
+                &["deletion.operation", "sandbox.deleting"],
             )
             .await
         {

@@ -1,18 +1,16 @@
-//! The Box error enum and the structured, redacted API failure.
+//! The Boat error enum and the structured, redacted API failure.
 //!
-//! Python `BoxConfigurationError`, `BoxTransportError` and the `ValueError`
-//! argument-validation sites fold into [`BoxError`]; Python `BoxAPIError`
-//! keeps its own [`BoxApiError`] payload so callers can match on the status
-//! and on retryability.
+//! Configuration, transport and argument-validation failures fold into
+//! [`BoxError`]; a refusal Boat answered keeps its own [`BoxApiError`]
+//! payload so callers can match on the status and on retryability.
 
 use serde_json::{Map, Value};
 
 use super::safe_text;
 
-/// Box-layer error. Python raises `BoxConfigurationError` for local config
-/// problems, `BoxTransportError` for bounded network/response failures,
-/// `BoxAPIError` for structured redacted API failures, and `ValueError` for
-/// client-side argument validation.
+/// Boat-layer error: local configuration problems, network or response
+/// failures, structured redacted API refusals, and client-side argument
+/// validation.
 #[derive(Debug, thiserror::Error)]
 pub enum BoxError {
     /// Python `BoxConfigurationError`.
@@ -44,9 +42,9 @@ impl BoxError {
     }
 }
 
-/// Structured, redacted Box API failure (Python `BoxAPIError`). Every text
-/// field passed through [`safe_text`] at construction, so a key or token
-/// embedded by the server never reaches logs.
+/// Structured, redacted Boat API refusal. Every text field passed through
+/// [`safe_text`] at construction, so a token embedded by the server never
+/// reaches logs.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub struct BoxApiError {
     pub status: u16,
@@ -57,12 +55,12 @@ pub struct BoxApiError {
 }
 
 impl BoxApiError {
-    /// Python `BoxAPIError.__init__`.
+    /// A refusal Boat answered with `status`.
     pub fn new(status: u16, code: &str, message: &str, request_id: &str, retryable: bool) -> Self {
         BoxApiError {
             status,
-            code: safe_text(code, "box_error"),
-            message: safe_text(message, "Box API request failed"),
+            code: safe_text(code, "Boat named no error code"),
+            message: safe_text(message, "Boat named no reason"),
             request_id: safe_text(request_id, ""),
             retryable,
         }
@@ -94,7 +92,7 @@ impl std::fmt::Display for BoxApiError {
         };
         write!(
             f,
-            "Box API HTTP {} [{}]: {}{}",
+            "Boat API HTTP {} [{}]: {}{}",
             self.status, self.code, self.message, suffix
         )
     }

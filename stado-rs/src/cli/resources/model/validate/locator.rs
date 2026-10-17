@@ -14,7 +14,10 @@ pub(super) fn validate_action_locator(action: &Action) -> Result<(), CmdError> {
             action.resource.resource_type == "agent-vm"
                 && matches!(
                     action.resource.provider,
-                    ProviderKind::Gcp | ProviderKind::Azure | ProviderKind::Aws | ProviderKind::Box
+                    ProviderKind::Gcp
+                        | ProviderKind::Azure
+                        | ProviderKind::Aws
+                        | ProviderKind::Boat
                 )
         }
         ActionKind::SnapshotDisk | ActionKind::DeleteDisk => {
@@ -31,9 +34,14 @@ pub(super) fn validate_action_locator(action: &Action) -> Result<(), CmdError> {
         ActionKind::DeleteManagedInstanceGroup => {
             valid_gcp_locator(action, "managed-instance-group", &["zone", "region"])
         }
+        // A plan resizes a managed group only to empty: no instance left.
         ActionKind::ResizeManagedInstanceGroup => {
             valid_gcp_locator(action, "managed-instance-group", &["zone", "region"])
-                && action.parameters.get("target_size").and_then(Value::as_i64) == Some(0)
+                && action
+                    .parameters
+                    .get("target_size")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|size| std::num::NonZeroU64::new(size).is_none())
         }
         ActionKind::ReleaseReservation => {
             valid_gcp_locator(action, "compute-reservation", &["zone"])
@@ -79,11 +87,10 @@ pub(super) fn validate_action_locator(action: &Action) -> Result<(), CmdError> {
 }
 
 fn valid_gcp_locator(action: &Action, resource_type: &str, scopes: &[&str]) -> bool {
-    let scope = action
-        .parameters
-        .get("scope")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    // An action without a textual scope names no place, so no locator fits.
+    let Some(scope) = action.parameters.get("scope").and_then(Value::as_str) else {
+        return false;
+    };
     let needs_location = scope != "global";
     action.resource.provider == ProviderKind::Gcp
         && action.resource.resource_type == resource_type
