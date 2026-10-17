@@ -87,6 +87,16 @@ pub struct EnvArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct StopArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// Stop even though saving the disk fails: the last successful snapshot
+    /// is kept and everything written since is lost for good.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Args, Debug)]
 pub struct ExecArgs {
     /// The sandbox id Boat answered at create, fork or list.
     pub id: String,

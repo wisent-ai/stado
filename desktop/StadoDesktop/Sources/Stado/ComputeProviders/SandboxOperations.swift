@@ -64,6 +64,15 @@ enum NativeSandboxOperations {
         .init(id: "sandbox-stop", title: "Stop a sandbox, saving its disk",
             path: ["sandbox", "stop"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "force", label: "Stop even though saving the disk fails, losing what was written since the last snapshot", option: "--force", flag: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-recover", title: "Power-cycle a sandbox that stopped answering",
+            path: ["sandbox", "recover"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-share", title: "Share a sandbox with the organization that pays for it",
+            path: ["sandbox", "share"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
             ], jsonOutput: false),
         .init(id: "sandbox-resume", title: "Resume a stopped sandbox",
             path: ["sandbox", "resume"], hostPlacement: .none, fields: [

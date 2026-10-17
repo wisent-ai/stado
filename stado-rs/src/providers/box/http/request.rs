@@ -87,6 +87,19 @@ impl BoxHttpTransport {
         Ok(payload)
     }
 
+    /// A JSON object answer that carries neither `ok` nor `type` nor
+    /// `success`, as Boat's OpenAPI document gives it for sharing a sandbox;
+    /// the caller checks the fields the operation documents.
+    pub async fn request_object(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Map<String, Value>, BoxError> {
+        let raw = self.send(method, path, body, &[], &[]).await?;
+        parse_json(&raw)
+    }
+
     /// Execute the request and return the raw body, mapping HTTP error
     /// statuses to [`BoxApiError`](super::super::BoxApiError) and network
     /// failures to [`BoxError::Transport`].

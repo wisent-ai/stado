@@ -1,5 +1,5 @@
 //! Boat sandbox lifecycle verbs: limits, create, fetch, list, update, stop,
-//! resume, fork and delete.
+//! recover, resume, fork and delete.
 
 use serde_json::{json, Map, Value};
 
@@ -181,15 +181,38 @@ impl BoxClient {
         parse_sandbox_envelope(&value)
     }
 
-    /// POST /sandboxes/{id}/stop.
-    pub async fn stop_box(&self, box_id: &str) -> Result<Map<String, Value>, BoxError> {
+    /// POST /sandboxes/{id}/stop. Without `force` the request sends no body
+    /// and Boat saves the disk first; with it Boat stops even though that
+    /// save fails, keeping the last successful snapshot.
+    pub async fn stop_box(
+        &self,
+        box_id: &str,
+        force: bool,
+    ) -> Result<Map<String, Value>, BoxError> {
+        let body = force.then(|| json!({"force": true}));
         self.transport
             .request_json(
                 "POST",
                 &format!("{}/stop", Self::box_path(box_id)?),
-                None,
+                body.as_ref(),
                 &[],
                 &["sandbox.stopping"],
+            )
+            .await
+    }
+
+    /// POST /sandboxes/{id}/recover: power-cycle the machine of a sandbox
+    /// that stopped answering, leaving its disk as it is. Boat refuses it
+    /// with a code saying why (the sandbox answers, a recover is too recent,
+    /// there is no machine, the machine cannot be power-cycled).
+    pub async fn recover_box(&self, box_id: &str) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "POST",
+                &format!("{}/recover", Self::box_path(box_id)?),
+                None,
+                &[],
+                &["sandbox.recovering"],
             )
             .await
     }

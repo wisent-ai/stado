@@ -14,7 +14,8 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    tagged stado:role:cloud-boat), STADO_BOAT_TEST_TTL_SECONDS is the
 //    lifetime of the sandboxes this journey creates. It creates a sandbox,
 //    refuses a lifetime that is not positive, writes a file with a fresh
-//    token and reads it back, runs a command that prints it, sees a failing
+//    token and reads it back, is refused a recover of the sandbox that just
+//    answered (sandbox_is_reachable), runs a command that prints it, sees a failing
 //    command fail the CLI with its exit, starts a command in the background,
 //    finds it running and stops it, keeps the sandbox's usage, reads its
 //    desktop URL, downloads the file and is refused a second download over
@@ -99,6 +100,9 @@ try {
   sandbox(['write', original.id, file, '--from', local, '--encoding', 'utf8']);
   const read = sandbox(['read', original.id, file, '--encoding', 'utf8']);
   assert.ok(JSON.stringify(read).includes(token), `reading ${file} did not answer the written token: ${JSON.stringify(read)}`);
+  // A sandbox that just answered a read is reachable, so Boat refuses to
+  // power-cycle it and the CLI keeps Boat's code.
+  refused(run(binary, ['sandbox', 'recover', original.id]), 'sandbox_is_reachable');
 
   const printed = sandbox(['exec', original.id, `cat ${file}`]);
   assert.equal(printed.success, true, `cat did not succeed: ${JSON.stringify(printed)}`);

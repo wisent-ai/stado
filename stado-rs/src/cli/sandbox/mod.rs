@@ -3,7 +3,9 @@
 //! command and follow or stop one run in the background, read, write and
 //! download files, hand a coding agent a prompt and follow it, read the
 //! sandbox's events and usage, add an SSH key, give a port a URL, keep the
-//! disk as a named snapshot, fork, stop, resume and delete.
+//! disk as a named snapshot, fork, stop (or force a stop whose save fails),
+//! power-cycle one that stopped answering, share one with its organization,
+//! resume and delete.
 //!
 //! The scheduler rents a sandbox per job and owns its whole life; these verbs
 //! are the same Boat Public API v1 calls handed to a caller directly, through
@@ -50,8 +52,14 @@ pub enum SandboxCommands {
     /// Create a new sandbox from an existing one's disk.
     Fork(EnvArgs),
     /// Stop a sandbox; Boat saves its disk first and keeps it for resume or
-    /// fork.
-    Stop(SandboxId),
+    /// fork. With --force it stops even though that save fails.
+    Stop(StopArgs),
+    /// Power-cycle the machine of a sandbox that stopped answering; its
+    /// disk is not touched.
+    Recover(SandboxId),
+    /// Let every member of the paying organization use a sandbox; the
+    /// creator's logins are wiped from it at its next start. One-way.
+    Share(SandboxId),
     /// Resume a stopped sandbox from its saved disk.
     Resume(EnvArgs),
     /// Delete a sandbox and its data for good.
@@ -152,7 +160,9 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
         SandboxCommands::Read(args) => verbs::read(&provider, &args).await,
         SandboxCommands::Write(args) => verbs::write(&provider, &args).await,
         SandboxCommands::Fork(args) => verbs::fork(&provider, &args).await,
-        SandboxCommands::Stop(sandbox) => verbs::stop(&provider, &sandbox.id).await,
+        SandboxCommands::Stop(args) => verbs::stop(&provider, &args).await,
+        SandboxCommands::Recover(sandbox) => verbs::recover(&provider, &sandbox.id).await,
+        SandboxCommands::Share(sandbox) => verbs::share(&provider, &sandbox.id).await,
         SandboxCommands::Resume(args) => verbs::resume(&provider, &args).await,
         SandboxCommands::Delete(sandbox) => verbs::delete(&provider, &sandbox.id).await,
         SandboxCommands::Update(args) => agent::update(&provider, &args).await,

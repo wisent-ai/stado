@@ -1,9 +1,9 @@
 //! Boat command, detached command, SSH-key, interrupt, public URL, desktop
-//! URL and usage verbs.
+//! URL, sharing and usage verbs.
 
 use serde_json::{json, Map, Value};
 
-use super::super::types::{jbool, jstr, BoxCommandResult, BoxError};
+use super::super::types::{jbool, jstr, parse_sandbox_envelope, BoxCommandResult, BoxError};
 use super::BoxClient;
 
 impl BoxClient {
@@ -193,5 +193,22 @@ impl BoxClient {
                 &["desktop.url"],
             )
             .await
+    }
+
+    /// POST /sandboxes/{id}/share: every member of the organization that
+    /// pays for the sandbox may use it, and the creator's logins are wiped
+    /// from it at its next start. One-way. The answer is checked for the
+    /// sandbox it names and for `restartRequired`, true while a running
+    /// sandbox still holds the creator's logins in memory.
+    pub async fn share_box(&self, box_id: &str) -> Result<Map<String, Value>, BoxError> {
+        let path = format!("{}/share", Self::box_path(box_id)?);
+        let answer = self.transport.request_object("POST", &path, None).await?;
+        parse_sandbox_envelope(&answer)?;
+        match answer.get("restartRequired") {
+            Some(Value::Bool(_)) => Ok(answer),
+            other => Err(BoxError::transport(format!(
+                "Boat answered POST {path} without a boolean restartRequired: {other:?}"
+            ))),
+        }
     }
 }

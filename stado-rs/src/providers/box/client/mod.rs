@@ -5,8 +5,9 @@
 //! OpenAPI document names for that operation.
 //!
 //! The verbs live beside this entry point: `lifecycle` (limits, create,
-//! fetch, list, update, release), `commands` (command, background command,
-//! SSH key, interrupt, public and desktop URLs, usage), `environments`
+//! fetch, list, update, recover, release), `commands` (command, background
+//! command, SSH key, interrupt, public and desktop URLs, sharing, usage),
+//! `environments`
 //! (environments, their variables, secret files and repositories), and the
 //! payload readers `files` (file, artifact, event, snapshot, named
 //! snapshot) and `prompts` (prompt submission, status and steer).

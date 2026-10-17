@@ -8,7 +8,7 @@ use crate::providers::r#box::types::HTTP_NOT_FOUND;
 use crate::providers::r#box::{BoxError, BoxInfo};
 use crate::providers::BoxProvider;
 
-use super::{CmdError, CreateArgs, EnvArgs, ExecArgs, ReadArgs, WriteArgs};
+use super::{CmdError, CreateArgs, EnvArgs, ExecArgs, ReadArgs, StopArgs, WriteArgs};
 
 /// The Boat provider as the deployment declares it: its client, and the
 /// lifetime a sandbox created here gets unless the call states one.
@@ -193,8 +193,22 @@ pub(super) async fn fork(provider: &BoxProvider, args: &EnvArgs) -> Result<(), C
     print(&sandbox(&info))
 }
 
-pub(super) async fn stop(provider: &BoxProvider, id: &str) -> Result<(), CmdError> {
-    let answer = provider.client.stop_box(id).await.map_err(failure)?;
+pub(super) async fn stop(provider: &BoxProvider, args: &StopArgs) -> Result<(), CmdError> {
+    let answer = provider
+        .client
+        .stop_box(&args.id, args.force)
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn recover(provider: &BoxProvider, id: &str) -> Result<(), CmdError> {
+    let answer = provider.client.recover_box(id).await.map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn share(provider: &BoxProvider, id: &str) -> Result<(), CmdError> {
+    let answer = provider.client.share_box(id).await.map_err(failure)?;
     print(&Value::Object(answer))
 }
 
