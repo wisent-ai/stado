@@ -1,6 +1,6 @@
 //! What the two reads are printed as, in JSON and in prose.
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::deploy::service::{ImageIdentity, UnitImageObservation};
 
