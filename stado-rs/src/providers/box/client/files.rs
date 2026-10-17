@@ -173,6 +173,42 @@ impl BoxClient {
             .await
     }
 
+    /// GET /named-snapshots/{name}/shares: its share codes, active and
+    /// revoked, without the codes themselves.
+    pub async fn snapshot_shares(&self, name: &str) -> Result<Map<String, Value>, BoxError> {
+        let path = format!("{}/shares", named_snapshot_path(name)?);
+        let accepted = ["snapshot.share.list"];
+        self.transport
+            .request_json("GET", &path, None, &[], &accepted)
+            .await
+    }
+
+    /// POST /named-snapshots/{name}/shares: a secret code with which any
+    /// Boat account creates a sandbox from this snapshot (`create --from`).
+    /// The answer carries `shareCode`, which Boat never shows again.
+    pub async fn share_snapshot(&self, name: &str) -> Result<Map<String, Value>, BoxError> {
+        let path = format!("{}/shares", named_snapshot_path(name)?);
+        let accepted = ["snapshot.share.created"];
+        self.transport
+            .request_json("POST", &path, None, &[], &accepted)
+            .await
+    }
+
+    /// DELETE /named-snapshots/{name}/shares/{share}: the code stops creating
+    /// sandboxes; those already created from it keep their copy.
+    pub async fn revoke_snapshot_share(
+        &self,
+        name: &str,
+        share: &str,
+    ) -> Result<Map<String, Value>, BoxError> {
+        let shares = format!("{}/shares", named_snapshot_path(name)?);
+        let path = segment_path(&shares, share, "a share id")?;
+        let accepted = ["snapshot.share.revoked"];
+        self.transport
+            .request_json("DELETE", &path, None, &[], &accepted)
+            .await
+    }
+
     /// GET /sandboxes/{id}/snapshots: every snapshot of a sandbox's disk.
     pub async fn sandbox_snapshots(&self, box_id: &str) -> Result<Map<String, Value>, BoxError> {
         self.transport

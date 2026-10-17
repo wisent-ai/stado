@@ -52,9 +52,10 @@ impl BoxClient {
     }
 
     /// POST /sandboxes. `ttl_seconds=None` sends an explicit JSON null, which
-    /// Boat reads as "never stop by itself"; `from` names the named snapshot
-    /// the sandbox starts from and `environment` the environment it starts
-    /// with, and without either the request names none.
+    /// Boat reads as "never stop by itself"; `from` names the named snapshot,
+    /// or a share code another account made for one, the sandbox starts from
+    /// and `environment` the environment it starts with, and without either
+    /// the request names none.
     pub async fn create_box(
         &self,
         ttl_seconds: Option<i64>,

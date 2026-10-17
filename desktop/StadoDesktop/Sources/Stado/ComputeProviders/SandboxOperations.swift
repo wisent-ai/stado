@@ -19,7 +19,7 @@ enum NativeSandboxOperations {
             path: ["sandbox", "create"], hostPlacement: .none, fields: [
                 .init(id: "ttl", label: "Lifetime in seconds (blank: boat.ttl_seconds)", option: "--ttl-seconds"),
                 .init(id: "no-env", label: "Start without the account's environment variables", option: "--no-env", flag: true),
-                .init(id: "from", label: "Named snapshot to start from (blank: a fresh disk)", option: "--from"),
+                .init(id: "from", label: "Named snapshot or share code to start from (blank: a fresh disk)", option: "--from"),
                 .init(id: "environment", label: "Environment id to start with (blank: the account's default)", option: "--environment"),
             ], jsonOutput: false),
         .init(id: "sandbox-exec", title: "Run a command line in a sandbox",
@@ -210,6 +210,19 @@ enum NativeSandboxOperations {
                 .init(id: "snapshot", label: "Snapshot id", required: true),
                 .init(id: "path", label: "Path in the snapshot", required: true),
                 .init(id: "to", label: "New file on the machine running Stado", option: "--to", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-snapshot-shares", title: "List a named snapshot's share codes",
+            path: ["sandbox", "snapshot", "shares"], hostPlacement: .none, fields: [
+                .init(id: "name", label: "Named snapshot", required: true),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-snapshot-share", title: "Make a share code other Boat accounts start sandboxes from",
+            path: ["sandbox", "snapshot", "share"], hostPlacement: .none, fields: [
+                .init(id: "name", label: "Named snapshot", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-snapshot-unshare", title: "Revoke a share code",
+            path: ["sandbox", "snapshot", "unshare"], hostPlacement: .none, fields: [
+                .init(id: "name", label: "Named snapshot", required: true),
+                .init(id: "share", label: "Share id", required: true),
             ], jsonOutput: false),
         .init(id: "sandbox-environment-list", title: "List the environments",
             path: ["sandbox", "environment", "list"], hostPlacement: .none, mutates: false, jsonOutput: false),

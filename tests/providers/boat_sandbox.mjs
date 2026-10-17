@@ -33,7 +33,9 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    empty one is refused), starts a sandbox with it that prints the
 //    variable, deletes that sandbox, removes the variable and deletes the
 //    environment, gives STADO_BOAT_TEST_PORT a public URL, saves the
-//    disk as a named snapshot, finds it listed and shown, deletes it and no
+//    disk as a named snapshot, finds it listed and shown, makes a share code
+//    for it, finds the share listed, revokes it and is refused a sandbox
+//    from the revoked code (snapshot_not_found), deletes it and no
 //    longer finds it listed, forks the sandbox and reads the token on the
 //    fork, deletes the fork, stops the original, finds the file in its latest
 //    snapshot's tree and takes it back out of that snapshot with the token,
@@ -227,6 +229,15 @@ try {
   const listed = sandbox(['snapshot', 'list']);
   assert.ok(listed.snapshots.some(row => row.name === named), `snapshot list does not hold ${named}`);
   assert.equal(sandbox(['snapshot', 'show', named]).snapshot?.name, named, `snapshot show does not read ${named}`);
+  // A share code is printed once and listed by its id without the code; once
+  // revoked, Boat no longer starts a sandbox from it.
+  const shared = sandbox(['snapshot', 'share', named]);
+  assert.ok(shared.shareCode?.startsWith('bsh_') && shared.share?.id,
+    `snapshot share answered no code and share: ${JSON.stringify(shared)}`);
+  assert.ok(sandbox(['snapshot', 'shares', named]).shares.some(row => row.id === shared.share.id),
+    `snapshot shares does not list ${shared.share.id}`);
+  sandbox(['snapshot', 'unshare', named, shared.share.id]);
+  refused(run(binary, ['sandbox', 'create', '--ttl-seconds', lifetime, '--from', shared.shareCode]), 'snapshot_not_found');
   sandbox(['snapshot', 'delete', named]);
   report.snapshot_after_delete = run(binary, ['sandbox', 'snapshot', 'show', named]);
   assert.ok(!sandbox(['snapshot', 'list']).snapshots.some(row => row.name === named),

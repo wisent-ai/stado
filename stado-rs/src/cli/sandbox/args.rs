@@ -17,7 +17,8 @@ pub struct CreateArgs {
     /// Start without the account's environment variables.
     #[arg(long, conflicts_with = "environment")]
     pub no_env: bool,
-    /// Start from this named snapshot instead of a fresh disk.
+    /// Start from this named snapshot, or from the share code another
+    /// account made for one, instead of a fresh disk.
     #[arg(long)]
     pub from: Option<String>,
     /// Start with this environment's variables, secret files and

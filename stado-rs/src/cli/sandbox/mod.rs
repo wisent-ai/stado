@@ -30,6 +30,7 @@ use clap::Subcommand;
 pub use agent::FileUrlArgs;
 pub use args::*;
 pub use history::{CommandRef, HistoryArgs, LogsArgs};
+pub use snapshots::ShareRef;
 pub use webhooks::WebhookCommands;
 
 use super::CmdError;
@@ -163,6 +164,15 @@ pub enum SnapshotCommands {
     /// Write a file or folder (as a tar) of a snapshot into a new local
     /// file; the sandbox need not run.
     Get(SnapshotGetArgs),
+    /// List a named snapshot's share codes, active and revoked, without the
+    /// codes themselves.
+    Shares(SnapshotName),
+    /// Make a secret code with which any Boat account starts a sandbox from
+    /// a named snapshot (`create --from <code>`); it is printed only now, and
+    /// everything on the disk is shared.
+    Share(SnapshotName),
+    /// Revoke a share code; sandboxes already made from it keep their copy.
+    Unshare(ShareRef),
 }
 
 #[derive(Subcommand)]
@@ -222,6 +232,9 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
                 snapshots::tree(&provider, &snapshot.snapshot).await
             }
             SnapshotCommands::Get(args) => snapshots::get(&provider, &args).await,
+            SnapshotCommands::Shares(named) => snapshots::shares(&provider, &named.name).await,
+            SnapshotCommands::Share(named) => snapshots::share(&provider, &named.name).await,
+            SnapshotCommands::Unshare(args) => snapshots::unshare(&provider, &args).await,
         },
         SandboxCommands::Environment(sub) => match sub {
             EnvironmentCommands::List => environments::list(&provider).await,
