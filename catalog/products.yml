@@ -1168,6 +1168,15 @@ products:
     for_surface: cli
     alternative: 'OKO_DATABASE_URL and OKO_DATABASE_ANON_KEY reach the database with no Skarbiec read, so tasks, defects and the registers run without Skarbiec; only the features that hold a service credential read it from Skarbiec: calendar accounts (from the broker or the vault SKARBIEC_VAULT_FILE names, through the skarbiec CLI), GitHub repository execution, Ultrareach sends and the PTY relay'
     alternative_source: oko/rust/src/database/resolved.rs
+  - product: tama
+    surface: cli
+    for_surface: cli
+    alternative: the session listing reads tama hooks abandoned only to name the hook a refused call was still waiting on; without Tama it lists every session and names the failed reading once beside the rows as tamaFailure. Only the delivery of Tama's rule proposals asks tama rules digest, and it is refused naming why tama could not run; every other command runs without Tama
+    alternative_source: oko/rust/src/pty/client/agents/tama/mod.rs
+  - product: jeden
+    surface: cli
+    for_surface: cli
+    bound_because: an autonomy tick pursues a goal by running Jeden Pursuit (OKO_JEDEN_BIN, else ~/.stado/bin/jeden) and accepts only the receipt and verdict Jeden writes, so without Jeden that tick cannot start a pursuit; Jeden is otherwise one of the agent harnesses Oko lists, and tasks, defects, asks, the session listing and every other harness run without it
 - id: singularity
   name: Singularity
   status: active
