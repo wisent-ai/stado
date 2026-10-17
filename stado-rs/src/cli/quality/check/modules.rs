@@ -1,5 +1,7 @@
 //! The module half of `stado quality check`: every `mod name;` each Rust
-//! crate of the exported tree reaches names a file the tree holds.
+//! crate of the exported tree reaches names a file the tree holds, and no
+//! Swift package target holds two sources of one file name
+//! ([`swift`]).
 //!
 //! A commit that deleted a module file another file still declares, or
 //! declared one it never added, compiles nowhere, and until now the first to
@@ -10,6 +12,8 @@
 //! delivery queue's gate step, each of which runs this check. The tree is
 //! the commit's export, which holds tracked files only, so no build output or
 //! dependency directory is walked.
+
+mod swift;
 
 use std::path::{Path, PathBuf};
 
@@ -48,6 +52,7 @@ pub(super) fn check(tree: &Path, checkout: &Path, revision: &str) -> Result<(), 
         missing.extend(undeclared_files(crate_dir).map_err(CmdError::click)?);
         unreached.extend(super::paths::unreached(crate_dir).map_err(CmdError::click)?);
     }
+    let colliding = swift::colliding(tree).map_err(CmdError::click)?;
     let exported = format!("{}/", tree.display());
     let listed = |lines: &[String]| {
         lines
@@ -69,6 +74,14 @@ pub(super) fn check(tree: &Path, checkout: &Path, revision: &str) -> Result<(), 
             "{revision} of {} uses modules no declaration reaches, so no build of it compiles: {}",
             checkout.display(),
             listed(&unreached)
+        ));
+    }
+    if !colliding.is_empty() {
+        refusals.push(format!(
+            "{revision} of {} holds Swift sources of one file name in one Swift package target, \
+             so SwiftPM has two producers of one object file and the target does not build: {}",
+            checkout.display(),
+            listed(&colliding)
         ));
     }
     if refusals.is_empty() {
