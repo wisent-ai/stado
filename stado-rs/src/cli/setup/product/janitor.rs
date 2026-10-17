@@ -23,6 +23,11 @@ use crate::providers::local::space_reclaim as janitor;
 /// holds it waits on, before anything is exported or compiled, unless the
 /// operation was asked to `--wait`: then it waits for the running workloads
 /// to let go, runs the janitor's pass itself, and takes its hold after it.
+/// The pass it runs walks the build caches before it takes the exclusive
+/// lock, and a workload that takes a hold meanwhile turns the pass away and
+/// makes it ask for the next turn; so a waiting operation waits for that turn
+/// too, and for each one after it, until a pass has run and its own hold is
+/// taken. Each round is said on stderr with what the pass reported.
 pub(super) async fn janitor_hold(
     matches: &ArgMatches,
 ) -> Result<Option<janitor::WorkloadLock>, CmdError> {
@@ -64,24 +69,27 @@ pub(super) async fn janitor_hold(
             janitor::workload_holders()
         )));
     }
-    janitor::wait_for_janitor_turn(&holder).map_err(unheld)?;
-    let running = janitor::live_workload_count().map_err(unheld)?;
-    let running = i64::try_from(running).map_err(|error| {
-        CmdError::click(format!(
-            "{holder}: {running} running workloads count past i64: {error}"
-        ))
-    })?;
-    let report = janitor::run_cleanup_once(
-        running,
-        janitor::CleanupWriter::Cli { every: None },
-        &mut |line: &str| eprintln!("{line}"),
-    )
-    .await;
-    match janitor::wait_workload_lock(&holder).map_err(unheld)? {
-        Some(lock) => Ok(Some(lock)),
-        None => Err(CmdError::refused(format!(
-            "{holder} ran the disk janitor's pass it waited for, and the janitor still asks \
-             for its turn; nothing was exported or built. The pass reported: {report}"
-        ))),
+    loop {
+        janitor::wait_for_janitor_turn(&holder).map_err(unheld)?;
+        let running = janitor::live_workload_count().map_err(unheld)?;
+        let running = i64::try_from(running).map_err(|error| {
+            CmdError::click(format!(
+                "{holder}: {running} running workloads count past i64: {error}"
+            ))
+        })?;
+        let report = janitor::run_cleanup_once(
+            running,
+            janitor::CleanupWriter::Cli { every: None },
+            &mut |line: &str| eprintln!("{line}"),
+        )
+        .await;
+        if let Some(lock) = janitor::wait_workload_lock(&holder).map_err(unheld)? {
+            return Ok(Some(lock));
+        }
+        eprintln!(
+            "{holder}: the disk janitor asks for its turn again after the pass it waited for \
+             ({report}); it waits for that turn too. It waits on: {}",
+            janitor::workload_holders()
+        );
     }
 }
