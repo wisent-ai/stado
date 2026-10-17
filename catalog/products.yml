@@ -1221,6 +1221,11 @@ products:
     surface: cli
     for_surface: cli
     bound_because: an autonomy tick pursues a goal by running Jeden Pursuit (OKO_JEDEN_BIN, else ~/.stado/bin/jeden) and accepts only the receipt and verdict Jeden writes, so without Jeden that tick cannot start a pursuit; Jeden is otherwise one of the agent harnesses Oko lists, and tasks, defects, asks, the session listing and every other harness run without it
+  - product: needher
+    surface: web
+    for_surface: cli
+    alternative: 'Oko reaches nothing of Need Her: NEEDHER_GENERATION_WORKER_URL appears only in an operator message recorded in Oko''s intent-evaluation data set'
+    alternative_source: oko/Evaluation/auto-goals/intent-eval.jsonl
 - id: singularity
   name: Singularity
   status: active
@@ -1498,6 +1503,11 @@ products:
     surface: service
     for_surface: cli
     bound_because: every crawl command (crawl, crawl-cli, crawl-docs, crawl-mobile, crawl-desktop, crawl-web and crawl-tui) submits its crawl as a Stado job and keeps its attempts at stado:// URIs; the catalog, reference-record, docs-site and evidence commands work on the checked-in records without Stado
+  - product: preferences
+    surface: cli
+    for_surface: cli
+    alternative: 'Spis starts no Preferences program: the match is the robots.txt rule ^/forums/preferences recorded in a saved crawl of Apple''s developer documentation among Spis''s example references'
+    alternative_source: spis/documentation-site-examples/references/19-apple-developer-documentation/crawl/attempt-1-8beb7438d983df23/state.json
 - id: glina
   name: Glina
   status: active
