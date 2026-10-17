@@ -103,13 +103,14 @@ impl Hold {
         );
     }
 
-    /// The service's first byte came down, or the connection ended without
-    /// one: the place is given back.
+    /// The wait ended, answered or not: the place is given back.
     fn answered(&self, how: &str) {
         let mut key = self.key();
         let Some(taken) = key.take() else { return };
         shed::forget(taken);
-        let still = waiting::end(taken);
+        let answered = self.answer_began.load(Ordering::Acquire);
+        let still =
+            crate::cli::resolver::report::answers::ended(&self.adapter.service, answered, taken);
         eprintln!(
             "stado resolver service={} consumer={} request to {} on {:?} {how}; {still} open(s) \
              still waiting",
@@ -147,14 +148,13 @@ impl Drop for Hold {
     }
 }
 
-/// The request line in the first bytes a client sent: the text up to the
-/// first line end, when the bytes hold one and it is printable text. A chunk
-/// without a line end names nothing rather than half a line.
+/// The request line in the first bytes a client sent, up to its first line
+/// end, a byte that is not text shown as U+FFFD; a chunk without a line end,
+/// or a line holding a control character, names nothing rather than a guess.
 fn request_line(first: &[u8]) -> Option<String> {
     let end = first.iter().position(|byte| *byte == b'\n')?;
-    let line = std::str::from_utf8(&first[..end])
-        .ok()?
-        .trim_end_matches('\r');
+    let text = String::from_utf8_lossy(&first[..end]);
+    let line = text.trim_end_matches('\r');
     let printable = line.chars().all(|character| !character.is_control());
     (printable && !line.is_empty()).then(|| line.to_owned())
 }

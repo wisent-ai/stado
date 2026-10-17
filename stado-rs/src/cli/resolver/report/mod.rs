@@ -2,6 +2,7 @@
 // `resolver status` — readiness, answerable with the resolver stopped
 // ---------------------------------------------------------------------------
 
+pub(crate) mod answers;
 pub(in crate::cli::resolver) mod probe;
 pub(in crate::cli::resolver) mod published;
 pub(in crate::cli::resolver) mod readers;
