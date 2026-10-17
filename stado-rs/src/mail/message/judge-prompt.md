@@ -17,6 +17,4 @@ Subject: {subject}
 
 {body}
 
-Answer with one JSON object and nothing else:
-{"categories": ["<name>", ...], "action": "<one sentence naming what the operator must do and when>"}
-with "action": null when the email asks nothing of him.
+Give in categories the names of what the email is about, and in action one sentence naming what the operator must do and when, or null when the email asks nothing of him.

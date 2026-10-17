@@ -13,6 +13,7 @@ mod patterns;
 mod text;
 
 use serde::Deserialize;
+use serde_json::json;
 
 use super::{MailAnalysis, SkrzynkaMessage};
 use crate::primitives::model_judgement;
@@ -24,8 +25,12 @@ const PROMPT: &str = include_str!("judge-prompt.md");
 const FROM_SLOT: &str = "{from}";
 const SUBJECT_SLOT: &str = "{subject}";
 const BODY_SLOT: &str = "{body}";
+/// The schema the reading is bound to: its name and its two fields.
+const READING: &str = "provider_mail_reading";
+const CATEGORIES_KEY: &str = "categories";
+const ACTION_KEY: &str = "action";
 
-/// The model's reading of one message, as the prompt asks for it.
+/// The model's reading of one message, as the schema binds it.
 #[derive(Deserialize)]
 struct Reading {
     categories: Vec<String>,
@@ -38,9 +43,19 @@ fn read(message: &SkrzynkaMessage) -> Result<Reading, String> {
         .replace(FROM_SLOT, &message.sender)
         .replace(SUBJECT_SLOT, &message.subject)
         .replace(BODY_SLOT, &message.body_text);
-    let answer = model_judgement::ask(&prompt)?;
-    serde_json::from_str(answer.trim())
-        .map_err(|error| format!("the model's reading is not the asked JSON ({error}): {answer}"))
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            CATEGORIES_KEY: { "type": "array", "items": { "type": "string" } },
+            ACTION_KEY: { "type": ["string", "null"] },
+        },
+        "required": [CATEGORIES_KEY, ACTION_KEY],
+        "additionalProperties": false,
+    });
+    let answer = model_judgement::object(&prompt, READING, &schema)?;
+    serde_json::from_value(answer.clone()).map_err(|error| {
+        format!("the model's reading is not the asked {READING} ({error}): {answer}")
+    })
 }
 
 pub fn analyze(message: &SkrzynkaMessage) -> MailAnalysis {
