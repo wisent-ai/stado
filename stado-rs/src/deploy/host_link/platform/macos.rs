@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::deploy::host_link::probes::{probe, resolve_program, window_minutes};
 use crate::deploy::host_link::timestamps::{detail_of, iso, newest_changes, parse_stamp};
@@ -96,19 +96,36 @@ struct Judged {
     changes: Vec<String>,
 }
 
-/// Which of `sentences` record an interface change, as the model reads them.
+/// Which of `sentences` record an interface change, as the model reads them:
+/// one object under a strict JSON Schema whose `changes` may name only the
+/// sentences it was shown.
 fn judged_changes(sentences: &BTreeSet<String>) -> Result<BTreeSet<String>, String> {
     let listed = serde_json::to_string(sentences)
         .map_err(|error| format!("the configd sentences could not be listed: {error}"))?;
-    let answer = model_judgement::ask(&PROMPT.replace(MESSAGES_SLOT, &listed))?;
-    let judged: Judged = serde_json::from_str(answer.trim())
-        .map_err(|error| format!("the model's answer is not the asked JSON ({error}): {answer}"))?;
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "changes": { "type": "array", "items": { "type": "string", "enum": sentences } },
+        },
+        "required": ["changes"],
+        "additionalProperties": false,
+    });
+    let answer = model_judgement::object(
+        &PROMPT.replace(MESSAGES_SLOT, &listed),
+        "configd_interface_changes",
+        &schema,
+    )?;
+    let judged: Judged = serde_json::from_value(answer.clone()).map_err(|error| {
+        format!("the model's answer does not fit its schema ({error}): {answer}")
+    })?;
     Ok(judged.changes.into_iter().collect())
 }
 
 /// Interface changes inside the window from the unified log, or `None` when
-/// `log` is absent or failed or its messages could not be judged, the cause
-/// said. `Some(vec![])` means the window was quiet.
+/// `log` is absent or failed, wrote a line that is not JSON, or its messages
+/// could not be judged, the cause said. `Some(vec![])` means the window was
+/// quiet. A record without a timestamp or a message (the summary `log`
+/// writes last) is not an entry.
 pub(in crate::deploy::host_link) async fn macos_interface_changes(
     runner: &Runner,
     window: i64,
@@ -129,16 +146,32 @@ pub(in crate::deploy::host_link) async fn macos_interface_changes(
     )
     .await?;
 
-    let entries: Vec<_> = output
-        .stdout
-        .lines()
-        .filter_map(|line| {
-            let entry: Value = serde_json::from_str(line.trim()).ok()?;
-            let stamp = parse_stamp(entry.get("timestamp")?.as_str()?)?;
-            let message = detail_of(entry.get("eventMessage")?.as_str()?);
-            (!message.is_empty()).then_some((stamp, message))
-        })
-        .collect();
+    let mut entries = Vec::new();
+    for line in output.stdout.lines().map(str::trim) {
+        if line.is_empty() {
+            continue;
+        }
+        let entry: Value = match serde_json::from_str(line) {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!("host link: `log show` wrote a line that is not JSON ({error}): {line}");
+                return None;
+            }
+        };
+        let stamp = entry
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(parse_stamp);
+        let message = entry
+            .get("eventMessage")
+            .and_then(Value::as_str)
+            .map(detail_of);
+        if let (Some(stamp), Some(message)) = (stamp, message) {
+            if !message.is_empty() {
+                entries.push((stamp, message));
+            }
+        }
+    }
     let sentences: BTreeSet<String> = entries.iter().map(|(_, message)| masked(message)).collect();
     if sentences.is_empty() {
         return Some(Vec::new());

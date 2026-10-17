@@ -5,7 +5,4 @@ Decide whether the job failed because it ran out of memory — GPU memory (a CUD
 The error, as the job recorded it:
 {error}
 
-Answer with exactly one line and nothing else:
-OUT_OF_MEMORY
-or
-OTHER
+Choose OUT_OF_MEMORY when the job ran out of memory and OTHER when it failed for any other reason, saying in the reason what in the error shows it.

@@ -5,6 +5,4 @@ Name every message that records a change of a network interface: a link going up
 The messages, as a JSON array:
 {messages}
 
-Answer with one JSON object and nothing else, copying each named message exactly as given:
-{"changes": ["<message>", ...]}
-with an empty array when none records a change.
+List in changes every message that records a change, copied exactly as given, and none when no message records one.
