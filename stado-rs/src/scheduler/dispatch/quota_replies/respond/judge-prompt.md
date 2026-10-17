@@ -5,7 +5,4 @@ Decide whether the message says the request is held by a billing or payment prob
 The message, in any language:
 {message}
 
-Answer with exactly one line and nothing else:
-BILLING: <one sentence naming the billing problem the message describes>
-or
-OTHER
+Choose BILLING when the message says the request is held by such a billing or payment problem, naming the problem in the reason; choose OTHER for anything else, saying in the reason what the message asks or says.

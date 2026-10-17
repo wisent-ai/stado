@@ -26,7 +26,10 @@ use crate::primitives::model_judgement;
 const PROMPT: &str = include_str!("read-only-prompt.md");
 const ARGS_SLOT: &str = "{args}";
 const HELP_SLOT: &str = "{help}";
-const READ_VERDICT: &str = "READ";
+/// The schema's name and the two options the model chooses between.
+const JUDGEMENT: &str = "operator_command_effect";
+const READ: &str = "READ";
+const CHANGES: &str = "CHANGES";
 
 /// The CLI's own command tree, built once and kept for the process.
 static TREE: LazyLock<clap::Command> = LazyLock::new(crate::cli::Cli::command);
@@ -71,8 +74,8 @@ fn judged(args: &[String]) -> bool {
     let prompt = PROMPT
         .replace(ARGS_SLOT, &args.join(" "))
         .replace(HELP_SLOT, &named_help(args));
-    match model_judgement::ask(&prompt) {
-        Ok(answer) => answer.trim().starts_with(READ_VERDICT),
+    match model_judgement::choose(&prompt, JUDGEMENT, &[READ, CHANGES]) {
+        Ok(judged) => judged.choice == READ,
         Err(cause) => {
             eprintln!(
                 "[dashboard] `stado {}` is treated as a change: whether it only reads could not be judged: {cause}",

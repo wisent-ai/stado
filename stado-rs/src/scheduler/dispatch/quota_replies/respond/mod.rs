@@ -12,18 +12,24 @@ use super::runner::{AzRunner, RepliesError};
 use super::tickets::list_open_azure_tickets;
 use crate::primitives::model_judgement;
 
-/// What the model is asked about Microsoft's latest message, and its answer
-/// when the message names a billing hold.
+/// What the model is asked about Microsoft's latest message, the schema's
+/// name, and the two options it chooses between.
 const PROMPT: &str = include_str!("judge-prompt.md");
 const MESSAGE_SLOT: &str = "{message}";
-const BILLING_VERDICT: &str = "BILLING";
+const JUDGEMENT: &str = "quota_reply_hold";
+const BILLING: &str = "BILLING";
+const OTHER: &str = "OTHER";
 
 /// Whether Microsoft's latest message holds the request on a billing or
 /// payment problem of the customer's, as the model reads it in any wording;
 /// the cause when nobody could read it.
 fn billing_hold(snippet: &str) -> Result<bool, String> {
-    let answer = model_judgement::ask(&PROMPT.replace(MESSAGE_SLOT, snippet))?;
-    Ok(answer.trim().starts_with(BILLING_VERDICT))
+    let judged = model_judgement::choose(
+        &PROMPT.replace(MESSAGE_SLOT, snippet),
+        JUDGEMENT,
+        &[BILLING, OTHER],
+    )?;
+    Ok(judged.choice == BILLING)
 }
 
 use self::subscription::{subscription_id, subscription_quota_id};
@@ -61,20 +67,33 @@ pub fn respond_to_open_quota_tickets(
     };
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
+        .map_err(|error| {
+            RepliesError::Config(format!(
+                "this machine's clock reads before the Unix epoch, so no reply can be named: {error}"
+            ))
+        })?
         .as_secs();
     let mut out = Vec::new();
     for ticket in list_open_azure_tickets(runner)? {
-        let name = ticket.get("name").and_then(Value::as_str).unwrap_or("");
-        let region = ticket.get("region").and_then(Value::as_str).unwrap_or("");
-        if region.is_empty() {
+        let Some(name) = ticket.get("name").and_then(Value::as_str) else {
+            return Err(RepliesError::Config(format!(
+                "an open quota ticket was listed without a name: {ticket}"
+            )));
+        };
+        // A ticket whose title names no region gets no reply: the reply asks
+        // for quota in that region.
+        let Some(region) = ticket
+            .get("region")
+            .and_then(Value::as_str)
+            .filter(|region| !region.is_empty())
+        else {
             out.push(json!({
                 "name": name, "ok": false,
                 "action": "skip_no_region_in_title",
-                "title": ticket.get("title").and_then(Value::as_str).unwrap_or(""),
+                "title": ticket.get("title"),
             }));
             continue;
-        }
+        };
         if ticket.get("awaiting_customer").and_then(Value::as_bool) != Some(true) {
             out.push(json!({
                 "name": name, "region": region, "ok": true,

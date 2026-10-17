@@ -8,7 +8,4 @@ The command line (after `stado`):
 The command's own help:
 {help}
 
-Answer with exactly one line and nothing else:
-READ
-or
-CHANGES
+Choose READ when the command only reads, CHANGES when it can change something, and give the reason in one sentence.
