@@ -21,6 +21,7 @@ pub const TASK_PARAMETER_NAMES: &[&str] = &[
     "headless",
     "constraints",
     "env",
+    "login_item",
 ];
 
 /// What one browser task asks Weles to do.
