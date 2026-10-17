@@ -872,6 +872,16 @@ products:
     for_surface: cli
     alternative: the judged hooks and review-push read the attestation each commit and each turn end carries against the standard tama attestation standard prints, with no model asked (tama model-provider set --none declares it); a hook that only asks a model a question about a text finds nothing and says so in its log
     alternative_source: tama/rust/crates/tama-hook-tools/src/ports/task_attestation/mod.rs
+  - product: wisent-app
+    surface: service
+    for_surface: desktop
+    alternative: Tama Desktop's build reads WISENT_CODESIGN_IDENTITY and the WISENT_ provisioning-profile variables only to sign the app; unset, it signs with the first Apple Development identity in the Keychain, and nothing of the Wisent app is read or run
+    alternative_source: tama-desktop/Scripts/app_build/prepare.sh
+  - product: wisent-enterprise
+    surface: repository
+    for_surface: cli
+    alternative: a release install writes a repository's own Git hooks only for a checkout present in the workspace; without the wisent-enterprise checkout its two registry entries are skipped and every other hook is installed and runs
+    alternative_source: tama/rust/crates/tama-cli/src/hooks/install/entrypoints/mod.rs
 - id: byk
   name: Byk
   status: active
