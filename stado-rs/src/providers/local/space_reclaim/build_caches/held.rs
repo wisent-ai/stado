@@ -3,11 +3,9 @@
 //!
 //! Cargo writes `CACHEDIR.TAG` into its build directory and holds an
 //! exclusive advisory lock on the `.cargo-lock` file of each profile
-//! directory for as long as a build runs there. The cleaner took the tag
-//! alone as leave to delete, and reclaimed build directories under running
-//! builds: object files vanished mid-link, the next build answered that a
-//! cached unit had no object file, and a build dir half rebuilt linked a
-//! stale crate, so a tree that did not compile passed. Before a tagged cache
+//! directory for as long as a build runs there, so the tag alone is no leave
+//! to delete: a build directory reclaimed under a running build loses object
+//! files the build is about to link. Before a tagged cache
 //! is removed, every `.cargo-lock` at its root and one directory below is
 //! locked the same way, without waiting. A lock another process holds keeps
 //! the cache for a later pass; the locks taken are held until the removal
