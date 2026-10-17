@@ -12,9 +12,10 @@ impl Client {
             GrantMode::RereadPerRequest => read_grant(&self.token_file),
             GrantMode::TransientHandoff => {
                 let key = (self.consumer.clone(), self.token_file.clone());
-                let mut cached = TRANSIENT_GRANTS
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut cached = match TRANSIENT_GRANTS.lock() {
+                    Ok(cached) => cached,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
                 if let Some(token) = cached.get(&key) {
                     return Ok(token.clone());
                 }
@@ -74,10 +75,14 @@ impl Client {
         &self,
         builder: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, SkarbiecError> {
+        let address = url::Url::parse(&self.base_url).map_err(|error| {
+            SkarbiecError::Deployment(format!(
+                "the Skarbiec URL {} is not a URL, so whether its adapter is held cannot be \
+                 read: {error}",
+                self.base_url
+            ))
+        })?;
         let sent = crate::wait::send(crate::wait::Kind::Network, "Skarbiec", builder);
-        let Ok(address) = url::Url::parse(&self.base_url) else {
-            return Ok(sent.await?);
-        };
         match unless_held(Route::Address(&address), sent).await {
             Ok(answer) => Ok(answer?),
             Err(held) => Err(SkarbiecError::Held(held)),
