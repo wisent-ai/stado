@@ -250,6 +250,16 @@ products:
     for_surface: service
     alternative: brama serve --local-credentials-stdin runs Brama on its standalone in-memory provider credential store, managed through /v1/admin/credentials, as Brama Desktop does with keys from the macOS Keychain; the release launcher scripts, workload registration, version gate, Stado journey service and resolver-state readiness belong to a gateway Stado launches
     alternative_source: brama/src/cli/serving.rs
+  - product: weles
+    surface: service
+    for_surface: service
+    alternative: 'Brama never calls Weles: weles is the alias a Weles caller asks Brama for, which a gateway serving Wisent''s backend requires beside best, and a standalone gateway (brama serve --local-credentials-stdin) requires neither and serves without any Weles alias'
+    alternative_source: brama/src/core/server/lifecycle/mod.rs
+  - product: wisent-app
+    surface: service
+    for_surface: service
+    alternative: 'Brama never calls the Wisent app: WISENT_APP_AGENT_ID and WISENT_APP_AGENT_AUTH_SECRET are named only in the documentation of the real image-selection test, as the signed caller identity that test sends to the gateway under test'
+    alternative_source: brama/vercel-ingress/docs/testing.html
 - id: weles
   name: Weles
   status: active
