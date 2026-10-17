@@ -15,8 +15,10 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    lifetime of the sandboxes this journey creates. It creates a sandbox,
 //    refuses a lifetime that is not positive, writes a file with a fresh
 //    token and reads it back, runs a command that prints it, sees a failing
-//    command fail the CLI with its exit, downloads the file and is refused
-//    a second download over it, renames the sandbox and reads the name back,
+//    command fail the CLI with its exit, starts a command in the background,
+//    finds it running and stops it, keeps the sandbox's usage, downloads the
+//    file and is refused a second download over it, renames the sandbox and
+//    reads the name back,
 //    reads its events, gives STADO_BOAT_TEST_PORT a public URL, saves the
 //    disk as a named snapshot, finds it listed and shown, deletes it and no
 //    longer finds it listed, forks the sandbox and reads the token on the
@@ -98,6 +100,16 @@ try {
   assert.ok(printed.stdout.includes(token), `cat did not print the token: ${JSON.stringify(printed)}`);
   refused(run(binary, ['sandbox', 'exec', original.id, 'false']), `the command in sandbox ${original.id} exited with`);
   refused(run(binary, ['sandbox', 'exec', original.id, '--cwd', '', 'true']), '--cwd names no directory');
+
+  const started = sandbox(['exec', original.id, '--detach', 'tail -f /dev/null']);
+  assert.ok(Number.isSafeInteger(started.processId), `exec --detach answered no process id: ${JSON.stringify(started)}`);
+  const background = String(started.processId);
+  const status = sandbox(['process', 'status', original.id, background]);
+  assert.equal(status.processId, started.processId, `process status answered another process: ${JSON.stringify(status)}`);
+  assert.equal(status.running, true, `the background command is not running: ${JSON.stringify(status)}`);
+  sandbox(['process', 'stop', original.id, background]);
+  report.stopped_process = sandbox(['process', 'status', original.id, background]);
+  report.usage = sandbox(['usage', original.id]);
 
   const downloaded = join(output, 'downloaded.bin');
   sandbox(['download', original.id, file, '--to', downloaded]);

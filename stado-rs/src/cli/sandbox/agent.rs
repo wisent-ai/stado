@@ -14,8 +14,8 @@ use crate::providers::BoxProvider;
 
 use super::verbs::{failure, print, sandbox};
 use super::{
-    CmdError, DownloadArgs, EventsArgs, HostArgs, PromptArgs, PromptRunId, SnapshotSaveArgs,
-    SshKeyArgs, UpdateArgs,
+    CmdError, DownloadArgs, EventsArgs, HostArgs, ProcessArgs, PromptArgs, PromptRunId,
+    SnapshotSaveArgs, SshKeyArgs, UpdateArgs,
 };
 
 /// An optional argument as the client takes it: the stated value, or no
@@ -171,6 +171,35 @@ pub(super) async fn host(provider: &BoxProvider, args: &HostArgs) -> Result<(), 
         .host_port(&args.id, args.port, args.public, args.localhost)
         .await
         .map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn process_status(
+    provider: &BoxProvider,
+    args: &ProcessArgs,
+) -> Result<(), CmdError> {
+    let answer = provider
+        .client
+        .command_status(&args.id, args.process)
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn process_stop(
+    provider: &BoxProvider,
+    args: &ProcessArgs,
+) -> Result<(), CmdError> {
+    let answer = provider
+        .client
+        .stop_command(&args.id, args.process)
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn usage(provider: &BoxProvider, id: &str) -> Result<(), CmdError> {
+    let answer = provider.client.usage(id).await.map_err(failure)?;
     print(&Value::Object(answer))
 }
 

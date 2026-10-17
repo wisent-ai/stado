@@ -110,6 +110,14 @@ pub(super) async fn exec(provider: &BoxProvider, args: &ExecArgs) -> Result<(), 
         Some(directory) => directory,
         None => "",
     };
+    if args.detach {
+        let started = provider
+            .client
+            .start_command(&args.id, &args.command, cwd)
+            .await
+            .map_err(failure)?;
+        return print(&Value::Object(started));
+    }
     let result = provider
         .client
         .execute_command(&args.id, &args.command, cwd)

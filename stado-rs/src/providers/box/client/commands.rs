@@ -1,4 +1,5 @@
-//! Boat command, SSH-key, and interrupt verbs.
+//! Boat command, detached command, SSH-key, interrupt, public URL and usage
+//! verbs.
 
 use serde_json::{json, Map, Value};
 
@@ -101,6 +102,81 @@ impl BoxClient {
                 Some(&body),
                 &[],
                 &["port.hosted"],
+            )
+            .await
+    }
+
+    /// POST /sandboxes/{id}/commands with `detached`: start `command` in the
+    /// background and answer its process id at once; its output goes to a
+    /// log on the sandbox, read with [`Self::command_status`].
+    pub async fn start_command(
+        &self,
+        box_id: &str,
+        command: &str,
+        cwd: &str,
+    ) -> Result<Map<String, Value>, BoxError> {
+        if command.is_empty() {
+            return Err(BoxError::value("a Boat sandbox command is required"));
+        }
+        let mut body = json!({"command": command, "detached": true});
+        if !cwd.is_empty() {
+            body["cwd"] = Value::from(cwd);
+        }
+        self.transport
+            .request_json(
+                "POST",
+                &format!("{}/commands", Self::box_path(box_id)?),
+                Some(&body),
+                &[],
+                &["command.started"],
+            )
+            .await
+    }
+
+    /// GET /sandboxes/{id}/commands/{process}: whether a detached command
+    /// runs, its exit code and its recent log.
+    pub async fn command_status(
+        &self,
+        box_id: &str,
+        process: i64,
+    ) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "GET",
+                &format!("{}/commands/{process}", Self::box_path(box_id)?),
+                None,
+                &[],
+                &["command.status"],
+            )
+            .await
+    }
+
+    /// DELETE /sandboxes/{id}/commands/{process}: stop a detached command.
+    pub async fn stop_command(
+        &self,
+        box_id: &str,
+        process: i64,
+    ) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "DELETE",
+                &format!("{}/commands/{process}", Self::box_path(box_id)?),
+                None,
+                &[],
+                &["command.stopped"],
+            )
+            .await
+    }
+
+    /// GET /sandboxes/{id}/usage: what the sandbox has run and cost.
+    pub async fn usage(&self, box_id: &str) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "GET",
+                &format!("{}/usage", Self::box_path(box_id)?),
+                None,
+                &[],
+                &["sandbox.usage"],
             )
             .await
     }

@@ -25,8 +25,23 @@ enum NativeSandboxOperations {
             path: ["sandbox", "exec"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
                 .init(id: "cwd", label: "Directory in the sandbox (blank: the request names none)", option: "--cwd"),
+                .init(id: "detach", label: "Start in the background and print its process id", option: "--detach", flag: true),
                 .init(id: "command", label: "Command line, run by the sandbox's shell", required: true),
             ], jsonOutput: false),
+        .init(id: "sandbox-process-status", title: "Read a background command's status and log",
+            path: ["sandbox", "process", "status"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "process", label: "Process id from exec --detach", required: true),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-process-stop", title: "Stop a background command",
+            path: ["sandbox", "process", "stop"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "process", label: "Process id from exec --detach", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-usage", title: "Read what a sandbox has run and cost",
+            path: ["sandbox", "usage"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+            ], mutates: false, jsonOutput: false),
         .init(id: "sandbox-read", title: "Read a file from a sandbox",
             path: ["sandbox", "read"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
