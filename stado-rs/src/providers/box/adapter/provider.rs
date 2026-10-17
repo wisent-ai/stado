@@ -153,7 +153,7 @@ impl BoxProvider {
     /// `ttl_seconds`.
     pub async fn create_box(&self, ttl_seconds: i64) -> Result<BoxInfo, BoxError> {
         self.preflight().await?;
-        self.client.create_box(Some(ttl_seconds), true).await
+        self.client.create_box(Some(ttl_seconds), true, None).await
     }
 
     /// Move the sandbox's auto-stop `ttl_seconds` forward.

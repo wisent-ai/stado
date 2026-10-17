@@ -17,19 +17,22 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    token and reads it back, runs a command that prints it, sees a failing
 //    command fail the CLI with its exit, downloads the file and is refused
 //    a second download over it, renames the sandbox and reads the name back,
-//    reads its events, forks the sandbox and reads the token on the fork,
-//    deletes the fork, stops the original and deletes it. Prompting the
+//    reads its events, gives STADO_BOAT_TEST_PORT a public URL, saves the
+//    disk as a named snapshot, finds it listed and shown, deletes it and no
+//    longer finds it listed, forks the sandbox and reads the token on the
+//    fork, deletes the fork, stops the original and deletes it. Prompting the
 //    coding agent needs an agent provider's account and is not run here.
 //    The last `show` of each sandbox is kept as the observed final state.
-// STADO_BIN selects the Stado under test. Without STADO_BIN or
-// STADO_BOAT_TEST_TTL_SECONDS the journey is blocked, never passed. The
-// report keeps every command, exit status and output under .build/; a
-// failure is rethrown after the report is written.
+// STADO_BIN selects the Stado under test. Without STADO_BIN,
+// STADO_BOAT_TEST_TTL_SECONDS or STADO_BOAT_TEST_PORT the journey is blocked,
+// never passed. The report keeps every command, exit status and output under
+// .build/; a failure is rethrown after the report is written.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 mkdirSync(join(root, '.build'), { recursive: true });
 const output = mkdtempSync(join(realpathSync(join(root, '.build')), 'providers-boat-sandbox-'));
 const stado = process.env.STADO_BIN;
 const lifetime = process.env.STADO_BOAT_TEST_TTL_SECONDS;
+const port = process.env.STADO_BOAT_TEST_PORT;
 const report = { started_at: new Date().toISOString(), commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 // A clean exit: no spawn error, no signal, and a status that is zero (falsy).
@@ -61,10 +64,10 @@ function withoutBoatOverrides(document) {
 try {
   report.source_revision = success(run('git', ['rev-parse', 'HEAD']));
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
-  if (!stado || !lifetime) {
+  if (!stado || !lifetime || !port) {
     report.result = 'blocked';
-    throw new Error(`The Boat sandbox journey requires STADO_BIN and STADO_BOAT_TEST_TTL_SECONDS; missing: ${[
-      !stado && 'STADO_BIN', !lifetime && 'STADO_BOAT_TEST_TTL_SECONDS',
+    throw new Error(`The Boat sandbox journey requires STADO_BIN, STADO_BOAT_TEST_TTL_SECONDS and STADO_BOAT_TEST_PORT; missing: ${[
+      !stado && 'STADO_BIN', !lifetime && 'STADO_BOAT_TEST_TTL_SECONDS', !port && 'STADO_BOAT_TEST_PORT',
     ].filter(Boolean).join(', ')}`);
   }
   assert.equal(success(run('git', ['status', '--porcelain', '--untracked-files=all'])), '',
@@ -108,6 +111,20 @@ try {
   const events = sandbox(['events', original.id, '--sort', 'asc']);
   assert.ok(Array.isArray(events.events), `events answered no list: ${JSON.stringify(events)}`);
   assert.ok(events.events.length, `the sandbox that ran commands has no events: ${JSON.stringify(events)}`);
+
+  const hosted = sandbox(['host', original.id, port]);
+  assert.ok(String(hosted.url).startsWith('https://'), `host answered no HTTPS URL: ${JSON.stringify(hosted.port)}`);
+  assert.equal(String(hosted.port), port, 'host answered another port than the one asked for');
+
+  const saved = sandbox(['snapshot', 'save', original.id, named]);
+  assert.equal(saved.snapshot?.name, named, `snapshot save answered another name: ${JSON.stringify(saved)}`);
+  const listed = sandbox(['snapshot', 'list']);
+  assert.ok(listed.snapshots.some(row => row.name === named), `snapshot list does not hold ${named}`);
+  assert.equal(sandbox(['snapshot', 'show', named]).snapshot?.name, named, `snapshot show does not read ${named}`);
+  sandbox(['snapshot', 'delete', named]);
+  report.snapshot_after_delete = run(binary, ['sandbox', 'snapshot', 'show', named]);
+  assert.ok(!sandbox(['snapshot', 'list']).snapshots.some(row => row.name === named),
+    `snapshot list still holds ${named} after its deletion`);
 
   const fork = sandbox(['fork', original.id]);
   assert.ok(fork.id && fork.id !== original.id, `fork answered no new sandbox: ${JSON.stringify(fork)}`);

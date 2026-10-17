@@ -1,11 +1,12 @@
 import Foundation
 
 /// The Boat sandbox operations `stado sandbox` has, through the selected
-/// endpoint's operator command channel: list and show, create and update,
-/// run a command line, read, write and download a file, prompt the coding
-/// agent and read the run, interrupt it, read events, allow an SSH key, fork,
-/// stop, resume and delete. Each answers with the JSON the CLI prints; the
-/// writes run behind the review dialog.
+/// endpoint's operator command channel: list and show, create (also from a
+/// named snapshot) and update, run a command line, read, write and download
+/// a file, prompt the coding agent and read the run, interrupt it, read
+/// events, allow an SSH key, give a port a public URL, save, list, show and
+/// delete named snapshots, fork, stop, resume and delete. Each answers with
+/// the JSON the CLI prints; the writes run behind the review dialog.
 enum NativeSandboxOperations {
     static let all: [NativeCapabilityOperation] = [
         .init(id: "sandbox-list", title: "List every Boat sandbox the key reaches",
@@ -18,6 +19,7 @@ enum NativeSandboxOperations {
             path: ["sandbox", "create"], hostPlacement: .none, fields: [
                 .init(id: "ttl", label: "Lifetime in seconds (blank: boat.ttl_seconds)", option: "--ttl-seconds"),
                 .init(id: "no-env", label: "Start without the account's environment variables", option: "--no-env", flag: true),
+                .init(id: "from", label: "Named snapshot to start from (blank: a fresh disk)", option: "--from"),
             ], jsonOutput: false),
         .init(id: "sandbox-exec", title: "Run a command line in a sandbox",
             path: ["sandbox", "exec"], hostPlacement: .none, fields: [
@@ -97,6 +99,28 @@ enum NativeSandboxOperations {
                 .init(id: "id", label: "Sandbox id", required: true),
                 .init(id: "path", label: "Path in the sandbox", required: true),
                 .init(id: "to", label: "New file on the machine running Stado", option: "--to", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-host", title: "Give a port in a sandbox a public HTTPS URL",
+            path: ["sandbox", "host"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "port", label: "Port the service listens on", required: true),
+                .init(id: "public", label: "Anyone can open it, without its token", option: "--public", flag: true),
+                .init(id: "localhost", label: "The service listens on the loopback address only", option: "--localhost", flag: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-snapshot-save", title: "Save a sandbox's disk as a named snapshot",
+            path: ["sandbox", "snapshot", "save"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "name", label: "Snapshot name (an existing one is replaced)", required: true),
+            ], jsonOutput: false),
+        .init(id: "sandbox-snapshot-list", title: "List the named snapshots",
+            path: ["sandbox", "snapshot", "list"], hostPlacement: .none, mutates: false, jsonOutput: false),
+        .init(id: "sandbox-snapshot-show", title: "Show one named snapshot",
+            path: ["sandbox", "snapshot", "show"], hostPlacement: .none, fields: [
+                .init(id: "name", label: "Snapshot name", required: true),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-snapshot-delete", title: "Delete a named snapshot for good",
+            path: ["sandbox", "snapshot", "delete"], hostPlacement: .none, fields: [
+                .init(id: "name", label: "Snapshot name", required: true),
             ], jsonOutput: false),
     ]
 }

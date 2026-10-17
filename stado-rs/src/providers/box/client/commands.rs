@@ -81,4 +81,27 @@ impl BoxClient {
             )
             .await
     }
+
+    /// POST /sandboxes/{id}/host: a stable HTTPS URL for `port` inside the
+    /// sandbox, gated by a token unless `public`; `localhost` says the
+    /// service listens on the loopback address only. Boat answers the same
+    /// URL for the same port again.
+    pub async fn host_port(
+        &self,
+        box_id: &str,
+        port: u16,
+        public: bool,
+        localhost: bool,
+    ) -> Result<Map<String, Value>, BoxError> {
+        let body = json!({"port": port, "public": public, "localhost": localhost});
+        self.transport
+            .request_json(
+                "POST",
+                &format!("{}/host", Self::box_path(box_id)?),
+                Some(&body),
+                &[],
+                &["port.hosted"],
+            )
+            .await
+    }
 }

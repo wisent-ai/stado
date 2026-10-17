@@ -1,4 +1,4 @@
-//! Boat file, artifact, and event payload readers.
+//! Boat file, artifact, event and named-snapshot payload readers.
 
 use serde_json::{json, Map, Value};
 
@@ -113,4 +113,74 @@ impl BoxClient {
             has_more,
         })
     }
+
+    /// POST /named-snapshots: freeze `box_id`'s disk under `name`. Boat
+    /// answers at once with the snapshot `saving`; its status turns `ready`
+    /// or `failed` in the background.
+    pub async fn save_named_snapshot(
+        &self,
+        box_id: &str,
+        name: &str,
+    ) -> Result<Map<String, Value>, BoxError> {
+        let body = json!({"sandboxId": Self::validate_box_id(box_id)?, "name": name});
+        self.transport
+            .request_json(
+                "POST",
+                "/named-snapshots",
+                Some(&body),
+                &[],
+                &["snapshot.named.saving"],
+            )
+            .await
+    }
+
+    /// GET /named-snapshots, newest first, with the account's allowance.
+    pub async fn named_snapshots(&self) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "GET",
+                "/named-snapshots",
+                None,
+                &[],
+                &["snapshot.named.list"],
+            )
+            .await
+    }
+
+    /// GET /named-snapshots/{name}.
+    pub async fn named_snapshot(&self, name: &str) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "GET",
+                &named_snapshot_path(name)?,
+                None,
+                &[],
+                &["snapshot.named.info"],
+            )
+            .await
+    }
+
+    /// DELETE /named-snapshots/{name}: remove it for good.
+    pub async fn delete_named_snapshot(&self, name: &str) -> Result<Map<String, Value>, BoxError> {
+        self.transport
+            .request_json(
+                "DELETE",
+                &named_snapshot_path(name)?,
+                None,
+                &[],
+                &["snapshot.named.deleted"],
+            )
+            .await
+    }
+}
+
+/// The path of one named snapshot, its name encoded as one path segment so
+/// a name holding a slash or a query mark cannot address another resource.
+/// Which names Boat accepts is Boat's to say; an empty one names none.
+fn named_snapshot_path(name: &str) -> Result<String, BoxError> {
+    if name.is_empty() {
+        return Err(BoxError::value("a named snapshot needs a name"));
+    }
+    let segment: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect();
+    Ok(format!("/named-snapshots/{segment}"))
 }

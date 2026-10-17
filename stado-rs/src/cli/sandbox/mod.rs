@@ -57,6 +57,52 @@ pub enum SandboxCommands {
     SshKey(SshKeyArgs),
     /// Download a file or folder from a sandbox into a new local file.
     Download(DownloadArgs),
+    /// Give a port inside a sandbox a stable public HTTPS URL.
+    Host(HostArgs),
+    /// Save, list, show and delete named snapshots: a sandbox's disk kept
+    /// under a name, from which `create --from` starts new sandboxes.
+    #[command(subcommand)]
+    Snapshot(SnapshotCommands),
+}
+
+#[derive(Subcommand)]
+pub enum SnapshotCommands {
+    /// Freeze a sandbox's disk under a name; Boat saves it in the background.
+    Save(SnapshotSaveArgs),
+    /// List the named snapshots, newest first, with the account's allowance.
+    List,
+    /// Show one named snapshot and its status.
+    Show(SnapshotName),
+    /// Delete a named snapshot for good.
+    Delete(SnapshotName),
+}
+
+#[derive(Args, Debug)]
+pub struct SnapshotSaveArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// The name to save under; saving an existing name replaces it.
+    pub name: String,
+}
+
+#[derive(Args, Debug)]
+pub struct SnapshotName {
+    /// The named snapshot's name.
+    pub name: String,
+}
+
+#[derive(Args, Debug)]
+pub struct HostArgs {
+    /// The sandbox id Boat answered at create, fork or list.
+    pub id: String,
+    /// The port the service listens on inside the sandbox.
+    pub port: u16,
+    /// Answer a URL anyone can open, not one gated by its token.
+    #[arg(long)]
+    pub public: bool,
+    /// The service listens on the loopback address only.
+    #[arg(long)]
+    pub localhost: bool,
 }
 
 #[derive(Args, Debug)]
@@ -160,6 +206,9 @@ pub struct CreateArgs {
     /// Start without the account's environment variables.
     #[arg(long)]
     pub no_env: bool,
+    /// Start from this named snapshot instead of a fresh disk.
+    #[arg(long)]
+    pub from: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -228,5 +277,12 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
         SandboxCommands::Events(args) => agent::events(&provider, &args).await,
         SandboxCommands::SshKey(args) => agent::ssh_key(&provider, &args).await,
         SandboxCommands::Download(args) => agent::download(&provider, &args).await,
+        SandboxCommands::Host(args) => agent::host(&provider, &args).await,
+        SandboxCommands::Snapshot(sub) => match sub {
+            SnapshotCommands::Save(args) => agent::snapshot_save(&provider, &args).await,
+            SnapshotCommands::List => agent::snapshot_list(&provider).await,
+            SnapshotCommands::Show(named) => agent::snapshot_show(&provider, &named.name).await,
+            SnapshotCommands::Delete(named) => agent::snapshot_delete(&provider, &named.name).await,
+        },
     }
 }

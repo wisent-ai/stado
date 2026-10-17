@@ -1,7 +1,8 @@
 //! The `stado sandbox` verbs an agent uses beyond a sandbox's life: rename
 //! it or change when it stops, hand its coding agent a prompt and follow the
-//! run, interrupt it, read its events, allow an SSH key, and download a file.
-//! Each is one Boat Public API v1 call through the provider's client.
+//! run, interrupt it, read its events, allow an SSH key, download a file,
+//! give a port a public URL, and keep its disk as a named snapshot. Each is
+//! one Boat Public API v1 call through the provider's client.
 
 use std::io::Write;
 
@@ -12,7 +13,10 @@ use crate::providers::r#box::{BoxPromptRun, TtlUpdate};
 use crate::providers::BoxProvider;
 
 use super::verbs::{failure, print, sandbox};
-use super::{CmdError, DownloadArgs, EventsArgs, PromptArgs, PromptRunId, SshKeyArgs, UpdateArgs};
+use super::{
+    CmdError, DownloadArgs, EventsArgs, HostArgs, PromptArgs, PromptRunId, SnapshotSaveArgs,
+    SshKeyArgs, UpdateArgs,
+};
 
 /// An optional argument as the client takes it: the stated value, or no
 /// value, which the client leaves out of the request. A stated empty value
@@ -159,4 +163,48 @@ pub(super) async fn download(provider: &BoxProvider, args: &DownloadArgs) -> Res
         "to": args.to.display().to_string(),
         "bytes": bytes.len(),
     }))
+}
+
+pub(super) async fn host(provider: &BoxProvider, args: &HostArgs) -> Result<(), CmdError> {
+    let answer = provider
+        .client
+        .host_port(&args.id, args.port, args.public, args.localhost)
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn snapshot_save(
+    provider: &BoxProvider,
+    args: &SnapshotSaveArgs,
+) -> Result<(), CmdError> {
+    let answer = provider
+        .client
+        .save_named_snapshot(&args.id, &args.name)
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn snapshot_list(provider: &BoxProvider) -> Result<(), CmdError> {
+    let answer = provider.client.named_snapshots().await.map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn snapshot_show(provider: &BoxProvider, name: &str) -> Result<(), CmdError> {
+    let answer = provider
+        .client
+        .named_snapshot(name)
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
+}
+
+pub(super) async fn snapshot_delete(provider: &BoxProvider, name: &str) -> Result<(), CmdError> {
+    let answer = provider
+        .client
+        .delete_named_snapshot(name)
+        .await
+        .map_err(failure)?;
+    print(&Value::Object(answer))
 }
