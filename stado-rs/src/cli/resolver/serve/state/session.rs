@@ -2,9 +2,9 @@
 //! remote host rides the resolver's cached native SSH session to it. That
 //! session can stop answering its channels while the host itself answers a
 //! new SSH session at once: every relayed request then waits without end,
-//! and refusing each later connection behind the held ones kept the service
-//! from every consumer on this host for hours although a new session would
-//! have carried it.
+//! and refusing each later connection behind the held ones would keep the
+//! service from every consumer on this host although a new session would
+//! carry it.
 //!
 //! So a connection on a held adapter first asks whether the held waits ride
 //! the session it would be sent on. When the youngest held wait began after
