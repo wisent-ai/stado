@@ -7,14 +7,16 @@
 //! The verbs live beside this entry point: `lifecycle` (limits, create,
 //! fetch, list, update, recover, release), `commands` (command, background
 //! command, SSH key, interrupt, public and desktop URLs, sharing, usage),
-//! `environments`
-//! (environments, their variables, secret files and repositories), and the
-//! payload readers `files` (file, artifact, event, snapshot, named
+//! `environments` (environments, their variables, secret files and
+//! repositories), `history` (conversations, command history and its stored
+//! output, processes), and
+//! the payload readers `files` (file, artifact, event, snapshot, named
 //! snapshot) and `prompts` (prompt submission, status and steer).
 
 mod commands;
 mod environments;
 mod files;
+mod history;
 mod lifecycle;
 mod prompts;
 

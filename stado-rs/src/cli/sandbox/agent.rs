@@ -20,7 +20,7 @@ use super::{
 /// An optional argument as the client takes it: the stated value, or no
 /// value, which the client leaves out of the request. A stated empty value
 /// is refused naming its option, so it is never sent as if it were absent.
-fn stated<'a>(value: Option<&'a str>, option: &str) -> Result<&'a str, CmdError> {
+pub(super) fn stated<'a>(value: Option<&'a str>, option: &str) -> Result<&'a str, CmdError> {
     match value {
         Some("") => Err(CmdError::usage(format!("{option} is given with no value"))),
         Some(value) => Ok(value),

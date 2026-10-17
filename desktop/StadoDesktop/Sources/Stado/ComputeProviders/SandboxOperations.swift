@@ -124,6 +124,35 @@ enum NativeSandboxOperations {
                 .init(id: "cursor", label: "nextCursor of the previous page (blank: first page)", option: "--cursor"),
                 .init(id: "type", label: "Event type (blank: every type)", option: "--type"),
             ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-conversations", title: "Read a sandbox's agent conversations",
+            path: ["sandbox", "conversations"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-history", title: "Read one page of the commands that ran in a sandbox",
+            path: ["sandbox", "history"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "mode", label: "Kinds of run, comma-separated: sync, stream, detached, process, commands (blank: every kind)", option: "--mode"),
+                .init(id: "query", label: "Text the command line contains (blank: every command)", option: "--query"),
+                .init(id: "limit", label: "Commands per page (blank: Boat's page size)", option: "--limit"),
+                .init(id: "cursor", label: "nextCursor of the previous page (blank: first page)", option: "--cursor"),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-command", title: "Read one command of a sandbox's history",
+            path: ["sandbox", "command"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "command", label: "Command id", required: true),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-logs", title: "Read a command's stored output",
+            path: ["sandbox", "logs"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+                .init(id: "command", label: "Command id", required: true),
+                .init(id: "stream", label: "Output", option: "--stream", required: true, choices: ["stdout", "stderr"], initial: "stdout"),
+                .init(id: "encoding", label: "Encoding", option: "--encoding", required: true, choices: ["utf8", "base64"], initial: "utf8"),
+                .init(id: "offset", label: "nextOffset of the previous read (blank: from the start)", option: "--offset"),
+            ], mutates: false, jsonOutput: false),
+        .init(id: "sandbox-processes", title: "Read the processes of a sandbox",
+            path: ["sandbox", "processes"], hostPlacement: .none, fields: [
+                .init(id: "id", label: "Sandbox id", required: true),
+            ], mutates: false, jsonOutput: false),
         .init(id: "sandbox-ssh-key", title: "Allow an OpenSSH public key into a sandbox",
             path: ["sandbox", "ssh-key"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),

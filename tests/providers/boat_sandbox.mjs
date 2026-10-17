@@ -15,8 +15,11 @@ import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 //    lifetime of the sandboxes this journey creates. It creates a sandbox,
 //    refuses a lifetime that is not positive, writes a file with a fresh
 //    token and reads it back, is refused a recover of the sandbox that just
-//    answered (sandbox_is_reachable), runs a command that prints it, sees a failing
-//    command fail the CLI with its exit, starts a command in the background,
+//    answered (sandbox_is_reachable), runs a command that prints it, finds
+//    that command in the sandbox's history and the token in its stored
+//    output (an empty --query is refused), reads its processes and
+//    conversations, sees a failing command fail the CLI with its exit,
+//    starts a command in the background,
 //    finds it running and stops it, keeps the sandbox's usage, reads its
 //    desktop URL, downloads the file and is refused a second download over
 //    it, renames the sandbox and reads the name back, reads its events,
@@ -109,6 +112,21 @@ try {
   assert.ok(printed.stdout.includes(token), `cat did not print the token: ${JSON.stringify(printed)}`);
   refused(run(binary, ['sandbox', 'exec', original.id, 'false']), `the command in sandbox ${original.id} exited with`);
   refused(run(binary, ['sandbox', 'exec', original.id, '--cwd', '', 'true']), '--cwd names no directory');
+
+  // The history keeps the cat that just ran, finds it by its command line,
+  // and its stored stdout holds the token; an empty --query is refused.
+  const history = sandbox(['history', original.id, '--mode', 'sync', '--query', file]);
+  const kept = history.commands?.find(entry => entry.command === `cat ${file}`);
+  assert.ok(kept?.commandId, `the history holds no cat of ${file}: ${JSON.stringify(history)}`);
+  assert.equal(sandbox(['command', original.id, kept.commandId]).command?.commandId, kept.commandId,
+    `command answered another record than ${kept.commandId}`);
+  const logs = sandbox(['logs', original.id, kept.commandId, '--stream', 'stdout', '--encoding', 'utf8']);
+  assert.ok(logs.data?.includes(token), `the stored stdout of the cat holds no token: ${JSON.stringify(logs)}`);
+  refused(run(binary, ['sandbox', 'history', original.id, '--query', '']), '--query is given with no value');
+  const processes = sandbox(['processes', original.id]);
+  assert.ok(Array.isArray(processes.processes), `processes answered no list: ${JSON.stringify(processes)}`);
+  assert.ok(Array.isArray(sandbox(['conversations', original.id]).conversations),
+    'conversations answered no list');
 
   const started = sandbox(['exec', original.id, '--detach', 'tail -f /dev/null']);
   assert.ok(Number.isSafeInteger(started.processId), `exec --detach answered no process id: ${JSON.stringify(started)}`);

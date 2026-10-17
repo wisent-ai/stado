@@ -2,10 +2,11 @@
 //! an agent or a script drives them: list and show, create and rename, run a
 //! command and follow or stop one run in the background, read, write and
 //! download files, hand a coding agent a prompt and follow it, read the
-//! sandbox's events and usage, add an SSH key, give a port a URL, keep the
-//! disk as a named snapshot, fork, stop (or force a stop whose save fails),
-//! power-cycle one that stopped answering, share one with its organization,
-//! resume and delete.
+//! sandbox's events and usage, its conversations, the history of its
+//! commands with their stored output and its processes, add an SSH key,
+//! give a port a URL, keep the disk as a named snapshot, fork, stop (or
+//! force a stop whose save fails), power-cycle one that stopped answering,
+//! share one with its organization, resume and delete.
 //!
 //! The scheduler rents a sandbox per job and owns its whole life; these verbs
 //! are the same Boat Public API v1 calls handed to a caller directly, through
@@ -18,12 +19,14 @@
 mod agent;
 mod args;
 mod environments;
+mod history;
 mod snapshots;
 mod verbs;
 
 use clap::Subcommand;
 
 pub use args::*;
+pub use history::{CommandRef, HistoryArgs, LogsArgs};
 
 use super::CmdError;
 
@@ -94,6 +97,19 @@ pub enum SandboxCommands {
     /// every new sandbox started with one gets.
     #[command(subcommand)]
     Environment(EnvironmentCommands),
+    /// Print a sandbox's agent conversations, most recently prompted first.
+    Conversations(SandboxId),
+    /// Print one page of the commands and other processes that ran in a
+    /// sandbox, newest first; also while it is stopped.
+    History(HistoryArgs),
+    /// Print one command of a sandbox's history.
+    Command(CommandRef),
+    /// Print a command's stored output from an offset; also while the
+    /// sandbox is stopped.
+    Logs(LogsArgs),
+    /// Print the processes of a sandbox, busiest first, or the last sample
+    /// Boat kept of a stopped one.
+    Processes(SandboxId),
 }
 
 #[derive(Subcommand)]
@@ -157,6 +173,13 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
             ProcessCommands::Stop(args) => agent::process_stop(&provider, &args).await,
         },
         SandboxCommands::Usage(sandbox) => agent::usage(&provider, &sandbox.id).await,
+        SandboxCommands::Conversations(sandbox) => {
+            history::conversations(&provider, &sandbox.id).await
+        }
+        SandboxCommands::History(args) => history::history(&provider, &args).await,
+        SandboxCommands::Command(args) => history::command(&provider, &args).await,
+        SandboxCommands::Logs(args) => history::logs(&provider, &args).await,
+        SandboxCommands::Processes(sandbox) => history::processes(&provider, &sandbox.id).await,
         SandboxCommands::Read(args) => verbs::read(&provider, &args).await,
         SandboxCommands::Write(args) => verbs::write(&provider, &args).await,
         SandboxCommands::Fork(args) => verbs::fork(&provider, &args).await,
