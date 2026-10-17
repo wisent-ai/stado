@@ -48,6 +48,11 @@ products:
     for_surface: cli
     alternative: pairs synthesize writes pairs with the local model by default (--generator local), pairs add authors them by hand, and decisions import reads labelled decisions from a JSONL file; only pairs synthesize --generator brama and decisions synthesize ask a hosted writer through Brama, and steering itself is always local
     alternative_source: ster/src/cli/decisions/mod.rs
+  - product: stado
+    surface: cli
+    for_surface: desktop
+    alternative: Ster Desktop runs the ster executable it finds first on PATH, then in ~/.local/bin, /opt/homebrew/bin or /usr/local/bin; ~/.stado/bin, where Stado installs Ster, is one more place it looks and nothing of Stado is run, and a ster found in none of them is refused as missing
+    alternative_source: ster-desktop/Sources/SterDesktop/Client/RequestProcess.swift
 - id: jeden
   name: Jeden
   status: active
@@ -636,6 +641,12 @@ products:
   approved_by: operator
   approved_at: 2026-09-02T19:53:05Z
   approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
+  dependencies:
+  - product: stado
+    surface: cli
+    for_surface: cli
+    alternative: 'Lem reads nothing of Stado: it only removes STADO_MODEL_ROUTER_TOKEN from the environment of the TeX process it starts, so that token is never handed to it, and runs the same on a machine without Stado'
+    alternative_source: lem/Sources/LemCore/FigureQualityEvaluator/LemFigureQualityEvaluator+FigurePreambleFile.swift
 - id: echo
   name: Echo
   status: active
@@ -1277,6 +1288,11 @@ products:
     for_surface: cli
     alternative: Lake ingests, keeps and answers every read without Oko; projection rebuild writes the Oko projection under exports/oko without running it, and only projection refresh --target oko hands it to oko-cli
     alternative_source: transcript-lake/src/commands/derived/mod.rs
+  - product: stado
+    surface: library
+    for_surface: cli
+    alternative: stado-wait is a Rust library compiled into the transcript-lake binary from its pinned Stado source; nothing of Stado is installed or run, and the binary runs on a machine without Stado
+    alternative_source: transcript-lake/Cargo.toml
 - id: kronika
   name: Kronika
   status: active
