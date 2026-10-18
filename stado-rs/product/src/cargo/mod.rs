@@ -222,9 +222,10 @@ pub(crate) fn execute_revision(
         }
         process.arg("--locked");
         if operation == "metadata" {
-            process.args(["--format-version", "1"]);
+            process.args(["--format-version", "1"]).args(arguments);
+        } else {
+            process.args(findings::with_messages(arguments)?);
         }
-        process.args(arguments);
         process.envs(pinned.iter().flat_map(|pinned| pinned.source_contract()));
         report["argv"] = json!(std::iter::once(process.get_program())
             .chain(process.get_args())
@@ -240,11 +241,11 @@ pub(crate) fn execute_revision(
         report["stdout_path"] = json!(stdout_path);
         report["stderr_path"] = json!(stderr_path);
         io::stderr().write_all(&output.stderr)?;
-        // Each diagnostic the compiler printed — file:line, lint or error
-        // code, message — so a refused lint is read from this record.
-        let found = findings::read(&String::from_utf8_lossy(&output.stderr));
-        report["findings"] = json!(found);
-        stdout = output.stdout;
+        // Each diagnostic Cargo recorded: file:line, lint or error code, message.
+        let messages = findings::Messages::read(&output.stdout)?;
+        io::stderr().write_all(messages.rendered.as_bytes())?;
+        report["findings"] = json!(messages.findings);
+        stdout = messages.rest;
         report["exit_status"] = json!(output.status.code());
         report["process_status"] = json!(output.status.to_string());
         if !output.status.success() {
@@ -253,7 +254,7 @@ pub(crate) fn execute_revision(
             if let Some(exit) = output.status.code() {
                 code = exit;
             }
-            let named: Vec<String> = found.iter().map(ToString::to_string).collect();
+            let named: Vec<String> = messages.findings.iter().map(ToString::to_string).collect();
             bail!(
                 "Cargo {operation} failed ({}){}",
                 output.status,

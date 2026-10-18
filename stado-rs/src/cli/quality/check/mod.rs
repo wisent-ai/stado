@@ -11,7 +11,9 @@ pub(crate) use modules::check_source;
 use std::path::Path;
 use std::process::Command;
 
-use super::{declared_gates, inputs, lockfile, run, web, Declaration, Report, Selection};
+use super::{
+    declared_gates, inputs, lockfile, run, web, Declaration, Diagnostics, Report, Selection,
+};
 use crate::cli::CmdError;
 use crate::release_pipeline::GateKind;
 
@@ -238,7 +240,12 @@ async fn check_tree(
     .collect();
     for gate in &declared.gates {
         report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
-        run(&gate.argv, tree, &contract, report).map_err(|error| {
+        // A format gate compiles nothing; every other kind compiles the tree.
+        let diagnostics = match gate.kind {
+            GateKind::Format => Diagnostics::Text,
+            _ => Diagnostics::Compiled,
+        };
+        run(&gate.argv, tree, &contract, report, diagnostics).map_err(|error| {
             let refused = error.within(format!(
                 "stado quality check: gate {:?} ({}) of {} refuses {revision} of {}",
                 gate.name,

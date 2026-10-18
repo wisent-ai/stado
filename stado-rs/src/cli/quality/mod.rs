@@ -104,7 +104,7 @@ fn converge(
     let mut previous: Option<Vec<u8>> = None;
     loop {
         println!("stado quality format: {}", writing.join(" "));
-        run(&writing, root, &[], Report::Stdout)?;
+        run(&writing, root, &[], Report::Stdout, Diagnostics::Text)?;
         let (program, args) = gate.argv.split_first().ok_or_else(|| {
             CmdError::click("a quality gate declares an empty command")
                 .stating(crate::primitives::failure::FailureCode::Config)
@@ -181,37 +181,72 @@ pub(super) fn installed(program: &str) -> Result<std::path::PathBuf, CmdError> {
     })
 }
 
+/// How a gate's diagnostics are read: from the records Cargo prints for a
+/// gate that compiles with Cargo, or not at all, the gate's own report then
+/// standing for them.
+#[derive(Clone, Copy)]
+pub(crate) enum Diagnostics {
+    /// A Cargo operation that compiles: run with Cargo's records, each
+    /// diagnostic read from them. Another program runs as declared.
+    Compiled,
+    /// Read no diagnostics; a refusal carries the gate's own report.
+    Text,
+}
+
 /// Run one gate's argv in `root`. Its report is captured and then printed
 /// where the check's lines go, so a refusal names what the gate found —
-/// each compiler finding's file:line, lint and message
-/// ([`stado_product::findings`]), or, for a report that names none, the
-/// gate's own report — instead of only
-/// its argv and exit status.
+/// each compiler finding's file:line, lint and message from Cargo's records
+/// ([`stado_product::findings`]), or, for a gate that reads none, the gate's
+/// own report — instead of only its argv and exit status.
 fn run(
     argv: &[String],
     root: &Path,
     env: &[(&str, String)],
     report: Report,
+    diagnostics: Diagnostics,
 ) -> Result<(), CmdError> {
     let (program, args) = argv.split_first().ok_or_else(|| {
         CmdError::click("a quality gate declares an empty command")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
+    let recorded =
+        matches!(diagnostics, Diagnostics::Compiled) && program == stado_product::findings::CARGO;
+    let unreadable = |error: anyhow::Error| {
+        CmdError::click(format!("{}: {error:#}", argv.join(" ")))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    };
+    let args = if recorded {
+        stado_product::findings::with_messages(args).map_err(unreadable)?
+    } else {
+        args.to_vec()
+    };
     let mut command = Command::new(installed(program)?);
-    command.args(args).current_dir(root);
+    command.args(&args).current_dir(root);
     command.envs(env.iter().map(|(name, value)| (*name, value.as_str())));
     let output = crate::wait::output(&mut command).map_err(|error| {
         CmdError::click(format!("cannot run {program}: {error}"))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let messages = if recorded {
+        stado_product::findings::Messages::read(&output.stdout).map_err(unreadable)?
+    } else {
+        stado_product::findings::Messages {
+            rest: output.stdout,
+            ..Default::default()
+        }
+    };
+    let stdout = String::from_utf8_lossy(&messages.rest);
     let stderr = String::from_utf8_lossy(&output.stderr);
     // A gate's own report (a formatter's diff on stdout, a compiler's
-    // diagnostics on stderr), in the order the streams are read.
-    let said: Vec<&str> = [stdout.trim_end(), stderr.trim_end()]
-        .into_iter()
-        .filter(|text| !text.is_empty())
-        .collect();
+    // diagnostics as it renders them), in the order the streams are read.
+    let said: Vec<&str> = [
+        stdout.trim_end(),
+        messages.rendered.trim_end(),
+        stderr.trim_end(),
+    ]
+    .into_iter()
+    .filter(|text| !text.is_empty())
+    .collect();
     let gate_report = said.join("\n");
     // The report follows the check's lines.
     if !gate_report.is_empty() {
@@ -224,7 +259,7 @@ fn run(
         Some(code) => code.to_string(),
         None => "on a signal".to_string(),
     };
-    let found = stado_product::findings::read(&gate_report);
+    let found = messages.findings;
     let named = match found.as_slice() {
         [] => format!("the gate's own report:\n{gate_report}"),
         found => {

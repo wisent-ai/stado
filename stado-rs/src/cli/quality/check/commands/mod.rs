@@ -10,7 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::super::{gates::DeclaredGates, run, Report};
+use super::super::{gates::DeclaredGates, run, Diagnostics, Report};
 use crate::cli::CmdError;
 use help_grammar::clap_children;
 use judged::Reading;
@@ -194,7 +194,7 @@ pub(super) fn check(
         "stado quality check: building candidate CLI: {}",
         declared.build.join(" ")
     ));
-    run(&declared.build, tree, &env, report).map_err(|cause| {
+    run(&declared.build, tree, &env, report, Diagnostics::Compiled).map_err(|cause| {
         cause.within(format!("building CLI command tree of {}", declared.product))
     })?;
     let mut command_tree = BTreeMap::new();
