@@ -16,3 +16,5 @@ Harsh-Review-Attacked: whether "unknown" can still match a registry target as a 
 Harsh-Review-Attacked: whether the text view still prints values nobody measured; a missing kind or stado version and a capability with no value print "not reported", and a report without generated_at says nothing below is dated.
 Harsh-Review-Attacked: whether Stado Desktop reads a null kind; its overview models decode kind as optional already.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
+
+Repaired-By: "stado overview names what its fleet lines did not read" repairs it in this push, naming this commit on its Repairs line
