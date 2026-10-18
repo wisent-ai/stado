@@ -78,9 +78,7 @@ pub struct QualityGate {
     /// reads through `WISENT_INPUT_<NAME>_DIR`. The pre-push check stages
     /// exactly these beside the exported tree; a release build stages every
     /// input whatever the gates declare. Declared, never inferred: a gate's
-    /// script reads the variable where no reader of the manifest can see it,
-    /// and staging every pin fetched a desktop's whole SwiftPM resolution on
-    /// every push for a formatter that reads the source alone.
+    /// script reads the variable where no reader of the manifest can see it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
 }

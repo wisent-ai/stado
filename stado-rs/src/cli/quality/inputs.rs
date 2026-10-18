@@ -9,9 +9,9 @@
 //! stages the ones a selected gate declares it reads the way the worker
 //! stages them: the bytes must hash to the pin, and they are extracted or
 //! mounted as declared, beside the exported tree and removed with it. An
-//! input no selected gate reads is confirmed stored and left in the store:
-//! fetching a desktop's whole SwiftPM resolution on every push, for a
-//! formatter that reads the source alone, cost twenty minutes a push.
+//! input no selected gate reads is confirmed stored and left in the store,
+//! so a gate that reads only the source never waits for a dependency
+//! resolution it does not use.
 
 use std::path::Path;
 
