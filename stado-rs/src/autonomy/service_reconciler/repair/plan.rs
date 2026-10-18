@@ -14,20 +14,6 @@ pub(super) async fn resolved_plan(
     runner: &crate::deploy::Runner,
 ) -> Result<(service::DeployPlan, String, Vec<String>, String), super::RepairRefused> {
     let declared = &status.service;
-    // `unit_program` refuses (a stated `refused`) when nothing declares what
-    // the unit runs: the declaration is incomplete, and no host command ran.
-    let mut unit =
-        crate::cli::service::unit_program(&target.name, &declared.name, None, &[], Some(declared))
-            .map_err(|error| {
-                let kind = match error.failure {
-                    Some(crate::primitives::failure::FailureCode::Refused) => {
-                        super::FailureKind::DeclarationIncomplete
-                    }
-                    _ => super::FailureKind::RepairFailed,
-                };
-                super::RepairRefused::new(kind, error.to_string())
-            })?;
-    let home = crate::deploy::service_catalog::home_for(target);
     let catalog_entry = crate::deploy::service_catalog::lookup(&declared.name)?;
     let listen_port = match catalog_entry.as_ref() {
         Some(entry) => crate::cli::directory::listen_port_for(entry, target, runner)
@@ -35,53 +21,26 @@ pub(super) async fn resolved_plan(
             .map_err(|error| error.to_string())?,
         None => None,
     };
-    let mut unit_env = catalog_entry
-        .map(|entry| {
-            crate::deploy::service_catalog::resolve_entry(
-                &entry,
-                &home,
-                Some(&target.release_platform),
-                &target.name,
-                listen_port,
-            )
-            .2
-        })
-        .unwrap_or_default();
-    if unit.source == "catalog" {
-        let entry = crate::deploy::service_catalog::CatalogService {
-            name: declared.name.clone(),
-            summary: String::new(),
-            unit: unit.unit.clone(),
-            program: unit.program.clone(),
-            args: unit.args.clone(),
-            env: unit.env.clone(),
-            acquisition_scopes: None,
-            directory_service: None,
-            answering: None,
+    // `resolved_unit` refuses (a stated `refused`) when nothing declares what
+    // the unit runs: the declaration is incomplete, and no host command ran.
+    let (mut unit, unit_env) = crate::cli::service::resolved_unit(
+        target,
+        &declared.name,
+        None,
+        &[],
+        Some(declared),
+        catalog_entry.as_ref(),
+        listen_port,
+    )
+    .map_err(|error| {
+        let kind = match error.failure {
+            Some(crate::primitives::failure::FailureCode::Refused) => {
+                super::FailureKind::DeclarationIncomplete
+            }
+            _ => super::FailureKind::RepairFailed,
         };
-        let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
-            &entry,
-            &crate::deploy::service_catalog::home_for(target),
-            Some(&target.release_platform),
-            &target.name,
-            listen_port,
-        );
-        unit.program = program;
-        unit.args = args;
-        unit_env = env;
-    }
-    for (name, value) in &unit.env {
-        let value = crate::deploy::service_catalog::resolve_word(
-            value,
-            &home,
-            Some(&target.release_platform),
-            &target.name,
-        );
-        match unit_env.iter_mut().find(|(key, _)| key == name) {
-            Some((_, current)) => *current = value,
-            None => unit_env.push((name.clone(), value)),
-        }
-    }
+        super::RepairRefused::new(kind, error.to_string())
+    })?;
     let mut plan = match unit
         .unit
         .as_deref()

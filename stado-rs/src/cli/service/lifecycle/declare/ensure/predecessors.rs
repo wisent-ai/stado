@@ -38,7 +38,7 @@ pub(super) async fn host_ready(
         let installed = crate::deploy::service_catalog::resolve_word(
             scopes,
             &crate::deploy::service_catalog::home_for(target),
-            Some(target.release_platform.as_str()),
+            &target.release_platform,
             &target.name,
         );
         let registered =

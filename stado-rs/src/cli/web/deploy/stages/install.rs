@@ -129,7 +129,7 @@ fn platform_directory(target: &ComputeTarget) -> String {
     service_catalog::resolve_word(
         "$STADO_PLATFORM",
         "",
-        Some(&target.release_platform),
+        &target.release_platform,
         &target.name,
     )
 }
@@ -147,7 +147,7 @@ pub(in crate::cli::web::deploy) fn launcher_program(
             LAUNCHER
         ),
         home,
-        Some(&target.release_platform),
+        &target.release_platform,
         &target.name,
     )
 }

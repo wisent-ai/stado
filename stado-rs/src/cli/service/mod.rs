@@ -46,7 +46,7 @@ use crate::cli::reporting::table;
 
 pub mod commands;
 
-// `pub(crate)` only so `unit_program`'s return type stays as reachable as the
+// `pub(crate)` only so `resolved_unit`'s return type stays as reachable as the
 // function itself: `UnitProgram` is named by nobody outside this module tree,
 // so it is not re-exported below, and a type more private than the function
 // returning it is what `private_interfaces` refuses.
@@ -56,7 +56,7 @@ mod runtime;
 
 pub use commands::{dispatch, ServiceCommands};
 
-pub(crate) use lifecycle::declare::ensure::program::{declared_label, unit_program};
+pub(crate) use lifecycle::declare::ensure::program::{declared_label, resolved_unit};
 pub(crate) use lifecycle::declare::ensure::run::ensure_unit;
 pub(crate) use lifecycle::declare::ensure::EnsureOptions;
 pub(crate) use lifecycle::deploy::catalog::{

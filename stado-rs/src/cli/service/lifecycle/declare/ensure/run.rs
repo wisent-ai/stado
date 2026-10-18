@@ -134,7 +134,7 @@ async fn pass(
         }
         (None, None) => None,
     };
-    let (mut unit, unit_env) = program::resolved_unit(
+    let (mut unit, unit_env) = program::ensured_unit(
         &target,
         &options,
         existing,

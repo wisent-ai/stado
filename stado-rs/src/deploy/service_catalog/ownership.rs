@@ -14,14 +14,17 @@ use clap::CommandFactory;
 
 /// The first words that only start another program: the program the unit
 /// really runs is the first operand after them.
-const INTERPRETERS: [&str; 12] = [
+const INTERPRETERS: &[&str] = &[
     "sh", "bash", "zsh", "dash", "env", "node", "bun", "deno", "python", "python3", "perl", "ruby",
 ];
 
-/// The unit a catalog entry runs as: its launchd label, or its product name
-/// when it declares none.
+/// The unit a catalog entry runs as: its launchd label, or, by the catalog's
+/// rule for an entry that declares none, its product name.
 pub fn unit_of(entry: &CatalogService) -> &str {
-    entry.unit.as_deref().unwrap_or(&entry.name)
+    match entry.unit.as_deref() {
+        Some(unit) => unit,
+        None => &entry.name,
+    }
 }
 
 /// Whether `label` names `entry`'s own unit: its product name, its launchd
@@ -74,10 +77,10 @@ fn own_tree(entry: &CatalogService, home: &str, platform: &str, host: &str) -> O
     let root = resolve_word(
         crate::deploy::service::DEPLOYED_SERVICES_ROOT,
         home,
-        Some(platform),
+        platform,
         host,
     );
-    let program = resolve_word(&entry.program, home, Some(platform), host);
+    let program = resolve_word(&entry.program, home, platform, host);
     let name = program
         .strip_prefix(&format!("{root}/"))?
         .split('/')
@@ -100,7 +103,7 @@ pub fn runs_program_of(
     host: &str,
 ) -> bool {
     let tree = own_tree(entry, home, platform, host);
-    let resolved = resolve_word(&entry.program, home, Some(platform), host);
+    let resolved = resolve_word(&entry.program, home, platform, host);
     let named = executable_name(&entry.program).filter(|name| *name == entry.name);
     program_words(declared)
         .into_iter()
@@ -142,10 +145,12 @@ pub fn host_roles(entry: &CatalogService, line: &str) -> Vec<&'static str> {
         return Vec::new();
     };
     let words: Vec<&str> = line.split_whitespace().collect();
-    for (at, word) in words.iter().enumerate() {
+    let mut rest = words.as_slice();
+    while let Some((word, after)) = rest.split_first() {
         if executable_name(word) == Some(executable) {
-            return crate::cli::integrations::runtime::roles::command_roles(&words[at + 1..]);
+            return crate::cli::integrations::runtime::roles::command_roles(after);
         }
+        rest = after;
     }
     Vec::new()
 }

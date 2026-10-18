@@ -219,22 +219,19 @@ pub fn second_process_sentence(label: &str, program: &str, product: &CatalogServ
 /// `$HOME` for the approved account's home, `$STADO_PLATFORM` for the
 /// registry `release_platform`, `$STADO_HOST` for the target's registry
 /// name. Expanding anywhere but against the resolved target would bake this
-/// machine's shape into another host's unit. With no `release_platform`
-/// stated, `$STADO_PLATFORM` stays as written: no platform is guessed, and
-/// the unit names the placeholder it could not resolve.
-pub fn resolve_word(word: &str, home: &str, release_platform: Option<&str>, host: &str) -> String {
-    let resolved = word.replace("$HOME", home).replace("$STADO_HOST", host);
-    let Some(platform) = release_platform else {
-        return resolved;
-    };
+/// machine's shape into another host's unit, so every caller states the
+/// target's platform; there is no expansion without one.
+pub fn resolve_word(word: &str, home: &str, release_platform: &str, host: &str) -> String {
     // The brama artifact layout shortens the platform triple to `darwin-arm`;
     // that is the directory the release actually publishes, not a mistake.
-    let short = match platform {
+    let short = match release_platform {
         "darwin-arm64" => "darwin-arm",
         "linux-amd64" => "linux-amd",
         other => other,
     };
-    resolved.replace("$STADO_PLATFORM", short)
+    word.replace("$HOME", home)
+        .replace("$STADO_PLATFORM", short)
+        .replace("$STADO_HOST", host)
 }
 
 /// [`resolve_word`] over a whole catalog entry, with `$STADO_LISTEN_PORT`
@@ -243,7 +240,7 @@ pub fn resolve_word(word: &str, home: &str, release_platform: Option<&str>, host
 pub fn resolve_entry(
     entry: &CatalogService,
     home: &str,
-    release_platform: Option<&str>,
+    release_platform: &str,
     host: &str,
     listen_port: Option<u16>,
 ) -> (String, Vec<String>, Vec<(String, String)>) {

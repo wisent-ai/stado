@@ -1,6 +1,11 @@
 //! What a unit runs, and which declaration said so.
 
+mod names;
+
 use super::*;
+
+pub(super) use names::canonical_unit;
+pub(crate) use names::declared_label;
 
 /// What a unit runs, and which declaration said so.
 ///
@@ -16,70 +21,9 @@ pub(crate) struct UnitProgram {
     pub(crate) unit: Option<String>,
     /// Non-secret environment declared by this unit, with target placeholders intact.
     pub(crate) env: std::collections::BTreeMap<String, String>,
-    /// Exact authored systemd definition retained by registry lifecycle repairs.
+    /// Exact authored systemd definition retained by registry lifecycle repairs;
+    /// empty when the declaration authored none.
     pub(crate) systemd_unit: String,
-}
-pub(crate) fn declared_label(service: &ManagedService) -> Option<&str> {
-    let unit_id = service.unit_id();
-    Some(unit_id.strip_suffix(".service").unwrap_or(unit_id)).filter(|label| !label.is_empty())
-}
-
-/// The stable init-system identity of `name` on `target`, from the service
-/// catalog's `entry` (authored services) or the managed-product catalog
-/// (units that execute a delivered product binary). Two declarations naming
-/// different units for one service are refused as configuration.
-pub(super) fn canonical_unit(
-    name: &str,
-    target: &crate::targets::ComputeTarget,
-    entry: Option<&crate::deploy::service_catalog::CatalogService>,
-) -> Result<Option<String>, CmdError> {
-    let catalog_unit = entry.and_then(|entry| entry.unit.clone());
-    let managed_unit = canonical_managed_unit(name, &target.name)?;
-    match (catalog_unit, managed_unit) {
-        (Some(service_unit), Some(product_unit)) if service_unit != product_unit => {
-            Err(CmdError::click(format!(
-                "service and managed-product declarations disagree about {name}: {service_unit} \
-                 versus {product_unit}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config))
-        }
-        (Some(unit), _) | (_, Some(unit)) => Ok(Some(unit)),
-        (None, None) => Ok(None),
-    }
-}
-
-/// Stable unit identity supplied by the managed-product declaration.
-///
-/// Service names are operator-facing leaves (`stado-resolver`), while the
-/// product catalog carries the init system's full identity
-/// (`com.wisent.stado-resolver`). A registry record may contain the broken
-/// historical spelling, so it cannot be the authority for this lookup.
-fn canonical_managed_unit(name: &str, target: &str) -> Result<Option<String>, CmdError> {
-    let requested = name.strip_suffix(".service").unwrap_or(name);
-    let mut matched: Option<String> = None;
-    let products = crate::deploy::products::declared().map_err(CmdError::from)?;
-    for product in products {
-        for unit in &product.units {
-            let label = unit.label_for(target);
-            let bare = label.strip_suffix(".service").unwrap_or(&label).to_string();
-            let leaf = bare.rsplit('.').next().unwrap_or(&bare);
-            if label != name && bare != requested && leaf != requested {
-                continue;
-            }
-            // A product declares a unit once per init system: `com.wisent.stado`
-            // for launchd and `com.wisent.stado.service` for systemd are one
-            // unit. Compared whole, they refused `service ensure` for the host
-            // Stado process with "more than one unit identity".
-            if matched.as_deref().is_some_and(|existing| existing != bare) {
-                return Err(CmdError::click(format!(
-                    "managed product declarations give {name} more than one unit identity"
-                ))
-                .stating(crate::primitives::failure::FailureCode::Config));
-            }
-            matched = Some(bare);
-        }
-    }
-    Ok(matched)
 }
 
 /// The program and argument vector `ensure` renders the unit from.
@@ -88,13 +32,12 @@ fn canonical_managed_unit(name: &str, target: &str) -> Result<Option<String>, Cm
 /// able to. Absent them, the host's own `services[]` entry answers: a
 /// declaration that carries its program is one this command can reinstall
 /// from the document alone, which is the whole difference between a declared
-/// service and a plist somebody installed by hand — the resolver and the
-/// local dashboard on `operator-host` were the second kind, and nothing in
-/// the product knew their restart policy. Last, the declaration shipped in
-/// this build ([`targets::load_bundled_registry`]), which is how a unit
-/// declared in a release reaches a canonical document published before it:
-/// the first `ensure` writes it there.
-pub(crate) fn unit_program(
+/// service and a unit somebody installed by hand, whose restart policy
+/// nothing in the product knows. Last, the declaration shipped in this build
+/// ([`targets::load_bundled_registry`]), which is how a unit declared in a
+/// release reaches a canonical document published before it: the first
+/// `ensure` writes it there.
+fn unit_program(
     host: &str,
     name: &str,
     from: Option<&str>,
@@ -102,17 +45,19 @@ pub(crate) fn unit_program(
     declared: Option<&ManagedService>,
 ) -> Result<UnitProgram, CmdError> {
     if let Some(from) = from {
+        // A flag names the program; the declaration, when there is one,
+        // still says the environment and any authored systemd unit.
+        let (env, systemd_unit) = match declared {
+            Some(service) => (service.env.clone(), service.systemd_unit.clone()),
+            None => (std::collections::BTreeMap::new(), String::new()),
+        };
         return Ok(UnitProgram {
             program: from.to_string(),
             args: args.to_vec(),
             source: "flag",
             unit: None,
-            env: declared
-                .map(|service| service.env.clone())
-                .unwrap_or_default(),
-            systemd_unit: declared
-                .map(|service| service.systemd_unit.clone())
-                .unwrap_or_default(),
+            env,
+            systemd_unit,
         });
     }
     if !args.is_empty() {
@@ -180,12 +125,13 @@ pub(crate) fn unit_program(
         });
     }
     let bundled = targets::load_bundled_registry().map_err(CmdError::from)?;
-    let shipped = bundled
-        .lookup(host)
-        .map(service::declared_services)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|candidate| candidate.matches(name) && !candidate.program.is_empty());
+    // A host the bundled registry does not carry ships no declaration.
+    let shipped = match bundled.lookup(host) {
+        Some(bundled_host) => service::declared_services(bundled_host)
+            .into_iter()
+            .find(|candidate| candidate.matches(name) && !candidate.program.is_empty()),
+        None => None,
+    };
     if let Some(shipped) = shipped {
         let unit = shipped.unit_id().to_string();
         return Ok(UnitProgram {
@@ -210,35 +156,34 @@ pub(crate) fn unit_program(
 /// so it applies whatever declared the program: a registry entry adopted from
 /// a hand-installed plist names the same binary and still needs the same
 /// variables. Program and args keep [`unit_program`]'s resolution order; only
-/// the environment is defaulted from the catalog, then the unit's own
+/// the environment starts from the catalog's, then the unit's own
 /// declaration and `--env` override it, each value resolved for this target.
 /// `listen_port` is the port the service directory records for the service on
 /// this target (`cli::directory::listen_port_for`).
-pub(super) fn resolved_unit(
+pub(crate) fn resolved_unit(
     target: &crate::targets::ComputeTarget,
-    options: &EnsureOptions<'_>,
+    name: &str,
+    from: Option<&str>,
+    args: &[String],
     existing: Option<&ManagedService>,
     catalog_entry: Option<&crate::deploy::service_catalog::CatalogService>,
     listen_port: Option<u16>,
 ) -> Result<(UnitProgram, Vec<(String, String)>), CmdError> {
     let host = target.name.as_str();
     let home = crate::deploy::service_catalog::home_for(target);
-    let mut unit_env: Vec<(String, String)> = catalog_entry
-        .map(|entry| {
-            crate::deploy::service_catalog::resolve_entry(
-                entry,
-                &home,
-                Some(&target.release_platform),
-                &target.name,
-                listen_port,
-            )
-            .2
-        })
-        .unwrap_or_default();
-    let mut unit = unit_program(host, options.name, options.from, options.args, existing)?;
+    let platform = target.release_platform.as_str();
+    // A service the catalog does not carry brings no catalog environment.
+    let mut unit_env: Vec<(String, String)> = match catalog_entry {
+        Some(entry) => {
+            crate::deploy::service_catalog::resolve_entry(entry, &home, platform, host, listen_port)
+                .2
+        }
+        None => Vec::new(),
+    };
+    let mut unit = unit_program(host, name, from, args, existing)?;
     if unit.source == "catalog" {
         let entry = crate::deploy::service_catalog::CatalogService {
-            name: options.name.to_string(),
+            name: name.to_string(),
             summary: String::new(),
             unit: unit.unit.clone(),
             program: unit.program.clone(),
@@ -251,42 +196,69 @@ pub(super) fn resolved_unit(
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,
             &home,
-            Some(&target.release_platform),
-            &target.name,
+            platform,
+            host,
             listen_port,
         );
         unit.program = program;
         unit.args = args;
         unit_env = env;
         eprintln!(
-            "{host} declares no program for {}; rendering the unit from the Wisent service \
+            "{host} declares no program for {name}; rendering the unit from the Wisent service \
              catalog this build ships: {} {}",
-            options.name,
             unit.program,
             unit.args.join(" ")
         );
     }
     if unit.source == "shipped" {
         eprintln!(
-            "{host} declares no program for {}; rendering the unit from the declaration shipped \
-             with this build: {} {}",
-            options.name,
+            "{host} declares no program for {name}; rendering the unit from the declaration \
+             shipped with this build: {} {}",
             unit.program,
             unit.args.join(" ")
         );
     }
-    let mut env_overrides = std::mem::take(&mut unit.env);
+    for (variable, value) in std::mem::take(&mut unit.env) {
+        let value = crate::deploy::service_catalog::resolve_word(&value, &home, platform, host);
+        match unit_env.iter_mut().find(|(key, _)| key == &variable) {
+            Some((_, current)) => *current = value,
+            None => unit_env.push((variable, value)),
+        }
+    }
+    Ok((unit, unit_env))
+}
+
+/// [`resolved_unit`] for one `service ensure` pass: its `--env` assignments
+/// override the declared environment, and its `--unset-env` names leave it.
+pub(super) fn ensured_unit(
+    target: &crate::targets::ComputeTarget,
+    options: &EnsureOptions<'_>,
+    existing: Option<&ManagedService>,
+    catalog_entry: Option<&crate::deploy::service_catalog::CatalogService>,
+    listen_port: Option<u16>,
+) -> Result<(UnitProgram, Vec<(String, String)>), CmdError> {
+    let mut assigned = Vec::new();
     for assignment in options.env {
         let (name, value) = assignment
             .split_once('=')
             .ok_or_else(|| CmdError::usage("--env requires NAME=VALUE"))?;
-        env_overrides.insert(name.to_string(), value.to_string());
+        assigned.push((name.to_string(), value.to_string()));
     }
-    for (name, value) in env_overrides {
+    let (unit, mut unit_env) = resolved_unit(
+        target,
+        options.name,
+        options.from,
+        options.args,
+        existing,
+        catalog_entry,
+        listen_port,
+    )?;
+    let home = crate::deploy::service_catalog::home_for(target);
+    for (name, value) in assigned {
         let value = crate::deploy::service_catalog::resolve_word(
             &value,
             &home,
-            Some(&target.release_platform),
+            &target.release_platform,
             &target.name,
         );
         match unit_env.iter_mut().find(|(key, _)| key == &name) {
