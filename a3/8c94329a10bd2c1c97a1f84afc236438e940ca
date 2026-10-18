@@ -19,3 +19,4 @@ Harsh-Review-Attacked: whether the authority read retried and hid a first failur
 Harsh-Review-Attacked: whether the Skarbiec send dropped an unparsable base URL; it did, and "A Skarbiec URL that does not parse is refused, not sent without its held reading" repairs it in this push, naming this commit on its Repairs line.
 Harsh-Review-Attacked: whether an unreadable published list lets the request stand; unless_held refuses the request naming the route and the reason the list cannot be read.
 Harsh-Review-Attacked: whether the journey reads the product; it runs the real stado against a registry whose authority route is held by a listener that never answers and reads the abandonment naming the adapter from that process.
+Harsh-Review-Attacked: whether its comments narrate; its in-flight module comment narrated a past hold, and "The in-flight wait's documentation states the rule without its history" repairs it in this push, naming this commit on its Repairs line.
