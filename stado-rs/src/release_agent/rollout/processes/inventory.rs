@@ -74,9 +74,11 @@ pub(crate) fn release_processes(install_root: &str) -> Result<Vec<ReleaseProcess
         let process_group = number(fields.next(), "process group")?;
         let arguments: Vec<&str> = fields.collect();
         let Some((version, release_dir)) = arguments.iter().find_map(|argument| {
-            let path = argument
-                .split_once('=')
-                .map_or(*argument, |(_, value)| value);
+            // An `env` assignment (`NAME=/path/...`) names its path after `=`.
+            let path = match argument.split_once('=') {
+                Some((_, value)) => value,
+                None => *argument,
+            };
             let (prefix, tail) = path.split_once(&marker)?;
             let mut components = tail.split('/');
             let version = components.next()?;
@@ -92,9 +94,15 @@ pub(crate) fn release_processes(install_root: &str) -> Result<Vec<ReleaseProcess
             continue;
         };
         let mut port = None;
-        for pair in arguments.windows(2) {
-            if pair[0] == "--port" {
-                port = pair[1].parse().ok();
+        let mut rest = arguments.iter();
+        while let Some(argument) = rest.next() {
+            if *argument == "--port" {
+                let value = rest.next().ok_or_else(|| {
+                    format!("the process table line {line:?} has --port with no value")
+                })?;
+                port = Some(value.parse::<u16>().map_err(|error| {
+                    format!("the process table line {line:?} has an unreadable --port: {error}")
+                })?);
             }
         }
         let agent_spawned = arguments
@@ -144,21 +152,26 @@ pub(crate) fn listener_pid(port: Option<u16>) -> Result<Option<i32>, String> {
     let Some(port) = port else {
         return Ok(None);
     };
-    let selector = format!("-iTCP@127.0.0.1:{port}");
+    let listener = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, port);
+    let selector = format!("-iTCP@{listener}");
     let output =
         crate::wait::output(Command::new("lsof").args(["-nP", "-Fp", &selector, "-sTCP:LISTEN"]))
-            .map_err(|error| {
-            format!("lsof could not run to read who listens on 127.0.0.1:{port}: {error}")
-        })?;
-    let listening = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| line.strip_prefix('p')?.parse().ok());
+            .map_err(|error| format!("lsof could not run for {listener}: {error}"))?;
+    let mut listening = None;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some(pid) = line.strip_prefix('p') {
+            listening = Some(pid.parse::<i32>().map_err(|error| {
+                format!("lsof named the listener on {listener} as {line:?}: {error}")
+            })?);
+            break;
+        }
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
     if listening.is_some() || stderr.trim().is_empty() {
         return Ok(listening);
     }
     Err(format!(
-        "lsof could not read who listens on 127.0.0.1:{port}: it ended with {}: {}",
+        "lsof could not read who listens on {listener}: it ended with {}: {}",
         output.status,
         stderr.trim()
     ))
@@ -187,11 +200,22 @@ pub(crate) fn swept_before(
             for entry in entries {
                 let entry = entry
                     .map_err(|error| format!("cannot list {}: {error}", directory.display()))?;
-                let stale = entry
-                    .file_name()
+                let name = entry.file_name();
+                let recorded = name
                     .to_str()
-                    .and_then(|name| name.parse::<i32>().ok())
-                    .is_some_and(|recorded| recorded != pid && !pid_alive(recorded));
+                    .ok_or_else(|| format!("{name:?} is not a pid"))
+                    .and_then(|text| {
+                        text.parse::<i32>()
+                            .map_err(|error| format!("{text:?}: {error}"))
+                    })
+                    .map_err(|error| {
+                        format!(
+                            "{} holds a file that names no pid, and a sweep marker is named by \
+                             its pid: {error}",
+                            directory.display()
+                        )
+                    })?;
+                let stale = recorded != pid && !pid_alive(recorded);
                 if stale {
                     std::fs::remove_file(entry.path()).map_err(|error| {
                         format!(
