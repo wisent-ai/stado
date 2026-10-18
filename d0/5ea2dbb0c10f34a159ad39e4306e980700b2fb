@@ -18,4 +18,4 @@ Repairs: "A held route is one resolver status blocker that counts its connection
 
 Harsh-Review-Attacked: whether a held wait still counts from the request; the place is made at the accept and its since is set to the accept time, so the channel open counts toward the held measure.
 Harsh-Review-Attacked: whether moving held_at changes its answer; it moves to the host module unchanged and is re-exported where its callers name it.
-Harsh-Review-Attacked: whether the test runs the real product; the held journey runs the real resolver against a service that opens slowly and reads the wait counted from the accept.
+Harsh-Review-Attacked: whether the test runs the real product; the held journey connects a client to the real resolver, runs a real command before the client sends its request, and reads that the published wait's since lies before the request, at the accept.
