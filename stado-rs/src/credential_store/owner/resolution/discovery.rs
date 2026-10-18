@@ -10,7 +10,7 @@ use crate::skarbiec::SkarbiecError;
 const SKARBIEC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec"];
 
 /// The home the vault and binary candidates sit under, as text. A home that
-/// is not text is refused naming it; read with `std::env::var`, it was
+/// is not text is refused naming it; read with `std::env::var`, it would be
 /// reported as unset.
 pub(super) fn home() -> Result<String, SkarbiecError> {
     crate::config_file::home()

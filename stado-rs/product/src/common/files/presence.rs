@@ -2,8 +2,8 @@
 //!
 //! `Path::exists` answers false for a path it cannot stat (a permission or
 //! I/O fault), so an installed path, an evidence report or a release
-//! directory read through it was taken as absent. Only a path that does not
-//! exist is absent here; every other cause is the error naming the path.
+//! directory read through it would be taken as absent. Only a path that does
+//! not exist is absent here; every other cause is the error naming the path.
 
 use std::path::Path;
 
