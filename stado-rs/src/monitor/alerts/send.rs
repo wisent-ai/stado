@@ -113,7 +113,14 @@ pub(super) async fn send_skrzynka(
         None => format!("<no {name}>"),
     };
     match row.get("status").and_then(serde_json::Value::as_str) {
-        Some("sent") => Ok(field("id")),
+        // A delivered page is the outbound row Skrzynka recorded, named by
+        // its id; a sent row without one names no delivery to point at.
+        Some("sent") => match row.get("id").and_then(serde_json::Value::as_str) {
+            Some(id) => Ok(id.to_string()),
+            None => Err(format!(
+                "{program} message send answered a sent row without its id: {row}"
+            )),
+        },
         _ => Err(format!(
             "{program} recorded outbound {} as {}: {}: {}",
             field("id"),
