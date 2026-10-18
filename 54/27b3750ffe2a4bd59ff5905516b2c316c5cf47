@@ -12,6 +12,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Repairs: "fleet approve names an enrollment request without a status" its command-tree audit and local space reclaim were split across the CLI and its journey
+Repairs: "fleet approve names an enrollment request without a status" its command-tree audit and space reclaim were not laid out as the format gate asks, and the reclaim reason said it was recorded where only fleet apply records it
 
-Harsh-Review-Attacked: whether the audit reads the built CLI; it runs the built binary's --help over every command path and asks the Brama judgment, refusing an unreachable judgment with its cause, and local space reclaim is one command its journey exercises.
+Harsh-Review-Attacked: whether the audit reads the built CLI; it runs the built binary's --help over every command path and asks the Brama judgment, refusing an unreachable judgment with its cause, and its journey reads the verdict over the real binary.
+Harsh-Review-Attacked: whether the reclaim change alters behaviour; it only lays the dispatch out and corrects the reason's help to say fleet apply records it.
