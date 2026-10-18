@@ -46,7 +46,7 @@ pub(in crate::cli::build_cmd) async fn recent_builds(
             continue;
         };
         // A record that does not parse is said, naming it: dropped, the
-        // listing showed fewer builds than ran with nothing to say so.
+        // listing would show fewer builds than ran with nothing to say so.
         let build = serde_json::from_str::<BuildRun>(&text).map_err(|error| {
             CmdError::click(format!(
                 "the build record {} does not parse: {error}",

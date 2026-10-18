@@ -31,8 +31,8 @@ pub(crate) fn home_dir() -> PathBuf {
 
 /// The user's home as [`home_dir`] finds it, for a caller that refuses
 /// rather than stops: with neither HOME nor a user-database home, the cause.
-/// Read as `std::env::var("HOME")`, a home that is not Unicode was reported
-/// as unset and the user database was never asked.
+/// Read as `std::env::var("HOME")`, a home that is not Unicode would be
+/// reported as unset and the user database never asked.
 pub(crate) fn home() -> Result<PathBuf, String> {
     std::env::home_dir()
         .filter(|home| !home.as_os_str().is_empty())
