@@ -99,7 +99,9 @@ pub enum ServiceFileCommands {
         #[arg(long)]
         source_file: String,
         /// Absolute local path to write the fetched bytes to. Replaced
-        /// atomically, owner-only. Omit to report on the file without
+        /// atomically, owner-only. `-` writes the verified bytes to
+        /// standard output instead and nothing else there, so a caller
+        /// reads them without a file. Omit to report on the file without
         /// keeping a copy.
         #[arg(long)]
         dest_file: Option<String>,

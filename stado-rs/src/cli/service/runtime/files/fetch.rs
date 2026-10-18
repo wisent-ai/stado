@@ -24,12 +24,28 @@ pub(crate) async fn file_fetch(options: FileFetchOptions<'_>) -> Result<(), CmdE
         dest_file,
         as_json,
     } = options;
+    // `-` is standard output, which then carries the file's bytes alone: a
+    // report printed beside them would corrupt them, and the bytes of two
+    // units would run together.
+    let to_stdout = dest_file == Some("-");
+    if to_stdout && as_json {
+        return Err(CmdError::usage(
+            "--dest-file - writes the file's bytes to standard output, where --json would print its report too; drop one",
+        ));
+    }
     if let Some(destination) = dest_file {
-        if !std::path::Path::new(destination).is_absolute() {
+        if !to_stdout && !std::path::Path::new(destination).is_absolute() {
             return Err(CmdError::usage("--dest-file must be absolute"));
         }
     }
     let services = declared_matching(name, Some(host)).await?;
+    if let (true, [first, second, ..]) = (to_stdout, services.as_slice()) {
+        return Err(CmdError::usage(format!(
+            "--dest-file - writes one file's bytes, and {name} on {host} matches more than one unit ({} and {}); name the unit",
+            first.unit_id(),
+            second.unit_id()
+        )));
+    }
     let runner = production_runner();
     let mut payload = Vec::new();
     let mut cells = Vec::new();
@@ -40,16 +56,33 @@ pub(crate) async fn file_fetch(options: FileFetchOptions<'_>) -> Result<(), CmdE
         let fetched = service_file_fetch::fetch_file(&target, source_file, &runner)
             .await
             .map_err(click)?;
-        if let Some(failure) = fetched.failure(&declared.host) {
-            failures.push(failure);
-        }
+        // The one reading of whether this fetch can be believed: its bytes
+        // are kept only when it can.
+        let failure = fetched.failure(&declared.host);
         let written = match dest_file {
-            Some(destination) if fetched.ok() => {
+            Some(_) if to_stdout && failure.is_none() => {
+                use std::io::Write;
+                let mut output = std::io::stdout().lock();
+                output
+                    .write_all(&fetched.content)
+                    .and_then(|()| output.flush())
+                    .map_err(|error| {
+                        CmdError::click(format!(
+                            "cannot write {source_file} to standard output: {error}"
+                        ))
+                        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+                    })?;
+                "standard output"
+            }
+            Some(destination) if failure.is_none() => {
                 write_owner_only(destination, &fetched.content)?;
                 destination
             }
             _ => "-",
         };
+        if let Some(failure) = failure {
+            failures.push(failure);
+        }
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
@@ -77,9 +110,11 @@ pub(crate) async fn file_fetch(options: FileFetchOptions<'_>) -> Result<(), CmdE
         payload.push(Value::Object(object));
     }
 
+    // With `-` standard output holds the bytes alone (`--json` was refused
+    // with it); a failure still exits non-zero with its cause below.
     if as_json {
         print_json(&Value::Array(payload))?;
-    } else {
+    } else if !to_stdout {
         table::print(
             &[
                 "HOST",
