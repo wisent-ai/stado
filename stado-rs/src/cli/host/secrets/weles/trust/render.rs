@@ -61,8 +61,8 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
         }
     };
     // A live environment that names no vault file is said as such: read as
-    // "", it reached the presence check below as "required file is missing: "
-    // with no path, which named nothing to go and fix.
+    // "", it would reach the presence check below as "required file is
+    // missing: " with no path, naming nothing to go and fix.
     let Some(vault) = declared
         .iter()
         .find(|(key, _)| key == "SKARBIEC_VAULT_FILE")

@@ -15,11 +15,12 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
 
     let hostname = crate::providers::vast::system_hostname();
     let identity = crate::targets::normalize_hostname(&hostname);
-    let target_name = identity
-        .split('.')
-        .next()
-        .unwrap_or(identity.as_str())
-        .to_string();
+    // The target is named by its hostname's first label; a hostname with one
+    // label is that label.
+    let target_name = match identity.split_once('.') {
+        Some((label, _)) => label.to_string(),
+        None => identity.clone(),
+    };
     let hostnames = if target_name == identity {
         Vec::new()
     } else {
@@ -86,7 +87,7 @@ pub(in crate::cli::config_cmd) fn init() -> Result<(), CmdError> {
         config_file::expand_tilde(selected.trim())
     };
     // A config that cannot be examined refuses with its cause: read as
-    // absent, the template was written over it.
+    // absent, the template would be written over it.
     if crate::primitives::presence::present(&path)? {
         return Err(CmdError::refused(format!(
             "config file already exists: {}",
