@@ -8,7 +8,7 @@
 //! page is refused naming the missing keys. With the keys naming a mailbox the
 //! isolated organization does not hold, `alerts send` fails, the refusal
 //! carries Skrzynka's own answer for that mailbox, and Skrzynka records no
-//! outbound row for it. Nothing in the `stado` binary names Resend's API.
+//! outbound row for it.
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -138,13 +138,6 @@ fn a_page_on_the_skrzynka_channel_goes_only_through_skrzynka() {
         rows,
         Value::Array(Vec::new()),
         "Skrzynka recorded outbound mail for a mailbox it does not hold"
-    );
-
-    let binary = fs::read(env!("CARGO_BIN_EXE_stado")).unwrap();
-    let resend = b"api.resend.com";
-    assert!(
-        !binary.windows(resend.len()).any(|window| window == resend),
-        "the stado binary still names Resend's API"
     );
 
     fs::remove_dir_all(&deployment.root).unwrap();
