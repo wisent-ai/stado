@@ -46,6 +46,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A Boat environment change that does not take says why:** `stado sandbox environment` changes refused with `Boat answered … without success=true` and nothing of Boat's answer. The refusal now carries Boat's `error` member, or names the members the answer held when it has none; the rest of the answer is not quoted, since a change may echo the variable or file it was given.
+
 - **The backup audit keeps every unreadable row's cause:** each marker row the reader could not read replaced the cause of the one before it, an unavailable marker that named no reason cleared the audit's unavailability, a namespace inventory ended without a root was passed over, and a size, count, hex path or namespace that did not read was said without its parser's error. `stado host backup-audit` now marks the audit unavailable with every such row's cause and line, in the order printed.
 
 - **A host's link block names every datum it could not read and why:** a beacon whose tailnet, sleep or interface-change probe failed published a null with no cause, and a journal line or timestamp it could not read was dropped silently. Each such datum now stays null with its cause in the block's `unread` list (the probe and its exit status and stderr, the line that is not JSON, the stamp no format reads, an undeclared window or `PATH`); `stado host link` prints each on an `unread:` line and as `link_unread` in `--json`, the Desktop Link section shows them as Unread link data, and a link block that is not one is reported there with its parse error.

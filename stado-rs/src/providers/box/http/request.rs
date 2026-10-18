@@ -80,8 +80,18 @@ impl BoxHttpTransport {
         let raw = self.send(method, path, body, query, &[]).await?;
         let payload = parse_json(&raw)?;
         if payload.get("success") != Some(&Value::Bool(true)) {
+            // Boat's error member is the only account of why the change did
+            // not take. The rest of the answer is not quoted: a change may
+            // echo the variable or file it was given.
+            let said = match payload.get("error") {
+                Some(error) => format!("its error: {error}"),
+                None => format!(
+                    "no error member, only {}",
+                    payload.keys().cloned().collect::<Vec<_>>().join(", ")
+                ),
+            };
             return Err(BoxError::transport(format!(
-                "Boat answered {method} {path} without success=true"
+                "Boat answered {method} {path} without success=true and {said}"
             )));
         }
         Ok(payload)
