@@ -23,3 +23,5 @@ Harsh-Review-Attacked: whether keeping every cause makes unavailable unbounded; 
 Harsh-Review-Attacked: whether a non-marker line is now an error; lines that are no STADO_ marker still take no part, as the program prints its own output between them.
 
 Repaired-By: "The backup audit report says why a pair stayed unproven and a deletion was refused" repairs it in this push, naming this commit on its Repairs line
+
+Repaired-By: "Every count Stado keeps adds one item through one tally" repairs it in this push, naming this commit on its Repairs line
