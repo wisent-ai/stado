@@ -13,5 +13,5 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Harsh-Review-Attacked: whether quota output still prints "?" for what a provider left out; a failed row without error text says so, and a missing quota id, state, name or error says not reported.
-Harsh-Review-Attacked: whether a request without a preferred value still prints zero; its column holds a dash, the table's blank, not a number.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
+Harsh-Review-Attacked: whether a request without a preferred value names its absence; its column held a dash, and "Quota commands name a missing region, family, limit or grant" repairs it in this push, naming this commit on its Repairs line.
