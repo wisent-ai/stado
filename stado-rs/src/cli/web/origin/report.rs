@@ -10,6 +10,7 @@
 use serde_json::{json, Value};
 
 use super::verdict::{self, VERDICT_SERVING};
+use crate::cli::reporting::field;
 use crate::cli::CmdError;
 use crate::deploy::host_gates::observe;
 use crate::public_origin::{self, PublicOrigin};
@@ -114,9 +115,9 @@ pub(crate) async fn status(name: Option<&str>, json_output: bool) -> Result<(), 
     .await;
     for mut row in examined {
         row["registry_observation"] = json!(registry_read);
-        let word = shown(&row["verdict"]);
+        let word = field(&row["verdict"]);
         if row["verdict"].as_str() != Some(VERDICT_SERVING) {
-            broken.push(format!("{}: {word}", shown(&row["name"])));
+            broken.push(format!("{}: {word}", field(&row["name"])));
         }
         rows.push(row);
     }
@@ -129,7 +130,7 @@ pub(crate) async fn status(name: Option<&str>, json_output: bool) -> Result<(), 
                 Some(origin) if !origin.is_empty() => origin,
                 _ => "the public origin boundary",
             };
-            broken.push(format!("{subject}: {}", shown(&row["verdict"])));
+            broken.push(format!("{subject}: {}", field(&row["verdict"])));
             rows.push(row);
         }
     }
@@ -161,25 +162,10 @@ fn declared_names(declared: &[PublicOrigin]) -> String {
         .join(", ")
 }
 
-/// A report field as text, or `not reported` when the row does not carry it
-/// as text: printed as "", a verdict or state the examination never wrote
-/// would read as a blank one.
-fn shown(value: &Value) -> String {
-    match value.as_str() {
-        Some(text) => text.to_string(),
-        None => "not reported".to_string(),
-    }
-}
-
 fn print_row(row: &Value) {
-    let text = |key: &str| shown(&row[key]);
-    let nested = |section: &str, key: &str| shown(&row[section][key]);
-    println!(
-        "{} {} {}",
-        row["name"].as_str().unwrap_or("(undeclared)"),
-        text("verdict"),
-        text("origin")
-    );
+    let text = |key: &str| field(&row[key]);
+    let nested = |section: &str, key: &str| field(&row[section][key]);
+    println!("{} {} {}", text("name"), text("verdict"), text("origin"));
     println!(
         "  resolution:  {} — {}",
         nested("resolution", "state"),
@@ -199,20 +185,20 @@ fn print_row(row: &Value) {
         .get("diagnosis")
         .filter(|value| !value.is_null())
     {
-        println!(
-            "  origin diagnosis: {}",
-            serde_json::to_string_pretty(diagnosis).expect("JSON value serializes")
-        );
+        match serde_json::to_string_pretty(diagnosis) {
+            Ok(diagnosis) => println!("  origin diagnosis: {diagnosis}"),
+            Err(error) => println!("  origin diagnosis: cannot be written out: {error}"),
+        }
     }
     if let Some(reads) = row["observations"].as_array() {
         for read in reads {
             println!(
                 "  read {}: {} ({} ms) {} — {}",
-                shown(&read["operation"]),
-                shown(&read["state"]),
-                read["elapsed_ms"],
-                shown(&read["source"]),
-                shown(&read["detail"])
+                field(&read["operation"]),
+                field(&read["state"]),
+                field(&read["elapsed_ms"]),
+                field(&read["source"]),
+                field(&read["detail"])
             );
         }
     }

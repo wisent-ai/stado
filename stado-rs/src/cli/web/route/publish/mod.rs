@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::planning::{planned_record, resolved_words};
 use super::{registrar_credential, CmdError, RECORD_TYPE};
+use crate::cli::reporting::field;
 use crate::config::WebApiProduct;
 
 mod verification;
@@ -66,8 +67,8 @@ pub(super) async fn publish(
             println!(
                 "{}: edge {}, record {} ({} -> {})",
                 declared.hostname(),
-                reported(&edge_report["change"]),
-                reported(&record["change"]),
+                field(&edge_report["change"]),
+                field(&record["change"]),
                 resolved_words(&record),
                 edge.address(),
             );
@@ -77,7 +78,7 @@ pub(super) async fn publish(
         return if settled {
             Ok(())
         } else {
-            Err(CmdError::silent(1))
+            Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE))
         };
     }
 
@@ -130,28 +131,14 @@ pub(super) async fn publish(
         println!(
             "{} answers {} from {} (edge {}, record {})",
             verify_url(declared),
-            reported(&served["status"]),
-            served["server"].as_str().unwrap_or("an unnamed server"),
-            reported(&report["edge"]["change"]),
-            reported(&report["record"]["change"]),
+            field(&served["status"]),
+            field(&served["server"]),
+            field(&report["edge"]["change"]),
+            field(&report["record"]["change"]),
         );
         for row in report["schedules"].as_array().into_iter().flatten() {
-            println!(
-                "  schedule {} {}",
-                reported(&row["id"]),
-                reported(&row["change"])
-            );
+            println!("  schedule {} {}", field(&row["id"]), field(&row["change"]));
         }
     }
     Ok(())
-}
-
-/// One report field as text; a field the report lacks reads "not reported",
-/// not as an empty word or a zero status.
-fn reported(field: &serde_json::Value) -> String {
-    match field {
-        serde_json::Value::String(text) => text.clone(),
-        serde_json::Value::Number(number) => number.to_string(),
-        _ => "not reported".to_string(),
-    }
 }

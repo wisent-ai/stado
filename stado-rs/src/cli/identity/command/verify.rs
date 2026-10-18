@@ -4,6 +4,7 @@ use anyhow::Result;
 use serde_json::json;
 
 use super::{verified_bindings, Verification};
+use crate::cli::reporting::{field, NOT_REPORTED};
 use crate::cli::CmdError;
 use crate::targets::load_registry_auto;
 
@@ -31,7 +32,7 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
             let observed = match row["observed"].as_bool() {
                 Some(true) => "held",
                 Some(false) => "MISSING",
-                None => "not reported",
+                None => NOT_REPORTED,
             };
             // Two separate questions, so two separate words: whether the identity is
             // there, and whether the fleet can act where it is. False covers either a
@@ -39,16 +40,18 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
             let session = match row["drivable_session"].as_bool() {
                 Some(true) => "drivable",
                 Some(false) => "NOT-DRIVABLE",
-                None => "not reported",
+                None => NOT_REPORTED,
             };
-            let reason = row["drivable_reason"]
-                .as_str()
-                .map(|reason| format!("  {reason}"))
-                .unwrap_or_default();
+            // A host that gives no reason prints none: the reason follows the
+            // word only when the host stated one.
+            let reason = match row["drivable_reason"].as_str() {
+                Some(reason) => format!("  {reason}"),
+                None => String::new(),
+            };
             println!(
                 "{:<24} {:<32} {:<8} {}{}",
-                field_or_absent(row, "host"),
-                field_or_absent(row, "identity"),
+                field(&row["host"]),
+                field(&row["identity"]),
                 observed,
                 session,
                 reason
@@ -63,13 +66,5 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
             "no host holds {kind} {identity}; enroll one before dispatching work that needs it"
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound))
-    }
-}
-
-/// A row's field, or which field the host did not report.
-fn field_or_absent(row: &serde_json::Value, field: &str) -> String {
-    match row[field].as_str() {
-        Some(value) => value.to_string(),
-        None => format!("(no {field})"),
     }
 }

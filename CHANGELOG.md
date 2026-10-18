@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado web origin`, `web route publish` and `identity verify` print an absent field the way every other report does:** an origin row without a name printed `(undeclared)`, a read without its elapsed time printed `null ms`, a publication whose server sent no name printed `an unnamed server`, and a binding without a host or identity printed `(no host)`; each kept its own helper besides. They now use the one report-field renderer, so an absent field reads `not reported`, and `web route publish --check` exits with the CLI's declared failure status when the route would change.
+
 - **`stado status` names a job without a recorded submitter as not reported:** a job record written without its submitter showed `?@<host>` in the `SUBMITTED_BY` column, a mark that reads as an account. It now shows `not reported@<host>`, and the rule under the table header is as long as the header instead of a fixed width.
 
 - **`stado host gates` says a figure was not reported or not observed instead of standing a value in:** a capacity publication without its running job count printed `0 running job(s)`, a reservation total it left out printed `0` cores and GiB, a missing core, RAM or VRAM pair printed `-/-`, a reservation field it left out printed `?`, and an uncounted local snapshot number printed `-`. Each now prints `not reported` (a figure the host's publication lacks) or `not observed` (a reading this command could not take). Figures print as the host published them rather than rounded, a waiting job is named by its whole id, and a capacity map that cannot be written out says why instead of printing `{}`.
