@@ -14,3 +14,5 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Harsh-Review-Attacked: whether a declared unit now names a probe; answering is None at both places a unit is rendered from catalog entries, as no answering probe was declared before the field existed.
+
+Repaired-By: "A service repair renders its unit the way service ensure does" repairs it in this push, naming this commit on its Repairs line
