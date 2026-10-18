@@ -17,3 +17,4 @@ Harsh-Review-Attacked: whether an unreadable init system retires anything; an un
 Harsh-Review-Attacked: whether a host without passwordless sudo is now left without a takeover; it is, and it says so naming the sudo refusal, which is the honest answer: the predecessor's root cannot be compared there.
 Harsh-Review-Attacked: whether the move changed the reader's other answers; main_pid, variable and other_root move unchanged into the new module, and the takeover module only changes how it acts on the read's result.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it moves or replaces was pushed, so no Repairs line is owed.
+Harsh-Review-Attacked: whether the module it writes holds a dropped error; the main-pid read it moved took a pid row it could not parse for no process, and "launchd presence is read by one shared domain-listing reader" repairs it in this push, naming this commit on its Repairs line.
