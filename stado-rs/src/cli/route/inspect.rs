@@ -52,16 +52,12 @@ pub async fn capability(name: &str, as_json: bool) -> Result<(), CmdError> {
             return Ok(());
         };
         println!("routes:    {}", rows.len());
-        let field = |row: &serde_json::Value, key: &str| match row[key].as_str() {
-            Some(text) => text.to_string(),
-            None => "not reported".to_string(),
-        };
         for row in rows {
             println!(
                 "  {:<52} {}/{}",
-                field(row, "resource"),
-                field(row, "item"),
-                field(row, "field"),
+                crate::cli::reporting::field(&row["resource"]),
+                crate::cli::reporting::field(&row["item"]),
+                crate::cli::reporting::field(&row["field"]),
             );
         }
     }

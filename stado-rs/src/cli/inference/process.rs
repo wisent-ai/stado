@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::cli::reporting::field;
 use crate::cli::CmdError;
 use crate::deploy::{inference::process, production_runner};
 
@@ -32,7 +33,7 @@ pub async fn blockers(host: &str, json_output: bool) -> Result<(), CmdError> {
     }
     // The identity is what `release` takes, so a row without one is refused
     // rather than printed as "unknown"; the other columns are display only
-    // and say they were not reported.
+    // and say when they were not reported.
     println!("IDENTITY\tVRAM_MIB\tOWNER\tCOMMAND");
     for process in processes {
         let Some(identity) = process.get("identity").and_then(Value::as_str) else {
@@ -41,20 +42,15 @@ pub async fn blockers(host: &str, json_output: bool) -> Result<(), CmdError> {
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         };
-        let vram = match process.get("used_mib").and_then(Value::as_u64) {
-            Some(value) => value.to_string(),
-            None => NOT_REPORTED.to_string(),
-        };
-        let text = |field: &str| match process.get(field).and_then(Value::as_str) {
-            Some(value) => value.to_string(),
-            None => NOT_REPORTED.to_string(),
-        };
-        println!("{identity}\t{vram}\t{}\t{}", text("owner"), text("command"));
+        println!(
+            "{identity}\t{}\t{}\t{}",
+            field(&process["used_mib"]),
+            field(&process["owner"]),
+            field(&process["command"])
+        );
     }
     Ok(())
 }
-
-const NOT_REPORTED: &str = "not reported";
 
 pub async fn release(
     host: &str,

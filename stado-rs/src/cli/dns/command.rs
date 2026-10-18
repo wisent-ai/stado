@@ -6,8 +6,9 @@
 //! for `--json`.
 
 use clap::Subcommand;
-use serde_json::{json, Value};
+use serde_json::json;
 
+use crate::cli::reporting::field;
 use crate::cli::CmdError;
 
 use super::records::write::{ensure_record, merge, normalized_type, remove_record};
@@ -245,7 +246,7 @@ async fn set(
         return if change == "unchanged" {
             Ok(())
         } else {
-            Err(CmdError::silent(1))
+            Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE))
         };
     }
     let report = ensure_record(name, record_type, value, ttl, zone, credential).await?;
@@ -254,10 +255,10 @@ async fn set(
     } else {
         println!(
             "{name} {} {value}: {} ({} records in {})",
-            shown(&report["type"]),
-            shown(&report["change"]),
-            shown(&report["records_after"]),
-            shown(&report["zone"]),
+            field(&report["type"]),
+            field(&report["change"]),
+            field(&report["records_after"]),
+            field(&report["zone"]),
         );
     }
     Ok(())
@@ -276,21 +277,11 @@ async fn remove(
     } else {
         println!(
             "{name} {}: removed {} record(s); {} remain in {}",
-            shown(&report["type"]),
-            shown(&report["removed"]),
-            shown(&report["records_after"]),
-            shown(&report["zone"]),
+            field(&report["type"]),
+            field(&report["removed"]),
+            field(&report["records_after"]),
+            field(&report["zone"]),
         );
     }
     Ok(())
-}
-
-/// One report field as text; a field the report lacks reads "not reported",
-/// not as an empty word or a zero count.
-fn shown(field: &Value) -> String {
-    match field {
-        Value::String(text) => text.clone(),
-        Value::Number(number) => number.to_string(),
-        _ => "not reported".to_string(),
-    }
 }

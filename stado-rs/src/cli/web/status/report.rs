@@ -92,20 +92,13 @@ pub(crate) async fn status(name: Option<&str>, json: bool) -> Result<(), CmdErro
             // A state or name the row does not carry is said as not reported:
             // the word "unknown", an empty word or port 0 would read as a
             // value the probe had measured.
-            let reported = |field: &str| match row[field].as_str() {
-                Some(state) => state.to_string(),
-                None => "not reported".to_string(),
-            };
-            let port = match row["port"].as_u64() {
-                Some(port) => port.to_string(),
-                None => "not reported".to_string(),
-            };
+            let reported = |field: &str| crate::cli::reporting::field(&row[field]);
             println!(
                 "{} {} host={} port={} unit={} hostname={}",
                 reported("product"),
                 reported("verdict"),
                 reported("host"),
-                port,
+                reported("port"),
                 reported("unit"),
                 reported("hostname"),
             );

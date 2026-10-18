@@ -1,5 +1,6 @@
 //! Fleet-local delivery declarations, separate from host-independent recipes.
 
+use crate::cli::reporting::field;
 use crate::cli::{registry, CmdError};
 use crate::release_pipeline::destinations;
 use clap::{Args, Subcommand};
@@ -103,17 +104,6 @@ pub async fn dispatch(args: DestinationArgs) -> Result<(), CmdError> {
         print(&answer);
     }
     Ok(())
-}
-
-/// A field of the answer as it was given — text bare, any other value as
-/// JSON — or `not reported`: read as text only, a generation the registry
-/// gives as a number would print as nothing.
-fn field(value: &Value) -> String {
-    match value {
-        Value::Null => "not reported".to_string(),
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    }
 }
 
 fn print(answer: &Value) {

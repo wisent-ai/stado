@@ -5,18 +5,11 @@ use serde_json::Value;
 
 use crate::cli::CmdError;
 
-/// The text a field shows to a person, or a word saying the host did not
-/// report it: a value nobody stated is never shown as one.
+/// The text a field of the host's report shows to a person, as every report
+/// renders one ([`crate::cli::reporting::field`]).
 pub(super) fn field(report: &Value, name: &str) -> String {
-    match report.get("fields").and_then(|fields| fields.get(name)) {
-        Some(Value::String(text)) => text.clone(),
-        Some(other) => other.to_string(),
-        None => NOT_REPORTED.to_string(),
-    }
+    crate::cli::reporting::field(&report["fields"][name])
 }
-
-/// What [`field`] shows for a field the host's report does not carry.
-pub(super) const NOT_REPORTED: &str = "not reported";
 
 /// One field a decision is made on: a report without it is refused naming
 /// the field and quoting the report, because a decision on a missing value
