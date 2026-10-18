@@ -117,7 +117,7 @@ pub(crate) fn print_json(value: &Value) {
 }
 
 /// A field the host's report carries as text, or that it did not report one,
-/// in the same words the listener reading uses; a dash read as a value.
+/// in the same words the listener reading uses; a dash would read as a value.
 pub(crate) fn text(value: Option<&Value>) -> &str {
     match value.and_then(Value::as_str) {
         Some(text) => text,

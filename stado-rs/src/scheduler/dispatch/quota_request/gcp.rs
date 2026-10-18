@@ -67,7 +67,7 @@ pub async fn gcp_request_for_family(
     match client.create_quota_preference(&pref_id, &body).await {
         Ok(resp) => Ok(json!({
             // Google's own name for the preference, or null when the answer
-            // carries none: "" read as a preference named nothing.
+            // carries none: "" would read as a preference named nothing.
             "name": resp.get("name").and_then(Value::as_str),
             "created": true,
         })),
