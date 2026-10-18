@@ -1,0 +1,18 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Harsh-Review-Attacked: whether an exit code is still invented; the code is taken only when the status has one, a signal is an error naming it and the child's stderr, and a status with neither is an error carrying the status itself.
+Harsh-Review-Attacked: whether both callers act on the error; the MCP dispatch answers a tool error naming the verb and the cause, and the watchdog records the error's message as the row's error with no rc.
+Harsh-Review-Attacked: whether every comment says what the code does; the watchdog's runner contract still said an error meant only a spawn failure, and "The watchdog's runner contract names a child a signal ended as an error" repairs it in this push, naming this commit on its Repairs line.
+Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
