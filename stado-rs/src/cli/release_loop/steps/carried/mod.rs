@@ -19,47 +19,12 @@ use crate::cli::release_newest::{Planned, Standing};
 use crate::cli::CmdError;
 use crate::release_pipeline::PRODUCT_MANIFEST;
 
+mod repairs;
+
+pub use repairs::{open_repairs, Repair};
+
 /// Oko's program; the loop records in Oko through its CLI only.
 const OKO: &str = "oko";
-
-#[derive(Deserialize)]
-struct Defect {
-    id: String,
-    #[serde(default)]
-    repaired_in: Option<String>,
-}
-
-/// One open defect's recorded repair: the defect, the repository the
-/// repair was committed in and the repair commit.
-pub struct Repair {
-    id: String,
-    repository: String,
-    commit: String,
-}
-
-/// Every open defect's recorded repair, read once for a whole pass: the
-/// register holds thousands of defects, and the workspace hundreds of
-/// checkouts.
-pub async fn open_repairs() -> Result<Vec<Repair>, CmdError> {
-    let listed = run(OKO, &["defects", "list", "--open", "--json"], None).await?;
-    let defects: Vec<Defect> = serde_json::from_str(&listed).map_err(|error| {
-        CmdError::click(format!(
-            "oko defects list --open --json answered no defect list: {error}"
-        ))
-    })?;
-    Ok(defects
-        .into_iter()
-        .filter_map(|defect| {
-            let revision = defect.repaired_in?;
-            let (repository, commit) = revision.rsplit_once('@')?;
-            Some(Repair {
-                id: defect.id,
-                repository: repository.to_string(),
-                commit: commit.to_string(),
-            })
-        })
-        .collect())
-}
 
 #[derive(Deserialize)]
 struct Released {

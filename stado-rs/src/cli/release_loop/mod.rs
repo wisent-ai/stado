@@ -36,6 +36,7 @@ use crate::cli::release_submit::SubmitChannel;
 use crate::cli::CmdError;
 
 use register::{Entry, State};
+pub(crate) use steps::open_repairs;
 pub(crate) use steps::process;
 pub use steps::Unplaced;
 

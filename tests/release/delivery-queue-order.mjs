@@ -14,6 +14,9 @@
 //    repository the workspace holds no checkout of, and one at a commit the
 //    checkout does not hold at all. A repair the checkout's commit carries is
 //    not listed.
+// 3. A recorded repair that names no <repository>@<commit>, as an older Oko
+//    wrote one into its register, refuses the plan naming the defect and how
+//    to record its repair again; it is not dropped from the listing.
 //
 // Needs STADO_BIN, OKO_BIN and STADO_TEST_SUCCESS_EXIT.
 import assert from 'node:assert/strict';
@@ -121,6 +124,18 @@ try {
   assert.notEqual(refused.status, successExit, 'an unknown --first was accepted');
   assert.ok(refused.stderr.includes('--first no-such-product names no product of this plan'), refused.stderr);
   assert.ok(refused.stderr.includes(alpha) && refused.stderr.includes(beta), refused.stderr);
+
+  const unnamed = repaired(`${alpha}@${stands}`);
+  const register = JSON.parse(readFileSync(environment.OKO_DEFECT_REGISTER, 'utf8'));
+  const legacy = register.defects.find(defect => defect.id === unnamed);
+  assert.ok(legacy, `the register holds no defect ${unnamed}`);
+  legacy.repaired_in = stands;
+  writeFileSync(environment.OKO_DEFECT_REGISTER, JSON.stringify(register, null, '  '));
+  const malformed = run(stadoBinary, ['release', 'newest', '--root', workspace, '--plan', '--json'], workspace);
+  assert.notEqual(malformed.status, successExit, 'a plan read a repair that names no repository');
+  assert.ok(malformed.stderr.includes('name no <repository>@<commit>'), malformed.stderr);
+  assert.ok(malformed.stderr.includes(unnamed), malformed.stderr);
+  assert.ok(malformed.stderr.includes('oko defects repaired ID --revision REPOSITORY@COMMIT'), malformed.stderr);
   report.verdict = 'passed';
 } finally {
   report.finished_at = new Date().toISOString();

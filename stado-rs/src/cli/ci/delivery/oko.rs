@@ -17,47 +17,32 @@ use crate::cli::CmdError;
 const OKO: &str = "oko";
 
 #[derive(Deserialize)]
-struct Listed {
-    #[serde(default)]
-    repaired_in: Option<String>,
-    #[serde(default)]
-    owner: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct Recorded {
     id: String,
 }
 
 /// The sessions owning the open defects whose recorded repair `revision` of
 /// `checkout` carries and `since` (the revision last delivered, when there is
-/// one) does not: the authors of the work the refused revision brought.
+/// one) does not: the authors of the work the refused revision brought. The
+/// repairs are read as the release loop reads them.
 pub async fn authors(
     checkout: &Path,
     repository: &str,
     since: Option<&str>,
     revision: &str,
 ) -> Result<Vec<String>, CmdError> {
-    let listed = process(OKO, &["defects", "list", "--open", "--json"], None).await?;
-    let defects: Vec<Listed> = serde_json::from_str(&listed).map_err(|error| {
-        CmdError::click(format!(
-            "oko defects list --open --json answered no defect list: {error}"
-        ))
-    })?;
+    let repairs = crate::cli::release_loop::open_repairs().await?;
     let mut authors: Vec<String> = Vec::new();
-    for defect in defects {
-        let (Some(repaired_in), Some(owner)) = (defect.repaired_in, defect.owner) else {
+    for repair in repairs {
+        let Some(owner) = repair.owner else {
             continue;
         };
-        let Some((named, commit)) = repaired_in.rsplit_once('@') else {
-            continue;
-        };
-        if named != repository || authors.contains(&owner) {
+        if repair.repository != repository || authors.contains(&owner) {
             continue;
         }
         let carried = succeeds(
             "git",
-            &["merge-base", "--is-ancestor", commit, revision],
+            &["merge-base", "--is-ancestor", &repair.commit, revision],
             checkout,
         )
         .await?;
@@ -65,7 +50,7 @@ pub async fn authors(
             Some(since) => {
                 succeeds(
                     "git",
-                    &["merge-base", "--is-ancestor", commit, since],
+                    &["merge-base", "--is-ancestor", &repair.commit, since],
                     checkout,
                 )
                 .await?
