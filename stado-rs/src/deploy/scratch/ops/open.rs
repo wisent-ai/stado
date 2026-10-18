@@ -13,10 +13,6 @@ use crate::targets::ComputeTarget;
 /// leases, so the limit was invisible until two runs wanted one host.
 const FULL_NAME_PREFIX: &str = "Stado scratch";
 
-/// Field index of the home directory in the `trusted` marker, whose fields are
-/// the username and then the home the directory service reported.
-const HOME_FIELD: u8 = 1;
-
 /// Create the account through the channel account creation already uses.
 pub async fn open_account(
     target: &ComputeTarget,
@@ -31,7 +27,7 @@ pub async fn open_account(
         username: name,
         password: Some(&password),
         target_names: &selection,
-        full_name: Some(&full_name),
+        full_name: &full_name,
         shell,
         ..host_users::ProvisionOptions::default()
     };
@@ -87,7 +83,7 @@ pub async fn settle(
     let command = remote::trust_command(&record.username, &source_keys);
     let trusted =
         host_channel::run_program(parent, &["/bin/sh", "-c", command.as_str()], runner).await?;
-    if !trusted.ok() {
+    if !trusted.succeeded() {
         return Err(DeployError::unreachable(format!(
             "'{}' could not be trusted with the keys that reach '{}': {}",
             record.username,
@@ -96,13 +92,12 @@ pub async fn settle(
         )));
     }
     // The trust program names the account home it prepared; an answer
-    // without it is a damaged one, not an account with no home.
+    // without it is a damaged one, not an account with no home. The
+    // marker's fields are the username, then that home.
     let account_home = remote::parse_marker(&trusted.stdout, "trusted")
         .and_then(|marker| {
-            marker
-                .split('\t')
-                .nth(HOME_FIELD.into())
-                .map(str::to_string)
+            let mut fields = marker.split('\t');
+            fields.next().and(fields.next()).map(str::to_string)
         })
         .ok_or_else(|| {
             DeployError::unreachable(format!(
@@ -116,7 +111,7 @@ pub async fn settle(
     let command = remote::record_command(record, home)?;
     let recorded =
         host_channel::run_program(parent, &["/bin/sh", "-c", command.as_str()], runner).await?;
-    if !recorded.ok() {
+    if !recorded.succeeded() {
         return Err(DeployError::unreachable(format!(
             "the lease record for '{}' could not be written on '{}': exit {}; stderr: {}; stdout: {}",
             record.name,
@@ -128,7 +123,7 @@ pub async fn settle(
     }
 
     let entered = host_channel::run_program(leased, &["/usr/bin/id", "-un"], runner).await?;
-    if !entered.ok() {
+    if !entered.succeeded() {
         return Err(DeployError::unreachable(format!(
             "the leased target '{}' does not answer ssh: {}",
             leased.name,

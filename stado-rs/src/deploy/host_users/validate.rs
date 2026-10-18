@@ -24,30 +24,25 @@ pub fn validate_username(username: &str) -> Result<(), DeployError> {
     Ok(())
 }
 
-/// Python `_validate_text`.
-pub(super) fn validate_text(
-    value: &str,
-    label: &str,
-    max_length: usize,
-) -> Result<(), DeployError> {
-    if value.is_empty()
-        || value.chars().count() > max_length
-        || value.chars().any(|ch| matches!(ch, '\0' | '\r' | '\n'))
-    {
+/// Free text for the host's account tool: checked only for what the remote
+/// command line cannot carry. How long it may be is the account tool's own
+/// limit, which refuses with its own words.
+pub(super) fn validate_text(value: &str, label: &str) -> Result<(), DeployError> {
+    if value.is_empty() || value.chars().any(|ch| matches!(ch, '\0' | '\r' | '\n')) {
         return Err(DeployError(format!(
-            "{label} must be 1-{max_length} characters without control newlines"
+            "{label} must not be empty and must not contain NUL or newlines"
         ))
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
     Ok(())
 }
 
-/// Python `_validate_shell`: empty is allowed (host OS default).
+/// The login shell: empty leaves it to the host's account tool.
 pub fn validate_shell(shell: &str) -> Result<(), DeployError> {
     if shell.is_empty() {
         return Ok(());
     }
-    validate_text(shell, "shell", 255)?;
+    validate_text(shell, "shell")?;
     if !shell.starts_with('/') {
         return Err(DeployError("shell must be an absolute path".to_string())
             .stating(crate::primitives::failure::FailureCode::Refused));

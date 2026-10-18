@@ -33,10 +33,7 @@ impl AccountStatus {
 
 impl std::fmt::Display for AccountStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 
@@ -51,20 +48,22 @@ pub struct HostUserResult {
 }
 
 impl HostUserResult {
-    /// Python `ok` property: created / exists / planned all count.
-    pub fn ok(&self) -> bool {
+    /// Created, already there, or planned: every outcome but a failure.
+    pub fn succeeded(&self) -> bool {
         self.status != AccountStatus::Failed
     }
 }
 
-/// Keyword options of Python `provision_users`.
+/// What `stado host user create` asks for.
 #[derive(Debug, Default, Clone)]
 pub struct ProvisionOptions<'a> {
     pub username: &'a str,
     pub password: Option<&'a str>,
     pub target_names: &'a [String],
     pub all_targets: bool,
-    pub full_name: Option<&'a str>,
+    /// The account's display name; empty leaves it to the host's own
+    /// account tool, as an empty `shell` leaves the login shell.
+    pub full_name: &'a str,
     pub shell: &'a str,
     pub admin: bool,
     pub require_password_change: bool,
@@ -79,8 +78,9 @@ pub async fn provision_users(
     runner: &Runner,
 ) -> Result<Vec<HostUserResult>, DeployError> {
     validate_username(options.username)?;
-    let full_name = options.full_name.unwrap_or(options.username);
-    validate_text(full_name, "full name", 255)?;
+    if !options.full_name.is_empty() {
+        validate_text(options.full_name, "full name")?;
+    }
     validate_shell(options.shell)?;
     if !options.dry_run {
         let Some(password) = options.password else {
@@ -95,10 +95,15 @@ pub async fn provision_users(
     let mut results: Vec<HostUserResult> = Vec::new();
     for target in selected {
         let name = target.name.clone();
-        let mut ssh_target = target
-            .ssh_connections()
-            .next()
-            .map_or_else(String::new, |(_, destination)| destination.to_string());
+        // Selection admits only targets with an SSH destination; one without
+        // is refused here rather than reported with a blank destination.
+        let Some((_, destination)) = target.ssh_connections().next() else {
+            return Err(
+                DeployError(format!("target {name} has no SSH connection path"))
+                    .stating(crate::primitives::failure::FailureCode::Config),
+            );
+        };
+        let mut ssh_target = destination.to_string();
         if options.dry_run {
             results.push(HostUserResult {
                 target: name,
@@ -112,7 +117,7 @@ pub async fn provision_users(
 
         let command = remote_command(
             options.username,
-            full_name,
+            options.full_name,
             options.shell,
             options.admin,
             options.require_password_change,
@@ -149,26 +154,15 @@ pub async fn provision_users(
             }
         };
 
-        if !completed.ok() {
-            let detail_text = if !completed.stderr.is_empty() {
-                completed.stderr.as_str()
-            } else if !completed.stdout.is_empty() {
-                completed.stdout.as_str()
+        if !completed.succeeded() {
+            // The account tool's own words, whole: stderr, else stdout, else
+            // the exit status when it said nothing at all.
+            let said = completed.detail().trim();
+            let detail = if said.is_empty() {
+                format!("ssh exit {}", completed.code)
             } else {
-                ""
+                said.to_string()
             };
-            let exit_detail;
-            let detail_text = if detail_text.is_empty() {
-                exit_detail = format!("ssh exit {}", completed.code);
-                exit_detail.as_str()
-            } else {
-                detail_text
-            };
-            let trimmed = detail_text.trim();
-            let detail: String = trimmed
-                .chars()
-                .skip(trimmed.chars().count().saturating_sub(2000))
-                .collect();
             results.push(HostUserResult {
                 target: name,
                 ssh: ssh_target,

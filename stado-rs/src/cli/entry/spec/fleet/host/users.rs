@@ -13,9 +13,9 @@ pub(crate) enum HostUserCommands {
         /// Provision every kind=local registry target with SSH configured.
         #[arg(long)]
         all: bool,
-        /// Account display name.
-        #[arg(long)]
-        full_name: Option<String>,
+        /// Account display name; the host's account tool chooses it if omitted.
+        #[arg(long, default_value = "")]
+        full_name: String,
         /// Absolute login shell; host OS default if omitted.
         #[arg(long, default_value = "")]
         shell: String,

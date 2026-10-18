@@ -63,9 +63,9 @@ fn prompt_hidden(prompt: &str) -> Result<String, CmdError> {
     use std::io::Write;
     eprint!("{prompt}: ");
     std::io::stderr().flush()?;
-    // SAFETY: isatty/tcgetattr/tcsetattr on fd 0 with a valid termios
-    // buffer; the original settings are always restored below.
-    let tty = unsafe { nix::libc::isatty(nix::libc::STDIN_FILENO) } == 1;
+    // SAFETY: tcgetattr/tcsetattr on fd 0 with a valid termios buffer; the
+    // original settings are always restored below.
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
     let mut original: nix::libc::termios = unsafe { std::mem::zeroed() };
     if tty {
         unsafe {
@@ -109,7 +109,7 @@ pub async fn user_create(
     username: &str,
     target_names: Vec<String>,
     all_targets: bool,
-    full_name: Option<String>,
+    full_name: String,
     shell: String,
     admin: bool,
     require_password_change: bool,
@@ -130,7 +130,7 @@ pub async fn user_create(
         password: password.as_deref(),
         target_names: &target_names,
         all_targets,
-        full_name: full_name.as_deref(),
+        full_name: &full_name,
         shell: &shell,
         admin,
         require_password_change,
@@ -139,7 +139,7 @@ pub async fn user_create(
     let results = provision_users(&options, &targets, &runner)
         .await
         .map_err(CmdError::from)?;
-    let failed = results.iter().any(|result| !result.ok());
+    let failed = results.iter().any(|result| !result.succeeded());
     if json {
         let hosts: Vec<serde_json::Value> = results
             .iter()
@@ -160,7 +160,7 @@ pub async fn user_create(
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
         return if failed {
-            Err(CmdError::silent(1))
+            Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE))
         } else {
             Ok(())
         };
@@ -190,7 +190,7 @@ pub async fn user_create(
     }
     if failed {
         // click.exceptions.Exit(1): the [failed] lines above are the report.
-        return Err(CmdError::silent(1));
+        return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
     }
     Ok(())
 }

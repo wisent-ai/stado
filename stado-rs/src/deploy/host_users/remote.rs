@@ -7,8 +7,8 @@ use crate::deploy::{shlex_quote, DeployError};
 /// Python `_STATUS_PREFIX`.
 pub const STATUS_PREFIX: &str = "STADO_USER\t";
 
-/// Python `_REMOTE_CREATE_SCRIPT` (byte-exact; verified against the
-/// checked-in golden rendered by the Python module).
+/// The program that creates one account on the host. An empty full name
+/// passes no display name, leaving it to the host's account tool.
 pub const REMOTE_CREATE_SCRIPT: &str = r#"set -eu
 
 USERNAME=$1
@@ -36,13 +36,18 @@ case "$OS_NAME" in
             echo "requested shell is not executable: $SHELL_PATH" >&2
             exit 66
         fi
+        if [ -n "$FULL_NAME" ]; then
+            set -- -fullName "$FULL_NAME"
+        else
+            set --
+        fi
         if [ "$MAKE_ADMIN" = 1 ]; then
             /usr/sbin/sysadminctl -addUser "$USERNAME" \
-                -fullName "$FULL_NAME" -home "/Users/$USERNAME" \
+                ${1+"$@"} -home "/Users/$USERNAME" \
                 -shell "$SHELL_PATH" -password "$PASSWORD" -admin >/dev/null
         else
             /usr/sbin/sysadminctl -addUser "$USERNAME" \
-                -fullName "$FULL_NAME" -home "/Users/$USERNAME" \
+                ${1+"$@"} -home "/Users/$USERNAME" \
                 -shell "$SHELL_PATH" -password "$PASSWORD" >/dev/null
         fi
         /usr/sbin/createhomedir -c -u "$USERNAME" >/dev/null
@@ -56,7 +61,12 @@ case "$OS_NAME" in
             echo "requested shell is not executable: $SHELL_PATH" >&2
             exit 66
         fi
-        /usr/sbin/useradd --create-home --comment "$FULL_NAME" \
+        if [ -n "$FULL_NAME" ]; then
+            set -- --comment "$FULL_NAME"
+        else
+            set --
+        fi
+        /usr/sbin/useradd --create-home ${1+"$@"} \
             --shell "$SHELL_PATH" "$USERNAME"
         printf '%s:%s\n' "$USERNAME" "$PASSWORD" | /usr/sbin/chpasswd
         if [ "$MAKE_ADMIN" = 1 ]; then
