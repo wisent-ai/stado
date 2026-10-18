@@ -67,8 +67,8 @@ pub fn find_config_file() -> Result<Option<PathBuf>, ConfigError> {
         }
     };
     let override_ = override_.trim();
-    // Only a candidate that does not exist is passed over: one that cannot be
-    // examined was too, and Stado then ran on the next config or none.
+    // Only a candidate that does not exist is passed over: passing over one
+    // that cannot be examined would run Stado on the next config or none.
     let present = |candidate: &std::path::Path| match std::fs::metadata(candidate) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),

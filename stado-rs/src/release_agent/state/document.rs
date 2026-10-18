@@ -72,7 +72,7 @@ pub(crate) fn acquire_state_lock(state_dir: &str, stem: &str) -> Result<Option<S
         .write(true)
         .create(true)
         .custom_flags(nix::libc::O_NOFOLLOW)
-        .mode(0o600)
+        .mode(crate::primitives::file_mode::owner_read_write())
         .open(&path)
         .map_err(|error| format!("cannot open release lock {}: {error}", path.display()))?;
     if !file
@@ -186,7 +186,7 @@ pub(crate) fn load_state(
 ) -> Result<HostReleaseState, String> {
     let path = state_path(target, product);
     // Only a state that does not exist is a new one: one that cannot be
-    // examined was read as new, and the next save wrote that empty state
+    // examined, read as new, would have the next save write that empty state
     // over the host's release history.
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
