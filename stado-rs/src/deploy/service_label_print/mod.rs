@@ -53,6 +53,7 @@ enum EventRead {
     Read,
     Carry,
     Same(String),
+    Skip,
 }
 
 impl EventRead {
@@ -61,6 +62,7 @@ impl EventRead {
             Self::Read => "read".to_string(),
             Self::Carry => "carry".to_string(),
             Self::Same(key) => format!("same:{key}"),
+            Self::Skip => "skip".to_string(),
         }
     }
 }
@@ -98,6 +100,18 @@ pub async fn inspect_label(
     runner: &Runner,
 ) -> Result<LabelState, DeployError> {
     inspect_label_with(target, label, scope, runner, EventRead::Read).await
+}
+
+/// The unit's state alone, for a reader that decides by it and shows no
+/// events: launchd's event log, which `log show` reads for minutes on a busy
+/// host, is not read, and `event_read_status` says so.
+pub async fn inspect_label_state(
+    target: &ComputeTarget,
+    label: &str,
+    scope: BootoutScope,
+    runner: &Runner,
+) -> Result<LabelState, DeployError> {
+    inspect_label_with(target, label, scope, runner, EventRead::Skip).await
 }
 
 /// The same read for a reader that repeats it on a cadence: launchd's event

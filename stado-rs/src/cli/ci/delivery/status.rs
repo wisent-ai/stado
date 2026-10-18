@@ -90,7 +90,9 @@ pub async fn path() -> Result<Value, CmdError> {
 
 /// `label` as this machine's init system holds it: loaded, state, pid, runs,
 /// last exit code and why it is failing; a read that could not decide is
-/// kept as `read_error`, never taken for a healthy unit.
+/// kept as `read_error`, never taken for a healthy unit. Only the state is
+/// read, not launchd's event log: the path decides by the state, and Oko's
+/// gates wait on this answer.
 async fn unit(label: &str) -> Value {
     let target = match crate::deploy::service::local_target() {
         Ok(target) => target,
@@ -101,7 +103,9 @@ async fn unit(label: &str) -> Value {
         Ok(scope) => scope,
         Err(error) => return json!({ "label": label, "read_error": error.to_string() }),
     };
-    match crate::deploy::service_label_print::inspect_label(&target, label, scope, &runner).await {
+    match crate::deploy::service_label_print::inspect_label_state(&target, label, scope, &runner)
+        .await
+    {
         Ok(state) => json!({
             "label": label,
             "loaded": state.loaded(),
@@ -110,6 +114,7 @@ async fn unit(label: &str) -> Value {
             "runs": state.runs,
             "last_exit_code": state.last_exit_code,
             "failing": state.failing(),
+            "events": state.event_read_status,
         }),
         Err(error) => json!({ "label": label, "read_error": error.to_string() }),
     }
@@ -127,13 +132,14 @@ pub fn print_path(document: &Value) {
     match unit["read_error"].as_str() {
         Some(error) => println!("  unit {}: could not be read: {error}", unit["label"]),
         None => println!(
-            "  unit {}: loaded {} state {} pid {} runs {} last exit code {}",
+            "  unit {}: loaded {} state {} pid {} runs {} last exit code {}; events {}",
             unit["label"],
             unit["loaded"],
             unit["state"],
             unit["pid"],
             unit["runs"],
-            unit["last_exit_code"]
+            unit["last_exit_code"],
+            unit["events"]
         ),
     }
     let stalled = document["stalled"]

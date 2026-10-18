@@ -149,6 +149,8 @@ if [ \"$os\" = Darwin ]; then
     printf 'STADO_LABEL_EVENT_KEY\\t%s\\n' \"$event_key\"
     if [ \"$events\" = carry ]; then
       printf 'STADO_LABEL_EVENT_STATUS\\tcarried: the host is above its scan load ceiling, the previous read stands\\n'
+    elif [ \"$events\" = skip ]; then
+      printf 'STADO_LABEL_EVENT_STATUS\\tnot read: this reader asks for the unit state only\\n'
     elif [ \"$events\" = \"same:$event_key\" ]; then
       printf 'STADO_LABEL_EVENT_STATUS\\tcarried: the unit is as it was at the previous read\\n'
     elif [ -x /usr/bin/log ]; then

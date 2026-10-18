@@ -249,9 +249,10 @@ pub(crate) enum CiCommands {
     /// Whether the path that delivers repairs stands on this machine: the
     /// routine's running and refused steps, each step's main check (every
     /// commit checked, its last green one), who holds the pass lock, which
-    /// product operations hold build trees, and this machine's Stado unit.
-    /// `stalled` names every way the path is down, a red `main` among them,
-    /// one sentence each; Oko orders work by it. Reads only.
+    /// product operations hold build trees, and this machine's Stado unit by
+    /// its state alone: launchd's event log is not read, and the unit's
+    /// `events` says so. `stalled` names every way the path is down, a red
+    /// `main` among them, one sentence each; Oko orders work by it. Reads only.
     Delivery {
         /// Print the document instead of lines.
         #[arg(long)]

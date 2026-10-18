@@ -8,7 +8,9 @@
 //! `blocking_defects` carries the defect. Then the state holds a step
 //! recorded as installing while no pass holds the routine's lock: `stalled`
 //! says the pass ended without an outcome. The unit read of this machine is
-//! reported either way, as a state or as its read error, never left out.
+//! reported either way, as a state or as its read error, never left out; a
+//! state read on macOS says launchd's event log was not read, since that log
+//! takes minutes on a busy host and Oko waits on this report.
 //! Nothing of the operator's is read or written.
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -94,6 +96,14 @@ fn a_refused_step_and_an_abandoned_install_stall_the_path() {
         "{report}"
     );
     assert_eq!(report["pass_lock_holder"], Value::Null, "{report}");
+    let unit = &report["unit"];
+    if unit["read_error"].is_null() && cfg!(target_os = "macos") {
+        assert_eq!(
+            unit["events"],
+            json!("not read: this reader asks for the unit state only"),
+            "{report}"
+        );
+    }
 
     std::fs::remove_dir_all(&root).expect("the run directory is removed");
 }

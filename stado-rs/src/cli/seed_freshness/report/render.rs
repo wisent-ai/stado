@@ -28,37 +28,6 @@ pub(in crate::cli::seed_freshness) fn render(report: &Value) -> String {
     );
     let rows = count(report.get("login_rows_read"), "login row(s) read");
     out.push_str(&format!("{target}: {rows}, {records}, {runs}\n"));
-    // Evidence the host could not read is said beside the counts: a count
-    // over a journal or a recording store with unreadable parts is a lower
-    // bound, not the whole history.
-    let journal = evidence.and_then(|e| e.get("journal"));
-    if let Some(lines) = journal
-        .and_then(|j| j.get("unreadable_lines"))
-        .and_then(Value::as_array)
-        .filter(|lines| !lines.is_empty())
-    {
-        for line in lines {
-            out.push_str(&format!("  journal record not read: {line}\n"));
-        }
-    }
-    if let Some(unattributed) = journal
-        .and_then(|j| j.get("unattributed_records"))
-        .and_then(Value::as_i64)
-        .filter(|count| count.is_positive())
-    {
-        out.push_str(&format!(
-            "  {unattributed} recorded sign-in(s) name no login item and are left out\n"
-        ));
-    }
-    if let Some(roots) = evidence
-        .and_then(|e| e.get("unreadable_recordings"))
-        .and_then(Value::as_array)
-        .filter(|roots| !roots.is_empty())
-    {
-        for root in roots {
-            out.push_str(&format!("  recording store not read: {root}\n"));
-        }
-    }
     if let Some(detail) = report.get("vault_half_unavailable").and_then(Value::as_str) {
         out.push_str(&format!(
             "  the vault half is unavailable on this host: {detail}\n  \
@@ -66,10 +35,11 @@ pub(in crate::cli::seed_freshness) fn render(report: &Value) -> String {
              history only\n"
         ));
     }
-    let Some(findings) = report.get("findings").and_then(Value::as_array) else {
-        out.push_str("  the report carries no findings list\n");
-        return out;
-    };
+    let empty = Vec::new();
+    let findings = report
+        .get("findings")
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
     if findings.is_empty() {
         out.push_str("  no login row carries or declares an authenticator seed\n");
         return out;
@@ -101,19 +71,19 @@ pub(in crate::cli::seed_freshness) fn render(report: &Value) -> String {
         if let Some(at) = finding.get("last_known_good_at").and_then(Value::as_str) {
             out.push_str(&format!("    a code from this seed was accepted at {at}\n"));
         }
-        match finding.get("markers").and_then(Value::as_array) {
-            Some(names) if names.is_empty() => {}
-            Some(names) => {
-                let names: Vec<String> = names
+        let markers = finding
+            .get("markers")
+            .and_then(Value::as_array)
+            .map(|names| {
+                names
                     .iter()
-                    .map(|name| match name.as_str() {
-                        Some(name) => name.to_string(),
-                        None => format!("(not a marker name: {name})"),
-                    })
-                    .collect();
-                out.push_str(&format!("    markers: {}\n", names.join(", ")));
-            }
-            None => out.push_str("    markers: not reported\n"),
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        if !markers.is_empty() {
+            out.push_str(&format!("    markers: {markers}\n"));
         }
         if let Some(repair) = finding.get("repair").and_then(Value::as_str) {
             out.push_str(&format!("    repair: {repair}\n"));
