@@ -1,8 +1,8 @@
 //! Whether a path is there, told apart from whether it can be examined.
 //!
 //! `Path::exists` answers false for a path it cannot stat (a permission or
-//! I/O fault), so a job's output directory read through it was taken as
-//! absent and its artifacts were never uploaded. Only a path that does not
+//! I/O fault), so a job's output directory read through it would be taken as
+//! absent and its artifacts never uploaded. Only a path that does not
 //! exist is absent here; every other cause is an error of the same kind that
 //! names the path.
 

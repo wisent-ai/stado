@@ -9,10 +9,10 @@
 //! with the resolver stopped it is refused at once, naming the process that
 //! is not running; and with a published resolver whose API accepts the
 //! request and answers nothing it ends by itself at the published refresh
-//! interval, naming that API. Before, the snapshot read the store itself,
-//! and on an authority whose store stood every host's registry read stood
-//! behind it; then it asked the resolver with no measure, and every reader
-//! that gave up over SSH left one snapshot process waiting on the authority.
+//! interval, naming that API. Read from the store itself, the snapshot on an
+//! authority whose store stands would hold every host's registry read behind
+//! it; asked of the resolver with no measure, every reader that gives up over
+//! SSH would leave one snapshot process waiting on the authority.
 use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;

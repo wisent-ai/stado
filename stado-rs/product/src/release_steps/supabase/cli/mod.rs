@@ -4,18 +4,17 @@
 //!
 //! The post-build test of a schema release starts a scratch database with the
 //! CLI and the delivery pushes with it. A Linux builder carries no Supabase
-//! CLI, so the test failed with `cannot run supabase db start: No such file
-//! or directory` before a migration was read. A host installs the declared
+//! CLI, so without one installed the test would fail with `cannot run
+//! supabase db start: No such file or directory` before a migration is read.
+//! A host installs the declared
 //! release under `~/.local/share/stado-supabase/<version>`, verified against
 //! the release's `checksums.txt`, and every step runs that binary by its
 //! path, so the CLI on the search path, of whatever version, never stands in.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use stado_wait as wait;
 
 use crate::node_runtime::published;
 
@@ -58,17 +57,9 @@ fn root(home: &Path) -> PathBuf {
 }
 
 /// The declared release's binary when it is installed and answers with its
-/// version; `None` when it is absent or answers another, which an install
-/// replaces. A binary that is there and cannot be run is the error naming it.
+/// version ([`published::answering`]).
 fn installed(home: &Path, declaration: &Declaration) -> Result<Option<PathBuf>> {
-    let binary = binary(home, declaration);
-    if !binary.is_file() {
-        return Ok(None);
-    }
-    let output = wait::output(Command::new(&binary).arg("--version"))
-        .with_context(|| format!("running {} --version", binary.display()))?;
-    let answered = String::from_utf8_lossy(&output.stdout);
-    Ok((output.status.success() && answered.trim() == declaration.version).then_some(binary))
+    published::answering(binary(home, declaration), &declaration.version)
 }
 
 /// The declared Supabase CLI on this host, installed first when it is absent

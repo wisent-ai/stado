@@ -74,10 +74,10 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
         {
             // A price row is only usable with what it prices, the kind of
             // price it is, the meter it bills, the unit it is quoted per and
-            // its currency. One without them was priced as meter "unknown",
-            // per hour, in dollars, or as a product named "Azure VM"; it is
-            // now left out, and the source says how many rows it left out and
-            // which fields they lacked.
+            // its currency. One without them would be priced as meter
+            // "unknown", per hour, in dollars, or as a product named "Azure
+            // VM"; it is left out, and the source says how many rows it left
+            // out and which fields they lacked.
             let rate = item.get("retailPrice").and_then(Value::as_f64);
             let product = item.get("productName").and_then(Value::as_str);
             let price_type = item.get("type").and_then(Value::as_str);

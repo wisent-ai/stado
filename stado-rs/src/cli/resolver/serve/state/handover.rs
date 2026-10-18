@@ -2,10 +2,10 @@
 //! or, while that authority does not answer, a newer registry this host was
 //! handed.
 //!
-//! A registry authority that stops answering held every resolver on the
-//! last document it served: each one asked only that authority, so no
-//! registry naming another authority could reach a host while the old one
-//! was down. A takeover writes the new registry, whose service directory
+//! A registry authority that stops answering would hold every resolver on the
+//! last document it served if each one asked only that authority: no registry
+//! naming another authority could reach a host while the old one is down. A
+//! takeover writes the new registry, whose service directory
 //! names the new authority under a higher generation, into each host's
 //! last-known-good copy; the resolver adopts it here, and its next source is
 //! the new authority. The generation is the fence: a later answer of the old

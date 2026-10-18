@@ -88,9 +88,9 @@ pub fn acquire_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, Janit
 
 /// The shared hold for one live workload that waits, as a lock wait in the
 /// wait register, while a cleanup pass holds the lock exclusively, and takes
-/// it the moment the pass lets go. An installation refused for a pass that
-/// was cleaning was refused again by the next one, so on a host whose
-/// pressure never lifted it never ran. `None` only while the janitor has
+/// it the moment the pass lets go. Refused for a pass that is cleaning, an
+/// installation would be refused again by the next one, so on a host whose
+/// pressure never lifts it would never run. `None` only while the janitor has
 /// asked for its turn: running workloads are letting it have the lock, and a
 /// new hold would keep it from ever getting it.
 pub fn wait_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, JanitorError> {

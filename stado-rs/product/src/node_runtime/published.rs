@@ -1,17 +1,33 @@
 //! A program release a host installs from its publisher: the archive and the
 //! checksum list the publisher puts beside it are fetched, the archive is
 //! refused unless its sha256 is the one the list gives it, and it is unpacked
-//! and placed as `<root>/<version>`. Node.js was the first program installed
-//! this way; the Supabase CLI the schema release runs is installed the same
-//! way, each from the release Stado declares for it.
+//! and placed as `<root>/<version>`. Node.js is installed this way, and the
+//! Supabase CLI the schema release runs is installed the same
+//! way, each from the release Stado declares for it, and each is taken as
+//! installed only when it answers that release ([`answering`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use stado_wait as wait;
 
-use crate::common::files::remove_tree;
+use crate::common::files::{present, remove_tree};
 use crate::common::{capture, sha256, unpack};
+
+/// `program` when it is installed and answers `version` to `--version`;
+/// `None` when it is absent or answers another release, which an install
+/// replaces. A program that is there and cannot be examined or run is the
+/// error naming it.
+pub fn answering(program: PathBuf, version: &str) -> Result<Option<PathBuf>> {
+    if !present(&program)? {
+        return Ok(None);
+    }
+    let output = wait::output(Command::new(&program).arg("--version"))
+        .with_context(|| format!("running {} --version", program.display()))?;
+    let answered = String::from_utf8_lossy(&output.stdout);
+    Ok((output.status.success() && answered.trim() == version).then_some(program))
+}
 
 /// One archive of a release and the checksum list published beside it.
 pub struct Published {

@@ -104,8 +104,8 @@ pub fn target_name_for(hostname: &str) -> String {
 /// Parse a stored request and confirm it is still awaiting a decision.
 /// Pure.
 pub fn pending_request(document: &Value) -> Result<&str, String> {
-    // A request without its status was refused as "status is ''", which
-    // reads as a decided request rather than an unreadable one.
+    // A request without its status, refused as "status is ''", would read as
+    // a decided request rather than an unreadable one.
     let Some(status) = document.get("status").and_then(Value::as_str) else {
         return Err(format!("request records no status: {document}"));
     };

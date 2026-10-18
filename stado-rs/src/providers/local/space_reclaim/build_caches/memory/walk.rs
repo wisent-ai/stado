@@ -1,11 +1,11 @@
 //! One build-cache walk at a time on this host.
 //!
 //! The walk reads the whole home at background priority, which on a full
-//! developer host takes many minutes. It used to run inside the janitor's
-//! exclusive cleanup lock, so every workload's shared hold — a running job,
-//! a product installation — was refused for as long as the walk read the
-//! disk, and a host whose pressure the cleaners cannot relieve refused every
-//! build it was asked for. The walk now runs under this lock of its own,
+//! developer host takes many minutes. Inside the janitor's exclusive cleanup
+//! lock, every workload's shared hold — a running job, a product
+//! installation — would be refused for as long as the walk reads the disk,
+//! and a host whose pressure the cleaners cannot relieve would refuse every
+//! build it is asked for. The walk runs under this lock of its own,
 //! which keeps two janitors (the agent tick and the health watch) from
 //! walking and remembering at once, and takes the exclusive cleanup lock
 //! only for the moment it removes one cache.

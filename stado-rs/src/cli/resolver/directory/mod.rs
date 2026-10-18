@@ -70,8 +70,8 @@ pub(crate) async fn read_local_snapshot(
 ///
 /// Asked of the resolver's API, never read from the registry store: on the
 /// authority that store is the object API, which authorizes each read
-/// through Skarbiec, and when Skarbiec stood the snapshot stood with it, so
-/// every registry read of every host waited on one command that never ended.
+/// through Skarbiec, and when Skarbiec stands the snapshot would stand with
+/// it, so every registry read of every host would wait on one command.
 /// The resolver reads the store on its own interval and holds the result;
 /// this command only asks for it, in one registered wait on a loopback
 /// address, and is refused at once with the reason when no live resolver

@@ -9,15 +9,14 @@ use crate::targets;
 impl super::ResolverState {
     /// Open a channel and retain its session until the caller finishes copying.
     ///
-    /// Connections through this adapter used to wait minutes while the
-    /// remote object API refused channels at once. Two things made that
-    /// queue: every refused channel dropped a healthy session, so the next
-    /// connection opened a new SSH session from scratch; and every open
-    /// ran while holding the one lock all services and consumers share, so
-    /// each connection waited for every handshake queued before it. A
-    /// session is now opened without the shared lock, and it is dropped only
-    /// when it is closed; a channel the service refuses leaves it in place and
-    /// is reported to the caller at once.
+    /// Two things would make connections through this adapter queue while the
+    /// remote object API refuses channels at once: dropping a healthy session
+    /// on every refused channel, so the next connection opens a new SSH
+    /// session from scratch; and opening while holding the one lock all
+    /// services and consumers share, so each connection waits for every
+    /// handshake queued before it. A session is opened without the shared
+    /// lock, and it is dropped only when it is closed; a channel the service
+    /// refuses leaves it in place and is reported to the caller at once.
     pub(in crate::cli::resolver::serve) async fn tunnel_connect(
         &self,
         active_host: &str,
