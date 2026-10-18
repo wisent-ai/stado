@@ -49,7 +49,9 @@ pub enum ServiceFileCommands {
         /// The single registry host to update.
         #[arg(long)]
         host: String,
-        /// Absolute regular file on this operator host.
+        /// Absolute regular file on this operator host, owner-only unless
+        /// --executable is set; `-` reads the content from standard input
+        /// instead, so a secret never lands on this host's disk on its way.
         #[arg(long)]
         source_file: String,
         /// File on the target, absolute or rooted at $HOME.
@@ -141,7 +143,8 @@ pub enum ServiceOnboardingCommands {
         display_name: String,
         #[arg(long)]
         repository: String,
-        #[arg(long, value_enum, value_delimiter = ',', num_args = 1..)]
+        /// Comma-separated, or the flag repeated.
+        #[arg(long, value_enum, value_delimiter = ',')]
         surfaces: Vec<crate::deploy::service::SurfaceKind>,
         #[arg(long)]
         first_success_fact: String,

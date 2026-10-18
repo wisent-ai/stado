@@ -160,7 +160,8 @@ pub enum LifecycleCommands {
     /// Writes source, run spec, observation and consumer declarations into the
     /// service directory so `deploy` can use them without repeating its inputs.
     Declare {
-        /// Path to the declaration file (JSON). Required keys: `name`,
+        /// Path to the declaration file (JSON), or `-` to read it from
+        /// standard input. Required keys: `name`,
         /// `host`, `source.artifact`, `source.sha256`. Optional: `run`,
         /// `verify`, `consumers`, `endpoints`, or `port` as a shorthand for
         /// one loopback endpoint on the declared host. `answer_seconds` is

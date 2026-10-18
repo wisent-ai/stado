@@ -13,11 +13,25 @@ fn declaration_name_ok(value: &str) -> bool {
     let edge = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
     let bytes = value.as_bytes();
     !bytes.is_empty()
-        && edge(bytes[0])
-        && edge(bytes[bytes.len() - 1])
+        && bytes.first().copied().is_some_and(edge)
+        && bytes.last().copied().is_some_and(edge)
         && bytes
             .iter()
             .all(|byte| edge(*byte) || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// The declaration's text: the file named, or standard input for `-` (the
+/// Unix convention), so a caller holding it in memory writes no file for it.
+fn declaration_text(file: &str) -> Result<String, CmdError> {
+    let read = if file == "-" {
+        std::io::read_to_string(std::io::stdin())
+    } else {
+        std::fs::read_to_string(file)
+    };
+    read.map_err(|error| {
+        CmdError::click(format!("{file}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })
 }
 
 /// Write one user-authored declaration into the service directory.
@@ -29,10 +43,7 @@ fn declaration_name_ok(value: &str) -> bool {
 /// design, not a gap: anything the service knows about itself lives inside
 /// the artifact and the run spec.
 pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
-    let text = std::fs::read_to_string(file).map_err(|error| {
-        CmdError::click(format!("{file}: {error}"))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })?;
+    let text = declaration_text(file)?;
     let value: Value = serde_json::from_str(&text)
         .map_err(|error| CmdError::refused(format!("{file}: not a JSON object: {error}")))?;
     let name = value
@@ -113,12 +124,19 @@ pub(crate) async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         value.get("port").and_then(Value::as_u64),
         endpoints.contains_key(host),
     ) {
-        if port == 0 || port > u16::MAX as u64 {
-            return Err(CmdError::usage(format!("{file}: 'port' out of range")));
-        }
+        // A TCP port is a nonzero 16-bit number.
+        let port = u16::try_from(port)
+            .map_err(|error| {
+                CmdError::usage(format!("{file}: 'port' {port} is no TCP port: {error}"))
+            })
+            .and_then(|port| {
+                std::num::NonZeroU16::new(port)
+                    .ok_or_else(|| CmdError::usage(format!("{file}: 'port' {port} is no TCP port")))
+            })?;
+        let loopback = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port.get()));
         endpoints.insert(
             host.to_string(),
-            json!({"url": format!("http://127.0.0.1:{port}")}),
+            json!({"url": format!("http://{loopback}")}),
         );
     }
     if !endpoints.contains_key(host) {
