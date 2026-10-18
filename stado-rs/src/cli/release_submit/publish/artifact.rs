@@ -31,10 +31,13 @@ pub(crate) async fn publish(
         } else {
             job.pinned_host.as_str()
         };
+        let cause = match &job.error {
+            Some(error) => error.clone(),
+            None => format!("it ended {} without an error", job.state),
+        };
         return Err(CmdError::click(format!(
-            "release job {} ({p} on {host}) failed: {}{}",
+            "release job {} ({p} on {host}) failed: {cause}{}",
             rec.job_id,
-            job.error.clone().unwrap_or_else(|| job.state.clone()),
             job_output_tail(store, &rec.job_id).await
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
@@ -57,24 +60,48 @@ pub(crate) async fn publish(
     let r: BuildReceipt = serde_json::from_slice(&rb)?;
     let digest = release_control::sha256_bytes(&archive);
     // The receipt names the build the job belonged to, which is the run's
-    // build; a run of its own never queued this job.
-    let build_id = run.build_id.as_deref().unwrap_or(&run.run_id);
-    if r.run_id != build_id
-        || r.job_id != rec.job_id
-        || r.product != run.product
-        || r.version != run.version
-        || r.platform != p
-        || r.builder != rec.builder
-        || r.source_commit != run.source_commit
-        || r.source_sha256 != run.source_sha256
-        || r.manifest_sha256 != run.manifest_sha256
-        || r.status != StepStatus::Passed
-        || r.artifact.as_ref().map(|v| v.sha256.as_str()) != Some(&digest)
-    {
-        return Err(
-            CmdError::click("release job returned mixed or invalid output")
-                .stating(crate::primitives::failure::FailureCode::InfraDown),
-        );
+    // build; a run with no separate build queued its jobs under its own id.
+    let build_id = match run.build_id.as_deref() {
+        Some(build) => build,
+        None => run.run_id.as_str(),
+    };
+    // Every field the receipt must agree on is checked, and every one that
+    // does not is named with both values: "mixed output" alone left the
+    // operator to diff the receipt by hand.
+    let mut differs = Vec::new();
+    let mut compare = |field: &str, said: &str, expected: &str| {
+        if said != expected {
+            differs.push(format!("{field} is {said:?}, not {expected:?}"));
+        }
+    };
+    compare("run_id", &r.run_id, build_id);
+    compare("job_id", &r.job_id, &rec.job_id);
+    compare("product", &r.product, &run.product);
+    compare("version", &r.version, &run.version);
+    compare("platform", &r.platform, p);
+    compare("builder", &r.builder, &rec.builder);
+    compare("source_commit", &r.source_commit, &run.source_commit);
+    compare("source_sha256", &r.source_sha256, &run.source_sha256);
+    compare("manifest_sha256", &r.manifest_sha256, &run.manifest_sha256);
+    match &r.artifact {
+        Some(artifact) => compare("artifact.sha256", &artifact.sha256, &digest),
+        None => differs.push(format!(
+            "artifact is absent; the archive hashes to {digest}"
+        )),
+    }
+    if r.status != StepStatus::Passed {
+        differs.push(match &r.failure {
+            Some(failure) => format!("status is {:?}: {failure}", r.status),
+            None => format!("status is {:?} with no failure stated", r.status),
+        });
+    }
+    if !differs.is_empty() {
+        return Err(CmdError::click(format!(
+            "release job {} returned a receipt that does not match this run: {}",
+            rec.job_id,
+            differs.join("; ")
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     // The runtime contract belongs to the platforms that stage it. A product
     // may now publish a platform that ships no binary at all — a web site
@@ -94,6 +121,27 @@ pub(crate) async fn publish(
             )
         })
         .and(m.runtime.as_ref());
+    // A platform that stages no runtime publishes a manifest naming none:
+    // the manifest's own encoding of that is an empty binary, launcher and
+    // minimum version, zero schemas and no rollback set.
+    let (binary, launcher, config_schema, state_schema, minimum_stado_version, rollback): (
+        &str,
+        &str,
+        u64,
+        u64,
+        &str,
+        &[String],
+    ) = match runtime {
+        Some(contract) => (
+            &contract.binary,
+            &contract.launcher,
+            contract.config_schema,
+            contract.state_schema,
+            &contract.minimum_stado_version,
+            &contract.rollback_compatible_with,
+        ),
+        None => Default::default(),
+    };
     let q = ReleaseQualification {
         status: QualificationStatus::Passed,
         evidence_sha256: Some(release_control::sha256_bytes(&rb)),
@@ -107,16 +155,12 @@ pub(crate) async fn publish(
         source_revision: &run.source_commit,
         source_sha256: &run.source_sha256,
         pipeline_manifest_sha256: &run.manifest_sha256,
-        binary: runtime.map(|v| v.binary.as_str()).unwrap_or(""),
-        launcher: runtime.map(|v| v.launcher.as_str()).unwrap_or(""),
-        config_schema: runtime.map(|v| v.config_schema).unwrap_or(0),
-        state_schema: runtime.map(|v| v.state_schema).unwrap_or(0),
-        minimum_stado_version: runtime
-            .map(|v| v.minimum_stado_version.as_str())
-            .unwrap_or(""),
-        rollback_compatible_with: runtime
-            .map(|v| v.rollback_compatible_with.as_slice())
-            .unwrap_or(&[]),
+        binary,
+        launcher,
+        config_schema,
+        state_schema,
+        minimum_stado_version,
+        rollback_compatible_with: rollback,
         qualification: q,
         qualification_receipt: &rb,
         key_id: key,

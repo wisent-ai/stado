@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **Release publication names what a build receipt got wrong:** a receipt that disagreed with its run in any of eleven ways was refused as `release job returned mixed or invalid output`, leaving the operator to diff it by hand. The refusal now names the job and every field that disagrees with both values, an absent artifact with the archive's digest, and a failed status with the failure the receipt states. A release job that failed without an error now says it ended in its state without one, instead of printing the state as the error.
+
 - **`stado resources rationalize` says why a source was not read whole:** the source table's `ERROR` column printed only an `error` field and left every other cell blank, so a source blocked because the queue is on device-local storage, or one unsupported by this build, showed no cause and no remedy. The column is now `WHY`: empty for a source read in full, and otherwise the error, reason and `remedy:` the source gave, or `not reported` when it gave none.
 
 - **`stado release staged activate` says why it stopped:** an env file whose bytes did not arrive intact was reported as one that "could not be read (read)", a staged installer that failed was never checked and the run went on to compare versions, and a run that did not report the runtime link after the settle window was refused as one "put back to" an empty link. The env-file refusal now carries the fetch's own report (missing is not found; unreadable or corrupted is an infrastructure failure), a failed installer is refused with its exit and last error line, and a missing link reading is named as missing.
