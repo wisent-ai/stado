@@ -81,11 +81,11 @@ pub async fn run_bootstrap(
         // `--local` installs on THIS machine, so this machine's own
         // declaration decides the domain — for the agent, for a coordinator
         // tick, and for the two internal daemons alike. An always-on host has
-        // no per-login domain, and every unit this path wrote into
-        // `~/Library/LaunchAgents` there is a unit launchd never loaded.
+        // no per-login domain, and a unit this path writes into
+        // `~/Library/LaunchAgents` there is one launchd never loads.
         // An identity two targets claim is refused, not read as "no entry":
-        // read that way, an always-on host got per-login units launchd never
-        // loads.
+        // read that way, an always-on host would get per-login units launchd
+        // never loads.
         let daemon_domain = registry
             .lookup_self(&crate::providers::vast::system_hostname())
             .map_err(|error| {

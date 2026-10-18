@@ -104,7 +104,7 @@ async fn pass(
     let host_product =
         crate::deploy::service_catalog::host_process().map_err(CmdError::declaration)?;
     // A unit whose owner cannot be read is not a unit this ensure leaves
-    // standing: read that way, it stayed declared beside the process that
+    // standing: read that way, it would stay declared beside the process that
     // replaces it. The read fails the ensure as the named lookup above does.
     let mut replaced: Vec<String> = Vec::new();
     if let Some(entry) = catalog_entry

@@ -9,7 +9,7 @@ use crate::cli::{placement, registry, CmdError};
 use crate::deploy::{host_access::resolver_key, host_capability};
 
 /// A text field of `report` as the report gives it, or which field the
-/// report left out: an empty word stood in the sentence where it was missing.
+/// report left out, rather than an empty word where it is missing.
 fn reported(report: &serde_json::Value, field: &str) -> String {
     match report[field].as_str() {
         Some(value) => value.to_string(),
@@ -45,8 +45,8 @@ pub async fn capability(name: &str, as_json: bool) -> Result<(), CmdError> {
         println!("host:      {}", declared.active_host);
         println!("authority: {}", directory.authority.target);
         println!("vault:     {}", broker.vault);
-        // A host report without its route list said nothing about routes; it
-        // was printed as "routes: 0", a claim the host never made.
+        // A host report without its route list says nothing about routes;
+        // printed as a count of none, it would claim what the host never said.
         let Some(rows) = report["report"]["routes"].as_array() else {
             println!("routes:    not reported by the host: {}", report["report"]);
             return Ok(());
