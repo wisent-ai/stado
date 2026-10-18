@@ -92,6 +92,22 @@ struct Throughput: Sendable {
     let averageWallSecondsPerCompletedJob: Double?
     /// How many completed jobs the average is over.
     let samples: Int
+    /// Job stamps that did not read, so their jobs are not in the average.
+    let unreadableStamps: [UnreadableStamp]
+}
+
+/// One job stamp `stado overview` could not read: the job, the field, the
+/// value it holds and the parser's error.
+struct UnreadableStamp: Decodable, Sendable {
+    let jobID: String
+    let field: String
+    let value: String
+    let error: String
+
+    enum CodingKeys: String, CodingKey {
+        case jobID = "job_id"
+        case field, value, error
+    }
 }
 
 func operationalMetadata(_ value: String?) -> String? {
@@ -108,9 +124,19 @@ enum StadoFormat {
     private static let fractionalDateStrategy = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let dateStrategy = Date.ISO8601FormatStyle()
 
+    /// The ISO 8601 time `value` spells, with or without fractional seconds;
+    /// nil when it is absent or spells neither form.
     static func date(_ value: String?) -> Date? {
         guard let value else { return nil }
-        return (try? fractionalDateStrategy.parse(value)) ?? (try? dateStrategy.parse(value))
+        do {
+            return try fractionalDateStrategy.parse(value)
+        } catch {
+            do {
+                return try dateStrategy.parse(value)
+            } catch {
+                return nil
+            }
+        }
     }
 
     /// A `ps` start stamp as a host prints it — `Mon Aug 11 09:12:33 2026`.
@@ -134,20 +160,18 @@ enum StadoFormat {
         return formatter
     }()
 
+    /// A wall time in the units it spans, as the system's duration style
+    /// spells them.
     static func duration(_ seconds: Double?) -> String {
-        guard let seconds, seconds.isFinite, seconds >= 0 else { return "Unavailable" }
-        if seconds < 60 {
-            return "\(Int(seconds.rounded())) sec"
-        }
-        if seconds < 3_600 {
-            return "\(Int((seconds / 60).rounded())) min"
-        }
-        return "\((seconds / 3_600).formatted(.number.precision(.fractionLength(0...1)))) hr"
+        guard let seconds, seconds.isFinite, seconds >= .zero else { return "Unavailable" }
+        return Duration.seconds(seconds).formatted(
+            .units(allowed: [.hours, .minutes, .seconds], width: .abbreviated)
+        )
     }
 
     static func decimal(_ value: Double?) -> String {
         guard let value, value.isFinite else { return "Unavailable" }
-        return value.formatted(.number.precision(.fractionLength(0...1)))
+        return value.formatted(.number)
     }
 
     /// A value a row may leave out, shown as the absence the caller names

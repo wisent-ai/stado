@@ -6,7 +6,10 @@
 //!
 //! The model and task of a job are read out of its command the way the
 //! makespan history reads them; a command that names neither is listed with
-//! null for each, never under an invented label.
+//! null for each, never under an invented label. A stamp that does not parse
+//! is listed under `throughput.unreadable_stamps` with the job, the field and
+//! the parser's error: read as absent, its job dropped out of the measured
+//! wall time and the newest-first order without a word.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,10 +24,30 @@ use crate::scheduler::makespan::history::extract_model_task;
 /// The states counted per model, under the names `jobs` uses.
 const COUNTED: &[&str] = &[runs::QUEUE, runs::RUNNING, runs::COMPLETED, runs::FAILED];
 
-fn stamp(value: Option<&str>) -> Option<DateTime<Utc>> {
-    value
-        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-        .map(|parsed| parsed.with_timezone(&Utc))
+/// The stamps read for the outcomes, keeping every one that did not parse.
+#[derive(Default)]
+struct Stamps {
+    unreadable: Vec<Value>,
+}
+
+impl Stamps {
+    /// `field` of `job` as a time; `None` when the job carries none, and also
+    /// when it does not parse, which is then recorded with its error.
+    fn read(&mut self, job: &Job, field: &str, value: Option<&str>) -> Option<DateTime<Utc>> {
+        let text = value?;
+        match DateTime::parse_from_rfc3339(text) {
+            Ok(parsed) => Some(parsed.with_timezone(&Utc)),
+            Err(error) => {
+                self.unreadable.push(json!({
+                    "job_id": job.job_id,
+                    "field": field,
+                    "value": text,
+                    "error": error.to_string(),
+                }));
+                None
+            }
+        }
+    }
 }
 
 fn stated(text: String) -> Value {
@@ -33,13 +56,6 @@ fn stated(text: String) -> Value {
     } else {
         json!(text)
     }
-}
-
-/// How long a finished job ran, when both of its stamps read.
-fn wall_seconds(job: &Job) -> Option<i64> {
-    let started = stamp(job.started_at.as_deref())?;
-    let ended = stamp(job.completed_at.as_deref())?;
-    Some((ended - started).num_seconds())
 }
 
 /// The jobs `list_all_jobs` read under one lifecycle prefix; it answers every
@@ -85,11 +101,15 @@ pub(super) async fn job_outcomes(store: &JobStorage) -> Result<Value, StorageErr
         })
         .collect();
 
-    let mut failed: Vec<&Job> = jobs(runs::FAILED).iter().collect();
-    failed.sort_by_key(|job| std::cmp::Reverse(stamp(job.failed_at.as_deref())));
+    let mut stamps = Stamps::default();
+    let mut failed: Vec<(Option<DateTime<Utc>>, &Job)> = jobs(runs::FAILED)
+        .iter()
+        .map(|job| (stamps.read(job, "failed_at", job.failed_at.as_deref()), job))
+        .collect();
+    failed.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
     let failed: Vec<Value> = failed
         .into_iter()
-        .map(|job| {
+        .map(|(_, job)| {
             let (model, task) = extract_model_task(&job.command);
             json!({
                 "job_id": job.job_id,
@@ -101,21 +121,30 @@ pub(super) async fn job_outcomes(store: &JobStorage) -> Result<Value, StorageErr
         })
         .collect();
 
-    let mut completed: Vec<&Job> = jobs(runs::COMPLETED).iter().collect();
-    completed.sort_by_key(|job| std::cmp::Reverse(stamp(job.completed_at.as_deref())));
-    let walls: Vec<i64> = completed
+    // How long each finished job ran, when both of its stamps read.
+    let mut completed: Vec<(Option<DateTime<Utc>>, Option<i64>, &Job)> = jobs(runs::COMPLETED)
         .iter()
-        .filter_map(|job| wall_seconds(job))
+        .map(|job| {
+            let started = stamps.read(job, "started_at", job.started_at.as_deref());
+            let ended = stamps.read(job, "completed_at", job.completed_at.as_deref());
+            let wall = match (started, ended) {
+                (Some(started), Some(ended)) => Some((ended - started).num_seconds()),
+                (_, _) => None,
+            };
+            (ended, wall, job)
+        })
         .collect();
+    completed.sort_by_key(|(at, _, _)| std::cmp::Reverse(*at));
+    let walls: Vec<i64> = completed.iter().filter_map(|(_, wall, _)| *wall).collect();
     let completed: Vec<Value> = completed
         .into_iter()
-        .map(|job| {
+        .map(|(_, wall, job)| {
             let (model, task) = extract_model_task(&job.command);
             json!({
                 "job_id": job.job_id,
                 "model": stated(model),
                 "task": stated(task),
-                "wall_seconds": wall_seconds(job),
+                "wall_seconds": wall,
                 "completed_at": job.completed_at,
             })
         })
@@ -132,6 +161,7 @@ pub(super) async fn job_outcomes(store: &JobStorage) -> Result<Value, StorageErr
         "throughput": {
             "average_wall_seconds_per_completed_job": average,
             "samples": walls.len(),
+            "unreadable_stamps": stamps.unreadable,
         },
     }))
 }

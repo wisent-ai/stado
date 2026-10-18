@@ -11,12 +11,12 @@ extension FleetPosture {
             WisentSignal(
                 "Queued",
                 value: snapshot.counts.queue.formatted(.number),
-                tone: snapshot.counts.queue > 0 ? .warning : .neutral
+                tone: snapshot.counts.queue > .zero ? .warning : .neutral
             ),
             WisentSignal(
                 "Running",
                 value: snapshot.counts.running.formatted(.number),
-                tone: snapshot.counts.running > 0 ? .success : .neutral
+                tone: snapshot.counts.running > .zero ? .success : .neutral
             ),
             WisentSignal(
                 "Live hosts",
@@ -63,8 +63,19 @@ extension FleetPosture {
             WisentCounterRow.Counter(
                 "Average completion",
                 value: StadoFormat.duration(snapshot.throughput.averageWallSecondsPerCompletedJob),
-                detail: "\(snapshot.throughput.samples.formatted(.number)) samples"
+                detail: throughputDetail,
+                tone: snapshot.throughput.unreadableStamps.isEmpty ? .neutral : .warning
             ),
         ]
+    }
+
+    /// How many completed jobs the average is over, and which job stamps did
+    /// not read, so a job left out of the average is named rather than missing.
+    private var throughputDetail: String {
+        let samples = "\(snapshot.throughput.samples.formatted(.number)) samples"
+        let unreadable = snapshot.throughput.unreadableStamps
+        guard !unreadable.isEmpty else { return samples }
+        let named = unreadable.map { "\($0.jobID) \($0.field) \($0.value): \($0.error)" }
+        return "\(samples) · not measured: \(named.joined(separator: "; "))"
     }
 }

@@ -28,6 +28,17 @@ pub(super) fn print_human(document: &Value, claim: &FleetClaim) {
     ) {
         println!("completed jobs ran {average:.0} s on average over {samples} measured");
     }
+    if let Some(unreadable) = document
+        .pointer("/outcomes/throughput/unreadable_stamps")
+        .and_then(Value::as_array)
+    {
+        for stamp in unreadable {
+            println!(
+                "job {} has a {} that does not read ({}), so it is not measured: {}",
+                stamp["job_id"], stamp["field"], stamp["value"], stamp["error"]
+            );
+        }
+    }
     if let Some(error) = document.get("measurements_error").and_then(Value::as_str) {
         println!("capability measurements could not be read: {error}");
     }

@@ -71,10 +71,12 @@ struct FleetOverview: Decodable, Sendable {
         struct Measured: Decodable, Sendable {
             let averageWallSecondsPerCompletedJob: Double?
             let samples: Int
+            let unreadableStamps: [UnreadableStamp]
 
             enum CodingKeys: String, CodingKey {
                 case averageWallSecondsPerCompletedJob = "average_wall_seconds_per_completed_job"
                 case samples
+                case unreadableStamps = "unreadable_stamps"
             }
         }
     }
@@ -233,7 +235,8 @@ extension DashboardSnapshot {
             throughput: Throughput(
                 averageWallSecondsPerCompletedJob:
                     overview.outcomes.throughput.averageWallSecondsPerCompletedJob,
-                samples: overview.outcomes.throughput.samples
+                samples: overview.outcomes.throughput.samples,
+                unreadableStamps: overview.outcomes.throughput.unreadableStamps
             )
         )
     }
