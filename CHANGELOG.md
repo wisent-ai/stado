@@ -46,6 +46,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A GCP exhaustion mark that is not epoch seconds is logged, and no mark is dated at the epoch:** a mark map entry whose value was not a number was left out without a word, and the next write dropped it; a clock before the Unix epoch dated a new mark at zero, the oldest, so that zone was retried first. Each such entry is now logged with its key and why, and a mark the clock cannot date is refused.
+
 - **A waiting or refused installation names why it cannot read the surface lock's holder:** a holder record that could not be read, or one that was not a record, was said as "cannot be read" without the cause or as a record from a Stado before holders were recorded, and a pid no process can have read as a holder no longer running. The read error and the parse error are now said with the record, only an empty record is taken for an older Stado's, and an impossible pid is named as such.
 
 - **A recorded repair that names no repository is refused, not dropped:** the release queue, its plan and the delivery routine each read Oko's open repairs, and a repair recorded without `<repository>@<commit>` was left out, so its defect stayed open with no release ever carrying it and nothing saying why. The three now share one reader, which refuses while Oko holds such a record, naming each defect and its record and how to record it again (`oko defects repaired ID --revision REPOSITORY@COMMIT`); a queue pass queues nothing and says so on stderr. Real journey: `tests/release/delivery-queue-order.mjs`.

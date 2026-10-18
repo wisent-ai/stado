@@ -80,20 +80,30 @@ fn quota_key(region: &str, accel: &str) -> String {
     format!("{region}:{accel}")
 }
 
-/// Epoch seconds as float.
-fn now_epoch() -> f64 {
+/// Epoch seconds as float. A clock before the Unix epoch is refused: a mark
+/// dated at the epoch would read as the oldest and be retried first.
+fn now_epoch() -> Result<f64, StorageError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
+        .map_err(|error| {
+            StorageError::Other(format!(
+                "the clock stands before the Unix epoch, so no exhaustion mark can be dated: \
+                 {error}"
+            ))
+        })
 }
 
-/// `float(v)` on a JSON scalar: numbers pass, numeric strings parse.
-fn json_float(value: &serde_json::Value) -> Option<f64> {
+/// `float(v)` on a JSON scalar: numbers pass, numeric strings parse; any
+/// other value, or a string that is no number, is the reason it is not one.
+fn json_float(value: &serde_json::Value) -> Result<f64, String> {
     match value {
-        serde_json::Value::Number(n) => n.as_f64(),
-        serde_json::Value::String(s) => s.trim().parse().ok(),
-        _ => None,
+        serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| format!("{n} is no float")),
+        serde_json::Value::String(s) => s
+            .trim()
+            .parse()
+            .map_err(|error| format!("{s:?} is no number: {error}")),
+        other => Err(format!("{other} is neither a number nor a numeric string")),
     }
 }
 
@@ -102,16 +112,30 @@ fn json_float(value: &serde_json::Value) -> Option<f64> {
 /// A missing blob means nothing was marked yet. A corrupt or non-object blob
 /// reads as empty: the next mark overwrites it, and a corrupted state file
 /// must not stop the autoscaler. That reading is said in the log with the
-/// blob and why, since the marks it held are gone with the next write. Any
-/// other storage error propagates.
+/// blob and why, since the marks it held are gone with the next write; so is
+/// each entry whose value is not epoch seconds, which the next write drops.
+/// Any other storage error propagates.
 async fn load(store: &JobStorage, blob: &str) -> Result<BTreeMap<String, f64>, StorageError> {
     Ok(match store.download_text(blob).await? {
         None => BTreeMap::new(),
         Some(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(serde_json::Value::Object(obj)) => obj
-                .iter()
-                .filter_map(|(k, v)| json_float(v).map(|f| (k.clone(), f)))
-                .collect(),
+            Ok(serde_json::Value::Object(obj)) => {
+                let mut marks = BTreeMap::new();
+                for (key, value) in &obj {
+                    match json_float(value) {
+                        Ok(at) => {
+                            marks.insert(key.clone(), at);
+                        }
+                        Err(why) => tracing::warn!(
+                            blob,
+                            key = %key,
+                            %why,
+                            "gcp exhaustion mark is not epoch seconds; read as unmarked"
+                        ),
+                    }
+                }
+                marks
+            }
             Ok(other) => {
                 tracing::warn!(blob, found = %other, "gcp exhaustion marks are not a map; read as none");
                 BTreeMap::new()
@@ -166,7 +190,7 @@ pub async fn load_exhaustion(store: &JobStorage) -> Result<Exhaustion, StorageEr
 
 /// Record that `zone` answered a stockout now.
 pub async fn mark_zone_stockout(store: &JobStorage, zone: &str) -> Result<(), StorageError> {
-    let now = now_epoch();
+    let now = now_epoch()?;
     update(store, STOCKOUT_BLOB, |map| {
         map.insert(zone.to_string(), now);
     })
@@ -181,7 +205,7 @@ pub async fn mark_region_quota_exceeded(
     region: &str,
     accel: &str,
 ) -> Result<(), StorageError> {
-    let now = now_epoch();
+    let now = now_epoch()?;
     let key = quota_key(region, accel);
     update(store, QUOTA_BLOB, |map| {
         map.insert(key, now);
