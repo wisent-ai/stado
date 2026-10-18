@@ -22,13 +22,14 @@
 // 5. A run record that names no source commit: the plan is refused naming the
 //    record, instead of reading the version as taken by a commit nobody named.
 //
-// Needs STADO_BIN, OKO_BIN and STADO_TEST_SUCCESS_EXIT.
+// Needs STADO_BIN and OKO_BIN.
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -37,8 +38,6 @@ function required(name) {
 }
 const stadoBinary = realpathSync(required('STADO_BIN'));
 const okoBinary = realpathSync(required('OKO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const own = JSON.parse(readFileSync(join(root, '.wisent-release.json'), 'utf8'));
 const output = join(root, '.build', 'release-version-taken', `run-${randomUUID()}`);
@@ -73,7 +72,7 @@ function run(program, args, cwd) {
 }
 function ok(program, args, cwd) {
   const result = run(program, args, cwd);
-  assert.equal(result.status, successExit, `${program} ${args.join(' ')} was refused: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `${program} ${args.join(' ')} was refused: ${result.stderr}`);
   return result.stdout;
 }
 function checkout() {
@@ -159,7 +158,7 @@ try {
   writeFileSync(garbled, JSON.stringify(garbledBody, null, '  '));
   report.runs.push({ path: garbled, body: garbledBody });
   const refused = run(stadoBinary, ['release', 'newest', '--root', workspace, '--product', product, '--plan', '--json'], workspace);
-  assert.notEqual(refused.status, successExit, `a run without a commit was read: ${refused.stdout}`);
+  assert.ok(!exitedCleanly(refused), `a run without a commit was read: ${refused.stdout}`);
   assert.ok(refused.stderr.includes(`runs/release-pipeline/${garbledId}/run.json`), refused.stderr);
   assert.ok(refused.stderr.includes('names no source_commit'), refused.stderr);
   report.verdict = 'passed';

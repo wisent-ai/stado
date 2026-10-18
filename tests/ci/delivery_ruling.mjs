@@ -20,6 +20,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -28,8 +29,6 @@ function required(name) {
 }
 const stadoBinary = realpathSync(required('STADO_BIN'));
 const okoBinary = realpathSync(required('OKO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const step = required('STADO_DELIVERY_TEST_STEP');
 const purposes = [required('STADO_DELIVERY_TEST_PURPOSE'), required('STADO_DELIVERY_TEST_OTHER_PURPOSE')];
 const [product, surface] = step.split(':');
@@ -61,21 +60,21 @@ function journey(purpose) {
   rmSync(environment.STADO_DELIVERY_PLAN, { force: true });
   rmSync(environment.STADO_DELIVERY_STATE, { force: true });
   const verdict = spawn(okoBinary, ['admit', 'install', '--product', product, '--purpose', purpose]);
-  const allowed = verdict.status === successExit;
+  const allowed = exitedCleanly(verdict);
   report.answers[purpose] = { allowed, said: (verdict.stderr || verdict.stdout).trim() };
   const declare = ['ci', 'plan', 'set', '--purpose', purpose, '--step', step, '--json'];
   if (allowed) {
     const declared = spawn(stadoBinary, declare);
-    assert.equal(declared.status, successExit, declared.stderr);
+    assert.ok(exitedCleanly(declared), declared.stderr);
     assert.equal(JSON.parse(declared.stdout).purpose, purpose, 'the plan does not keep its purpose');
     const cleared = spawn(stadoBinary, ['ci', 'plan', 'clear']);
-    assert.equal(cleared.status, successExit, cleared.stderr);
+    assert.ok(exitedCleanly(cleared), cleared.stderr);
     return;
   }
   const ruling = report.answers[purpose].said;
   assert.ok(ruling, 'Oko refused without saying why');
   const declared = spawn(stadoBinary, declare);
-  assert.notEqual(declared.status, successExit, `a plan the rulings forbid for ${purpose} was declared`);
+  assert.ok(!exitedCleanly(declared), `a plan the rulings forbid for ${purpose} was declared`);
   assert.ok(declared.stderr.includes('declaring the delivery plan is refused'), declared.stderr);
   assert.ok(declared.stderr.includes(ruling), `the refusal does not quote Oko's: ${declared.stderr}`);
   assert.ok(!existsSync(environment.STADO_DELIVERY_PLAN), 'a refused plan was written');
@@ -88,7 +87,7 @@ function journey(purpose) {
     declared_at: new Date().toISOString(),
   }));
   const pass = spawn(stadoBinary, ['ci', 'run']);
-  assert.notEqual(pass.status, successExit, `a pass the rulings forbid for ${purpose} ran`);
+  assert.ok(!exitedCleanly(pass), `a pass the rulings forbid for ${purpose} ran`);
   assert.ok(pass.stderr.includes('stado ci run is refused'), pass.stderr);
   assert.ok(pass.stderr.includes(ruling), `the refusal does not quote Oko's: ${pass.stderr}`);
   assert.ok(!existsSync(environment.STADO_DELIVERY_STATE), 'a refused pass wrote the state');

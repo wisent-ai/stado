@@ -18,13 +18,14 @@
 //    wrote one into its register, refuses the plan naming the defect and how
 //    to record its repair again; it is not dropped from the listing.
 //
-// Needs STADO_BIN, OKO_BIN and STADO_TEST_SUCCESS_EXIT.
+// Needs STADO_BIN and OKO_BIN.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -33,8 +34,6 @@ function required(name) {
 }
 const stadoBinary = realpathSync(required('STADO_BIN'));
 const okoBinary = realpathSync(required('OKO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const own = JSON.parse(readFileSync(join(root, '.wisent-release.json'), 'utf8'));
 const output = join(root, '.build', 'release-delivery-queue-order', `run-${randomUUID()}`);
@@ -63,7 +62,7 @@ function run(program, args, cwd) {
 }
 function ok(program, args, cwd) {
   const result = run(program, args, cwd);
-  assert.equal(result.status, successExit, `${program} ${args.join(' ')} was refused: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `${program} ${args.join(' ')} was refused: ${result.stderr}`);
   return result.stdout;
 }
 function checkout(product) {
@@ -121,7 +120,7 @@ try {
   assert.ok(unplaced[missing].why.includes(`holds no commit ${absent}`), unplaced[missing]?.why);
 
   const refused = run(stadoBinary, ['release', 'newest', '--root', workspace, '--plan', '--first', 'no-such-product'], workspace);
-  assert.notEqual(refused.status, successExit, 'an unknown --first was accepted');
+  assert.ok(!exitedCleanly(refused), 'an unknown --first was accepted');
   assert.ok(refused.stderr.includes('--first no-such-product names no product of this plan'), refused.stderr);
   assert.ok(refused.stderr.includes(alpha) && refused.stderr.includes(beta), refused.stderr);
 
@@ -132,7 +131,7 @@ try {
   legacy.repaired_in = stands;
   writeFileSync(environment.OKO_DEFECT_REGISTER, JSON.stringify(register, null, '  '));
   const malformed = run(stadoBinary, ['release', 'newest', '--root', workspace, '--plan', '--json'], workspace);
-  assert.notEqual(malformed.status, successExit, 'a plan read a repair that names no repository');
+  assert.ok(!exitedCleanly(malformed), 'a plan read a repair that names no repository');
   assert.ok(malformed.stderr.includes('name no <repository>@<commit>'), malformed.stderr);
   assert.ok(malformed.stderr.includes(unnamed), malformed.stderr);
   assert.ok(malformed.stderr.includes('oko defects repaired ID --revision REPOSITORY@COMMIT'), malformed.stderr);

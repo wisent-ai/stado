@@ -24,6 +24,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -32,8 +33,6 @@ function required(name) {
 }
 const stadoBinary = realpathSync(required('STADO_BIN'));
 const okoBinary = realpathSync(required('OKO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const step = required('STADO_DELIVERY_TEST_STEP');
 // The open Oko defect the journey's installs repair: the operator's rulings
 // are asked for it, so the journey runs only where they admit that purpose.
@@ -66,18 +65,18 @@ function run(args) {
 }
 function ok(args) {
   const result = run(args);
-  assert.equal(result.status, successExit, `stado ${args.join(' ')} was refused: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `stado ${args.join(' ')} was refused: ${result.stderr}`);
   return result.stdout;
 }
 function refused(args, pattern) {
   const result = run(args);
-  assert.notEqual(result.status, successExit, `stado ${args.join(' ')} was accepted`);
+  assert.ok(!exitedCleanly(result), `stado ${args.join(' ')} was accepted`);
   assert.match(result.stderr, pattern);
 }
 function oko(args) {
   const result = spawnSync(okoBinary, args, { cwd: output, env: environment, encoding: 'utf8' });
   report.commands.push({ program: 'oko', args, status: result.status, stdout: result.stdout, stderr: result.stderr });
-  assert.equal(result.status, successExit, `oko ${args.join(' ')} was refused: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `oko ${args.join(' ')} was refused: ${result.stderr}`);
   return JSON.parse(result.stdout);
 }
 const git = args => spawnSync('git', args, { cwd: checkout, encoding: 'utf8' }).stdout.trim();
@@ -112,7 +111,7 @@ try {
   const [latest] = [...checked].reverse();
   assert.equal(latest.revision, main, 'the main check did not check main HEAD');
   const green = checked.findLast(commit => commit.green);
-  if (first.status === successExit && green) {
+  if (exitedCleanly(first) && green) {
     assert.equal(afterFirst.delivered[key].revision, green.revision, 'the routine installed other than the last green commit');
     assert.equal(afterFirst.refused, null);
     assert.deepEqual(afterFirst.pushed, {}, 'a plan declared without --push pushed');
@@ -136,8 +135,8 @@ try {
 
   const second = run(['ci', 'run']);
   const said = state().last_pass.said;
-  if (first.status === successExit && green) {
-    assert.equal(second.status, successExit, second.stderr);
+  if (exitedCleanly(first) && green) {
+    assert.ok(exitedCleanly(second), second.stderr);
     assert.ok(said.includes(`${key} already installed at ${green.revision}`), said);
   } else if (afterFirst.refused) {
     assert.match(said, /no newer commit of its main is green; waiting for a commit that repairs/);

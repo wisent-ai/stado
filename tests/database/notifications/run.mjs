@@ -3,6 +3,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'nod
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../../native/process.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const directory = join(root, 'build/database-notifications', `build-${randomUUID()}`);
@@ -31,7 +32,7 @@ function command(program, args, environment = process.env) {
     startError: result.error?.message });
   save();
   if (result.error) throw new Error(`${program} could not start: ${result.error.message}`);
-  if (result.signal || result.status !== successExit) {
+  if (!exitedCleanly(result)) {
     throw new Error(`${program} ${JSON.stringify(args)} ended with status ${result.status}, signal ${result.signal}; see ${stderrPath}`);
   }
   return readFileSync(stdoutPath, 'utf8');
@@ -43,13 +44,10 @@ function cleanSource() {
   const untracked = command('git', ['ls-files', '--others', '--exclude-standard', '--', 'stado-rs', 'tests/database/notifications']);
   if (untracked.trim()) throw new Error(`qualification source contains untracked files: ${untracked}`);
 }
-let successExit;
 let sourceRevision;
 save();
 try {
   sourceRevision = required('STADO_TEST_SOURCE_REVISION');
-  successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-  if (!Number.isInteger(successExit)) throw new Error('STADO_TEST_SUCCESS_EXIT must be an integer process success status');
   const cargo = required('STADO_TEST_CARGO');
   report.sourceRevision = sourceRevision;
   report.database = required('STADO_TEST_NOTIFICATION_DATABASE');

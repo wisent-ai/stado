@@ -21,6 +21,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -29,8 +30,6 @@ function required(name) {
 }
 const stadoBinary = realpathSync(required('STADO_BIN'));
 const okoBinary = realpathSync(required('OKO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 // The open Oko defect the journey's pass serves: the operator's rulings are
 // asked for it, so the journey runs only where they admit that purpose.
 const purpose = required('STADO_DELIVERY_TEST_PURPOSE');
@@ -62,18 +61,18 @@ function run(args) {
 }
 function ok(args) {
   const result = run(args);
-  assert.equal(result.status, successExit, `stado ${args.join(' ')} was refused: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `stado ${args.join(' ')} was refused: ${result.stderr}`);
   return result.stdout;
 }
 function oko(args) {
   const result = spawnSync(okoBinary, args, { cwd: output, env: environment, encoding: 'utf8' });
   report.commands.push({ program: 'oko', args, status: result.status, stdout: result.stdout, stderr: result.stderr });
-  assert.equal(result.status, successExit, `oko ${args.join(' ')} was refused: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `oko ${args.join(' ')} was refused: ${result.stderr}`);
   return JSON.parse(result.stdout);
 }
 function git(args) {
   const result = spawnSync('git', args, { cwd: checkout, encoding: 'utf8' });
-  assert.equal(result.status, successExit, `git ${args.join(' ')}: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `git ${args.join(' ')}: ${result.stderr}`);
   return result.stdout.trim();
 }
 function commit(source, message) {

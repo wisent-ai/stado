@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly, exitedRefusing } from '../native/process.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const output = join(root, '.build', 'delivery-job-identity', randomUUID());
@@ -27,9 +28,6 @@ function command(program, args, env, cwd) {
 }
 save();
 try {
-  const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-  assert.ok(Number.isInteger(successExit), 'STADO_TEST_SUCCESS_EXIT must be an integer');
-  report.success_exit = successExit;
   const binary = realpathSync(required('STADO_BIN'));
   const revision = required('STADO_TEST_SOURCE_REVISION');
   const requestPath = realpathSync(required('STADO_TEST_DELIVERY_REQUEST'));
@@ -42,14 +40,14 @@ try {
   report.source_revision = revision;
   report.request = { original: requestPath, sha256: digest(requestBytes), run_id: request.run_id, source_sha256: request.source_sha256 };
   const source = command('git', ['rev-parse', 'HEAD'], { PATH: required('PATH') }, root);
-  assert.equal(source.status, successExit, source.stderr);
+  assert.ok(exitedCleanly(source), source.stderr);
   assert.equal(source.stdout.trim(), revision, 'the journey checkout must match the candidate revision');
   const patch = command('git', ['diff', '--binary', 'HEAD'], { PATH: required('PATH') }, root);
-  assert.equal(patch.status, successExit, patch.stderr);
+  assert.ok(exitedCleanly(patch), patch.stderr);
   writeFileSync(join(output, 'source.patch'), patch.stdout);
   assert.equal(patch.stdout, '', 'tracked source must be committed before qualification');
   const version = command(binary, ['--version'], { PATH: required('PATH'), HOME: output }, output);
-  assert.equal(version.status, successExit, version.stderr);
+  assert.ok(exitedCleanly(version), version.stderr);
   assert.ok(version.stdout.trim().endsWith(`(rev ${revision})`), `candidate embedded revision differs: ${version.stdout}`);
   report.binary_version = version.stdout.trim();
   const requestFailures = join(output, 'request-failures');
@@ -66,16 +64,14 @@ try {
   }
   assert.ok(Number.isInteger(missingErrno), 'the isolated request must produce a real filesystem refusal');
   const missing = command(binary, ['release', 'delivery', 'worker', '--request', absentRequest], requestEnvironment, requestFailures);
-  assert.notEqual(missing.status, null, 'unreadable request must produce an actual refusal');
-  assert.notEqual(missing.status, successExit, 'an absent request cannot admit delivery');
+  assert.ok(exitedRefusing(missing), 'an absent request cannot admit delivery');
   assert.ok(missing.stderr.includes(`cannot read delivery request ${absentRequest}:`), missing.stderr);
   assert.ok(missing.stderr.includes(`(os error ${missingErrno})`), `filesystem cause was discarded: ${missing.stderr}`);
   const malformedRequest = join(requestFailures, 'malformed-request.json');
   const malformedBytes = Buffer.from('{');
   writeFileSync(malformedRequest, malformedBytes);
   const malformed = command(binary, ['release', 'delivery', 'worker', '--request', malformedRequest], requestEnvironment, requestFailures);
-  assert.notEqual(malformed.status, null, 'malformed request must produce an actual refusal');
-  assert.notEqual(malformed.status, successExit, 'malformed JSON cannot admit delivery');
+  assert.ok(exitedRefusing(malformed), 'malformed JSON cannot admit delivery');
   assert.ok(malformed.stderr.includes(`cannot decode delivery request ${malformedRequest}:`), malformed.stderr);
   assert.ok(malformed.stderr.includes('EOF'), `decoder cause was discarded: ${malformed.stderr}`);
   assert.deepEqual(readFileSync(malformedRequest), malformedBytes, 'refusal must preserve invalid input');
@@ -97,8 +93,7 @@ try {
     writeFileSync(retained, requestBytes);
     const env = { PATH: required('PATH'), HOME: home, STADO_CONFIG: join(home, 'config.json'), ...item.environment };
     const result = command(binary, ['release', 'delivery', 'worker', '--request', retained], env, fixture);
-    assert.notEqual(result.status, null, 'worker must exit with its actual refusal');
-    assert.notEqual(result.status, successExit, 'missing queue identity cannot admit a delivery');
+    assert.ok(exitedRefusing(result), 'missing queue identity cannot admit a delivery');
     assert.ok(result.stderr.includes(item.cause), `wrong operation/cause: ${result.stderr}`);
     assert.ok(result.stderr.includes(retained), `refusal must identify the actual request: ${result.stderr}`);
     assert.deepEqual(readFileSync(retained), requestBytes, 'refusal must preserve the request');

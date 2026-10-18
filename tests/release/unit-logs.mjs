@@ -13,6 +13,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -20,8 +21,6 @@ function required(name) {
   return value;
 }
 const binary = realpathSync(required('STADO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const tailLines = required('STADO_TEST_UNIT_LOG_TAIL_LINES');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const output = join(root, '.build', 'release-unit-logs', `run-${randomUUID()}`);
@@ -39,12 +38,12 @@ function stado(args) {
 }
 function accepted(args) {
   const result = stado(args);
-  assert.equal(result.status, successExit, `stado ${args.join(' ')} was refused: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `stado ${args.join(' ')} was refused: ${result.stderr}`);
   return JSON.parse(result.stdout);
 }
 function refused(args, sentence) {
   const result = stado(args);
-  assert.notEqual(result.status, successExit, `stado ${args.join(' ')} was accepted`);
+  assert.ok(!exitedCleanly(result), `stado ${args.join(' ')} was accepted`);
   assert.ok(result.stderr.includes(sentence), `stado ${args.join(' ')}: ${result.stderr}`);
 }
 

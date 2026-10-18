@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly, exitedRefusing } from '../../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -17,8 +18,6 @@ const source = realpathSync(required('STADO_TEST_GIT_SOURCE'));
 const revision = required('STADO_TEST_GIT_REVISION');
 const packageName = required('STADO_TEST_GIT_PACKAGE');
 const packageFile = required('STADO_TEST_GIT_PACKAGE_FILE');
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const parent = join(root, '.build', 'git-bundle-input');
 mkdirSync(parent, { recursive: true });
@@ -57,7 +56,7 @@ function command(program, args, cwd = root) {
 }
 function success(program, args, cwd) {
   const result = command(program, args, cwd);
-  assert.equal(result.status, successExit, `${program} ${args.join(' ')}: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `${program} ${args.join(' ')}: ${result.stderr}`);
   return result.stdout;
 }
 const refs = () => success('git', ['for-each-ref', '--format=%(refname) %(objectname)'], source);
@@ -66,7 +65,7 @@ function refusal(name, args, expected) {
   const before = readFileSync(manifestPath);
   const beforeRefs = refs();
   const result = command(binary, args);
-  assert.ok(result.status !== null && result.status !== successExit, `${name} was accepted`);
+  assert.ok(exitedRefusing(result), `${name} was accepted`);
   assert.ok(result.stderr.includes(expected), `${name}: ${result.stderr}`);
   assert.deepEqual(readFileSync(manifestPath), before);
   assert.equal(refs(), beforeRefs);

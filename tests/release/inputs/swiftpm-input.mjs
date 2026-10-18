@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, createReadStream, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly, exitedRefusing } from '../../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -15,8 +16,6 @@ function required(name) {
 const binary = realpathSync(required('STADO_BIN'));
 const source = realpathSync(required('STADO_TEST_SWIFT_SOURCE'));
 const revision = required('STADO_TEST_SWIFT_REVISION');
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const parent = join(root, '.build', 'swiftpm-input');
 mkdirSync(parent, { recursive: true });
@@ -66,14 +65,14 @@ function command(program, args, cwd = root, env = environment) {
 }
 function success(program, args, cwd, env) {
   const result = command(program, args, cwd, env);
-  assert.equal(result.status, successExit, `${program} ${args.join(' ')}: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `${program} ${args.join(' ')}: ${result.stderr}`);
   return result.stdout;
 }
 const pin = ['release', 'catalog', 'pin-input', checkout, '--name', 'swiftpm-cache', '--source', source, '--revision', revision, '--swiftpm', '--json'];
 function refusal(name, args) {
   const before = readFileSync(manifestPath);
   const result = command(binary, args);
-  assert.ok(result.status !== null && result.status !== successExit, `${name} was accepted`);
+  assert.ok(exitedRefusing(result), `${name} was accepted`);
   assert.deepEqual(readFileSync(manifestPath), before);
   report.cases.push({ name, status: result.status, manifest_unchanged: true });
 }
@@ -93,7 +92,7 @@ try {
   // stages whose process is gone and keeps those of a live process.
   const stages = join(checkout, '.build', 'release-input');
   const ended = spawnSync('true');
-  assert.equal(ended.status, successExit);
+  assert.ok(exitedCleanly(ended), JSON.stringify(ended));
   const abandoned = join(stages, `swiftpm-${ended.pid}-interrupted`);
   const live = join(stages, `swiftpm-${process.pid}-running`);
   for (const stage of [abandoned, live]) {
@@ -144,7 +143,7 @@ try {
   const profile = '(version 1)(allow default)';
   const sandboxCause = 'sandbox_apply: Operation not permitted';
   const insideSandbox = command('sandbox-exec', ['-p', profile, 'swift', 'package', '--package-path', source, 'dump-package']);
-  assert.ok(insideSandbox.status !== null && insideSandbox.status !== successExit,
+  assert.ok(exitedRefusing(insideSandbox),
     'This qualification requires a host that refuses SwiftPM nested manifest sandboxes');
   assert.ok(insideSandbox.stderr.includes(sandboxCause), insideSandbox.stderr);
   const confined = join(fixture, 'confined');
@@ -154,7 +153,7 @@ try {
   const beforeRefusal = readFileSync(confinedManifest);
   const confinedEnvironment = { ...environment, WC_LOCAL_STORAGE_PATH: join(fixture, 'confined-objects') };
   const refused = command('sandbox-exec', ['-p', profile, binary, ...pin.map(value => value === checkout ? confined : value)], root, confinedEnvironment);
-  assert.ok(refused.status !== null && refused.status !== successExit, 'Nested sandbox refusal was accepted');
+  assert.ok(exitedRefusing(refused), 'Nested sandbox refusal was accepted');
   assert.ok(refused.stderr.includes('swift package resolve'), refused.stderr);
   assert.ok(refused.stderr.includes(sandboxCause), refused.stderr);
   assert.ok(refused.stderr.includes('no input was published'), refused.stderr);
@@ -172,7 +171,7 @@ try {
   renameSync(artifact.path, retainedArtifact);
   try {
     const missing = command(binary, restore);
-    assert.ok(missing.status !== null && missing.status !== successExit,
+    assert.ok(exitedRefusing(missing),
       'Restore accepted a cache whose binary artifact disappeared');
     report.cases.push({ name: 'missing-restored-artifact-refused', status: missing.status });
   } finally {
@@ -184,7 +183,7 @@ try {
   renameSync(checkoutPath, retainedCheckout);
   try {
     const missing = command(binary, restore);
-    assert.ok(missing.status !== null && missing.status !== successExit,
+    assert.ok(exitedRefusing(missing),
       'Restore accepted a cache whose pinned checkout disappeared');
     report.cases.push({ name: 'missing-restored-checkout-refused', status: missing.status });
   } finally {
@@ -198,7 +197,7 @@ try {
   writeFileSync(lockPath, JSON.stringify(changedLock));
   try {
     const stale = command(binary, restore);
-    assert.ok(stale.status !== null && stale.status !== successExit,
+    assert.ok(exitedRefusing(stale),
       'Restore accepted a cache whose revision differs from Package.resolved');
     report.cases.push({ name: 'changed-pin-refused', status: stale.status });
   } finally {

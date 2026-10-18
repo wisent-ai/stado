@@ -5,11 +5,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 assert.ok(process.env.STADO_BIN, 'STADO_BIN must name the candidate executable');
-assert.ok(process.env.STADO_TEST_SUCCESS_EXIT, 'STADO_TEST_SUCCESS_EXIT must declare the successful process exit status');
-const successExit = Number(process.env.STADO_TEST_SUCCESS_EXIT);
-assert.ok(Number.isInteger(successExit));
 const binary = realpathSync(process.env.STADO_BIN);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const build = join(root, 'build', 'storage-archive');
@@ -33,14 +31,14 @@ function command(program, args, overrides = {}) {
 }
 function success(program, args, overrides = {}) {
   const result = command(program, args, overrides);
-  assert.equal(result.status, successExit, `${result.stderr}\n${result.stdout}`);
+  assert.ok(exitedCleanly(result), `${result.stderr}\n${result.stdout}`);
   return result.stdout;
 }
 function refused(name, overrides, reason, sourcePath = source) {
   const path = join(output, `${name}.tar.gz`);
   const result = command(binary, ['storage', 'archive', sourcePath, path, '--json'], overrides);
   const outputExists = existsSync(path);
-  const passed = result.status !== successExit && !outputExists && result.stderr.includes(reason);
+  const passed = !exitedCleanly(result) && !outputExists && result.stderr.includes(reason);
   report.cases.push({ name, status: result.status, output_exists: outputExists,
     diagnostic: result.stderr, verdict: passed ? 'passed' : 'failed' });
 }
@@ -81,7 +79,7 @@ try {
   const existing = command(binary, ['storage', 'archive', source, archive, '--json']);
   const unchanged = readFileSync(archive).equals(bytes);
   report.cases.push({ name: 'no-overwrite', status: existing.status, unchanged,
-    verdict: existing.status !== successExit && unchanged && existing.stderr.includes('refusing to overwrite archive') ? 'passed' : 'failed' });
+    verdict: !exitedCleanly(existing) && unchanged && existing.stderr.includes('refusing to overwrite archive') ? 'passed' : 'failed' });
   for (const [field, value] of Object.entries({ entries: fewerNames.length,
     path_bytes: Math.min(...nameSizes), member_bytes: Math.min(...sizes), total_bytes: Math.max(...sizes) })) {
     refused(`over-${field}`, { WC_STORAGE_ARCHIVE_LIMITS: JSON.stringify({ ...limits, [field]: value }) }, `storage.archive_limits.${field}`);
@@ -106,11 +104,11 @@ try {
   const invalidWrite = command(binary, ['config', 'set', 'storage.archive_limits', JSON.stringify({ ...limits, entries: false })]);
   const configurationUnchanged = readFileSync(config).equals(stored);
   report.cases.push({ name: 'invalid-write-is-atomic', status: invalidWrite.status, configuration_unchanged: configurationUnchanged,
-    verdict: invalidWrite.status !== successExit && configurationUnchanged && invalidWrite.stderr.includes('storage.archive_limits') ? 'passed' : 'failed' });
+    verdict: !exitedCleanly(invalidWrite) && configurationUnchanged && invalidWrite.stderr.includes('storage.archive_limits') ? 'passed' : 'failed' });
   assert.ok(report.cases.every(row => row.verdict === 'passed'), 'Archive qualification failed; inspect retained cases');
   report.verdict = 'passed';
 } catch (error) {
-  report.error = error.stack || String(error);
+  report.error = { message: String(error), stack: error.stack };
 } finally {
   rmSync(home, { recursive: true, force: true });
   report.finished_at = new Date().toISOString();

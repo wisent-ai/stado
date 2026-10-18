@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly, succeededStatus } from '../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -14,8 +15,6 @@ function required(name) {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const binary = realpathSync(required('STADO_BIN'));
 const revision = required('STADO_TEST_SOURCE_REVISION');
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const buildOnly = required('STADO_TEST_BUILD_ONLY_CHANGE');
 const behavioral = required('STADO_TEST_BEHAVIORAL_CHANGE');
 assert.notEqual(buildOnly, behavioral, 'fixtures must be distinct real handoffs');
@@ -33,7 +32,7 @@ function command(program, args) {
   report.commands.push({ program, args, status: result.status, signal: result.signal,
     error: result.error?.message, stdout: result.stdout, stderr: result.stderr });
   assert.equal(result.error, undefined, `cannot execute ${program}: ${result.error?.message}`);
-  assert.equal(result.status, successExit, `${program} ${args.join(' ')} failed: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `${program} ${args.join(' ')} failed: ${result.stderr}`);
   return result.stdout;
 }
 function row(id) {
@@ -50,7 +49,7 @@ function row(id) {
     assert.equal(receipt.run_id, value.run_id);
     assert.equal(receipt.product, value.product);
     assert.equal(receipt.build.status, 'passed');
-    assert.equal(receipt.build.exit_code, successExit);
+    assert.ok(succeededStatus(receipt.build.exit_code), `the build exited ${receipt.build.exit_code}`);
     assert.ok(receipt.source_commit && receipt.source_sha256 && receipt.manifest_sha256,
       'build evidence must retain source and manifest identities');
   }
@@ -71,7 +70,7 @@ try {
   assert.ok(tests.some(test => test.status === 'passed'), 'passing fixture must contain actual post-build tests');
   for (const test of tests) {
     assert.equal(test.status, 'passed');
-    assert.equal(test.exit_code, successExit);
+    assert.ok(succeededStatus(test.exit_code), `a test exited ${test.exit_code}`);
     assert.ok(Array.isArray(test.argv) && test.argv.some(argument => typeof argument === 'string'),
       'retain the actual test command');
   }

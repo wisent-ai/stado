@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../../native/process.mjs';
 import { snapshotSubject, verifyRevision } from '../../native/subject.mjs';
 
 function required(name) {
@@ -23,7 +24,6 @@ assert.ok(Number.isSafeInteger(count) && Number.isSafeInteger(limit) && count > 
 const parallelism = availableParallelism();
 assert.ok(count > parallelism, 'STADO_TEST_LIST_COUNT must exceed the measured host parallelism');
 const revision = required('STADO_TEST_SOURCE_REVISION');
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
 const explicitConcurrency = required('STADO_TEST_COPY_CONCURRENCY');
 const refusedConcurrency = required('STADO_TEST_COPY_REFUSED_CONCURRENCY');
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -49,7 +49,7 @@ function command(args, succeeds = true) {
   save();
   assert.ifError(result.error);
   assert.equal(result.signal, null, 'a terminated process is not a product refusal');
-  assert.equal(result.status === successExit, succeeds, result.stderr);
+  assert.equal(exitedCleanly(result), succeeds, result.stderr);
   return result;
 }
 function snapshot(root = store) {

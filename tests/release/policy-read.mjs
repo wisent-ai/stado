@@ -11,6 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -18,8 +19,6 @@ function required(name) {
   return value;
 }
 const binary = realpathSync(required('STADO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const output = join(root, '.build', 'release-policy-read', `run-${randomUUID()}`);
 mkdirSync(output, { recursive: true });
@@ -36,12 +35,12 @@ function stado(args) {
 }
 function accepted(args) {
   const result = stado(args);
-  assert.equal(result.status, successExit, `stado ${args.join(' ')} was refused: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `stado ${args.join(' ')} was refused: ${result.stderr}`);
   return JSON.parse(result.stdout);
 }
 function refused(args, sentence) {
   const result = stado(args);
-  assert.notEqual(result.status, successExit, `stado ${args.join(' ')} was accepted`);
+  assert.ok(!exitedCleanly(result), `stado ${args.join(' ')} was accepted`);
   if (sentence) assert.ok(result.stderr.includes(sentence), `stado ${args.join(' ')}: ${result.stderr}`);
 }
 
@@ -53,7 +52,7 @@ try {
     assert.deepEqual(Object.keys(shown).sort(), ['policy', 'product']);
     assert.equal(shown.product, row.product);
     assert.deepEqual(Object.keys(shown.policy.targets).sort(), [...row.targets].sort());
-    assert.deepEqual(shown.policy.desired ?? null, row.desired ?? null);
+    assert.deepEqual(shown.policy.desired, row.desired);
   }
   const unknown = `no-such-product-${randomUUID()}`;
   refused(['release', 'policy', 'show', unknown], `${unknown} has no rollout policy; products with one:`);

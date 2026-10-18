@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -35,8 +36,6 @@ const environment = {
 const target = required('STADO_TEST_QUARANTINE_TARGET');
 const product = required('STADO_TEST_QUARANTINE_PRODUCT');
 const expectedCause = required('STADO_TEST_QUARANTINE_CAUSE');
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit), 'STADO_TEST_SUCCESS_EXIT must be an integer');
 const output = join(build, 'release-quarantine', `run-${randomUUID()}`);
 mkdirSync(output, { recursive: true });
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -52,7 +51,7 @@ function stado(args) {
   report.commands.push({ args, status: result.status, stdout: result.stdout, stderr: result.stderr,
     error: result.error?.message });
   assert.ifError(result.error);
-  assert.equal(result.status, successExit, result.stderr);
+  assert.ok(exitedCleanly(result), result.stderr);
   return JSON.parse(result.stdout);
 }
 try {

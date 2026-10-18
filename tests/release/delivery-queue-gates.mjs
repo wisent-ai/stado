@@ -13,13 +13,14 @@
 // 2. The commit is not taken again: a second `--plan` leaves the entry as it
 //    was, and the gated `stado release newest` does not submit it.
 //
-// Needs STADO_BIN, OKO_BIN and STADO_TEST_SUCCESS_EXIT.
+// Needs STADO_BIN and OKO_BIN.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -28,8 +29,6 @@ function required(name) {
 }
 const stadoBinary = realpathSync(required('STADO_BIN'));
 const okoBinary = realpathSync(required('OKO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const own = JSON.parse(readFileSync(join(root, '.wisent-release.json'), 'utf8'));
 const output = join(root, '.build', 'release-delivery-queue-gates', `run-${randomUUID()}`);
@@ -58,7 +57,7 @@ function run(program, args, cwd) {
 }
 function ok(program, args, cwd) {
   const result = run(program, args, cwd);
-  assert.equal(result.status, successExit, `${program} ${args.join(' ')} was refused: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `${program} ${args.join(' ')} was refused: ${result.stderr}`);
   return result.stdout;
 }
 const git = args => ok('git', args, checkout).trim();

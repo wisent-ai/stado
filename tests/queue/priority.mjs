@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -15,7 +16,6 @@ function required(name) {
 }
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const binary = realpathSync(required('STADO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
 const base = Number(required('STADO_TEST_PRIORITY_BASE'));
 const negative = Number(required('STADO_TEST_PRIORITY_NEGATIVE'));
 const high = Number.MAX_SAFE_INTEGER;
@@ -44,7 +44,7 @@ function command(args, succeeds = true) {
     error: result.error?.message });
   save();
   assert.ifError(result.error);
-  assert.equal(result.status === successExit, succeeds, result.stderr);
+  assert.equal(exitedCleanly(result), succeeds, result.stderr);
   return result;
 }
 function records(prefix) {

@@ -12,13 +12,14 @@
 // 3. A register that is not one is refused naming its path; it is never
 //    read as an empty queue.
 //
-// Needs STADO_BIN and STADO_TEST_SUCCESS_EXIT.
+// Needs STADO_BIN.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -26,8 +27,6 @@ function required(name) {
   return value;
 }
 const stadoBinary = realpathSync(required('STADO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const output = join(root, '.build', 'release-queue-register', `run-${randomUUID()}`);
 mkdirSync(output, { recursive: true });
@@ -61,14 +60,14 @@ const refused = {
 
 try {
   const empty = read(true);
-  assert.equal(empty.status, successExit, empty.stderr);
+  assert.ok(exitedCleanly(empty), empty.stderr);
   const none = JSON.parse(empty.stdout);
   assert.equal(none.path, register);
   assert.deepEqual(none.entries, []);
 
   writeFileSync(register, JSON.stringify({ entries: [delivered, refused] }));
   const kept = read(true);
-  assert.equal(kept.status, successExit, kept.stderr);
+  assert.ok(exitedCleanly(kept), kept.stderr);
   const entries = JSON.parse(kept.stdout).entries;
   assert.deepEqual(entries.map(entry => entry.product), [refused.product, delivered.product], 'not newest first');
   const [failed, done] = entries;
@@ -80,13 +79,13 @@ try {
   assert.equal(new Date(done.recorded_at).toISOString(), new Date(delivered.recorded_at).toISOString());
   assert.deepEqual(done.recorded, delivered.recorded);
   const lines = read(false);
-  assert.equal(lines.status, successExit, lines.stderr);
+  assert.ok(exitedCleanly(lines), lines.stderr);
   assert.ok(lines.stdout.includes(`register ${register}`), lines.stdout);
   assert.ok(lines.stdout.includes(refused.product) && lines.stdout.includes(delivered.product), lines.stdout);
 
   writeFileSync(register, 'not a register');
   const broken = read(true);
-  assert.notEqual(broken.status, successExit, 'a register that is not one was read');
+  assert.ok(!exitedCleanly(broken), 'a register that is not one was read');
   assert.ok(broken.stderr.includes(`the delivery loop register ${register} is not a register`), broken.stderr);
   report.verdict = 'passed';
 } finally {

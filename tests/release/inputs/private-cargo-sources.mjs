@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly, exitedRefusing } from '../../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -16,8 +17,6 @@ const source = realpathSync(required('STADO_TEST_PRIVATE_SOURCE'));
 const revision = required('STADO_TEST_PRIVATE_REVISION');
 const cargoHome = realpathSync(required('CARGO_HOME'));
 const rustupHome = realpathSync(required('RUSTUP_HOME'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const parent = join(root, '.build', 'private-cargo-sources');
 mkdirSync(parent, { recursive: true });
@@ -53,7 +52,7 @@ function command(program, args, env = environment, cwd = root) {
 }
 function success(program, args, env, cwd) {
   const result = command(program, args, env, cwd);
-  assert.equal(result.status, successExit, `${program} ${args.join(' ')}: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `${program} ${args.join(' ')}: ${result.stderr}`);
   return result;
 }
 const pin = ['release', 'catalog', 'pin-input', checkout, '--name', 'private-cargo-sources', '--source', source, '--revision', revision, '--cargo', '--json'];
@@ -62,7 +61,7 @@ const lockDigest = digest(readFileSync(lockPath));
 function refusal(name, args, env = environment) {
   const before = readFileSync(manifestPath);
   const result = command(binary, args, env);
-  assert.ok(result.status !== null && result.status !== successExit, `${name} was accepted`);
+  assert.ok(exitedRefusing(result), `${name} was accepted`);
   assert.deepEqual(readFileSync(manifestPath), before, `${name} changed the manifest`);
   assert.equal(digest(readFileSync(lockPath)), lockDigest, `${name} changed Cargo.lock`);
   report.cases.push({ name, verdict: 'passed', status: result.status, manifest_unchanged: true, lock_unchanged: true });

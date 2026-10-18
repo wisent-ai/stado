@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **Stado's journeys read a process's success from the process:** twenty-four journeys refused to run unless the caller stated in `STADO_TEST_SUCCESS_EXIT` what a successful process exits with, and compared every status to that number. They now share `tests/native/process.mjs`, whose `exitedCleanly` reads a started, unsignalled process with the platform's success status, `exitedRefusing` a process that ended with a failure status of its own, and `succeededStatus` a recorded exit code; `STADO_TEST_SUCCESS_EXIT` is no longer read anywhere.
+
 - **`stado release doctor` says `not reported` where its report is silent:** a field the diagnosis did not carry printed `-`, a published status row without its detail printed no detail line at all, and a report without its remedy or quarantine lists printed as if there were none. Absent fields now read `not reported`, the missing detail is said, and the remedy and quarantine sections print exactly what the report lists.
 
 - **The vault doctors say what Skarbiec's report left out and why it could not be read:** a recipient without key files printed `(no keygrip)`, a report naming no remedy was refused with a remedy Stado made up, and a key-doctor answer that was not JSON was refused without the parser's reason. The key file now reads `not reported`, a report without a remedy is refused quoting the report, and the unreadable answer names the parse error. `stado vault authority --json` exits with the CLI's declared failure status.

@@ -12,13 +12,14 @@
 //    submit`: `--queued --plan --json` plans that product and not the other,
 //    while the plain plan names both.
 //
-// Needs STADO_BIN and STADO_TEST_SUCCESS_EXIT.
+// Needs STADO_BIN.
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../../native/process.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -26,8 +27,6 @@ function required(name) {
   return value;
 }
 const stadoBinary = realpathSync(required('STADO_BIN'));
-const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-assert.ok(Number.isInteger(successExit));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const own = JSON.parse(readFileSync(join(root, '.wisent-release.json'), 'utf8'));
 const output = join(root, '.build', 'build-newest-queued', `run-${randomUUID()}`);
@@ -60,7 +59,7 @@ function run(program, args, cwd) {
 }
 function ok(program, args, cwd) {
   const result = run(program, args, cwd);
-  assert.equal(result.status, successExit, `${program} ${args.join(' ')} was refused: ${result.stderr}`);
+  assert.ok(exitedCleanly(result), `${program} ${args.join(' ')} was refused: ${result.stderr}`);
   return result.stdout;
 }
 // A product checkout with one passing format gate, pushed to its own bare

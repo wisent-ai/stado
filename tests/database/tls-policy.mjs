@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const build = join(root, 'build', 'database-tls-policy');
@@ -29,10 +30,8 @@ function run(program, args) {
 const persisted = () => JSON.parse(readFileSync(config, 'utf8'));
 try {
   const binary = required('STADO_BIN');
-  const successExit = Number(required('STADO_TEST_SUCCESS_EXIT'));
-  assert.ok(Number.isInteger(successExit), 'STADO_TEST_SUCCESS_EXIT must be an integer exit status');
   function success(result) {
-    assert.equal(result.status, successExit, result.stderr || result.error?.message);
+    assert.ok(exitedCleanly(result), JSON.stringify({ stderr: result.stderr, error: result.error?.message }));
     return result.stdout.trim();
   }
   report.source_revision = success(run('git', ['rev-parse', 'HEAD']));
@@ -48,7 +47,7 @@ try {
     'missing-days', 'missing-bits', 'unknown-member', 'zero-days', 'zero-bits',
     'negative-days', 'fractional-days', 'text-bits', 'null-policy',
   ]), 'The declared qualification cases must cover every policy refusal class');
-  report.inputs = { successExit, policy, refusals };
+  report.inputs = { policy, refusals };
   success(run(binary, ['config', 'init']));
   success(run(binary, ['config', 'set', 'database.postgres_tls', JSON.stringify(policy)]));
   assert.deepEqual(persisted().database.postgres_tls, policy);
@@ -61,7 +60,7 @@ try {
     const after = persisted();
     let error;
     try {
-      assert.notEqual(result.status, successExit, 'Invalid policy was accepted');
+      assert.ok(!exitedCleanly(result), 'Invalid policy was accepted');
       assert.match(`${result.stdout}\n${result.stderr}`, /database\.postgres_tls/);
       assert.deepEqual(after, before, 'A refused policy changed persisted configuration');
     } catch (failure) { error = String(failure); }
