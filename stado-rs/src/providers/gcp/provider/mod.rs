@@ -37,8 +37,7 @@ fn py_bool(value: bool) -> &'static str {
 /// (Compute Engine "Instance lifecycle"); an external protocol, so the type
 /// follows Google's list. A value Google adds later reads as `None`, an
 /// instance this provider does not count as up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InstanceStatus {
     Provisioning,
     Staging,
@@ -52,8 +51,21 @@ pub(super) enum InstanceStatus {
 }
 
 impl InstanceStatus {
+    /// The documented status Google's word names; `None` for a word outside
+    /// that list.
     pub(super) fn parse(word: &str) -> Option<Self> {
-        <Self as serde::Deserialize>::deserialize(Value::String(word.to_string())).ok()
+        match word {
+            "PROVISIONING" => Some(Self::Provisioning),
+            "STAGING" => Some(Self::Staging),
+            "RUNNING" => Some(Self::Running),
+            "STOPPING" => Some(Self::Stopping),
+            "STOPPED" => Some(Self::Stopped),
+            "SUSPENDING" => Some(Self::Suspending),
+            "SUSPENDED" => Some(Self::Suspended),
+            "REPAIRING" => Some(Self::Repairing),
+            "TERMINATED" => Some(Self::Terminated),
+            _ => None,
+        }
     }
 
     /// On its way up or up. One predicate for every reader, so the
@@ -88,10 +100,10 @@ pub(super) fn instance_booting_or_running(status: &str) -> bool {
 /// What a Compute Engine instance status word means; a word outside the
 /// documented list is unknown.
 pub fn instance_phase(status: &str) -> crate::providers::LifecyclePhase {
-    InstanceStatus::parse(status).map_or(
-        crate::providers::LifecyclePhase::Unknown,
-        InstanceStatus::phase,
-    )
+    match InstanceStatus::parse(status) {
+        Some(status) => status.phase(),
+        None => crate::providers::LifecyclePhase::Unknown,
+    }
 }
 
 /// Resolved-at-first-use provider state (see the module deviation note).
@@ -130,15 +142,14 @@ impl GcpProvider {
     }
 
     /// Python `name, zone = instance_ref.split("@")` — a ref that does not
-    /// split into exactly two parts is a ValueError.
+    /// hold exactly one `@` is a ValueError.
     fn parse_ref(instance_ref: &str) -> Result<(&str, &str), ProviderError> {
-        let parts: Vec<&str> = instance_ref.split('@').collect();
-        if parts.len() != 2 {
-            return Err(ProviderError::Value(format!(
+        match instance_ref.split_once('@') {
+            Some((name, zone)) if !zone.contains('@') => Ok((name, zone)),
+            _ => Err(ProviderError::Value(format!(
                 "invalid instance_ref (expected name@zone): {instance_ref}"
-            )));
+            ))),
         }
-        Ok((parts[0], parts[1]))
     }
 
     /// One zone insert attempt after the caller has confirmed any stale
@@ -228,18 +239,19 @@ impl GcpProvider {
                     "GCE listed an agent instance in {zone} without a name: {instance}"
                 )));
             };
-            let created = instance
-                .get("creationTimestamp")
-                .and_then(Value::as_str)
-                .and_then(|created| chrono::DateTime::parse_from_rfc3339(created).ok());
-            let Some(created) = created else {
+            let Some(stamp) = instance.get("creationTimestamp").and_then(Value::as_str) else {
                 return Err(ProviderError::Value(format!(
-                    "GCE instance {name} in {zone} reports no readable creationTimestamp, so its \
-                     age is unknown and the reaper cannot judge it"
+                    "GCE instance {name} in {zone} reports no creationTimestamp, so its age is \
+                     unknown and the reaper cannot judge it"
                 )));
             };
-            let age =
-                (now - created.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
+            let created = chrono::DateTime::parse_from_rfc3339(stamp).map_err(|error| {
+                ProviderError::Value(format!(
+                    "GCE instance {name} in {zone} reports creationTimestamp {stamp:?}, which is \
+                     not a time, so its age is unknown and the reaper cannot judge it: {error}"
+                ))
+            })?;
+            let age = (now - created.with_timezone(&chrono::Utc)).as_seconds_f64();
             out.push((Self::reference(name, &zone), age));
         }
         Ok(out)

@@ -185,7 +185,12 @@ impl AzureProvider {
         let now = chrono::Utc::now();
         let mut out = Vec::new();
         for vm in &vms {
-            let name = vm.get("name").and_then(Value::as_str).unwrap_or("");
+            let Some(name) = vm.get("name").and_then(Value::as_str) else {
+                return Err(ProviderError::Value(format!(
+                    "Azure listed a VM in {} without a name: {vm}",
+                    config::azure_resource_group()
+                )));
+            };
             if !name.starts_with(&prefix) {
                 continue;
             }
@@ -193,24 +198,28 @@ impl AzureProvider {
             // without its wisent_created tag was aged zero, and one zero
             // taught it that a boot takes no time. It is refused by name, as
             // the GPU clouds refuse it.
-            let created = vm
+            let Some(tag) = vm
                 .get("tags")
                 .and_then(|t| t.get("wisent_created"))
                 .and_then(Value::as_str)
-                .and_then(|created| chrono::DateTime::parse_from_rfc3339(created).ok());
-            let Some(created) = created else {
+            else {
                 return Err(ProviderError::Value(format!(
-                    "Azure VM {name} carries no readable wisent_created tag, so its age is \
-                     unknown and the reaper cannot judge it"
+                    "Azure VM {name} carries no wisent_created tag, so its age is unknown and \
+                     the reaper cannot judge it"
                 )));
             };
+            let created = chrono::DateTime::parse_from_rfc3339(tag).map_err(|error| {
+                ProviderError::Value(format!(
+                    "Azure VM {name} has a wisent_created tag {tag:?} that is not a time, so \
+                     its age is unknown and the reaper cannot judge it: {error}"
+                ))
+            })?;
             let Some(location) = vm.get("location").and_then(Value::as_str) else {
                 return Err(ProviderError::Value(format!(
                     "Azure VM {name} reports no location: {vm}"
                 )));
             };
-            let age =
-                (now - created.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
+            let age = (now - created.with_timezone(&chrono::Utc)).as_seconds_f64();
             out.push((format!("{name}@{location}"), age));
         }
         Ok(out)
