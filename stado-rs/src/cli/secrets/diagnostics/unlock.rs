@@ -98,17 +98,21 @@ case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
 binary="$HOME/.stado/bin/skarbiec"
 vault="$HOME/.stado/skarbiec.vault.json"
 unlock="$HOME/.stado/skarbiec-unlock"
+# What key-doctor and security said on stderr, kept to be quoted when they
+# fail instead of being thrown away.
+errors="$(/usr/bin/mktemp "$HOME/.stado/unlock-errors.XXXXXX")"
+trap '/bin/rm -f "$errors"' EXIT
 try_phrase() {{
   source_b64="$1"
   phrase="$2"
   set +e
-  report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$vault" SKARBIEC_UNLOCK="$phrase" "$binary" key-doctor 2>/dev/null)"
+  report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$vault" SKARBIEC_UNLOCK="$phrase" "$binary" key-doctor 2>"$errors")"
   status=$?
   set -e
   # An answer that is not a report says nothing about the phrase: key-doctor
   # itself failed, and every later phrase would fail the same way.
   if ! printf '%s' "$report" | /usr/bin/grep -q '"status"'; then
-    printf 'STADO_DOCTOR_FAILED\t%s\t%s\n' "$status" "$(printf '%s' "$report" | /usr/bin/tr '\n\t' '  ')"
+    printf 'STADO_DOCTOR_FAILED\t%s\t%s\t%s\n' "$status" "$(printf '%s' "$report" | /usr/bin/tr '\n\t' '  ')" "$(/usr/bin/tr '\n\t' '  ' < "$errors")"
     exit
   fi
   if [ "$status" -eq 0 ] && printf '%s' "$report" | /usr/bin/grep -q '"status"[[:space:]]*:[[:space:]]*"readable"'; then
@@ -123,7 +127,7 @@ try_phrase() {{
 while IFS= read -r candidate; do
   [ "$candidate" != "$vault" ] || continue
   set +e
-  report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$candidate" "$binary" key-doctor 2>/dev/null)"
+  report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$candidate" "$binary" key-doctor 2>"$errors")"
   status=$?
   set -e
   if [ "$status" -eq 0 ] && printf '%s' "$report" | /usr/bin/grep -q '"status"[[:space:]]*:[[:space:]]*"readable"'; then
@@ -136,10 +140,26 @@ while IFS= read -r candidate; do
     exit 0
   fi
 done < <(/usr/bin/find "$HOME/.stado" -maxdepth 4 -type f \( -name '*skarbiec*vault*.json*' -o -name '*skarbiec*.bak' \) -print)
+# security(1) exits 44 (errSecItemNotFound) when no item carries the name:
+# no phrase is stored, which is no failure. Any other failure is said with
+# security's own words, so an unreadable keychain is not taken for an empty
+# one.
+read_keychain() {{
+  set +e
+  keychain_phrase="$("$@" find-generic-password -s skarbiec-vault -w 2>"$errors")"
+  keychain_status=$?
+  set -e
+  if [ "$keychain_status" -ne 0 ]; then
+    keychain_phrase=""
+    if [ "$keychain_status" -ne 44 ]; then
+      printf 'STADO_KEYCHAIN_UNREADABLE\t%s\t%s\n' "$keychain_status" "$(/usr/bin/tr '\n\t' '  ' < "$errors")"
+    fi
+  fi
+}}
 if [ "$(/usr/bin/uname -s)" = Darwin ]; then
-  keychain_phrase="$(/bin/launchctl asuser "$(/usr/bin/id -u)" /usr/bin/security find-generic-password -s skarbiec-vault -w 2>/dev/null || true)"
+  read_keychain /bin/launchctl asuser "$(/usr/bin/id -u)" /usr/bin/security
   if [ -z "$keychain_phrase" ]; then
-    keychain_phrase="$(/usr/bin/security find-generic-password -s skarbiec-vault -w 2>/dev/null || true)"
+    read_keychain /usr/bin/security
   fi
   if [ -n "$keychain_phrase" ]; then
     try_phrase "{keychain_source}" "$keychain_phrase"
@@ -167,7 +187,26 @@ exit 2
     let output = crate::deploy::host_channel::run_script(&target, &script, &runner)
         .await
         .map_err(CmdError::from)?;
-    if !output.ok() {
+    // A keychain that could not be read is said whatever the outcome: it
+    // was a source the operator expected to be tried.
+    let keychain_unreadable: Vec<&str> = output
+        .stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("STADO_KEYCHAIN_UNREADABLE\t"))
+        .collect();
+    for answer in &keychain_unreadable {
+        eprintln!(
+            "the host keychain on {host} could not be read (security's exit status, then its \
+             words): {answer}"
+        );
+    }
+    if keychain_only && !keychain_unreadable.is_empty() && !output.succeeded() {
+        return Err(CmdError::unreachable(format!(
+            "the host keychain on {host} could not be read, so no keychain phrase was tested: {}",
+            keychain_unreadable.join("; ")
+        )));
+    }
+    if !output.succeeded() {
         return Err(
             CmdError::click(crate::deploy::host_channel::last_error_line(
                 &output,
@@ -182,7 +221,7 @@ exit 2
         .find_map(|line| line.strip_prefix("STADO_DOCTOR_FAILED\t"))
     {
         return Err(CmdError::unreachable(format!(
-            "skarbiec key-doctor on {host} answered without a report (exit status, then its output): {answer}; no phrase was judged"
+            "skarbiec key-doctor on {host} answered without a report (exit status, its output, then its errors): {answer}; no phrase was judged"
         )));
     }
     if let Some(path) = output

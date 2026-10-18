@@ -33,9 +33,15 @@ pub struct CommandOutput {
 }
 
 impl CommandOutput {
-    /// Python `returncode == 0`.
+    /// Whether the command exited with the platform's success status.
+    pub fn succeeded(&self) -> bool {
+        self.code == nix::libc::EXIT_SUCCESS
+    }
+
+    /// [`Self::succeeded`] under the name the callers not yet moved use;
+    /// every caller moves to `succeeded`, and this name goes with the last.
     pub fn ok(&self) -> bool {
-        self.code == 0
+        self.succeeded()
     }
 
     /// Python `r.stderr or r.stdout` — the error detail preferred by the
