@@ -27,13 +27,15 @@ pub(super) fn print_human(report: &ResourcesReport) {
             .collect::<Vec<Vec<String>>>(),
     );
 
-    let providers: Vec<Value> = report
-        .compute
-        .data
-        .get("providers")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    // A compute source without a provider list says so, rather than printing
+    // an empty table that reads as a fleet with no providers.
+    let providers: &[Value] = match report.compute.data["providers"].as_array() {
+        Some(providers) => providers,
+        None => {
+            println!("compute: the compute source reported no provider list");
+            &[]
+        }
+    };
     table::print(
         &[
             "PROVIDER",
@@ -81,17 +83,7 @@ pub(super) fn print_human(report: &ResourcesReport) {
                         text(instance, "reference"),
                         number(instance, "age_seconds"),
                         text(instance, "accelerator"),
-                        instance
-                            .get("held_by")
-                            .and_then(Value::as_array)
-                            .map(|items| {
-                                items
-                                    .iter()
-                                    .filter_map(Value::as_str)
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            })
-                            .unwrap_or_default(),
+                        listed(instance, "held_by"),
                     ]
                 })
         })
@@ -179,17 +171,7 @@ pub(super) fn print_human(report: &ResourcesReport) {
                 text(target, "gpu_type"),
                 text(target, "release_platform"),
                 text(target, "region"),
-                target
-                    .get("hostnames")
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_default(),
+                listed(target, "hostnames"),
             ]
         })
         .collect();
@@ -238,9 +220,21 @@ fn registry_count(report: &ResourcesReport, key: &str) -> String {
     }
 }
 
+/// A count or age for a cell; one the row does not carry reads `not
+/// reported`, since a blank count reads as none.
 fn number(value: &Value, key: &str) -> String {
-    match value.get(key) {
-        Some(Value::Number(number)) => number.to_string(),
-        _ => String::new(),
+    crate::cli::reporting::field(&value[key])
+}
+
+/// A list field joined for a cell, or `not reported` when the row does not
+/// carry it: an empty cell would read as a list nobody is on.
+fn listed(value: &Value, key: &str) -> String {
+    match value[key].as_array() {
+        Some(items) => items
+            .iter()
+            .map(crate::cli::reporting::field)
+            .collect::<Vec<_>>()
+            .join(", "),
+        None => crate::cli::reporting::NOT_REPORTED.to_string(),
     }
 }

@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado resources inventory` says what a source did not report instead of printing blank cells:** a compute source without a provider list printed an empty provider table, and a count, age, holder list or hostname list a row did not carry printed an empty cell, which read as none. The missing provider list is now said in a line of its own, and each missing cell reads `not reported`.
+
 - **The local vault inventory says what an item did not carry and why grants could not be read:** an item without its id, type or update time printed an empty cell and one without its deletion flag printed `false`, and a grant inventory that was not JSON was refused without the parser's reason. Each absent field now reads `not reported`, and the refusal ends with the parse error.
 
 - **`stado release status` refuses a `--limit` it cannot count to and shows a negative run duration as it is:** a `--limit` larger than the platform could count read every recorded run instead, and a run whose recorded end preceded its start printed `0s`. The limit is now refused with `--limit <N> cannot be counted here: <cause>`, and such a duration prints as the negative seconds it is, so a clock that ran behind is visible.
