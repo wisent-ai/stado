@@ -14,3 +14,5 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Harsh-Review-Attacked: whether a recipient report that leaves fields out still prints blanks; each missing field is named as not reported, and an unreported recipient list is said as such.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
+
+Repaired-By: "Vault doctors say what Skarbiec's report left out and why it was unreadable" repairs it in this push, naming this commit on its Repairs line
