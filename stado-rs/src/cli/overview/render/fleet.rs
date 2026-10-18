@@ -4,6 +4,7 @@
 
 use serde_json::Value;
 
+use crate::cli::reporting::field;
 use crate::deploy::fleet_claim::FleetClaim;
 
 pub(super) fn print_fleet(document: &Value, claim: &FleetClaim) {
@@ -21,27 +22,22 @@ pub(super) fn print_fleet(document: &Value, claim: &FleetClaim) {
     }
     if let Some(workers) = fleet.get("workers").and_then(Value::as_array) {
         for worker in workers {
-            let target = worker
-                .get("target")
-                .and_then(Value::as_str)
-                .unwrap_or("unmapped");
-            let reported = |field: &str| match worker.get(field).and_then(Value::as_str) {
-                Some(value) => value.to_string(),
-                None => "not reported".to_string(),
+            // A row the registry maps to no target is named by the consumer
+            // that published it, so the operator can find which host it is.
+            let target = match worker["target"].as_str() {
+                Some(target) => target.to_string(),
+                None => format!("unmapped consumer {}", field(&worker["consumer_id"])),
             };
             println!(
                 "  worker: {target} [kind {}] stado={}",
-                reported("kind"),
-                reported("stado_version")
+                field(&worker["kind"]),
+                field(&worker["stado_version"])
             );
         }
     }
     if let Some(targets) = fleet.get("targets").and_then(Value::as_array) {
         for target in targets {
-            let name = target
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("unnamed");
+            let name = field(&target["name"]);
             let Some(measurement) = target.get("measurement") else {
                 continue;
             };
@@ -53,24 +49,17 @@ pub(super) fn print_fleet(document: &Value, claim: &FleetClaim) {
                 println!("  can do: {name} its measurement cannot be read: {reason}");
                 continue;
             }
-            let capabilities = measurement
-                .get("capabilities")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            let rendered: Vec<String> = capabilities
-                .iter()
-                .map(
-                    |(id, entry)| match entry.get("value").and_then(Value::as_bool) {
-                        Some(value) => format!("{id}={value}"),
-                        None => format!("{id}=not reported"),
-                    },
-                )
-                .collect();
-            let measured_at = measurement
-                .get("measured_at")
-                .and_then(Value::as_str)
-                .unwrap_or("unstamped");
+            let rendered: Vec<String> = match measurement["capabilities"].as_object() {
+                Some(capabilities) => capabilities
+                    .iter()
+                    .map(|(id, entry)| format!("{id}={}", field(&entry["value"])))
+                    .collect(),
+                None => vec![format!(
+                    "capabilities {}",
+                    field(&measurement["capabilities"])
+                )],
+            };
+            let measured_at = field(&measurement["measured_at"]);
             println!(
                 "  can do: {name} {} (measured {measured_at})",
                 rendered.join(" ")
