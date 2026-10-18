@@ -7,22 +7,21 @@ use serde_json::{json, Value};
 use super::RepliesError;
 
 /// The value after `flag` in the az argv this runner was handed, or a
-/// refusal naming the flag: read as "", a missing ticket name asked Azure
-/// for `supportTickets//communications` and a missing body posted an empty
-/// reply.
+/// refusal naming the flag: read as "", a missing ticket name would ask Azure
+/// for `supportTickets//communications` and a missing body would post an
+/// empty reply. As az reads it, the flag takes the argument after it.
 fn arg_value<'a>(args: &'a [&str], flag: &str) -> Result<&'a str, RepliesError> {
-    args.windows(
-        std::iter::once(())
-            .count()
-            .saturating_add(std::iter::once(()).count()),
-    )
-    .find(|pair| pair.first() == Some(&flag))
-    .and_then(|pair| pair.get(std::iter::once(()).count()).copied())
-    .ok_or_else(|| {
-        RepliesError::Config(format!(
-            "the az argv {args:?} carries no value for {flag}, so the Azure Support request cannot be made"
-        ))
-    })
+    let mut remaining = args.iter();
+    while let Some(argument) = remaining.next() {
+        if *argument == flag {
+            if let Some(value) = remaining.next() {
+                return Ok(value);
+            }
+        }
+    }
+    Err(RepliesError::Config(format!(
+        "the az argv {args:?} carries no value for {flag}, so the Azure Support request cannot be made"
+    )))
 }
 
 async fn azure_response(
@@ -83,11 +82,14 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
             None,
         )
         .await?;
-        return Ok(value
-            .pointer("/properties/subscriptionPolicies/quotaId")
-            .cloned()
-            .unwrap_or(Value::Null)
-            .to_string());
+        // `az rest --query` prints null for a path the answer does not carry,
+        // and the caller refuses that null naming the missing field.
+        return Ok(
+            match value.pointer("/properties/subscriptionPolicies/quotaId") {
+                Some(quota) => quota.to_string(),
+                None => Value::Null.to_string(),
+            },
+        );
     }
     if matches!(args, ["support", "in-subscription", "tickets", "list", ..]) {
         let value = azure_response(
@@ -131,23 +133,35 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
             None,
         )
         .await?;
-        let latest = listing(&value, &format!("the communications of ticket {ticket}"))?
-            .iter()
-            .max_by(|left, right| {
-                let left_created = left
-                    .pointer("/properties/createdDate")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let right_created = right
-                    .pointer("/properties/createdDate")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                left_created.cmp(right_created)
-            })
-            .and_then(|row| row.get("properties"))
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        return Ok(latest.to_string());
+        // The latest communication is the one Azure created last; one that
+        // carries no creation date cannot be placed among them, so it is
+        // refused rather than sorted first. Of equal dates the last listed
+        // is taken.
+        let mut latest: Option<(&str, &Value)> = None;
+        for row in listing(&value, &format!("the communications of ticket {ticket}"))? {
+            let Some(created) = row
+                .pointer("/properties/createdDate")
+                .and_then(Value::as_str)
+            else {
+                return Err(RepliesError::Config(format!(
+                    "a communication of ticket {ticket} carries no createdDate, so the latest \
+                     one cannot be told: {row}"
+                )));
+            };
+            let newer = match latest {
+                Some((newest, _)) => created >= newest,
+                None => true,
+            };
+            if newer {
+                latest = Some((created, row));
+            }
+        }
+        // A ticket with no communication answers as `az --query [0]` reads
+        // to the caller: an empty object, which it reads as no message yet.
+        return Ok(match latest {
+            Some((_, row)) => row["properties"].to_string(),
+            None => json!({}).to_string(),
+        });
     }
     if matches!(
         args,
