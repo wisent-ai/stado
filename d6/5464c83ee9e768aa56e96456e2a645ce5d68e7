@@ -15,3 +15,5 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 Harsh-Review-Attacked: whether two callers without USER can still read as one requester; the scratch lease refuses a caller whose USER cannot be read, at creation and at removal, and the other readers say which value was not reported, not checked or unreadable.
 Harsh-Review-Attacked: whether a provider without an authoritative flag still reads as one that is not; the three answers are printed apart.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
+
+Repaired-By: "web origin, route publish and identity verify print absent fields as not reported" repairs it in this push, naming this commit on its Repairs line
