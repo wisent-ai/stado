@@ -24,6 +24,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         }
         ReleaseCommands::Submit(args) => crate::cli::release_submit::submit(&args).await,
         ReleaseCommands::Newest(args) => crate::cli::release_newest::newest(&args).await,
+        ReleaseCommands::History(args) => crate::cli::release_history::history(&args),
         ReleaseCommands::Changes(args) => {
             crate::cli::release_submit::changes::dispatch(&args).await
         }

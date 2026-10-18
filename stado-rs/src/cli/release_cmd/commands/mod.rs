@@ -41,6 +41,8 @@ pub enum ReleaseCommands {
     /// is released again. The rest go through the same pipeline `submit`
     /// drives. `--plan` reads without submitting.
     Newest(crate::cli::release_newest::ReleaseNewestArgs),
+    /// Rewrite a checkout's unpushed commits by a plan, keeping HEAD's tree.
+    History(crate::cli::release_history::ReleaseHistoryArgs),
     /// Hand pushed work to a later batch release, without starting a build.
     Changes(crate::cli::release_submit::changes::ChangesArgs),
     /// Resume a recorded release without replacing its source or running jobs.

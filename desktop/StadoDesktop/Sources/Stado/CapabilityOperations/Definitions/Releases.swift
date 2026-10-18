@@ -133,6 +133,14 @@ enum NativeReleaseSourceOperations {
             .init(id: "channel", label: "Release channel", option: "--channel", choices: ["candidate", "stable"], initial: "candidate"),
             .init(id: "push", label: "After the first products are delivered and installed here, push every checkout and read its CI, then deliver the rest", option: "--push", flag: true),
         ]),
+        // The same rewrite `stado release history` makes: the branch moves
+        // only when the plan keeps HEAD's tree, and every refusal is the
+        // command's own sentence.
+        .init(id: "history", title: "Rewrite a checkout's unpushed commits by a plan (pick, reword, fold, drop, split), keeping its tree", path: ["release", "history"], hostPlacement: .none, fields: [
+            .init(id: "root", label: "Checkout whose unpushed commits are rewritten", option: "--root", required: true),
+            .init(id: "plan", label: "Plan file: one entry per unpushed commit", option: "--plan", required: true),
+            .init(id: "notes-ref", label: "Notes ref an unaltered commit keeps its note under (blank carries no note)", option: "--notes-ref"),
+        ]),
         // A build is not a release. These queue and read builds and publish
         // nothing; `release-build` is the release that consumes one, and the
         // CLI refuses it while the build is waiting or has failed.
