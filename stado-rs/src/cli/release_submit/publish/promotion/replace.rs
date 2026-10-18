@@ -18,8 +18,8 @@ struct ReplaceRolloutStatus {
 /// Whether `target` has committed `version` with `artifact_sha256` at
 /// `generation`: `Ok(false)` while its status is absent or names another
 /// state. A status that cannot be read or parsed is the error: read as "not
-/// committed", it restarted the service onto a release it may already run
-/// and then refused as a target that "did not publish committed status".
+/// committed", it would restart the service onto a release it may already
+/// run and then refuse as a target that "did not publish committed status".
 pub(super) async fn replace_status_exact(
     product: &str,
     target: &str,
