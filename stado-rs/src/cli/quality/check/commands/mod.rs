@@ -1,5 +1,6 @@
 //! Audit the CLI artifact built from the exact committed source being checked.
 
+mod attested;
 mod help_grammar;
 mod judged;
 
@@ -12,6 +13,7 @@ use std::process::Command;
 use super::super::{gates::DeclaredGates, run, Report};
 use crate::cli::CmdError;
 use help_grammar::clap_children;
+use judged::Reading;
 
 fn cli_product(product: &str) -> Result<bool, CmdError> {
     let catalog = stado_product::catalog::embedded()
@@ -58,12 +60,15 @@ fn help(binary: &Path, path: &[String]) -> Result<String, CmdError> {
     })
 }
 
+/// Read the command tree under `path` of `binary` into `tree`, each command's
+/// help by its name; a model reading the tree needed that obtained no
+/// judgment ends the walk as [`Reading::Unanswered`] with its cause.
 fn discover(
     binary: &Path,
     path: &mut Vec<String>,
     parent_help: Option<&str>,
     tree: &mut BTreeMap<String, String>,
-) -> Result<(), CmdError> {
+) -> Result<Reading<()>, CmdError> {
     let text = help(binary, path)?;
     if parent_help.is_some_and(|parent| parent == text.as_str()) {
         return Err(CmdError::refused(format!(
@@ -89,7 +94,10 @@ fn discover(
     let children = if let Some(advertised) = clap_children(&text, &name) {
         advertised.into_iter().map(str::to_owned).collect()
     } else {
-        judged::children(&name, &text)?
+        match judged::children(&name, &text)? {
+            Reading::Answered(children) => children,
+            Reading::Unanswered(cause) => return Ok(Reading::Unanswered(cause)),
+        }
     };
     let mut unique = BTreeSet::new();
     for child in &children {
@@ -108,10 +116,12 @@ fn discover(
         path.push(child);
         let result = discover(binary, path, Some(&text), tree);
         path.pop();
-        result?;
+        if let Reading::Unanswered(cause) = result? {
+            return Ok(Reading::Unanswered(cause));
+        }
     }
     tree.insert(name, text);
-    Ok(())
+    Ok(Reading::Answered(()))
 }
 
 fn staged_binaries(
@@ -152,11 +162,17 @@ fn staged_binaries(
     Ok(binaries)
 }
 
+/// The CLI command tree of `revision` of `checkout`, built from the exported
+/// `tree` into `area`, judged by a model against the CLI rules; when no model
+/// judgment is obtained, the tree stands on the commit's attestation
+/// ([`attested::stands`]) and the report says it was not judged.
 pub(super) fn check(
     declared: &DeclaredGates,
     tree: &Path,
     area: &Path,
     contract: &[(&str, String)],
+    checkout: &Path,
+    revision: &str,
     report: Report,
 ) -> Result<(), CmdError> {
     if super::super::web::is_web_platform(&declared.platform) || !cli_product(&declared.product)? {
@@ -182,13 +198,34 @@ pub(super) fn check(
         cause.within(format!("building CLI command tree of {}", declared.product))
     })?;
     let mut command_tree = BTreeMap::new();
+    let mut unjudged = None;
     for binary in staged_binaries(&output, &declared.stage)? {
         let mut path = Vec::new();
-        discover(&binary, &mut path, None, &mut command_tree)?;
+        if let Reading::Unanswered(cause) = discover(&binary, &mut path, None, &mut command_tree)? {
+            if unjudged.is_none() {
+                unjudged = Some(cause);
+            }
+        }
         super::super::units::qualify(&binary, declared, report)?;
     }
+    let reading = match unjudged {
+        Some(cause) => Reading::Unanswered(cause),
+        None => judged::violations(&declared.product, &command_tree)?,
+    };
+    let issues = match reading {
+        Reading::Answered(issues) => issues,
+        Reading::Unanswered(cause) => {
+            attested::stands(checkout, revision, &cause)?;
+            report.say(&format!(
+                "stado quality check: {} CLI command tree was not judged ({cause}); it stands on \
+                 the attestation {revision} carries, read by `tama attestation check`",
+                declared.product
+            ));
+            return Ok(());
+        }
+    };
     let mut failures = Vec::new();
-    for issue in judged::violations(&declared.product, &command_tree)? {
+    for issue in issues {
         if !command_tree.contains_key(&issue.command)
             || issue.primitive.trim().is_empty()
             || issue.reason.trim().is_empty()

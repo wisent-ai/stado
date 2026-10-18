@@ -10,6 +10,8 @@ use std::process::{Command, Output};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+mod unjudged;
+
 fn git(root: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(root)
