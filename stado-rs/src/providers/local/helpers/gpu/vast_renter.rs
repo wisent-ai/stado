@@ -18,7 +18,7 @@ pub const VAST_API: &str = "https://console.vast.ai/api/v0";
 pub async fn vast_has_renter() -> anyhow::Result<bool> {
     // The check runs only where Vast is an enabled provider; there a key
     // that is absent or empty cannot say whether a renter holds the machine,
-    // and read as "no renter" it let the agent claim on top of one.
+    // and read as "no renter" it would let the agent claim on top of one.
     let api_key = match crate::skarbiec::read_string("vast", "api_key").await? {
         Some(key) if !key.trim().is_empty() => key,
         Some(_) | None => anyhow::bail!(
