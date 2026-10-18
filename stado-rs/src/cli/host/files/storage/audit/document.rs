@@ -60,11 +60,14 @@ pub(super) fn print_audit_document(
         "classes": classes,
         "objects": objects,
         "inventory_objects": inventory_objects,
+        // A root's namespaces, or null for a root whose inventory never
+        // ended: an empty list is a root read and found empty.
         "namespace_inventory": {
             "complete": audit.namespace_inventory_complete,
-            "local_storage": audit.namespaces.get("local_storage").cloned().unwrap_or_default(),
-            "local_backup": audit.namespaces.get("local_backup").cloned().unwrap_or_default(),
+            "local_storage": audit.namespaces.get("local_storage"),
+            "local_backup": audit.namespaces.get("local_backup"),
         },
+        "unproven": audit.unproven,
         "reclaimable_bytes": audit.reclaimable_bytes(),
         "retained_bytes": audit.retained_bytes(),
         "reclaim": {
@@ -77,6 +80,7 @@ pub(super) fn print_audit_document(
             "would_delete_bytes": audit.would_delete.bytes,
             "delete_failed_objects": audit.delete_failed.objects,
             "delete_failed_bytes": audit.delete_failed.bytes,
+            "delete_failures": audit.delete_failures,
             "pruned_directories": audit.pruned_directories,
         },
         "free_kb_before": audit.free_kb_before,

@@ -57,6 +57,12 @@ pub struct BackupAudit {
     pub would_delete: ClassTotals,
     /// Deletions the host refused, which leave the replica object in place.
     pub delete_failed: ClassTotals,
+    /// Each refused deletion as `<path>: <the unlink error>`, for a host
+    /// whose Stado reports why.
+    pub delete_failures: Vec<String>,
+    /// Each same-size pair left unproven as `<path>: <why its content could
+    /// not be read>`, for a host whose Stado reports why.
+    pub unproven: Vec<String>,
     /// Emptied replica directories removed after the deletions.
     pub pruned_directories: i64,
     /// Free 1024-byte blocks on the replica's filesystem, read by this pass on
@@ -68,9 +74,14 @@ pub struct BackupAudit {
 }
 
 impl BackupAudit {
-    /// Bytes that are proven present and intact in the primary.
+    /// Bytes that are proven present and intact in the primary: the twins'
+    /// total, none when the pass classified no twin.
     pub fn reclaimable_bytes(&self) -> u64 {
-        self.classes.get(TWIN).map(|t| t.bytes).unwrap_or_default()
+        self.classes
+            .get(TWIN)
+            .map(|totals| totals.bytes)
+            .into_iter()
+            .sum()
     }
 
     /// Bytes that are data: the primary either lacks them or holds something

@@ -52,7 +52,8 @@ fn read_row(
     let mut fields = line.split('\t');
     match fields.next() {
         Some("STADO_BACKUP_AUDIT") => {
-            let (Some(class), Some(size), Some(_)) = (fields.next(), fields.next(), fields.next())
+            let (Some(class), Some(size), Some(path)) =
+                (fields.next(), fields.next(), fields.next())
             else {
                 return Err(format!(
                     "the audit printed a class row that does not read: {line}"
@@ -71,6 +72,10 @@ fn read_row(
             let totals = audit.classes.entry(class.to_string()).or_default();
             totals.objects += NonZeroU64::MIN.get();
             totals.bytes += bytes;
+            // Why a same-size pair stayed unproven, from a host that says.
+            if let Some(why) = fields.next().filter(|why| !why.is_empty()) {
+                audit.unproven.push(format!("{path}: {why}"));
+            }
         }
         Some("STADO_BACKUP_OBJECT") => {
             // A requested object the reader cannot read leaves the audit
@@ -110,6 +115,8 @@ fn read_row(
                     "the audit ended a namespace inventory without naming its root: {line}"
                 ));
             };
+            // A finished root holding no namespace is read and empty.
+            audit.namespaces.entry(root.to_string()).or_default();
             namespace_roots_complete.insert(root.to_string());
         }
         Some("STADO_BACKUP_NAMESPACES_ERROR") => {
@@ -131,7 +138,7 @@ fn read_row(
         }
         Some("STADO_BACKUP_AUDIT_END") => audit.complete = true,
         Some("STADO_BACKUP_RECLAIM") => {
-            let (Some(outcome), Some(size), Some(_path)) =
+            let (Some(outcome), Some(size), Some(path)) =
                 (fields.next(), fields.next(), fields.next())
             else {
                 return Err(format!(
@@ -153,6 +160,10 @@ fn read_row(
             };
             totals.objects += NonZeroU64::MIN.get();
             totals.bytes += bytes;
+            // Why the host refused a deletion, from a host that says.
+            if let Some(why) = fields.next().filter(|why| !why.is_empty()) {
+                audit.delete_failures.push(format!("{path}: {why}"));
+            }
         }
         Some("STADO_BACKUP_RECLAIM_END") => audit.reclaim_complete = true,
         Some("STADO_BACKUP_PRUNED") => {

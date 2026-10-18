@@ -1,3 +1,8 @@
+/// Bytes in one of the blocks the free-space reading counts: the host reads
+/// free space as `df -k` reports it, in 1024-byte units,
+/// https://pubs.opengroup.org/onlinepubs/9699919799/utilities/df.html
+const BLOCK_BYTES: u64 = 1024;
+
 /// The classification, free-space and reclaim summary of
 /// [`super::backup_audit`].
 pub(super) fn print_classes(
@@ -12,12 +17,18 @@ pub(super) fn print_classes(
         crate::deploy::host_backup_audit::DIFFERS,
         crate::deploy::host_backup_audit::SAME_SIZE_UNPROVEN,
     ] {
-        let totals = audit.classes.get(class).cloned().unwrap_or_default();
-        println!(
-            "{class:9} {:>7} object(s)  {:>8.2} GiB",
-            totals.objects,
-            gib(totals.bytes)
-        );
+        match audit.classes.get(class) {
+            Some(totals) => println!(
+                "{class:9} {:>7} object(s)  {:>8.2} GiB",
+                totals.objects,
+                gib(totals.bytes)
+            ),
+            // The pass printed no row of this class.
+            None => println!("{class:9} none"),
+        }
+    }
+    for unproven in &audit.unproven {
+        println!("unproven: {unproven}");
     }
     println!(
         "reclaim:  {:.2} GiB proven present and identical in the primary; {:.2} GiB is data and stays",
@@ -28,13 +39,13 @@ pub(super) fn print_classes(
     // deletions. Reported even for a read-only classification, because "how
     // full is this disk while you are telling me what is on it" is the
     // question the whole command exists to serve.
-    let gib_kb = |blocks: i64| blocks as f64 / 1024.0 / 1024.0;
+    let gib_blocks = |blocks: i64| gib(blocks.unsigned_abs() * BLOCK_BYTES);
     if let (Some(before), Some(after)) = (audit.free_kb_before, audit.free_kb_after) {
         println!(
             "free:     {:.2} GiB before, {:.2} GiB after ({:+.2} GiB)",
-            gib_kb(before),
-            gib_kb(after),
-            gib_kb(after - before),
+            gib_blocks(before),
+            gib_blocks(after),
+            gib_blocks(after) - gib_blocks(before),
         );
     }
     if reclaim_twins {
@@ -46,11 +57,13 @@ pub(super) fn print_classes(
                 gib(audit.deleted.bytes),
                 audit.pruned_directories,
             );
-            if audit.delete_failed.objects > 0 {
+            if let Some(refused) = std::num::NonZeroU64::new(audit.delete_failed.objects) {
                 println!(
-                    "refused:  {} object(s) the host would not unlink; they are still in the replica",
-                    audit.delete_failed.objects
+                    "refused:  {refused} object(s) the host would not unlink; they are still in the replica"
                 );
+                for failure in &audit.delete_failures {
+                    println!("          {failure}");
+                }
             }
             if !audit.reclaim_complete {
                 println!(
