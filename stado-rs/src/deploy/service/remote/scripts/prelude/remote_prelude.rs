@@ -172,8 +172,15 @@ pub const DOMAIN_RESOLVER: &str = "stado_domain_of() {
       ;;
   esac
   account=$(/usr/bin/id -un)
-  console=$(/usr/bin/stat -f%Su /dev/console 2>/dev/null | /usr/bin/tr -d ' \t\r\n')
-  if [ -z \"$console\" ]; then console='nobody'; fi
+  # Who owns the console, or stat's own words for why that cannot be read:
+  # an unreadable console is not one that belongs to nobody.
+  if console=$(/usr/bin/stat -f%Su /dev/console 2>&1); then
+    console=$(printf '%s' \"$console\" | /usr/bin/tr -d ' \t\r\n')
+    console_owner=\"belongs to $console\"
+  else
+    console_owner=\"cannot be read ($console)\"
+    console=''
+  fi
   if [ \"$console\" = \"$account\" ] && /bin/launchctl print \"$gui\" >/dev/null 2>&1; then
     domain=\"$gui\"
     domain_status='graphical'
@@ -183,7 +190,12 @@ pub const DOMAIN_RESOLVER: &str = "stado_domain_of() {
   if /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
     domain=\"$user_domain\"
     domain_status='background'
-    domain_reason=\"/dev/console belongs to $console, not $account: no graphical session, so $gui does not exist and a LaunchAgent has only the background domain $user_domain\"
+    if [ \"$console\" = \"$account\" ]; then
+      console_why=\"$account owns /dev/console but launchd answers no $gui\"
+    else
+      console_why=\"$account does not own /dev/console (it $console_owner)\"
+    fi
+    domain_reason=\"$console_why: no graphical session, so $gui does not exist and a LaunchAgent has only the background domain $user_domain\"
     return 0
   fi
   domain_status='unavailable'

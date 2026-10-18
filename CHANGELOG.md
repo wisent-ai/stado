@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A LaunchAgent's domain reason no longer names "nobody" for a console it could not read:** the launchd domain resolver read `/dev/console`'s owner with errors discarded and called an unreadable console `nobody`, and a console the account owned while launchd had no `gui/<uid>` was reported as belonging to someone else. The reason now quotes `stat`'s words for an unreadable console and says when the account owns the console but launchd answers no graphical domain.
+
 - **The bootstrap says why it did not reuse an installed Stado:** the check for a reusable Stado read its release marker with errors discarded, so a marker that could not be read looked like one naming no version, and the bootstrap then printed only "installed stado is missing or unmarked". The check now names a missing marker, a marker naming another version (with both versions), and lets `cat` say why a marker cannot be read; the `[install]` line quotes the check's own words and exit status.
 
 - **`stado credentials vault list` says why a host's Skarbiec did not list its vaults:** the host program discarded `skarbiec vaults`'s stderr and called every failure "skarbiec here predates the vaults command", so a vault Skarbiec could not read looked like an old release holding none. The host's answer now carries `error` with the binary and Skarbiec's own words, and an answer that does not parse is quoted with the program's whole failure.
