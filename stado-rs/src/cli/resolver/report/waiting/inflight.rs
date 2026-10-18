@@ -4,22 +4,19 @@
 //! [`held_at`](super::held_at) and [`held_on_host`](super::host::held_on_host)
 //! refuse a request before it is sent. A request sent before the route
 //! stood — the registry read behind `stado resolver status`, an object API
-//! request, the registry authority's snapshot over SSH — then stood for as
-//! long as the route did: the command that diagnoses a held resolver stood
-//! held for hours with the czekam line as its only word. At every refresh
-//! interval — the one this host's resolver publishes, or, with no resolver
-//! publishing one, the one this machine's registry record declares for it —
-//! the published waits are read again; once the route has gone unanswered
-//! longer than that interval — this request's own connection among them —
-//! the request is dropped, which closes its connection, and refused with
-//! the held wait's sentence, naming the address or host it stood on. A
-//! request the far side accepted and answers nothing on stands in no list of
-//! this host's — the authority's `stado resolver snapshot` over SSH stood
-//! that way for hours while every registry reader on this machine stood
-//! behind it — so a request that outlasts the interval with nothing
-//! published held is abandoned too, with the interval named and where to
-//! ask. Only a machine whose record declares no resolver has no measure and
-//! waits. No other bound exists: the one measure is the resolver's own.
+//! request, the registry authority's snapshot over SSH — would otherwise
+//! stand for as long as the route did. At every refresh interval — the one
+//! this host's resolver publishes, or, with no resolver publishing one, the
+//! one this machine's registry record declares for it — the published waits
+//! are read again; once the route has gone unanswered longer than that
+//! interval — this request's own connection among them — the request is
+//! dropped, which closes its connection, and refused with the held wait's
+//! sentence, naming the address or host it stood on. A request the far side
+//! accepted and answers nothing on stands in no list of this host's, so a
+//! request that outlasts the interval with nothing published held is
+//! abandoned too, with the interval named and where to ask. Only a machine
+//! whose record declares no resolver has no measure and waits. No other
+//! bound exists: the one measure is the resolver's own.
 
 use std::future::Future;
 use std::time::Duration;
@@ -98,8 +95,7 @@ impl Route<'_> {
 /// its own within it, `Err` with the sentence when it was abandoned — on a
 /// route published held, with the held wait's own sentence; otherwise with
 /// the interval it outlasted and where to ask, since a request the far side
-/// accepted and answers nothing on stands in no list of this host's (the
-/// authority's snapshot command over SSH stood for hours that way) — or
+/// accepted and answers nothing on stands in no list of this host's — or
 /// when whether the route is held cannot be read, since then nobody can say:
 /// the refresh interval that measures it included, which is a refusal before
 /// the request is sent, not a request sent unwatched.
