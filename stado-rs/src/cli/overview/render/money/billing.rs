@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use super::amounts::{amount, dollars};
+use super::amounts::{dollars, figure, Figure};
 
 pub(super) fn print_billing(document: &Value) {
     println!("billing:");
@@ -19,43 +19,35 @@ pub(super) fn print_billing(document: &Value) {
         }
     );
     let gcp = &billing[crate::capabilities::ProviderId::Gcp.as_str()];
-    let credit = |value: Option<&Value>| amount(value).map(|credit| -credit);
+    let credit = |value: Option<&Value>| figure(value).credited();
     if gcp.get("status").and_then(Value::as_str) == Some("ok") {
         // A figure the report does not carry is said as not reported; 0.00
         // and the word "current" stood in for a bill and a month nobody read.
-        if let Some(month) = gcp
+        match gcp
             .get("monthly")
             .and_then(Value::as_array)
-            .and_then(|rows| rows.last())
+            .map(|rows| rows.last())
         {
-            println!(
+            Some(Some(month)) => println!(
                 "  GCP {}: gross={} credits={} net={}",
                 match month.get("month").and_then(Value::as_str) {
                     Some(month) => month,
                     None => "(month not reported)",
                 },
-                dollars(amount(month.get("gross"))),
-                dollars(credit(month.get("credits"))),
-                dollars(amount(month.get("net"))),
-            );
+                dollars(&figure(month.get("gross"))),
+                dollars(&credit(month.get("credits"))),
+                dollars(&figure(month.get("net"))),
+            ),
+            Some(None) => println!("  GCP monthly: no month reported yet"),
+            None => println!("  GCP monthly: not reported"),
         }
         println!(
             "  GCP credit burn (7d avg): {}/day",
-            dollars(credit(gcp.get("avg_daily_credit_applied_7d")))
+            dollars(&credit(gcp.get("avg_daily_credit_applied_7d")))
         );
-        let promotion_used = gcp
-            .get("credits")
-            .and_then(Value::as_array)
-            .and_then(|credits| {
-                credits
-                    .iter()
-                    .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("PROMOTION"))
-                    .map(|entry| credit(entry.get("cumulative")))
-                    .sum::<Option<f64>>()
-            });
         println!(
             "  GCP promotion credits applied: {}",
-            dollars(promotion_used)
+            promotion_applied(gcp)
         );
         println!("  GCP promotion remaining: unavailable (grant ceiling is not exposed by GCP)");
     } else {
@@ -101,16 +93,38 @@ pub(super) fn print_billing(document: &Value) {
             );
         }
     } else {
-        println!(
-            "  Azure credits: {} — {}",
-            azure
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("unavailable"),
-            azure
-                .get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or("no detail"),
-        );
+        let said = |key: &str| match azure.get(key).and_then(Value::as_str) {
+            Some(text) => text.to_string(),
+            None => format!("({key} not reported)"),
+        };
+        println!("  Azure credits: {} — {}", said("status"), said("detail"));
+    }
+}
+
+/// The promotion credits GCP applied, summed over every promotion credit it
+/// lists; a credit list it does not carry, or a promotion whose cumulative
+/// is absent or unreadable, is said as such instead of summed as zero.
+fn promotion_applied(gcp: &Value) -> String {
+    let Some(credits) = gcp.get("credits").and_then(Value::as_array) else {
+        return dollars(&Figure::Absent);
+    };
+    let figures: Vec<Figure> = credits
+        .iter()
+        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("PROMOTION"))
+        .map(|entry| figure(entry.get("cumulative")).credited())
+        .collect();
+    let amounts: Vec<f64> = figures
+        .iter()
+        .filter_map(|figure| match figure {
+            Figure::Amount(amount) => Some(*amount),
+            Figure::Absent | Figure::Unreadable(_) => None,
+        })
+        .collect();
+    match figures
+        .iter()
+        .find(|figure| !matches!(figure, Figure::Amount(_)))
+    {
+        Some(unread) => format!("a promotion credit's cumulative is {}", dollars(unread)),
+        None => dollars(&Figure::Amount(amounts.into_iter().sum())),
     }
 }
