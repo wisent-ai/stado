@@ -26,3 +26,5 @@ Harsh-Review-Attacked: whether the journey's expectations still hold; a named cl
 Harsh-Review-Attacked: whether the moved held_to_service behaves differently; its body is unchanged, it reads the same published() list, and the resolver still re-exports it from the waiting module.
 Harsh-Review-Attacked: whether poisoned-lock recovery is a fallback; every change to the list is one insert or remove under the lock, so a poisoned guard still holds a whole list, and begin and end now read it the same way since_accepted and start did.
 Harsh-Review-Attacked: whether starting keys at one changes anything; keys only identify waits within this process and are never compared with a number.
+
+Repaired-By: "Every count Stado keeps adds one item through one tally" repairs it in this push, naming this commit on its Repairs line
