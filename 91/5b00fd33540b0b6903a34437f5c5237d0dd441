@@ -15,3 +15,5 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 Repairs: "Quota output names what a provider left out instead of printing "?"" its request listing printed a dash for a request without a preferred value
 
 Harsh-Review-Attacked: whether quota commands still print a dash or "?"; a missing region, family, limit, preferred value or grant is named.
+
+Repaired-By: "quota ticket reply and escalate say what a result row did not report" repairs it in this push, naming this commit on its Repairs line
