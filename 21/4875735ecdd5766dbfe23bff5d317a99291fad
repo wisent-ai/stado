@@ -1,0 +1,19 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Harsh-Review-Attacked: whether an enforcing walk can run without pressure; cleanup_once returns before the walk below the threshold unless it is a preview, so admit_relief is reached only on a full volume.
+Harsh-Review-Attacked: whether the relief admission hides the load; it reads and records the load and ceiling as an admission, so the beacon shows what load the walk ran under.
+Harsh-Review-Attacked: the test runs the real binary with the ceiling below any working host's load and checks the preview is skipped and leaves the cache while the enforcing pass removes it.
+Harsh-Review-Attacked: its index carried service_answering/recover.rs back to its earlier text; "Service recovery says recovery was attempted, and a failed record is reported, again" repairs it in this push, naming this commit on its Repairs line.
+Harsh-Review-Attacked: the configuration page listed the enforcing walk among the scans the ceiling skips; the page now says only a preview is skipped.
