@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 import { snapshotSubject, verifyRevision } from '../native/subject.mjs';
 
 // Real `stado sandbox` journey against Boat Public API v1.
@@ -59,8 +60,6 @@ const port = process.env.STADO_BOAT_TEST_PORT;
 const hook = process.env.STADO_BOAT_TEST_WEBHOOK_URL;
 const report = { started_at: new Date().toISOString(), commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-// A clean exit: no spawn error, no signal, and a status that is zero (falsy).
-const exitedCleanly = answer => !answer.error && !answer.signal && !answer.status;
 function run(program, args, env = process.env, input = undefined) {
   const answer = spawnSync(program, args, { cwd: root, env, encoding: 'utf8', input });
   report.commands.push({ program, arguments: args, config: env.STADO_CONFIG, exit_status: answer.status,

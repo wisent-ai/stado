@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { constants, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exitedCleanly } from '../native/process.mjs';
 
 // Real qualification of the GPU and cloud compute vendors as Stado compute
 // providers, through the installed or selected Stado binary:
@@ -29,8 +30,6 @@ const live = process.env.STADO_GPU_TEST_PROVIDER;
 const vendors = JSON.parse(readFileSync(join(root, 'tests/providers/gpu_cloud_vendors.json'), 'utf8'));
 const report = { started_at: new Date().toISOString(), vendors, live, commands: [], result: 'failed' };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-// A clean exit: no spawn error, no signal, and a status that is zero (falsy).
-const exitedCleanly = answer => !answer.error && !answer.signal && !answer.status;
 function run(program, args, env = process.env) {
   const answer = spawnSync(program, args, { cwd: root, env, encoding: 'utf8' });
   report.commands.push({ program, arguments: args, config: env.STADO_CONFIG, exit_status: answer.status,
