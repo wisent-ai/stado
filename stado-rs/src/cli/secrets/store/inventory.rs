@@ -173,9 +173,11 @@ pub(crate) fn inspect_vault(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    let grants: Vec<Value> = serde_json::from_slice(&grants_output.stdout).map_err(|_| {
-        CmdError::click("Skarbiec grant inventory was not a JSON array")
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    let grants: Vec<Value> = serde_json::from_slice(&grants_output.stdout).map_err(|error| {
+        CmdError::click(format!(
+            "Skarbiec grant inventory was not a JSON array: {error}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     if json {
         println!(
@@ -189,27 +191,15 @@ pub(crate) fn inspect_vault(
         );
         return Ok(());
     }
+    // A field an item does not carry reads `not reported`: an empty name or
+    // type, or `false` for an unstated deletion, would read as Skarbiec's word.
     let rows = items
         .iter()
         .map(|item| {
-            vec![
-                item.get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                item.get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                item.get("updated_at")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                item.get("deleted")
-                    .and_then(Value::as_bool)
-                    .unwrap_or_default()
-                    .to_string(),
-            ]
+            ["id", "type", "updated_at", "deleted"]
+                .iter()
+                .map(|key| crate::cli::reporting::field(&item[*key]))
+                .collect()
         })
         .collect::<Vec<Vec<String>>>();
     table::print(&["NAME", "TYPE", "UPDATED", "DELETED"], &rows);

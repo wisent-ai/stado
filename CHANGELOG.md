@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The local vault inventory says what an item did not carry and why grants could not be read:** an item without its id, type or update time printed an empty cell and one without its deletion flag printed `false`, and a grant inventory that was not JSON was refused without the parser's reason. Each absent field now reads `not reported`, and the refusal ends with the parse error.
+
 - **`stado release status` refuses a `--limit` it cannot count to and shows a negative run duration as it is:** a `--limit` larger than the platform could count read every recorded run instead, and a run whose recorded end preceded its start printed `0s`. The limit is now refused with `--limit <N> cannot be counted here: <cause>`, and such a duration prints as the negative seconds it is, so a clock that ran behind is visible.
 
 - **`stado quota request list` counts Azure tickets on what each one states:** a ticket that did not say whether it awaits the customer was printed as `N` and counted as awaiting Microsoft. It now prints `not reported`, the summary counts only tickets that state either, and names how many did not. GCP requests without a state, family or region sort ahead of the named ones rather than under an empty name.
