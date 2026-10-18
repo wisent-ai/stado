@@ -16,16 +16,46 @@ pub(super) use increase::{request, request_all};
 use serde_json::Value;
 
 use super::common::contact_email;
+use crate::cli::reporting::{field, NOT_REPORTED};
 use crate::cli::CmdError;
 use crate::scheduler::dispatch::quota_replies;
 
-/// A text field of one provider result as the provider gave it, or that it
-/// gave none; it was printed as "?".
-fn reported<'a>(row: &'a Value, field: &str) -> &'a str {
-    match row.get(field).and_then(Value::as_str) {
-        Some(text) => text,
-        None => "not reported",
+/// The table both ticket flows print, one row per provider result, and how
+/// many of them the provider said succeeded. A field the result does not
+/// carry reads `not reported`; a result that does not say whether it
+/// succeeded is neither counted nor shown as a failure.
+fn print_results(rows: &[&Value]) -> usize {
+    let header = format!("{:<46} {:<22} {:<3} ACTION", "TICKET", "REGION", "OK");
+    println!("{header}");
+    println!("{}", "-".repeat(header.chars().count()));
+    for row in rows {
+        let region = match row["region"].as_str() {
+            Some(region) if !region.is_empty() => region,
+            _ => NOT_REPORTED,
+        };
+        let ok = match row["ok"].as_bool() {
+            Some(true) => "Y",
+            Some(false) => "N",
+            None => NOT_REPORTED,
+        };
+        let action = match (row["action"].as_str(), row["would"].as_str()) {
+            (Some("dry_run"), Some(would)) => format!("dry_run → would be {would}"),
+            _ => field(&row["action"]),
+        };
+        let detail = match row["error"].as_str() {
+            Some(error) if !error.is_empty() => format!(" — {error}"),
+            _ => String::new(),
+        };
+        println!(
+            "{:<46} {:<22} {:<3} {action}{detail}",
+            field(&row["name"]),
+            region,
+            ok
+        );
     }
+    rows.iter()
+        .filter(|row| row["ok"].as_bool() == Some(true))
+        .count()
 }
 
 /// Python `quota_azure_replies`: respond to Open Azure quota tickets
@@ -51,32 +81,9 @@ pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), 
         println!("(no Open Azure quota tickets requiring reply)");
         return Ok(());
     }
-    println!("{:<46} {:<22} {:<3} ACTION", "TICKET", "REGION", "OK");
-    println!("{}", "-".repeat(92));
-    let mut ok_count = 0;
-    for r in &results {
-        let ok = r.get("ok").and_then(Value::as_bool).unwrap_or(false);
-        if ok {
-            ok_count += 1;
-        }
-        let name = reported(r, "name");
-        let region = match r.get("region").and_then(Value::as_str) {
-            Some(region) if !region.is_empty() => region,
-            _ => "(no region)",
-        };
-        let action = reported(r, "action");
-        let detail = match r.get("error").and_then(Value::as_str) {
-            Some(error) if !error.is_empty() => format!(" — {error}"),
-            _ => String::new(),
-        };
-        println!(
-            "{:<46} {:<22} {:<3} {action}{detail}",
-            name,
-            region,
-            if ok { "Y" } else { "N" },
-        );
-    }
-    println!("\n{ok_count}/{} tickets processed", results.len());
+    let rows = results.iter().collect::<Vec<_>>();
+    let succeeded = print_results(&rows);
+    println!("\n{succeeded}/{} tickets processed", results.len());
     Ok(())
 }
 
@@ -122,36 +129,9 @@ pub(super) async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(),
         println!("(no billing-decline tickets to escalate)");
         return Ok(());
     }
-    println!("{:<46} {:<22} {:<3} ACTION", "TICKET", "REGION", "OK");
-    println!("{}", "-".repeat(92));
-    let mut ok_count = 0;
-    for r in &relevant {
-        let ok = r.get("ok").and_then(Value::as_bool).unwrap_or(false);
-        if ok {
-            ok_count += 1;
-        }
-        let name = reported(r, "name");
-        let region = match r.get("region").and_then(Value::as_str) {
-            Some(region) if !region.is_empty() => region,
-            _ => "(no region)",
-        };
-        let mut action = reported(r, "action").to_string();
-        if action == "dry_run" {
-            action = "dry_run → would escalate".to_string();
-        }
-        let detail = match r.get("error").and_then(Value::as_str) {
-            Some(error) if !error.is_empty() => format!(" — {error}"),
-            _ => String::new(),
-        };
-        println!(
-            "{:<46} {:<22} {:<3} {action}{detail}",
-            name,
-            region,
-            if ok { "Y" } else { "N" },
-        );
-    }
+    let succeeded = print_results(&relevant);
     println!(
-        "\n{ok_count}/{} billing-decline tickets escalated",
+        "\n{succeeded}/{} billing-decline tickets escalated",
         relevant.len()
     );
     Ok(())

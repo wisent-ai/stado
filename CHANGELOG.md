@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado quota ticket reply|escalate` say what a result row did not report:** a provider result without its `ok` field was printed as `N` and counted as a failure, and one without its region as `(no region)`; the two commands kept two copies of the same table. They now print one table, in which a missing `OK` or region reads `not reported` and only rows the provider said succeeded are counted, and a dry-run row says `dry_run → would be replied` or `would be escalated`.
+
 - **`stado overview` names what its fleet lines did not read:** a capacity row the registry maps to no target printed `unmapped` without saying which consumer published it, a target without a name printed `unnamed`, a measurement without a time printed `unstamped`, and a measurement without its capabilities printed nothing after `can do:`. The worker line now names the publishing consumer, and an absent name, time or capability list reads `not reported`.
 
 - **`stado web origin`, `web route publish` and `identity verify` print an absent field the way every other report does:** an origin row without a name printed `(undeclared)`, a read without its elapsed time printed `null ms`, a publication whose server sent no name printed `an unnamed server`, and a binding without a host or identity printed `(no host)`; each kept its own helper besides. They now use the one report-field renderer, so an absent field reads `not reported`, and `web route publish --check` exits with the CLI's declared failure status when the route would change.
