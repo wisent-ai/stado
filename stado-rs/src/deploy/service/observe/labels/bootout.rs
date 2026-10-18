@@ -191,16 +191,15 @@ pub enum BootoutScope {
     User,
 }
 
-impl BootoutScope {
-    /// The word the remote program compares against, from the same serde
-    /// mapping the operator's `--domain` is parsed with.
-    pub fn word(self) -> String {
-        match serde_json::to_value(self) {
-            Ok(serde_json::Value::String(word)) => word,
-            other => unreachable!("BootoutScope serializes as a word, not {other:?}"),
-        }
+/// The word the remote program compares against, from the same serde mapping
+/// the operator's `--domain` is parsed with.
+impl std::fmt::Display for BootoutScope {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::primitives::word::write(self, formatter)
     }
+}
 
+impl BootoutScope {
     /// Parse an operator's `--domain`. `None` is [`Self::Any`].
     pub fn parse(value: Option<&str>) -> Result<Self, DeployError> {
         let Some(word) = value.map(str::trim).filter(|word| !word.is_empty()) else {
@@ -237,10 +236,7 @@ impl BootoutState {
 
 impl std::fmt::Display for BootoutState {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 
@@ -262,9 +258,9 @@ pub async fn bootout_label(
     }
     let script = BOOTOUT_SCRIPT
         .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))
-        .replace("@SCOPE@", &scope.word());
+        .replace("@SCOPE@", &scope.to_string());
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the bootout did not complete",
