@@ -14,3 +14,4 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Harsh-Review-Attacked: whether a transient SSH failure now costs a registry read; it does, and the reader's last-known-good copy answers with the failure said, instead of a second attempt that hides it.
+Repairs: "A request already sent when its resolver route stands held is abandoned and refused naming the address: the object API send, the Skarbiec transport and the authority snapshot over SSH share one in-flight reading of the published waits, so stado resolver status ends with the address it stood on instead of standing for hours" its authority read was sent a second time, hiding the first failure.
