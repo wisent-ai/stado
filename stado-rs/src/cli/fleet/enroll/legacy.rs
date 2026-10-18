@@ -74,7 +74,7 @@ pub fn register_verified(
         }
         // An undeclared or empty platform is the legacy declaration this
         // repairs; one declared as anything but text is not a platform, and
-        // was read as undeclared and overwritten without a word.
+        // read as undeclared it would be overwritten without a word.
         match target.get("release_platform") {
             None | Some(Value::Null) => {}
             Some(Value::String(declared))
