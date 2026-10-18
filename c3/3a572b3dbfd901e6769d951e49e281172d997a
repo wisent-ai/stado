@@ -15,4 +15,3 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 Repairs: "A product build holds the janitor's cleanup lock for its whole run" its list of building actions held the lock for swift sourcekit, a language server that compiles nothing, for as long as an editor stayed open
 
 Harsh-Review-Attacked: whether a compiling operation lost the hold; install, update, cargo and every swift operation but sourcekit still hold it, decided from the parsed invocation beside the operations it names.
-Harsh-Review-Attacked: whether the documentation says it; the products page names the operations that hold the lock and that the editor server holds none.
