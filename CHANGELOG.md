@@ -46,6 +46,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The wait-for graph says what it could not read instead of missing that edge:** a lock file that could not be read, a holder pid that was no number, a `ps` that could not run and a parent pid `ps` printed unreadably each ended the graph walk as if no process held the lock, so a wait that closed a cycle could start and stand. Each is now the graph's read error, said beside the wait's line (`graf czekan nieodczytany`) and by `stado waits cycles`; a lock file that is gone or names no holder still takes no part.
+
 - **A GCP exhaustion mark that is not epoch seconds is logged, and no mark is dated at the epoch:** a mark map entry whose value was not a number was left out without a word, and the next write dropped it; a clock before the Unix epoch dated a new mark at zero, the oldest, so that zone was retried first. Each such entry is now logged with its key and why, and a mark the clock cannot date is refused.
 
 - **A waiting or refused installation names why it cannot read the surface lock's holder:** a holder record that could not be read, or one that was not a record, was said as "cannot be read" without the cause or as a record from a Stado before holders were recorded, and a pid no process can have read as a holder no longer running. The read error and the parse error are now said with the record, only an empty record is taken for an older Stado's, and an impossible pid is named as such.

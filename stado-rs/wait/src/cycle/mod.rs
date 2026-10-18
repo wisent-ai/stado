@@ -20,10 +20,13 @@
 //! The graph follows locks only: a wait on a host, a service or a child
 //! process names nothing that holds what it waits on, so no edge leaves it.
 
+mod read;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use read::{holder, needing, ps};
 
 /// What follows the register directory's name in the graph's: the graph
 /// sits beside the register, whose every file is a wait's line.
@@ -137,48 +140,6 @@ pub(crate) fn forget(id: &str) {
     }
 }
 
-/// The pid a lock file names as its holder (`"pid": <n>`), when that
-/// process runs. A lock whose file names none takes no part in the graph.
-fn holder(lock: &Path) -> Option<u32> {
-    let text = std::fs::read_to_string(lock).ok()?;
-    let (_, after) = text.split_once("\"pid\"")?;
-    let digits: String = after
-        .trim_start()
-        .strip_prefix(':')?
-        .trim_start()
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect();
-    let pid = digits.parse::<u32>().ok()?;
-    crate::open::running(pid).then_some(pid)
-}
-
-/// One `ps` column for `pid`, when `ps` answers.
-fn ps(pid: u32, column: &str) -> Option<String> {
-    let output = crate::output(Command::new("ps").args([
-        "-o",
-        &format!("{column}="),
-        "-p",
-        &pid.to_string(),
-    ]))
-    .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (output.status.success() && !text.is_empty()).then_some(text)
-}
-
-/// `pid` and every ancestor of it: the processes whose completion needs it.
-fn needing(pid: u32) -> BTreeSet<u32> {
-    let mut chain = BTreeSet::from([pid]);
-    let mut current = pid;
-    while let Some(parent) = ps(current, "ppid").and_then(|text| text.parse::<u32>().ok()) {
-        if !chain.insert(parent) {
-            break;
-        }
-        current = parent;
-    }
-    chain
-}
-
 /// The lock each running process awaits now, from the register; the records
 /// of processes that no longer run are removed.
 fn awaited() -> Result<BTreeMap<u32, PathBuf>, String> {
@@ -193,14 +154,21 @@ fn awaited() -> Result<BTreeMap<u32, PathBuf>, String> {
         let entry = entry.map_err(|error| format!("listing {}: {error}", directory.display()))?;
         let file = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(pid) = name
-            .split_once('-')
-            .and_then(|(pid, _)| pid.parse::<u32>().ok())
-        else {
-            return Err(format!(
-                "{} is not named <pid>-<n>, so it is no wait of this register; remove it",
-                file.display()
-            ));
+        let pid = match name.split_once('-').map(|(pid, _)| pid.parse::<u32>()) {
+            Some(Ok(pid)) => pid,
+            Some(Err(error)) => {
+                return Err(format!(
+                    "{} is not named <pid>-<n> ({error}), so it is no wait of this register; \
+                     remove it",
+                    file.display()
+                ))
+            }
+            None => {
+                return Err(format!(
+                    "{} is not named <pid>-<n>, so it is no wait of this register; remove it",
+                    file.display()
+                ))
+            }
         };
         if !crate::open::running(pid) {
             match std::fs::remove_file(&file) {
@@ -228,30 +196,35 @@ fn follow(
     lock: &Path,
     needs_waiter: &BTreeSet<u32>,
     awaited: &BTreeMap<u32, PathBuf>,
-) -> Option<Cycle> {
+) -> Result<Option<Cycle>, String> {
     let mut links = vec![Link {
         pid: waiter,
-        command: ps(waiter, "command"),
+        command: ps(waiter, "command")?,
         awaits: lock.to_path_buf(),
     }];
     let mut seen = BTreeSet::from([waiter]);
     let mut lock = lock.to_path_buf();
     loop {
-        let held_by = holder(&lock)?;
+        let Some(held_by) = holder(&lock)? else {
+            return Ok(None);
+        };
         if needs_waiter.contains(&held_by) {
-            return Some(Cycle {
+            return Ok(Some(Cycle {
                 links,
                 closed_by: held_by,
-            });
+            }));
         }
         // A cycle that does not pass through the waiter is not this wait's.
         if !seen.insert(held_by) {
-            return None;
+            return Ok(None);
         }
-        lock = awaited.get(&held_by)?.clone();
+        let Some(next) = awaited.get(&held_by) else {
+            return Ok(None);
+        };
+        lock = next.clone();
         links.push(Link {
             pid: held_by,
-            command: ps(held_by, "command"),
+            command: ps(held_by, "command")?,
             awaits: lock.clone(),
         });
     }
@@ -260,7 +233,7 @@ fn follow(
 /// The cycle a wait of this process on `lock` would close, when it would.
 pub fn closed_by_waiting_on(lock: &Path) -> Result<Option<Cycle>, String> {
     let me = std::process::id();
-    Ok(follow(me, lock, &needing(me), &awaited()?))
+    follow(me, lock, &needing(me)?, &awaited()?)
 }
 
 /// Every cycle standing among the lock waits of running processes, each
@@ -269,7 +242,7 @@ pub fn standing() -> Result<Vec<Cycle>, String> {
     let awaited = awaited()?;
     let mut cycles: Vec<Cycle> = Vec::new();
     for (pid, lock) in &awaited {
-        let Some(cycle) = follow(*pid, lock, &needing(*pid), &awaited) else {
+        let Some(cycle) = follow(*pid, lock, &needing(*pid)?, &awaited)? else {
             continue;
         };
         let members: BTreeSet<u32> = cycle.links.iter().map(|link| link.pid).collect();
