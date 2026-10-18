@@ -109,20 +109,36 @@ fn machine(operation: &str, pod: &Value) -> Result<Machine, GpuCloudError> {
                 VENDOR,
                 operation,
                 format!(
-                    "the pod names its GPU type in neither machine.gpuTypeId nor gpu.id: {pod}"
+                    "the pod names its GPU type in neither machine.gpuTypeId nor gpu.id: \
+                     {pod}"
                 ),
             )
         })?;
+    // The launch time is the stamp Stado wrote into the pod's environment; a
+    // stamp that does not read is refused, never taken as a pod of no age.
+    let launched = match pod
+        .pointer("/env")
+        .and_then(|env| env.get(LAUNCHED_ENV))
+        .and_then(Value::as_str)
+    {
+        Some(stamp) => {
+            let moment = chrono::DateTime::parse_from_rfc3339(stamp.trim()).map_err(|error| {
+                GpuCloudError::response(
+                    VENDOR,
+                    operation,
+                    format!("{LAUNCHED_ENV} {stamp:?} is not an RFC 3339 time ({error}): {pod}"),
+                )
+            })?;
+            Some(moment.with_timezone(&chrono::Utc))
+        }
+        None => None,
+    };
     Ok(Machine {
         native_id: http::text(VENDOR, operation, pod, "/id")?,
         name: http::optional_text(pod, "/name"),
         instance_type: gpu,
         state,
-        created_at: pod
-            .pointer("/env")
-            .and_then(|env| env.get(LAUNCHED_ENV))
-            .and_then(Value::as_str)
-            .and_then(http::parse_time),
+        created_at: launched,
     })
 }
 

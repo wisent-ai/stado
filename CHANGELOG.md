@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A RunPod pod whose launch stamp does not read is refused:** the `STADO_LAUNCHED_AT` stamp Stado writes into a pod's environment was read as no launch time when it did not parse, so the reaper refused the pod as one of unknown age without saying the stamp was the cause. It is now refused naming the stamp and the parser's reason.
+
 - **`stado identity verify` says why this machine's Apple accounts could not be read:** a `defaults read MobileMeAccounts` that could not run or ended in failure left the binding unknown without a word. It now says on stderr which of the two happened, with `defaults`' own words, before the binding is reported unknown.
 
 - **`stado web declare` carries a unit's host, port and consumer only for a unit:** a declaration took an empty host, port `0` and an empty consumer whenever clap had not supplied them, trusting that only a redirect reached that path. What answers a hostname is now one of a redirect, an upstream service or a unit, and a unit lacking one of the three is refused with `a unit declaration needs --host, --port and --consumer`; a mount whose owner cannot be looked up because the declared web products cannot be read is refused naming their problems instead of reading as no owner.
