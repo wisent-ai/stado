@@ -1,12 +1,12 @@
 //! Fold the remote program's `STADO_*` marker lines into the reading.
 
 use std::collections::BTreeSet;
-use std::num::NonZeroU64;
 
 use super::{
     BackupAudit, ObjectComparison, ObjectIdentity, ABSENT, DIFFERS, SAME_SIZE_UNPROVEN, TWIN,
 };
 use crate::deploy::host_channel::marker_number;
+use crate::primitives::tally::Tally;
 
 /// The namespace roots the program inventories; the inventory is complete
 /// only when it ended each of them.
@@ -70,7 +70,7 @@ fn read_row(
                 format!("the audit printed a size that does not read ({error}): {line}")
             })?;
             let totals = audit.classes.entry(class.to_string()).or_default();
-            totals.objects += NonZeroU64::MIN.get();
+            totals.objects.tally();
             totals.bytes += bytes;
             // Why a same-size pair stayed unproven, from a host that says.
             if let Some(why) = fields.next().filter(|why| !why.is_empty()) {
@@ -158,7 +158,7 @@ fn read_row(
                     ))
                 }
             };
-            totals.objects += NonZeroU64::MIN.get();
+            totals.objects.tally();
             totals.bytes += bytes;
             // Why the host refused a deletion, from a host that says.
             if let Some(why) = fields.next().filter(|why| !why.is_empty()) {

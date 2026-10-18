@@ -29,7 +29,7 @@ pub(super) use listing::report;
 use listing::unanswered;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -96,9 +96,9 @@ pub(crate) struct WaitingOpen {
 }
 
 static WAITING: Mutex<BTreeMap<u64, WaitingOpen>> = Mutex::new(BTreeMap::new());
-/// The key the next wait is recorded under: keys count up one per wait from
-/// the smallest nonzero one, so no two waits of this process share one.
-static NEXT: AtomicU64 = AtomicU64::new(std::num::NonZeroU64::MIN.get());
+/// The key the next wait is recorded under: keys are drawn one per wait, so
+/// no two waits of this process share one.
+static NEXT: AtomicU64 = AtomicU64::new(crate::primitives::tally::FIRST_DRAW);
 
 fn waiting_path() -> Option<std::path::PathBuf> {
     state_path().map(|path| path.with_file_name(WAITING_FILE))
@@ -155,7 +155,7 @@ pub(crate) fn begin(began: Began<'_>) -> (u64, usize) {
         client,
         request,
     } = began;
-    let key = NEXT.fetch_add(std::num::NonZeroU64::MIN.get(), Ordering::SeqCst);
+    let key = crate::primitives::tally::draw(&NEXT);
     let mut opens = match WAITING.lock() {
         Ok(opens) => opens,
         Err(poisoned) => poisoned.into_inner(),

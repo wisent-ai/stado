@@ -49,12 +49,10 @@ pub(super) async fn show(as_json: bool) -> Result<(), CmdError> {
             *available += row.available;
         }
     }
-    // The grand total says something only when more than one provider
-    // answered.
-    let several = summary
-        .iter()
-        .nth(std::num::NonZeroUsize::MIN.get())
-        .is_some();
+    // The grand total says something only when a second provider answered
+    // beside the first.
+    let mut providers = summary.keys();
+    let several = providers.next().is_some() && providers.next().is_some();
     if several && !grand.is_empty() {
         println!("{rule}");
         for (accel, (total, avail)) in &grand {

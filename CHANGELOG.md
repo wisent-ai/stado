@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **Every count Stado keeps adds one item the same way:** counts of audited objects, schedule fires, job yields, scanned and eligible evidence items, and resolver wait keys each spelled the number one in a disguise of their own (`NonZeroU64::MIN.get()` and the like), and a job's yield count saturated while the others did not. They now go through one `primitives::tally` (`Tally::tally` for a count, `draw` for a shared counter), which states the step once and stops a full count at its maximum instead of wrapping. `stado quota show` prints its grand total when a second provider answered, as before, without a spelled-out number.
+
 - **Stado's journeys read a process's success from the process:** twenty-four journeys refused to run unless the caller stated in `STADO_TEST_SUCCESS_EXIT` what a successful process exits with, and compared every status to that number. They now share `tests/native/process.mjs`, whose `exitedCleanly` reads a started, unsignalled process with the platform's success status, `exitedRefusing` a process that ended with a failure status of its own, and `succeededStatus` a recorded exit code; `STADO_TEST_SUCCESS_EXIT` is no longer read anywhere.
 
 - **`stado release doctor` says `not reported` where its report is silent:** a field the diagnosis did not carry printed `-`, a published status row without its detail printed no detail line at all, and a report without its remedy or quarantine lists printed as if there were none. Absent fields now read `not reported`, the missing detail is said, and the remedy and quarantine sections print exactly what the report lists.

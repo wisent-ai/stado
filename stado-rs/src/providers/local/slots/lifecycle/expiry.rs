@@ -111,9 +111,7 @@ pub async fn request_yield(
 
     slot.close_log();
 
-    job.yield_count = job
-        .yield_count
-        .saturating_add(i64::from(std::num::NonZeroU8::MIN.get()));
+    crate::primitives::tally::Tally::tally(&mut job.yield_count);
     job.state = job_state::QUEUED.to_string();
     job.instance_ref = None;
     job.started_at = None;

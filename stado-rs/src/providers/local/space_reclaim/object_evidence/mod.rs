@@ -9,12 +9,12 @@
 
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
-use std::num::NonZeroUsize;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::Path;
 
 use super::janitor::state::report::{CleanerReport, CleanupReport};
 use super::{ifmt, safefs, IFDIR, IFREG};
+use crate::primitives::tally::Tally;
 
 /// The name this cleaner's report is filed under.
 pub const CLEANER: &str = "object_evidence";
@@ -85,7 +85,7 @@ fn scan_root(
                     continue;
                 }
             };
-            tally(&mut record.scanned_items);
+            record.scanned_items.tally();
             let path = directory.join(&name);
             // Stat relative to the held directory: no ancestor can turn into
             // a link between inspection and the eventual unlink.
@@ -140,7 +140,7 @@ fn scan_root(
                 bump(&mut record.skipped, "stado_record_or_pinned_input_kept");
                 continue;
             }
-            tally(&mut record.eligible_items);
+            record.eligible_items.tally();
             record.expected_bytes += info.st_size;
             if !enforcing {
                 continue;
@@ -230,11 +230,6 @@ fn refused(report: &mut CleanupReport, cause: &str) {
     report.add_error(CLEANER, &super::JanitorError::os(cause));
 }
 
-/// One more of whatever `count` counts.
-fn tally(count: &mut i64) {
-    *count += NonZeroUsize::MIN.get() as i64;
-}
-
 fn bump(counts: &mut BTreeMap<String, i64>, reason: &str) {
-    tally(counts.entry(reason.to_string()).or_default());
+    counts.entry(reason.to_string()).or_default().tally();
 }

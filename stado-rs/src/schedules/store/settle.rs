@@ -2,8 +2,6 @@
 //! back for another coordinator, drop it when the request was rejected
 //! outright, or record the accepted job against the schedule's bookkeeping.
 
-use std::num::NonZeroU32;
-
 use chrono::{DateTime, Utc};
 
 use crate::queue::{JobStorage, StorageError};
@@ -111,7 +109,7 @@ pub(in crate::schedules) async fn accept_pending_occurrence(
         sched.last_fired_at = Some(crate::models::isoformat_utc(fired_at));
         sched.last_run_id = job.run_id.clone();
         sched.last_job_id = job.job_id.clone();
-        sched.fire_count += i64::from(NonZeroU32::MIN.get());
+        crate::primitives::tally::Tally::tally(&mut sched.fire_count);
         sched.pending_occurrence = None;
         match store
             .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
