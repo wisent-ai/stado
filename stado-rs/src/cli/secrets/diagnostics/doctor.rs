@@ -74,7 +74,10 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
             "{}",
             serde_json::to_string_pretty(&json!({
                 "state": state,
-                "path": resolved.as_ref().ok().map(|path| path.display().to_string()),
+                "path": match &resolved {
+                    Ok(path) => Some(path.display().to_string()),
+                    Err(_) => None,
+                },
                 "detail": verdict.get("detail"),
                 "declared": if declared.trim().is_empty() {
                     serde_json::Value::Null
@@ -116,16 +119,19 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
             println!("  {items:>5} items  owner {owner}  {path}");
         }
     }
-    match resolved {
-        Ok(_) => Ok(()),
-        Err(_) if state == "reads_owner" => Ok(()),
-        // With `--json` the document already carries `state` and `refusal`,
-        // and a second JSON error printed after it makes the answer
-        // unparseable — one report per invocation, and the exit status is the
-        // part a script gates on.
-        Err(_) if json_output => Err(CmdError::silent(1)),
-        Err(error) => Err(CmdError::declaration(error)),
+    let Err(error) = resolved else {
+        return Ok(());
+    };
+    if state == "reads_owner" {
+        return Ok(());
     }
+    // With `--json` the document already carries `state` and `refusal`, and a
+    // second JSON error printed after it makes the answer unparseable — one
+    // report per invocation, and the exit status is the part a script gates on.
+    if json_output {
+        return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
+    }
+    Err(CmdError::declaration(error))
 }
 
 /// One reader for Skarbiec's verdict, shared by `doctor` and the `harvest`
@@ -137,9 +143,9 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
 /// during an outage two answers are worse than none.
 pub(crate) fn key_doctor_report(binary: &std::path::Path) -> Result<Value, CmdError> {
     let output = crate::wait::output(std::process::Command::new(binary).arg("key-doctor"))?;
-    serde_json::from_slice(&output.stdout).map_err(|_| {
+    serde_json::from_slice(&output.stdout).map_err(|error| {
         CmdError::click(format!(
-            "{} key-doctor produced no report: {}",
+            "{} key-doctor produced no report ({error}): {}",
             binary.display(),
             String::from_utf8_lossy(&output.stderr).trim()
         ))
@@ -166,24 +172,18 @@ pub(crate) fn doctor(json: bool) -> Result<(), CmdError> {
     let rows: Vec<Vec<String>> = recipients
         .iter()
         .map(|entry| {
-            let field = |name: &str| match entry.get(name).and_then(Value::as_str) {
-                Some(text) => text.to_string(),
-                None => "not reported".to_string(),
-            };
-            let flag = |name: &str| match entry.get(name).and_then(Value::as_bool) {
+            let field = |name: &str| crate::cli::reporting::field(&entry[name]);
+            let flag = |name: &str| match entry[name].as_bool() {
                 Some(true) => "yes".to_string(),
                 Some(false) => "no".to_string(),
-                None => "not reported".to_string(),
+                None => crate::cli::reporting::NOT_REPORTED.to_string(),
             };
             // The encryption subkey file is the one a restore must
             // produce, and Skarbiec lists it last.
-            let key_file = entry
-                .get("key_files")
-                .and_then(Value::as_array)
-                .and_then(|files| files.last())
-                .and_then(Value::as_str)
-                .unwrap_or("(no keygrip)")
-                .to_string();
+            let key_file = match entry["key_files"].as_array().and_then(|files| files.last()) {
+                Some(file) => crate::cli::reporting::field(file),
+                None => crate::cli::reporting::NOT_REPORTED.to_string(),
+            };
             vec![
                 field("uid"),
                 field("role"),
@@ -210,14 +210,16 @@ pub(crate) fn doctor(json: bool) -> Result<(), CmdError> {
 /// A readable vault exits zero; anything else is a failure an operator has to
 /// see in `$?`, not only on screen.
 fn verdict(report: &Value) -> Result<(), CmdError> {
-    match report.get("status").and_then(Value::as_str) {
+    match report["status"].as_str() {
         Some("readable") | Some("empty") => Ok(()),
-        _ => Err(CmdError::click(
-            report
-                .get("remedy")
-                .and_then(Value::as_str)
-                .unwrap_or("the vault cannot be opened by any key on this machine"),
-        )
+        // A report that names no remedy is quoted, so the refusal says what
+        // the doctor saw rather than a remedy nobody stated.
+        _ => Err(CmdError::click(match report["remedy"].as_str() {
+            Some(remedy) => remedy.to_string(),
+            None => {
+                format!("the vault is not readable here and the doctor names no remedy: {report}")
+            }
+        })
         .stating(crate::primitives::failure::FailureCode::Auth)),
     }
 }

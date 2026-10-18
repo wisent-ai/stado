@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The vault doctors say what Skarbiec's report left out and why it could not be read:** a recipient without key files printed `(no keygrip)`, a report naming no remedy was refused with a remedy Stado made up, and a key-doctor answer that was not JSON was refused without the parser's reason. The key file now reads `not reported`, a report without a remedy is refused quoting the report, and the unreadable answer names the parse error. `stado vault authority --json` exits with the CLI's declared failure status.
+
 - **`stado resources inventory` says what a source did not report instead of printing blank cells:** a compute source without a provider list printed an empty provider table, and a count, age, holder list or hostname list a row did not carry printed an empty cell, which read as none. The missing provider list is now said in a line of its own, and each missing cell reads `not reported`.
 
 - **The local vault inventory says what an item did not carry and why grants could not be read:** an item without its id, type or update time printed an empty cell and one without its deletion flag printed `false`, and a grant inventory that was not JSON was refused without the parser's reason. Each absent field now reads `not reported`, and the refusal ends with the parse error.
