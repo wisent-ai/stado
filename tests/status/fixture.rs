@@ -104,7 +104,7 @@ impl Store {
         self.report["source_patch_sha256"] = json!(format!("{:x}", Sha256::digest(&patch.stdout)));
         let binary = fs::read(env!("CARGO_BIN_EXE_stado")).expect("read the built stado");
         self.report["binary_sha256"] = json!(format!("{:x}", Sha256::digest(&binary)));
-        let version = self.ok(&["--version"]);
+        let version = self.succeeded(&["--version"]);
         assert!(
             version
                 .split_whitespace()
@@ -164,7 +164,7 @@ impl Store {
     }
 
     /// Run one command that must succeed; its stdout.
-    pub fn ok(&mut self, args: &[&str]) -> String {
+    pub fn succeeded(&mut self, args: &[&str]) -> String {
         let output = self.run(args);
         assert!(
             output.status.success(),
@@ -176,7 +176,8 @@ impl Store {
 
     /// Submit one local job under `run_id`; its job id, as submit prints it.
     pub fn submit(&mut self, run_id: &str, command: &str) -> String {
-        let printed = self.ok(&["submit", "--run-id", run_id, "--provider", "local", command]);
+        let printed =
+            self.succeeded(&["submit", "--run-id", run_id, "--provider", "local", command]);
         printed
             .lines()
             .find_map(|line| line.strip_prefix("Job ID: "))
@@ -187,7 +188,7 @@ impl Store {
 
     /// Cancel a queued job.
     pub fn cancel(&mut self, job_id: &str) {
-        let printed = self.ok(&["cancel", job_id]);
+        let printed = self.succeeded(&["cancel", job_id]);
         assert!(
             printed.contains(&format!("Cancelled {job_id}")),
             "{printed}"
@@ -223,12 +224,18 @@ impl Store {
                 !line.is_empty(),
                 "the control plane ended before reaping: {said:?}"
             );
-            if let Some(count) = line
-                .split_once("run-reaper: reaped ")
-                .and_then(|(_, rest)| rest.split_whitespace().next())
-                .and_then(|count| count.parse::<usize>().ok())
-            {
-                reaped.push(count);
+            // The reaper's own count of a pass; a count that does not read
+            // fails the journey rather than reading as no reaping.
+            if let Some((_, rest)) = line.split_once("run-reaper: reaped ") {
+                let count = rest
+                    .split_whitespace()
+                    .next()
+                    .expect("the reaper names a count");
+                reaped.push(
+                    count
+                        .parse::<usize>()
+                        .expect("the reaper's count is a number"),
+                );
             }
             if line.contains("tick failed") || line.contains("cleanup degraded") {
                 child.kill().expect("stop the control plane");

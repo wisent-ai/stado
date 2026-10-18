@@ -3,7 +3,7 @@
 //! and failed platforms, and the job outcomes `stado overview --json` states.
 //! They share the `fixture::Store`, so they compile into one test binary and
 //! every fixture item is used by the binary that compiles it. Run one with
-//! `cargo test --manifest-path tests/status/Cargo.toml --test reaped-reads -- <module>::`.
+//! `cargo test --manifest-path stado-rs/Cargo.toml --test reaped-reads -- <module>::`.
 #[path = "../build_status/failure_lines.rs"]
 mod build_status_failure_lines;
 #[path = "../build_status/reaped_platform.rs"]

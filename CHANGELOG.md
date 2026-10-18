@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **Stado's journeys build in the one workspace and its one lock:** the reaped-read, authority-read, vault-consultation, host-exec Skarbiec and transport-fault journeys were three packages of their own under `tests/`, each with its own `Cargo.lock`, which drifted from the workspace's. They are now `[[test]]` targets of `stado-rs/Cargo.toml` (`cargo test --manifest-path stado-rs/Cargo.toml --test reaped-reads`, and so on), their separate manifests and format gates are gone, and the workspace's format gate covers them. The reaped-read fixture's must-succeed runner is named `succeeded`, and a reaper count that does not read fails the journey instead of reading as no reaping.
+
 - **`stado host privacy` refuses a measurement it cannot read instead of standing values in:** a beacon naming no host was attributed to the target asked about, a measurement without a Documents path judged each grant against an empty home, a program the measuring process could not name became `the Stado executable`, and a folder entry with no state this Stado reads became `not measured`. Each is now refused naming what the beacon lacks, and a program that could not be named prints with the operating system's reason.
 
 - **A database declaration override that is not text is refused:** a `WC_DATABASE_API_DATABASES` set to something that is not text was read as unset, so the config file's declarations stood in for the ones the process was given. It is now refused as `WC_DATABASE_API_DATABASES cannot be read: <cause>`. Stado's run engines and the scope word are read and written through the enum's own serde names.

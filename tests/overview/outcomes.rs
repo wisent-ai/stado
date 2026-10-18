@@ -20,7 +20,7 @@ fn overview_counts_queued_jobs_per_named_model_and_states_unmeasured_throughput(
         store.submit("overview-outcomes-run", command);
     }
 
-    let document: Value = serde_json::from_str(&store.ok(&["overview", "--json"]))
+    let document: Value = serde_json::from_str(&store.succeeded(&["overview", "--json"]))
         .expect("overview --json prints one JSON document");
     let outcomes = document["outcomes"].clone();
     store.observe("jobs", document["jobs"].clone());

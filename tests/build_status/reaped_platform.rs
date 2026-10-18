@@ -9,7 +9,7 @@
 //! platform the release read says `failed` with the job's own end
 //! (`ended cancelled`), not that the job was lost.
 //!
-//! Run with `cargo test --manifest-path tests/status/Cargo.toml --test
+//! Run with `cargo test --manifest-path stado-rs/Cargo.toml --test
 //! reaped-reads -- build_status_reaped_platform:: --ignored --nocapture` with
 //! `STADO_RELEASE_QUALIFICATION_CONFIG` naming the declared queue's
 //! configuration file; without that declaration the journey is ignored,
@@ -38,7 +38,7 @@ fn reaped_cancelled(store: &mut Store, job_id: &str) -> bool {
 #[ignore = "requires STADO_RELEASE_QUALIFICATION_CONFIG naming the declared real queue's configuration"]
 fn a_platform_whose_reaped_job_left_no_receipt_reads_as_ended_cancelled() {
     let mut store = Store::declared("release-status-reaped-platform", CONFIGURATION);
-    let printed = store.ok(&["release", "status", "--json"]);
+    let printed = store.succeeded(&["release", "status", "--json"]);
     let listing: Value = serde_json::from_str(&printed).expect("--json prints JSON");
     let runs = listing["runs"]
         .as_array()

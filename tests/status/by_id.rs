@@ -33,7 +33,7 @@ fn a_reaped_job_is_read_by_its_whole_id_and_by_its_start_and_an_unknown_id_is_re
     let jobs = [job_id.as_str()];
     store.cancel(&job_id);
     assert!(
-        row(&store.ok(&["status", &job_id]), &job_id).contains("cancelled"),
+        row(&store.succeeded(&["status", &job_id]), &job_id).contains("cancelled"),
         "a cancelled job still in the queue reads as cancelled"
     );
 
@@ -55,20 +55,20 @@ fn a_reaped_job_is_read_by_its_whole_id_and_by_its_start_and_an_unknown_id_is_re
     );
 
     // Whole id, as text.
-    let printed = store.ok(&["status", &job_id]);
+    let printed = store.succeeded(&["status", &job_id]);
     let whole = row(&printed, &job_id).to_string();
     assert!(whole.contains("cancelled (reaped)"), "{whole}");
     store.observe("whole_id_row", json!(whole));
 
     // The start of the id, with and without `job-`.
     let start = &hex(&job_id)[..RUN_ID.len()];
-    let printed = store.ok(&["status", start]);
+    let printed = store.succeeded(&["status", start]);
     assert_eq!(row(&printed, &job_id), whole, "{printed}");
-    let printed = store.ok(&["status", &format!("job-{start}")]);
+    let printed = store.succeeded(&["status", &format!("job-{start}")]);
     assert_eq!(row(&printed, &job_id), whole, "{printed}");
 
     // The same rows as JSON, with the lifecycle state and the reaped mark.
-    let rows: Value = serde_json::from_str(&store.ok(&["status", &job_id, "--json"]))
+    let rows: Value = serde_json::from_str(&store.succeeded(&["status", &job_id, "--json"]))
         .expect("--json prints JSON");
     let listed = rows.as_array().expect("--json prints an array");
     let first = listed.first().expect("the job's row");
@@ -76,8 +76,8 @@ fn a_reaped_job_is_read_by_its_whole_id_and_by_its_start_and_an_unknown_id_is_re
     assert_eq!(first["state"], "cancelled", "{rows}");
     assert_eq!(first["reaped"], true, "{rows}");
     assert_eq!(listed.len(), jobs.len(), "{rows}");
-    let by_start: Value =
-        serde_json::from_str(&store.ok(&["status", start, "--json"])).expect("--json prints JSON");
+    let by_start: Value = serde_json::from_str(&store.succeeded(&["status", start, "--json"]))
+        .expect("--json prints JSON");
     assert_eq!(by_start, rows);
     store.observe("json", rows);
 

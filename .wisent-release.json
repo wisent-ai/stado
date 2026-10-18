@@ -25,23 +25,8 @@
           "kind": "format"
         },
         {
-          "name": "fmt-tests-status",
-          "argv": ["cargo", "fmt", "--manifest-path", "tests/status/Cargo.toml", "--all", "--", "--check"],
-          "kind": "format"
-        },
-        {
           "name": "fmt-tests-wait",
           "argv": ["cargo", "fmt", "--manifest-path", "tests/wait/Cargo.toml", "--all", "--", "--check"],
-          "kind": "format"
-        },
-        {
-          "name": "fmt-tests-storage-vault-consultation",
-          "argv": ["cargo", "fmt", "--manifest-path", "tests/storage/vault_consultation/Cargo.toml", "--all", "--", "--check"],
-          "kind": "format"
-        },
-        {
-          "name": "fmt-tests-service-directory-authority-read",
-          "argv": ["cargo", "fmt", "--manifest-path", "tests/service_directory/authority_read/Cargo.toml", "--all", "--", "--check"],
           "kind": "format"
         },
         {
@@ -119,23 +104,8 @@
           "kind": "format"
         },
         {
-          "name": "fmt-tests-status",
-          "argv": ["cargo", "fmt", "--manifest-path", "tests/status/Cargo.toml", "--all", "--", "--check"],
-          "kind": "format"
-        },
-        {
           "name": "fmt-tests-wait",
           "argv": ["cargo", "fmt", "--manifest-path", "tests/wait/Cargo.toml", "--all", "--", "--check"],
-          "kind": "format"
-        },
-        {
-          "name": "fmt-tests-storage-vault-consultation",
-          "argv": ["cargo", "fmt", "--manifest-path", "tests/storage/vault_consultation/Cargo.toml", "--all", "--", "--check"],
-          "kind": "format"
-        },
-        {
-          "name": "fmt-tests-service-directory-authority-read",
-          "argv": ["cargo", "fmt", "--manifest-path", "tests/service_directory/authority_read/Cargo.toml", "--all", "--", "--check"],
           "kind": "format"
         },
         {

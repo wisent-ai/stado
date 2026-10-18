@@ -7,7 +7,7 @@
 //! whose failure carries lines after its first is the case, and the line
 //! register of that product must show every one of those lines.
 //!
-//! Run with `cargo test --manifest-path tests/status/Cargo.toml --test
+//! Run with `cargo test --manifest-path stado-rs/Cargo.toml --test
 //! reaped-reads -- build_status_failure_lines:: --ignored --nocapture` with
 //! `STADO_RELEASE_QUALIFICATION_CONFIG` naming the declared queue's
 //! configuration file; without that declaration the journey is ignored,
@@ -30,7 +30,7 @@ fn spans_lines(failure: &str) -> bool {
 #[ignore = "requires STADO_RELEASE_QUALIFICATION_CONFIG naming the declared real queue's configuration"]
 fn a_failed_platform_shows_every_line_of_its_failure() {
     let mut store = Store::declared("release-status-failure-lines", CONFIGURATION);
-    let printed = store.ok(&["release", "status", "--json"]);
+    let printed = store.succeeded(&["release", "status", "--json"]);
     let listing: Value = serde_json::from_str(&printed).expect("--json prints JSON");
     let runs = listing["runs"]
         .as_array()
@@ -63,7 +63,7 @@ fn a_failed_platform_shows_every_line_of_its_failure() {
         "blocked: the declared queue records no run whose platform failure carries lines after its first"
     );
     for (product, run_id, name, failure) in &cases {
-        let register = store.ok(&["release", "status", product]);
+        let register = store.succeeded(&["release", "status", product]);
         for line in failure.lines() {
             assert!(
                 register.contains(line.trim()),

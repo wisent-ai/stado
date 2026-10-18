@@ -240,6 +240,33 @@ path = "../tests/release/untested/enroll.rs"
 name = "release-history"
 path = "../tests/release/history/main.rs"
 
+# Reading a job after the run reaper retired its record; one binary over the
+# shared fixture.
+[[test]]
+name = "reaped-reads"
+path = "../tests/status/main.rs"
+
+# A dedicated declared fleet host reached over real SSH; run with
+# STADO_REGISTRY_AUTHORITY_FIXTURE naming an owner-only JSON file under .build.
+[[test]]
+name = "service-directory-authority-read"
+path = "../tests/service_directory/authority_read/mod.rs"
+
+# A real Skarbiec (SKARBIEC names its binary) on a keyring of its own; run with
+# STADO_TEST_REQUEST_LIMITS declared.
+[[test]]
+name = "storage-vault-consultation"
+path = "../tests/storage/vault_consultation/mod.rs"
+
+[[test]]
+name = "host-exec-skarbiec-entries"
+path = "../tests/host_exec/skarbiec_entries.rs"
+
+# The transport half of an upload against a loopback listener that resets
+# every connection mid-body.
+[[test]]
+name = "storage-transport-fault"
+
 [[test]]
 name = "quality-release-inputs"
 path = "../tests/quality/release_inputs.rs"
