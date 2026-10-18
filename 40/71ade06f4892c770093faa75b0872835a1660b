@@ -16,3 +16,4 @@ Harsh-Review-Attacked: whether a plan's params can silently replace a parameter 
 Harsh-Review-Attacked: whether a malformed params passes; a params that is not an object is refused before anything is submitted, naming what it must be.
 Harsh-Review-Attacked: whether the parameters reach Weles under their own names; they are merged into the run's parameters after the task's own, and the reader has already refused any overlap.
 Harsh-Review-Attacked: whether the journey reads the product; it runs the real stado plan reader in an isolated home on a params that is not an object and one that names a task parameter, and keeps each command, exit status and stream beside the source revision.
+Harsh-Review-Attacked: whether its journey passes the clippy gate; run_plan took &PathBuf where &Path serves, which the gate refuses, and "The workspace passes the clippy gate with warnings denied" repairs it in this push, naming this commit on a Repairs line of its attestation note.
