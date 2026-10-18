@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **Grant sync and revoke run Skarbiec on the declared vault search path:** the host programs that re-issue and withdraw a consumer's grant exported their own `PATH`, without the GPG Suite and `~/.local/bin` directories the other vault commands carry, so a host whose `gpg` lives there could list its vault but not change a grant. Both now export `primitives::tool_path::vault_assignment`. A service file's mode is checked against the owner-only file and program modes read from the platform's own mode bits, and the refusal prints them in octal.
+
 - **Skarbiec commands on a host take one declared search path, and the seed-state read says why it failed:** the vault commands and the TOTP seed-state read each spelled their own `PATH` with GPG Suite's and the account's `~/.local/bin` directories. Both now take `primitives::tool_path::vault_assignment`, the fleet's declared search path followed by those two. A failed seed-state read quotes Skarbiec's whole failure with its exit status, and an unreadable answer is quoted with the parser's reason.
 
 - **A LaunchAgent's domain reason no longer names "nobody" for a console it could not read:** the launchd domain resolver read `/dev/console`'s owner with errors discarded and called an unreadable console `nobody`, and a console the account owned while launchd had no `gui/<uid>` was reported as belonging to someone else. The reason now quotes `stat`'s words for an unreadable console and says when the account owns the console but launchd answers no graphical domain.

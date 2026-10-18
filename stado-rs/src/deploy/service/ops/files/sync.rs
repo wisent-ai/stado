@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use nix::sys::stat::Mode;
 
 use crate::deploy::service::*;
 
@@ -14,9 +15,13 @@ pub async fn sync_service_file(
     mode: u32,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
-    if !matches!(mode, 0o600 | 0o700) {
+    // Owner read and write for a file, owner read, write and execute for a
+    // program; nothing for the group or anyone else.
+    let owner_file = u32::from((Mode::S_IRUSR | Mode::S_IWUSR).bits());
+    let owner_program = u32::from(Mode::S_IRWXU.bits());
+    if mode != owner_file && mode != owner_program {
         return Err(DeployError(format!(
-            "service file mode must be 0600 or 0700, got {mode:04o}"
+            "service file mode must be {owner_file:o} or {owner_program:o}, got {mode:o}"
         ))
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
@@ -56,7 +61,7 @@ printf 'STADO_SERVICE\tfile-sync\tfile_synced\t%s\n' "$target_path"
             &STANDARD.encode(target_path.as_bytes()),
         )
         .replace("@CONTENT_B64@", &STANDARD.encode(content))
-        .replace("@MODE@", &format!("{mode:04o}"));
+        .replace("@MODE@", &format!("{mode:o}"));
     let output = host_channel::run_script(target, &body, runner).await?;
     Ok(report_from(output))
 }
@@ -179,7 +184,7 @@ esac
 [ -f "$vault" ] && [ ! -L "$vault" ] || fail 'authoritative vault is not a regular file'
 [ -f "$token_path" ] && [ ! -L "$token_path" ] || fail 'token file is not a regular file'
 /bin/chmod 600 "$token_path" || fail 'cannot protect token file'
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export "@VAULT_PATH@"
 export GNUPGHOME="$HOME/.gnupg"
 export SKARBIEC_VAULT_FILE="$vault"
 if ! report=$("$HOME/.stado/bin/skarbiec" grant issue "$consumer" \
@@ -198,7 +203,11 @@ printf 'STADO_SERVICE\t%s\tgrant_synced\t%s\n' "$consumer" "$token_path"
         .replace("@CAPS_B64@", &STANDARD.encode(capabilities.as_bytes()))
         .replace("@TOKEN_PATH_B64@", &STANDARD.encode(token_path.as_bytes()))
         .replace("@AUDIENCE_B64@", &STANDARD.encode(audience.as_bytes()))
-        .replace("@LIFETIME@", &lifetime.shell());
+        .replace("@LIFETIME@", &lifetime.shell())
+        .replace(
+            "@VAULT_PATH@",
+            &crate::primitives::tool_path::vault_assignment("$HOME"),
+        );
     let output = host_channel::run_script(target, &body, runner).await?;
     Ok(report_from(output))
 }
@@ -228,7 +237,7 @@ case "$vault" in
   *) fail 'vault path must be under the target home' ;;
 esac
 [ -f "$vault" ] && [ ! -L "$vault" ] || fail 'authoritative vault is not a regular file'
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export "@VAULT_PATH@"
 export GNUPGHOME="$HOME/.gnupg"
 export SKARBIEC_VAULT_FILE="$vault"
 if ! report=$("$HOME/.stado/bin/skarbiec" grant revoke "$consumer" 2>&1); then
@@ -238,7 +247,11 @@ printf 'STADO_SERVICE\t%s\tgrant_revoked\t%s\n' "$consumer" "$vault"
 "#;
     let body = body
         .replace("@VAULT_B64@", &STANDARD.encode(vault_file.as_bytes()))
-        .replace("@CONSUMER_B64@", &STANDARD.encode(consumer.as_bytes()));
+        .replace("@CONSUMER_B64@", &STANDARD.encode(consumer.as_bytes()))
+        .replace(
+            "@VAULT_PATH@",
+            &crate::primitives::tool_path::vault_assignment("$HOME"),
+        );
     let output = host_channel::run_script(target, &body, runner).await?;
     Ok(report_from(output))
 }
