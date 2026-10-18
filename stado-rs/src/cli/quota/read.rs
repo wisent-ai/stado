@@ -22,13 +22,16 @@ pub(super) async fn show(as_json: bool) -> Result<(), CmdError> {
         echo_json(&serde_json::to_value(&summary)?);
         return Ok(());
     }
-    println!(
+    let header = format!(
         "{:<10} {:<22} {:>6} {:>9} {:>5} {:>6}",
         "PROVIDER", "ACCEL", "TOTAL", "RESERVED", "USED", "AVAIL"
     );
-    println!("{}", "-".repeat(70));
-    let mut grand_total: std::collections::BTreeMap<String, i64> = Default::default();
-    let mut grand_avail: std::collections::BTreeMap<String, i64> = Default::default();
+    println!("{header}");
+    let rule = "-".repeat(header.chars().count());
+    println!("{rule}");
+    // Per accelerator across providers: the total and the available count,
+    // summed only from rows a provider gave.
+    let mut grand: std::collections::BTreeMap<String, (i64, i64)> = Default::default();
     for (provider_name, rows) in &summary {
         if rows.is_empty() {
             println!(
@@ -41,14 +44,20 @@ pub(super) async fn show(as_json: bool) -> Result<(), CmdError> {
                 "{provider_name:<10} {accel:<22} {:>6} {:>9} {:>5} {:>6}",
                 row.total, row.reserved, row.used, row.available
             );
-            *grand_total.entry(accel.clone()).or_insert(0) += row.total;
-            *grand_avail.entry(accel.clone()).or_insert(0) += row.available;
+            let (total, available) = grand.entry(accel.clone()).or_default();
+            *total += row.total;
+            *available += row.available;
         }
     }
-    if summary.len() > 1 && !grand_total.is_empty() {
-        println!("{}", "-".repeat(70));
-        for (accel, total) in &grand_total {
-            let avail = grand_avail.get(accel).copied().unwrap_or(0);
+    // The grand total says something only when more than one provider
+    // answered.
+    let several = summary
+        .iter()
+        .nth(std::num::NonZeroUsize::MIN.get())
+        .is_some();
+    if several && !grand.is_empty() {
+        println!("{rule}");
+        for (accel, (total, avail)) in &grand {
             println!(
                 "{:<10} {accel:<22} {total:>6} {:>9} {:>5} {avail:>6}",
                 "TOTAL", "", ""
@@ -94,17 +103,11 @@ pub(super) async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), Cm
                 "QUOTA_ID", "FAMILY", "REGION", "LIMIT"
             );
             let mut sorted: Vec<&Value> = rows.iter().collect();
-            sorted.sort_by_key(|r| {
-                (
-                    r.get("quota_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    r.get("region")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                )
+            // A row without its quota id or region sorts ahead of those with
+            // one, rather than under an empty name.
+            sorted.sort_by(|left, right| {
+                (left["quota_id"].as_str(), left["region"].as_str())
+                    .cmp(&(right["quota_id"].as_str(), right["region"].as_str()))
             });
             for row in sorted {
                 let quota_id = match row.get("quota_id").and_then(Value::as_str) {
