@@ -51,8 +51,8 @@ pub(super) fn api_error(status: u16, raw: &[u8]) -> BoxError {
         &[payload.get("code"), nested.and_then(|e| e.get("code"))],
         "http_error",
     );
-    // Boat's own body when it names no message: a sentence written here read
-    // as Boat's, and a body that was not JSON was dropped whole.
+    // Boat's own body when it names no message: a sentence written here would
+    // read as Boat's, and a body that is not JSON would be dropped whole.
     let unnamed = format!(
         "Boat answered HTTP {status} without a message: {}{unreadable}",
         String::from_utf8_lossy(raw).trim()
