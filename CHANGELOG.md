@@ -48,6 +48,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A host's Stado whose object API accepts and answers nothing is repaired by its beacon and its peers:** the catalog declared no answering question for the stado service, so a held object API was never asked and never repaired; every Stado command and judged hook that read the registry through that host stood until someone ran the repair by hand. The stado service now declares `GET /api/release/object?uri=stado://releases/answering-probe` with the `object-api` repair: the public release route answers before host trust and Skarbiec and reads the store, so a healthy host answers at once (404, absent) and a held store holds the question past the bound, and the declared repair runs on the resolver's refresh interval.
+
 - **A Boat environment change that does not take says why:** `stado sandbox environment` changes refused with `Boat answered … without success=true` and nothing of Boat's answer. The refusal now carries Boat's `error` member, or names the members the answer held when it has none; the rest of the answer is not quoted, since a change may echo the variable or file it was given.
 
 - **The backup audit keeps every unreadable row's cause:** each marker row the reader could not read replaced the cause of the one before it, an unavailable marker that named no reason cleared the audit's unavailability, a namespace inventory ended without a root was passed over, and a size, count, hex path or namespace that did not read was said without its parser's error. `stado host backup-audit` now marks the audit unavailable with every such row's cause and line, in the order printed.
