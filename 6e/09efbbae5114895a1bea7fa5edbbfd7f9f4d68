@@ -14,3 +14,5 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Harsh-Review-Attacked: whether the grand total can differ; both sums come from the same rows in one pass, so every accelerator with a total has its available count.
 Harsh-Review-Attacked: whether the several-providers test changed; nth at the first nonzero index is the second entry, the condition the length test stated.
+
+Repaired-By: "Every count Stado keeps adds one item through one tally" repairs it in this push, naming this commit on its Repairs line
