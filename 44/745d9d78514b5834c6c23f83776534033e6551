@@ -19,3 +19,5 @@ Repairs: "Delivery routine asks the operator's rulings for its purpose before it
 Repairs: "Stado asks Oko's one admission decision, oko admit" its lines in mod.rs are replaced by this change.
 Repairs: "Stado delivers the declared plan itself: stado ci plan and stado ci run" its lines in Products.swift, delivery_run.mjs, mod.rs, oko.rs, plan.rs, platform.rs, state.rs, status.rs are replaced by this change.
 Repairs: "The delivery routine installs the checkout's main HEAD and pushes every repository last" its lines in Products.swift, delivery_run.mjs, mod.rs, platform.rs are replaced by this change.
+
+Repaired-By: "Refusals name the CI verbs that exist: stado ci run qualifies a provider, stado ci delivery says why" repairs it in this push, naming this commit on its Repairs line
