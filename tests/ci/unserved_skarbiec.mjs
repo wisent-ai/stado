@@ -6,9 +6,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Real qualification of `stado ci status` when this host reaches Skarbiec
-// through its resolver's own adapter and the resolver does not serve it. The
-// request once stood for minutes on a port the resolver held while reading its
-// registry store; it is now refused before anything is sent, naming why.
+// through its resolver's own adapter and the resolver does not serve it: the
+// request is refused before anything is sent, naming why, rather than
+// standing on a port the resolver holds while it reads its registry store.
 //
 // Each case runs the Stado under test with a HOME of its own under this
 // checkout's ignored .build: `~/.stado/forwards/skarbiec.local` names the
