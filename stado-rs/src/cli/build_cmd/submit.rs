@@ -68,7 +68,7 @@ pub(crate) fn read_source(
     // A release carries the entries written for it: a repository that keeps
     // released entries in changelog/ moves them out of Unreleased in the
     // version-bump commit, so the submitted revision holds none there. A
-    // CHANGELOG that cannot be read skipped this check; it is refused.
+    // CHANGELOG that cannot be read is refused rather than skip this check.
     let changelog = match committed_file_if_present(
         &root,
         &commit,

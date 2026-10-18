@@ -120,10 +120,10 @@ pub(crate) fn uncommitted_paths(root: &Path) -> Result<BTreeSet<String>, CmdErro
     )?;
     let mut paths = BTreeSet::new();
     let mut entries = status
-        .split(|byte| *byte == 0)
+        .split(|byte| *byte == b'\0')
         .filter(|entry| !entry.is_empty());
     while let Some(entry) = entries.next() {
-        let (code, path) = match (entry.get(..2), entry.get(3..)) {
+        let (code, path) = match (entry.get(..STATUS_WIDTH), entry.get(PATH_START..)) {
             (Some(code), Some(path)) if !path.is_empty() => (code, path),
             _ => {
                 return Err(CmdError::click(format!(
@@ -153,8 +153,8 @@ pub(crate) fn committed_file(root: &Path, commit: &str, path: &str) -> Result<Ve
 }
 
 /// `path` at `commit`, or `None` when that commit's tree holds no such path.
-/// A git that cannot answer is the error: read as an absent file, it skipped
-/// whatever check the file's presence asks for.
+/// A git that cannot answer is the error: read as an absent file, it would
+/// skip whatever check the file's presence asks for.
 pub(crate) fn committed_file_if_present(
     root: &Path,
     commit: &str,
@@ -179,7 +179,7 @@ pub(crate) fn committed_file_if_present(
 pub(crate) fn snapshot(root: &Path, commit: &str) -> Result<Vec<u8>, CmdError> {
     let tar = git(root, &["archive", "--format=tar", commit])?;
     let mut gz = GzBuilder::new()
-        .mtime(0)
+        .mtime(NO_MTIME)
         .write(Vec::new(), Compression::best());
     {
         let mut files = tar::Builder::new(&mut gz);
@@ -206,3 +206,15 @@ pub(crate) fn snapshot(root: &Path, commit: &str) -> Result<Vec<u8>, CmdError> {
     }
     Ok(gz.finish()?)
 }
+
+/// The width of the `XY` status that opens each `git status --porcelain=v1`
+/// entry: https://git-scm.com/docs/git-status#_short_format
+const STATUS_WIDTH: usize = 2;
+
+/// Where the path starts in such an entry, after `XY` and one space:
+/// https://git-scm.com/docs/git-status#_short_format
+const PATH_START: usize = 3;
+
+/// The gzip MTIME that says no time stamp is available, so the same commit
+/// always yields the same bytes: https://www.rfc-editor.org/rfc/rfc1952#page-7
+const NO_MTIME: u32 = 0;

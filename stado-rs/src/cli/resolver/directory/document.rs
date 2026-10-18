@@ -74,8 +74,8 @@ fn verify_document_target(document: Value, local_target: &str) -> Result<Value, 
 /// `Ok(None)` when this host keeps no copy, the copy declares no service
 /// directory, or this host is the authority: the caller reads its store. A
 /// copy that cannot be read is the error, which the caller says before it
-/// reads its store; taken for no copy, a vault-dependent store read stood in
-/// for the authority without a word.
+/// reads its store; taken for no copy, a vault-dependent store read would
+/// stand in for the authority without a word.
 pub(crate) async fn authority_snapshot() -> Result<Option<VersionedText>, CmdError> {
     let Some(copy) = kept_last_good_document().map_err(CmdError::declaration)? else {
         return Ok(None);
