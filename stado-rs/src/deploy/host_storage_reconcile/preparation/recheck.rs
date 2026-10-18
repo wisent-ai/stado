@@ -70,8 +70,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(
     }
     for retained in &fence.transport_retained {
         // A retained transport without its label names no unit to recheck;
-        // asked about "", launchd answered for nothing and the refusal read
-        // as a transport that stopped running.
+        // asked about "", launchd would answer for nothing and the refusal
+        // would read as a transport that stopped running.
         let label = retained
             .get("label")
             .and_then(Value::as_str)
@@ -154,7 +154,10 @@ pub(in crate::deploy::host_storage_reconcile) fn validate_prepared_fence(
         .staged_runtime
         .as_ref()
         .map(|release| release.staged_sha256.as_str())
-        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        .filter(|digest| {
+            hex::decode(digest)
+                .is_ok_and(|bytes| bytes.len() == <sha2::Sha256 as sha2::Digest>::output_size())
+        });
     for writer in &fence.writers {
         if let Some(snapshot) = &writer.unit_snapshot {
             let body = base64::engine::general_purpose::STANDARD

@@ -38,8 +38,9 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
     })?;
     let package: Value = serde_json::from_str(&text)
         .map_err(|error| CmdError::refused(format!("{} is not JSON: {error}", path.display())))?;
-    // A package without a name is refused as that; read as "" it was refused
-    // as a name mismatch that told the operator to pass an empty --product.
+    // A package without a name is refused as that; read as "" it would be
+    // refused as a name mismatch telling the operator to pass an empty
+    // --product.
     let name = package["name"].as_str().ok_or_else(|| {
         CmdError::refused(format!(
             "{} declares no package name; --kind npm releases the package under its name",
