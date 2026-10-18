@@ -54,3 +54,6 @@ harness = false
 name = "product-changelog"
 path = "../../tests/product/changelog/main.rs"
 harness = false
+
+[lints]
+workspace = true

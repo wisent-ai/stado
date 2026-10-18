@@ -18,3 +18,6 @@ stado-wait = { version = "0.1.0", path = "../wait" }
 [[test]]
 name = "notifications"
 path = "../../tests/database/notifications/journey.rs"
+
+[lints]
+workspace = true
