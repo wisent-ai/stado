@@ -19,10 +19,12 @@ use crate::providers::local::space_reclaim::janitor::pass::lock::ownership::pid_
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 use crate::providers::local::space_reclaim::janitor::state::report::build::epoch_now;
 
-/// Directory, beside the lock, holding one record per live shared hold.
-pub(crate) const HOLDS_DIR: &str = "space-reclaim-holds";
+/// Directory, beside the lock, holding one record per live shared hold. It
+/// and the turn request keep the names every release shares, for the reason
+/// the lock does (`janitor::LOCK_NAME`).
+pub(crate) const HOLDS_DIR: &str = "disk-cleanup-holds";
 /// The janitor's request for its turn.
-pub(crate) const TURN_NAME: &str = "space-reclaim-turn.json";
+pub(crate) const TURN_NAME: &str = "disk-cleanup-turn.json";
 
 /// One shared hold: the process, the work it stands for, and since when.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -24,7 +24,7 @@ fn a_product_install_waits_for_the_cleanup_pass_and_runs_once_it_lets_go() {
         .write(true)
         .create(true)
         .truncate(false)
-        .open(native.state_dir().join("space-reclaim.lock"))
+        .open(native.state_dir().join("disk-cleanup.lock"))
         .unwrap();
     // SAFETY: a descriptor this test owns; the lock is released when `lock`
     // is dropped below.

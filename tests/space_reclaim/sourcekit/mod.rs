@@ -97,7 +97,7 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
         .write(true)
         .create(true)
         .truncate(false)
-        .open(native.state_dir().join("space-reclaim.lock"))
+        .open(native.state_dir().join("disk-cleanup.lock"))
         .expect("open actual lock");
     lock.try_lock()
         .expect("an answering SourceKit server must not hold the cleanup lock");
@@ -105,7 +105,7 @@ fn an_editor_does_not_block_cleanup_or_product_admission() {
     // it is refused only while the janitor has asked running work for its
     // turn, the request this journey writes as the janitor would, standing
     // behind this live test process.
-    let turn = native.state_dir().join("space-reclaim-turn.json");
+    let turn = native.state_dir().join("disk-cleanup-turn.json");
     let requested_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("the clock reads after the epoch")

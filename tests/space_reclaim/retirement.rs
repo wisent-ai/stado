@@ -4,15 +4,26 @@ use serde_json::{json, Value};
 
 use super::native::Native;
 
+/// The status clap exits with when it refuses the command line:
+/// https://docs.rs/clap/latest/clap/error/struct.Error.html#method.exit
+const USAGE_STATUS: i32 = 2;
+
+/// The one target of the isolated registry.
+fn only_target(document: &mut Value) -> &mut Value {
+    match document["targets"].as_array_mut().unwrap().as_mut_slice() {
+        [target] => target,
+        targets => panic!("the isolated registry holds {} targets", targets.len()),
+    }
+}
+
 /// A registry generation written before the retired memory setting was
-/// removed, as persisted in local storage.
+/// removed, as persisted in local storage. The product reads none of the
+/// block, so it carries the setting's words and not its figures.
 fn stored_with_retired_settings(native: &Native) -> Value {
     let mut document: Value = serde_json::from_slice(&fs::read(&native.registry).unwrap()).unwrap();
-    document["targets"][0]["memory_reclaim"] = json!({
-        "mode": "enforce", "check_interval_seconds": 300, "low_free_mb": 2048,
-        "target_free_mb": 4096, "high_swap_used_pct": 80, "max_repairs_per_pass": 4,
-        "refuse_placement": true, "max_pass_seconds": 120,
-        "repairs": {"graphical_session": {"processes": ["Safari"], "min_age_seconds": 600,
+    only_target(&mut document)["memory_reclaim"] = json!({
+        "mode": "enforce", "refuse_placement": true,
+        "repairs": {"graphical_session": {"processes": ["Safari"],
                                           "allow_graphical_session": true}}
     });
     fs::write(
@@ -39,7 +50,7 @@ fn a_registry_write_drops_the_retired_janitor_settings() {
     ]);
     let persisted: Value = serde_json::from_slice(&fs::read(&native.registry).unwrap()).unwrap();
     native.observe("persisted registry", persisted.clone());
-    let target = expected["targets"][0].as_object_mut().unwrap();
+    let target = only_target(&mut expected).as_object_mut().unwrap();
     target.remove("memory_reclaim");
     target.insert("pinned_only".to_string(), json!(true));
     assert_eq!(persisted, expected);
@@ -49,16 +60,19 @@ fn a_registry_write_drops_the_retired_janitor_settings() {
 fn a_stored_generation_with_retired_settings_still_runs_the_rule() {
     let native = Native::new("retired-settings-pass");
     stored_with_retired_settings(&native);
-    let candidate = native.home.join("work/target");
-    native.cache(&candidate);
+    let candidates = [native.home.join("work/target")];
+    for candidate in &candidates {
+        native.cache(candidate);
+    }
     native.fill_with_user_data();
     let report = native.cleanup();
     assert_eq!(report["rule"]["triggered"], true, "{report}");
     assert_eq!(
-        report["cleaners"]["build_caches"]["deleted_items"], 1,
+        report["cleaners"]["build_caches"]["deleted_items"],
+        candidates.len(),
         "{report}"
     );
-    assert!(!candidate.exists());
+    assert!(candidates.iter().all(|candidate| !candidate.exists()));
 }
 
 #[test]
@@ -80,7 +94,11 @@ fn the_removed_setting_verbs_are_refused() {
             "removed verb",
             json!({"args": args, "exit_status": response.status.code()}),
         );
-        assert_eq!(response.status.code(), Some(2), "{args:?} was accepted");
+        assert_eq!(
+            response.status.code(),
+            Some(USAGE_STATUS),
+            "{args:?} was accepted"
+        );
     }
     assert_eq!(before, fs::read(&native.registry).unwrap());
 }
@@ -93,7 +111,7 @@ fn a_pass_below_the_threshold_withdraws_the_turn_it_asked_for() {
     let native = Native::new("stale-turn");
     let state_dir = native.state_dir();
     fs::create_dir_all(&state_dir).unwrap();
-    let turn = state_dir.join("space-reclaim-turn.json");
+    let turn = state_dir.join("disk-cleanup-turn.json");
     let request = json!({
         "reason": "the volume was at the disk-full threshold",
         "pid": std::process::id(),

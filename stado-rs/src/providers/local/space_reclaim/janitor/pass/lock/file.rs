@@ -13,8 +13,13 @@ use crate::providers::local::space_reclaim::janitor::{
     LOCK_HOLDER_INODE_PREFIX, LOCK_HOLDER_NAME, LOCK_NAME,
 };
 
-/// Open `space-reclaim.lock` with O_RDWR|O_CREAT|
-/// O_NOFOLLOW, verify it is a regular file owned by us, force 0600.
+/// Read and write for the owner alone, the mode every lock and holder record
+/// is created with and forced to, from the platform's `<sys/stat.h>` bits.
+const OWNER_READ_WRITE: u32 = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
+
+/// Open the run lock ([`LOCK_NAME`]) with O_RDWR|O_CREAT|
+/// O_NOFOLLOW, verify it is a regular file owned by us, force
+/// [`OWNER_READ_WRITE`].
 pub(crate) fn open_lock(state_dir: &Path) -> Result<File, JanitorError> {
     open_lock_at(&state_dir.join(LOCK_NAME))
 }
@@ -26,14 +31,14 @@ pub(crate) fn open_lock_at(path: &Path) -> Result<File, JanitorError> {
         .write(true)
         .create(true)
         .custom_flags(nix::libc::O_NOFOLLOW)
-        .mode(0o600)
+        .mode(OWNER_READ_WRITE)
         .open(path)?;
     let info = file.metadata()?;
     if !info.is_file() || info.uid() != euid() {
         return Err(JanitorError::os("unsafe cleanup lock"));
     }
     use std::os::unix::fs::PermissionsExt;
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.set_permissions(std::fs::Permissions::from_mode(OWNER_READ_WRITE))?;
     Ok(file)
 }
 
@@ -159,12 +164,19 @@ pub(crate) fn read_lock_holder(
     }
 }
 
-pub(crate) fn lock_token() -> String {
+/// A token no other holder carries: this process and the clock in nanos. A
+/// clock before the Unix epoch is refused, as a token from it would repeat.
+fn lock_token() -> Result<String, JanitorError> {
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
+        .map_err(|error| {
+            JanitorError::os(&format!(
+                "the clock stands before the Unix epoch, so no lock holder token can be made: \
+                 {error}"
+            ))
+        })?
         .as_nanos();
-    format!("{}-{nanos}", std::process::id())
+    Ok(format!("{}-{nanos}", std::process::id()))
 }
 
 pub(crate) fn write_lock_holder(
@@ -173,7 +185,7 @@ pub(crate) fn write_lock_holder(
     writer: &str,
 ) -> Result<(String, Vec<PathBuf>), JanitorError> {
     let now = epoch_now();
-    let token = lock_token();
+    let token = lock_token()?;
     let record = LockHolder {
         pid: std::process::id() as i32,
         acquired_at: now,
@@ -188,12 +200,25 @@ pub(crate) fn write_lock_holder(
     ];
     let mut written: Vec<PathBuf> = Vec::new();
     for destination in &records {
-        if let Ok(info) = std::fs::symlink_metadata(destination) {
-            if info.file_type().is_symlink() || !info.is_file() || info.uid() != euid() {
+        // A record that is there must be a regular file of ours; one that is
+        // not there is written, and one that cannot be inspected is refused
+        // with its cause rather than overwritten unseen.
+        match std::fs::symlink_metadata(destination) {
+            Ok(info)
+                if info.file_type().is_symlink() || !info.is_file() || info.uid() != euid() =>
+            {
                 for path in &written {
                     discard(path);
                 }
                 return Err(JanitorError::os("unsafe cleanup lock holder record"));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                for path in &written {
+                    discard(path);
+                }
+                return Err(error.into());
             }
         }
         let file_name = destination
@@ -206,7 +231,7 @@ pub(crate) fn write_lock_holder(
                 .write(true)
                 .create_new(true)
                 .custom_flags(nix::libc::O_NOFOLLOW)
-                .mode(0o600)
+                .mode(OWNER_READ_WRITE)
                 .open(&staged)?;
             file.write_all(&body)?;
             file.sync_data()?;
@@ -225,10 +250,8 @@ pub(crate) fn write_lock_holder(
     Ok((token, records))
 }
 
-/// Map an io error to the Python `type(exc).__name__` style the agent logs.
+/// The Python `type(exc).__name__` style the agent logs for an io error,
+/// read from the error's own kind.
 pub(crate) fn io_code(exc: &io::Error) -> &'static str {
-    JanitorError::from(io::Error::from_raw_os_error(
-        exc.raw_os_error().unwrap_or(0),
-    ))
-    .code
+    JanitorError::from(io::Error::from(exc.kind())).code
 }

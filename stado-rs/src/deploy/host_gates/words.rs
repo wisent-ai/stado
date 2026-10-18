@@ -135,7 +135,7 @@ pub const SPACE_RECLAIM_STALLED: &str = "space_reclaim_stalled";
 /// send an operator to opposite places. A stalled janitor is a janitor that
 /// ran and got nowhere — read its report, its policy, its errors. A held lock
 /// is a janitor that never started, and the only thing worth looking at is the
-/// process on the other end of `~/.cache/wisent-compute/space-reclaim.lock`,
+/// process on the other end of `~/.cache/wisent-compute/disk-cleanup.lock`,
 /// which `stado space report` names in `cleanup_lock.holders`.
 ///
 /// A host can report the stalled word with room on its volume while its own

@@ -24,7 +24,7 @@ fn a_workload_hold_keeps_the_cache_the_walk_found_and_a_free_pass_removes_it() {
         .write(true)
         .create(true)
         .truncate(false)
-        .open(native.state_dir().join("space-reclaim.lock"))
+        .open(native.state_dir().join("disk-cleanup.lock"))
         .unwrap();
     // SAFETY: a descriptor this test owns; the hold is released when `hold`
     // is dropped below. A workload takes the cleanup lock shared, as here.

@@ -13,6 +13,16 @@ use serde_json::{json, Value};
 
 use crate::native::Native;
 
+/// The health interval the watch case runs the host's watch at, as the
+/// space documentation's real tests declare it:
+/// https://stado.wisent.com/docs/capabilities/space#real-tests
+const WATCH_SECONDS: u64 = 2;
+/// Milliseconds in a second, by the SI prefix milli:
+/// https://www.bipm.org/en/publications/si-brochure
+const MILLIS_PER_SECOND: f64 = 1000.0;
+/// Read and write for the owner alone, the mode the janitor gives its lock.
+const OWNER_READ_WRITE: u32 = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
+
 /// `stado serve --health-interval-seconds N` in the isolated
 /// home, its reports read line by line as each pass prints one. Once the
 /// test has read the reports it needs, the rest are drained: the watch prints
@@ -79,7 +89,7 @@ fn instant(value: &Value) -> DateTime<Utc> {
 }
 
 fn state(native: &Native) -> Value {
-    let body = fs::read_to_string(native.state_dir().join("space-reclaim-state.json")).unwrap();
+    let body = fs::read_to_string(native.state_dir().join("disk-cleanup-state.json")).unwrap();
     serde_json::from_str(&body).unwrap()
 }
 /// `host gates` exits non-zero while any blocker stands, and this isolated
@@ -103,10 +113,10 @@ fn the_retired_watch_flag_is_refused() {
 #[test]
 fn a_watch_keeps_the_pass_it_promised_and_gates_read_the_promise() {
     let native = Native::new("watch-promise");
-    let mut watch = Watch::start(&native, "2");
+    let mut watch = Watch::start(&native, &WATCH_SECONDS.to_string());
     let first = watch.next_report();
     assert_eq!(first["writer"], "space-reclaim-cli", "{first}");
-    assert_eq!(first["every_seconds"], 2, "{first}");
+    assert_eq!(first["every_seconds"], WATCH_SECONDS, "{first}");
     // The second pass is the first one this process can measure its
     // lateness from: the time between the first pass's end and its own start
     // beyond the period, spent writing the state file and printing.
@@ -114,21 +124,35 @@ fn a_watch_keeps_the_pass_it_promised_and_gates_read_the_promise() {
     watch.drain();
     let promised = state(&native)["promises"]["space-reclaim-cli"].clone();
     native.observe("measured promise", promised.clone());
-    assert_eq!(promised["every_seconds"], 2, "{promised}");
+    assert_eq!(promised["every_seconds"], WATCH_SECONDS, "{promised}");
     assert_eq!(promised["pid"], second["writer_pid"], "{promised}");
-    let part = |key: &str| {
-        promised[key]
-            .as_f64()
-            .unwrap_or_else(|| panic!("{key} in {promised}"))
+    let part = |key: &str| match promised[key].as_f64() {
+        Some(part) => part,
+        None => panic!("{key} in {promised}"),
     };
-    assert!(part("longest_lateness_seconds") > 0.0, "{promised}");
+    let lateness = part("longest_lateness_seconds");
     assert!(
-        part("longest_pass_seconds") >= second["duration_ms"].as_f64().unwrap() / 1000.0,
+        lateness.is_normal() && lateness.is_sign_positive(),
         "{promised}"
     );
-    let expected =
-        part("finished_at") + 2.0 + part("longest_pass_seconds") + part("longest_lateness_seconds");
-    assert!((part("next_pass_by") - expected).abs() < 1e-6, "{promised}");
+    assert!(
+        part("longest_pass_seconds") >= second["duration_ms"].as_f64().unwrap() / MILLIS_PER_SECOND,
+        "{promised}"
+    );
+    // The promise is the sum of these terms; each addition may round by one
+    // unit in the last place of the sum, and no more.
+    let terms = [
+        part("finished_at"),
+        std::time::Duration::from_secs(WATCH_SECONDS).as_secs_f64(),
+        part("longest_pass_seconds"),
+        lateness,
+    ];
+    let expected: f64 = terms.iter().sum();
+    let rounding = expected.abs() * f64::EPSILON * terms.len() as f64;
+    assert!(
+        (part("next_pass_by") - expected).abs() <= rounding,
+        "{promised}"
+    );
 
     let report = native.json(&["space", "report", "example-cleanup-host", "--json"]);
     let cleanup_state = &report["cleanup_state"];
@@ -152,7 +176,7 @@ fn a_watch_keeps_the_pass_it_promised_and_gates_read_the_promise() {
     let mut legacy = state(&native);
     legacy.as_object_mut().unwrap().remove("promises");
     fs::write(
-        native.state_dir().join("space-reclaim-state.json"),
+        native.state_dir().join("disk-cleanup-state.json"),
         serde_json::to_vec(&legacy).unwrap(),
     )
     .unwrap();
@@ -168,13 +192,13 @@ fn an_aged_live_kernel_lock_is_not_replaced_and_release_allows_cleanup() {
     native.fill_with_user_data();
     let state_dir = native.state_dir();
     fs::create_dir_all(&state_dir).unwrap();
-    let path = state_dir.join("space-reclaim.lock");
+    let path = state_dir.join("disk-cleanup.lock");
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .mode(0o600)
+        .mode(OWNER_READ_WRITE)
         .open(&path)
         .unwrap();
     lock.try_lock().unwrap();
@@ -217,12 +241,12 @@ fn an_already_retired_locked_inode_remains_protected_until_kernel_release() {
     native.fill_with_user_data();
     let state_dir = native.state_dir();
     fs::create_dir_all(&state_dir).unwrap();
-    let path = state_dir.join("space-reclaim.lock.retired.regression");
+    let path = state_dir.join("disk-cleanup.lock.retired.regression");
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .mode(OWNER_READ_WRITE)
         .open(&path)
         .unwrap();
     lock.try_lock().unwrap();

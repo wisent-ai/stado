@@ -2,7 +2,6 @@
 
 use std::cell::RefCell;
 use std::fs::{self, File, FileTimes};
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -10,8 +9,16 @@ use std::time::SystemTime;
 
 use serde_json::{json, Value};
 
-/// Volume for the registry, store and disk-full rule.
+#[path = "native/fill.rs"]
+mod fill;
+
+/// Each case's volume, as the space documentation's real tests declare it:
+/// https://stado.wisent.com/docs/capabilities/space#real-tests
 const VOLUME_MEGABYTES: u64 = 256;
+/// Every permission for the owner alone, the isolated home's mode.
+const OWNER_ALL: u32 = nix::libc::S_IRWXU as u32;
+/// Read and write for the owner alone, the retained report's mode.
+const OWNER_READ_WRITE: u32 = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
 
 pub struct Native {
     root: PathBuf,
@@ -74,7 +81,7 @@ impl Native {
                 image.to_str().unwrap(),
             ],
         );
-        fs::set_permissions(&this.home, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&this.home, fs::Permissions::from_mode(OWNER_ALL)).unwrap();
         // The quality gate runs this journey in an exported tree with no Git
         // checkout and states the commit it exported (`WISENT_SOURCE_COMMIT`);
         // run from the checkout, the commit is the checkout's own.
@@ -107,12 +114,10 @@ impl Native {
             json!({"declared": ceiling, "key": "host.scan_load_ceiling"}),
         );
         let mut document = this.json(&["registry", "pull"]);
-        assert_eq!(
-            document["targets"].as_array().unwrap().len(),
-            1,
-            "first-run registry must be isolated"
-        );
-        let mut target = document["targets"][0].take();
+        let [target] = document["targets"].as_array_mut().unwrap().as_mut_slice() else {
+            panic!("first-run registry must be isolated");
+        };
+        let mut target = target.take();
         let original_name = target["name"].take();
         target["name"] = json!("example-cleanup-host");
         let aliases = target["hostnames"].as_array_mut().unwrap();
@@ -155,11 +160,14 @@ impl Native {
 
     /// A host tool the harness needs, run outside the isolated home.
     fn tool(&self, program: &str, args: &[&str]) -> String {
-        let output = Command::new(program)
+        let output = match Command::new(program)
             .args(args)
             .current_dir(&self.root)
             .output()
-            .unwrap_or_else(|error| panic!("cannot run {program}: {error}"));
+        {
+            Ok(output) => output,
+            Err(error) => panic!("cannot run {program}: {error}"),
+        };
         self.record(program, args, &output);
         assert!(
             output.status.success(),
@@ -249,37 +257,12 @@ impl Native {
             .set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
             .unwrap();
     }
-
-    /// Fill the test volume with user data past the declared threshold.
-    pub fn fill_with_user_data(&self) -> PathBuf {
-        let documents = self.home.join("Documents");
-        fs::create_dir_all(&documents).unwrap();
-        let path = documents.join("user-data.bin");
-        let total = fs2::total_space(&self.home).unwrap();
-        let free = fs2::available_space(&self.home).unwrap();
-        let keep_free = total / 100 * 15;
-        let mut file = File::create(&path).unwrap();
-        let block = vec![0x5a_u8; 1024 * 1024];
-        let mut written = 0_u64;
-        while written + keep_free < free {
-            file.write_all(&block).unwrap();
-            written += block.len() as u64;
-        }
-        file.sync_all().unwrap();
-        let used = 100.0 * (1.0 - fs2::available_space(&self.home).unwrap() as f64 / total as f64);
-        self.observe(
-            "user data",
-            json!({"path": path, "bytes": written, "used_percent": used}),
-        );
-        assert!(used >= 80.0, "the test volume is only {used:.1}% used");
-        path
-    }
 }
 
 impl Drop for Native {
     fn drop(&mut self) {
         let panicking = std::thread::panicking();
-        let state = self.state_dir().join("space-reclaim-state.json");
+        let state = self.state_dir().join("disk-cleanup-state.json");
         let persisted = match fs::read_to_string(&state) {
             Ok(body) => json!({"path": state, "body": body}),
             Err(error) => json!({"path": state, "read_error": error.to_string()}),
@@ -303,7 +286,9 @@ impl Drop for Native {
         });
         let destination = self.run.join("report.json");
         let written = fs::write(&destination, serde_json::to_vec_pretty(&report).unwrap())
-            .and_then(|()| fs::set_permissions(&destination, fs::Permissions::from_mode(0o600)));
+            .and_then(|()| {
+                fs::set_permissions(&destination, fs::Permissions::from_mode(OWNER_READ_WRITE))
+            });
         eprintln!("cleanup evidence: {}", destination.display());
         if !panicking {
             written.expect("retain native cleanup evidence");
