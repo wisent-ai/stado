@@ -179,14 +179,17 @@ pub fn last_auto_retirement(
         {
             continue;
         }
-        let Some(retired_at) = entry["audited_at"]
-            .as_str()
-            .and_then(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
-        else {
+        let Some(stamp) = entry["audited_at"].as_str() else {
             return Err(format!(
-                "{path}: the retirement after the first {index} line(s) has no readable audited_at"
+                "{path}: the retirement after the first {index} line(s) has no audited_at"
             ));
         };
+        let retired_at = DateTime::parse_from_rfc3339(stamp).map_err(|error| {
+            format!(
+                "{path}: the retirement after the first {index} line(s) has audited_at {stamp:?}, \
+                 which is not a time: {error}"
+            )
+        })?;
         let room = HostRoom {
             available_memory_bytes: entry["available_memory_bytes"].as_i64(),
             free_disk_bytes: entry["free_disk_bytes"].as_i64(),
