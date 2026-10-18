@@ -43,8 +43,8 @@ pub(crate) async fn fetch_canonical_registry() -> Result<Value, JanitorError> {
 
 /// The identity set of one raw registry target (Python `_identities`).
 fn raw_identities(target: &Map<String, Value>) -> Vec<String> {
-    // A target without a name has no name identity; read as "", it matched a
-    // host whose own name normalized to nothing.
+    // A target without a name has no name identity; read as "", it would
+    // match a host whose own name normalizes to nothing.
     let mut values: Vec<String> = target
         .get("name")
         .and_then(Value::as_str)
@@ -78,12 +78,12 @@ pub fn resolve_target(data: &Value, hostname: &str) -> Result<ComputeTarget, Jan
         .filter_map(Value::as_object)
         .filter(|raw| raw_identities(raw).contains(&identity))
         .collect();
-    if matches.len() != 1 {
+    let [only] = matches.as_slice() else {
         return Err(JanitorError::lookup(
             "canonical host identity did not match uniquely",
         ));
-    }
-    serde_json::from_value(Value::Object(matches[0].clone())).map_err(|error| {
+    };
+    serde_json::from_value(Value::Object((*only).clone())).map_err(|error| {
         JanitorError::lookup(&format!("registry target could not be parsed: {error}"))
     })
 }

@@ -79,9 +79,9 @@ pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Resu
     .await
     .map_err(refused)?;
 
-    let fingerprints = pass.get("fingerprints").cloned().unwrap_or(Value::Null);
+    let fingerprints = &pass["fingerprints"];
     // A pass that names no `unreadable` list did not report one; read as an
-    // empty list it printed "0 unreadable", a count nobody made.
+    // empty list it would print "0 unreadable", a count nobody made.
     let unreadable = match fingerprints.get("unreadable").and_then(Value::as_array) {
         Some(listed) => listed.len().to_string(),
         None => "(unreadable not reported)".to_string(),
@@ -107,7 +107,7 @@ pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Resu
             if pass["envelope"]["needed"].as_bool() == Some(true) { "migration needed" } else { "current" },
             field(&pass["item_uids"], if apply { "stamped" } else { "missing" }),
             if apply { "stamped" } else { "missing" },
-            field(&fingerprints, "stamped"),
+            field(fingerprints, "stamped"),
             if apply { "stamped" } else { "would be stamped" },
         );
         println!(
@@ -120,7 +120,7 @@ pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Resu
             field(&after, "groups")
         );
         // A Skarbiec build before the control step answers no `control`,
-        // which reads as `-`, not as zero.
+        // which is said as not reported, not as zero.
         println!(
             "{}: items a former owner controlled: {} {}",
             resolved.name,
@@ -136,7 +136,7 @@ pub async fn upgrade_vault(target: &str, apply: bool, json_output: bool) -> Resu
 }
 
 /// A count Skarbiec's pass reported, or that it did not report one: a dash
-/// read as a count of its own.
+/// would read as a count of its own.
 fn field(document: &Value, name: &str) -> String {
     match document.get(name) {
         Some(value) => value.to_string(),
