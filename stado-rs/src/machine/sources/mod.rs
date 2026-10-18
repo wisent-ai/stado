@@ -1,7 +1,8 @@
 //! The owned work files a machine submission stages its source archive
 //! through, plus the size limits and path rules that bound them.
 
-use std::io::Read;
+#[cfg(unix)]
+use nix::sys::stat::Mode;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -72,41 +73,35 @@ fn machine_source_work_root() -> Result<PathBuf, std::io::Error> {
     Ok(root)
 }
 
+/// A new owner-only file under the machine source work root. Its name ends in
+/// a fresh random UUID, so a file already there under that name was not left
+/// by this process; that is refused with the path rather than tried again
+/// under another name.
 fn create_owned_machine_file(
     purpose: &str,
 ) -> Result<(OwnedMachineFile, std::fs::File), std::io::Error> {
     let root = machine_source_work_root()?;
-    for _ in 0..16 {
-        let path = root.join(format!("{purpose}-{}", uuid::Uuid::new_v4().simple()));
-        let mut options = std::fs::OpenOptions::new();
-        options.read(true).write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        match options.open(&path) {
-            Ok(file) => {
-                std::fs::File::open(&root)?.sync_all()?;
-                return Ok((OwnedMachineFile { path: Some(path) }, file));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "could not reserve a unique machine source work file",
-    ))
+    let path = root.join(format!("{purpose}-{}", uuid::Uuid::new_v4().simple()));
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(u32::from((Mode::S_IRUSR | Mode::S_IWUSR).bits()));
+    let file = options.open(&path).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!(
+                "cannot create machine source work file {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    std::fs::File::open(&root)?.sync_all()?;
+    Ok((OwnedMachineFile { path: Some(path) }, file))
 }
 
 pub(in crate::machine) fn sha256_path(path: &Path) -> Result<String, std::io::Error> {
     let mut file = std::fs::File::open(path)?;
     let mut digest = Sha256::new();
-    let mut chunk = [0u8; 1024 * 1024];
-    loop {
-        let n = file.read(&mut chunk)?;
-        if n == 0 {
-            break;
-        }
-        digest.update(&chunk[..n]);
-    }
+    std::io::copy(&mut file, &mut digest)?;
     Ok(hex::encode(digest.finalize()))
 }
