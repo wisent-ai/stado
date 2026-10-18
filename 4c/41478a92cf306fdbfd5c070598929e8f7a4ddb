@@ -17,3 +17,5 @@ Harsh-Review-Attacked: whether reading an unlisted status as still coming up ans
 Harsh-Review-Attacked: whether Oracle should refuse unknown states since its states are listed; OCI's own SDKs read lifecycle values outside their enum as an unknown value rather than failing, because OCI adds states, and the commit names the four coming-up states it reads that way.
 Harsh-Review-Attacked: whether Nebius or Vast.ai now fail where they did not; a missing Nebius state and a missing or null Vast.ai actual_status still read as provisioning, and only a present status that is not a string, which the old code silently read as missing, is now refused naming it.
 Harsh-Review-Attacked: whether http::state loses the vendor's word in its error; its refusal quotes the raw status, the JSON pointer and serde's own error, under the vendor and operation.
+
+Repaired-By: "A rented machine the vendor reports without a name is no agent" repairs it in this push, naming this commit on its Repairs line
