@@ -47,21 +47,42 @@ pub fn export(root: &Path, revision: &str, into: &Path) -> Result<String> {
         .args(["-x", "-f", "-", "-C"])
         .arg(into)
         .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .context("cannot run tar to unpack the committed source")?;
-    std::io::Write::write_all(
-        unpack.stdin.as_mut().context("tar has no stdin")?,
-        &archive.stdout,
-    )?;
-    drop(unpack.stdin.take());
+    // A tar that fails stops reading, so the write breaks the pipe; its exit
+    // status and its own words are the cause, read before the write's error.
+    // Its words are read while the archive is written, so a tar with much to
+    // say never waits on a full stderr pipe while this waits on its stdin.
+    let mut stdin = unpack.stdin.take().context("tar has no stdin")?;
+    let mut stderr = unpack.stderr.take().context("tar has no stderr")?;
+    let (written, said) = std::thread::scope(|scope| {
+        let reading = scope.spawn(move || {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut stderr, &mut text).map(|_| text)
+        });
+        let written = std::io::Write::write_all(&mut stdin, &archive.stdout);
+        drop(stdin);
+        (written, reading.join())
+    });
+    let said = said
+        .map_err(|_| anyhow::anyhow!("the thread reading tar's stderr panicked"))?
+        .context("cannot read tar's stderr")?;
     let place = format!("pid {}, unpacking into {}", unpack.id(), into.display());
     let status = wait::blocking(wait::Kind::Process, "tar -x -f -", place, || unpack.wait())?;
     if !status.success() {
         bail!(
-            "tar could not unpack the committed source of {base} into {}: {status}",
-            into.display()
+            "tar could not unpack the committed source of {base} into {}: {status}: {}",
+            into.display(),
+            said.trim()
         );
     }
+    written.with_context(|| {
+        format!(
+            "tar unpacked into {} but did not take the whole archive of {base}",
+            into.display()
+        )
+    })?;
     Ok(hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
         &archive.stdout,
     )))
