@@ -168,10 +168,9 @@ fn served_unit(
 /// enabled. A loaded unit that cannot bind yet is exactly what this pass waits
 /// for; the init system restarts it once the port is free.
 ///
-/// launchd's presence is read from each domain's listing, which names every
-/// service it holds as the last field of its row: `print` of one service
-/// fails the same way for an absent service as for a domain it may not read,
-/// so a refused read would have been told as "not loaded".
+/// launchd's presence is read from each domain's listing
+/// ([`crate::deploy::service::launchd_domain_holds`]), so a domain that
+/// cannot be read is refused rather than told as "not loaded".
 fn unit_loaded(unit: &str) -> Result<bool, String> {
     let asked = |program: &str, args: &[&str]| -> Result<bool, String> {
         crate::wait::output(Command::new(program).args(args))
@@ -179,23 +178,11 @@ fn unit_loaded(unit: &str) -> Result<bool, String> {
             .map_err(|error| format!("cannot ask {program} about {unit}: {error}"))
     };
     if cfg!(target_os = "macos") {
-        let holds = |domain: &str| -> Result<bool, String> {
-            let output =
-                crate::wait::output(Command::new("/bin/launchctl").args(["print", domain]))
-                    .map_err(|error| format!("cannot list launchd domain {domain}: {error}"))?;
-            if !output.status.success() {
-                return Err(format!(
-                    "launchd domain {domain} could not be listed: launchctl ended with {}: {}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
-            }
-            Ok(String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .any(|line| line.split_whitespace().last() == Some(unit)))
-        };
         let session = format!("gui/{}", nix::unistd::getuid());
-        return Ok(holds(&session)? || holds("system")?);
+        return Ok(
+            crate::deploy::service::launchd_domain_holds(&session, unit)?
+                || crate::deploy::service::launchd_domain_holds("system", unit)?,
+        );
     }
     let service = if unit.ends_with(".service") {
         unit.to_string()

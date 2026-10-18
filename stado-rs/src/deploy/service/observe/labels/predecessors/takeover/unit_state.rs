@@ -14,14 +14,22 @@ pub(super) struct UnitState {
 }
 
 impl UnitState {
-    pub(super) fn main_pid(&self) -> Option<u32> {
+    /// The pid the init system names as the unit's main process; `None` when
+    /// it names none: no such row, or systemd's `MainPID=0` for a unit with no
+    /// process. A row whose value is not a pid is refused naming it.
+    pub(super) fn main_pid(&self) -> Result<Option<u32>, String> {
         let prefix = if self.systemd { "MainPID=" } else { "pid = " };
-        self.text.lines().find_map(|line| {
-            line.trim()
-                .strip_prefix(prefix)
-                .and_then(|value| value.parse::<std::num::NonZeroU32>().ok())
-                .map(std::num::NonZeroU32::get)
-        })
+        let Some(value) = self
+            .text
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(prefix))
+        else {
+            return Ok(None);
+        };
+        let pid = value.trim().parse::<u32>().map_err(|error| {
+            format!("the init system names main pid {value:?}, which is not a pid: {error}")
+        })?;
+        Ok(std::num::NonZeroU32::new(pid).map(std::num::NonZeroU32::get))
     }
 
     /// One environment variable the unit starts its process with.
@@ -95,17 +103,9 @@ pub(super) fn unit_state(unit: &str) -> Result<Option<UnitState>, String> {
             Some(label) => label,
             None => unit,
         };
-        // A domain's listing names each service it holds as the last field
-        // of its row, so presence is read from the listing and only a held
-        // service is printed: launchd's `print` of an absent service fails
-        // the same way as one it was not allowed to read. Any account may
-        // list the system domain; only a held service's print needs `sudo`.
-        let holds = |listing: &str| {
-            listing
-                .lines()
-                .any(|line| line.split_whitespace().last() == Some(label))
-        };
-        if holds(&run("/bin/launchctl", &["print", "system"])?) {
+        // Presence is read from each domain's listing and only a held service
+        // is printed; only a held system service's print needs `sudo`.
+        if crate::deploy::service::launchd_domain_holds("system", label)? {
             let service = format!("system/{label}");
             let text = run(
                 "/usr/bin/sudo",
@@ -117,7 +117,7 @@ pub(super) fn unit_state(unit: &str) -> Result<Option<UnitState>, String> {
             }));
         }
         let gui = format!("gui/{}", nix::unistd::getuid());
-        if holds(&run("/bin/launchctl", &["print", &gui])?) {
+        if crate::deploy::service::launchd_domain_holds(&gui, label)? {
             let service = format!("{gui}/{label}");
             let text = run("/bin/launchctl", &["print", &service])?;
             return Ok(Some(UnitState {

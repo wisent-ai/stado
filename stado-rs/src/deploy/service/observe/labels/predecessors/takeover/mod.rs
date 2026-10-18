@@ -21,7 +21,7 @@ use super::record::{self, taken_over, TAKEN_OVER, WITHDRAWN};
 use super::{retirement, PredecessorRetirement};
 mod served_root;
 mod unit_state;
-use unit_state::{unit_state, UnitState};
+use unit_state::unit_state;
 
 /// The unit the init system started this process under: launchd names the
 /// job in `XPC_SERVICE_NAME`, systemd in the process's own cgroup path.
@@ -65,8 +65,11 @@ async fn take_over_retired(
     if entry.unit.as_deref() != Some(unit.as_str()) {
         return Ok(Vec::new());
     }
-    let owner = match unit_state(&unit) {
-        Ok(state) => state.as_ref().and_then(UnitState::main_pid),
+    let owner = match unit_state(&unit).and_then(|state| match state {
+        Some(state) => state.main_pid(),
+        None => Ok(None),
+    }) {
+        Ok(owner) => owner,
         Err(error) => {
             eprintln!(
                 "[stado] {unit}: its init system could not be read, so this pid is not proven \
