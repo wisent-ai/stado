@@ -135,7 +135,7 @@ pub fn host_process() -> Result<CatalogService, String> {
 /// the same name with `.service` appended.
 pub fn host_unit() -> Result<String, String> {
     let entry = host_process()?;
-    Ok(entry.unit.unwrap_or(entry.name))
+    Ok(unit_of(&entry).to_string())
 }
 
 /// Whether `unit` names the host Stado process: its product name, its launchd
@@ -182,15 +182,17 @@ pub fn retired_sentence(unit: &str, replacement: &CatalogService) -> String {
 }
 
 /// The product a unit labelled `label` that runs `program` would be a second
-/// process of: `program` is that product's catalog executable and `label` is
-/// not its one unit. A product runs as one process per host, so such a unit
-/// is refused rather than started beside the product's own.
+/// process of: `program` is that product's catalog executable, or the
+/// product's own binary (a file named as the product, which a catalog entry
+/// whose program is a launcher, such as Brama's, starts under it), and
+/// `label` is not its one unit. A product runs as one process per host, so
+/// such a unit is refused rather than started beside the product's own.
 pub fn second_process_of(label: &str, program: &str) -> Result<Option<CatalogService>, String> {
     let Some(executable) = executable_name(program) else {
         return Ok(None);
     };
     Ok(all()?.into_iter().find(|entry| {
-        executable_name(&entry.program) == Some(executable)
+        (executable_name(&entry.program) == Some(executable) || entry.name == executable)
             && entry.name != label
             && entry.unit.as_deref() != Some(label)
     }))
@@ -204,7 +206,7 @@ pub fn executable_name(program: &str) -> Option<&str> {
 
 /// The sentence every refusal of a second product process prints.
 pub fn second_process_sentence(label: &str, program: &str, product: &CatalogService) -> String {
-    let unit = product.unit.as_deref().unwrap_or(&product.name);
+    let unit = unit_of(product);
     format!(
         "{label} would run {program}, a second {name} process beside its one unit {unit}; a \
          product runs as one process per host, so move this work into {name} and deploy {name} \
@@ -217,9 +219,14 @@ pub fn second_process_sentence(label: &str, program: &str, product: &CatalogServ
 /// `$HOME` for the approved account's home, `$STADO_PLATFORM` for the
 /// registry `release_platform`, `$STADO_HOST` for the target's registry
 /// name. Expanding anywhere but against the resolved target would bake this
-/// machine's shape into another host's unit.
+/// machine's shape into another host's unit. With no `release_platform`
+/// stated, `$STADO_PLATFORM` stays as written: no platform is guessed, and
+/// the unit names the placeholder it could not resolve.
 pub fn resolve_word(word: &str, home: &str, release_platform: Option<&str>, host: &str) -> String {
-    let platform = release_platform.unwrap_or("darwin-arm64");
+    let resolved = word.replace("$HOME", home).replace("$STADO_HOST", host);
+    let Some(platform) = release_platform else {
+        return resolved;
+    };
     // The brama artifact layout shortens the platform triple to `darwin-arm`;
     // that is the directory the release actually publishes, not a mistake.
     let short = match platform {
@@ -227,9 +234,7 @@ pub fn resolve_word(word: &str, home: &str, release_platform: Option<&str>, host
         "linux-amd64" => "linux-amd",
         other => other,
     };
-    word.replace("$HOME", home)
-        .replace("$STADO_PLATFORM", short)
-        .replace("$STADO_HOST", host)
+    resolved.replace("$STADO_PLATFORM", short)
 }
 
 /// [`resolve_word`] over a whole catalog entry, with `$STADO_LISTEN_PORT`
