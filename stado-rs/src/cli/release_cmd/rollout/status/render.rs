@@ -1,7 +1,25 @@
 //! Render the retained pipeline diagnostics without discarding delivery failures.
 use serde_json::Value;
 
-use super::human_seconds;
+/// A duration an operator reads at a glance: `47s`, `18m34s`, `2h05m`. A
+/// negative span (a clock that ran behind) or one too long to split prints as
+/// the seconds it is, never as no time at all.
+fn human_seconds(seconds: i64) -> String {
+    use chrono::TimeDelta;
+    let Some(span) = TimeDelta::try_seconds(seconds).filter(|_| !seconds.is_negative()) else {
+        return format!("{seconds}s");
+    };
+    let hours = span.num_hours();
+    let minutes = (span - TimeDelta::hours(hours)).num_minutes();
+    let rest = (span - TimeDelta::hours(hours) - TimeDelta::minutes(minutes)).num_seconds();
+    if hours.is_positive() {
+        return format!("{hours}h{minutes:02}m");
+    }
+    if minutes.is_positive() {
+        return format!("{minutes}m{rest:02}s");
+    }
+    format!("{rest}s")
+}
 
 pub(super) fn print_runs(runs: &[Value]) {
     if !runs.is_empty() {

@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado release status` refuses a `--limit` it cannot count to and shows a negative run duration as it is:** a `--limit` larger than the platform could count read every recorded run instead, and a run whose recorded end preceded its start printed `0s`. The limit is now refused with `--limit <N> cannot be counted here: <cause>`, and such a duration prints as the negative seconds it is, so a clock that ran behind is visible.
+
 - **`stado quota request list` counts Azure tickets on what each one states:** a ticket that did not say whether it awaits the customer was printed as `N` and counted as awaiting Microsoft. It now prints `not reported`, the summary counts only tickets that state either, and names how many did not. GCP requests without a state, family or region sort ahead of the named ones rather than under an empty name.
 
 - **`stado quota show` and `quota catalog` sum and sort only what the providers gave:** the grand total row looked an accelerator's available count up again in a second map and printed `0` when it was missing, and the GCP catalog sorted a row without its quota id or region as an empty name. Totals and available counts are now summed together from the rows the providers returned, rows without a quota id or region sort ahead of the named ones, and the table rules are as long as their headers.

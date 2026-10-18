@@ -51,7 +51,8 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
     // size of the fleet is a column somebody eventually deletes.
     let records = crate::observations::load();
     let mut reports = Vec::new();
-    let mut failures: usize = 0;
+    // Rollout targets whose software is judged failed; each is a failure.
+    let mut failed: Vec<&String> = Vec::new();
     // Rollout targets the fleet registry does not declare; each is a failure.
     let mut undeclared: Vec<&String> = Vec::new();
     for (product, policy) in &control.products {
@@ -95,7 +96,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
                 Some(&ProductBinary::of(policy)),
             );
             if finding.failed {
-                failures = failures.saturating_add(1);
+                failed.push(target);
             }
             let mut block = software.json();
             finding.merge_into(&mut block);
@@ -109,8 +110,8 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
             }));
         }
     }
-    let failures = failures.saturating_add(undeclared.len());
-    let runs = recent_runs(args.product.as_deref(), run_window(args)).await?;
+    let failures = failed.len().saturating_add(undeclared.len());
+    let runs = recent_runs(args.product.as_deref(), run_window(args)?).await?;
     if reports.is_empty() && runs.is_empty() {
         // The request names nothing Stado holds: a refusal of the request,
         // with what is configured, never an unattributed failure.
@@ -193,7 +194,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
         }
         print_runs(&runs);
     }
-    if failures == 0 {
+    if failed.is_empty() && undeclared.is_empty() {
         return Ok(());
     }
     // Silence is the failure. Every sentence is already printed beside its row,
@@ -208,16 +209,30 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
 }
 
 /// The runs one listing reads: the newest `--limit`, or every recorded run.
-fn run_window(args: &ReleaseStatusArgs) -> usize {
-    args.limit.map_or(usize::MAX, |limit| {
-        usize::try_from(limit).unwrap_or(usize::MAX)
-    })
+/// A limit this platform cannot count to is refused rather than cut down.
+fn run_window(args: &ReleaseStatusArgs) -> Result<usize, CmdError> {
+    match args.limit {
+        Some(limit) => usize::try_from(limit).map_err(|error| {
+            CmdError::usage(format!("--limit {limit} cannot be counted here: {error}"))
+        }),
+        None => Ok(usize::MAX),
+    }
 }
 
 /// How a refusal names the runs it read.
 fn window_words(args: &ReleaseStatusArgs) -> String {
-    args.limit
-        .map_or_else(|| "recorded".to_string(), |limit| format!("newest {limit}"))
+    match args.limit {
+        Some(limit) => format!("newest {limit}"),
+        None => "recorded".to_string(),
+    }
+}
+
+/// How a refusal names one filter the request did not set: any value.
+fn filter_word(value: Option<&str>) -> &str {
+    match value {
+        Some(value) => value,
+        None => "*",
+    }
 }
 
 /// `release status --run ID | --version V`: the runs the filter admits, and
@@ -228,9 +243,9 @@ async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
         run: args.run.as_deref(),
         version: args.version.as_deref(),
     };
-    let runs = matching_runs(filter, run_window(args)).await?;
+    let runs = matching_runs(filter, run_window(args)?).await?;
     if runs.is_empty() {
-        let recent = recent_runs(args.product.as_deref(), run_window(args)).await?;
+        let recent = recent_runs(args.product.as_deref(), run_window(args)?).await?;
         let known: Vec<String> = recent
             .iter()
             .map(|run| {
@@ -248,9 +263,9 @@ async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
             .collect();
         return Err(CmdError::click(format!(
             "no release run matches run={} version={} product={}; the {} are:\n  {}",
-            args.run.as_deref().unwrap_or("*"),
-            args.version.as_deref().unwrap_or("*"),
-            args.product.as_deref().unwrap_or("*"),
+            filter_word(args.run.as_deref()),
+            filter_word(args.version.as_deref()),
+            filter_word(args.product.as_deref()),
             window_words(args),
             known.join("\n  ")
         ))
@@ -265,17 +280,4 @@ async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
     }
     print_runs(&runs);
     Ok(())
-}
-
-/// A duration an operator reads at a glance: `47s`, `18m34s`, `2h05m`.
-pub(crate) fn human_seconds(seconds: i64) -> String {
-    let seconds = seconds.max(0);
-    let (hours, minutes, rest) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
-    if hours > 0 {
-        return format!("{hours}h{minutes:02}m");
-    }
-    if minutes > 0 {
-        return format!("{minutes}m{rest:02}s");
-    }
-    format!("{rest}s")
 }
