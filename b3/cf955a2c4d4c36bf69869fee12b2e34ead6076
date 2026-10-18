@@ -16,3 +16,5 @@ Repairs: "Quality: the pre-push check, a change hand-off and a release submissio
 
 Harsh-Review-Attacked: whether the pre-push check reads what is pushed; --pre-push reads Git's update lines from stdin per its documented grammar, refuses a malformed line or object id, skips a deletion, and checks every distinct pushed commit; --revision checks one exact commit without fetching.
 Harsh-Review-Attacked: whether a dirty checkout changes the verdict; each revision is exported from the commit itself, so uncommitted files are not read.
+
+Repaired-By: "A refused gate's findings are read from Cargo's records" repairs it in this push, naming this commit on its Repairs line
