@@ -15,12 +15,13 @@ pub(in crate::cli::identity) fn probes_own_user(
     let Some(declared) = binding.user.as_deref() else {
         return true;
     };
+    // A connection that names no login lands on whatever user the transport
+    // picks, which is not the binding's user as far as anyone stated.
     target.has_ssh_connection()
         && target.ssh_connections().all(|(_, destination)| {
             destination
                 .split_once('@')
-                .map(|(login, _)| login == declared)
-                .unwrap_or(false)
+                .is_some_and(|(login, _)| login == declared)
         })
 }
 
@@ -38,24 +39,37 @@ pub(in crate::cli::identity) fn is_local_target(target: &ComputeTarget) -> bool 
     // an exact match fails on that suffix unannounced -- reporting the local machine as
     // unverifiable while standing on it.
     let label = |value: &str| {
-        value
-            .to_lowercase()
-            .split('.')
-            .next()
-            .unwrap_or("")
-            .to_string()
+        let value = value.to_lowercase();
+        match value.split_once('.') {
+            Some((first, _)) => first.to_string(),
+            None => value,
+        }
     };
     let host = label(&host);
     label(&target.name) == host || target.hostnames.iter().any(|name| label(name) == host)
 }
 
-/// The Apple accounts the current user is signed into on this machine.
+/// The Apple accounts the current user is signed into on this machine, or
+/// none when they cannot be read; why not is said on stderr, so an unknown
+/// answer carries its cause.
 pub(in crate::cli::identity) fn local_apple_accounts() -> Option<Vec<String>> {
-    let output = crate::wait::output(
+    let output = match crate::wait::output(
         std::process::Command::new("defaults").args(["read", "MobileMeAccounts"]),
-    )
-    .ok()?;
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!(
+                "this machine's Apple accounts cannot be read: defaults did not run: {error}"
+            );
+            return None;
+        }
+    };
     if !output.status.success() {
+        eprintln!(
+            "this machine's Apple accounts cannot be read: defaults read MobileMeAccounts ended {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
         return None;
     }
     let found = account_ids(&String::from_utf8_lossy(&output.stdout));
