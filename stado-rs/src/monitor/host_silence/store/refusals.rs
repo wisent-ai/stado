@@ -53,12 +53,12 @@ struct Claim {
 
 /// The refusal table, also after a thread panicked holding it.
 ///
-/// Every update of a [`Recording`] is whole, so a holder that panicked left
+/// Every update of a [`Recording`] is whole, so a holder that panicked leaves
 /// the table between updates. Skipping the table on a poisoned lock instead
-/// turned off the dedupe for the rest of the process: every refusal opened
-/// its own write, which is the burst the table exists to prevent, and a
-/// write that ended unsettled left its refusal marked as being written, so
-/// it was never written again.
+/// would turn off the dedupe for the rest of the process: every refusal would
+/// open its own write, which is the burst the table exists to prevent, and a
+/// write that ended unsettled would leave its refusal marked as being
+/// written, so it would never be written again.
 fn recordings() -> std::sync::MutexGuard<'static, HashMap<RefusalKey, Recording>> {
     match RECORDINGS.lock() {
         Ok(table) => table,

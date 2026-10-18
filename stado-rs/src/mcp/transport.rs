@@ -16,9 +16,9 @@ fn frame(message: &Value) -> String {
 /// Run the stdin loop until EOF (Python `serve`). Owns `writer`
 /// exclusively (frames only); diagnostics go to stderr via `tracing`.
 /// A line that cannot be read and a frame that cannot be written end the
-/// loop with that error: read as EOF, a broken stdin looked like a client
-/// that hung up, and an unwritten answer left the client waiting while the
-/// server went on reading.
+/// loop with that error: read as EOF, a broken stdin would look like a client
+/// that hung up, and an unwritten answer would leave the client waiting while
+/// the server went on reading.
 pub fn serve<R: BufRead, W: Write>(reader: R, writer: &mut W) -> std::io::Result<()> {
     for raw in reader.lines() {
         let raw = raw?;
