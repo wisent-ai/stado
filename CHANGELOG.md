@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A workload plan flag that is not a boolean is refused:** `fresh_profile`, `allow_login`, `defer_fills`, `prefill_all`, `windowed`, `repair` and `apple_only` named with anything but `true` or `false` (`"yes"`, `1`) were read as off, dropping what the plan asked for. They are now refused with `workload plan <field> must be true or false, not <value>`; a flag the plan does not name stays off. A `login_item` is checked by the grammar Weles identifiers share and must begin with a letter or digit, and an unmet placement is recorded with the reservation the kind declares rather than a reservation of nothing.
+
 - **`stado repair` prints a step's missing name, status or proof as not reported:** a step report without its name printed `repair`, without its status `reported`, and without its proof `not declared`, each a word the step never gave. Absent fields now read `not reported`. The proof each declared step must show is now kept beside the repair declarations.
 
 - **`stado space work-root` says what `systemctl` and `df` said when they fail:** the host program threw their stderr away, so a `systemctl` that could not read the unit's account fell back to the SSH account, and a `df` that failed left an empty device that was refused as `not a device-backed filesystem`. Each failure is now refused with the command's own words, and the path's filesystem is read with one `df` instead of three.

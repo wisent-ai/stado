@@ -7,7 +7,7 @@ use crate::cli::CmdError;
 
 use super::catalog::{list, workload, DECLARATION_PATH};
 use super::plan::{
-    boolean, dynamic_allowance, place, read_plan, required_plan, required_plan_path, required_text,
+    dynamic_allowance, flag, place, read_plan, required_plan, required_plan_path, required_text,
     string_array,
 };
 use super::runners::{
@@ -243,20 +243,14 @@ async fn run_kind(
         "weles-browser-runtime" => {
             let document = required_plan(document, kind)?;
             let components = string_array(document, "components")?;
-            weles_browser_runtime(
-                target,
-                &components,
-                boolean(document, "repair", false),
-                json_output,
-            )
-            .await
+            weles_browser_runtime(target, &components, flag(document, "repair")?, json_output).await
         }
         "gui-automation" => {
             run_gui_automation(target, required_plan(document, kind)?, json_output).await
         }
         "mobile-runtime" => {
             let document = required_plan(document, kind)?;
-            mobile_runtime(target, boolean(document, "repair", false), json_output).await
+            mobile_runtime(target, flag(document, "repair")?, json_output).await
         }
         _ => Err(CmdError::click(format!(
             "{kind} has no runner; add it to {DECLARATION_PATH}"

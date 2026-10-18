@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use crate::cli::workload::plan::{boolean, print_json, required_text};
+use crate::cli::workload::plan::{flag, print_json, required_text};
 use crate::cli::CmdError;
 
 pub(crate) async fn run_weles_browser_task(
@@ -31,24 +31,26 @@ pub(crate) async fn run_weles_browser_task(
         ));
     }
     let session_label = required_text(Some(plan), "session_label")?;
-    let action = plan
-        .get("action")
-        .and_then(Value::as_str)
-        .unwrap_or(crate::deploy::weles_browser_task::DEFAULT_ACTION);
-    let allowlist_file = plan
-        .get("allowlist_file")
-        .and_then(Value::as_str)
-        .unwrap_or(crate::deploy::weles_browser_task::DEFAULT_ALLOWLIST_FILE);
+    // The action and the allowlist are the plan's when it names them, and
+    // the declared defaults of the browser-task module when it does not.
+    let action = match plan.get("action").and_then(Value::as_str) {
+        Some(action) => action,
+        None => crate::deploy::weles_browser_task::DEFAULT_ACTION,
+    };
+    let allowlist_file = match plan.get("allowlist_file").and_then(Value::as_str) {
+        Some(file) => file,
+        None => crate::deploy::weles_browser_task::DEFAULT_ALLOWLIST_FILE,
+    };
     let login_item = plan.get("login_item").and_then(Value::as_str);
     let account_id = plan.get("account_id").and_then(Value::as_str);
-    let fresh_profile = boolean(plan, "fresh_profile", false);
-    let allow_login = boolean(plan, "allow_login", false);
+    let fresh_profile = flag(plan, "fresh_profile")?;
+    let allow_login = flag(plan, "allow_login")?;
     let sign_in_origin = plan.get("sign_in_origin").and_then(Value::as_str);
     let sign_in_item = plan.get("sign_in_item").and_then(Value::as_str);
-    let defer_fills = boolean(plan, "defer_fills", false);
-    let prefill_all = boolean(plan, "prefill_all", false);
+    let defer_fills = flag(plan, "defer_fills")?;
+    let prefill_all = flag(plan, "prefill_all")?;
     let flow_name = plan.get("flow_name").and_then(Value::as_str);
-    let windowed = boolean(plan, "windowed", false);
+    let windowed = flag(plan, "windowed")?;
 
     if defer_fills && prefill_all {
         return Err(CmdError::usage(
@@ -85,16 +87,21 @@ pub(crate) async fn run_weles_browser_task(
         ));
     }
     if let Some(item) = login_item {
-        let bytes = item.as_bytes();
-        if bytes.is_empty()
-            || bytes.len() > 128
-            || !bytes[0].is_ascii_alphanumeric()
-            || !bytes
-                .iter()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        // A Weles item id follows the grammar of every Weles identifier the
+        // account id is checked by, and begins with a letter or digit.
+        let item = crate::deploy::weles_capture::checked_account_id(item).map_err(|error| {
+            CmdError::usage(format!(
+                "weles-browser-task plan login_item is not a valid Weles item id: {error}"
+            ))
+        })?;
+        if !item
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
         {
             return Err(CmdError::usage(
-                "weles-browser-task plan login_item is not a valid Weles item id",
+                "weles-browser-task plan login_item is not a valid Weles item id: it must begin \
+                 with a letter or digit",
             ));
         }
         if !action.ends_with("_login") {
@@ -257,7 +264,7 @@ pub(crate) async fn run_weles_browser_task(
         if let Some(profile) = &outcome.profile {
             println!(
                 "profile:   {}",
-                profile["directory"].as_str().unwrap_or("fresh")
+                crate::cli::reporting::field(&profile["directory"])
             );
         }
         if !outcome.result.is_null() {

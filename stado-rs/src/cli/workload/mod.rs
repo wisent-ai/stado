@@ -9,6 +9,7 @@ mod catalog;
 mod commands;
 mod plan;
 mod runners;
+mod unmet;
 
 pub use catalog::workload as declared;
 pub use catalog::{WorkloadKind, WorkloadReservation, DECLARATION_PATH};

@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use crate::cli::workload::plan::{boolean, registry_target, required_text};
+use crate::cli::workload::plan::{flag, registry_target, required_text};
 use crate::cli::CmdError;
 
 fn print_gui_report(
@@ -63,7 +63,7 @@ pub(crate) async fn run_gui_automation(
             let password = crate::cli::service::host_sudo_password(&resolved).await?;
             crate::deploy::host_gui_automation::grant_accessibility(
                 &resolved,
-                boolean(plan, "apple_only", false),
+                flag(plan, "apple_only")?,
                 password.as_deref(),
                 &runner,
             )

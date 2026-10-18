@@ -7,6 +7,7 @@ use crate::cli::CmdError;
 use crate::targets::ComputeTarget;
 
 use super::catalog::{WorkloadKind, DECLARATION_PATH};
+use super::unmet::record_no_eligible_target;
 
 pub(crate) fn read_plan<'a>(
     declaration: &WorkloadKind,
@@ -145,85 +146,6 @@ pub(crate) async fn place(
     }
 }
 
-/// The platform a kind needs, when its declaration pins one. Only
-/// `gui-automation` does today; every other kind is refused for a missing
-/// Weles or mobile declaration, which is a registry gap and not a machine
-/// the fleet lacks.
-fn required_platform(declaration: &WorkloadKind) -> Option<&'static str> {
-    match declaration.kind.as_str() {
-        "gui-automation" => Some("darwin-arm64"),
-        _ => None,
-    }
-}
-
-async fn record_no_eligible_target(
-    declaration: &WorkloadKind,
-    allowance: Option<&str>,
-    registry: &crate::targets::Registry,
-) {
-    use crate::fleet_needs::{
-        record_unmet, this_requester, Candidate, Requirement, UnmetPlacement, UnmetReason,
-    };
-    let reservation = declaration
-        .reservation
-        .unwrap_or(super::catalog::WorkloadReservation {
-            cpu_cores: 0,
-            ram_gb: 0.0,
-            vram_gb: 0,
-        });
-    let requester = match this_requester() {
-        Ok(requester) => requester,
-        Err(error) => {
-            eprintln!("the refusal could not be recorded for `stado fleet needs`: {error}");
-            return;
-        }
-    };
-    let record = UnmetPlacement::new(
-        &declaration.kind,
-        &declaration.product,
-        requester,
-        Requirement {
-            platform: required_platform(declaration).map(str::to_string),
-            gpu_type: None,
-            vram_gb: reservation.vram_gb,
-            ram_gb: reservation.ram_gb,
-            cpu_cores: reservation.cpu_cores,
-            exclusive: false,
-            pinned_host: None,
-        },
-        UnmetReason::NoEligibleTarget,
-        registry
-            .targets
-            .iter()
-            .map(|target| Candidate {
-                target: target.name.clone(),
-                refusal: format!(
-                    "{} declares no {}{}",
-                    target.name,
-                    declaration.kind,
-                    allowance
-                        .map(|action| format!(" with action {action}"))
-                        .unwrap_or_default()
-                ),
-            })
-            .collect(),
-    );
-    // The record is the refusal's second copy, for `stado fleet needs`; a
-    // store that does not open is said like a write that fails.
-    let store = match crate::queue::submit::default_store("").await {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!(
-                "the refusal could not be recorded for `stado fleet needs`: the store did not open: {error}"
-            );
-            return;
-        }
-    };
-    if let Err(error) = record_unmet(&store, &record).await {
-        eprintln!("the refusal could not be recorded for `stado fleet needs`: {error}");
-    }
-}
-
 pub(crate) fn required_text<'a>(
     document: Option<&'a Value>,
     field: &str,
@@ -240,11 +162,18 @@ pub(crate) fn required_text<'a>(
         })
 }
 
-pub(crate) fn boolean(document: &Value, field: &str, default: bool) -> bool {
-    document
-        .get(field)
-        .and_then(Value::as_bool)
-        .unwrap_or(default)
+/// An opt-in flag of a plan: true or false as the plan states it, false when
+/// the plan does not name it (it did not opt in), and refused when the plan
+/// names it with something that is not a boolean, which read as false would
+/// drop what the plan asked for.
+pub(crate) fn flag(document: &Value, field: &str) -> Result<bool, CmdError> {
+    match document.get(field) {
+        None => Ok(false),
+        Some(Value::Bool(set)) => Ok(*set),
+        Some(other) => Err(CmdError::usage(format!(
+            "workload plan {field} must be true or false, not {other}"
+        ))),
+    }
 }
 
 pub(crate) fn string_array(document: &Value, field: &str) -> Result<Vec<String>, CmdError> {
