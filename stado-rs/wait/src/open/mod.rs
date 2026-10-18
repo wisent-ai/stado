@@ -3,7 +3,7 @@
 //! A wait's lines go to the waiting program's stderr, which belongs to
 //! whoever started it: a caller that filters that stream, or pipes it
 //! through `tail`, sees nothing while a wait stands, and a wait that never
-//! ended stayed invisible for hours. So each wait is also a file here,
+//! ends would stay invisible. So each wait is also a file here,
 //! created as it begins and removed as it ends, named by its id and holding
 //! its `czekam` line. `stado waits` lists them, whoever started the process.
 //!
@@ -143,16 +143,22 @@ pub fn listed() -> Result<Listing, RegisterError> {
             .map_err(|error| io_failure(format!("listing {}", directory.display()), &error))?;
         let file = entry.path();
         let id = entry.file_name().to_string_lossy().into_owned();
-        let (pid, sequence) = id
-            .split_once('-')
-            .and_then(|(pid, sequence)| Some((pid.parse::<u32>().ok()?, sequence.parse().ok()?)))
-            .ok_or_else(|| RegisterError {
-                cause: format!(
-                    "{} is not named <pid>-<n>, so it is no wait of this register; remove it",
-                    file.display()
-                ),
-                io: None,
-            })?;
+        let misnamed = |why: String| RegisterError {
+            cause: format!(
+                "{} is not named <pid>-<n> ({why}), so it is no wait of this register; remove it",
+                file.display()
+            ),
+            io: None,
+        };
+        let Some((pid, sequence)) = id.split_once('-') else {
+            return Err(misnamed("no dash".to_string()));
+        };
+        let pid = pid
+            .parse::<u32>()
+            .map_err(|error| misnamed(format!("pid {pid:?}: {error}")))?;
+        let sequence = sequence
+            .parse::<u64>()
+            .map_err(|error| misnamed(format!("sequence {sequence:?}: {error}")))?;
         let line = match std::fs::read_to_string(&file) {
             Ok(text) => text.trim_end().to_string(),
             // Its wait ended between the listing and the read.
@@ -190,14 +196,17 @@ pub fn listed() -> Result<Listing, RegisterError> {
     Ok(listing)
 }
 
-/// Whether a process with this pid exists: signal 0 delivers nothing and
-/// answers whether it could be delivered (EPERM means it exists, owned by
-/// another user).
+/// kill(2)'s null signal, which delivers nothing and only checks the pid:
+/// https://pubs.opengroup.org/onlinepubs/9699919799/functions/kill.html
+const NULL_SIGNAL: libc::c_int = 0;
+
+/// Whether a process with this pid exists: the null signal answers whether
+/// it could be delivered (EPERM means it exists, owned by another user).
 pub(crate) fn running(pid: u32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
-    // SAFETY: kill with signal 0 sends no signal; it only checks the pid.
-    let answered = unsafe { libc::kill(pid, 0) };
-    answered == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    // SAFETY: kill with the null signal sends no signal; it only checks the pid.
+    let answered = unsafe { libc::kill(pid, NULL_SIGNAL) };
+    !answered.is_negative() || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
