@@ -29,14 +29,23 @@
 /// One copy: this text and its `printf` existed twice, once per activate
 /// program, byte-identical, and a second copy is how a field added for one
 /// shape silently misses the other.
+///
+/// The program says where it wrote the receipt (`receipt`) or why it could
+/// not (`receipt_unwritten`, with the shell's own words): a receipt whose
+/// write failed used to vanish without a word, and later read as a delivery
+/// made before receipts.
 pub const RECEIPT_BODY: &str = r##"
 receipt_dir="$stado_home/releases/$binary/$version/$platform"
-if [ -d "$receipt_dir" ]; then
-  printf '{"binary":"%s","version":"%s","platform":"%s","source_commit":"%s","sha256":"%s","artifact_sha256":"%s","installed_at":"%s","delivered_by":"%s"}\n' \
+receipt="$receipt_dir/release-receipt.json"
+if [ ! -d "$receipt_dir" ]; then
+  say receipt_unwritten "$receipt_dir is not a directory"
+elif receipt_error=$( { printf '{"binary":"%s","version":"%s","platform":"%s","source_commit":"%s","sha256":"%s","artifact_sha256":"%s","installed_at":"%s","delivered_by":"%s"}\n' \
     "$binary" "$version" "$platform" "${source_commit:-}" "${expected_sha256:-}" \
     "${active_sha256:-}" "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" "${delivered_by:-}" \
-    > "$receipt_dir/release-receipt.json" 2>/dev/null || true
-  /bin/chmod 600 "$receipt_dir/release-receipt.json" 2>/dev/null || true
+    > "$receipt"; } 2>&1 ) && receipt_error=$(/bin/chmod 600 "$receipt" 2>&1); then
+  say receipt "$receipt"
+else
+  say receipt_unwritten "$receipt: $receipt_error"
 fi
 "##;
 

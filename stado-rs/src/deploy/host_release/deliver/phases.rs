@@ -51,7 +51,9 @@ pub(super) async fn prove_active_image(
                     && state.process_started_at.is_some()
                     && state.process_executable.is_some()
                     && state.process_device.is_some()
-                    && state.process_inode.is_some_and(|inode| inode != 0)
+                    // The label reader keeps no inode it could not read
+                    // whole; zero is cleared with the rest of the identity.
+                    && state.process_inode.is_some()
                     && state.process_sha256.as_deref() == Some(active_sha256);
                 if mapped {
                     let evidence = state.to_json();
@@ -95,7 +97,7 @@ pub(super) async fn stage_phase(
         "fetched_sha256".to_string(),
         json!(marker(&stage_markers, "sha256")),
     );
-    if !stage.ok() || marker(&stage_markers, "step") != "stage" {
+    if !stage.succeeded() || marker(&stage_markers, "step") != "stage" {
         let detail = step_failure(&stage_markers, &stage);
         steps.push(step_entry(
             "stage",
@@ -176,7 +178,7 @@ pub(super) async fn activate_phase(
 ) -> Result<Result<String, Value>, DeployError> {
     let activate = host_channel::run_script(target, &activate_script(plan), runner).await?;
     let activate_markers = markers(&activate.stdout);
-    if !activate.ok() || marker(&activate_markers, "step") != "activate" {
+    if !activate.succeeded() || marker(&activate_markers, "step") != "activate" {
         let detail = step_failure(&activate_markers, &activate);
         steps.push(step_entry(
             "activate",
@@ -202,6 +204,17 @@ pub(super) async fn activate_phase(
         return Ok(Err(fail(report, activate.code, detail)));
     }
     report.insert("active_sha256".to_string(), json!(active_sha256));
+    // Where this delivery recorded who installed the bytes, or the host's
+    // words for why it could not: a receipt that failed to write is said
+    // here instead of being found missing later.
+    report.insert(
+        "receipt".to_string(),
+        json!(marker_values(&activate_markers, "receipt").first()),
+    );
+    report.insert(
+        "receipt_unwritten".to_string(),
+        json!(marker_values(&activate_markers, "receipt_unwritten").first()),
+    );
     if plan.product.install.is_tree() {
         // The paths this delivery actually replaced, as the host named them
         // one by one. An operator asking what a tree delivery touched gets

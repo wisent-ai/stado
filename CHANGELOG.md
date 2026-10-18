@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **A delivery says whether it wrote its release receipt:** the activate program wrote `release-receipt.json` with its errors sent to `/dev/null` and `|| true`, so a receipt that could not be written left a host with no record of who installed the bytes and no word why. The program now says `receipt` with the path it wrote, or `receipt_unwritten` with the path and the shell's own words, and the delivery report carries both fields.
+
 - **A machine submission's work file is created once and refused with its path:** creating the owner-only file a machine submission stages its source through tried up to sixteen fresh names and then refused with no path. Its name ends in a fresh random UUID, so a file already there was not left by this process: it is now created once, and any failure is refused naming the file and the operating system's cause.
 
 - **Unit directories are read from one declaration in four more places, and a remote file retirement says why it failed:** the unit-domain classifier, the misdeclared-domain finding, the precheck runner's daemon check and file retirement spelled `/Library/LaunchDaemons` and `/Library/LaunchAgents` for themselves; they now read `deploy::service`'s unit-path declaration, compared by path component rather than string prefix. The misdeclared-domain finding holds its account as present or absent instead of an empty string. A file retirement the host's Stado refused now quotes its whole failure with the exit status, and a report that does not parse is quoted with it.
