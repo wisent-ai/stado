@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The host beacon names a systemd trigger it could not read:** reconciling a oneshot's lifecycle skipped a trigger (its timer) whose `systemctl show` could not run or failed, so a unit whose timer systemd could not answer for stayed unscheduled with no trace why. Each such read is now listed on the unit as `triggers_unread` with its cause, beside `lifecycle_unread`.
+
 - **`stado credentials try-unlock` says why the host Keychain or `key-doctor` failed:** the remote program threw away the stderr of `security` and `skarbiec key-doctor`, so a Keychain that could not be read was taken for one with no phrase, and a `key-doctor` that answered without a report was quoted without its errors. A missing `skarbiec-vault` item (`security` exit 44) is still no failure; any other Keychain failure is said on stderr with its status and words, and refuses a `--keychain-only` run with that cause. `CommandOutput::succeeded` is the name for a command that exited with the platform's success status, and the callers move to it from `ok`.
 
 - **A RunPod pod whose launch stamp does not read is refused:** the `STADO_LAUNCHED_AT` stamp Stado writes into a pod's environment was read as no launch time when it did not parse, so the reaper refused the pod as one of unknown age without saying the stamp was the cause. It is now refused naming the stamp and the parser's reason.

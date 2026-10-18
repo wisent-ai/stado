@@ -29,7 +29,7 @@ async fn local_systemd_properties(
     let output = runner(spec)
         .await
         .map_err(|error| format!("systemctl show {unit} could not run: {error}"))?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(format!(
             "systemctl show {unit} failed: {}",
             output.stderr.trim()
@@ -41,6 +41,19 @@ async fn local_systemd_properties(
         .filter_map(|line| line.split_once('='))
         .map(|(key, value)| (key.to_string(), value.to_string()))
         .collect())
+}
+
+/// The beacon's own entry for `unit`, when the document carries one as an
+/// object: the one place the reconciliation writes a unit's fields.
+fn unit_fields<'a>(
+    document: &'a mut Value,
+    unit: &str,
+) -> Option<&'a mut serde_json::Map<String, Value>> {
+    document
+        .get_mut("units")
+        .and_then(Value::as_object_mut)
+        .and_then(|units| units.get_mut(unit))
+        .and_then(Value::as_object_mut)
 }
 
 /// Reconcile a collector's non-active systemd sample with native lifecycle
@@ -87,12 +100,7 @@ pub(super) async fn refresh_local_unit_lifecycle(
         {
             Ok(properties) => properties,
             Err(unread) => {
-                if let Some(fields) = document
-                    .get_mut("units")
-                    .and_then(Value::as_object_mut)
-                    .and_then(|units| units.get_mut(&unit))
-                    .and_then(Value::as_object_mut)
-                {
+                if let Some(fields) = unit_fields(document, &unit) {
                     fields.insert("lifecycle_unread".to_string(), json!(unread));
                 }
                 continue;
@@ -130,13 +138,25 @@ pub(super) async fn refresh_local_unit_lifecycle(
             None
         };
         let mut active_trigger = None;
+        // A trigger whose state cannot be read is said on the unit beside
+        // the others, never dropped: dropped, a timer systemd could not
+        // answer for left the unit unscheduled with no trace why.
+        let mut triggers_unread = Vec::new();
         if scheduled_run.is_some() && !triggers.is_empty() {
             for trigger in &triggers {
-                let Ok(trigger_properties) =
-                    local_systemd_properties(manager, trigger, "LoadState,ActiveState", runner)
-                        .await
-                else {
-                    continue;
+                let trigger_properties = match local_systemd_properties(
+                    manager,
+                    trigger,
+                    "LoadState,ActiveState",
+                    runner,
+                )
+                .await
+                {
+                    Ok(properties) => properties,
+                    Err(unread) => {
+                        triggers_unread.push(unread);
+                        continue;
+                    }
                 };
                 let trigger_state = trigger_properties.get("ActiveState");
                 if trigger_properties.get("LoadState").map(String::as_str) == Some("loaded")
@@ -149,6 +169,11 @@ pub(super) async fn refresh_local_unit_lifecycle(
                 }
             }
         }
+        if !triggers_unread.is_empty() {
+            if let Some(fields) = unit_fields(document, &unit) {
+                fields.insert("triggers_unread".to_string(), json!(triggers_unread));
+            }
+        }
 
         let published_state = if active_trigger.is_some() && scheduled_run.is_some() {
             "scheduled"
@@ -157,12 +182,7 @@ pub(super) async fn refresh_local_unit_lifecycle(
         } else {
             continue;
         };
-        let Some(fields) = document
-            .get_mut("units")
-            .and_then(Value::as_object_mut)
-            .and_then(|units| units.get_mut(&unit))
-            .and_then(Value::as_object_mut)
-        else {
+        let Some(fields) = unit_fields(document, &unit) else {
             continue;
         };
         fields.insert("state".to_string(), json!(published_state));
