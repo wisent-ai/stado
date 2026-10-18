@@ -4,14 +4,10 @@
 //! counterpart it did not actually read.
 
 use std::fs;
-use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-
-/// Bytes read per step while hashing one file.
-const HASH_CHUNK: usize = 1 << 20;
 
 /// What reading one path found.
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -37,41 +33,71 @@ impl FileState {
 /// The word the marker lines carry, from the serde mapping.
 impl std::fmt::Display for FileState {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 
-/// A file's state, size and, when it was hashed, its content digest.
+/// A file's state, its byte count when its metadata was read, its content
+/// digest when it was hashed, and why it could not be read when it could not.
 pub(super) struct Identity {
     pub(super) state: FileState,
-    pub(super) size: String,
-    pub(super) digest: String,
+    pub(super) bytes: Option<u64>,
+    pub(super) digest: Option<String>,
+    pub(super) cause: Option<String>,
 }
 
 impl Identity {
-    fn of(state: FileState, size: String) -> Self {
+    fn of(state: FileState, bytes: Option<u64>) -> Self {
         Identity {
             state,
-            size,
-            digest: String::new(),
+            bytes,
+            digest: None,
+            cause: None,
+        }
+    }
+
+    fn unreadable(bytes: Option<u64>, cause: String) -> Self {
+        Identity {
+            state: FileState::Unreadable,
+            bytes,
+            digest: None,
+            cause: Some(cause),
+        }
+    }
+
+    /// The size field of a marker row: the byte count, or nothing where no
+    /// metadata was read, which the operator side reads as no size.
+    pub(super) fn size(&self) -> String {
+        match self.bytes {
+            Some(bytes) => bytes.to_string(),
+            None => String::new(),
+        }
+    }
+
+    /// The digest field of a marker row: the content digest, or nothing
+    /// where the content was not hashed.
+    pub(super) fn digest_field(&self) -> &str {
+        match &self.digest {
+            Some(digest) => digest,
+            None => "",
+        }
+    }
+
+    /// The state as a sentence names it, with why it could not be read.
+    pub(super) fn described(&self) -> String {
+        match &self.cause {
+            Some(cause) => format!("{} ({cause})", self.state),
+            None => self.state.to_string(),
         }
     }
 }
 
+/// The SHA-256 of `path`'s content, streamed through the hasher.
 pub(super) fn sha256(path: &Path) -> std::io::Result<String> {
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; HASH_CHUNK];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            return Ok(hex::encode(hasher.finalize()));
-        }
-        hasher.update(&buffer[..read]);
-    }
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// The state and size of `path` without reading it; `hash` also reads it.
@@ -79,24 +105,25 @@ pub(super) fn identity(path: &Path, hash: bool) -> Identity {
     let entry = match fs::symlink_metadata(path) {
         Ok(entry) => entry,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Identity::of(FileState::Absent, String::new())
+            return Identity::of(FileState::Absent, None)
         }
-        Err(_) => return Identity::of(FileState::Unreadable, String::new()),
+        Err(error) => return Identity::unreadable(None, error.to_string()),
     };
-    let size = entry.size().to_string();
+    let bytes = Some(entry.size());
     if !entry.file_type().is_file() {
-        return Identity::of(FileState::NotRegular, size);
+        return Identity::of(FileState::NotRegular, bytes);
     }
     if !hash {
-        return Identity::of(FileState::Present, size);
+        return Identity::of(FileState::Present, bytes);
     }
     match sha256(path) {
         Ok(digest) => Identity {
             state: FileState::Present,
-            size,
-            digest,
+            bytes,
+            digest: Some(digest),
+            cause: None,
         },
-        Err(_) => Identity::of(FileState::Unreadable, size),
+        Err(error) => Identity::unreadable(bytes, error.to_string()),
     }
 }
 
@@ -162,10 +189,10 @@ pub(super) fn walk(
     }
 }
 
-/// A path relative to `root`, as text.
-pub(super) fn relative(path: &Path, root: &Path) -> String {
+/// A path the walk of `root` reached, relative to `root`, as text; one that
+/// is not under `root` is the error naming both.
+pub(super) fn relative(path: &Path, root: &Path) -> Result<String, String> {
     path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
+        .map(|inside| inside.to_string_lossy().into_owned())
+        .map_err(|_| format!("{} is not under {}", path.display(), root.display()))
 }
