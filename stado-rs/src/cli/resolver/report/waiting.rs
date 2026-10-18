@@ -88,10 +88,9 @@ pub(crate) struct WaitingOpen {
     pub(crate) session_replaced_at: Option<String>,
     /// The request line the client sent first (`GET /api/object?… HTTP/1.1`),
     /// when its first bytes carried a whole line: the one fact that names
-    /// which operation the holding process is waiting on. Hundreds of waits
-    /// from one process stood in this list with nothing saying what they
-    /// asked for. Absent for a wait to open a channel, and for a first chunk
-    /// without a line end.
+    /// which operation the holding process is waiting on, so many waits from
+    /// one process are told apart. Absent for a wait to open a channel, and
+    /// for a first chunk without a line end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) request: Option<String>,
 }
