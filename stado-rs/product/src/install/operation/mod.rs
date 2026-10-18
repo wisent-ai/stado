@@ -73,13 +73,20 @@ fn holder(lock: &Path) -> Result<Option<Value>> {
 }
 
 /// The holder a lock file records, as one clause for a refusal or a wait:
-/// its pid and whether it runs, since when, its command and its step.
+/// its pid and whether it runs, since when, its command and its step. A
+/// record that cannot be read or parsed is said with its cause, and only an
+/// empty one as the record of a Stado from before holders were recorded.
 pub(crate) fn clause(path: &Path) -> String {
-    let Ok(text) = fs::read_to_string(path) else {
-        return "its holder record cannot be read".into();
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) => return format!("its holder record cannot be read: {error}"),
     };
-    let Ok(record) = serde_json::from_str::<Value>(text.trim()) else {
+    if text.trim().is_empty() {
         return "the holder recorded nothing (a Stado from before holders were recorded)".into();
+    }
+    let record = match serde_json::from_str::<Value>(text.trim()) {
+        Ok(record) => record,
+        Err(error) => return format!("its holder record is not one ({error}): {}", text.trim()),
     };
     let Some(pid) = record["pid"].as_u64() else {
         return "the holder record names no pid".into();
@@ -88,9 +95,10 @@ pub(crate) fn clause(path: &Path) -> String {
         Some(value) => value.to_owned(),
         None => format!("no recorded {name}"),
     };
-    let state = match i32::try_from(pid).is_ok_and(alive) {
-        true => "running",
-        false => "no longer running",
+    let state = match i32::try_from(pid) {
+        Ok(pid) if alive(pid) => "running".to_owned(),
+        Ok(_) => "no longer running".to_owned(),
+        Err(error) => format!("a pid no process can have: {error}"),
     };
     let step = match record["step"].as_str() {
         Some(step) => format!(", in step {step}"),
