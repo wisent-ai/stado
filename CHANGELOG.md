@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado release doctor` says `not reported` where its report is silent:** a field the diagnosis did not carry printed `-`, a published status row without its detail printed no detail line at all, and a report without its remedy or quarantine lists printed as if there were none. Absent fields now read `not reported`, the missing detail is said, and the remedy and quarantine sections print exactly what the report lists.
+
 - **The vault doctors say what Skarbiec's report left out and why it could not be read:** a recipient without key files printed `(no keygrip)`, a report naming no remedy was refused with a remedy Stado made up, and a key-doctor answer that was not JSON was refused without the parser's reason. The key file now reads `not reported`, a report without a remedy is refused quoting the report, and the unreadable answer names the parse error. `stado vault authority --json` exits with the CLI's declared failure status.
 
 - **`stado resources inventory` says what a source did not report instead of printing blank cells:** a compute source without a provider list printed an empty provider table, and a count, age, holder list or hostname list a row did not carry printed an empty cell, which read as none. The missing provider list is now said in a line of its own, and each missing cell reads `not reported`.

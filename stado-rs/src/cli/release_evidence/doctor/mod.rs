@@ -90,18 +90,19 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
         .and_then(|state| state.active.as_ref())
         .map(|record| record.version.clone())
         .or_else(|| published["active_version"].as_str().map(str::to_string));
-    let phase = state.as_ref().map_or_else(
-        || {
-            published["phase"]
-                .as_str()
-                .map_or_else(|| PHASE_UNREPORTED.to_string(), str::to_string)
+    // Without the agent's state file, the published status row speaks; a
+    // phase or detail it does not carry is said as unreported.
+    let phase = match &state {
+        Some(state) => phase_word(state.phase),
+        None => match published["phase"].as_str() {
+            Some(phase) => phase.to_string(),
+            None => PHASE_UNREPORTED.to_string(),
         },
-        |state| phase_word(state.phase),
-    );
-    let detail = state.as_ref().map_or_else(
-        || published["detail"].as_str().unwrap_or_default().to_string(),
-        |state| state.detail.clone(),
-    );
+    };
+    let detail = match &state {
+        Some(state) => state.detail.clone(),
+        None => crate::cli::reporting::field(&published["detail"]),
+    };
     let candidate = candidate_section(
         &compute,
         state.as_ref(),
@@ -139,11 +140,7 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
-    let cell = |value: &Value| match value {
-        Value::Null => "-".to_string(),
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    };
+    let cell = crate::cli::reporting::field;
     println!("product           {}", args.product);
     println!("target            {target_name}");
     println!("desired           {}", cell(&report["desired_version"]));
@@ -205,20 +202,21 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
     }
     let remedies: Vec<String> = report["remedies"]
         .as_array()
-        .map(|remedies| remedies.iter().map(cell).collect())
-        .unwrap_or_default();
-    for (index, remedy) in remedies.iter().enumerate() {
-        // One line each, all of them: the first is not necessarily the one
-        // this operator needs, and a verdict that prints only the top remedy
-        // hides the rest of what it just diagnosed.
-        let label = if index == 0 { "remedy" } else { "" };
+        .into_iter()
+        .flatten()
+        .map(cell)
+        .collect();
+    // One line each, all of them: the first is not necessarily the one this
+    // operator needs, and a verdict that prints only the top remedy hides the
+    // rest of what it just diagnosed. The label stands on the first line only.
+    let labels = std::iter::once("remedy").chain(std::iter::repeat(""));
+    for (label, remedy) in labels.zip(&remedies) {
         println!("{label:<18}{remedy}");
     }
-    let quarantined = report["quarantined"]
+    if let Some(quarantined) = report["quarantined"]
         .as_array()
-        .cloned()
-        .unwrap_or_default();
-    if !quarantined.is_empty() {
+        .filter(|entries| !entries.is_empty())
+    {
         // The summary, then the detail. Twenty rows of truncated stderr is not
         // a thing an operator can read, and the finding in it -- that several
         // of those rows are one cause -- was a pattern they had to spot. It is
