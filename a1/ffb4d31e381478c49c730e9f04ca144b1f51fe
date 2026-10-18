@@ -1,0 +1,23 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Repairs: "The held readings use the refresh interval of the resolver that published the waits" its interval was read from the last-known-good registry copy, whose absence or unreadable state answered no interval, so nothing could be held
+Repairs: "Format the client-address lines as rustfmt lays them out" its journey line is rewritten for the interval the resolver publishes
+Repairs: "Format the held-route journey as rustfmt lays it out" its journey line is rewritten the same way
+Repairs: "A held connection names the client holding it" its journey assertion is rewritten the same way
+Repairs: "A resolver serves its store's registry when the authority's first snapshot does not answer" its silent-authority journey helper is rewritten the same way
+
+Harsh-Review-Attacked: whether a held wait is measured without a registry copy; the resolver publishes its refresh interval beside its state, the readers take it from there, and a state naming none holds nothing.
+Harsh-Review-Attacked: whether a poisoned config lock loses the interval; publish takes the config through the poison, since it holds a value with no invariant a panic breaks.
+Harsh-Review-Attacked: whether the test runs the real product; the held and silent journeys run the real resolver with no last-known-good copy and read the waits held against the published interval.
