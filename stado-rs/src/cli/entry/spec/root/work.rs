@@ -48,9 +48,9 @@ pub(crate) enum WorkCommands {
     Cancel {
         /// The job to cancel. Omitted with `--queued`, which selects them all.
         job_id: Option<String>,
-        /// Cancel every job still in the queue, claimed by nobody. A fleet
-        /// that has queued work it no longer wants had to be emptied one id
-        /// at a time, which is how a queue stays full.
+        /// Cancel every job still in the queue, claimed by nobody, in one
+        /// command, so a fleet empties queued work it no longer wants without
+        /// naming each id.
         #[arg(long)]
         queued: bool,
         /// Also delete the cloud instance the job is holding. Without it a
