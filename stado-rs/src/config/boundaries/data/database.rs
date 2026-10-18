@@ -19,9 +19,18 @@ pub enum DatabaseEngine {
 }
 
 impl DatabaseEngine {
-    /// The engine Stado runs that `name` spells, or nothing.
+    /// Every engine Stado runs itself.
+    const RUN: &'static [Self] = &[Self::Postgres, Self::Sqlite];
+
+    /// The engine Stado runs that `name` spells, or nothing when `name` is
+    /// an engine Stado does not run (which [`Self::is_engine_name`] still
+    /// admits for an external server).
     pub fn parse(name: &str) -> Option<Self> {
-        serde_json::from_value(Value::String(name.to_string())).ok()
+        let spelled = Value::String(name.to_string());
+        Self::RUN
+            .iter()
+            .copied()
+            .find(|engine| serde_json::to_value(engine).is_ok_and(|word| word == spelled))
     }
 
     /// Whether `name` can name a database engine: the lowercase scheme of
@@ -56,10 +65,7 @@ impl DatabaseScope {
 /// The scope word a grant carries, from the same serde mapping.
 impl std::fmt::Display for DatabaseScope {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 
@@ -142,10 +148,12 @@ pub(crate) fn parse_database_api_databases(
             &mut problems,
         );
         let expected_item = format!("{name}-database");
-        let item = entry
-            .get("item")
-            .and_then(Value::as_str)
-            .unwrap_or(&expected_item);
+        // The credential item is implied by the database's name; a declared
+        // one must be that same item.
+        let item = match entry.get("item").and_then(Value::as_str) {
+            Some(declared) => declared,
+            None => expected_item.as_str(),
+        };
         if item != expected_item {
             problems.push(format!(
                 "database_api.databases.{name}.item must be {expected_item:?}, got {item:?}"
@@ -245,18 +253,19 @@ pub(crate) fn parse_database_api_databases(
 static DATABASE_API_DATABASES: LazyLock<
     Result<BTreeMap<String, DatabaseApiDatabase>, Vec<String>>,
 > = LazyLock::new(|| {
-    let configured = match std::env::var("WC_DATABASE_API_DATABASES")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
-        Some(encoded) => serde_json::from_str::<Value>(&encoded)
+    let override_of = crate::config_file::variable("WC_DATABASE_API_DATABASES")
+        .map(|value| value.filter(|value| !value.trim().is_empty()))
+        .map_err(|cause| vec![cause]);
+    let configured = match override_of {
+        Err(problems) => Err(problems),
+        Ok(Some(encoded)) => serde_json::from_str::<Value>(&encoded)
             .map_err(|error| {
                 vec![format!(
                     "WC_DATABASE_API_DATABASES must be valid JSON: {error}"
                 )]
             })
             .and_then(|parsed| parse_database_api_databases(Some(&parsed))),
-        None => match crate::config_file::get("database_api") {
+        Ok(None) => match crate::config_file::get("database_api") {
             None => Ok(BTreeMap::new()),
             Some(section) => parse_database_api_databases(section.get("databases")),
         },
