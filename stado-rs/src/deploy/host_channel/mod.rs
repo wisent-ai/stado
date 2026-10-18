@@ -32,7 +32,7 @@ use crate::targets::{ComputeTarget, Registry};
 /// The `status` value every command in this family reports when the remote
 /// side did not exit clean. The success value is command-specific.
 pub const FAILED_STATUS: &str = "failed";
-const CONNECTION_PROBE_PROGRAM: [&str; 1] = ["true"];
+const CONNECTION_PROBE_PROGRAM: &[&str] = &["true"];
 
 struct HostSession {
     target: String,
@@ -45,11 +45,15 @@ tokio::task_local! {
     static HOST_SESSION: HostSession;
 }
 
+/// The key of the session [`with_session`] opened for `target`, when the
+/// calling task runs inside one. Outside every `with_session` scope the task
+/// local is unset, which is the one thing its access error says: there is no
+/// session, so the caller authenticates for itself.
 pub(super) fn session_key(target: &str) -> Option<ssh_key::KeyFile> {
-    HOST_SESSION
-        .try_with(|session| (session.target == target).then(|| session.key.clone()))
-        .ok()
-        .flatten()
+    match HOST_SESSION.try_with(|session| (session.target == target).then(|| session.key.clone())) {
+        Ok(key) => key,
+        Err(_outside_every_session) => None,
+    }
 }
 
 /// Authenticate and choose a declared route once for a multi-command operation.
@@ -191,7 +195,11 @@ pub fn ssh_options(ssh_target: &str) -> Vec<String> {
         target: "stado::deploy::host_channel",
         tracing::Level::TRACE
     ) {
-        argv.insert(argv.len() - 1, "-vvv".to_string());
+        // Among the options, before the destination that ends the argv.
+        if let Some(destination) = argv.pop() {
+            argv.push("-vvv".to_string());
+            argv.push(destination);
+        }
     }
     argv
 }
@@ -236,7 +244,9 @@ pub use postcondition::{
     postcondition_verdict, run_checked_script, PostCondition, PostConditionVerdict,
     POSTCONDITION_MARKER, POSTCONDITION_MET, POSTCONDITION_UNMET, POSTCONDITION_UNOBSERVED,
 };
-pub use report::{base_report, finish_report, last_error_line, marker_fields, marker_number};
+pub use report::{
+    base_report, finish_report, last_error_line, marker_fields, marker_number, whole_failure,
+};
 pub use run::{
     extract_semver, remote_home, remote_json_member, remote_program_version, remote_read_file,
     remote_test, run_command, run_program, run_program_with_connection, run_program_with_stdin,

@@ -13,10 +13,7 @@ use crate::targets::ComputeTarget;
 pub fn base_report(target: &ComputeTarget) -> Map<String, Value> {
     let mut report = Map::new();
     report.insert("target".to_string(), json!(target.name));
-    report.insert(
-        "ssh".to_string(),
-        target.ssh.as_ref().map_or(Value::Null, |ssh| json!(ssh)),
-    );
+    report.insert("ssh".to_string(), json!(target.ssh));
     report.insert("ssh_fallbacks".to_string(), json!(target.ssh_fallbacks));
     report
 }
@@ -34,6 +31,25 @@ pub fn last_error_line(output: &CommandOutput, fallback: &str) -> String {
     }
 }
 
+/// Everything a failed remote command said, with its exit status: every
+/// line of its stderr (its stdout when stderr is empty) on one line. A
+/// failure whose cause sits above its last line — a refused verb followed by
+/// a usage hint — keeps the line that names it, which the last line alone
+/// does not.
+pub fn whole_failure(output: &CommandOutput) -> String {
+    let said: Vec<&str> = output
+        .detail()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if said.is_empty() {
+        format!("exit {} with no output", output.code)
+    } else {
+        format!("exit {}: {}", output.code, said.join(" | "))
+    }
+}
+
 /// Close a report the way `host reboot` closes its own: `exit_code`, a
 /// `status` string, and on failure the last stderr line under `error`.
 pub fn finish_report(
@@ -45,13 +61,13 @@ pub fn finish_report(
     report.insert("exit_code".to_string(), json!(output.code));
     report.insert(
         "status".to_string(),
-        json!(if output.ok() {
+        json!(if output.succeeded() {
             ok_status
         } else {
             FAILED_STATUS
         }),
     );
-    if !output.ok() {
+    if !output.succeeded() {
         report.insert(
             "error".to_string(),
             json!(last_error_line(output, fallback_error)),

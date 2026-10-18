@@ -42,11 +42,15 @@ printf '%s' '{}' | /usr/bin/base64 "$decode" |
     let recovered = crate::deploy::host_channel::run_script(resolved, &script, runner)
         .await
         .map_err(CmdError::from)?;
-    if !recovered.ok() {
+    if !recovered.succeeded() {
+        // The whole failure, not its last line: a host Stado that does not
+        // declare a verb the program runs says which one above its usage
+        // hint, and the hint alone told the operator nothing.
         return Err(CmdError::click(format!(
-            "{}: object API recovery failed: {}",
+            "{}: object API recovery failed, the host's recovery program ran with its own Stado: \
+             {}",
             resolved.name,
-            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+            crate::deploy::host_channel::whole_failure(&recovered)
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
@@ -87,11 +91,11 @@ pub(crate) async fn apply_release_store_repair(
     let repaired = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
         .map_err(CmdError::from)?;
-    if !repaired.ok() {
+    if !repaired.succeeded() {
         return Err(CmdError::click(format!(
-            "{}: release store repair failed: {}",
+            "{}: release store repair by the host's own Stado failed: {}",
             resolved.name,
-            crate::deploy::host_channel::last_error_line(&repaired, "remote command failed")
+            crate::deploy::host_channel::whole_failure(&repaired)
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
