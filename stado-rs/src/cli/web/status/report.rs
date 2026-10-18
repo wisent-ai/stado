@@ -27,6 +27,12 @@ fn selected(
         let declared = super::product(name)?;
         return Ok(Some(BTreeMap::from([(name.to_string(), declared)])));
     }
+    // A fleet that declares no web products has none to report; a
+    // declaration that is there and does not parse is refused with its
+    // problems.
+    if crate::config_file::get("web_api.products").is_none() {
+        return Ok(None);
+    }
     match crate::config::web_api_products() {
         Ok(products) => Ok(Some(
             products
@@ -34,7 +40,6 @@ fn selected(
                 .map(|(name, product)| (name.clone(), product))
                 .collect(),
         )),
-        Err(_) if crate::config_file::get("web_api.products").is_none() => Ok(None),
         Err(problems) => Err(CmdError::declaration(problems.join("; "))),
     }
 }
@@ -85,8 +90,8 @@ pub(crate) async fn status(name: Option<&str>, json: bool) -> Result<(), CmdErro
     } else {
         for row in &rows {
             // A state or name the row does not carry is said as not reported:
-            // the word "unknown", an empty word or port 0 read as a value the
-            // probe had measured.
+            // the word "unknown", an empty word or port 0 would read as a
+            // value the probe had measured.
             let reported = |field: &str| match row[field].as_str() {
                 Some(state) => state.to_string(),
                 None => "not reported".to_string(),
@@ -137,7 +142,7 @@ pub(crate) async fn status(name: Option<&str>, json: bool) -> Result<(), CmdErro
         // exits non-zero on its own report rather than on a second reading of
         // it.
         eprintln!("not serving: {}", broken.join("; "));
-        return Err(CmdError::silent(1));
+        return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
     }
     Ok(())
 }

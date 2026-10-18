@@ -222,8 +222,8 @@ pub fn declared_units(
     }
     for declared in registry_units {
         // A unit whose owner cannot be read is not a unit of another
-        // product: read that way, a delivery left a unit running the old
-        // release unrestarted. The delivery refuses naming it instead.
+        // product: read that way, a delivery would leave a unit running the
+        // old release unrestarted. The delivery refuses naming it instead.
         let runs_product = service::declared_owner(target, &declared)
             .map_err(|error| {
                 DeployError(format!(
