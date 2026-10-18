@@ -64,7 +64,7 @@ pub(in crate::cli::storage) async fn abort_upload(
         values
     };
     let mut discarded: Vec<String> = Vec::with_capacity(parts.len());
-    let mut bytes = 0u64;
+    let mut sizes: Vec<u64> = Vec::with_capacity(parts.len());
     for part in &parts {
         let Some(uri) = part["uri"].as_str() else {
             return Err(
@@ -72,15 +72,15 @@ pub(in crate::cli::storage) async fn abort_upload(
                     .stating(crate::primitives::failure::FailureCode::InfraDown),
             );
         };
-        // Read as zero, a part without its size undercounted the bytes this
-        // abort reports discarding.
+        // Read as zero, a part without its size would undercount the bytes
+        // this abort reports discarding.
         let Some(size) = part.get("size").and_then(Value::as_u64) else {
             return Err(CmdError::click(format!(
                 "Stado object API returned upload part {uri} with no size"
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         };
-        bytes += size;
+        sizes.push(size);
         if !args.dry_run {
             let part_object = crate::remote::object_store::ObjectRef::parse(uri)?;
             if let Some(remote) = RemoteObjectApi::configured_for_object(&part_object)? {
@@ -92,6 +92,7 @@ pub(in crate::cli::storage) async fn abort_upload(
         }
         discarded.push(uri.to_string());
     }
+    let bytes: u64 = sizes.iter().sum();
     let state = if args.dry_run { "staged" } else { "discarded" };
     if args.json {
         echo_json(&json!({

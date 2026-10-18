@@ -28,18 +28,11 @@ pub(crate) async fn retract(declared: &WebApiProduct) -> Result<Value, CmdError>
             // mount under it still does too. What comes out is one
             // `handle_path` block, and nothing else.
             if let Some(prefix) = declared.path_prefix() {
-                let edge = match crate::config::web_api_edge() {
-                    Ok(edge) => edge,
-                    Err(_) => {
-                        return Ok(json!({
-                            "hostname": declared.hostname(),
-                            "path_prefix": prefix,
-                            "change": "unchanged",
-                            "record": Value::Null,
-                            "edge": Value::Null,
-                        }))
-                    }
-                };
+                // The edge is read as the hostname's retraction below reads
+                // it: an edge that is not declared, or declared with problems,
+                // is refused with them, never reported as a mount left
+                // unchanged on an edge nobody read.
+                let edge = super::super::edge::declared()?;
                 let mounted = super::super::edge::mount(
                     declared.hostname(),
                     prefix,
@@ -77,7 +70,7 @@ pub(crate) async fn retract(declared: &WebApiProduct) -> Result<Value, CmdError>
                 registrar_credential(edge)?,
             )
             .await?;
-            // Read as zero, a report without its count called a removed
+            // Read as zero, a report without its count would call a removed
             // record "unchanged".
             let removed = record["removed"].as_u64().ok_or_else(|| {
                 CmdError::click(format!(
