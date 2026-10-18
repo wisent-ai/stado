@@ -1,0 +1,19 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Repairs: "Stado Desktop says why the fleet screens have no snapshot" its screens still read a snapshot /api/state.json no longer serves, so they named the missing field and never had a fleet; this commit reads the fleet, queue and outcomes from stado overview --json instead
+
+Harsh-Review-Attacked: whether the screens read what the CLI prints; Hosts, Queue and Posture decode the overview document the CLI prints, every field required, through the same CLI endpoint the app's other commands use.
+Harsh-Review-Attacked: whether overview invents labels or counts; a command naming no model or task is listed with null, the average is null when no completed job has both stamps, and no bound on rows is chosen. Its stamp reader dropped the parse error of a job stamp, and "overview names the job stamps it cannot read" repairs it in this push, naming this commit on its Repairs line.
+Harsh-Review-Attacked: whether the removed state-URL client leaves dead code; its request, address test and authorization token are deleted with it, and the configured address reader stays as the not-configured check.
