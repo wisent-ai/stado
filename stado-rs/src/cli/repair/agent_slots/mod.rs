@@ -28,8 +28,8 @@ const AGENT_SERVICE: &str = "stado";
 /// Whether `word` (a pin or a worker host) names `host`: its registry name,
 /// or the `<kind>-<hostname>` consumer identity its agent claims under. An
 /// identity the registry declares on several targets is the error: read as
-/// no host, it left a live job uncounted, and a host whose slots looked
-/// free of jobs had its agent restarted under them.
+/// no host, it would leave a live job uncounted, and a host whose slots look
+/// free of jobs would have its agent restarted under them.
 fn names_host(
     word: &str,
     host: &crate::targets::ComputeTarget,
