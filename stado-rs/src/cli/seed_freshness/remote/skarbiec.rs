@@ -22,9 +22,7 @@ pub(in crate::cli::seed_freshness) async fn remote_seed_state(
     arguments: &[String],
 ) -> Result<Value, CmdError> {
     let skarbiec = release_managed_skarbiec(resolved, runner, home).await?;
-    let tool_path = format!(
-        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/local/MacGPG2/bin:{home}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    );
+    let tool_path = crate::primitives::tool_path::vault_assignment(home);
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
     let mut invocation = vec![
@@ -38,18 +36,19 @@ pub(in crate::cli::seed_freshness) async fn remote_seed_state(
     let output = crate::deploy::host_channel::run_program(resolved, &invocation, runner)
         .await
         .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{}: Skarbiec totp-seed-state failed: {}",
             resolved.name,
-            crate::deploy::host_channel::last_error_line(&output, "remote command failed")
+            crate::deploy::host_channel::whole_failure(&output)
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
-            "{}: Skarbiec totp-seed-state returned unreadable JSON: {error}",
-            resolved.name
+            "{}: Skarbiec totp-seed-state returned unreadable JSON ({error}): {}",
+            resolved.name,
+            output.stdout.trim()
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })

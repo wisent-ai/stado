@@ -13,10 +13,10 @@ use crate::targets::ComputeTarget;
 
 use crate::cli::host::secrets::vault::mirror::read::remote_skarbiec_json_at;
 
+/// The search path every Skarbiec command this module runs on a host
+/// carries: the one [`crate::primitives::tool_path::vault_assignment`].
 pub(super) fn skarbiec_tool_path(home: &str) -> String {
-    format!(
-        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/local/MacGPG2/bin:{home}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    )
+    crate::primitives::tool_path::vault_assignment(home)
 }
 
 /// Run one Skarbiec command on TARGET and parse its JSON answer.
