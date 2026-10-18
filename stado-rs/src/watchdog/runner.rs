@@ -16,8 +16,9 @@ pub struct RunOutcome {
 /// a fake; production uses [`SystemRunner`].
 pub trait CommandRunner: Send + Sync {
     /// Run `argv` capturing output until it exits. `Err` = the process could
-    /// not be spawned at all (Python's generic `except Exception` branch,
-    /// e.g. `FileNotFoundError` when the binary is not installed on the box).
+    /// not be spawned at all (e.g. `FileNotFoundError` when the binary is not
+    /// installed on the box), or it ended without an exit code: a signal ended
+    /// it, and the error names the signal and the child's stderr.
     fn run(&self, argv: &[String]) -> std::io::Result<RunOutcome>;
 }
 
