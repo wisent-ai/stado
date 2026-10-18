@@ -87,7 +87,8 @@ pub async fn newest(args: &ReleaseNewestArgs) -> Result<(), CmdError> {
         // With products selected, the other repositories' repairs are not
         // this plan's to place.
         // A plan whose unplaced repairs cannot be read is refused: printed
-        // without them, it read as a plan in which every repair has a place.
+        // without them, it would read as a plan in which every repair has a
+        // place.
         let unplaced = match args.products.is_empty() {
             false => Vec::new(),
             true => crate::cli::release_loop::unplaced(&root, &planned).await?,
