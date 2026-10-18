@@ -4,9 +4,9 @@
 //!
 //! A product works while another product is down, and where Brama's judge
 //! does not answer, the working model's own attestation settles the question
-//! the judge would have answered. The audit used to refuse every revision for
-//! as long as Brama did not answer, so no delivery pass could install
-//! anything; now an unjudged tree passes only on a commit whose attestation
+//! the judge would have answered. Refusing every revision for as long as
+//! Brama does not answer would leave no delivery pass able to install
+//! anything; so an unjudged tree passes only on a commit whose attestation
 //! stands, and every refusal names both why the judge was not obtained and
 //! what the attestation lacks.
 
