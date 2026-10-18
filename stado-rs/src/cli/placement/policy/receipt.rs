@@ -26,9 +26,10 @@ struct PolicySnapshot {
 ///
 /// The before-state arrives as remote output rather than as anything this
 /// process knows, because the file it replaced only ever existed on that host.
-/// A missing line is reported as missing and never defaulted to "the same as
-/// now": defaulting would render every publication as a no-op and hide exactly
-/// the drift this command exists to close.
+/// A missing line, or one missing any of its fields, is reported as missing and
+/// never defaulted to "the same as now": defaulting would render every
+/// publication as a no-op and hide exactly the drift this command exists to
+/// close.
 fn snapshot(stdout: &str, phase: &str) -> Option<PolicySnapshot> {
     let prefix = format!("{POLICY_MARKER}\t{phase}\t");
     let line = stdout.lines().find(|line| line.starts_with(&prefix))?;
@@ -36,7 +37,7 @@ fn snapshot(stdout: &str, phase: &str) -> Option<PolicySnapshot> {
     Some(PolicySnapshot {
         generation: fields.next()?.to_string(),
         enabled: fields.next()?.to_string(),
-        actions: fields.next().map(action_list).unwrap_or_default(),
+        actions: action_list(fields.next()?),
     })
 }
 
@@ -58,10 +59,9 @@ fn action_list(field: &str) -> Vec<String> {
 ///
 /// The registry declares `weles.actions` per target and the worker never reads
 /// it. The worker reads `~/.config/weles/placement-policy.json` on the box it
-/// runs on. Those two disagreed: the registry listed `apple_create_developer_id`
-/// and the host file did not, so the worker skipped the row in silence for hours
-/// while the registry said it was allowed. Two sources of truth, and the one an
-/// operator edits was not the one that decided.
+/// runs on. Were the two to disagree, the worker would skip a row the registry
+/// allows in silence: two sources of truth, and the one an operator edits not
+/// the one that decides.
 ///
 /// This makes the host file a cache. It is generated from the registry, stamped
 /// with `_source`, delivered over the audited channel, and refused on arrival if
@@ -123,7 +123,7 @@ pub(crate) async fn publish_placement_policy_report(
     })?;
     let previous = snapshot(&reported, "previous");
     // The vantage the host's apply step printed, or null when it printed
-    // none; a dash read as a vantage named "-".
+    // none; a dash would read as a vantage named "-".
     let vantage_prefix = format!("{VANTAGE_MARKER}\t");
     let vantage = reported
         .lines()
@@ -142,12 +142,10 @@ pub(crate) async fn publish_placement_policy_report(
     let removed: Vec<&str> = before.difference(&after).copied().collect();
     let unchanged: Vec<&str> = after.intersection(&before).copied().collect();
     let current: Vec<&str> = installed.actions.iter().map(String::as_str).collect();
-    let previous_generation = previous
-        .as_ref()
-        .map_or("unreported", |held| held.generation.as_str());
-    let previous_enabled = previous
-        .as_ref()
-        .map_or("unreported", |held| held.enabled.as_str());
+    let (previous_generation, previous_enabled) = match &previous {
+        Some(held) => (held.generation.as_str(), held.enabled.as_str()),
+        None => ("unreported", "unreported"),
+    };
 
     Ok(json!({
         "target": resolved.name,
