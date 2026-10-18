@@ -1,7 +1,5 @@
 //! Per-job side objects: the launch script and the status/heartbeat blobs.
 
-use chrono::Utc;
-
 use crate::queue::StorageError;
 
 use super::JobStorage;
@@ -15,18 +13,29 @@ pub enum StatusLeaf {
     Heartbeat,
 }
 
+impl std::fmt::Display for StatusLeaf {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::primitives::word::write(self, formatter)
+    }
+}
+
 impl StatusLeaf {
-    /// The leaf a key's last segment names, or `None` for any other key.
+    /// Every leaf, so a key's segment is matched against the words these
+    /// write rather than against a second spelling of them.
+    const ALL: &'static [Self] = &[Self::Status, Self::Heartbeat];
+
+    /// The leaf a key's last segment names, or `None` for any other key:
+    /// any other key belongs to the job's output.
     pub fn parse(segment: &str) -> Option<Self> {
-        serde_json::from_value(serde_json::Value::String(segment.to_string())).ok()
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|leaf| leaf.to_string() == segment)
     }
 
     /// The object key of this leaf for `job_id`.
     pub fn path(self, job_id: &str) -> String {
-        match serde_json::to_value(self) {
-            Ok(serde_json::Value::String(leaf)) => format!("status/{job_id}/{leaf}"),
-            other => unreachable!("StatusLeaf serializes as a word, not {other:?}"),
-        }
+        format!("status/{job_id}/{self}")
     }
 }
 
@@ -42,15 +51,6 @@ impl JobStorage {
             .await
     }
 
-    /// Read the job's launch script; "" when absent. Python
-    /// `download_script`.
-    pub async fn read_script(&self, job_id: &str) -> Result<String, StorageError> {
-        Ok(self
-            .download_text(&format!("scripts/{job_id}.sh"))
-            .await?
-            .unwrap_or_default())
-    }
-
     // ---- status / heartbeat ----
 
     /// First whitespace-separated token of `status/{job_id}/status`, or
@@ -62,25 +62,9 @@ impl JobStorage {
         Ok(data.split_whitespace().next().map(str::to_string))
     }
 
-    /// Whether the heartbeat blob at `status/{job_id}/heartbeat` is older
-    /// than `threshold_minutes`. Missing heartbeat = not stale (Python
-    /// parity).
-    pub async fn heartbeat_stale(
-        &self,
-        job_id: &str,
-        threshold_minutes: i64,
-    ) -> Result<bool, StorageError> {
-        let path = StatusLeaf::Heartbeat.path(job_id);
-        let Some(updated) = self.backend.updated_at(&path).await? else {
-            return Ok(false);
-        };
-        let age_minutes = (Utc::now() - updated).num_seconds() as f64 / 60.0;
-        Ok(age_minutes > threshold_minutes as f64)
-    }
-
     /// Remove both status blobs for a job.
     pub async fn cleanup_status(&self, job_id: &str) -> Result<(), StorageError> {
-        for leaf in [StatusLeaf::Status, StatusLeaf::Heartbeat] {
+        for leaf in StatusLeaf::ALL {
             self.delete_blob(&leaf.path(job_id)).await?;
         }
         Ok(())
