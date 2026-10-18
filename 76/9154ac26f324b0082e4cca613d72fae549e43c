@@ -14,5 +14,5 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Harsh-Review-Attacked: whether a store that does not answer is hidden by the retry; each start that meets it logs the store's own error and that the next poll tries again, at the poll the agent declares, which is the cadence every tick already skips an unanswered store on, and any other start error ends the agent as before.
 Harsh-Review-Attacked: whether the agent waits on anything but the store; only an error the store classifies as unavailable is retried.
-Harsh-Review-Attacked: whether the test runs the real product; it starts the real agent against a loopback store that accepts and answers nothing, reads the held-start line, then lets the store answer and reads the agent start.
+Harsh-Review-Attacked: whether the test runs the real product; it runs the real stado serve --worker --standalone against a loopback store that drops every request, reads the held-start line at least twice with the process still running, and ends the process it started. It does not show the start completing once the store answers.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
