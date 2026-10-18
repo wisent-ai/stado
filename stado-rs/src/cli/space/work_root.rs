@@ -29,7 +29,10 @@ path=@PATH@
 unit=@UNIT@
 user=""
 if command -v systemctl >/dev/null 2>&1; then
-  user=$(systemctl show -p User --value "$unit" 2>/dev/null || true)
+  user=$(systemctl show -p User --value "$unit" 2>&1) || {
+    printf 'ERROR\tsystemctl cannot read the account of %s: %s\n' "$unit" "$(printf '%s' "$user" | tr '\n' ' ')"
+    exit 1
+  }
 fi
 if [ -z "$user" ]; then
   user=$(id -un)
@@ -45,10 +48,20 @@ fi
 mkdir -p "$path" || { printf 'ERROR\tcannot create %s\n' "$path"; exit 1; }
 chown "$user" "$path" || { printf 'ERROR\tcannot make %s the owner of %s\n' "$user" "$path"; exit 1; }
 chmod 0700 "$path" || { printf 'ERROR\tcannot restrict %s\n' "$path"; exit 1; }
-device=$(/bin/df -P "$path" 2>/dev/null | awk 'NR == 2 { print $1 }')
-root_device=$(/bin/df -P / 2>/dev/null | awk 'NR == 2 { print $1 }')
-free_kb=$(/bin/df -Pk "$path" 2>/dev/null | awk 'NR == 2 { print $4 }')
-mounted_on=$(/bin/df -P "$path" 2>/dev/null | awk 'NR == 2 { print $6 }')
+# One df per filesystem, its own words kept when it refuses: an empty
+# answer would read as a path on no device.
+df_path=$(/bin/df -Pk "$path" 2>&1) || {
+  printf 'ERROR\tdf cannot read the filesystem of %s: %s\n' "$path" "$(printf '%s' "$df_path" | tr '\n' ' ')"
+  exit 1
+}
+df_root=$(/bin/df -P / 2>&1) || {
+  printf 'ERROR\tdf cannot read the root filesystem: %s\n' "$(printf '%s' "$df_root" | tr '\n' ' ')"
+  exit 1
+}
+device=$(printf '%s\n' "$df_path" | awk 'NR == 2 { print $1 }')
+free_kb=$(printf '%s\n' "$df_path" | awk 'NR == 2 { print $4 }')
+mounted_on=$(printf '%s\n' "$df_path" | awk 'NR == 2 { print $6 }')
+root_device=$(printf '%s\n' "$df_root" | awk 'NR == 2 { print $1 }')
 case "$device" in
   /dev/*) ;;
   *) printf 'ERROR\t%s is on %s, which is not a device-backed filesystem\n' "$path" "${device:-nothing}"; exit 1 ;;
