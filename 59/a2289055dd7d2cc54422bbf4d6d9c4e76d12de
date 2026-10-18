@@ -16,3 +16,5 @@ Harsh-Review-Attacked: whether any accepted word changed; the product status, vi
 Harsh-Review-Attacked: whether a bad word is now refused without saying which; catalog validation names the field and the value it holds, product creation's typed request refuses a visibility or family outside its enum, and destroy refuses a provider outside the three naming the item and the word.
 Harsh-Review-Attacked: whether destroy now invents a provider for an item a previous run deleted; provider_of answers None for it, the steps that need a provider are skipped as they were, and the report says already destroyed, the same words it carried, instead of naming a provider.
 Harsh-Review-Attacked: whether the stored credential items change; the provider field is written through the enum's serde name, the same lowercase word.
+
+Repaired-By: "The product crate's vocabularies are written through the one word writer" repairs it in this push, naming this commit on its Repairs line
