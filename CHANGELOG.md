@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado quota request list` counts Azure tickets on what each one states:** a ticket that did not say whether it awaits the customer was printed as `N` and counted as awaiting Microsoft. It now prints `not reported`, the summary counts only tickets that state either, and names how many did not. GCP requests without a state, family or region sort ahead of the named ones rather than under an empty name.
+
 - **`stado quota show` and `quota catalog` sum and sort only what the providers gave:** the grand total row looked an accelerator's available count up again in a second map and printed `0` when it was missing, and the GCP catalog sorted a row without its quota id or region as an empty name. Totals and available counts are now summed together from the rows the providers returned, rows without a quota id or region sort ahead of the named ones, and the table rules are as long as their headers.
 
 - **`stado quota ticket reply|escalate` say what a result row did not report:** a provider result without its `ok` field was printed as `N` and counted as a failure, and one without its region as `(no region)`; the two commands kept two copies of the same table. They now print one table, in which a missing `OK` or region reads `not reported` and only rows the provider said succeeded are counted, and a dry-run row says `dry_run → would be replied` or `would be escalated`.

@@ -6,6 +6,7 @@
 use serde_json::Value;
 
 use super::common::{echo_json, parse_providers, quota_adapter};
+use crate::cli::reporting::{field, NOT_REPORTED};
 use crate::cli::CmdError;
 use crate::scheduler::dispatch::{quota_replies, quota_skus};
 
@@ -64,18 +65,13 @@ pub(super) async fn requests(
             continue;
         }
         if quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Gcp) {
-            let mut buckets: std::collections::BTreeMap<String, usize> = Default::default();
+            let mut buckets: std::collections::BTreeMap<String, Vec<&Value>> = Default::default();
             for r in rows {
-                *buckets
-                    .entry(match r.get("state").and_then(Value::as_str) {
-                        Some(state) => state.to_string(),
-                        None => "not reported".to_string(),
-                    })
-                    .or_insert(0) += 1;
+                buckets.entry(field(&r["state"])).or_default().push(r);
             }
             let summary: Vec<String> = buckets
                 .iter()
-                .map(|(state, n)| format!("{state}={n}"))
+                .map(|(state, requests)| format!("{state}={}", requests.len()))
                 .collect();
             println!("  by state: {}", summary.join(", "));
             println!(
@@ -83,22 +79,16 @@ pub(super) async fn requests(
                 "STATE", "FAMILY", "REGION", "PREF", "GRANTED"
             );
             let mut sorted: Vec<&Value> = rows.iter().collect();
-            sorted.sort_by_key(|r| {
+            // A request without a state, family or region sorts ahead of those
+            // with one, rather than under an empty name.
+            let key = |r: &Value| {
                 (
-                    r.get("state")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    r.get("gpu_family")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    r.get("region")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
+                    r["state"].as_str().map(str::to_string),
+                    r["gpu_family"].as_str().map(str::to_string),
+                    r["region"].as_str().map(str::to_string),
                 )
-            });
+            };
+            sorted.sort_by_key(|r| key(r));
             for r in sorted {
                 let state = match r.get("state").and_then(Value::as_str) {
                     Some(state) if !state.is_empty() => state,
@@ -128,14 +118,18 @@ pub(super) async fn requests(
                 );
             }
         } else if quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Azure) {
-            let ms_n = rows
-                .iter()
-                .filter(|r| r.get("awaiting_customer").and_then(Value::as_bool) == Some(true))
-                .count();
-            println!(
-                "  awaiting customer: {ms_n}    awaiting Microsoft: {}",
-                rows.len() - ms_n
-            );
+            let awaiting = |r: &Value| r["awaiting_customer"].as_bool();
+            let customer = rows.iter().filter(|r| awaiting(r) == Some(true)).count();
+            let microsoft = rows.iter().filter(|r| awaiting(r) == Some(false)).count();
+            if rows.iter().any(|r| awaiting(r).is_none()) {
+                let unreported = rows.iter().filter(|r| awaiting(r).is_none()).count();
+                println!(
+                    "  awaiting customer: {customer}    awaiting Microsoft: {microsoft}    \
+                     not reported: {unreported}"
+                );
+            } else {
+                println!("  awaiting customer: {customer}    awaiting Microsoft: {microsoft}");
+            }
             println!(
                 "  {:<22} {:<11} {:<22} LAST_BODY_SNIPPET",
                 "REGION", "AWAIT_CUST", "LAST_SENT"
@@ -143,19 +137,15 @@ pub(super) async fn requests(
             let mut sorted: Vec<&Value> = rows.iter().collect();
             sorted.sort_by_key(|r| {
                 (
-                    r.get("awaiting_customer").and_then(Value::as_bool) != Some(true),
-                    r.get("region")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
+                    awaiting(r) != Some(true),
+                    r["region"].as_str().map(str::to_string),
                 )
             });
             for r in sorted {
-                let awaiting = if r.get("awaiting_customer").and_then(Value::as_bool) == Some(true)
-                {
-                    "Y"
-                } else {
-                    "N"
+                let awaiting = match awaiting(r) {
+                    Some(true) => "Y",
+                    Some(false) => "N",
+                    None => NOT_REPORTED,
                 };
                 let region = match r.get("region").and_then(Value::as_str) {
                     Some(region) if !region.is_empty() => region,
