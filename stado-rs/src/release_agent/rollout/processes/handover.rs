@@ -64,12 +64,18 @@ pub(crate) async fn hand_over_to_unit(
     // proxy no longer held (a host process restarted on a `replace` policy
     // does not start a proxy again). A port nobody listens on means the proxy
     // holds another one, still forwarding to these processes.
-    let port_holder = match bind
-        .rsplit_once(':')
-        .and_then(|(_, port)| port.parse::<u16>().ok())
-    {
-        Some(port) if !proxy_holds => super::inventory::listener_pid(Some(port))?,
-        _ => None,
+    let port_holder = if proxy_holds {
+        None
+    } else {
+        let Some((_, port)) = bind.rsplit_once(':') else {
+            return Err(format!(
+                "the endpoint {bind} that {unit} serves names no port"
+            ));
+        };
+        let port = port.parse::<u16>().map_err(|cause| {
+            format!("the endpoint {bind} that {unit} serves names no port: {cause}")
+        })?;
+        super::inventory::listener_pid(Some(port))?
     };
     let unit_holds = !proxy_holds
         && port_holder.is_some_and(|holder| !records.iter().any(|record| record.pid == holder));
