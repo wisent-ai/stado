@@ -26,7 +26,8 @@ pub(crate) async fn materialize_stado_inputs(
     for (name, value) in inputs {
         // Only an input that declares a stado_uri is a Stado object; the rest
         // are other kinds of input. One that declares it as anything but text
-        // was passed over, and the job ran without the input it named.
+        // is refused: passed over, the job would run without the input it
+        // named.
         let Some(spec) = value.as_object() else {
             continue;
         };

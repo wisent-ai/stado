@@ -59,7 +59,7 @@ async fn failure_evidence(
             if report.get("status").and_then(Value::as_str) == Some(host_exec::OK_STATUS) =>
         {
             // An ok answer without its listing names no exit; read as empty
-            // text it read as a unit launchctl does not list.
+            // text it would read as a unit launchctl does not list.
             match report.get("stdout").and_then(Value::as_str) {
                 Some(stdout) => evidence.last_exit = launchctl_last_exit(stdout, &unit),
                 None => evidence.push_note(format!(
