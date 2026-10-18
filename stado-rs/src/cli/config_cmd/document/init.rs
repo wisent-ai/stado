@@ -65,9 +65,9 @@ pub(in crate::cli::config_cmd) fn init() -> Result<(), CmdError> {
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    // Unset is the default file; a selection that is not text is refused,
-    // where it was read as unset and the template went to the default file
-    // instead of the one the caller chose.
+    // Unset is the default file; a selection that is not text is refused:
+    // read as unset, the template would go to the default file instead of
+    // the one the caller chose.
     let selected = match std::env::var(config_file::FILE_ENV) {
         Ok(selected) => selected,
         Err(std::env::VarError::NotPresent) => String::new(),

@@ -21,6 +21,32 @@ pub fn program() -> u32 {
     widen((Mode::S_IRWXU | Mode::S_IRGRP | Mode::S_IXGRP | Mode::S_IROTH | Mode::S_IXOTH).bits())
 }
 
+/// Read for the owner and nothing for anyone else: a file sealed so nothing
+/// can change it.
+pub fn owner_read_only() -> u32 {
+    widen(Mode::S_IRUSR.bits())
+}
+
+/// Read and search for the owner and nothing for anyone else: a directory
+/// sealed so nothing can be added to it or removed from it.
+pub fn owner_read_search() -> u32 {
+    widen((Mode::S_IRUSR | Mode::S_IXUSR).bits())
+}
+
+/// Every bit `chmod` sets and `stat.S_IMODE` keeps: set-user-ID, set-group-ID,
+/// sticky and the nine access bits, without the file-type bits.
+pub fn permission_bits() -> u32 {
+    widen(
+        (Mode::S_ISUID
+            | Mode::S_ISGID
+            | Mode::S_ISVTX
+            | Mode::S_IRWXU
+            | Mode::S_IRWXG
+            | Mode::S_IRWXO)
+            .bits(),
+    )
+}
+
 /// `mode_t` is already `u32` on Linux and narrower on Darwin, so the widening
 /// is a conversion on one platform and the identity on the other.
 #[cfg(target_os = "linux")]

@@ -15,11 +15,7 @@ use super::{
 };
 use crate::deploy::host_storage_reconcile_program::json::list;
 use crate::deploy::host_storage_reconcile_program::{Context, Step};
-
-const SEALED_FILE: u32 = 0o400;
-const SEALED_DIRECTORY: u32 = 0o500;
-/// The permission bits `stat.S_IMODE` keeps.
-const MODE_BITS: u32 = 0o7777;
+use crate::primitives::file_mode::{owner_read_only, owner_read_search, permission_bits};
 
 /// One directory with its child directories and its files.
 type Listing = (String, Vec<String>, Vec<String>);
@@ -72,12 +68,12 @@ pub(in crate::deploy::host_storage_reconcile_program) fn seal_tree(root: &str) -
     }
     for (directory, directories, files) in bottom_up(root)? {
         for path in &files {
-            seal_one(path, SEALED_FILE)?;
+            seal_one(path, owner_read_only())?;
         }
         for path in &directories {
-            seal_one(path, SEALED_DIRECTORY)?;
+            seal_one(path, owner_read_search())?;
         }
-        seal_one(&directory, SEALED_DIRECTORY)?;
+        seal_one(&directory, owner_read_search())?;
     }
     Ok(())
 }
@@ -87,7 +83,7 @@ fn sealed(path: &str, mode: u32) -> Step<bool> {
         fs::symlink_metadata(path).map_err(|error| format!("cannot inspect {path}: {error}"))?;
     Ok(
         darwin::carries(darwin::flags(&info), darwin::USER_IMMUTABLE)
-            && info.permissions().mode() & MODE_BITS == mode,
+            && info.permissions().mode() & permission_bits() == mode,
     )
 }
 
@@ -96,16 +92,16 @@ pub(in crate::deploy::host_storage_reconcile_program) fn validate_sealed_tree(
 ) -> Step<()> {
     for (directory, directories, files) in bottom_up(root)? {
         for path in &files {
-            if !sealed(path, SEALED_FILE)? {
+            if !sealed(path, owner_read_only())? {
                 return Err(format!("checkpoint file is not immutable: {path}"));
             }
         }
         for path in &directories {
-            if !sealed(path, SEALED_DIRECTORY)? {
+            if !sealed(path, owner_read_search())? {
                 return Err(format!("checkpoint directory is not immutable: {path}"));
             }
         }
-        if !sealed(&directory, SEALED_DIRECTORY)? {
+        if !sealed(&directory, owner_read_search())? {
             return Err(format!("checkpoint root is not immutable: {directory}"));
         }
     }
@@ -117,9 +113,9 @@ pub(in crate::deploy::host_storage_reconcile_program) fn set_tree_modes(root: &s
     for (directory, directories, files) in bottom_up(root)? {
         let modes = files
             .iter()
-            .map(|path| (path, SEALED_FILE))
-            .chain(directories.iter().map(|path| (path, SEALED_DIRECTORY)))
-            .chain(std::iter::once((&directory, SEALED_DIRECTORY)));
+            .map(|path| (path, owner_read_only()))
+            .chain(directories.iter().map(|path| (path, owner_read_search())))
+            .chain(std::iter::once((&directory, owner_read_search())));
         for (path, mode) in modes {
             fs::set_permissions(path, fs::Permissions::from_mode(mode))
                 .map_err(|error| format!("cannot set the mode of {path}: {error}"))?;
@@ -149,8 +145,8 @@ pub(in crate::deploy::host_storage_reconcile_program) fn checkpoint_tree(
     let building = format!("{destination}.building");
     make_private_dirs(&building)?;
     // An inventory entry without its relative path is refused: read as an
-    // empty path it named the checkpoint directory itself, which the copy
-    // below would then replace or clone over.
+    // empty path it would name the checkpoint directory itself, which the
+    // copy below would then replace or clone over.
     for relative in list(snapshot, "directories", "physical checkpoint")? {
         let Some(relative) = relative.as_str() else {
             return Err(format!(
