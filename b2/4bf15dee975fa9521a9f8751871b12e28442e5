@@ -15,3 +15,4 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Harsh-Review-Attacked: whether the autoscaler stops on a corrupt state file; an unreadable mark map reads as none again, as the design states, and only the reading is now said in the log with the blob and why; every other storage error still propagates.
 Repairs: "GCP exhaustion marks are never overwritten with an empty map by a serialization failure" its unreadable mark map stopped the autoscaler, contrary to its stated design.
+Harsh-Review-Attacked: whether its reader leaves out a mark that is not a number in silence; it did, and "A GCP exhaustion mark that is not epoch seconds is logged, and none is dated at the epoch" logs each such entry in this push, naming this commit on its Repairs line.
