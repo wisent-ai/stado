@@ -36,7 +36,8 @@ fn empty_request(body: &[u8]) -> Result<(), HandlerError> {
 
 /// When `job` reached the state `stamp` records; `None` when it records no
 /// time. A stamp that is not a time refuses the read with the job and the
-/// value, since read as absent it put the job at the end of "newest first".
+/// value, since read as absent it would put the job at the end of "newest
+/// first".
 fn timestamp(job: &Job, stamp: Option<&str>) -> Result<Option<DateTime<Utc>>, HandlerError> {
     let Some(value) = stamp else {
         return Ok(None);

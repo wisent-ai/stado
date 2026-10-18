@@ -2,9 +2,9 @@
 //! sources: the product catalog, which owns the command line every host's
 //! unit starts with, and this machine's record, which names the roles this
 //! host runs beyond it (a resolver, a worker for its target, release and
-//! product-sync loops). Rendering from the catalog alone dropped every such
-//! role; rendering from the record alone kept an option a later release had
-//! retired, and the unit restarted on it without end.
+//! product-sync loops). Rendering from the catalog alone would drop every
+//! such role; rendering from the record alone would keep an option a later
+//! release retired, and the unit would restart on it without end.
 
 use clap::Args;
 

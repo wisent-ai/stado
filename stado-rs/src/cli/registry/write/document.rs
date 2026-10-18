@@ -152,7 +152,7 @@ pub async fn push_document_if(
 /// reader reads it. On a host whose registry authority is another host that
 /// read is the authority's snapshot, which carries the document
 /// re-serialized, so the document is compared, not its bytes: comparing
-/// bytes refused every write such a host made after the write had landed.
+/// bytes would refuse every write such a host makes after it has landed.
 pub(in crate::cli::registry) async fn confirm_written(
     store: &RegistryStore,
     generation: &str,
