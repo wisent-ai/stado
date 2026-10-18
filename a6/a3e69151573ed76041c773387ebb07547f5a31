@@ -17,3 +17,5 @@ Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every li
 Harsh-Review-Attacked: whether a request without a preferred value names its absence; its column held a dash, and "Quota commands name a missing region, family, limit or grant" repairs it in this push, naming this commit on its Repairs line.
 
 Repaired-By: "quota ticket reply and escalate say what a result row did not report" repairs it in this push, naming this commit on its Repairs line
+
+Repaired-By: "quota request list counts Azure tickets on what each one states" repairs it in this push, naming this commit on its Repairs line
