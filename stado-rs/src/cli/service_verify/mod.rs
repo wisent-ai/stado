@@ -92,7 +92,7 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
         .stating(crate::primitives::failure::FailureCode::Config));
     };
     // Two targets claiming this machine is a registry the sweep cannot
-    // place itself in; read as "none", every probe of this host went out
+    // place itself in; read as "none", every probe of this host would go out
     // over SSH as though to another machine.
     let me = registry
         .lookup_self(&crate::providers::vast::system_hostname())

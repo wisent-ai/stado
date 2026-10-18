@@ -24,7 +24,7 @@ pub fn run(name: Option<&str>, as_json: bool) -> Result<(), CmdError> {
         .into_iter()
         .map(|name| match profiles::load_profile(&name) {
             // A profile that declares no description is `null`, not "": an
-            // empty text read as a description that says nothing.
+            // empty text would read as a description that says nothing.
             Ok(profile) => json!({
                 "name": name,
                 "description": profile.get("description").and_then(Value::as_str),
