@@ -52,22 +52,21 @@ impl FolderAccess {
         matches!(self, Self::Denied | Self::Unreadable)
     }
 
-    /// The state a measured folder entry carries, or `NotMeasured` when the
-    /// entry is missing or not a state this build reads.
-    fn of_entry(entry: &Value) -> Self {
-        match <Self as serde::Deserialize>::deserialize(&entry["state"]) {
-            Ok(state) => state,
-            Err(_) => Self::NotMeasured,
-        }
+    /// The state a measured folder entry carries; an entry that carries no
+    /// state this build reads is the error naming the folder and why.
+    fn of_entry(folder: &str, entry: &Value) -> Result<Self, CmdError> {
+        <Self as serde::Deserialize>::deserialize(&entry["state"]).map_err(|error| {
+            CmdError::click(format!(
+                "the beacon's privacy entry for {folder} carries no state this Stado reads \
+                 ({error}): {entry}"
+            ))
+        })
     }
 }
 
 impl std::fmt::Display for FolderAccess {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 
@@ -122,11 +121,13 @@ impl Verdict<'_> {
     }
 }
 
+/// The folder `key` names in the beacon, or the key itself for a folder this
+/// build does not measure.
 fn folder_name(key: &str) -> &str {
-    FOLDERS
-        .iter()
-        .find(|(declared, _)| *declared == key)
-        .map_or(key, |(_, name)| *name)
+    match FOLDERS.iter().find(|(declared, _)| *declared == key) {
+        Some((_, name)) => *name,
+        None => key,
+    }
 }
 
 /// `stado host privacy TARGET [--json] [--open]` — TARGET's declared grants
@@ -146,16 +147,18 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
     let report = crate::monitor::host_health::load_host_health(&store, target)
         .await
         .map_err(CmdError::from)?;
-    let host = report
-        .beacon
-        .get("host")
-        .and_then(Value::as_str)
-        .unwrap_or(target);
-    let reported_at = report
-        .beacon
-        .get("reported_at")
-        .and_then(Value::as_str)
-        .unwrap_or("an unrecorded time");
+    // The beacon names the host it measured; one that names none is not a
+    // measurement this command can attribute.
+    let Some(host) = report.beacon.get("host").and_then(Value::as_str) else {
+        return Err(CmdError::click(format!(
+            "{target}'s latest beacon names no host, so its privacy measurement cannot be \
+             attributed"
+        )));
+    };
+    let reported_at = match report.beacon.get("reported_at").and_then(Value::as_str) {
+        Some(at) => at.to_string(),
+        None => "a time the beacon does not record".to_string(),
+    };
     let Some(block) = report.beacon.get("privacy") else {
         return Err(CmdError::click(format!(
             "{host}'s latest beacon (reported {reported_at}) carries no privacy measurement: the \
@@ -163,29 +166,36 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
         ))
         .stating(FailureCode::NotFound));
     };
-    let program = block
-        .get("program")
-        .and_then(Value::as_str)
-        .unwrap_or("the Stado executable");
+    // The program that measured; a beacon whose program could not name
+    // itself carries the reason instead, and then no grant was measured.
+    let program = block.get("program").and_then(Value::as_str);
+    let program_line = match (program, block.get("program_error").and_then(Value::as_str)) {
+        (Some(program), _) => program.to_string(),
+        (None, Some(error)) => format!("not named ({error})"),
+        (None, None) => "not named, and the beacon says no reason".to_string(),
+    };
     // The measured folders sit in the measuring user's home, which is what
     // `~/` in a declared program means on that host.
-    let home = block["folders"]["documents"]["path"]
+    let Some(home) = block["folders"]["documents"]["path"]
         .as_str()
         .and_then(|path| Path::new(path).parent())
         .map(Path::to_path_buf)
-        .unwrap_or_default();
-    let verdicts: Vec<Verdict> = grants
-        .iter()
-        .map(|grant| {
-            let path = grant.program_on(&home);
-            let state = if path.as_path() == Path::new(program) {
-                FolderAccess::of_entry(&block["folders"][grant.folder.as_str()])
-            } else {
-                FolderAccess::NotMeasured
-            };
-            Verdict { grant, path, state }
-        })
-        .collect();
+    else {
+        return Err(CmdError::click(format!(
+            "{host}'s privacy measurement (reported {reported_at}) names no Documents path, so \
+             the home its declared programs live in is not known: {block}"
+        )));
+    };
+    let mut verdicts: Vec<Verdict> = Vec::new();
+    for grant in &grants {
+        let path = grant.program_on(&home);
+        let state = if program.is_some_and(|program| path.as_path() == Path::new(program)) {
+            FolderAccess::of_entry(&grant.folder, &block["folders"][grant.folder.as_str()])?
+        } else {
+            FolderAccess::NotMeasured
+        };
+        verdicts.push(Verdict { grant, path, state });
+    }
     let refused: Vec<&Verdict> = verdicts
         .iter()
         .filter(|verdict| verdict.state.refused())
@@ -227,10 +237,10 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
     } else {
         println!("host:        {host}");
         println!("measured_at: {reported_at}");
-        println!("program:     {program}");
+        println!("program:     {program_line}");
         for (key, name) in FOLDERS {
             let entry = &block["folders"][key];
-            let state = FolderAccess::of_entry(entry);
+            let state = FolderAccess::of_entry(key, entry)?;
             match entry["detail"].as_str() {
                 Some(detail) => println!("{name:<12} {state} ({detail})"),
                 None => println!("{name:<12} {state}"),

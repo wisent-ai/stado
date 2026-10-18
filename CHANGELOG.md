@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado host privacy` refuses a measurement it cannot read instead of standing values in:** a beacon naming no host was attributed to the target asked about, a measurement without a Documents path judged each grant against an empty home, a program the measuring process could not name became `the Stado executable`, and a folder entry with no state this Stado reads became `not measured`. Each is now refused naming what the beacon lacks, and a program that could not be named prints with the operating system's reason.
+
 - **A database declaration override that is not text is refused:** a `WC_DATABASE_API_DATABASES` set to something that is not text was read as unset, so the config file's declarations stood in for the ones the process was given. It is now refused as `WC_DATABASE_API_DATABASES cannot be read: <cause>`. Stado's run engines and the scope word are read and written through the enum's own serde names.
 
 - **`stado credentials backup audit` says why a pair stayed unproven and why a deletion was refused:** the host half now carries those errors, and the report prints each as `unproven: <path>: <why>` and under `refused:` as `<path>: <the unlink error>` (`unproven` and `reclaim.delete_failures` in `--json`). A class the pass printed no row of reads `none` instead of zero, and in `--json` a namespace root read and found empty is an empty list while a root whose inventory never ended is null, where both read as an empty list before.
