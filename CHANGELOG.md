@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado repair` prints a step's missing name, status or proof as not reported:** a step report without its name printed `repair`, without its status `reported`, and without its proof `not declared`, each a word the step never gave. Absent fields now read `not reported`. The proof each declared step must show is now kept beside the repair declarations.
+
 - **`stado space work-root` says what `systemctl` and `df` said when they fail:** the host program threw their stderr away, so a `systemctl` that could not read the unit's account fell back to the SSH account, and a `df` that failed left an empty device that was refused as `not a device-backed filesystem`. Each failure is now refused with the command's own words, and the path's filesystem is read with one `df` instead of three.
 
 - **A rented machine the vendor reports without a name is no agent, and the vendor answers that do not say what a machine is are refused:** twelve GPU cloud adapters read a machine reported without a name as named `""`, so a machine whose guest is known by its name got the reference `@<id>`. A machine's name is now absent when the vendor reports none: it is not counted as a fleet agent, and a reference to it is refused naming the machine. A RunPod pod naming no GPU type, a Vultr instance without a readable `status` or `power_status` (read as running before), an Oblivus lifetime that is not a number of minutes, and an Oracle URL without a host are refused with the vendor's answer instead of standing a value in; Scaleway's listing starts at its documented first page.

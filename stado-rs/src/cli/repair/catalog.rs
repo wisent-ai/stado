@@ -144,3 +144,29 @@ pub(super) fn implementation(service: &str, name: &str) -> Result<&'static Repai
             .stating(crate::primitives::failure::FailureCode::Config)
         })
 }
+
+/// The refusal a step's proof observation earns when it does not show the
+/// repair the step declares, or none when the proof holds.
+pub(super) fn proof_refusal(
+    service: &str,
+    step: &str,
+    target: &str,
+    proof: &serde_json::Value,
+) -> Option<String> {
+    match (service, step) {
+        ("stado", "host")
+            if proof["status"].as_str() != Some(crate::deploy::host_recovery::STATUS_OK) =>
+        {
+            Some(format!(
+                "{target} did not complete host repair; inspect the reported blockers and \
+                 retry the declared stado repair stado --step host --target {target} --apply."
+            ))
+        }
+        ("stado-control-plane", "release-state") if proof["healthy"].as_bool() != Some(true) => {
+            Some(format!(
+                "{target} did not complete release-state repair; inspect the reported host drift and failed deliveries."
+            ))
+        }
+        _ => None,
+    }
+}

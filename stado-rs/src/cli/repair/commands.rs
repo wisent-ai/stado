@@ -7,8 +7,8 @@ use crate::cli::CmdError;
 
 use super::args::{reject_extra, RepairArgs};
 use super::catalog::{
-    catalog, declared_service, declared_step, implementation, CatalogRepair, RepairService,
-    DECLARATION,
+    catalog, declared_service, declared_step, implementation, proof_refusal, CatalogRepair,
+    RepairService, DECLARATION,
 };
 use super::steps::RepairExecution;
 
@@ -128,27 +128,6 @@ async fn observe_target(target: &str) -> Value {
         }),
     }
 }
-fn proof_refusal(service: &str, step: &str, target: &str, proof: &Value) -> Option<String> {
-    match (service, step) {
-        ("stado", "host")
-            if proof.get("status").and_then(Value::as_str)
-                != Some(crate::deploy::host_recovery::STATUS_OK) =>
-        {
-            Some(format!(
-                "{target} did not complete host repair; inspect the reported blockers and \
-                 retry the declared stado repair stado --step host --target {target} --apply."
-            ))
-        }
-        ("stado-control-plane", "release-state")
-            if proof.get("healthy").and_then(Value::as_bool) != Some(true) =>
-        {
-            Some(format!(
-                "{target} did not complete release-state repair; inspect the reported host drift and failed deliveries."
-            ))
-        }
-        _ => None,
-    }
-}
 
 async fn run(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdError> {
     if args.service_argument.is_some() || args.step_argument.is_some() || args.service.is_some() {
@@ -253,11 +232,12 @@ async fn run(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdErr
             println!("target: {target}");
         }
         for step in report["steps"].as_array().into_iter().flatten() {
+            let field = |key: &str| crate::cli::reporting::field(&step[key]);
             println!(
                 "{}: {} — proof: {}",
-                step["name"].as_str().unwrap_or("repair"),
-                step["status"].as_str().unwrap_or("reported"),
-                step["proof"].as_str().unwrap_or("not declared")
+                field("name"),
+                field("status"),
+                field("proof")
             );
             println!("  {}", step["observation"]);
         }
