@@ -59,7 +59,7 @@ pub async fn submit(
 /// document is declared to carry is read by name and its absence refused by
 /// name: a run whose `ok` or `outputs` is missing is a Weles that answered
 /// something other than a run, not a run that failed or left nothing.
-pub fn outcome(
+fn outcome(
     payload: &Value,
     action: &str,
     profile: Option<Value>,
@@ -86,8 +86,17 @@ pub fn outcome(
         ))
     })?;
     // A run a signal ended has no exit code, and the document says so with
-    // a null; a document without the key is not a run document.
-    let exit_code = field("exitCode")?.as_i64();
+    // a null; a document without the key is not a run document, and a value
+    // that is neither is not an exit code.
+    let exit_code = match field("exitCode")? {
+        Value::Null => None,
+        code => Some(code.as_i64().ok_or_else(|| {
+            DeployError::unreachable(format!(
+                "the Weles API completed {action} and its run document's `exitCode` is not an \
+                 integer: {code}"
+            ))
+        })?),
+    };
     let outputs = field("outputs")?.clone();
     Ok(TaskOutcome {
         run_id: text("run_id")?,

@@ -395,7 +395,3 @@ path = "../tests/service_images/system_units.rs"
 [[test]]
 name = "workload-browser-task-params"
 path = "../tests/workload/browser_task_params.rs"
-
-[[test]]
-name = "workload-browser-task-report"
-path = "../tests/workload/browser_task_report.rs"

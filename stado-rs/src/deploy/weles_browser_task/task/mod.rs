@@ -6,7 +6,7 @@ use serde_json::{json, Map, Value};
 mod invocation;
 mod receipts;
 
-pub use invocation::{outcome, submit};
+pub use invocation::submit;
 pub use receipts::TaskOutcome;
 
 /// The run parameters the task sets from its own fields, which a plan's
