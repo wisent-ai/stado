@@ -1,9 +1,30 @@
 //! The same answer written for a person: every read, the verdict, the
 //! blockers in the agent own words, and the capacity behind them.
 
+use crate::cli::reporting::{field, NOT_REPORTED};
 use crate::deploy::host_gates::HostGates;
 
 use super::outcome::{gigabytes, store_clause};
+
+/// What this command read off the host, or the words saying it was not
+/// observed: a reading it could not take is never printed as a value.
+const NOT_OBSERVED: &str = "not observed";
+
+fn observed(value: Option<impl std::fmt::Display>) -> String {
+    match value {
+        Some(value) => value.to_string(),
+        None => NOT_OBSERVED.to_string(),
+    }
+}
+
+/// A figure the host's capacity publication carries, or the words saying it
+/// did not report it.
+fn reported(value: Option<impl std::fmt::Display>) -> String {
+    match value {
+        Some(value) => value.to_string(),
+        None => NOT_REPORTED.to_string(),
+    }
+}
 
 /// Print what this host answered, line by line.
 pub(super) fn print_report(gates: &HostGates) {
@@ -45,33 +66,19 @@ pub(super) fn print_report(gates: &HostGates) {
     println!(
         "disk:     {} free, {} used, {} until the {}% disk-full threshold",
         gigabytes(gates.free_gb),
-        gates
-            .used_percent
-            .map_or_else(|| "not observed".to_string(), |used| format!("{used:.1}%")),
+        observed(gates.used_percent.map(|used| format!("{used}%"))),
         gigabytes(gates.headroom_gb),
         crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT,
     );
     // Beside the disk line and never inside it: the disk and memory refuse
     // work for different reasons and are repaired differently.
-    println!(
-        "memory:   {}",
-        gates
-            .memory
-            .line()
-            .unwrap_or_else(|| "not observed".to_string())
-    );
+    println!("memory:   {}", observed(gates.memory.line()));
     // Which of the two sources answered, on its own line: a memory reading
     // taken by this command off a silent host and one the host published
     // itself are different facts, and an operator acting on the first has to
     // know the agent is not talking.
-    println!(
-        "memory evidence: {}",
-        gates.memory.source.unwrap_or("not observed")
-    );
-    println!(
-        "pressure evidence: {}",
-        gates.pressure_source.unwrap_or("not observed")
-    );
+    println!("memory evidence: {}", observed(gates.memory.source));
+    println!("pressure evidence: {}", observed(gates.pressure_source));
     // Both stores on one line, ahead of the capacity line the first one
     // explains: an agent bound to a device-local store publishes capacity into
     // a store nothing here reads, and an operator who cannot see the two
@@ -104,39 +111,39 @@ pub(super) fn print_report(gates: &HostGates) {
                 (Some(false), None, _) => "busy or gated".to_string(),
                 (None, _, _) => "admission unstated".to_string(),
             };
-            let cpu = gates
-                .available_cpu_cores
-                .zip(gates.total_cpu_cores)
-                .map_or_else(
-                    || "-/-".to_string(),
-                    |(free, total)| format!("{free}/{total}"),
-                );
-            let ram = gates.free_ram_gb.zip(gates.total_ram_gb).map_or_else(
-                || "-/-".to_string(),
-                |(free, total)| format!("{free:.1}/{total:.1}"),
+            let cpu = format!(
+                "{}/{}",
+                reported(gates.available_cpu_cores),
+                reported(gates.total_cpu_cores)
             );
-            let vram = gates.free_vram_gb.zip(gates.total_vram_gb).map_or_else(
-                || "-/-".to_string(),
-                |(free, total)| format!("{free}/{total}"),
+            let ram = format!(
+                "{}/{}",
+                reported(gates.free_ram_gb),
+                reported(gates.total_ram_gb)
             );
+            let vram = format!(
+                "{}/{}",
+                reported(gates.free_vram_gb),
+                reported(gates.total_vram_gb)
+            );
+            let age = match gates.age_seconds {
+                Some(age) => format!(
+                    "{} ago",
+                    crate::cli::registry::human_age(chrono::TimeDelta::seconds(age))
+                ),
+                None => "at a time it did not report".to_string(),
+            };
             println!(
                 "capacity: {admission}, {} running job(s), CPU {cpu} cores available/total, \
-                 RAM {ram} GiB free/total, VRAM {vram} GiB free/total; published {} ({published})",
-                gates.running_jobs.unwrap_or_default(),
-                gates.age_seconds.map_or_else(
-                    || "at an unknown time".to_string(),
-                    |age| format!(
-                        "{} ago",
-                        crate::cli::registry::human_age(chrono::TimeDelta::seconds(age))
-                    )
-                ),
+                 RAM {ram} GiB free/total, VRAM {vram} GiB free/total; \
+                 published {age} ({published})",
+                reported(gates.running_jobs),
             );
             if !gates.available_accelerators.is_empty() {
-                println!(
-                    "accelerators: {}",
-                    serde_json::to_string(&gates.available_accelerators)
-                        .unwrap_or_else(|_| "{}".to_string())
-                );
+                match serde_json::to_string(&gates.available_accelerators) {
+                    Ok(accelerators) => println!("accelerators: {accelerators}"),
+                    Err(error) => println!("accelerators: cannot be written out: {error}"),
+                }
             }
             if let Some(line) = gates
                 .published_diagnostics
@@ -146,38 +153,26 @@ pub(super) fn print_report(gates: &HostGates) {
             {
                 println!("accelerator: {line}");
             }
-            if let Some(held) = gates.running_workloads.filter(|held| *held > 0) {
-                let reserved = gates.reserved.as_ref();
-                let number = |key: &str| {
-                    reserved
-                        .and_then(|value| value.get(key))
-                        .and_then(serde_json::Value::as_f64)
-                        .unwrap_or(0.0)
+            if let Some(held) = gates.running_workloads.filter(|held| held.is_positive()) {
+                let number = |key: &str| match &gates.reserved {
+                    Some(reserved) => field(&reserved[key]),
+                    None => NOT_REPORTED.to_string(),
                 };
                 println!(
-                    "reserved: {held} placed workload(s) hold {} core(s), {:.1} GiB RAM, {} GiB VRAM; the capacity line is net of them",
+                    "reserved: {held} placed workload(s) hold {} core(s), {} GiB RAM, {} GiB VRAM; the capacity line is net of them",
                     number("cpu_cores"),
                     number("ram_gb"),
                     number("vram_gb")
                 );
                 for reservation in &gates.reservations {
-                    let text = |key: &str| {
-                        reservation
-                            .get(key)
-                            .map(|value| match value {
-                                serde_json::Value::String(text) => text.clone(),
-                                other => other.to_string(),
-                            })
-                            .unwrap_or_else(|| "?".to_string())
-                    };
                     println!(
                         "          {} ({}) held by {} since {}: {} core(s), {} GiB",
-                        text("kind"),
-                        text("product"),
-                        text("holder"),
-                        text("acquired_at"),
-                        text("cpu_cores"),
-                        text("ram_gb")
+                        field(&reservation["kind"]),
+                        field(&reservation["product"]),
+                        field(&reservation["holder"]),
+                        field(&reservation["acquired_at"]),
+                        field(&reservation["cpu_cores"]),
+                        field(&reservation["ram_gb"])
                     );
                 }
             }
@@ -195,15 +190,13 @@ pub(super) fn print_report(gates: &HostGates) {
             gates
                 .waiting_jobs
                 .iter()
-                .map(|job| {
-                    let id = &job.job_id[..8.min(job.job_id.len())];
-                    match job.age_seconds {
-                        Some(age) => format!(
-                            "{id} ({} in queue)",
-                            crate::cli::registry::human_age(chrono::TimeDelta::seconds(age))
-                        ),
-                        None => id.to_string(),
-                    }
+                .map(|job| match job.age_seconds {
+                    Some(age) => format!(
+                        "{} ({} in queue)",
+                        job.job_id,
+                        crate::cli::registry::human_age(chrono::TimeDelta::seconds(age))
+                    ),
+                    None => job.job_id.clone(),
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -227,9 +220,7 @@ pub(super) fn print_report(gates: &HostGates) {
                  for. `stado space reclaim {} --stage local_apfs_snapshots` may thin local \
                  Time Machine snapshots to the declared watermark; `com.apple.os.update-*` \
                  snapshots remain OS recovery state, so no Stado command deletes them",
-                gates
-                    .local_snapshots
-                    .map_or_else(|| "-".to_string(), |count| count.to_string()),
+                observed(gates.local_snapshots),
                 gates.host,
             );
             continue;
