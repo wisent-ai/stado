@@ -8,8 +8,8 @@
 //! nobody at all, so every wait older than the refresh interval is ended.
 //! The other is the session the wait rides being replaced because it stood
 //! unanswering while a new session to the same host answered: nothing will
-//! answer the wait on the standing session, and left there it held its
-//! caller without end (an installation stood for hours on one registry read).
+//! answer the wait on the standing session, and left there it would hold its
+//! caller without end.
 //! Each relay listens on an ender here; told to end, it refuses its client
 //! with the resolver's sentence, gives its place back and frees its
 //! descriptor, and the client's own request fails with that cause.
