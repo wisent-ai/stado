@@ -22,7 +22,15 @@ pub(crate) async fn list(json_output: bool) -> Result<(), CmdError> {
     )
     .await;
     let document = document.ok_or_else(|| {
-        CmdError::click(observation.detail.unwrap_or_default()).machine_readable(json_output)
+        // A reading that returned no document and named no cause is said as
+        // such, not as a refusal with nothing in it.
+        let detail = match observation.detail {
+            Some(detail) => detail,
+            None => {
+                "the registry document was not read, and the reading named no cause".to_string()
+            }
+        };
+        CmdError::click(detail).machine_readable(json_output)
     })?;
     let origins = public_origin::declarations(&document);
     if json_output {
@@ -82,7 +90,7 @@ pub(crate) async fn status(name: Option<&str>, json_output: bool) -> Result<(), 
         } else {
             print_row(&row);
         }
-        return Err(CmdError::silent(1));
+        return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
     };
     let registry = crate::targets::load_registry_from_value(&document)
         .map_err(|error| CmdError::from(error).machine_readable(json_output))?;
@@ -137,7 +145,7 @@ pub(crate) async fn status(name: Option<&str>, json_output: bool) -> Result<(), 
         // exits non-zero on its own report rather than on a second reading of
         // it.
         eprintln!("not serving: {}", broken.join("; "));
-        return Err(CmdError::silent(1));
+        return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
     }
     Ok(())
 }
@@ -155,7 +163,7 @@ fn declared_names(declared: &[PublicOrigin]) -> String {
 
 /// A report field as text, or `not reported` when the row does not carry it
 /// as text: printed as "", a verdict or state the examination never wrote
-/// read as a blank one.
+/// would read as a blank one.
 fn shown(value: &Value) -> String {
     match value.as_str() {
         Some(text) => text.to_string(),

@@ -177,8 +177,8 @@ pub async fn promote_version(
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
         // An undeclared or empty platform is filled from the inventory; one
-        // declared as anything but text is not a platform, and was read as
-        // undeclared and overwritten without a word.
+        // declared as anything but text is not a platform, and read as
+        // undeclared it would be overwritten without a word.
         let undeclared = match object.get("release_platform") {
             None | Some(Value::Null) => true,
             Some(Value::String(declared)) => declared.is_empty(),
