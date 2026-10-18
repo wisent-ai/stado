@@ -1,22 +1,19 @@
 //! The beacon's `link` block: a host's own account of its connectivity.
 //!
-//! A connectivity gap used to leave no trace in this product: a fleet host
-//! goes unreachable for minutes — full ping loss, ssh failing, then a direct
-//! path back — and the only evidence anywhere is the ping packets an
-//! operator happened to send.
-//! The beacon a host publishes about itself is where that evidence belongs:
-//! it is collected ON the host, so it can name the sleep it just came out of
-//! and the tailnet path it holds right now. No reader can see either.
+//! The beacon a host publishes about itself is where the evidence of a
+//! connectivity gap belongs: it is collected ON the host, so it can name the
+//! sleep it just came out of and the tailnet path it holds right now, which
+//! no reader elsewhere can see.
 //!
 //! Two rules shape everything here:
 //!
-//! - A beacon that does not publish is the exact failure this block exists to
-//!   remove, so every failed probe degrades to a null. [`collect_link`]
-//!   cannot fail; it can only come back thinner.
-//! - Where a datum cannot be read, the block says so. No default ever stands
-//!   in for a measurement: an absent `pmset` yields a null sleep time, not
-//!   "never slept", and a host that is neither macOS nor Linux reports
-//!   `source: "unsupported"` rather than a fabricated path.
+//! - A beacon that does not publish would hide the gap this block exists to
+//!   show, so [`collect_link`] cannot fail: a probe that fails leaves its
+//!   datum null and its cause in `unread`.
+//! - Where a datum cannot be read, the block says so and why. No default
+//!   ever stands in for a measurement: a host without `pmset` publishes a
+//!   null sleep time, not "never slept", and a host that is neither macOS
+//!   nor Linux reports `source: "unsupported"` rather than a fabricated path.
 //!
 //! Every probe is resolved through `PATH` (`resolve_program`) and never
 //! from a path written here, because "which tools does this beacon have" is
@@ -92,12 +89,18 @@ pub struct BeaconLink {
     pub interface_changes: Vec<InterfaceChange>,
     /// [`SOURCE_MACOS`], [`SOURCE_LINUX`] or [`SOURCE_UNSUPPORTED`].
     pub source: String,
+    /// Every datum above the host could not read, each with its cause. A
+    /// null with no entry here is a datum the host has no tool for (no
+    /// tailscale, no pmset), not one it failed to read. Null in a beacon
+    /// from a Stado that did not report it.
+    #[serde(default)]
+    pub unread: Option<Vec<String>>,
 }
 
 impl BeaconLink {
     /// The block a host publishes when nothing about its link can be read:
     /// every datum null, named as unsupported. Collected at is still real.
-    pub fn unsupported(collected_at: String) -> Self {
+    pub fn unsupported(collected_at: String, unread: Vec<String>) -> Self {
         Self {
             collected_at,
             path_kind: PATH_KIND_UNKNOWN.to_string(),
@@ -106,46 +109,106 @@ impl BeaconLink {
             last_wake_at: None,
             interface_changes: Vec::new(),
             source: SOURCE_UNSUPPORTED.to_string(),
+            unread: Some(unread),
         }
     }
 
-    /// The block carried by a loaded beacon document, or `None` when the
-    /// beacon predates it or carries something that is not this shape. A
-    /// reader renders `None` as the unsupported/unknown nulls itself; this
+    /// What a loaded beacon document published for its link: none when the
+    /// beacon predates the block, the block, or — when it carries something
+    /// that is not this shape — why, in the block's own `unread` field. This
     /// never invents a block a host did not publish.
-    pub fn from_beacon(beacon: &Map<String, Value>) -> Option<Self> {
-        serde_json::from_value(beacon.get("link")?.clone()).ok()
+    pub fn from_beacon(beacon: &Map<String, Value>) -> Option<Published> {
+        let link = beacon.get("link")?;
+        Some(match serde_json::from_value(link.clone()) {
+            Ok(block) => Published::Block(block),
+            Err(error) => Published::Unreadable {
+                unread: vec![format!("the beacon's link block is not one: {error}")],
+            },
+        })
+    }
+}
+
+/// What one beacon published for its link, as a reader shows it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum Published {
+    /// The block the host collected.
+    Block(BeaconLink),
+    /// A link block that could not be read, and why.
+    Unreadable { unread: Vec<String> },
+}
+
+/// One probe's answer: its datum, or its cause recorded in `unread` and no
+/// datum.
+fn read<T>(unread: &mut Vec<String>, what: &str, answer: Result<Option<T>, String>) -> Option<T> {
+    match answer {
+        Ok(datum) => datum,
+        Err(cause) => {
+            unread.push(format!("{what}: {cause}"));
+            None
+        }
     }
 }
 
 /// Collect this host's `link` block. Never fails: an unreadable datum is a
-/// null and an unknown platform is [`SOURCE_UNSUPPORTED`].
+/// null with its cause in `unread`, and an unknown platform is
+/// [`SOURCE_UNSUPPORTED`].
 pub async fn collect_link(runner: &Runner) -> BeaconLink {
     let collected_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let window = window_seconds();
-    let path = tailnet_path(runner).await;
+    let mut unread = Vec::new();
+    let window = match window_seconds() {
+        Ok(Some(window)) => Some(window),
+        Ok(None) => {
+            unread.push(
+                "interface changes: the beacon unit declares no WC_HEALTH_INTERVAL_SECONDS, so \
+                 no window was read"
+                    .to_string(),
+            );
+            None
+        }
+        Err(cause) => {
+            unread.push(format!("interface changes: {cause}"));
+            None
+        }
+    };
+    let path = read(&mut unread, "tailnet path", tailnet_path(runner).await);
 
     let (sleep_wake, changes, platform_source) = match std::env::consts::OS {
         "macos" => (
-            macos_sleep_wake(runner).await,
+            read(
+                &mut unread,
+                "sleep and wake",
+                macos_sleep_wake(runner).await,
+            ),
             match window {
-                Some(window) => macos_interface_changes(runner, window).await,
+                Some(window) => read(
+                    &mut unread,
+                    "interface changes",
+                    macos_interface_changes(runner, window).await,
+                ),
                 None => None,
             },
             SOURCE_MACOS,
         ),
         "linux" => (
-            linux_sleep_wake(runner).await,
+            read(
+                &mut unread,
+                "sleep and wake",
+                linux_sleep_wake(runner).await,
+            ),
             match window {
-                Some(window) => linux_interface_changes(runner, window).await,
+                Some(window) => read(
+                    &mut unread,
+                    "interface changes",
+                    linux_interface_changes(runner, window).await,
+                ),
                 None => None,
             },
             SOURCE_LINUX,
         ),
-        // A platform whose sleep log this module has never read reports the
-        // tailnet path it can read and refuses to name a source it does not
-        // have.
-        _ => return BeaconLink::unsupported(collected_at),
+        // A platform whose sleep log this module has never read refuses to
+        // name a source it does not have.
+        _ => return BeaconLink::unsupported(collected_at, unread),
     };
 
     // What decides the source is which probes ANSWERED, not what they found:
@@ -155,17 +218,27 @@ pub async fn collect_link(runner: &Runner) -> BeaconLink {
     // two readings nobody took.
     let answered = path.is_some() || sleep_wake.is_some() || changes.is_some();
     if !answered {
-        return BeaconLink::unsupported(collected_at);
+        return BeaconLink::unsupported(collected_at, unread);
     }
-    let (last_sleep_at, last_wake_at) = sleep_wake.unwrap_or((None, None));
-    let (path_kind, endpoint) = path.unwrap_or((PATH_KIND_UNKNOWN.to_string(), None));
+    let (last_sleep_at, last_wake_at) = match sleep_wake {
+        Some(halves) => halves,
+        None => (None, None),
+    };
+    let (path_kind, endpoint) = match path {
+        Some(path) => path,
+        None => (PATH_KIND_UNKNOWN.to_string(), None),
+    };
     BeaconLink {
         collected_at,
         path_kind,
         endpoint,
         last_sleep_at,
         last_wake_at,
-        interface_changes: changes.unwrap_or_default(),
+        interface_changes: match changes {
+            Some(changes) => changes,
+            None => Vec::new(),
+        },
         source: platform_source.to_string(),
+        unread: Some(unread),
     }
 }

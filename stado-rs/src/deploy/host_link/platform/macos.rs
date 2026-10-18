@@ -11,6 +11,7 @@
 //! sentence the model named.
 
 use std::collections::BTreeSet;
+use std::num::NonZeroU64;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -35,16 +36,19 @@ const CONFIGD_PREDICATE: &str = "process == \"configd\"";
 const PROMPT: &str = include_str!("link-prompt.md");
 const MESSAGES_SLOT: &str = "{messages}";
 
-/// `(last_sleep_at, last_wake_at)` from `pmset -g log`, or `None` when pmset
-/// is absent or failed.
+/// `(last_sleep_at, last_wake_at)` from `pmset -g log`; none when pmset is
+/// not on this host, and the error when it failed or a transition's time
+/// cannot be read.
 ///
 /// The read is bounded from the end: the log holds tens of thousands of lines
 /// and only the newest transition of each kind is wanted, so the scan walks
 /// backwards and stops as soon as it has both.
 pub(in crate::deploy::host_link) async fn macos_sleep_wake(
     runner: &Runner,
-) -> Option<(Option<String>, Option<String>)> {
-    let program = resolve_program("pmset")?;
+) -> Result<Option<(Option<String>, Option<String>)>, String> {
+    let Some(program) = resolve_program("pmset")? else {
+        return Ok(None);
+    };
     let output = probe(runner, vec![program, "-g".to_string(), "log".to_string()]).await?;
 
     let mut sleep = None;
@@ -61,9 +65,8 @@ pub(in crate::deploy::host_link) async fn macos_sleep_wake(
         if (is_sleep && sleep.is_some()) || (is_wake && wake.is_some()) || (!is_sleep && !is_wake) {
             continue;
         }
-        let Some(stamp) = parse_stamp(&format!("{date} {time} {offset}")) else {
-            continue;
-        };
+        let stamp = parse_stamp(&format!("{date} {time} {offset}"))
+            .map_err(|error| format!("a pmset {kind} transition's time: {error}"))?;
         if is_sleep {
             sleep = Some(iso(stamp));
         } else {
@@ -73,7 +76,7 @@ pub(in crate::deploy::host_link) async fn macos_sleep_wake(
             break;
         }
     }
-    Some((sleep, wake))
+    Ok(Some((sleep, wake)))
 }
 
 /// A message with every digit masked, so repetitions share one sentence.
@@ -121,16 +124,18 @@ fn judged_changes(sentences: &BTreeSet<String>) -> Result<BTreeSet<String>, Stri
     Ok(judged.changes.into_iter().collect())
 }
 
-/// Interface changes inside the window from the unified log, or `None` when
-/// `log` is absent or failed, wrote a line that is not JSON, or its messages
-/// could not be judged, the cause said. `Some(vec![])` means the window was
-/// quiet. A record without a timestamp or a message (the summary `log`
-/// writes last) is not an entry.
+/// Interface changes inside the window from the unified log; none when `log`
+/// is not on this host, and the error when it failed, wrote a line that is
+/// not JSON, dated a message unreadably, or its messages could not be
+/// judged. An empty list means the window was quiet. A record without a
+/// timestamp or a message (the summary `log` writes last) is not an entry.
 pub(in crate::deploy::host_link) async fn macos_interface_changes(
     runner: &Runner,
-    window: i64,
-) -> Option<Vec<InterfaceChange>> {
-    let program = resolve_program("log")?;
+    window: NonZeroU64,
+) -> Result<Option<Vec<InterfaceChange>>, String> {
+    let Some(program) = resolve_program("log")? else {
+        return Ok(None);
+    };
     let output = probe(
         runner,
         vec![
@@ -151,45 +156,31 @@ pub(in crate::deploy::host_link) async fn macos_interface_changes(
         if line.is_empty() {
             continue;
         }
-        let entry: Value = match serde_json::from_str(line) {
-            Ok(entry) => entry,
-            Err(error) => {
-                eprintln!("host link: `log show` wrote a line that is not JSON ({error}): {line}");
-                return None;
-            }
+        let entry: Value = serde_json::from_str(line).map_err(|error| {
+            format!("`log show` wrote a line that is not JSON ({error}): {line}")
+        })?;
+        let (Some(stamp), Some(message)) = (
+            entry.get("timestamp").and_then(Value::as_str),
+            entry.get("eventMessage").and_then(Value::as_str),
+        ) else {
+            continue;
         };
-        let stamp = entry
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(parse_stamp);
-        let message = entry
-            .get("eventMessage")
-            .and_then(Value::as_str)
-            .map(detail_of);
-        if let (Some(stamp), Some(message)) = (stamp, message) {
-            if !message.is_empty() {
-                entries.push((stamp, message));
-            }
+        let message = detail_of(message);
+        if !message.is_empty() {
+            entries.push((parse_stamp(stamp)?, message));
         }
     }
     let sentences: BTreeSet<String> = entries.iter().map(|(_, message)| masked(message)).collect();
     if sentences.is_empty() {
-        return Some(Vec::new());
+        return Ok(Some(Vec::new()));
     }
-    let judged = match tokio::task::spawn_blocking(move || judged_changes(&sentences)).await {
-        Ok(Ok(judged)) => judged,
-        Ok(Err(cause)) => {
-            eprintln!("host link: configd's messages were not judged: {cause}");
-            return None;
-        }
-        Err(error) => {
-            eprintln!("host link: judging configd's messages stopped: {error}");
-            return None;
-        }
-    };
+    let judged = tokio::task::spawn_blocking(move || judged_changes(&sentences))
+        .await
+        .map_err(|error| format!("judging configd's messages stopped: {error}"))?
+        .map_err(|cause| format!("configd's messages were not judged: {cause}"))?;
     let changes = entries
         .into_iter()
         .filter(|(_, message)| judged.contains(&masked(message)))
         .collect();
-    Some(newest_changes(changes))
+    Ok(Some(newest_changes(changes)))
 }

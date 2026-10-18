@@ -3,11 +3,18 @@ import WisentDesignSystem
 
 extension HostsView {
     func hostLink(_ host: WorkerNode) -> HostLink? {
-        linkStore.link(for: host.targetName ?? host.displayName)
+        linkStore.link(for: host.displayName)
     }
 
     private func linkFailure(_ host: WorkerNode) -> String? {
-        linkStore.failure(for: host.targetName ?? host.displayName)
+        linkStore.failure(for: host.displayName)
+    }
+
+    private func beaconAgeDescription(_ link: HostLink) -> String {
+        guard let age = link.beaconAgeSeconds else {
+            return "No beacon has ever been published for this host"
+        }
+        return ConsoleFormat.age(Double(age))
     }
 
     /// Why this host went quiet, under the gates that decide whether it works.
@@ -55,8 +62,7 @@ extension HostsView {
             }
             WisentField(
                 label: "Newest beacon",
-                value: link.beaconAgeSeconds.map { ConsoleFormat.age(Double($0)) }
-                    ?? "No beacon has ever been published for this host",
+                value: beaconAgeDescription(link),
                 tone: link.verdict.needsAttention ? link.verdict.tone : .neutral
             )
             if let publisher = link.beaconPublisher {
@@ -131,6 +137,14 @@ extension HostsView {
             WisentField(label: "Last sleep", value: stampDescription(link.lastSleepAt))
             WisentField(label: "Last wake", value: stampDescription(link.lastWakeAt))
             WisentField(label: "Interface changes", value: interfaceDescription(link))
+            // What the host could not read of its own link, each with its
+            // cause, so a null above says whether a probe failed or the host
+            // has no such tool.
+            WisentField(
+                label: "Unread link data",
+                value: link.unreadLine,
+                tone: link.linkUnread?.isEmpty == false ? .warning : .neutral
+            )
             // What the host's own disk scans last decided. A scan standing
             // skipped is the host above its load ceiling, so the readings
             // that scan produces (unit events, build caches, inventory) are
@@ -145,17 +159,16 @@ extension HostsView {
                 value: silenceDescription(link),
                 tone: link.openSilence == nil ? .neutral : .danger
             )
-            if let reader = link.openSilence?.firstReaderError ?? link.silences.first?.firstReaderError,
-               !reader.isEmpty {
-                // The refusal in the reader's own words. This sentence reached
-                // nothing but a log file on the operator's laptop before the
-                // silence records existed.
+            // Silences are newest first and only the newest can be open, so
+            // its refusal is the current gap's when one is open.
+            if let reader = link.silences.first?.firstReaderError, !reader.isEmpty {
+                // The refusal in the reader's own words.
                 WisentField(label: "First reader refusal", value: reader, tone: .danger)
             }
             WisentField(
                 label: "Reader refusals",
                 value: refusalDescription(link.readerRefusals),
-                tone: (link.readerRefusals?.count ?? 0) > 0 ? .warning : .neutral
+                tone: link.readerRefusals?.reasons.isEmpty == false ? .warning : .neutral
             )
         } else if let failure = linkFailure(host) {
             WisentAlertPanel(

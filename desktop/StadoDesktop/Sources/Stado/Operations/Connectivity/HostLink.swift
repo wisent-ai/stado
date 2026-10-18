@@ -35,6 +35,9 @@ struct HostLink: Decodable, Identifiable, Sendable {
     let lastSleepAt: String?
     let lastWakeAt: String?
     let interfaceChanges: [HostLinkInterfaceChange]
+    /// Every datum of the link block the host could not read, each with its
+    /// cause, verbatim. `nil` when the beacon's Stado did not report it.
+    let linkUnread: [String]?
     /// Newest first, as the command orders them.
     let silences: [HostSilenceRecord]
     let readerRefusals: HostReaderRefusals?
@@ -58,7 +61,17 @@ struct HostLink: Decodable, Identifiable, Sendable {
     /// console that guessed "nobody is logged in" from silence would be
     /// asserting the fact this reading exists to establish.
     var sessionLine: String {
-        session?.headline ?? "Not reported"
+        guard let session else { return "Not reported" }
+        return session.headline
+    }
+
+    /// The one line the Link section renders for what the host could not
+    /// read of its own link: each cause on its own line, "None" when every
+    /// probe answered, and "Not reported" when the beacon's Stado did not say.
+    var unreadLine: String {
+        guard let linkUnread else { return "Not reported" }
+        guard !linkUnread.isEmpty else { return "None" }
+        return linkUnread.joined(separator: "\n")
     }
 
     var id: String { host }
@@ -97,33 +110,38 @@ struct HostLink: Decodable, Identifiable, Sendable {
         case lastSleepAt = "last_sleep_at"
         case lastWakeAt = "last_wake_at"
         case interfaceChanges = "interface_changes"
+        case linkUnread = "link_unread"
         case readerRefusals = "reader_refusals"
     }
 
+    /// Every field `stado host link --json` always writes is required: a
+    /// report without one is not this command's answer, and decoding fails
+    /// naming the missing key rather than standing an empty value in for it.
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
+        host = try values.decode(String.self, forKey: .host)
         beaconAgeSeconds = try values.decodeIfPresent(Int.self, forKey: .beaconAgeSeconds)
-        sshReachable = try values.decodeIfPresent(Bool.self, forKey: .sshReachable) ?? false
+        sshReachable = try values.decode(Bool.self, forKey: .sshReachable)
         pathKind = (try values.decodeIfPresent(String.self, forKey: .pathKind))
             .map(HostLinkPathKind.init)
         endpoint = try values.decodeIfPresent(String.self, forKey: .endpoint)
         selectedConnection = try values.decodeIfPresent(String.self, forKey: .selectedConnection)
         connectionPaths =
-            try values.decodeIfPresent([HostConnectionPathProbe].self, forKey: .connectionPaths) ?? []
+            try values.decode([HostConnectionPathProbe].self, forKey: .connectionPaths)
         connectionProbeError = try values.decodeIfPresent(String.self, forKey: .connectionProbeError)
         beaconPublisher =
             try values.decodeIfPresent(HostBeaconPublisherDiagnosis.self, forKey: .beaconPublisher)
         lastSleepAt = try values.decodeIfPresent(String.self, forKey: .lastSleepAt)
         lastWakeAt = try values.decodeIfPresent(String.self, forKey: .lastWakeAt)
         interfaceChanges =
-            try values.decodeIfPresent([HostLinkInterfaceChange].self, forKey: .interfaceChanges) ?? []
-        silences = try values.decodeIfPresent([HostSilenceRecord].self, forKey: .silences) ?? []
+            try values.decode([HostLinkInterfaceChange].self, forKey: .interfaceChanges)
+        linkUnread = try values.decodeIfPresent([String].self, forKey: .linkUnread)
+        silences = try values.decode([HostSilenceRecord].self, forKey: .silences)
         readerRefusals = try values.decodeIfPresent(HostReaderRefusals.self, forKey: .readerRefusals)
         session = try values.decodeIfPresent(HostLinkSession.self, forKey: .session)
         scans = try values.decodeIfPresent(HostScans.self, forKey: .scans)
-        verdict = HostLinkVerdict(try values.decodeIfPresent(String.self, forKey: .verdict) ?? "")
-        blockers = try values.decodeIfPresent([String].self, forKey: .blockers) ?? []
+        verdict = HostLinkVerdict(try values.decode(String.self, forKey: .verdict))
+        blockers = try values.decode([String].self, forKey: .blockers)
     }
 }
 

@@ -8,9 +8,12 @@
 //! and is back at the second. The kernel journal names the subsystem of the
 //! device a message is about in `_KERNEL_SUBSYSTEM`, and `net` is a network
 //! interface, so every message the kernel attributes to an interface in the
-//! window is an interface change, whatever its driver writes. The phrase list
-//! (`link is up`, `carrier`, …) and systemd's English verbs these used to
-//! match are gone.
+//! window is an interface change, whatever its driver writes.
+//!
+//! Each reader answers none when `journalctl` is not on this host, and the
+//! error with its cause when it ran and its answer could not be read.
+
+use std::num::NonZeroU64;
 
 use chrono::{DateTime, FixedOffset};
 use serde_json::Value;
@@ -30,13 +33,16 @@ const START_JOB: &str = "start";
 const KERNEL_SUBSYSTEM_FIELD: &str = "_KERNEL_SUBSYSTEM";
 const NETWORK_SUBSYSTEM: &str = "net";
 
-/// Every journal entry of `journalctl -o json`, or none when a line is not
-/// JSON: such an answer is a failed read, the same `None` as journalctl
-/// failing, rather than a journal with that entry silently missing.
-fn entries(stdout: &str) -> Option<Vec<Value>> {
+/// Every journal entry of `journalctl -o json`. A line that is not JSON is
+/// the error: a journal with that entry silently missing is not a reading.
+fn entries(stdout: &str) -> Result<Vec<Value>, String> {
     stdout
         .lines()
-        .map(|line| serde_json::from_str::<Value>(line).ok())
+        .map(|line| {
+            serde_json::from_str::<Value>(line).map_err(|error| {
+                format!("journalctl wrote a line that is not JSON ({error}): {line}")
+            })
+        })
         .collect()
 }
 
@@ -45,20 +51,28 @@ fn field<'a>(entry: &'a Value, name: &str) -> Option<&'a str> {
 }
 
 /// When the entry was written: the journal's microseconds since the epoch.
-fn written_at(entry: &Value) -> Option<DateTime<FixedOffset>> {
-    let micros = field(entry, REALTIME_FIELD)?.parse::<i64>().ok()?;
-    DateTime::from_timestamp_micros(micros).map(|stamp| stamp.fixed_offset())
+/// An entry that names none, or one that is no instant, is the error.
+fn written_at(entry: &Value) -> Result<DateTime<FixedOffset>, String> {
+    let raw = field(entry, REALTIME_FIELD)
+        .ok_or_else(|| format!("a journal entry names no {REALTIME_FIELD}: {entry}"))?;
+    let micros = raw.parse::<i64>().map_err(|error| {
+        format!("{REALTIME_FIELD} {raw:?} is no count of microseconds: {error}")
+    })?;
+    DateTime::from_timestamp_micros(micros)
+        .map(|stamp| stamp.fixed_offset())
+        .ok_or_else(|| format!("{REALTIME_FIELD} {micros} is no instant"))
 }
 
-/// `(last_sleep_at, last_wake_at)` from the suspend unit's jobs, or `None`
-/// when journalctl is absent or failed.
+/// `(last_sleep_at, last_wake_at)` from the suspend unit's jobs.
 ///
 /// A registry Linux host is typically a server that never suspends, so both
 /// halves being null is the normal, honest answer there.
 pub(in crate::deploy::host_link) async fn linux_sleep_wake(
     runner: &Runner,
-) -> Option<(Option<String>, Option<String>)> {
-    let program = resolve_program("journalctl")?;
+) -> Result<Option<(Option<String>, Option<String>)>, String> {
+    let Some(program) = resolve_program("journalctl")? else {
+        return Ok(None);
+    };
     let output = probe(
         runner,
         vec![
@@ -79,9 +93,7 @@ pub(in crate::deploy::host_link) async fn linux_sleep_wake(
     let mut sleep = None;
     let mut wake = None;
     for entry in entries(&output.stdout)? {
-        let Some(stamp) = written_at(&entry) else {
-            continue;
-        };
+        let stamp = written_at(&entry)?;
         let starts = field(&entry, JOB_TYPE_FIELD) == Some(START_JOB);
         let finished = field(&entry, JOB_RESULT_FIELD).is_some();
         if sleep.is_none() && starts && !finished {
@@ -93,16 +105,17 @@ pub(in crate::deploy::host_link) async fn linux_sleep_wake(
             break;
         }
     }
-    Some((sleep, wake))
+    Ok(Some((sleep, wake)))
 }
 
-/// Interface changes inside the window from the kernel journal, or `None`
-/// when journalctl is absent or failed.
+/// Interface changes inside the window from the kernel journal.
 pub(in crate::deploy::host_link) async fn linux_interface_changes(
     runner: &Runner,
-    window: i64,
-) -> Option<Vec<InterfaceChange>> {
-    let program = resolve_program("journalctl")?;
+    window: NonZeroU64,
+) -> Result<Option<Vec<InterfaceChange>>, String> {
+    let Some(program) = resolve_program("journalctl")? else {
+        return Ok(None);
+    };
     let output = probe(
         runner,
         vec![
@@ -118,14 +131,15 @@ pub(in crate::deploy::host_link) async fn linux_interface_changes(
     )
     .await?;
 
-    let changes = entries(&output.stdout)?
-        .into_iter()
-        .filter(|entry| field(entry, KERNEL_SUBSYSTEM_FIELD) == Some(NETWORK_SUBSYSTEM))
-        .filter_map(|entry| {
-            let stamp = written_at(&entry)?;
-            let message = field(&entry, MESSAGE_FIELD)?;
-            Some((stamp, detail_of(message)))
-        })
-        .collect();
-    Some(newest_changes(changes))
+    let mut changes = Vec::new();
+    for entry in entries(&output.stdout)? {
+        if field(&entry, KERNEL_SUBSYSTEM_FIELD) != Some(NETWORK_SUBSYSTEM) {
+            continue;
+        }
+        let stamp = written_at(&entry)?;
+        let message = field(&entry, MESSAGE_FIELD)
+            .ok_or_else(|| format!("a kernel network entry names no {MESSAGE_FIELD}: {entry}"))?;
+        changes.push((stamp, detail_of(message)));
+    }
+    Ok(Some(newest_changes(changes)))
 }

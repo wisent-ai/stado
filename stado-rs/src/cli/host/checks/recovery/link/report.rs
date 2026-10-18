@@ -204,6 +204,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         "last_sleep_at": from_link("last_sleep_at"),
         "last_wake_at": from_link("last_wake_at"),
         "interface_changes": changes,
+        "link_unread": from_link("unread"),
         "silences": recorded,
         "reader_refusals": {
             "since": refusals.since.map(super::silence_instant),

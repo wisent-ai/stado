@@ -52,13 +52,10 @@ pub(super) fn render(
         _ => println!("beacon:   nothing readable for this host"),
     }
     if let Some(publisher) = &beacon_publisher {
-        println!(
-            "publisher:{}",
-            publisher.get("detail").and_then(Value::as_str).map_or_else(
-                || " no diagnosis".to_string(),
-                |detail| format!(" {detail}")
-            )
-        );
+        match publisher.get("detail").and_then(Value::as_str) {
+            Some(detail) => println!("publisher: {detail}"),
+            None => println!("publisher: no diagnosis"),
+        }
     }
     println!(
         "ssh:      {}",
@@ -70,22 +67,20 @@ pub(super) fn render(
     if let Some(detail) = &connection_probe_error {
         println!("routes:   could not probe: {detail}");
     } else {
-        for (index, probe) in connection_probes.iter().enumerate() {
-            let label = if index == 0 { "routes:  " } else { "         " };
+        let mut label = "routes:  ";
+        for probe in &connection_probes {
             let selected = if selected_connection.as_deref() == Some(probe.name.as_str()) {
                 ", selected"
             } else {
                 ""
             };
-            let state = if probe.reachable {
-                format!("answered{selected}")
-            } else {
-                format!(
-                    "did not answer: {}",
-                    probe.error.as_deref().unwrap_or("SSH probe failed")
-                )
+            let state = match (probe.reachable, probe.error.as_deref()) {
+                (true, _) => format!("answered{selected}"),
+                (false, Some(error)) => format!("did not answer: {error}"),
+                (false, None) => "did not answer, and the probe named no error".to_string(),
             };
             println!("{label} {} ({}) {state}", probe.name, probe.destination);
+            label = "         ";
         }
     }
     // The headline in the operator's words first, the resolver's own sentence
@@ -120,10 +115,10 @@ pub(super) fn render(
     // it; a beacon from before the block has nothing to say here.
     println!(
         "scans:    {}",
-        scans.as_ref().map_or_else(
-            || "not reported".to_string(),
-            crate::deploy::host_scan::record::line
-        )
+        match scans.as_ref() {
+            Some(scans) => crate::deploy::host_scan::record::line(scans),
+            None => "not reported".to_string(),
+        }
     );
     if changes.is_empty() {
         println!("changes:  none recorded");
@@ -136,6 +131,17 @@ pub(super) fn render(
                 cell(change.get("detail"))
             );
         }
+    }
+    // What the host could not read of its own link, each with its cause; a
+    // beacon from a Stado that did not report it says so.
+    match published.as_ref().and_then(|block| block.get("unread")) {
+        Some(Value::Array(unread)) if unread.is_empty() => println!("unread:   none"),
+        Some(Value::Array(unread)) => {
+            for cause in unread {
+                println!("unread:   {}", cell(Some(cause)));
+            }
+        }
+        _ => println!("unread:   not reported by this beacon"),
     }
     if refused {
         println!(

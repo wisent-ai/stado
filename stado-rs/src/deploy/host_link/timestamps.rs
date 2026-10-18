@@ -13,18 +13,26 @@ pub(super) fn iso(stamp: DateTime<FixedOffset>) -> String {
 }
 
 /// Parse the timestamp spellings the macOS log tools print (the Linux
-/// journal is read as JSON with its own epoch field). Anything else is
-/// skipped: a line whose time cannot be read is not evidence.
-pub(super) fn parse_stamp(raw: &str) -> Option<DateTime<FixedOffset>> {
+/// journal is read as JSON with its own epoch field). A spelling neither
+/// format reads is the error, naming the stamp and each format's reason.
+pub(super) fn parse_stamp(raw: &str) -> Result<DateTime<FixedOffset>, String> {
     const FORMATS: &[&str] = &[
         // pmset -g log: local date and time with a numeric UTC offset.
         "%Y-%m-%d %H:%M:%S %z",
         // log show --style ndjson: fractional seconds and an unseparated offset.
         "%Y-%m-%d %H:%M:%S%.f%z",
     ];
-    FORMATS
-        .iter()
-        .find_map(|format| DateTime::parse_from_str(raw.trim(), format).ok())
+    let mut reasons = Vec::new();
+    for format in FORMATS {
+        match DateTime::parse_from_str(raw.trim(), format) {
+            Ok(stamp) => return Ok(stamp),
+            Err(error) => reasons.push(format!("{format}: {error}")),
+        }
+    }
+    Err(format!(
+        "{raw:?} is no timestamp a log tool prints ({})",
+        reasons.join("; ")
+    ))
 }
 
 /// One log line's own sentence, flattened.
