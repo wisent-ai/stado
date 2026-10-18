@@ -17,3 +17,5 @@ Harsh-Review-Attacked: whether a read that names its cause refuses differently; 
 Harsh-Review-Attacked: whether the exit status changes; CLICK_ERROR_CODE is EXIT_FAILURE, the status the typed one was.
 Repairs: "Web origin status names a field its report does not carry" its doc narrated what an empty field read as.
 Repairs: "Version promotion refuses a release_platform that is not a platform name and names an inventory that failed without saying why" its comment narrated what reading the platform as undeclared did.
+
+Repaired-By: "web origin, route publish and identity verify print absent fields as not reported" repairs it in this push, naming this commit on its Repairs line
