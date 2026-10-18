@@ -23,16 +23,23 @@ pub async fn activate_staged_release(
     let runner = crate::deploy::production_runner();
     let click = <CmdError as From<crate::deploy::DeployError>>::from;
 
-    let fetched = crate::deploy::service_file_fetch::fetch_file(&resolved, env_file, &runner)
+    use crate::deploy::service_file_fetch::{fetch_file, FILE_MISSING};
+    let fetched = fetch_file(&resolved, env_file, &runner)
         .await
         .map_err(click)?;
-    if !fetched.ok() {
+    // A file that is not there and a file whose bytes did not arrive intact
+    // are different failures; the fetch itself says which, in its words.
+    if let Some(failure) = fetched.failure(&resolved.name) {
+        let code = if fetched.report.file_state == FILE_MISSING {
+            crate::primitives::failure::FailureCode::NotFound
+        } else {
+            crate::primitives::failure::FailureCode::InfraDown
+        };
         return Err(CmdError::click(format!(
-            "{} declares staged release coordinates in {env_file}, but that file could not be \
-             read ({}); restore the deployment env file before activating",
-            resolved.name, fetched.report.file_state
+            "staged release coordinates are declared in {env_file}, which could not be used: \
+             {failure}; restore the deployment env file before activating"
         ))
-        .stating(crate::primitives::failure::FailureCode::NotFound));
+        .stating(code));
     }
     let body = String::from_utf8_lossy(&fetched.content).into_owned();
     let coordinate = staged_release::coordinate(&body, product).map_err(click)?;
@@ -108,6 +115,19 @@ pub async fn activate_staged_release(
     )
     .await
     .map_err(click)?;
+    // The script stops at the first failing step under `set -e`; an exit
+    // other than success is the installer (or its unpacking) failing, and
+    // its own words are the cause.
+    if !outcome.succeeded() {
+        return Err(CmdError::click(format!(
+            "{}: the staged installer for {product} {} failed with exit {}: {}",
+            resolved.name,
+            coordinate.version,
+            outcome.code,
+            crate::deploy::host_channel::last_error_line(&outcome, "it printed nothing")
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    }
 
     let after = staged_release::installed_version(&resolved, &runner)
         .await
@@ -163,27 +183,40 @@ pub async fn activate_staged_release(
     }
     // `installed_version` reads the link, so a revert shows up as an unchanged
     // version even though the installer did everything right. The link either
-    // side of the settle window is what separates the two.
-    let activated = log_tail
-        .lines()
-        .find_map(|line| line.strip_prefix("STADO_ACTIVATE_LINK "))
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let settled = log_tail
-        .lines()
-        .find_map(|line| line.strip_prefix("STADO_ACTIVATE_SETTLED "))
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if !activated.is_empty() && activated != settled {
-        return Err(CmdError::click(format!(
-            "{}: the staged installer activated {activated}, and something on that host put the \
-             runtime link back to {settled} within thirty seconds; the release is installed and \
-             something else is holding the host on the old one",
-            resolved.name
-        ))
-        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    // side of the settle window is what separates the two; a run that did not
+    // report both readings is said to be one, never compared against a blank.
+    let marker = |prefix: &str| {
+        log_tail
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .map(|value| value.trim().to_string())
+    };
+    match (
+        marker("STADO_ACTIVATE_LINK "),
+        marker("STADO_ACTIVATE_SETTLED "),
+    ) {
+        (Some(activated), Some(settled)) if activated != settled => {
+            return Err(CmdError::click(format!(
+                "{}: the staged installer activated {activated}, and something on that host put \
+                 the runtime link back to {settled} within thirty seconds; the release is \
+                 installed and something else is holding the host on the old one",
+                resolved.name
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
+        }
+        (Some(_), Some(_)) => {}
+        (activated, settled) => {
+            let missing = match (activated, settled) {
+                (None, None) => "at all",
+                (None, Some(_)) => "after installing",
+                _ => "after the settle window",
+            };
+            return Err(CmdError::unreachable(format!(
+                "{}: the activation run did not report the runtime link {missing}; whether the \
+                 release held is unknown",
+                resolved.name
+            )));
+        }
     }
     if after != coordinate.version {
         return Err(CmdError::click(format!(

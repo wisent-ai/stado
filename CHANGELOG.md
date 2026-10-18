@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado release staged activate` says why it stopped:** an env file whose bytes did not arrive intact was reported as one that "could not be read (read)", a staged installer that failed was never checked and the run went on to compare versions, and a run that did not report the runtime link after the settle window was refused as one "put back to" an empty link. The env-file refusal now carries the fetch's own report (missing is not found; unreadable or corrupted is an infrastructure failure), a failed installer is refused with its exit and last error line, and a missing link reading is named as missing.
+
 - **`stado host user create` leaves an omitted display name to the host and reports a failure whole:** an omitted `--full-name` was replaced by the username, the display name and shell were refused past a 255-character limit nothing declared, and a failing host's detail was cut to its last 2000 characters. `--full-name`, like `--shell`, now leaves an omitted value to the host's account tool (`sysadminctl` or `useradd`), the account tool refuses a length it does not take in its own words, and the detail is its whole stderr, else stdout, else the exit status. A selected host without an SSH destination is refused instead of being reported with a blank one.
 
 - **The host beacon names a systemd trigger it could not read:** reconciling a oneshot's lifecycle skipped a trigger (its timer) whose `systemctl show` could not run or failed, so a unit whose timer systemd could not answer for stayed unscheduled with no trace why. Each such read is now listed on the unit as `triggers_unread` with its cause, beside `lifecycle_unread`.
