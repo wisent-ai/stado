@@ -198,11 +198,13 @@ fn print_rows(rows: &[Row], json: bool) {
         );
         return;
     }
-    println!(
+    let header = format!(
         "{:<12} {:<10} {:<18} {:<22} COMMAND",
         "JOB ID", "STATE", "GPU", "SUBMITTED_BY"
     );
-    println!("{}", "-".repeat(110));
+    println!("{header}");
+    // The rule is as long as the header it underlines.
+    println!("{}", "-".repeat(header.chars().count()));
     for row in rows {
         print_job_row(row);
     }
@@ -214,8 +216,10 @@ fn print_job_row(row: &Row) {
     // Whole values: the columns pad short ones and the command, the last
     // column, runs as long as it is.
     let cmd = job.command.split_whitespace().collect::<Vec<_>>().join(" ");
+    // A job record written without its submitter says so; a mark in its place
+    // reads as an account somebody is called.
     let submitted_by = if job.submitted_by.is_empty() {
-        "?"
+        super::NOT_REPORTED
     } else {
         job.submitted_by.as_str()
     };
