@@ -23,7 +23,7 @@ async fn edit_service<F>(name: &str, edit: F) -> Result<u64, CmdError>
 where
     F: Fn(&mut Value) -> Result<(), CmdError>,
 {
-    let next_generation = std::cell::Cell::new(0);
+    let next_generation = std::cell::Cell::new(None);
     registry::commit_document(|current| {
         let mut document = current.clone();
         {
@@ -31,14 +31,18 @@ where
             service(block, name)?;
         }
         edit(&mut document)?;
-        next_generation.set(
+        next_generation.set(Some(
             crate::service_resolution::advance_generation(&mut document)
                 .map_err(CmdError::declaration)?,
-        );
+        ));
         Ok(document)
     })
     .await?;
-    Ok(next_generation.get())
+    next_generation.get().ok_or_else(|| {
+        CmdError::click(format!(
+            "the registry commit for {name:?} landed without running its edit, so it produced no generation"
+        ))
+    })
 }
 
 fn consumer_entry<'a>(
@@ -116,7 +120,8 @@ fn bind_consumer(
         .find(|adapter| adapter["bind"] == bind.as_str())
     {
         // The adapter is named as declared: one without its service or
-        // consumer was named "/", which pointed the operator at nothing.
+        // consumer would otherwise be named "/", pointing the operator at
+        // nothing.
         return Err(CmdError::refused(format!(
             "{target} handed out {bind}, which an adapter already declares and the resolver has \
              not bound yet ({holder}); run the declaration again for another port"
@@ -223,7 +228,7 @@ pub(in crate::cli::directory) async fn consumer_rm(
     consumer: &str,
     as_json: bool,
 ) -> Result<(), CmdError> {
-    let removed_bindings = std::cell::Cell::new(0);
+    let removed_bindings = std::cell::Cell::new(None);
     let generation = edit_service(name, |document| {
         let entry = consumer_entry(document, name)?;
         let consumers = entry
@@ -237,7 +242,7 @@ pub(in crate::cli::directory) async fn consumer_rm(
                 known.join(", ")
             )));
         }
-        let mut removed = 0;
+        let mut removed = Vec::new();
         if let Some(targets) = document.get_mut("targets").and_then(Value::as_array_mut) {
             for target in targets {
                 if let Some(adapters) = target
@@ -245,18 +250,24 @@ pub(in crate::cli::directory) async fn consumer_rm(
                     .and_then(|config| config.get_mut("adapters"))
                     .and_then(Value::as_array_mut)
                 {
-                    let previous = adapters.len();
-                    adapters.retain(|adapter| {
-                        adapter["service"] != name || adapter["consumer"] != consumer
-                    });
-                    removed += previous - adapters.len();
+                    let (kept, gone): (Vec<Value>, Vec<Value>) =
+                        std::mem::take(adapters).into_iter().partition(|adapter| {
+                            adapter["service"] != name || adapter["consumer"] != consumer
+                        });
+                    *adapters = kept;
+                    removed.extend(gone);
                 }
             }
         }
-        removed_bindings.set(removed);
+        removed_bindings.set(Some(removed.len()));
         Ok(())
     })
     .await?;
+    let bindings_removed = removed_bindings.get().ok_or_else(|| {
+        CmdError::click(format!(
+            "the registry commit for {name:?} landed without running its edit, so no binding count was produced"
+        ))
+    })?;
     if as_json {
         println!(
             "{}",
@@ -264,7 +275,7 @@ pub(in crate::cli::directory) async fn consumer_rm(
                 "service": name,
                 "removed": consumer,
                 "generation": generation,
-                "bindings_removed": removed_bindings.get(),
+                "bindings_removed": bindings_removed,
             }))?
         );
     } else {
