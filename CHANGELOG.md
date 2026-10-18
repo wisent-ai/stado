@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado space volume unmount` refuses when it cannot read fstab:** the check for an fstab line Stado did not write discarded `awk`'s errors, so an `/etc/fstab` that could not be read looked like one declaring nothing and the volume was unmounted. It is now refused with `awk`'s words before anything changes; a host without fstab still declares nothing. A failed fstab backup and a failed `systemctl daemon-reload` keep their programs' words, and a program that ended without a finding is reported with its whole failure.
+
 - **A delivery says whether it wrote its release receipt:** the activate program wrote `release-receipt.json` with its errors sent to `/dev/null` and `|| true`, so a receipt that could not be written left a host with no record of who installed the bytes and no word why. The program now says `receipt` with the path it wrote, or `receipt_unwritten` with the path and the shell's own words, and the delivery report carries both fields.
 
 - **A machine submission's work file is created once and refused with its path:** creating the owner-only file a machine submission stages its source through tried up to sixteen fresh names and then refused with no path. Its name ends in a fresh random UUID, so a file already there was not left by this process: it is now created once, and any failure is refused naming the file and the operating system's cause.

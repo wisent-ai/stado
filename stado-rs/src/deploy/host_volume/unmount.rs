@@ -25,7 +25,16 @@ if [ ! -r /proc/self/mounts ]; then
   printf 'ERROR\t%s\n' 'this host has no /proc/self/mounts; only a Linux host can be asked to unmount a volume'
   exit 1
 fi
-foreign=$(awk -v point="$mount_point" -v tag="$tag" '$1 !~ /^#/ && $2 == point && index($0, tag) == 0 { print; exit }' /etc/fstab 2>/dev/null)
+# A host without /etc/fstab declares nothing there. One that has it but
+# cannot be read leaves unknown whether another line declares this mount
+# point, so nothing is unmounted.
+foreign=''
+if [ -e /etc/fstab ]; then
+  if ! foreign=$(awk -v point="$mount_point" -v tag="$tag" '$1 !~ /^#/ && $2 == point && index($0, tag) == 0 { print; exit }' /etc/fstab 2>&1); then
+    printf 'ERROR\tcannot read /etc/fstab, so whether another line declares %s is unknown: %s\n' "$mount_point" "$foreign"
+    exit 1
+  fi
+fi
 if [ -n "$foreign" ]; then
   printf 'ERROR\t/etc/fstab declares %s with a line stado did not write (%s); remove that line by hand or leave the volume mounted\n' "$mount_point" "$foreign"
   exit 1
@@ -41,12 +50,17 @@ fi
 printf 'STADO_VOLUME_UNMOUNTED\t%s\n' "$unmounted_now"
 fstab_removed=0
 if awk -v point="$mount_point" -v tag="$tag" '$2 == point && index($0, tag) > 0 { found = 1 } END { exit !found }' /etc/fstab; then
-  cp -p /etc/fstab "/etc/fstab.before-stado-volume-$(date -u +%Y%m%d)" || { printf 'ERROR\tcannot back up /etc/fstab\n'; exit 1; }
+  if ! copied=$(cp -p /etc/fstab "/etc/fstab.before-stado-volume-$(date -u +%Y%m%d)" 2>&1); then
+    printf 'ERROR\tcannot back up /etc/fstab: %s\n' "$copied"
+    exit 1
+  fi
   kept=$(awk -v point="$mount_point" -v tag="$tag" '!($2 == point && index($0, tag) > 0)' /etc/fstab) || { printf 'ERROR\tcannot read /etc/fstab\n'; exit 1; }
   printf '%s\n' "$kept" >/etc/fstab || { printf 'ERROR\tcannot write /etc/fstab\n'; exit 1; }
   fstab_removed=1
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload >/dev/null 2>&1 || printf 'ERROR\t%s\n' 'systemctl daemon-reload failed after the fstab line was removed'
+  if command -v systemctl >/dev/null; then
+    if ! reloaded=$(systemctl daemon-reload 2>&1); then
+      printf 'ERROR\tsystemctl daemon-reload failed after the fstab line was removed: %s\n' "$reloaded"
+    fi
   fi
 fi
 printf 'STADO_VOLUME_FSTAB_REMOVED\t%s\n' "$fstab_removed"
@@ -89,10 +103,10 @@ pub async fn unmount_volume(
         .replace(TAG_MARK, super::FSTAB_TAG);
     let output = host_channel::run_script(&target, &program, runner).await?;
     let mut unmount = parse_output(&output.stdout);
-    if unmount.error.is_none() && output.code != 0 {
+    if unmount.error.is_none() && !output.succeeded() {
         unmount.error = Some(format!(
-            "the host program exited {} without a finding; stdout: {}",
-            output.code,
+            "the host program ended without a finding ({}); stdout: {}",
+            host_channel::whole_failure(&output),
             output.stdout.trim()
         ));
     }
