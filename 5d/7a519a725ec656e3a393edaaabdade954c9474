@@ -18,3 +18,5 @@ Repairs: "Align reclaim reports, release gate and real journeys" its lines in .w
 Repairs: "Release: name a required platform without post-build tests before it is built" its lines in enroll.rs, submit.rs are replaced by this change.
 Repairs: "Expose cleanup hold provenance and qualify editor concurrency" its lines in .wisent-release.json are replaced by this change.
 Repairs: "Keep verb dependencies compatible with predecessor installers" its lines in .wisent-release.json are replaced by this change.
+
+Repaired-By: "Every count Stado keeps adds one item through one tally" repairs it in this push, naming this commit on its Repairs line
