@@ -8,6 +8,15 @@ use super::{deliver, stado_routes, CmdError};
 use crate::config::WebApiEdge;
 use crate::deploy::{production_runner, service_serving};
 
+/// The default port of the `http` scheme, which the edge answers for its
+/// certificate challenges and redirects:
+/// https://www.rfc-editor.org/rfc/rfc9110#section-4.2.1
+const HTTP_PORT: u16 = 80;
+
+/// The default port of the `https` scheme, which the edge terminates:
+/// https://www.rfc-editor.org/rfc/rfc9110#section-4.2.2
+const HTTPS_PORT: u16 = 443;
+
 /// Whether the edge answers a TCP connection on one port, from here.
 ///
 /// From this machine deliberately: the operator's laptop is on the same public
@@ -43,7 +52,7 @@ async fn on_edge(edge: &WebApiEdge) -> Value {
         &target,
         unit.unit_id(),
         &unit.path,
-        &[80, 443],
+        &[HTTP_PORT, HTTPS_PORT],
         &production_runner(),
     )
     .await;
@@ -68,8 +77,8 @@ async fn on_edge(edge: &WebApiEdge) -> Value {
 
 pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), CmdError> {
     let edge = declared()?;
-    let (http, http_detail) = answers(edge.address(), 80).await;
-    let (https, https_detail) = answers(edge.address(), 443).await;
+    let (http, http_detail) = answers(edge.address(), HTTP_PORT).await;
+    let (https, https_detail) = answers(edge.address(), HTTPS_PORT).await;
     let routes = stado_routes().await?;
     let terminating: Vec<&String> = routes.iter().map(|(hostname, _)| hostname).collect();
     let local = if http && https {
@@ -82,10 +91,8 @@ pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), C
         "address": edge.address(),
         "contact": edge.contact(),
         "unit": HOST_UNIT,
-        "http": { "port":
-            80, "answers": http, "detail": http_detail },
-        "https": { "port":
-            443, "answers": https, "detail": https_detail },
+        "http": { "port": HTTP_PORT, "answers": http, "detail": http_detail },
+        "https": { "port": HTTPS_PORT, "answers": https, "detail": https_detail },
         "on_edge": local,
         "hostnames": terminating,
     });
@@ -100,7 +107,7 @@ pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), C
             }
         };
         println!(
-            "{} at {}: 80 {}, 443 {}",
+            "{} at {}: {HTTP_PORT} {}, {HTTPS_PORT} {}",
             edge.target(),
             edge.address(),
             word(http, &http_detail),
@@ -180,7 +187,7 @@ pub(in crate::cli::web::edge) async fn hostnames(json_output: bool) -> Result<()
     } else {
         // A list the report carries empty is "none"; one it does not carry,
         // or an entry that is not a name, is said as that — read as "none",
-        // a hostname the edge never reported looked terminated.
+        // a hostname the edge never reported would look terminated.
         let names = |key: &str| match report[key].as_array() {
             None => format!("not reported (the edge report carries no {key} list)"),
             Some(values) if values.is_empty() => "none".to_string(),
@@ -201,6 +208,6 @@ pub(in crate::cli::web::edge) async fn hostnames(json_output: bool) -> Result<()
     if reconciled {
         Ok(())
     } else {
-        Err(CmdError::silent(1))
+        Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE))
     }
 }
