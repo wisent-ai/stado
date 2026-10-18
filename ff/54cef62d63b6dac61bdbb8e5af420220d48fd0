@@ -12,6 +12,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "A request already sent when its resolver route stands held is abandoned and refused naming the address: the object API send, the Skarbiec transport and the authority snapshot over SSH share one in-flight reading of the published waits, so stado resolver status ends with the address it stood on instead of standing for hours" its authority read did not tell the next reader that the authority had already gone unanswered
+
 Harsh-Review-Attacked: whether the next reader still waits the interval again; the first abandoned read writes authority-unanswered.json with its sentence, and a later read before the interval has passed is refused at once with that sentence and goes on to its last-known-good copy without connecting.
+Harsh-Review-Attacked: whether its record reader drops an unreadable value; it read an interval that does not fit as no record, and "The unanswered-authority record says a missing HOME and an unreadable interval instead of silently skipping" repairs it in this push, naming this commit on its Repairs line.
 Harsh-Review-Attacked: whether its journey keeps the line limit; it took the file over it, and "The silent authority journey splits its fixture from its cases" splits it in this push, naming this commit on its Repairs line.
-Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; it only adds lines beside the reader it extends, so no Repairs line is owed.
