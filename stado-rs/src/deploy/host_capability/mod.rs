@@ -85,11 +85,11 @@ pub async fn resolve(
         runner,
     )
     .await?;
-    if !environment.ok() {
+    if !environment.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: the host's vault environment could not be read: {}",
             target.name,
-            host_channel::last_error_line(&environment, "no answer from the host")
+            host_channel::whole_failure(&environment)
         )));
     }
     // The host printed both paths or its answer is damaged; an empty path
@@ -151,8 +151,8 @@ impl RemoteBroker {
     /// is a missing variable.
     fn command(&self, arguments: &[&str]) -> String {
         let mut line = format!(
-            "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} \
-             SKARBIEC_VAULT_FILE={}",
+            "{} GNUPGHOME={} SKARBIEC_VAULT_FILE={}",
+            crate::primitives::tool_path::vault_assignment("$HOME"),
             shlex_quote(&self.gnupg_home),
             shlex_quote(&self.vault),
         );
@@ -218,8 +218,8 @@ async fn run_json(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     let output = host_channel::run_command(target, &broker.command(arguments), runner).await?;
-    if !output.ok() {
-        let said = host_channel::last_error_line(&output, "the host gave no reason");
+    if !output.succeeded() {
+        let said = host_channel::whole_failure(&output);
         if let Some(stale) = stale_broker(target, broker, &said) {
             return Err(stale);
         }

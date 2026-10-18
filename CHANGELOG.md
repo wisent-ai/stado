@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **Capability routes are read with the vault commands' search path, and a broker failure is quoted whole:** the capability broker ran Skarbiec with its own `PATH`, without the GPG Suite and `~/.local/bin` directories, so on a host whose `gpg` lives there every route answered `does not open: spawn gpg`. It now takes `primitives::tool_path::vault_assignment`. A failed broker command and an unreadable vault environment quote the host's whole failure with its exit status instead of its last line.
+
 - **Grant sync and revoke run Skarbiec on the declared vault search path:** the host programs that re-issue and withdraw a consumer's grant exported their own `PATH`, without the GPG Suite and `~/.local/bin` directories the other vault commands carry, so a host whose `gpg` lives there could list its vault but not change a grant. Both now export `primitives::tool_path::vault_assignment`. A service file's mode is checked against the owner-only file and program modes read from the platform's own mode bits, and the refusal prints them in octal.
 
 - **Skarbiec commands on a host take one declared search path, and the seed-state read says why it failed:** the vault commands and the TOTP seed-state read each spelled their own `PATH` with GPG Suite's and the account's `~/.local/bin` directories. Both now take `primitives::tool_path::vault_assignment`, the fleet's declared search path followed by those two. A failed seed-state read quotes Skarbiec's whole failure with its exit status, and an unreadable answer is quoted with the parser's reason.
