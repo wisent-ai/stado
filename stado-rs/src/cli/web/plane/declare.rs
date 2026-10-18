@@ -6,14 +6,24 @@ use super::mutate_web;
 use crate::cli::web::unit_label;
 use crate::cli::CmdError;
 
+/// What answers a declared hostname: a redirect, a service from the
+/// directory, or a unit Stado runs on a host. Only a unit has a host, a port
+/// and a consumer, so only a unit carries them.
+#[derive(Clone, Copy)]
+pub(crate) enum Upstream<'a> {
+    Redirect(&'a str),
+    Service(&'a str),
+    Unit {
+        host: &'a str,
+        port: u16,
+        consumer: &'a str,
+    },
+}
+
 pub(crate) struct DeclareRequest<'a> {
     pub name: &'a str,
-    pub host: &'a str,
-    pub port: u16,
     pub hostname: &'a str,
-    pub consumer: &'a str,
-    pub redirect_to: Option<&'a str>,
-    pub upstream_service: Option<&'a str>,
+    pub upstream: Upstream<'a>,
     pub path_prefix: Option<&'a str>,
     pub readyz: &'a str,
     pub edge: crate::config::WebEdge,
@@ -95,17 +105,22 @@ pub(crate) fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError> {
     // the declaration does not list is refused by the database plane. Saying
     // so here turns a deploy-time refusal into a declare-time one.
     if let Some(database) = request.database {
+        let Upstream::Unit { consumer, .. } = request.upstream else {
+            return Err(CmdError::usage(format!(
+                "--database {database:?} reaches a unit's consumer, and a redirect or an \
+                 upstream service runs no unit of this product"
+            )));
+        };
         let databases = crate::cli::database::declared_databases()?;
         let declared = databases.get(database).ok_or_else(|| {
             CmdError::usage(format!(
                 "no database {database:?} is declared; declare it with `stado database declare`"
             ))
         })?;
-        if !declared.allows_consumer(request.consumer) {
+        if !declared.allows_consumer(consumer) {
             return Err(CmdError::usage(format!(
-                "consumer {:?} is not authorized for database {database:?}; \
-                 grant it with `stado database grant {database} --consumer {}`",
-                request.consumer, request.consumer
+                "consumer {consumer:?} is not authorized for database {database:?}; \
+                 grant it with `stado database grant {database} --consumer {consumer}`"
             )));
         }
     }
@@ -140,30 +155,39 @@ fn entry_for(
     // Writing a host, a port, a consumer and a readiness path beside it would
     // put a unit in the configuration that nothing ever installs, and the
     // parser refuses that combination anyway.
-    if let Some(target) = request.redirect_to {
-        if !crate::config::is_redirect_target(target) {
-            return Err(CmdError::usage(format!(
-                "--redirect-to {target:?} must be an https URL with a host, no query or fragment, \
-                 and no trailing slash"
-            )));
+    match request.upstream {
+        Upstream::Redirect(target) => {
+            if !crate::config::is_redirect_target(target) {
+                return Err(CmdError::usage(format!(
+                    "--redirect-to {target:?} must be an https URL with a host, no query or \
+                     fragment, and no trailing slash"
+                )));
+            }
+            entry.insert("redirect_to".into(), json!(target));
         }
-        entry.insert("redirect_to".into(), json!(target));
-    } else if let Some(service) = request.upstream_service {
-        // The service is checked against the directory now rather than at the
-        // first `route`: a hostname declared in front of a service nobody
+        // The service is checked against the directory now rather than at
+        // the first `route`: a hostname declared in front of a service nobody
         // declared is a declaration that cannot be rendered, and finding that
         // out here costs one read instead of a failed publication.
-        entry.insert("upstream_service".into(), json!(service));
-    } else {
-        entry.insert("host".into(), json!(request.host));
-        entry.insert("port".into(), json!(request.port));
-        entry.insert("consumer".into(), json!(request.consumer));
-        // A mount answers at its own prefix, so the owner's readiness path is
-        // not its readiness path and `route` proves it at `<prefix>/` instead.
-        if let Some(prefix) = request.path_prefix {
-            entry.insert("path_prefix".into(), json!(mount_prefix(request, prefix)?));
-        } else {
-            entry.insert("readyz".into(), json!(request.readyz));
+        Upstream::Service(service) => {
+            entry.insert("upstream_service".into(), json!(service));
+        }
+        Upstream::Unit {
+            host,
+            port,
+            consumer,
+        } => {
+            entry.insert("host".into(), json!(host));
+            entry.insert("port".into(), json!(port));
+            entry.insert("consumer".into(), json!(consumer));
+            // A mount answers at its own prefix, so the owner's readiness
+            // path is not its readiness path and `route` proves it at
+            // `<prefix>/` instead.
+            if let Some(prefix) = request.path_prefix {
+                entry.insert("path_prefix".into(), json!(mount_prefix(request, prefix)?));
+            } else {
+                entry.insert("readyz".into(), json!(request.readyz));
+            }
         }
     }
     if !env.is_empty() {
@@ -194,16 +218,21 @@ fn mount_prefix<'a>(request: &DeclareRequest<'_>, prefix: &'a str) -> Result<&'a
     // The owner is required now rather than at the first `route`: a mount is
     // rendered inside its owner's site block, so one with no owner is a block
     // with nowhere to go, and the hostname would get no certificate at all.
-    let declared_products = crate::config::web_api_products().ok();
+    let declared_products = crate::config::web_api_products().map_err(|problems| {
+        CmdError::usage(format!(
+            "the declared web products cannot be read, so the owner of {} cannot be found: {}",
+            request.hostname,
+            problems.join("; ")
+        ))
+    })?;
     let owner = declared_products
         .into_iter()
-        .flatten()
         .find(|(other, product)| {
             other.as_str() != request.name
                 && product.hostname() == request.hostname
                 && product.owns_its_hostname()
         })
-        .map(|(other, _)| other.clone());
+        .map(|(other, _)| other);
     let Some(owner) = owner else {
         return Err(CmdError::usage(format!(
             "no declaration owns {}, so {prefix} has no site block to be mounted in: declare the product that answers that hostname first, without --path-prefix",
@@ -222,34 +251,36 @@ fn mount_prefix<'a>(request: &DeclareRequest<'_>, prefix: &'a str) -> Result<&'a
 /// as an empty consumer described a unit that does not exist.
 fn report(request: &DeclareRequest<'_>, existed: bool) -> Result<(), CmdError> {
     let change = if existed { "replaced" } else { "declared" };
-    let mut report = json!({
-        "product": request.name,
-        "hostname": request.hostname,
-        "edge": request.edge,
-        "change": change,
-    });
-    let object = report
-        .as_object_mut()
-        .expect("a JSON object was just built");
-    let summary = if let Some(target) = request.redirect_to {
-        object.insert("kind".into(), json!("redirect"));
-        object.insert("redirect_to".into(), json!(target));
-        format!("redirect to {target}")
-    } else if let Some(service) = request.upstream_service {
-        object.insert("kind".into(), json!("upstream-service"));
-        object.insert("upstream_service".into(), json!(service));
-        format!("in front of service {service}")
-    } else {
-        object.insert("kind".into(), json!("unit"));
-        object.insert("host".into(), json!(request.host));
-        object.insert("port".into(), json!(request.port));
-        object.insert("consumer".into(), json!(request.consumer));
-        object.insert("unit".into(), json!(unit_label(request.name)));
-        format!(
-            "on {}:{} as {}",
-            request.host, request.port, request.consumer
-        )
+    let mut report = Map::new();
+    report.insert("product".into(), json!(request.name));
+    report.insert("hostname".into(), json!(request.hostname));
+    report.insert("edge".into(), json!(request.edge));
+    report.insert("change".into(), json!(change));
+    let summary = match request.upstream {
+        Upstream::Redirect(target) => {
+            report.insert("kind".into(), json!("redirect"));
+            report.insert("redirect_to".into(), json!(target));
+            format!("redirect to {target}")
+        }
+        Upstream::Service(service) => {
+            report.insert("kind".into(), json!("upstream-service"));
+            report.insert("upstream_service".into(), json!(service));
+            format!("in front of service {service}")
+        }
+        Upstream::Unit {
+            host,
+            port,
+            consumer,
+        } => {
+            report.insert("kind".into(), json!("unit"));
+            report.insert("host".into(), json!(host));
+            report.insert("port".into(), json!(port));
+            report.insert("consumer".into(), json!(consumer));
+            report.insert("unit".into(), json!(unit_label(request.name)));
+            format!("on {host}:{port} as {consumer}")
+        }
     };
+    let report = Value::Object(report);
     if request.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {

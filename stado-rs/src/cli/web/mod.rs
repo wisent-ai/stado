@@ -49,7 +49,9 @@ use super::CmdError;
 
 pub(crate) use builds::PLATFORM as WEB_PLATFORM;
 pub(crate) use edge::role::run as edge_role;
-pub(crate) use plane::{declare, list, mutate_web, product, remove, DeclareRequest, WebCommands};
+pub(crate) use plane::{
+    declare, list, mutate_web, product, remove, DeclareRequest, Upstream, WebCommands,
+};
 
 /// A web product is one repository, so it runs as one unit named for it,
 /// `com.wisent.<product>`, like every other product: one service per
@@ -91,27 +93,42 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
             database_field,
             database_variable,
             json,
-        } => declare(DeclareRequest {
-            name: &name,
-            // clap guarantees the three unit arguments are present unless
-            // this is a redirect, so the defaults here are only ever reached
-            // by a redirect, which has no unit to describe.
-            host: host.as_deref().unwrap_or(""),
-            port: port.unwrap_or(0),
-            hostname: &hostname,
-            consumer: consumer.as_deref().unwrap_or(""),
-            redirect_to: redirect_to.as_deref(),
-            upstream_service: upstream_service.as_deref(),
-            path_prefix: path_prefix.as_deref(),
-            readyz: &readyz,
-            edge,
-            env: &env,
-            secrets: &secrets,
-            database: database.as_deref(),
-            database_field: &database_field,
-            database_variable: &database_variable,
-            json,
-        }),
+        } => {
+            // clap requires the unit's host, port and consumer unless the
+            // declaration is a redirect or an upstream service, and refuses
+            // them beside either, so a unit lacking one is refused here by
+            // name rather than written with an empty value.
+            let upstream = match (redirect_to.as_deref(), upstream_service.as_deref()) {
+                (Some(target), _) => Upstream::Redirect(target),
+                (None, Some(service)) => Upstream::Service(service),
+                (None, None) => match (host.as_deref(), port, consumer.as_deref()) {
+                    (Some(host), Some(port), Some(consumer)) => Upstream::Unit {
+                        host,
+                        port,
+                        consumer,
+                    },
+                    _ => {
+                        return Err(CmdError::usage(
+                            "a unit declaration needs --host, --port and --consumer",
+                        ))
+                    }
+                },
+            };
+            declare(DeclareRequest {
+                name: &name,
+                hostname: &hostname,
+                upstream,
+                path_prefix: path_prefix.as_deref(),
+                readyz: &readyz,
+                edge,
+                env: &env,
+                secrets: &secrets,
+                database: database.as_deref(),
+                database_field: &database_field,
+                database_variable: &database_variable,
+                json,
+            })
+        }
         WebCommands::List { json } => list(json),
         WebCommands::Remove { name, json } => remove(&name, json).await,
         WebCommands::Deploy {

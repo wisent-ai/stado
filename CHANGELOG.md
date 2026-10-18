@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **`stado web declare` carries a unit's host, port and consumer only for a unit:** a declaration took an empty host, port `0` and an empty consumer whenever clap had not supplied them, trusting that only a redirect reached that path. What answers a hostname is now one of a redirect, an upstream service or a unit, and a unit lacking one of the three is refused with `a unit declaration needs --host, --port and --consumer`; a mount whose owner cannot be looked up because the declared web products cannot be read is refused naming their problems instead of reading as no owner.
+
 - **A workload plan flag that is not a boolean is refused:** `fresh_profile`, `allow_login`, `defer_fills`, `prefill_all`, `windowed`, `repair` and `apple_only` named with anything but `true` or `false` (`"yes"`, `1`) were read as off, dropping what the plan asked for. They are now refused with `workload plan <field> must be true or false, not <value>`; a flag the plan does not name stays off. A `login_item` is checked by the grammar Weles identifiers share and must begin with a letter or digit, and an unmet placement is recorded with the reservation the kind declares rather than a reservation of nothing.
 
 - **`stado repair` prints a step's missing name, status or proof as not reported:** a step report without its name printed `repair`, without its status `reported`, and without its proof `not declared`, each a word the step never gave. Absent fields now read `not reported`. The proof each declared step must show is now kept beside the repair declarations.

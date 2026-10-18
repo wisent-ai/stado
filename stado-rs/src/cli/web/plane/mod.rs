@@ -14,5 +14,5 @@ mod inventory;
 
 pub(crate) use commands::WebCommands;
 pub(crate) use config::{mutate_web, product};
-pub(crate) use declare::{declare, DeclareRequest};
+pub(crate) use declare::{declare, DeclareRequest, Upstream};
 pub(crate) use inventory::{list, remove};
