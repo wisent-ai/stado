@@ -15,6 +15,8 @@ use super::command::run_with_path;
 use crate::cli::web::builds::contract::worker::Worker;
 use crate::cli::CmdError;
 
+pub(super) mod origins;
+
 /// Where a release input was staged — the directory it was extracted into,
 /// or the file it was mounted as — refused by name when the manifest declared
 /// no such input for this platform. The variable is the one the release
@@ -77,21 +79,65 @@ pub(in crate::cli::web::builds) fn git_redirects(
         // A path, not a `file://` URL: Git reads a bundle only through a
         // local path, and a `file://` URL asks for a repository directory.
         let target = format!("url.{}.insteadOf", bundle.display());
-        let origins = [
-            format!("ssh://git@github.com/{repository}"),
-            format!("git@github.com:{repository}"),
-        ];
-        for (index, origin) in origins.iter().enumerate() {
-            let mut arguments = vec!["config", "--global"];
-            if index > 0 {
-                arguments.push("--add");
-            }
-            arguments.push(&target);
-            arguments.push(origin);
-            run_with_path(&worker.source, "git", &arguments, "Git", None, &entry)?;
-        }
+        // The first value replaces whatever the key held; the second is added
+        // beside it, so both spellings reach the bundle.
+        let ssh = format!("{}{repository}", origins::ssh());
+        let scp = format!("{}{repository}", origins::scp());
+        let first = ["config", "--global", target.as_str(), ssh.as_str()];
+        run_with_path(&worker.source, "git", &first, "Git", None, &entry)?;
+        let second = ["config", "--global", "--add", target.as_str(), scp.as_str()];
+        run_with_path(&worker.source, "git", &second, "Git", None, &entry)?;
     }
     Ok(entry)
+}
+
+/// The origins the Git config `variables` point the install at answers from
+/// a release input: every `url.<bundle>.insteadOf` value in the file
+/// `GIT_CONFIG_GLOBAL` names, as [`git_redirects`] wrote it. Nothing when no
+/// such file is named. Git itself reads the file, so the answer is the
+/// rewrite Git will apply, not a second reading of its format.
+pub(in crate::cli::web::builds) fn redirected(
+    source: &Path,
+    variables: &[(String, String)],
+) -> Result<Vec<String>, CmdError> {
+    let Some((_, config)) = variables
+        .iter()
+        .find(|(name, _)| name == "GIT_CONFIG_GLOBAL")
+    else {
+        return Ok(Vec::new());
+    };
+    let output = crate::wait::output(
+        std::process::Command::new("git")
+            .args(["config", "--file", config, "--get-regexp"])
+            .arg(r"^url\..*\.insteadof$")
+            .current_dir(source)
+            .stdin(std::process::Stdio::null()),
+    )
+    .map_err(|error| {
+        CmdError::click(format!("cannot run git config --file {config}: {error}"))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    if !output.status.success() {
+        return Err(CmdError::click(format!(
+            "git config --file {config} could not list the release inputs' rewrites ({}): {}",
+            super::command::exit_report(output.status),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| {
+            line.rsplit_once(' ')
+                .map(|(_, origin)| origin.to_string())
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "git config --file {config} printed a rewrite without an origin: {line:?}"
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+                })
+        })
+        .collect()
 }
 
 /// `PATH=INPUT[/SUBPATH]` for each `file:` dependency outside the package:
@@ -116,7 +162,12 @@ pub(in crate::cli::web::builds) fn link_inputs(
                 "--link-input takes PATH=INPUT[/SUBPATH], not {declaration:?}"
             ))
         })?;
-        let (input, inside) = source.split_once('/').unwrap_or((source, ""));
+        // `INPUT` alone names the input's own directory; `INPUT/SUBPATH` one
+        // directory inside it, as the flag's grammar declares.
+        let (input, inside) = match source.split_once('/') {
+            Some((input, inside)) => (input, inside),
+            None => (source, ""),
+        };
         let target = input_directory(input)?.join(inside);
         if !target.is_dir() {
             return Err(CmdError::usage(format!(

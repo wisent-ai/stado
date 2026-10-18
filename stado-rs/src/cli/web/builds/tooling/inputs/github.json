@@ -1,0 +1,5 @@
+{
+  "host": "github.com",
+  "sshUser": "git",
+  "tokenUser": "x-access-token"
+}
