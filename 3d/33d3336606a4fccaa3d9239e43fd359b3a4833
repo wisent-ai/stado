@@ -18,3 +18,5 @@ Repairs: "Require runtime evidence regardless of job priority" its lines in CHAN
 Repairs: "A push runs only the checks that compile nothing" its lines in command.rs are replaced by this change.
 Repairs: "Check the exact revisions selected by Git push updates" its lines in Releases.swift, command.rs are replaced by this change.
 Repairs: "Job work directories are reclaimed only by the queue_workdirs stage" its lines in command.rs, mod.rs are replaced by this change.
+
+Repaired-By: "A refused gate's findings are read from Cargo's records" repairs it in this push, naming this commit on its Repairs line
