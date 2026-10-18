@@ -16,3 +16,5 @@ Harsh-Review-Attacked: a product's own unit refused; an entry whose name or unit
 Harsh-Review-Attacked: a stranger refused for a coincidental name; only a program file named exactly as a catalog product matches, the file a release installs for that product.
 Harsh-Review-Attacked: a platform guess; the darwin default is gone, every caller passes the target's release platform, and the None arm, which no caller reaches, leaves the placeholder visible instead of choosing a directory.
 Harsh-Review-Attacked: the placeholder order; $HOME and $STADO_HOST are replaced before $STADO_PLATFORM, and none of the three values can contain another's placeholder.
+
+Repaired-By: "A service repair renders its unit the way service ensure does" repairs it in this push, naming this commit on its Repairs line
