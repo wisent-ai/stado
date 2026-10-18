@@ -85,31 +85,22 @@ pub fn published() -> Result<Value, String> {
 
 /// The block as a line for an operator: `load 3.2 under ceiling 12
 /// (measured_cores)`, with every standing skip named, or `-` before any scan
-/// has asked.
+/// has asked. A field the block does not carry reads as not reported, never
+/// as a stand-in mark.
 pub fn line(block: &Value) -> String {
+    use crate::cli::reporting::field;
     let Some(last) = block.get("last").filter(|last| !last.is_null()) else {
         return "-".to_string();
     };
-    let number = |key: &str| {
-        last.get(key)
-            .and_then(Value::as_f64)
-            .map_or_else(|| "?".to_string(), |value| value.to_string())
-    };
-    let source = last
-        .get("ceiling_source")
-        .and_then(Value::as_str)
-        .map_or_else(|| "?".to_string(), str::to_string);
     let mut sentence = format!(
-        "load {} against ceiling {} ({source})",
-        number("load"),
-        number("ceiling")
+        "load {} against ceiling {} ({})",
+        field(&last["load"]),
+        field(&last["ceiling"]),
+        field(&last["ceiling_source"])
     );
     if let Some(skipped) = block.get("skipped").and_then(Value::as_object) {
         for (scan, skip) in skipped {
-            let since = skip
-                .get("since")
-                .and_then(Value::as_str)
-                .map_or_else(|| "?".to_string(), str::to_string);
+            let since = field(&skip["since"]);
             sentence.push_str(&format!("; {scan} skipped since {since}"));
         }
     }

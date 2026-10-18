@@ -145,16 +145,21 @@ fn echo_json(value: &Value) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// An object's update time for a table cell; a backend that gave none is
+/// said as not reported, never as an empty cell.
 fn render_stamp(updated: Option<DateTime<Utc>>) -> String {
-    updated.map_or_else(String::new, |stamp| {
-        stamp.to_rfc3339_opts(SecondsFormat::Secs, true)
-    })
+    match updated {
+        Some(stamp) => stamp.to_rfc3339_opts(SecondsFormat::Secs, true),
+        None => crate::cli::reporting::NOT_REPORTED.to_string(),
+    }
 }
 
+/// An object's update time for JSON; null when the backend gave none.
 fn render_optional_stamp(updated: Option<DateTime<Utc>>) -> Value {
-    updated.map_or(Value::Null, |stamp| {
-        json!(stamp.to_rfc3339_opts(SecondsFormat::Secs, true))
-    })
+    match updated {
+        Some(stamp) => json!(stamp.to_rfc3339_opts(SecondsFormat::Secs, true)),
+        None => Value::Null,
+    }
 }
 
 fn render_metadata(metadata: &BTreeMap<String, String>) -> String {
@@ -165,7 +170,10 @@ fn render_metadata(metadata: &BTreeMap<String, String>) -> String {
         .join(",")
 }
 
-/// An unknown count renders as `?`, never as zero.
+/// An unknown count reads as not reported, never as zero or a stand-in mark.
 fn render_count(count: Option<usize>) -> String {
-    count.map_or_else(|| "?".to_string(), |count| count.to_string())
+    match count {
+        Some(count) => count.to_string(),
+        None => crate::cli::reporting::NOT_REPORTED.to_string(),
+    }
 }

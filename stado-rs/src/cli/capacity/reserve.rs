@@ -2,10 +2,12 @@
 //! publication, check the declared reservation fits what is net free, take
 //! it, and keep it heartbeated until the caller lets go.
 
+use std::num::NonZeroU64;
+
 use chrono::Utc;
-use serde_json::Value;
 
 use crate::cli::registry::read_registry;
+use crate::cli::reporting::NOT_REPORTED;
 use crate::cli::workload::{WorkloadKind, WorkloadReservation};
 use crate::cli::CmdError;
 use crate::fleet_needs::{
@@ -32,40 +34,50 @@ impl ReservationRefusal {
     }
 }
 
-/// What the host publishes now, netted: cores, RAM, and how many holds.
+/// What the host publishes now, netted: cores, RAM, and how many holds. A
+/// publication from before workloads or admission reasons were published
+/// carries neither, and they stay unstated rather than read as none.
 struct NetRoom {
     cores: i64,
     ram_gb: Option<f64>,
-    held: usize,
+    held: Option<u64>,
     accepting: bool,
-    reason: String,
-    stale: bool,
+    reason: Option<String>,
 }
 
-fn net_room(publication: &Publication) -> NetRoom {
+/// The room `publication` states, or the refusal naming the field it does
+/// not state: without its free cores or whether it accepts placements, no
+/// one can judge whether the hold fits, and reading either as zero or no
+/// would refuse for a reason the host never gave.
+fn net_room(
+    publication: &Publication,
+    target: &ComputeTarget,
+) -> Result<NetRoom, ReservationRefusal> {
     let payload = &publication.payload;
-    NetRoom {
-        cores: payload
-            .get("available_cpu_cores")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        ram_gb: payload.get("free_ram_gb").and_then(Value::as_f64),
-        held: payload
-            .get("running_workloads")
-            .and_then(Value::as_i64)
-            .unwrap_or(0) as usize,
-        accepting: payload
-            .get("accepting_jobs")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        reason: payload
-            .get("diag")
-            .and_then(|diag| diag.get("admission_reason"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        stale: publication.stale(Utc::now()),
-    }
+    let unstated = |field: &str| ReservationRefusal {
+        target: target.name.clone(),
+        sentence: format!(
+            "{} publishes no {field} in its capacity row, so whether the hold fits cannot be \
+             judged; update its agent or pick another host with --target",
+            target.name
+        ),
+        reason: UnmetReason::NoEligibleTarget,
+    };
+    let Some(cores) = payload["available_cpu_cores"].as_i64() else {
+        return Err(unstated("available_cpu_cores"));
+    };
+    let Some(accepting) = payload["accepting_jobs"].as_bool() else {
+        return Err(unstated("accepting_jobs"));
+    };
+    Ok(NetRoom {
+        cores,
+        ram_gb: payload["free_ram_gb"].as_f64(),
+        held: payload["running_workloads"].as_u64(),
+        accepting,
+        reason: payload["diag"]["admission_reason"]
+            .as_str()
+            .map(str::to_string),
+    })
 }
 
 /// Take `kind`'s declared reservation on `target`, or say exactly why not.
@@ -91,8 +103,12 @@ pub async fn reserve_for_workload(
     let publication = publication_of(&registry, target, &publications)
         .map_err(CmdError::from)?
         .map(|(_, publication)| publication);
-    if let Some(room) = publication.map(net_room).filter(|room| !room.stale) {
-        if let Some(refusal) = refusal(kind, &wanted, target, &room) {
+    if let Some(publication) = publication.filter(|row| !row.stale(Utc::now())) {
+        let refused = match net_room(publication, target) {
+            Ok(room) => refusal(kind, &wanted, target, &room),
+            Err(unstated) => Some(unstated),
+        };
+        if let Some(refusal) = refused {
             record_refusal(&store, kind, &wanted, &refusal).await;
             return Ok(Err(refusal));
         }
@@ -143,30 +159,38 @@ fn refusal(
 ) -> Option<ReservationRefusal> {
     let fits =
         room.cores >= wanted.cpu_cores && room.ram_gb.is_none_or(|free| free >= wanted.ram_gb);
-    if fits && (room.accepting || room.reason.is_empty()) {
-        return None;
-    }
     if !fits {
+        let free_ram = match room.ram_gb {
+            Some(free) => free.to_string(),
+            None => NOT_REPORTED.to_string(),
+        };
+        let held = match room.held {
+            Some(held) => held.to_string(),
+            None => NOT_REPORTED.to_string(),
+        };
         return Some(ReservationRefusal {
             target: target.name.clone(),
             sentence: format!(
-                "{} has no room for {}: needs {} cores and {} GiB, host publishes {} cores and {} GiB net of {} reservation(s); pick another host with --target or wait for a reservation to end",
+                "{} has no room for {}: needs {} cores and {} GiB, host publishes {} cores and {free_ram} GiB net of {held} reservation(s); pick another host with --target or wait for a reservation to end",
                 target.name,
                 kind.kind,
                 wanted.cpu_cores,
                 wanted.ram_gb,
                 room.cores,
-                room.ram_gb.map(|free| format!("{free:.1}")).unwrap_or_else(|| "?".to_string()),
-                room.held
             ),
-            reason: if room.held > 0 {
-                UnmetReason::ReservationsExhausted
-            } else {
-                UnmetReason::CapacityExhausted
+            reason: match room.held.and_then(NonZeroU64::new) {
+                Some(_) => UnmetReason::ReservationsExhausted,
+                None => UnmetReason::CapacityExhausted,
             },
         });
     }
-    let reason = match room.reason.as_str() {
+    // A host that is not accepting but gives no reason still takes a
+    // workload hold: its job admission is what it closed, not its room.
+    let reason = match room.reason.as_deref() {
+        Some(reason) if !room.accepting && !reason.is_empty() => reason,
+        _ => return None,
+    };
+    let reason_kind = match reason {
         "disk_pressure_active"
         | "disk_unreadable"
         | "disk_gate_refused"
@@ -178,10 +202,10 @@ fn refusal(
     Some(ReservationRefusal {
         target: target.name.clone(),
         sentence: format!(
-            "{} is not accepting placements ({}); pick another host with --target or wait for it to clear",
-            target.name, room.reason
+            "{} is not accepting placements ({reason}); pick another host with --target or wait for it to clear",
+            target.name
         ),
-        reason,
+        reason: reason_kind,
     })
 }
 

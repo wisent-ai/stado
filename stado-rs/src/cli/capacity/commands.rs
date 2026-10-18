@@ -5,12 +5,10 @@ use clap::Subcommand;
 use serde_json::{json, Value};
 
 use crate::cli::registry::read_registry;
-use crate::cli::reporting::table;
+use crate::cli::reporting::{field as cell, table};
 use crate::cli::CmdError;
 use crate::primitives::constants;
-use crate::queue::capacity::{
-    consumer_names_target, read_publications, reservations, Publication, Reserved,
-};
+use crate::queue::capacity::{consumer_names_target, read_publications, reservations, Publication};
 use crate::targets::Registry;
 
 #[derive(Subcommand)]
@@ -61,11 +59,13 @@ fn host_target(registry: &Registry, consumer: &str) -> Result<Option<String>, Cm
     Ok(None)
 }
 
+/// One host's row as its publication carries it: a field the publication
+/// lacks (a publication from before workloads or reservations were
+/// published) is null in JSON and `not reported` in the table, never a zero
+/// or an empty list the host did not state.
 fn host_row(target: Option<String>, consumer: &str, publication: &Publication) -> Value {
     let now = Utc::now();
     let payload = &publication.payload;
-    // A publication from before reservations existed held nothing.
-    let nothing_held = serde_json::to_value(Reserved::default()).unwrap_or(Value::Null);
     json!({
         "target": target,
         "consumer_id": consumer,
@@ -75,31 +75,13 @@ fn host_row(target: Option<String>, consumer: &str, publication: &Publication) -
         "accepting_jobs": payload.get("accepting_jobs"),
         "admission_reason": payload.get("diag").and_then(|diag| diag.get("admission_reason")),
         "running_jobs": payload.get("running_jobs"),
-        "running_workloads": payload.get("running_workloads").cloned().unwrap_or(Value::from(0)),
+        "running_workloads": payload.get("running_workloads"),
         "cpu": {"available": payload.get("available_cpu_cores"), "total": payload.get("total_cpu_cores")},
         "ram_gb": {"free": payload.get("free_ram_gb"), "total": payload.get("total_ram_gb")},
         "vram_gb": {"free": payload.get("free_vram_gb"), "total": payload.get("total_vram_gb")},
-        "reserved": payload.get("reserved").cloned().unwrap_or(nothing_held),
-        "reservations": payload.get("reservations").cloned().unwrap_or_else(|| json!([])),
+        "reserved": payload.get("reserved"),
+        "reservations": payload.get("reservations"),
     })
-}
-
-fn cell(value: &Value) -> String {
-    match value {
-        Value::Null => "?".to_string(),
-        Value::String(text) => text.clone(),
-        Value::Number(number) => number
-            .as_f64()
-            .map(|f| {
-                if f.fract() == 0.0 {
-                    format!("{f:.0}")
-                } else {
-                    format!("{f:.1}")
-                }
-            })
-            .unwrap_or_else(|| number.to_string()),
-        other => other.to_string(),
-    }
 }
 
 fn pair(value: &Value, left: &str, right: &str) -> String {
@@ -206,15 +188,15 @@ async fn held(target: Option<&str>, json_output: bool) -> Result<(), CmdError> {
                 continue;
             }
         }
-        rows.extend(list.iter().map(|reservation| {
-            let mut row = serde_json::to_value(reservation).unwrap_or(Value::Null);
+        for reservation in list {
+            let mut row = serde_json::to_value(reservation)?;
             row["live"] = Value::from(reservation.is_live(now));
-            row["expires_at"] = reservation
-                .expires_at()
-                .map(|stamp| Value::from(stamp.to_rfc3339()))
-                .unwrap_or(Value::Null);
-            row
-        }));
+            row["expires_at"] = match reservation.expires_at() {
+                Some(stamp) => Value::from(stamp.to_rfc3339()),
+                None => Value::Null,
+            };
+            rows.push(row);
+        }
     }
     if json_output {
         println!(
