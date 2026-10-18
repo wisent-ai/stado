@@ -12,8 +12,8 @@ use crate::models::json_dumps_pretty_sorted;
 use crate::queue::{JobStorage, StorageError};
 
 /// A text field the collected payload must carry. Read as empty, a payload
-/// without its host was uploaded as `box_diagnostics/.json`, over every
-/// other host's that also lacked one.
+/// without its host would be uploaded as `box_diagnostics/.json`, over every
+/// other host's that also lacks one.
 fn stated<'a>(payload: &'a Value, field: &str) -> Result<&'a str, String> {
     match payload.get(field).and_then(Value::as_str) {
         Some("") | None => Err(format!("the collected diagnostics carry no {field}")),

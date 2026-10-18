@@ -8,7 +8,7 @@
 //! makespan history reads them; a command that names neither is listed with
 //! null for each, never under an invented label. A stamp that does not parse
 //! is listed under `throughput.unreadable_stamps` with the job, the field and
-//! the parser's error: read as absent, its job dropped out of the measured
+//! the parser's error: read as absent, its job would drop out of the measured
 //! wall time and the newest-first order without a word.
 
 use std::collections::{BTreeMap, BTreeSet};

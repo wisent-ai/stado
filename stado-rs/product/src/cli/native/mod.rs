@@ -77,7 +77,7 @@ pub(crate) fn cargo_operations() -> Vec<String> {
 ///
 /// Clap's `mut_arg` takes the argument out and appends it again, so the
 /// reopened `operation` would follow `forward` and the trailing arguments
-/// would no longer be the last positional: every debug build refused the
+/// would no longer be the last positional: every debug build would refuse the
 /// command definition (`cargo:forward: Arg::trailing_var_arg can only apply
 /// to last positional`) before parsing a word. `forward` is appended after it
 /// again, unchanged.
