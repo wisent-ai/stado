@@ -14,4 +14,4 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Repairs: "Version gate conformance: the fixture groups are fields of a typed document" its typed fixture still decided a case missing its current version, surface or name on defaults
 
-Harsh-Review-Attacked: whether a broken fixture case can still reproduce a verdict; a case missing its current version or surface is refused naming the case, and a nameless case is named by its place.
+Harsh-Review-Attacked: whether a broken fixture case can still reproduce a verdict; a case missing its current version or surface fails as malformed naming what it lacks, the run reports it as differing, and a case that states no name is printed whole.
