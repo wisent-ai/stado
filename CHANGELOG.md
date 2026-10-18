@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The bootstrap says why it did not reuse an installed Stado:** the check for a reusable Stado read its release marker with errors discarded, so a marker that could not be read looked like one naming no version, and the bootstrap then printed only "installed stado is missing or unmarked". The check now names a missing marker, a marker naming another version (with both versions), and lets `cat` say why a marker cannot be read; the `[install]` line quotes the check's own words and exit status.
+
 - **`stado credentials vault list` says why a host's Skarbiec did not list its vaults:** the host program discarded `skarbiec vaults`'s stderr and called every failure "skarbiec here predates the vaults command", so a vault Skarbiec could not read looked like an old release holding none. The host's answer now carries `error` with the binary and Skarbiec's own words, and an answer that does not parse is quoted with the program's whole failure.
 
 - **`stado space volume unmount` refuses when it cannot read fstab:** the check for an fstab line Stado did not write discarded `awk`'s errors, so an `/etc/fstab` that could not be read looked like one declaring nothing and the volume was unmounted. It is now refused with `awk`'s words before anything changes; a host without fstab still declares nothing. A failed fstab backup and a failed `systemctl daemon-reload` keep their programs' words, and a program that ended without a finding is reported with its whole failure.

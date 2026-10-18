@@ -34,11 +34,16 @@ pub async fn provision_target(
         return Ok(());
     }
     let ssh_target = if dry_run {
-        target
-            .ssh_connections()
-            .next()
-            .map(|(_, destination)| destination.to_string())
-            .unwrap_or_default()
+        // Checked above: the target has a connection, so its first one is the
+        // destination a real run would try first.
+        let Some((_, destination)) = target.ssh_connections().next() else {
+            return Err(DeployError(format!(
+                "{} has no SSH connection path to preview",
+                target.name
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config));
+        };
+        destination.to_string()
     } else {
         host_channel::select_ssh_connection(target, runner)
             .await?
@@ -59,16 +64,21 @@ pub async fn provision_target(
             let installed = runner(installed_spec(&ssh_target, expected_version))
                 .await
                 .map_err(DeployError::unreachable)?;
-            if installed.ok() {
+            if installed.succeeded() {
                 echo(&format!(
                     "[reuse] {}: installed stado matches the registry or its release marker",
                     target.name
                 ));
                 installed
             } else {
+                // The check's own words: a missing binary, an invalid version,
+                // no marker, a marker naming another version, or a marked
+                // version not newer than the registry's.
                 echo(&format!(
-                    "[install] {}: installed stado is missing or unmarked; download bootstrap release binaries",
-                    target.name
+                    "[install] {}: the installed stado is not reused ({}); download bootstrap \
+                     release binaries",
+                    target.name,
+                    host_channel::whole_failure(&installed)
                 ));
                 runner(install_spec(&ssh_target))
                     .await
@@ -83,7 +93,7 @@ pub async fn provision_target(
                 .await
                 .map_err(DeployError::unreachable)?
         };
-        if !output.ok() {
+        if !output.succeeded() {
             return Err(DeployError(format!("install failed: {}", output.detail()))
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
@@ -132,7 +142,7 @@ pub async fn provision_target(
         let retired = runner(retire_superseded_agent_units_spec(&ssh_target, &stado_bin))
             .await
             .map_err(DeployError::unreachable)?;
-        if !retired.ok() {
+        if !retired.succeeded() {
             return Err(DeployError::unreachable(format!(
                 "retiring units that run the removed stado agent failed: {}",
                 retired.detail()
@@ -147,7 +157,7 @@ pub async fn provision_target(
     let output = runner(CommandSpec::new(ssh_argv(&ssh_target, &command)))
         .await
         .map_err(DeployError::unreachable)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "host unit install failed: {}",
             output.detail()

@@ -49,9 +49,13 @@ $actual_version\n\
 EOF\n\
          [ -n \"$a3\" ] && [ -z \"$extra\" ] || {{ echo \"installed stado version is invalid\" >&2; exit 1; }}\n\
          if [ \"$actual_version\" != \"$expected_version\" ]; then\n\
-           marked_version=\"$(cat \"$marker\" 2>/dev/null || true)\"\n\
+           [ -e \"$marker\" ] || {{ \
+             echo \"installed stado $actual_version is not the registry's $expected_version and \
+carries no release marker at $marker\" >&2; exit 1; }}\n\
+           marked_version=\"$(cat \"$marker\")\"\n\
            [ \"$actual_version\" = \"$marked_version\" ] || {{ \
-             echo \"installed stado candidate lacks its release marker\" >&2; exit 1; }}\n\
+             echo \"installed stado $actual_version is not the registry's $expected_version, and \
+its release marker $marker names $marked_version\" >&2; exit 1; }}\n\
            IFS=. read -r e1 e2 e3 extra <<EOF\n\
 $expected_version\n\
 EOF\n\
