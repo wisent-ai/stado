@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The object-evidence cleaner says when a link stands in its root's path:** a symbolic link or file in place of a directory on the way to an evidence root was only counted as `root_not_a_directory`, so a root the cleaner never cleans under looked like a quiet pass. It is now also named among the pass's errors with that component's path and the operating system's refusal; the cleaner still does not follow it.
+
 - **Release publication names what a build receipt got wrong:** a receipt that disagreed with its run in any of eleven ways was refused as `release job returned mixed or invalid output`, leaving the operator to diff it by hand. The refusal now names the job and every field that disagrees with both values, an absent artifact with the archive's digest, and a failed status with the failure the receipt states. A release job that failed without an error now says it ended in its state without one, instead of printing the state as the error.
 
 - **`stado resources rationalize` says why a source was not read whole:** the source table's `ERROR` column printed only an `error` field and left every other cell blank, so a source blocked because the queue is on device-local storage, or one unsupported by this build, showed no cause and no remedy. The column is now `WHY`: empty for a source read in full, and otherwise the error, reason and `remedy:` the source gave, or `not reported` when it gave none.

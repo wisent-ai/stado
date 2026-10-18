@@ -189,9 +189,25 @@ fn open_root(
                 bump(&mut record.skipped, "root_absent");
                 return None;
             }
-            Err(error) if matches!(error.raw_os_error(), Some(code) if code == nix::libc::ENOTDIR || code == nix::libc::ELOOP) =>
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(code) if code == nix::libc::ENOTDIR || code == nix::libc::ELOOP
+                ) =>
             {
+                // A link or a file where the evidence root's path runs is
+                // left alone, and said, so a root nothing is cleaned under
+                // is told apart from one that does not exist.
                 bump(&mut record.skipped, "root_not_a_directory");
+                refused(
+                    report,
+                    &format!(
+                        "{} under {} is not a directory this cleaner opens without following \
+                         links: {error}",
+                        path.display(),
+                        root.display()
+                    ),
+                );
                 return None;
             }
             Err(error) => {
