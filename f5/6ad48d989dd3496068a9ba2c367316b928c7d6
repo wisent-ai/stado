@@ -1,4 +1,5 @@
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
 No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
 This commit adds no needless abstraction and no second copy of something that already exists.
 No error is swallowed and no missing or failed value is answered with one nobody stated.
@@ -12,6 +13,4 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Harsh-Review-Attacked: whether each declared alternative is code that exists; every alternative_source file is present in the workspace, and the variable or key each alternative names (the credentials-file variables, the OpenAI-compatible model settings, the model endpoint and URL variables) appears in that file.
-Harsh-Review-Attacked: whether the alternatives claim more than they deliver; each says which references or calls it answers and through what, rather than claiming the whole product runs unchanged.
-Harsh-Review-Attacked: whether the entries are valid catalog; each carries product, surface, for_surface, alternative and alternative_source, the fields the typed Dependency accepts, and names a product the catalog has.
+Harsh-Review-Attacked: whether the alternative is real; the named credentials file answers the runtime and integration roles in the backend source it cites, so the service runs without Skarbiec when it is given.
