@@ -61,9 +61,10 @@ struct InferenceDeployment: Decodable, Identifiable, Equatable, Sendable {
 }
 
 /// What the host's health beacon last said about one deployment, read
-/// through `stado inference status <name> --json`.
+/// through `stado inference status <name> --json`. `state` is `nil` when the
+/// host reported none, and `detail` then says why.
 struct InferenceBeacon: Decodable, Equatable, Sendable {
-    let state: String
+    let state: String?
     let detail: String?
     let gpuMemoryUsedMb: String?
 
@@ -195,9 +196,8 @@ final class InferenceStore: ObservableObject {
         routes: [String: String],
         deployments: [InferenceDeployment]
     ) -> [InferenceRoute] {
-        routes.keys.sorted().map { alias in
-            let destination = routes[alias] ?? ""
-            return InferenceRoute(
+        routes.sorted { $0.key < $1.key }.map { alias, destination in
+            InferenceRoute(
                 alias: alias,
                 destination: destination,
                 deployment: deployments.first { $0.name == destination }

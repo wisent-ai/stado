@@ -20,8 +20,6 @@ struct InferenceDeploymentRow: View {
                         .font(WisentTypeScale.identifierSmall())
                         .foregroundStyle(WisentDesign.secondary)
                         .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 WisentBadge(stateLabel, tone: stateTone)
@@ -58,20 +56,21 @@ struct InferenceDeploymentRow: View {
         .padding(.vertical, WisentDesign.Space.x3)
     }
 
-    /// The beacon's word when it has one; the registry's desired state,
-    /// marked as such, when the beacon could not be read.
+    /// The beacon's word when it has one, "not reported" when the host's
+    /// beacon carries none (its detail, shown below, says why); the
+    /// registry's desired state, marked as such, when the beacon could not
+    /// be read.
     private var stateLabel: String {
-        if let beacon {
-            return beacon.state
-        }
-        return "declared \(deployment.desiredState)"
+        guard let beacon else { return "declared \(deployment.desiredState)" }
+        guard let state = beacon.state else { return "not reported" }
+        return state
     }
 
     private var stateTone: WisentTone {
         guard let beacon else { return .neutral }
         switch beacon.state {
-        case "running", "active": return .success
-        case "missing", "unknown": return .warning
+        case "running"?, "active"?: return .success
+        case "missing"?, nil: return .warning
         default: return .danger
         }
     }
