@@ -61,10 +61,7 @@ pub enum Family {
 
 impl std::fmt::Display for Family {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::word::write(self, formatter)
     }
 }
 

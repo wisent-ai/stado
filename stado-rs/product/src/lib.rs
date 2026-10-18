@@ -31,6 +31,7 @@ mod source;
 mod state;
 mod surface;
 pub mod swift_cache;
+pub mod word;
 
 pub use install::plan::conflict::InstallationHostConflict;
 
