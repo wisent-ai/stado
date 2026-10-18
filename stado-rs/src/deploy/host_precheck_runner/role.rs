@@ -25,10 +25,6 @@ fn carried(context: String, error: CmdError) -> DeployError {
 /// role read names it.
 pub const RUNNER_ROLE: &str = "--precheck-runner";
 
-/// The launchd system domain's unit directory: a declaration there is a
-/// daemon and is re-asserted as one.
-const DAEMON_DIRECTORY: &str = "/Library/LaunchDaemons/";
-
 /// Assert the host's Stado unit with the runner role for `runner_root`
 /// switched on; `off` takes it off instead. Returns the ensure action the
 /// pass reported.
@@ -80,7 +76,10 @@ pub async fn declare_runner_role(
         env: &env,
         unset_env: &[],
         reason,
-        as_daemon: existing.path.starts_with(DAEMON_DIRECTORY),
+        // A declaration in the launchd system domain's unit directory is a
+        // daemon and is re-asserted as one.
+        as_daemon: std::path::Path::new(&existing.path)
+            .starts_with(crate::deploy::service::LAUNCHD_DAEMONS),
         as_launch_agent: false,
         as_json: true,
     })

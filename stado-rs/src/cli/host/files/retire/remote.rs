@@ -24,7 +24,9 @@ async fn retire_file_document(
         ..
     } = *request;
     let resolved = crate::cli::canonical_host(target).await?;
-    let mut outcome = if Path::new(path).parent() == Some(Path::new("/Library/LaunchDaemons")) {
+    let in_system_daemons =
+        Path::new(path).parent() == Some(Path::new(crate::deploy::service::LAUNCHD_DAEMONS));
+    let mut outcome = if in_system_daemons {
         retire_system_launchd_file(&resolved, request, binding).await?
     } else if crate::deploy::host_channel::target_is_this_host(&resolved) {
         retire_file_local_document(request, binding)?
@@ -66,21 +68,22 @@ async fn retire_file_document(
         let output = crate::deploy::host_channel::run_program(&resolved, &words, &runner)
             .await
             .map_err(CmdError::from)?;
-        if !output.ok() {
+        if !output.succeeded() {
+            // The host's own Stado may be older than this one; its whole
+            // failure names the verb or flag it refused, its last line alone
+            // only the usage hint.
             return Err(CmdError::click(format!(
                 "{}: installed Stado space file retire primitive failed: {}",
                 resolved.name,
-                crate::deploy::host_channel::last_error_line(
-                    &output,
-                    "remote command returned no detail"
-                )
+                crate::deploy::host_channel::whole_failure(&output)
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         serde_json::from_str::<RetireFileOutcome>(output.stdout.trim()).map_err(|error| {
             CmdError::click(format!(
-                "{}: installed Stado returned an invalid retirement report: {error}",
-                resolved.name
+                "{}: installed Stado returned an invalid retirement report ({error}): {}",
+                resolved.name,
+                output.stdout.trim()
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?

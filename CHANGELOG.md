@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **Unit directories are read from one declaration in four more places, and a remote file retirement says why it failed:** the unit-domain classifier, the misdeclared-domain finding, the precheck runner's daemon check and file retirement spelled `/Library/LaunchDaemons` and `/Library/LaunchAgents` for themselves; they now read `deploy::service`'s unit-path declaration, compared by path component rather than string prefix. The misdeclared-domain finding holds its account as present or absent instead of an empty string. A file retirement the host's Stado refused now quotes its whole failure with the exit status, and a report that does not parse is quoted with it.
+
 - **The object-API and release-store repairs quote the host program's whole failure:** a repair the target's older Stado refused reported only the last stderr line, `For more information, try '--help'.`, hiding the line that named the refused verb. Both repairs now quote every line the host program printed, with its exit status, through the host channel's new `whole_failure` reader.
 
 - **The object-evidence cleaner says when a link stands in its root's path:** a symbolic link or file in place of a directory on the way to an evidence root was only counted as `root_not_a_directory`, so a root the cleaner never cleans under looked like a quiet pass. It is now also named among the pass's errors with that component's path and the operating system's refusal; the cleaner still does not follow it.

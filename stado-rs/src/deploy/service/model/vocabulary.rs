@@ -24,7 +24,7 @@ pub const NAME_KEY: &str = "name";
 /// `["name", "label", "unit"]` and converge's `["label", "unit", "name"]` —
 /// in different orders, which is how one of them could start preferring a
 /// different field from the other without anybody seeing it.
-pub const NAME_KEYS: [&str; 3] = [LABEL_KEY, UNIT_KEY, NAME_KEY];
+pub const NAME_KEYS: &[&str] = &[LABEL_KEY, UNIT_KEY, NAME_KEY];
 
 /// Declared in the registry document; adopt / retire / deploy edit these.
 pub const SOURCE_REGISTRY: &str = "registry";
@@ -121,11 +121,16 @@ impl UnitDomain {
     /// `Library/LaunchAgents` segment rather than on a home prefix — which
     /// also covers `/Users/<name>/Library/LaunchAgents/...`.
     pub fn from_path(path: &str) -> Self {
-        if path.starts_with("/Library/LaunchDaemons/") {
+        let path = std::path::Path::new(path);
+        if path.starts_with(LAUNCHD_DAEMONS) {
             Self::System
-        } else if path.starts_with("/Library/LaunchAgents/") {
+        } else if path.starts_with(LAUNCHD_AGENTS) {
             Self::AnyUser
-        } else if path.contains("/Library/LaunchAgents/") {
+        } else if path.parent().is_some_and(|parent| {
+            parent
+                .ancestors()
+                .any(|dir| dir.ends_with(USER_LAUNCHD_AGENTS))
+        }) {
             Self::User
         } else {
             Self::Unknown
@@ -187,8 +192,14 @@ pub enum SystemdActiveState {
 }
 
 impl SystemdActiveState {
+    /// The state systemd reports by `word`; `None` for a word systemd does
+    /// not write, the one thing serde's refusal of it says.
     pub fn parse(word: &str) -> Option<Self> {
-        <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string())).ok()
+        match <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string()))
+        {
+            Ok(state) => Some(state),
+            Err(_not_a_systemd_state) => None,
+        }
     }
 
     /// Up: active, or active and re-reading its configuration.
@@ -217,7 +228,12 @@ pub enum SystemdManager {
 }
 
 impl SystemdManager {
+    /// The manager named by `word`; `None` for any other word.
     pub fn parse(word: &str) -> Option<Self> {
-        <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string())).ok()
+        match <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string()))
+        {
+            Ok(manager) => Some(manager),
+            Err(_not_a_manager) => None,
+        }
     }
 }

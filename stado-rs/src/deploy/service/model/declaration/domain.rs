@@ -36,8 +36,6 @@ pub fn requires_daemon_domain(target: &ComputeTarget) -> bool {
         && !target.release_platform.starts_with("linux")
 }
 
-/// Where a launchd job that belongs to the machine lives.
-const DAEMON_DIR: &str = "/Library/LaunchDaemons";
 /// The `/Users/<account>/...` prefix a per-account agent path carries. The
 /// account is load-bearing: a LaunchAgent's job runs as its owner, and the
 /// daemon spelling of the same unit only keeps running as that owner if it
@@ -55,7 +53,7 @@ const ACCOUNTS_PREFIX: &str = "/Users/";
 /// never load it: `launchctl bootstrap user/<uid> <plist>` answers
 /// `Bootstrap failed: 5: Input/output error` and `gui/<uid>` does not exist.
 /// Every other always-on unit on such a host is a system LaunchDaemon under
-/// [`DAEMON_DIR`].
+/// [`LAUNCHD_DAEMONS`].
 ///
 /// The declaration is checkable without going anywhere: the path says the
 /// domain and the target says the host runs unattended. So this is a
@@ -77,9 +75,9 @@ pub struct MisdeclaredDomain {
     /// Where the daemon spelling of this unit belongs.
     pub daemon_path: String,
     /// The account the agent's job runs as, read out of the declared path;
-    /// empty for a machine-wide `/Library/LaunchAgents` declaration, which
+    /// `None` for a machine-wide `/Library/LaunchAgents` declaration, which
     /// names no account at all.
-    pub account: String,
+    pub account: Option<String>,
 }
 
 impl MisdeclaredDomain {
@@ -102,11 +100,11 @@ impl MisdeclaredDomain {
             .path
             .strip_prefix(ACCOUNTS_PREFIX)
             .and_then(|rest| rest.split('/').next())
-            .unwrap_or_default()
-            .to_string();
+            .filter(|account| !account.is_empty())
+            .map(str::to_string);
         Some(Self {
             host: target.name.clone(),
-            daemon_path: format!("{DAEMON_DIR}/{unit}.plist"),
+            daemon_path: format!("{LAUNCHD_DAEMONS}/{unit}.plist"),
             unit,
             path: service.path.clone(),
             declared_domain: declared.as_str(),
@@ -121,7 +119,7 @@ impl MisdeclaredDomain {
     /// hand and the file the fleet writes have the same owner and mode.
     ///
     /// `UserName` rides along wherever the declared path names an account:
-    /// root reads a plist in [`DAEMON_DIR`], and a daemon without that key
+    /// root reads a plist in [`LAUNCHD_DAEMONS`], and a daemon without that key
     /// would run the account's program as uid 0 against an account-owned
     /// `~/.stado` — the exact trade `local_install::daemon_plist_text`
     /// documents.
@@ -130,12 +128,12 @@ impl MisdeclaredDomain {
             "/usr/bin/install -m 644 -o root -g wheel {} {}",
             self.path, self.daemon_path
         );
-        if self.account.is_empty() {
+        let Some(account) = &self.account else {
             return format!("sudo {install}");
-        }
+        };
         format!(
-            "sudo /bin/sh -c '{install} && /usr/bin/plutil -insert UserName -string {} {}'",
-            self.account, self.daemon_path
+            "sudo /bin/sh -c '{install} && /usr/bin/plutil -insert UserName -string {account} {}'",
+            self.daemon_path
         )
     }
 
