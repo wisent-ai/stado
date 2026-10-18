@@ -137,10 +137,17 @@ pub async fn submit_batch(
         None => {
             let provenance = SubmissionProvenance {
                 created_at: chrono::Utc::now().to_rfc3339(),
-                submitter_app: std::env::var("WC_SUBMITTER_APP")
-                    .ok()
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| "manual".into()),
+                // No submitting app named means the run was submitted by hand;
+                // a name that is not text is refused rather than read as that.
+                submitter_app: match std::env::var("WC_SUBMITTER_APP") {
+                    Ok(app) if !app.is_empty() => app,
+                    Ok(_) | Err(std::env::VarError::NotPresent) => "manual".into(),
+                    Err(error) => {
+                        return Err(SubmitError::Validation(format!(
+                            "WC_SUBMITTER_APP is set but cannot be read: {error}"
+                        )))
+                    }
+                },
                 submitted_by: submitter()?,
                 submitted_from: hostname(),
             };
@@ -167,8 +174,8 @@ pub async fn submit_batch(
                 }));
             }
             // Unset names the run from its commands; a name that is not text
-            // is refused, where it was read as unset and the run was stored
-            // under a derived name the submitter did not give.
+            // is refused: read as unset, the run would be stored under a
+            // derived name the submitter did not give.
             let explicit_name = match std::env::var("WC_RUN_NAME") {
                 Ok(name) => name,
                 Err(std::env::VarError::NotPresent) => String::new(),
