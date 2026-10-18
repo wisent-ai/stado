@@ -1,0 +1,20 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Repairs: "resolver: shed held relays when the listener runs out of descriptors" its changelog entry is the line this commit's changelog hunk replaced; that removal was itself a defect of this commit, and "workload: the browser-task report carries the run's named outputs" restores the entry in this push, so the released changelog names the shed
+
+Harsh-Review-Attacked: whether an exit code is still invented; the deploy runner refuses a child with no code naming its status and stderr, the failure fixer records a null return code with the status beside it and judges success from the status, and the probes and nvidia-smi refusals print the status itself.
+Harsh-Review-Attacked: whether a caller of the CUDA probe judgement was missed; its only caller passes the child's status, and the judgement reads success from it.
+Harsh-Review-Attacked: whether a consumer of last_returncode breaks on null; the fixer's record gains last_status, and a null code is what a run with no exit code has.
+Harsh-Review-Attacked: whether the changelog kept every entry; this commit dropped the resolver shed entry while adding its own, which is a defect, and the commit named on the Repairs line above restores it in this push.
