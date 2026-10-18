@@ -12,6 +12,10 @@ use crate::config;
 
 pub(super) fn insert(resolved: &mut Map<String, Value>) {
     resolved.insert("skarbiec_url".into(), Value::from(config::skarbiec_url()));
+    // An empty address says nothing of why; the reason is shown beside it.
+    if let Some(why) = config::skarbiec_url_absent() {
+        resolved.insert("skarbiec_url_absent".into(), Value::from(why));
+    }
     resolved.insert(
         "skarbiec_consumer".into(),
         Value::from(config::skarbiec_consumer()),

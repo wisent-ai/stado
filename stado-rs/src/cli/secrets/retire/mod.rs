@@ -105,11 +105,11 @@ pub(crate) async fn retire_copy(
              secrets.skarbiec.url and holds no vault"
         )));
     }
-    if crate::config::skarbiec_url().trim().is_empty() {
-        return Err(CmdError::refused(
-            "this machine declares neither secrets.skarbiec.vault_file nor secrets.skarbiec.url, \
-             so no owner reads for it and its vault files are not copies of anything",
-        ));
+    if let Some(why) = crate::config::skarbiec_url_absent() {
+        return Err(CmdError::refused(format!(
+            "this machine declares no secrets.skarbiec.vault_file and has no Skarbiec address \
+             ({why}), so no owner reads for it and its vault files are not copies of anything"
+        )));
     }
     let file = std::path::Path::new(path);
     if !file.is_file() {
