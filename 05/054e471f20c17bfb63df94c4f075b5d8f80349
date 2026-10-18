@@ -17,4 +17,4 @@ Repairs: "A published run settles only its own commit; new source under its vers
 
 Harsh-Review-Attacked: whether a missing module file is found before compiling; every crate of the exported tree is walked for mod declarations from the files alone, the same reading the version gate uses, and each declaration naming no file is refused with its revision, on every path that runs the quality check.
 Harsh-Review-Attacked: whether build output is walked; the tree is the commit's export of tracked files, and symlinked directories are not followed.
-Harsh-Review-Attacked: whether the test runs the real product; it commits a crate whose module file is deleted and one declaring a file never added, runs the built quality check on each, and reads the refusals.
+Harsh-Review-Attacked: whether the test runs the real product; it runs the built stado quality check on a real Git checkout of its own whose committed tree declares a module file it does not hold, reads the refusal naming the declaring file and the files looked for with nothing compiled, and reads the same product pass that check once the file is committed.
