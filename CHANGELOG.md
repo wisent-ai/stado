@@ -46,6 +46,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The public status page reads requests as the API listener does and stops when it cannot accept:** `stado public-status serve` read the request head with a parser of its own, with no bound on its size, and an accept that failed (the process out of descriptors) was tried again at once without end. The page now reads each request through the listener's own reader under its declared or measured request limits, answers a method that is no HTTP method with 400, and ends with the accept error when the failure is not a client that gave up before it was accepted.
+
 - **The wait-for graph says what it could not read instead of missing that edge:** a lock file that could not be read, a holder pid that was no number, a `ps` that could not run and a parent pid `ps` printed unreadably each ended the graph walk as if no process held the lock, so a wait that closed a cycle could start and stand. Each is now the graph's read error, said beside the wait's line (`graf czekan nieodczytany`) and by `stado waits cycles`; a lock file that is gone or names no holder still takes no part.
 
 - **A GCP exhaustion mark that is not epoch seconds is logged, and no mark is dated at the epoch:** a mark map entry whose value was not a number was left out without a word, and the next write dropped it; a clock before the Unix epoch dated a new mark at zero, the oldest, so that zone was retried first. Each such entry is now logged with its key and why, and a mark the clock cannot date is refused.

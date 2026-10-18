@@ -9,9 +9,9 @@
 //! published it (or `{"error": …}` beside a 503); anything else is 404, and a
 //! method other than GET or HEAD is 405.
 
-use reqwest::{StatusCode, Version};
+use reqwest::{Method, StatusCode, Version};
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
 use super::{document, page};
@@ -71,40 +71,48 @@ async fn answer(store: &JobStorage, target: &str) -> Answer {
     }
 }
 
-/// Read the request head, answer it, close.
-async fn respond(store: JobStorage, stream: TcpStream) -> Result<(), String> {
-    let mut stream = BufReader::new(stream);
-    let mut request_line = String::new();
-    stream
-        .read_line(&mut request_line)
-        .await
-        .map_err(|error| format!("the request could not be read: {error}"))?;
-    // The head ends at its first empty line, or where the client stopped.
-    loop {
-        let mut header = String::new();
-        stream
-            .read_line(&mut header)
-            .await
-            .map_err(|error| format!("a request header could not be read: {error}"))?;
-        if header.trim().is_empty() {
-            break;
+/// Read the request through the API listener's own reader, with its declared
+/// or measured limits, answer it, close. A client that closed before sending
+/// a byte is answered with nothing.
+async fn respond(
+    store: JobStorage,
+    mut stream: TcpStream,
+    limits: crate::dashboard::RequestLimits,
+) -> Result<(), String> {
+    let mut carry = Vec::new();
+    let read = crate::dashboard::read_request(&mut stream, &mut carry, limits).await;
+    let (head_only, answer) = match read {
+        Ok(None) => return Ok(()),
+        Ok(Some(request)) => {
+            let method = Method::from_bytes(request.method.as_bytes());
+            let answer = match &method {
+                Ok(method) if method == Method::GET || method == Method::HEAD => {
+                    answer(&store, &request.path).await
+                }
+                Ok(_) => Answer {
+                    status: StatusCode::METHOD_NOT_ALLOWED,
+                    kind: TEXT,
+                    body: "this status site answers GET and HEAD\n".to_owned(),
+                },
+                Err(error) => Answer {
+                    status: StatusCode::BAD_REQUEST,
+                    kind: TEXT,
+                    body: format!("{:?} is no HTTP method: {error}\n", request.method),
+                },
+            };
+            (
+                matches!(method, Ok(method) if method == Method::HEAD),
+                answer,
+            )
         }
-    }
-    let mut words = request_line.split_whitespace();
-    let (method, target) = (words.next(), words.next());
-    let head_only = method == Some("HEAD");
-    let answer = match (method, target) {
-        (Some("GET" | "HEAD"), Some(target)) => answer(&store, target).await,
-        (Some(_), Some(_)) => Answer {
-            status: StatusCode::METHOD_NOT_ALLOWED,
-            kind: TEXT,
-            body: "this status site answers GET and HEAD\n".to_owned(),
-        },
-        _ => Answer {
-            status: StatusCode::BAD_REQUEST,
-            kind: TEXT,
-            body: format!("{:?} is not an HTTP request line\n", request_line.trim()),
-        },
+        Err(cause) => (
+            false,
+            Answer {
+                status: StatusCode::BAD_REQUEST,
+                kind: TEXT,
+                body: format!("{cause}\n"),
+            },
+        ),
     };
     let reason = match answer.status.canonical_reason() {
         Some(reason) => reason,
@@ -118,7 +126,7 @@ async fn respond(store: JobStorage, stream: TcpStream) -> Result<(), String> {
         answer.kind,
         answer.body.len()
     );
-    let stream = stream.get_mut();
+    let stream = &mut stream;
     stream
         .write_all(head.as_bytes())
         .await
@@ -135,8 +143,13 @@ async fn respond(store: JobStorage, stream: TcpStream) -> Result<(), String> {
         .map_err(|error| format!("the connection could not be closed: {error}"))
 }
 
-/// Serve the page on `bind` until the process is ended.
+/// Serve the page on `bind` until the process is ended. A connection the
+/// client gave up before it was accepted is said and the next is taken; any
+/// other accept failure (descriptors or memory exhausted) ends the serve with
+/// its cause, as accepting again would fail the same way at once.
 pub(super) async fn serve(bind: &str) -> Result<(), CmdError> {
+    let limits = crate::dashboard::RequestLimits::read()
+        .map_err(|error| CmdError::refused(format!("public-status request limits: {error}")))?;
     let store = JobStorage::with_bucket(crate::config::bucket()).await?;
     let listener = TcpListener::bind(bind)
         .await
@@ -150,14 +163,24 @@ pub(super) async fn serve(bind: &str) -> Result<(), CmdError> {
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(accepted) => accepted,
-            Err(error) => {
-                eprintln!("stado public-status: a connection could not be accepted: {error}");
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset
+                ) =>
+            {
+                eprintln!("stado public-status: a client gave up before it was accepted: {error}");
                 continue;
+            }
+            Err(error) => {
+                return Err(CmdError::click(format!(
+                    "stado public-status on {address} cannot accept connections: {error}"
+                )))
             }
         };
         let store = store.clone();
         tokio::spawn(async move {
-            if let Err(error) = respond(store, stream).await {
+            if let Err(error) = respond(store, stream, limits).await {
                 eprintln!("stado public-status: {peer}: {error}");
             }
         });

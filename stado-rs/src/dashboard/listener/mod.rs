@@ -26,8 +26,8 @@ use boundary::BoundaryAvailability;
 pub(crate) use auth::{constant_time_eq, AuthorityUnavailable};
 pub(crate) use boundary::Boundary;
 pub(crate) use http::{
-    dashboard_error_response, empty_response, http_status, parse_qs, query_value, send_json,
-    storage_error_response, trusted_request_host, Request, RequestLimits, Response,
+    dashboard_error_response, empty_response, http_status, parse_qs, query_value, read_request,
+    send_json, storage_error_response, trusted_request_host, Request, RequestLimits, Response,
 };
 
 /// The exact (method, path) pairs `--enrollment-only` serves.
@@ -38,7 +38,7 @@ pub(crate) use http::{
 /// default, and the mistake is invisible until the wrong thing answers on a
 /// public tunnel. With an allowlist a new route is unreachable in this mode
 /// until it is named here on purpose, so forgetting fails closed.
-pub(crate) const ENROLLMENT_ROUTES: [(&str, &str); 3] = [
+pub(crate) const ENROLLMENT_ROUTES: &[(&str, &str)] = &[
     ("GET", "/join.sh"),
     ("GET", "/api/fleet/invite/key"),
     ("POST", "/api/fleet/join"),
@@ -62,10 +62,13 @@ pub fn join_script_source() -> &'static str {
 /// listener has never heard of".
 pub(crate) const ENROLLMENT_REFUSAL: &[u8] = b"not found\n";
 
-/// Whether `method`+`path` is one of the three enrollment pairs. The query
-/// string is not part of the decision; the routes parse their own.
+/// Whether `method`+`path` is one of the enrollment pairs. The query string
+/// is not part of the decision; the routes parse their own.
 pub(crate) fn enrollment_route_allowed(method: &str, path: &str) -> bool {
-    let path = path.split('?').next().unwrap_or("");
+    let path = match path.split_once('?') {
+        Some((path, _)) => path,
+        None => path,
+    };
     ENROLLMENT_ROUTES
         .iter()
         .any(|(allowed_method, allowed_path)| *allowed_method == method && *allowed_path == path)
