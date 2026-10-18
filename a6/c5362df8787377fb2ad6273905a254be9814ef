@@ -17,3 +17,4 @@ Harsh-Review-Attacked: whether StatusLeaf::parse drops an error; a segment that 
 Harsh-Review-Attacked: whether a vault item's absence can still be confused with a state word; absence is now its own variant, so a lifecycle word the vault records can no longer be mistaken for it, and every caller asks held() instead of comparing with the word absent.
 Harsh-Review-Attacked: whether reports changed; VaultItemState serializes and displays as absent or the vault's own lifecycle word, the same text the string carried, and the readiness table still prints - when no state was read.
 Harsh-Review-Attacked: whether the write check changed; a created item must still be held as active with a new revision.
+Harsh-Review-Attacked: whether its readiness line names a value nobody gave; it printed a dash for a vault state the host did not report, and "Vast readiness names a missing machine or vault answer, not a dash" repairs it in this push, naming this commit on its Repairs line.
