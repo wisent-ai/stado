@@ -37,14 +37,17 @@ for candidate in \
   /usr/local/bin/skarbiec
 do
   if [ -x "$candidate" ]; then
-    # A release older than the `vaults` subcommand is a fact about the
-    # fleet's rollout, not a broken host, and must not surface as an
-    # unparseable answer.
-    if answer=$("$candidate" vaults 2>/dev/null); then
+    # What Skarbiec says on stderr is kept: a release older than the
+    # `vaults` subcommand and a vault it cannot read are different
+    # answers, and both are told in its own words.
+    /bin/mkdir -p "$HOME/.stado"
+    errors=$(/usr/bin/mktemp "$HOME/.stado/fleet-vaults-errors.XXXXXX")
+    trap '/bin/rm -f "$errors"' EXIT
+    if answer=$("$candidate" vaults 2>"$errors"); then
       printf '%s\n' "$answer"
       exit 0
     fi
-    printf '{"host":"%s","vaults":[],"absent":"skarbiec here predates the vaults command"}\n' "$(hostname)"
+    printf 'STADO_VAULTS_REFUSED\t%s\t%s\n' "$candidate" "$(/usr/bin/tr '\n\t' '  ' < "$errors")"
     exit 0
   fi
 done
@@ -55,22 +58,38 @@ printf '{"host":"%s","vaults":[],"absent":"no skarbiec binary on this host"}\n' 
 /// rather than dropped, because a fleet inventory missing a machine silently
 /// is worse than one that says which machine it could not read.
 pub async fn collect_from(target: &crate::targets::ComputeTarget, runner: &Runner) -> Value {
-    match host_channel::run_script(target, REMOTE_VAULT_SCRIPT, runner).await {
-        Ok(output) => match serde_json::from_str::<Value>(output.stdout.trim()) {
-            Ok(document) => document,
-            Err(error) => json!({
-                "host": target.name.clone(),
-                "vaults": [],
-                "error": format!("unreadable answer: {error}"),
-            }),
-        },
-        Err(DeployError {
-            message: detail, ..
-        }) => json!({
+    let failed = |error: String| {
+        json!({
             "host": target.name.clone(),
             "vaults": [],
-            "error": detail,
-        }),
+            "error": error,
+        })
+    };
+    let output = match host_channel::run_script(target, REMOTE_VAULT_SCRIPT, runner).await {
+        Ok(output) => output,
+        Err(DeployError {
+            message: detail, ..
+        }) => return failed(detail),
+    };
+    let answer = output.stdout.trim();
+    // The trimmed answer loses the trailing tab of a refusal that printed no
+    // words, so the words are whatever fields follow the binary.
+    if let ["STADO_VAULTS_REFUSED", binary, words @ ..] =
+        host_channel::marker_fields(answer).as_slice()
+    {
+        let said = words.join(" ");
+        return failed(if said.trim().is_empty() {
+            format!("{binary} vaults failed and printed nothing on stderr")
+        } else {
+            format!("{binary} vaults failed: {}", said.trim())
+        });
+    }
+    match serde_json::from_str::<Value>(answer) {
+        Ok(document) => document,
+        Err(error) => failed(format!(
+            "unreadable answer ({error}): {answer}; {}",
+            host_channel::whole_failure(&output)
+        )),
     }
 }
 
