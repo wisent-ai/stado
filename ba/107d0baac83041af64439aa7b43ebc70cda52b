@@ -16,3 +16,5 @@ Harsh-Review-Attacked: whether the weles block check accepts less or more than b
 Harsh-Review-Attacked: whether a bad edge word is published anyway; the registry reader records a problem naming the product, the word and serde's reason, and a product with problems is refused, so the placeholder edge beside the problem is never acted on, and the publish and retract matches are exhaustive over the two edges.
 Harsh-Review-Attacked: whether an omitted edge is a value nobody stated; a product that names no edge is served by Stado's own edge, the default the CLI and the reader both declared before as the word stado and now as WebEdge's default.
 Harsh-Review-Attacked: whether the wire words changed; lowercase serde and clap renaming read and write stado and cloudflare, the words WEB_API_EDGES listed.
+
+Repaired-By: "stado web declare carries a unit's host, port and consumer only for a unit" repairs it in this push, naming this commit on its Repairs line
