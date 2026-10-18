@@ -33,8 +33,9 @@ pub struct Machine {
     /// back. Must not contain `@`; a vendor that needs a location to address a
     /// machine encodes it here (`fr-par-2/<uuid>`).
     pub native_id: String,
-    /// The name the machine was launched with.
-    pub name: String,
+    /// The name the vendor reports for the machine, the one it was launched
+    /// with; absent when the vendor's answer carries none.
+    pub name: Option<String>,
     /// The vendor's instance type, plan, flavor or shape.
     pub instance_type: String,
     pub state: MachineState,

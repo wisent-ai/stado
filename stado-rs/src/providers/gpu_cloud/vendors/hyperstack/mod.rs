@@ -111,7 +111,7 @@ impl From<Status> for MachineState {
 fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> {
     Ok(Machine {
         native_id: http::text(VENDOR, operation, instance, "/id")?,
-        name: http::optional_text(instance, "/name").unwrap_or_default(),
+        name: http::optional_text(instance, "/name"),
         instance_type: http::text(VENDOR, operation, instance, "/flavor/name")?,
         state: http::state::<Status>(VENDOR, operation, instance, "/status")?,
         created_at: http::timestamp(instance, "/created_at"),

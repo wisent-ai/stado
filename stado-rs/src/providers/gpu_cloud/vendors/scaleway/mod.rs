@@ -22,6 +22,9 @@ use crate::providers::gpu_cloud::{GuestIdentity, VendorProfile};
 
 const VENDOR: GpuCloudVendor = GpuCloudVendor::Scaleway;
 const API: &str = "https://api.scaleway.com/instance/v1/zones";
+/// The first page of a Scaleway listing: its `page` parameter counts from
+/// one (<https://www.scaleway.com/en/developers/api/instance/#path-instances-list-all-instances>).
+const FIRST_PAGE: u32 = 1;
 
 pub const PROFILE: VendorProfile = VendorProfile {
     vendor: VENDOR,
@@ -122,7 +125,7 @@ impl From<Status> for MachineState {
 fn machine(operation: &str, server: &Value) -> Result<Machine, GpuCloudError> {
     Ok(Machine {
         native_id: http::text(VENDOR, operation, server, "/id")?,
-        name: http::optional_text(server, "/name").unwrap_or_default(),
+        name: http::optional_text(server, "/name"),
         instance_type: http::text(VENDOR, operation, server, "/commercial_type")?,
         state: http::state::<Status>(VENDOR, operation, server, "/state")?,
         created_at: http::timestamp(server, "/creation_date"),
@@ -207,7 +210,7 @@ impl GpuCloudApi for Api {
     async fn machines(&self) -> Result<Vec<Machine>, GpuCloudError> {
         let operation = "list servers";
         let mut machines = Vec::new();
-        let mut page = std::num::NonZeroU32::MIN.get();
+        let mut page = FIRST_PAGE;
         loop {
             let answer = self
                 .call(
@@ -229,7 +232,7 @@ impl GpuCloudApi for Api {
             for server in servers {
                 machines.push(machine(operation, server)?);
             }
-            page += std::num::NonZeroU32::MIN.get();
+            crate::primitives::tally::Tally::tally(&mut page);
         }
     }
 }

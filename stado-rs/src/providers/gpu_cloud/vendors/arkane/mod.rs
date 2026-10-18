@@ -98,7 +98,7 @@ fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> 
     let state = http::state::<Status>(VENDOR, operation, instance, "/status")?;
     Ok(Machine {
         native_id: http::text(VENDOR, operation, instance, "/id")?,
-        name: http::optional_text(instance, "/name").unwrap_or_default(),
+        name: http::optional_text(instance, "/name"),
         instance_type: http::text(VENDOR, operation, instance, "/type")?,
         state,
         created_at: http::timestamp(instance, "/createdAt"),

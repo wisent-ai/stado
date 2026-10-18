@@ -117,7 +117,7 @@ fn machine(operation: &str, vm: &Value) -> Result<Machine, GpuCloudError> {
     let id = http::text(VENDOR, operation, vm, "/id")?;
     Ok(Machine {
         native_id: id.clone(),
-        name: id,
+        name: Some(id),
         instance_type: http::text(VENDOR, operation, vm, "/machineType")?,
         state: http::state::<Status>(VENDOR, operation, vm, "/state")?,
         created_at: http::timestamp(vm, "/createTime"),
@@ -146,7 +146,7 @@ impl GpuCloudApi for Api {
             Some(vm) => machine(&operation, vm),
             None => Ok(Machine {
                 native_id: http::text(VENDOR, &operation, &answer, "/id")?,
-                name: request.name.to_string(),
+                name: Some(request.name.to_string()),
                 instance_type: request.instance_type.to_string(),
                 state: MachineState::Provisioning,
                 created_at: Some(http::launch_stamp().1),

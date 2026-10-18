@@ -10,7 +10,6 @@
 
 use async_trait::async_trait;
 use base64::Engine as _;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::capabilities::{ConfigField, GpuCloudVendor};
@@ -86,26 +85,38 @@ enum Power {
     Other,
 }
 
-fn state(instance: &Value) -> MachineState {
-    let status = instance
-        .get("status")
-        .and_then(|value| Status::deserialize(value).ok());
-    let power = instance
-        .get("power_status")
-        .and_then(|value| Power::deserialize(value).ok());
-    match (status, power) {
-        (Some(Status::Pending), _) => MachineState::Provisioning,
-        (Some(Status::Suspended), _) | (_, Some(Power::Stopped)) => MachineState::Stopped,
+/// One state member of an instance, refused when it is absent or is not a
+/// word this Stado reads: read as running, an instance in an unknown state
+/// would be counted as a working agent.
+fn member<T: serde::de::DeserializeOwned>(
+    operation: &str,
+    instance: &Value,
+    field: &str,
+) -> Result<T, GpuCloudError> {
+    let value = instance.get(field).ok_or_else(|| {
+        GpuCloudError::response(VENDOR, operation, format!("no {field} in {instance}"))
+    })?;
+    serde_json::from_value(value.clone()).map_err(|error| {
+        GpuCloudError::response(VENDOR, operation, format!("{field} {value}: {error}"))
+    })
+}
+
+fn state(operation: &str, instance: &Value) -> Result<MachineState, GpuCloudError> {
+    let status: Status = member(operation, instance, "status")?;
+    let power: Power = member(operation, instance, "power_status")?;
+    Ok(match (status, power) {
+        (Status::Pending, _) => MachineState::Provisioning,
+        (Status::Suspended, _) | (_, Power::Stopped) => MachineState::Stopped,
         _ => MachineState::Running,
-    }
+    })
 }
 
 fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> {
     Ok(Machine {
         native_id: http::text(VENDOR, operation, instance, "/id")?,
-        name: http::optional_text(instance, "/label").unwrap_or_default(),
+        name: http::optional_text(instance, "/label"),
         instance_type: http::text(VENDOR, operation, instance, "/plan")?,
-        state: state(instance),
+        state: state(operation, instance)?,
         created_at: http::timestamp(instance, "/date_created"),
     })
 }
@@ -116,10 +127,10 @@ impl GpuCloudApi for Api {
         let operation = format!("launch {}", request.instance_type);
         let region = required_setting(VENDOR, "region")?;
         let os = required_setting(VENDOR, "os-id")?;
-        let os_id: i64 = os.parse().map_err(|_| {
+        let os_id: i64 = os.parse().map_err(|error| {
             GpuCloudError::Configuration(format!(
                 "Vultr: vultr.os_id must be the numeric operating-system id `GET /v2/os` lists, \
-                 not {os:?}"
+                 not {os:?}: {error}"
             ))
         })?;
         let availability = self

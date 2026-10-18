@@ -151,7 +151,7 @@ fn machine(operation: &str, vm: &Value) -> Result<Machine, GpuCloudError> {
         .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("no GPU in {vm}")))?;
     Ok(Machine {
         native_id: http::text(VENDOR, operation, vm, "/id")?,
-        name: http::optional_text(vm, "/name").unwrap_or_default(),
+        name: http::optional_text(vm, "/name"),
         instance_type: gpu,
         state,
         created_at: http::timestamp(vm, "/timestamp_creation"),
@@ -193,7 +193,7 @@ impl GpuCloudApi for Api {
             .await?;
         Ok(Machine {
             native_id: http::text(VENDOR, &operation, &answer, "/vm_id")?,
-            name: request.name.to_string(),
+            name: Some(request.name.to_string()),
             instance_type: request.instance_type.to_string(),
             state: MachineState::Provisioning,
             created_at: Some(http::launch_stamp().1),

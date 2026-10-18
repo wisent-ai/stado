@@ -140,7 +140,7 @@ fn machine(operation: &str, vm: &Value) -> Result<Machine, GpuCloudError> {
         .ok_or_else(|| GpuCloudError::response(VENDOR, operation, format!("no plan in {vm}")))?;
     Ok(Machine {
         native_id: http::text(VENDOR, operation, vm, "/id")?,
-        name: http::optional_text(vm, "/attributes/name").unwrap_or_default(),
+        name: http::optional_text(vm, "/attributes/name"),
         instance_type: plan,
         state: http::state::<Status>(VENDOR, operation, vm, "/attributes/status")?,
         created_at: http::timestamp(vm, "/attributes/created_at"),
@@ -205,7 +205,7 @@ impl GpuCloudApi for Api {
     }
 
     async fn terminate(&self, native_id: &str) -> Result<(), GpuCloudError> {
-        let name = self.machine(native_id).await?.map(|vm| vm.name);
+        let name = self.machine(native_id).await?.and_then(|vm| vm.name);
         self.call(
             &format!("delete virtual machine {native_id}"),
             reqwest::Method::DELETE,

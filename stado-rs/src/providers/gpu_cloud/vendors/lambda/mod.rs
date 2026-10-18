@@ -113,7 +113,7 @@ fn machine(operation: &str, value: &Value) -> Result<Machine, GpuCloudError> {
         .and_then(http::parse_time);
     Ok(Machine {
         native_id: http::text(VENDOR, operation, value, "/id")?,
-        name: http::optional_text(value, "/name").unwrap_or_default(),
+        name: http::optional_text(value, "/name"),
         instance_type: http::text(VENDOR, operation, value, "/instance_type/name")?,
         state,
         created_at: launched,
@@ -164,7 +164,7 @@ impl GpuCloudApi for Api {
         let id = http::text(VENDOR, &operation, &answer, "/data/instance_ids/0")?;
         Ok(Machine {
             native_id: id,
-            name: request.name.to_string(),
+            name: Some(request.name.to_string()),
             instance_type: request.instance_type.to_string(),
             state: MachineState::Provisioning,
             created_at: Some(launched_at),

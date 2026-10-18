@@ -100,12 +100,22 @@ impl From<Status> for MachineState {
 
 fn machine(operation: &str, pod: &Value) -> Result<Machine, GpuCloudError> {
     let state = http::state::<Status>(VENDOR, operation, pod, "/desiredStatus")?;
+    // The pod's GPU type is its instance type; a pod naming it in neither
+    // place is an answer that does not say what the pod is.
     let gpu = http::optional_text(pod, "/machine/gpuTypeId")
         .or_else(|| http::optional_text(pod, "/gpu/id"))
-        .unwrap_or_default();
+        .ok_or_else(|| {
+            GpuCloudError::response(
+                VENDOR,
+                operation,
+                format!(
+                    "the pod names its GPU type in neither machine.gpuTypeId nor gpu.id: {pod}"
+                ),
+            )
+        })?;
     Ok(Machine {
         native_id: http::text(VENDOR, operation, pod, "/id")?,
-        name: http::optional_text(pod, "/name").unwrap_or_default(),
+        name: http::optional_text(pod, "/name"),
         instance_type: gpu,
         state,
         created_at: pod

@@ -35,17 +35,29 @@ impl GpuCloudProvider {
         eprintln!("[{}] {message}", self.vendor.provider().as_str());
     }
 
-    /// The reference Stado keeps for `machine`.
-    fn reference(&self, machine: &Machine) -> String {
+    /// The reference Stado keeps for `machine`. A machine the guest knows by
+    /// its name, which the vendor reports without one, cannot be referred
+    /// to: the reference is refused naming the machine.
+    fn reference(&self, machine: &Machine) -> Result<String, ProviderError> {
         let worker = match profile(self.vendor).guest {
             // A machine no agent boots on is still listed, read and released
             // under the name Stado gave it at launch.
             GuestIdentity::InstanceName
             | GuestIdentity::ContainerName
-            | GuestIdentity::NoStartupScript => machine.name.as_str(),
+            | GuestIdentity::NoStartupScript => match &machine.name {
+                Some(name) => name.as_str(),
+                None => {
+                    return Err(ProviderError::Value(format!(
+                        "{}: machine {} is reported without a name, so the reference its \
+                         guest is known by cannot be formed",
+                        self.vendor.display_name(),
+                        machine.native_id
+                    )))
+                }
+            },
             GuestIdentity::ContainerEnv(_) => machine.native_id.as_str(),
         };
-        format!("{worker}@{}", machine.native_id)
+        Ok(format!("{worker}@{}", machine.native_id))
     }
 
     /// The vendor's id inside a reference Stado handed out.
@@ -63,7 +75,8 @@ impl GpuCloudProvider {
             })
     }
 
-    /// Agent machines: the fleet's naming prefix, alive.
+    /// Agent machines: the fleet's naming prefix, alive. A machine reported
+    /// without a name carries no prefix, so it is no agent of the fleet.
     async fn live_agents(&self) -> Result<Vec<Machine>, ProviderError> {
         Ok(self
             .api
@@ -71,7 +84,11 @@ impl GpuCloudProvider {
             .await?
             .into_iter()
             .filter(|machine| {
-                machine.name.starts_with(crate::config::INSTANCE_PREFIX) && machine.state.alive()
+                machine
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with(crate::config::INSTANCE_PREFIX))
+                    && machine.state.alive()
             })
             .collect())
     }
@@ -79,11 +96,14 @@ impl GpuCloudProvider {
     /// The accelerator a vendor instance type carries, from the vendor's
     /// declared offers; the type itself when it is not one of them.
     fn accel_of(&self, instance_type: &str) -> String {
-        profile(self.vendor)
+        match profile(self.vendor)
             .offers
             .iter()
             .find(|(offered, _)| *offered == instance_type)
-            .map_or_else(|| instance_type.to_string(), |(_, accel)| accel.to_string())
+        {
+            Some((_, accel)) => accel.to_string(),
+            None => instance_type.to_string(),
+        }
     }
 }
 
@@ -171,7 +191,7 @@ impl Provider for GpuCloudProvider {
         };
         match self.api.launch(&request).await {
             Ok(machine) => {
-                let reference = self.reference(&machine);
+                let reference = self.reference(&machine)?;
                 self.log(&format!("launched {reference} type={machine_type}"));
                 Ok(Some(reference))
             }
@@ -261,7 +281,7 @@ impl Provider for GpuCloudProvider {
                 .to_std()
                 .map_err(|error| ProviderError::Value(error.to_string()))?
                 .as_secs_f64();
-            refs.push((self.reference(&machine), age));
+            refs.push((self.reference(&machine)?, age));
         }
         Ok(refs)
     }

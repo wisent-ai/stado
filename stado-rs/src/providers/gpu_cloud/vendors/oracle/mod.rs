@@ -92,7 +92,14 @@ impl Api {
         let parsed = url::Url::parse(url).map_err(|error| {
             GpuCloudError::Configuration(format!("Oracle Cloud Infrastructure: {url}: {error}"))
         })?;
-        let host = parsed.host_str().unwrap_or_default().to_string();
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| {
+                GpuCloudError::Configuration(format!(
+                    "Oracle Cloud Infrastructure: {url} names no host, so the request cannot be signed"
+                ))
+            })?
+            .to_string();
         let target = match parsed.query() {
             Some(query) => format!("{}?{query}", parsed.path()),
             None => parsed.path().to_string(),
@@ -188,7 +195,7 @@ fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> 
     let state = http::state::<Status>(VENDOR, operation, instance, "/lifecycleState")?;
     Ok(Machine {
         native_id: http::text(VENDOR, operation, instance, "/id")?,
-        name: http::optional_text(instance, "/displayName").unwrap_or_default(),
+        name: http::optional_text(instance, "/displayName"),
         instance_type: http::text(VENDOR, operation, instance, "/shape")?,
         state,
         created_at: http::timestamp(instance, "/timeCreated"),

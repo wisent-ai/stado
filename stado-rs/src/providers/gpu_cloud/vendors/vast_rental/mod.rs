@@ -139,7 +139,7 @@ fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> 
     // label is part of a Stado machine; the listing leaves unlabeled ones out.
     Ok(Machine {
         native_id: http::text(VENDOR, operation, instance, "/id")?,
-        name: http::text(VENDOR, operation, instance, "/label")?,
+        name: Some(http::text(VENDOR, operation, instance, "/label")?),
         instance_type: http::text(VENDOR, operation, instance, "/gpu_name")?,
         state: state(operation, instance)?,
         created_at: started(instance),
@@ -179,7 +179,7 @@ impl GpuCloudApi for Api {
         let (_, launched_at) = http::launch_stamp();
         Ok(Machine {
             native_id: http::text(VENDOR, &operation, &answer, "/new_contract")?,
-            name: request.name.to_string(),
+            name: Some(request.name.to_string()),
             instance_type: request.instance_type.to_string(),
             state: MachineState::Provisioning,
             created_at: Some(launched_at),

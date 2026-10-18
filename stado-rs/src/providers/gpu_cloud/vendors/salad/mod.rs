@@ -158,14 +158,16 @@ fn machine(
         group,
         "/container/resources/gpu_classes/0",
     )?;
-    let instance_type = classes
-        .iter()
-        .find(|(id, _)| *id == class)
-        .map_or(class, |(_, name)| name.clone());
+    // The class's name from the vendor's class list; a class the list does
+    // not name is reported by its id, which is what the group carries.
+    let instance_type = match classes.iter().find(|(id, _)| *id == class) {
+        Some((_, name)) => name.clone(),
+        None => class,
+    };
     let name = http::text(VENDOR, operation, group, "/name")?;
     Ok(Machine {
         native_id: name.clone(),
-        name,
+        name: Some(name),
         instance_type,
         state,
         created_at: http::timestamp(group, "/create_time"),

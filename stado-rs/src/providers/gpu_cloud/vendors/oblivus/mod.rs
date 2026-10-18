@@ -102,12 +102,25 @@ impl From<Status> for MachineState {
 
 fn machine(operation: &str, vm: &Value) -> Result<Machine, GpuCloudError> {
     let state = http::state::<Status>(VENDOR, operation, vm, "/status")?;
-    let created_at = http::optional_text(vm, "/billing/lifetime")
-        .and_then(|minutes| minutes.parse::<i64>().ok())
-        .map(|minutes| chrono::Utc::now() - chrono::TimeDelta::minutes(minutes));
+    // A VM states how many minutes it has been billed; one that states a
+    // lifetime that is not a number of minutes is refused rather than read as
+    // a VM of unknown age the reaper would pass over.
+    let created_at = match http::optional_text(vm, "/billing/lifetime") {
+        Some(minutes) => {
+            let minutes = minutes.parse::<i64>().map_err(|error| {
+                GpuCloudError::response(
+                    VENDOR,
+                    operation,
+                    format!("billing.lifetime {minutes:?} is not minutes ({error}): {vm}"),
+                )
+            })?;
+            Some(chrono::Utc::now() - chrono::TimeDelta::minutes(minutes))
+        }
+        None => None,
+    };
     Ok(Machine {
         native_id: http::text(VENDOR, operation, vm, "/ID")?,
-        name: http::optional_text(vm, "/name").unwrap_or_default(),
+        name: http::optional_text(vm, "/name"),
         instance_type: http::text(VENDOR, operation, vm, "/resources/flavor")?,
         state,
         created_at,
@@ -141,7 +154,7 @@ impl GpuCloudApi for Api {
             .await?;
         Ok(Machine {
             native_id: http::text(VENDOR, &operation, &answer, "/data/instanceID")?,
-            name: request.name.to_string(),
+            name: Some(request.name.to_string()),
             instance_type: request.instance_type.to_string(),
             state: MachineState::Provisioning,
             created_at: Some(http::launch_stamp().1),

@@ -162,7 +162,7 @@ fn machine(operation: &str, instance: &Value) -> Result<Machine, GpuCloudError> 
     };
     Ok(Machine {
         native_id: http::text(VENDOR, operation, instance, "/metadata/id")?,
-        name: http::optional_text(instance, "/metadata/name").unwrap_or_default(),
+        name: http::optional_text(instance, "/metadata/name"),
         instance_type: format!(
             "{}/{}",
             http::text(VENDOR, operation, instance, "/spec/resources/platform")?,
@@ -223,7 +223,7 @@ impl GpuCloudApi for Api {
             .await?;
         Ok(Machine {
             native_id: http::text(VENDOR, &operation, &operation_answer, "/resource_id")?,
-            name: request.name.to_string(),
+            name: Some(request.name.to_string()),
             instance_type: request.instance_type.to_string(),
             state: MachineState::Provisioning,
             created_at: Some(http::launch_stamp().1),
