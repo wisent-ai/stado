@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::cli::quota::common::{
     contact_email, echo_json, parse_providers, parse_regions, quota_adapter,
 };
+use crate::cli::reporting::field;
 use crate::cli::CmdError;
 use crate::scheduler::dispatch::{quota_request, quota_skus};
 
@@ -67,11 +68,11 @@ pub(in crate::cli::quota) async fn request(
             ok_count += 1;
         }
         let detail = if ok {
-            super::reported(r, "name")
+            field(&r["name"])
         } else {
-            super::reported(r, "error")
+            field(&r["error"])
         };
-        let provider = super::reported(r, "provider");
+        let provider = field(&r["provider"]);
         println!(
             "{provider:<8} {rkey:<18} {:<3} {detail}",
             if ok { "Y" } else { "N" }
@@ -171,11 +172,11 @@ pub(in crate::cli::quota) async fn request_all(
             ok_count += 1;
         }
         let detail = if ok {
-            super::reported(r, "name")
+            field(&r["name"])
         } else {
-            super::reported(r, "error")
+            field(&r["error"])
         };
-        let provider = super::reported(r, "provider");
+        let provider = field(&r["provider"]);
         println!(
             "{provider:<8} {:<18} {:<22} {:<3} {}",
             rkey,

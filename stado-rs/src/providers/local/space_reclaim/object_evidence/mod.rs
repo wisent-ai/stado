@@ -147,7 +147,7 @@ fn scan_root(
             }
             match safefs::unlink_at(directory_fd.as_raw_fd(), &name) {
                 Ok(()) => {
-                    tally(&mut record.deleted_items);
+                    record.deleted_items.tally();
                     record.actual_free_delta_bytes += info.st_size;
                 }
                 Err(error) => {

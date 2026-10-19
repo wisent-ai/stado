@@ -226,7 +226,7 @@ fn mount_prefix<'a>(request: &DeclareRequest<'_>, prefix: &'a str) -> Result<&'a
         ))
     })?;
     let owner = declared_products
-        .into_iter()
+        .iter()
         .find(|(other, product)| {
             other.as_str() != request.name
                 && product.hostname() == request.hostname

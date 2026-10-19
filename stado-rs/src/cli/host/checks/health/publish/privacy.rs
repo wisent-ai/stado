@@ -125,7 +125,7 @@ impl Verdict<'_> {
 /// build does not measure.
 fn folder_name(key: &str) -> &str {
     match FOLDERS.iter().find(|(declared, _)| *declared == key) {
-        Some((_, name)) => *name,
+        Some((_, name)) => name,
         None => key,
     }
 }

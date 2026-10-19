@@ -121,8 +121,10 @@ pub(super) async fn job_outcomes(store: &JobStorage) -> Result<Value, StorageErr
         })
         .collect();
 
-    // How long each finished job ran, when both of its stamps read.
-    let mut completed: Vec<(Option<DateTime<Utc>>, Option<i64>, &Job)> = jobs(runs::COMPLETED)
+    // How long each finished job ran, when both of its stamps read: its
+    // start, its seconds and the job.
+    type Finished<'a> = (Option<DateTime<Utc>>, Option<i64>, &'a Job);
+    let mut completed: Vec<Finished<'_>> = jobs(runs::COMPLETED)
         .iter()
         .map(|job| {
             let started = stamps.read(job, "started_at", job.started_at.as_deref());

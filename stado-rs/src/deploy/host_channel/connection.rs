@@ -23,7 +23,7 @@ async fn probe_connection(
     runner: &Runner,
 ) -> SshConnectionProbe {
     let argv = match ssh_key::add_identity(
-        ssh_program_argv(connection.destination, &CONNECTION_PROBE_PROGRAM),
+        ssh_program_argv(connection.destination, CONNECTION_PROBE_PROGRAM),
         key,
     ) {
         Ok(argv) => argv,

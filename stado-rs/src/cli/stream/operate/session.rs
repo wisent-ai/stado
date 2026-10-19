@@ -1,7 +1,8 @@
 //! The session once it exists: what it is doing, which client may reach it,
 //! and how it is put down.
 
-use crate::cli::stream::report::{emitted, field, required_field, NOT_REPORTED};
+use crate::cli::reporting::NOT_REPORTED;
+use crate::cli::stream::report::{emitted, field, required_field};
 use crate::cli::CmdError;
 use crate::deploy::{production_runner, stream as remote};
 use crate::stream::schema::SUNSHINE_HTTPS_PORT;
