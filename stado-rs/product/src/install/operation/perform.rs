@@ -191,7 +191,7 @@ pub fn perform(
                     // A service dependency runs beside its dependent, on the
                     // host the installation names (this one, checked above).
                     let dependency_host = host.filter(|_| dependency_surface == "service");
-                    let dependency_state = perform(
+                    let installed_dependency = perform(
                         runtime,
                         document,
                         dependency_product,
@@ -201,10 +201,29 @@ pub fn perform(
                         &without,
                         with_prerequisites,
                         stack,
-                    )?;
-                    dependencies.push(json!({"product": dependency_id, "surface": dependency_surface,
-                        "checked": true, "install_decision": dependency_state.extra.get("install_decision"),
-                        "dependencies": dependency_state.extra.get("dependencies")}));
+                    );
+                    // Every product runs without the others: a dependency the
+                    // catalogue gives an alternative for is one this product
+                    // works without, so its failed installation stops only
+                    // itself. One bound by design stops this installation.
+                    match (installed_dependency, dependency["alternative"].as_str()) {
+                        (Ok(dependency_state), _) => {
+                            dependencies.push(json!({"product": dependency_id, "surface": dependency_surface,
+                                "checked": true, "install_decision": dependency_state.extra.get("install_decision"),
+                                "dependencies": dependency_state.extra.get("dependencies")}));
+                        }
+                        (Err(failed), Some(alternative)) => {
+                            eprintln!(
+                                "{id}: installed without {dependency_id}/{dependency_surface}, whose installation failed: {failed:#}; {alternative}"
+                            );
+                            dependencies.push(
+                                json!({"product": dependency_id, "surface": dependency_surface,
+                                "checked": true, "without": true, "failed": format!("{failed:#}"),
+                                "alternative": alternative}),
+                            );
+                        }
+                        (Err(failed), None) => return Err(failed),
+                    }
                 }
             }
         }
