@@ -113,8 +113,8 @@ async fn take_over_retired(
                 unit: retired.to_string(),
                 state: "failed".to_string(),
                 detail: format!(
-                    "{refusal}; moving the object store is `stado host storage-root-reconcile`, \
-                     not a takeover"
+                    "{refusal}; moving the object store is the storage-root step of \
+                     `stado repair stado --step storage-root --target <TARGET>`, not a takeover"
                 ),
             });
             continue;

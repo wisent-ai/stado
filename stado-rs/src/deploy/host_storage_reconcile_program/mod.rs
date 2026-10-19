@@ -1,4 +1,4 @@
-//! The host half of `stado host storage-root-reconcile`: every read and
+//! The host half of the storage-root transaction (`stado repair`'s storage-root step): every read and
 //! effect on the two local storage roots of the host it runs on, one phase
 //! per call. The resident transaction worker runs it as
 //! `stado host local reconcile phase --phase P --transaction TX`

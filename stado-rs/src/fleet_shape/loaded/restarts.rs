@@ -38,17 +38,35 @@ pub(in crate::fleet_shape) fn restart_loops(
     out: &mut Vec<Finding>,
     measured: &mut usize,
 ) {
+    // A unit counts as measured when the fleet installed it and the manager
+    // stated how often it started it.
+    *measured += loaded
+        .iter()
+        .filter(|unit| !unit.declaring_paths.is_empty() && unit.runs.is_some())
+        .count();
     for unit in loaded {
         if unit.declaring_paths.is_empty() {
             continue;
         }
-        if unit.runs.is_some() {
-            *measured += 1;
-        }
         // A non-zero last exit on a job the fleet installed, reported whether
         // or not it is also looping: `78`, `128` and `255` all read as
         // "loaded" to every other command.
-        let exit = unit.last_exit.or_else(|| unit.status.parse().ok());
+        let exit = match last_exit(unit) {
+            Ok(exit) => exit,
+            Err(observed) => {
+                out.push(Finding {
+                    check: RESTART_CHECK,
+                    subject: format!("{}:{}", target.name, unit.label),
+                    declared: "launchd states a job's last exit as a number or `-`".to_string(),
+                    observed,
+                    command: format!(
+                        "stado service unit show {} --host {}",
+                        unit.label, target.name
+                    ),
+                });
+                continue;
+            }
+        };
         match exit {
             Some(code) if code != success() => out.push(Finding {
                 check: RESTART_CHECK,
@@ -72,7 +90,7 @@ pub(in crate::fleet_shape) fn restart_loops(
                         runs_stated(unit)
                     ),
                     command: format!(
-                        "stado service label-print {} --host {} then stado service unit logs {} \
+                        "stado service unit show {} --host {} then stado service unit logs {} \
                          --host {} --lines <N>",
                         unit.label, target.name, unit.label, target.name
                     ),
@@ -81,4 +99,21 @@ pub(in crate::fleet_shape) fn restart_loops(
             _ => {}
         }
     }
+}
+
+/// The job's last exit: the posture read's number when it has one, else the
+/// status column of `launchctl list`, where `-` (or nothing) is a job that
+/// has not exited. Any other word is not an exit status, and it is reported
+/// as what launchd said rather than read as no exit.
+fn last_exit(unit: &service::UndeclaredUnit) -> Result<Option<i64>, String> {
+    if unit.last_exit.is_some() {
+        return Ok(unit.last_exit);
+    }
+    let status = unit.status.trim();
+    if status.is_empty() || status == "-" {
+        return Ok(None);
+    }
+    status.parse().map(Some).map_err(|error| {
+        format!("launchd reported last exit status {status:?}, which is not a number: {error}")
+    })
 }
