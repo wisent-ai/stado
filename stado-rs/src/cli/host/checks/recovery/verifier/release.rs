@@ -120,14 +120,14 @@ pub(super) async fn remote_skarbiec_metadata(
     gnupg_home: &str,
     command: &[&str],
 ) -> Result<Value, CmdError> {
-    let path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+    let path = crate::primitives::tool_path::assignment();
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
     let words = command;
     let command = command.join(" ");
     let mut invocation = vec![
         "/usr/bin/env",
-        path,
+        path.as_str(),
         gnupg_environment.as_str(),
         vault_environment.as_str(),
         skarbiec,
@@ -136,18 +136,19 @@ pub(super) async fn remote_skarbiec_metadata(
     let output = crate::deploy::host_channel::run_program(target, &invocation, runner)
         .await
         .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{}: Skarbiec {command} metadata unavailable: {}",
             target.name,
-            crate::deploy::host_channel::last_error_line(&output, "remote command failed")
+            crate::deploy::host_channel::whole_failure(&output)
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
     serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
-            "{}: Skarbiec {command} returned unreadable metadata: {error}",
-            target.name
+            "{}: Skarbiec {command} returned unreadable metadata ({error}): {}",
+            target.name,
+            output.stdout.trim()
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })

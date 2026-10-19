@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The recovery verifier's Skarbiec metadata reads take the fleet's search path and quote failures whole:** the verifier ran `skarbiec grant list`, `vaults` and `list` with a `PATH` of its own; it now carries `primitives::tool_path::assignment`. A failed read quotes Skarbiec's whole failure with its exit status, and an answer that is not JSON is quoted with the parser's reason.
+
 - **Capability routes are read with the vault commands' search path, and a broker failure is quoted whole:** the capability broker ran Skarbiec with its own `PATH`, without the GPG Suite and `~/.local/bin` directories, so on a host whose `gpg` lives there every route answered `does not open: spawn gpg`. It now takes `primitives::tool_path::vault_assignment`. A failed broker command and an unreadable vault environment quote the host's whole failure with its exit status instead of its last line.
 
 - **Grant sync and revoke run Skarbiec on the declared vault search path:** the host programs that re-issue and withdraw a consumer's grant exported their own `PATH`, without the GPG Suite and `~/.local/bin` directories the other vault commands carry, so a host whose `gpg` lives there could list its vault but not change a grant. Both now export `primitives::tool_path::vault_assignment`. A service file's mode is checked against the owner-only file and program modes read from the platform's own mode bits, and the refusal prints them in octal.
