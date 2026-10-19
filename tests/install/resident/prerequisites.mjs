@@ -1,5 +1,6 @@
 // Dedicated-host journey: an older real provider, a refused consumer install,
-// then qualified provider-first installation and persisted receipts.
+// an install without the verb when no provider revision is qualified, then
+// qualified provider-first installation and persisted receipts.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -123,7 +124,17 @@ try {
   assert.ok(!excluded.chain.some(item => item.product === required.product && item.verb === required.verb),
     'an explicit exclusion must drop the provider prerequisite');
   report.exclusion = excluded;
-
+  // An older provider that no revision is qualified to replace (no CI record)
+  // binds nothing either: the consumer installs without the verb, saying so.
+  const unqualified = execute(program, ['product', 'install', consumer.product, '--surface', 'cli',
+    '--source-commit', revision, '--plan', '--json'],
+  { ...environment, STADO_CI_MAIN_RECORD: join(home, 'no-ci-record.json') });
+  const unqualifiedPlan = JSON.parse(succeeds(unqualified));
+  assert.ok(!unqualifiedPlan.chain.some(item => item.product === required.product && item.verb === required.verb),
+    'a provider no revision can qualify must not be required');
+  assert.ok(unqualified.stderr.includes(`stado: ${consumer.product} installs without verb ${required.verb} of `
+    + `${required.product} ${required.surface}: installed revision ${old} does not serve it`), unqualified.stderr);
+  report.unqualified = { plan: unqualifiedPlan, stderr: unqualified.stderr };
 
   const refused = stado(['product', 'install', consumer.product, '--surface', 'cli',
     '--source-commit', revision, '--json']);

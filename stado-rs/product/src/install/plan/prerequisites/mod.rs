@@ -153,7 +153,9 @@ fn green(runtime: &Runtime, product: &str, surface: &str) -> Result<String> {
 /// the enclosing installation places it once this dependency is done, so a
 /// product whose own dependency needs its new verb can still be installed.
 /// A provider named in `without`, or not installed on this machine, binds
-/// nothing: the consumer runs without it.
+/// nothing: the consumer runs without it. Neither does an installed provider
+/// that does not serve the verb when no revision of it is qualified to replace
+/// it; standard error names the verb the consumer installs without.
 pub fn requirements(
     runtime: &Runtime,
     document: &Value,
@@ -280,12 +282,22 @@ pub fn requirements(
                 .clone()
                 .context("installed prerequisite has no source revision")?
         } else {
-            green(runtime, &required.product, &required.surface).with_context(|| {
-                format!(
-                    "{} {} needs verb {}; {installed_text}, which does not serve it: {reason}; a pass of the delivery routine (`stado ci run`, with the provider's step in `stado ci plan`) qualifies a provider revision",
-                    required.product, required.surface, required.verb
-                )
-            })?
+            match green(runtime, &required.product, &required.surface) {
+                Ok(qualified) => qualified,
+                // An installed provider that does not serve the verb, with no
+                // qualified revision to install in its place, binds nothing,
+                // as a provider that is not installed binds nothing: the
+                // consumer runs without the verb and its own use of it says
+                // so. Refusing here held two products that need each other's
+                // new verbs out of every install.
+                Err(unqualified) => {
+                    eprintln!(
+                        "stado: {id} installs without verb {} of {} {}: {installed_text} does not serve it ({reason}) and no revision of {} is qualified to replace it ({unqualified:#}); a pass of the delivery routine (`stado ci run`, with the provider's step in `stado ci plan`) qualifies one",
+                        required.verb, required.product, required.surface, required.product
+                    );
+                    continue;
+                }
+            }
         };
         let promised = manifest(&root, &qualified, provider_path)?;
         if promised.product != required.product || !provides(&promised, &required.verb) {
