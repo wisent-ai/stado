@@ -28,6 +28,9 @@ pub fn release(
     let run = evidence::directory(&runtime.home, root)?;
     let evidence = run.path.clone();
     let area = crate::common::runs::checkout_area(&runtime.home, root)?;
+    // The checkout itself, before `root` names the exported tree: a
+    // revision's attestation is kept against its repository.
+    let checkout = root.to_path_buf();
     let recorded = source::snapshot(root, &evidence, &area.join("source-index"))?;
     // The pinned commit (canonical: on origin/main or this checkout's main),
     // else the head. `product finish` names a retained build, keyed below.
@@ -183,7 +186,17 @@ pub fn release(
         environment.extend(manifest::secrets(&[&document, spec])?);
         if let Some(quality) = spec.get("quality") {
             let install = (id, revision.as_str(), evidence.as_path());
-            evidence::failures::gate(&area, &key, install, quality, |check| {
+            let refusals = evidence.join("dependency-refusals.jsonl");
+            environment.insert(
+                evidence::failures::DEPENDENCY_REFUSALS.to_owned(),
+                refusals.to_string_lossy().into_owned(),
+            );
+            let attestation = || attested(runtime, &checkout, &revision);
+            let dependencies = evidence::failures::Dependencies {
+                refusals: &refusals,
+                attestation: &attestation,
+            };
+            evidence::failures::gate(&area, &key, install, quality, dependencies, |check| {
                 step(check, root, &environment)
             })?;
         }
@@ -297,4 +310,50 @@ pub fn release(
         cache: None,
         resumed_from: resumed,
     })
+}
+
+/// Whether `revision` of `checkout` carries an attestation that stands, read
+/// word for word by Tama (`tama attestation check --commit`), as the quality
+/// check reads it when no model judges a command tree: the stand-in for what a
+/// product the gate depends on could not give. Tama is read where Stado
+/// installs it; a machine without Tama has no attestation to stand on.
+fn attested(
+    runtime: &crate::common::Runtime,
+    checkout: &Path,
+    revision: &str,
+) -> std::result::Result<(), String> {
+    let tama = runtime.home.join(".stado").join("bin").join("tama");
+    if !tama.is_file() {
+        return Err(format!(
+            "Tama is not installed at {}, so the attestation of {revision} cannot be read",
+            tama.display()
+        ));
+    }
+    let shown = format!(
+        "{} attestation check --commit {revision} --repository {} --json",
+        tama.display(),
+        checkout.display()
+    );
+    let output = stado_wait::output(
+        std::process::Command::new(&tama)
+            .args(["attestation", "check", "--commit", revision, "--repository"])
+            .arg(checkout)
+            .arg("--json")
+            .stdin(std::process::Stdio::null()),
+    )
+    .map_err(|error| format!("`{shown}` did not run: {error}"))?;
+    let answer: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        format!(
+            "`{shown}` exited {} without a JSON answer ({error}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+    })?;
+    if output.status.success() && answer["stands"].as_bool() == Some(true) {
+        return Ok(());
+    }
+    Err(format!(
+        "the attestation of {revision} does not stand (`{shown}` exited {}): missing {}, findings {}",
+        output.status, answer["missing"], answer["findings"]
+    ))
 }

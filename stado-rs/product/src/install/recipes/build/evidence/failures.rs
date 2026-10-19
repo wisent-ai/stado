@@ -128,26 +128,90 @@ pub(in crate::install::recipes::build) fn record(
     )
 }
 
+/// The environment variable that names the file a gate's program appends a
+/// line to for each request another product refused or did not answer. A
+/// gate that failed after such a refusal was stopped by its dependency, not
+/// by the tree: it says nothing about the revision.
+pub(in crate::install::recipes::build) const DEPENDENCY_REFUSALS: &str =
+    "WISENT_DEPENDENCY_REFUSALS";
+
+/// What the gates of one install read beside the tree: where a gate's
+/// program writes the refusals of the products it depends on, and whether
+/// the revision's own attestation stands in for what those products could
+/// not give.
+pub(in crate::install::recipes::build) struct Dependencies<'a> {
+    pub refusals: &'a Path,
+    pub attestation: &'a dyn Fn() -> std::result::Result<(), String>,
+}
+
 /// Run every quality check of a release platform to its end; the checks that
 /// refused the tree are recorded together against `key` in the checkout's
 /// build area and returned as one error naming each with its evidence.
+///
+/// Every product runs without the others. A check that failed after a
+/// product it depends on refused or did not answer (`DEPENDENCY_REFUSALS`)
+/// stands on the revision's attestation, as a judgment does when no model
+/// answers; without an attestation it is refused naming both, and it is not
+/// recorded against the revision, since the dependency stopped it.
 pub(in crate::install::recipes::build) fn gate(
     area: &Path,
     key: &str,
     install: (&str, &str, &Path),
     quality: &Value,
+    dependencies: Dependencies<'_>,
     mut run: impl FnMut(&Value) -> Result<()>,
 ) -> Result<()> {
     let (product, _, evidence) = install;
     let mut failures = Vec::new();
     let mut host_faults = Vec::new();
+    let mut unserved = Vec::new();
     for check in quality
         .as_array()
         .context("release quality must be an array")?
     {
+        match fs::remove_file(dependencies.refusals) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "clearing the dependency refusals {}",
+                        dependencies.refusals.display()
+                    )
+                })
+            }
+        }
         let Err(error) = run(check) else {
             continue;
         };
+        let refused = match fs::read_to_string(dependencies.refusals) {
+            Ok(text) => text.trim().to_owned(),
+            Err(read) if read.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(read) => {
+                return Err(read).with_context(|| {
+                    format!(
+                        "reading the dependency refusals {}",
+                        dependencies.refusals.display()
+                    )
+                })
+            }
+        };
+        if !refused.is_empty() {
+            match (dependencies.attestation)() {
+                Ok(()) => eprintln!(
+                    "{product}: quality {} stands on the revision's attestation: a product it \
+                     depends on did not serve it: {refused}",
+                    check["name"]
+                ),
+                Err(cause) => unserved.push(format!(
+                    "quality {} was stopped by a product it depends on ({refused}), and the \
+                     revision's attestation does not stand in for it: {cause}; the gate's own \
+                     failure: {error:#}",
+                    check["name"]
+                )),
+            }
+            continue;
+        }
         // A step whose program could not be started says nothing about the
         // revision: the host lacked the program. Recording it would refuse
         // every later attempt at the same revision with "the same revision
@@ -189,6 +253,7 @@ pub(in crate::install::recipes::build) fn gate(
                 failure.check, failure.error
             )
         }))
+        .chain(unserved)
         .collect();
     if said.is_empty() {
         return Ok(());
