@@ -212,6 +212,49 @@ fn a_module_declared_without_its_file_is_refused_before_anything_compiles() {
         !said.contains(UNREACHED) && !said.contains(REFUSAL),
         "the module check refused a declared module: {said}"
     );
+
+    // A declaration inside an inline module resolves under the inline
+    // module's name, as rustc resolves it: refused while that file is
+    // missing, accepted once it is committed.
+    fs::write(
+        checkout.join("src/main.rs"),
+        "mod present;\nmod absent;\nmod hidden;\nmod outer {\n    pub mod inner;\n}\nfn main() {\n    crate::hidden::run();\n    crate::outer::inner::run();\n}\n",
+    )
+    .unwrap();
+    git(&checkout, &["add", "src"]);
+    git(
+        &checkout,
+        &["commit", "--quiet", "-m", "declares inner inside outer"],
+    );
+    let nested = stado(
+        &root,
+        &mut report,
+        &["quality", "check", "--root", &checkout.to_string_lossy()],
+    );
+    let said = String::from_utf8_lossy(&nested.stderr).into_owned();
+    assert!(
+        !nested.status.success(),
+        "a missing file inside an inline module was accepted"
+    );
+    assert!(said.contains("src/main.rs declares `mod inner;`"), "{said}");
+    assert!(said.contains("src/outer/inner.rs or"), "{said}");
+    fs::create_dir_all(checkout.join("src/outer")).unwrap();
+    fs::write(checkout.join("src/outer/inner.rs"), "pub fn run() {}\n").unwrap();
+    git(&checkout, &["add", "src"]);
+    git(
+        &checkout,
+        &["commit", "--quiet", "-m", "adds inner under outer"],
+    );
+    let inline = stado(
+        &root,
+        &mut report,
+        &["quality", "check", "--root", &checkout.to_string_lossy()],
+    );
+    let said = String::from_utf8_lossy(&inline.stderr).into_owned();
+    assert!(
+        !said.contains(UNREACHED) && !said.contains(REFUSAL),
+        "the module check refused a module declared inside an inline module: {said}"
+    );
     report["outcome"] = json!("passed");
     fs::write(
         root.join("report.json"),

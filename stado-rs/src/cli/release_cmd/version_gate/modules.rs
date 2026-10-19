@@ -12,7 +12,7 @@
 //! fails too, because a stale entry would re-admit a real orphan later.
 //! [`Outcome`] names the three results the command's exit status reports.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -26,6 +26,128 @@ static MOD_DECLARATION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^[^\S\n]*(?:pub(?:\([^)]*\))?[^\S\n]+)?mod[^\S\n]+(?:r#)?(\w+)[^\S\n]*;")
         .expect("static")
 });
+
+/// `mod name {`: an inline module. A `mod` declaration inside it resolves
+/// one directory deeper, under the inline module's name, as rustc resolves
+/// it: `mod outer { mod inner; }` in `a/mod.rs` names `a/outer/inner.rs`.
+static INLINE_MODULE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^[^\S\n]*(?:pub(?:\([^)]*\))?[^\S\n]+)?mod[^\S\n]+(?:r#)?(\w+)\s*\{")
+        .expect("static")
+});
+
+/// One `mod name;` declaration: where its line starts, its name, and the
+/// inline modules it stands in, outermost first.
+struct Declaration {
+    start: usize,
+    name: String,
+    within: Vec<String>,
+}
+
+impl Declaration {
+    /// The directory the declaration resolves in, given its file's.
+    fn directory(&self, file_directory: &Path) -> PathBuf {
+        self.within
+            .iter()
+            .fold(file_directory.to_path_buf(), |directory, inline| {
+                directory.join(inline)
+            })
+    }
+}
+
+/// Every `mod name;` of `text` with the inline modules around it. Braces are
+/// counted outside comments, string and character literals, so an inline
+/// module ends at its own closing brace.
+fn declarations(text: &str) -> Vec<Declaration> {
+    let opens: BTreeMap<usize, String> = INLINE_MODULE
+        .captures_iter(text)
+        .filter_map(|found| Some((found.get(0)?.end() - 1, found.get(1)?.as_str().to_string())))
+        .collect();
+    let mut pending = MOD_DECLARATION
+        .captures_iter(text)
+        .filter_map(|found| Some((found.get(0)?.start(), found.get(1)?.as_str().to_string())))
+        .peekable();
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    let mut stack: Vec<(String, usize)> = Vec::new();
+    let mut depth = 0usize;
+    let mut index = 0;
+    loop {
+        while let Some((start, name)) = pending.next_if(|(start, _)| *start <= index) {
+            found.push(Declaration {
+                start,
+                name,
+                within: stack.iter().map(|(name, _)| name.clone()).collect(),
+            });
+        }
+        let Some(&byte) = bytes.get(index) else {
+            break;
+        };
+        let after = |from: usize, pattern: &str| {
+            text.get(from..)
+                .and_then(|rest| rest.find(pattern))
+                .map(|at| from + at)
+        };
+        index = match byte {
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                after(index, "\n").unwrap_or(bytes.len())
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                after(index + 2, "*/").map_or(bytes.len(), |end| end + 2)
+            }
+            b'"' => {
+                let mut at = index + 1;
+                while let Some(&inside) = bytes.get(at) {
+                    match inside {
+                        b'\\' => at += 2,
+                        b'"' => break,
+                        _ => at += 1,
+                    }
+                }
+                at + 1
+            }
+            b'r' if index
+                .checked_sub(1)
+                .and_then(|before| bytes.get(before))
+                .is_none_or(|before| {
+                    (!before.is_ascii_alphanumeric() && *before != b'_') || *before == b'b'
+                })
+                && matches!(bytes.get(index + 1), Some(b'"' | b'#')) =>
+            {
+                let hashes = bytes[index + 1..]
+                    .iter()
+                    .take_while(|byte| **byte == b'#')
+                    .count();
+                if bytes.get(index + 1 + hashes) == Some(&b'"') {
+                    let closing = format!("\"{}", "#".repeat(hashes));
+                    after(index + 2 + hashes, &closing)
+                        .map_or(bytes.len(), |end| end + closing.len())
+                } else {
+                    index + 1
+                }
+            }
+            b'\'' if bytes.get(index + 1) == Some(&b'\\') => {
+                after(index + 2, "'").map_or(bytes.len(), |end| end + 1)
+            }
+            b'\'' if bytes.get(index + 2) == Some(&b'\'') => index + 3,
+            b'{' => {
+                if let Some(name) = opens.get(&index) {
+                    stack.push((name.clone(), depth));
+                }
+                depth += 1;
+                index + 1
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if stack.last().is_some_and(|(_, opened)| *opened == depth) {
+                    stack.pop();
+                }
+                index + 1
+            }
+            _ => index + 1,
+        };
+    }
+    found
+}
 
 /// `path = "src/bin/whatever.rs"` in Cargo.toml: every `[[bin]]` is a root.
 static CARGO_BIN_PATH: LazyLock<Regex> =
@@ -105,8 +227,9 @@ fn reachable(roots: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
         let text = fs::read(&current)
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .map_err(|error| format!("error: cannot read {}: {error}", current.display()))?;
-        for found in MOD_DECLARATION.captures_iter(&text) {
-            let name = &found[1];
+        for declaration in declarations(&text) {
+            let directory = declaration.directory(&directory);
+            let name = &declaration.name;
             for candidate in [
                 directory.join(format!("{name}.rs")),
                 directory.join(name).join("mod.rs"),
@@ -158,27 +281,27 @@ pub(crate) fn undeclared_files(crate_dir: &Path) -> Result<Vec<String>, String> 
             .parent()
             .ok_or_else(|| format!("error: {} has no directory", file.display()))?;
         let directory = child_directory(&file, &root_set);
-        for found in MOD_DECLARATION.captures_iter(&text) {
-            let mut groups = found.iter().flatten();
-            let (Some(whole), Some(name)) = (groups.next(), groups.next()) else {
-                continue;
-            };
-            let line_before = text[..whole.start()].trim_end().lines().last();
+        for declaration in declarations(&text) {
+            let name = &declaration.name;
+            let line_before = text[..declaration.start].trim_end().lines().last();
             let attributed = line_before
                 .and_then(|line| PATH_ATTRIBUTE.captures(line))
                 .and_then(|attribute| attribute.name("path").map(|path| path.as_str().to_string()));
             let candidates: Vec<PathBuf> = match attributed {
                 Some(path) => vec![own_directory.join(path)],
-                None => vec![
-                    directory.join(format!("{}.rs", name.as_str())),
-                    directory.join(name.as_str()).join("mod.rs"),
-                ],
+                None => {
+                    let directory = declaration.directory(&directory);
+                    vec![
+                        directory.join(format!("{name}.rs")),
+                        directory.join(name).join("mod.rs"),
+                    ]
+                }
             };
             if !candidates.iter().any(|candidate| candidate.is_file()) {
                 missing.push(format!(
                     "{} declares `mod {};`, and the tree holds none of {}",
                     file.display(),
-                    name.as_str(),
+                    name,
                     candidates
                         .iter()
                         .map(|candidate| candidate.display().to_string())

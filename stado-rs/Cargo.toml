@@ -266,6 +266,7 @@ path = "../tests/host_exec/skarbiec_entries.rs"
 # every connection mid-body.
 [[test]]
 name = "storage-transport-fault"
+path = "../tests/storage/transport_fault.rs"
 
 [[test]]
 name = "quality-release-inputs"
