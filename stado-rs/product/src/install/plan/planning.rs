@@ -81,12 +81,12 @@ pub(in super::super) fn decision(
             "dependency recipe or destination differs from its receipt".to_owned(),
         ));
     }
-    if installed.source_revision.as_deref() != Some(required.as_str()) {
-        return Ok(build(format!(
-            "dependency needs revision {required}; installed {:?}",
-            installed.source_revision
-        )));
-    }
+    // An installed, verified dependency is reused whatever revision it was
+    // built from: a product installs against what is installed of its
+    // dependencies, and what it needs of one is stated as a verb its
+    // contract requires (`prerequisites`), not as the dependency's checkout
+    // head. Rebuilding each dependency to its checkout head turns products
+    // that depend on each other into a cycle no installation can start.
     if installed.installed_paths.is_empty() {
         return Ok(build(
             "dependency receipt names no installed files".to_owned(),
@@ -99,8 +99,8 @@ pub(in super::super) fn decision(
     }
     Ok(report(
         "reuse",
-        "dependency already has the required revision and verified installed files".to_owned(),
-        Some(required),
+        "dependency is installed and its files verify".to_owned(),
+        installed.source_revision.clone(),
     ))
 }
 

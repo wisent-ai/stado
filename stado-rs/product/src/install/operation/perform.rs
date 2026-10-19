@@ -74,7 +74,7 @@ pub fn perform(
     stack.push(Enclosing::new(id, surface, &revision));
     let result = (|| {
         let required = plan::prerequisites::requirements(
-            runtime, document, product, surface, &revision, &enclosing,
+            runtime, document, product, surface, &revision, &enclosing, without,
         )?;
         let lock = state::path(runtime, id, surface)?.with_extension("lock");
         let writer = operation::lock_surface(runtime, (id, surface), &lock, selected)?;
@@ -158,6 +158,19 @@ pub fn perform(
                         "{id}: installed without {dependency_id}/{dependency_surface}: {alternative}"
                     );
                     dependencies.push(json!({"product": dependency_id, "surface": dependency_surface, "checked": false, "without": true, "alternative": alternative}));
+                    continue;
+                }
+                // Products may depend on each other. A dependency that is
+                // an installation already in progress above this one (Tama
+                // depending back on the Oko being installed) is placed by
+                // that installation once this one is done, so it is met,
+                // not followed into a cycle.
+                let dependency_node = format!("{dependency_id}/{dependency_surface}");
+                if stack.iter().any(|frame| frame.node() == dependency_node) {
+                    let reason =
+                        "the installation in progress that this one is a dependency of places it";
+                    eprintln!("{id}: {dependency_node} is met: {reason}");
+                    dependencies.push(json!({"product": dependency_id, "surface": dependency_surface, "checked": false, "enclosing": true, "reason": reason}));
                     continue;
                 }
                 let blocked = if dependency_surface == "service" && host.is_none() {

@@ -29,13 +29,16 @@ impl Plan<'_> {
             return Ok(());
         }
         self.visiting.push(key);
-        for decision in requirements(self.runtime, self.document, product, surface, revision, &[])?
-        {
+        for decision in requirements(
+            self.runtime,
+            self.document,
+            product,
+            surface,
+            revision,
+            &[],
+            self.without,
+        )? {
             let provider = &decision.requirement.product;
-            if self.without.iter().any(|name| name == provider) {
-                bail!("{id}/{surface} needs {provider} {} for verb {} from revision {}; --without {provider} cannot provide it",
-                      decision.requirement.surface, decision.requirement.verb, decision.minimum);
-            }
             let document = self.document;
             let provided = catalog::product(document, provider)?;
             self.append(provided, &decision.requirement.surface, &decision.green)?;

@@ -89,6 +89,14 @@ try {
   report.provider_old_revision = old;
   report.provider_qualified_revision = green;
 
+  // Every product runs without the others: with the provider not installed
+  // in this home, the consumer's plan names no prerequisite for its verb.
+  const absent = JSON.parse(succeeds(stado(['product', 'install', consumer.product,
+    '--surface', 'cli', '--source-commit', revision, '--plan', '--json'])));
+  assert.ok(!absent.chain.some(item => item.product === required.product && item.verb === required.verb),
+    'a provider this machine does not have installed must not be required');
+  report.absent_plan = absent;
+
   succeeds(stado(['product', 'install', required.product, '--surface', required.surface,
     '--source-commit', old, '--json']));
   const before = JSON.parse(succeeds(stado(['product', 'status', required.product,
@@ -108,12 +116,13 @@ try {
   const [target] = planned.chain.slice().reverse();
   assert.equal(target.product, consumer.product);
   report.plan = planned;
-  const excluded = stado(['product', 'install', consumer.product, '--surface', 'cli',
-    '--source-commit', revision, '--without', required.product, '--plan', '--json']);
-  assert.ok(excluded.status || excluded.signal || excluded.error,
-    'an explicit exclusion cannot suppress a required verb');
-  assert.ok(excluded.stderr.includes(`--without ${required.product} cannot provide it`));
-  report.exclusion = { exit_status: excluded.status, stderr: excluded.stderr };
+  // A machine that does without the provider installs the consumer without
+  // its verb, even with an older provider installed.
+  const excluded = JSON.parse(succeeds(stado(['product', 'install', consumer.product, '--surface', 'cli',
+    '--source-commit', revision, '--without', required.product, '--plan', '--json'])));
+  assert.ok(!excluded.chain.some(item => item.product === required.product && item.verb === required.verb),
+    'an explicit exclusion must drop the provider prerequisite');
+  report.exclusion = excluded;
 
 
   const refused = stado(['product', 'install', consumer.product, '--surface', 'cli',

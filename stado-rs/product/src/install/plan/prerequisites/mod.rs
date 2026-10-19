@@ -152,6 +152,8 @@ fn green(runtime: &Runtime, product: &str, surface: &str) -> Result<String> {
 /// names, and whose target revision declares it, is met by that revision:
 /// the enclosing installation places it once this dependency is done, so a
 /// product whose own dependency needs its new verb can still be installed.
+/// A provider named in `without`, or not installed on this machine, binds
+/// nothing: the consumer runs without it.
 pub fn requirements(
     runtime: &Runtime,
     document: &Value,
@@ -159,6 +161,7 @@ pub fn requirements(
     surface: &str,
     revision: &str,
     enclosing: &[Enclosing],
+    without: &[String],
 ) -> Result<Vec<Decision>> {
     let id = catalog::text(product, "id")?;
     let Some(path) = manifest_path(product, surface)? else {
@@ -175,6 +178,9 @@ pub fn requirements(
     let handed = handed()?;
     let mut decisions = Vec::new();
     for required in own.requires {
+        if without.iter().any(|name| *name == required.product) {
+            continue;
+        }
         let provider = catalog::product(document, &required.product)?;
         if required.product == id {
             bail!(
@@ -218,8 +224,15 @@ pub fn requirements(
                 continue;
             }
         }
-        let (satisfied, reason) = match (installed.as_ref(), source_revision.as_deref()) {
-            (Some(state), Some(revision)) if state.status == InstallStatus::Installed => {
+        // A product the machine does not have installed is one the consumer
+        // runs without: every product works without the others, and the
+        // consumer's own use of that verb says so when it runs. Only an
+        // installed provider has to serve the verb the consumer calls.
+        let Some(state) = installed.as_ref() else {
+            continue;
+        };
+        let (satisfied, reason) = match source_revision.as_deref() {
+            Some(revision) if state.status == InstallStatus::Installed => {
                 match manifest(&root, revision, provider_path) {
                     Ok(declared)
                         if declared.product == required.product
@@ -247,18 +260,20 @@ pub fn requirements(
                     ),
                 }
             }
-            (Some(state), _) => (
+            _ => (
                 false,
                 format!(
                     "installed state is {:?} or has no source revision",
                     state.status
                 ),
             ),
-            (None, _) => (false, "not installed".to_owned()),
         };
         let installed_text = match source_revision.as_deref() {
             Some(revision) => format!("installed revision {revision}"),
-            None => "not installed".to_owned(),
+            None => format!(
+                "installed with state {:?} and no source revision",
+                state.status
+            ),
         };
         let qualified = if satisfied {
             source_revision

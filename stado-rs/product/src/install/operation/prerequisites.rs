@@ -28,9 +28,10 @@ pub(super) fn install(
         let provider = &requirement.requirement.product;
         let surface = &requirement.requirement.surface;
         let verb = &requirement.requirement.verb;
+        // A machine that does without the provider runs the consumer without
+        // that verb, as it runs one where the provider is not installed.
         if request.without.iter().any(|name| name == provider) {
-            bail!("{}/{} needs {provider} {surface} for verb {verb} from revision {}; --without {provider} cannot provide it",
-                  request.id, request.surface, requirement.minimum);
+            continue;
         }
         if requirement.satisfied {
             continue;
