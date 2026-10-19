@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The Weles trust document is rendered with the vault commands' search path, and a refusal is quoted whole:** the renderer ran its Skarbiec reads with a `PATH` of its own; it now takes `primitives::tool_path::vault_assignment`, so a host whose `gpg` is in GPG Suite's directory or `~/.local/bin` renders like the rest. A refused render quotes the host's whole failure with its exit status instead of its last line.
+
 - **The recovery verifier's Skarbiec metadata reads take the fleet's search path and quote failures whole:** the verifier ran `skarbiec grant list`, `vaults` and `list` with a `PATH` of its own; it now carries `primitives::tool_path::assignment`. A failed read quotes Skarbiec's whole failure with its exit status, and an answer that is not JSON is quoted with the parser's reason.
 
 - **Capability routes are read with the vault commands' search path, and a broker failure is quoted whole:** the capability broker ran Skarbiec with its own `PATH`, without the GPG Suite and `~/.local/bin` directories, so on a host whose `gpg` lives there every route answered `does not open: spawn gpg`. It now takes `primitives::tool_path::vault_assignment`. A failed broker command and an unreadable vault environment quote the host's whole failure with its exit status instead of its last line.

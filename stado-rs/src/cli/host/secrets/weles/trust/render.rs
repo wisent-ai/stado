@@ -123,16 +123,12 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
     // constants, so nothing that could name a secret field reaches this
     // command line, and no field VALUE ever does.
     //
-    // The PATH is explicit for the same reason `register_acquisition_scopes`
-    // sets one: Skarbiec decrypts by spawning GnuPG, and a login shell reached
-    // through the channel does not necessarily carry the Homebrew prefix the
-    // fleet installs it under.
-    let mut assignments = vec![format!(
-        "PATH={}",
-        crate::deploy::shlex_quote(
-            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        )
-    )];
+    // The PATH is the one every Skarbiec command Stado runs on a host takes
+    // (`primitives::tool_path::vault_assignment`): Skarbiec decrypts by
+    // spawning GnuPG, and a login shell reached through the channel does not
+    // necessarily carry the directory the host's gpg is in. Its `$HOME` is
+    // the host shell's, expanded in the assignment.
+    let mut assignments = vec![crate::primitives::tool_path::vault_assignment("$HOME")];
     for (key, value) in &declared {
         assignments.push(format!("{key}={}", crate::deploy::shlex_quote(value)));
     }
@@ -153,11 +149,8 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
     .await
     .map_err(CmdError::from)?;
     remove_remote(&resolved, &[installed.as_str()], &runner).await;
-    if !rendered.ok() {
-        return Err(refused(host_channel::last_error_line(
-            &rendered,
-            "the renderer refused",
-        )));
+    if !rendered.succeeded() {
+        return Err(refused(host_channel::whole_failure(&rendered)));
     }
     public_document(&rendered.stdout).map_err(refused)?;
 
