@@ -34,7 +34,7 @@ pub(crate) async fn kronika_agent_credential(
     let vault = context.vault;
     let routes = context.routes;
     let gnupg = context.gnupg;
-    let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    let program_path = crate::primitives::tool_path::vault_assignment(&context.home);
     // Read the capability routes from Skarbiec's declared route capability.
     // The vault resolves self-declared identities at read time.
     let resolved = host_channel::run_program(
@@ -44,7 +44,7 @@ pub(crate) async fn kronika_agent_credential(
             &vault,
             &routes,
             &gnupg,
-            program_path,
+            &program_path,
             &skarbiec,
             "route",
             "resolve",
@@ -52,7 +52,7 @@ pub(crate) async fn kronika_agent_credential(
         &runner,
     )
     .await?;
-    if !resolved.ok() {
+    if !resolved.succeeded() {
         return Err(DeployError(format!(
             "{}: cannot resolve {PROBIERZ_AGENT_RESOURCE} through Skarbiec: {}",
             target.name,
@@ -113,7 +113,7 @@ pub(crate) async fn kronika_agent_credential(
             &vault,
             &routes,
             &gnupg,
-            program_path,
+            &program_path,
             &skarbiec,
             "get",
             &item,
@@ -123,7 +123,7 @@ pub(crate) async fn kronika_agent_credential(
         &runner,
     )
     .await?;
-    if !read.ok() {
+    if !read.succeeded() {
         return Err(DeployError(format!(
             "{}: cannot read {PROBIERZ_AGENT_RESOURCE} through its Skarbiec route: {}",
             target.name,

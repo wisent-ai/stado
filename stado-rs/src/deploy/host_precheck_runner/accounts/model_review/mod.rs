@@ -94,7 +94,7 @@ pub async fn reconcile_model_review_secret(
     let github_token = github_credential().await?;
     let client_id = model_review_client_id(repository);
     let capability = format!("call:brama#{MODEL_REVIEW_ALIAS}");
-    let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    let program_path = crate::primitives::tool_path::vault_assignment(&context.home);
     let minted = host_channel::run_program(
         &identity,
         &[
@@ -102,7 +102,7 @@ pub async fn reconcile_model_review_secret(
             &context.vault,
             &context.routes,
             &context.gnupg,
-            program_path,
+            &program_path,
             &context.skarbiec,
             "grant",
             "issue",
@@ -117,7 +117,7 @@ pub async fn reconcile_model_review_secret(
         &context.runner,
     )
     .await?;
-    if !minted.ok() {
+    if !minted.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: model review bearer mint failed: {}",
             identity.name,

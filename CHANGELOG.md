@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **The precheck runner's Skarbiec reads beside Brama take the vault commands' search path:** the Probierz agent credential lookup and the model review bearer mint ran Skarbiec with a `PATH` of their own, without GPG Suite's directory or the account's `~/.local/bin`. Both now take `primitives::tool_path::vault_assignment` for the Brama host's home, like every other Skarbiec command Stado runs on a host.
+
 - **The Weles trust document is rendered with the vault commands' search path, and a refusal is quoted whole:** the renderer ran its Skarbiec reads with a `PATH` of its own; it now takes `primitives::tool_path::vault_assignment`, so a host whose `gpg` is in GPG Suite's directory or `~/.local/bin` renders like the rest. A refused render quotes the host's whole failure with its exit status instead of its last line.
 
 - **The recovery verifier's Skarbiec metadata reads take the fleet's search path and quote failures whole:** the verifier ran `skarbiec grant list`, `vaults` and `list` with a `PATH` of its own; it now carries `primitives::tool_path::assignment`. A failed read quotes Skarbiec's whole failure with its exit status, and an answer that is not JSON is quoted with the parser's reason.
