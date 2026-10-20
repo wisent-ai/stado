@@ -18,6 +18,6 @@ Repairs: "Admit resident unit arguments and restore failed activations" its line
 Repairs: "Sign source installations from catalog keychains" its lines in ProductCatalog.swift are replaced by this change.
 Repairs: "Refuse a lock wait that would close a wait cycle, and name standing cycles" its lines in mod.rs are replaced by this change.
 Repairs: "An installation names what holds its surface, status reports the operation, and cancel ends it through its owner" its lines in Products.swift, mod.rs are replaced by this change.
-Repairs: "Install journey: parse in strict mode and prove the resident unit runs the new image" its lines in  are replaced by this change.
+Repairs: "Install journey: parse in strict mode and prove the resident unit runs the new image" the lines of it this change rewrites are replaced by it.
 
 Harsh-Review-Attacked: whether the change does what its message says and nothing else; its patch was read against the message, every refusal it adds names its cause, and no line it adds answers a missing value with one nobody stated.
