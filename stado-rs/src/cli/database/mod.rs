@@ -45,12 +45,14 @@ pub(crate) enum DatabaseProvider {
     External,
 }
 
+/// The engine a fleet or Supabase database runs when `--engine` names none,
+/// as the database page's create table declares it: the one engine Supabase
+/// runs and the fleet's default.
+const DEFAULT_ENGINE: &str = "postgres";
+
 impl std::fmt::Display for DatabaseProvider {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 
@@ -109,11 +111,14 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
                         "--anchor and --accept-monthly-usd price a supabase project; a fleet database has no vendor bill",
                     ));
                 }
-                let engine = engine.as_deref().unwrap_or("postgres");
+                let engine = match engine.as_deref() {
+                    Some(engine) => engine,
+                    None => DEFAULT_ENGINE,
+                };
                 fleet::create(&name, engine, host.as_deref(), port, &consumers, json).await
             }
             DatabaseProvider::Supabase => {
-                if let Some(engine) = engine.as_deref().filter(|engine| *engine != "postgres") {
+                if let Some(engine) = engine.as_deref().filter(|engine| *engine != DEFAULT_ENGINE) {
                     return Err(CmdError::usage(format!(
                         "supabase runs postgres only; --engine {engine} is created with --provider fleet or external"
                     )));
