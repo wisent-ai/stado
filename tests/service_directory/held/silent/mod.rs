@@ -5,64 +5,47 @@
 //!
 //! One isolated deployment (`held_deployment.rs`): the imported registry
 //! names `other-host` as the service directory's authority, reached at a
-//! loopback listener this test owns that accepts every connection and sends
-//! nothing, so the SSH client waits for a banner that never comes. The real
-//! `stado serve --resolver --target marker-host` must log that the
-//! authority's first snapshot did not answer, bind the adapter declared for
-//! `marker-api`, publish `serving` with that adapter listening, and relay a
-//! client through it to a service that answers. The test holds no clock:
-//! the resolver must give up the first read by the refresh interval the
-//! registry declares, on its own.
+//! real OpenSSH server on a loopback port (`../../host_silence/hung_ssh.rs`)
+//! that greets once and is then stopped with SIGSTOP, so it accepts every
+//! connection and sends nothing and the SSH client waits for a banner that
+//! never comes. The real `stado serve --resolver --target marker-host` must
+//! log that the authority's first snapshot did not answer, bind the adapter
+//! declared for `marker-api`, publish `serving` with that adapter listening,
+//! and relay a client through it to a real object API on a real Skarbiec
+//! (`../../host_silence/refusal_in_flight/store.rs`). The test holds no
+//! clock: the resolver must give up the first read by the refresh interval
+//! the registry declares, on its own.
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Ipv4Addr, TcpStream};
 use std::process::Command;
 
 use crate::held_deployment::{Deployment, CONSUMER, SERVICE, TARGET};
+use crate::hung_ssh::HungSsh;
+use crate::store::Store;
 
 const AUTHORITY: &str = "other-host";
-const AUTHORITY_STADO: &str = "/usr/local/bin/stado";
-const ANSWER: &str = "served from the registry store";
+/// The relayed object API serves its state document with this key.
+const ANSWER: &str = "\"vault\"";
 
-/// A listener that accepts and never speaks, keeping every connection open;
-/// its SSH destination, written `[host]:port` as a registry path names a
-/// server off SSH's own port.
-fn silent_authority(deployment: &mut Deployment) -> String {
-    let listener = TcpListener::bind(deployment.free_bind()).unwrap();
-    let address = listener.local_addr().unwrap();
-    std::thread::spawn(move || {
-        let mut held = Vec::new();
-        for accepted in listener.incoming() {
-            let Ok(stream) = accepted else { return };
-            held.push(stream);
-        }
-    });
-    format!("[{}]:{}", address.ip(), address.port())
-}
-
-/// A service that answers every request with `ANSWER` and closes.
-fn answering_service(deployment: &mut Deployment) -> String {
-    let listener = TcpListener::bind(deployment.free_bind()).unwrap();
-    let address = listener.local_addr().unwrap().to_string();
-    std::thread::spawn(move || {
-        for accepted in listener.incoming() {
-            let Ok(mut stream) = accepted else { return };
-            let request = BufReader::new(stream.try_clone().unwrap());
-            for line in request.lines() {
-                match line {
-                    Ok(line) if !line.is_empty() => continue,
-                    _ => break,
-                }
-            }
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{ANSWER}",
-                ANSWER.len()
-            );
-        }
-    });
-    address
+/// The authority's SSH server, which sends its protocol greeting to one
+/// connection before it is stopped: a real server, now hung.
+fn hung_authority(deployment: &mut Deployment) -> HungSsh {
+    let port = deployment.free_port();
+    let authority = HungSsh::serve(&deployment.root, port);
+    let greeted = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+        .expect("the live SSH server accepts a connection");
+    let mut banner = String::new();
+    BufReader::new(greeted)
+        .read_line(&mut banner)
+        .expect("the live SSH server sends its greeting");
+    assert!(
+        banner.starts_with("SSH-2.0-"),
+        "the live SSH server greets with its protocol version: {banner:?}"
+    );
+    authority.hang();
+    authority
 }
 
 #[test]
@@ -74,8 +57,10 @@ fn a_silent_authority_does_not_keep_the_resolver_from_serving_its_store() {
         .unwrap()
         .trim()
         .to_lowercase();
-    let authority_ssh = silent_authority(&mut deployment);
-    let service_bind = answering_service(&mut deployment);
+    let authority = hung_authority(&mut deployment);
+    let authority_ssh = authority.destination.clone();
+    let service = Store::serve(deployment.root.join("service.token"));
+    let service_bind = service.service.clone();
     let adapter_bind = deployment.free_bind();
     let api_bind = deployment.free_bind();
     let mut document: Value = serde_json::from_str(include_str!("../../registry.json")).unwrap();
@@ -95,7 +80,7 @@ fn a_silent_authority_does_not_keep_the_resolver_from_serving_its_store() {
     }
     let refresh_seconds = refresh_seconds.expect("the registry declares a refresh interval");
     document["service_directory"]["authority"] =
-        json!({"target": AUTHORITY, "command": AUTHORITY_STADO});
+        json!({"target": AUTHORITY, "command": env!("CARGO_BIN_EXE_stado")});
     document["service_directory"]["services"][SERVICE]["endpoints"][TARGET]["url"] =
         json!(format!("http://{service_bind}"));
     let registry = deployment.root.join("registry.json");
@@ -126,14 +111,14 @@ fn a_silent_authority_does_not_keep_the_resolver_from_serving_its_store() {
 
     let mut client = TcpStream::connect(&adapter_bind).unwrap();
     client
-        .write_all(b"GET /through HTTP/1.1\r\nHost: marker-api\r\n\r\n")
+        .write_all(b"GET /api/state.json HTTP/1.1\r\nHost: marker-api\r\nConnection: close\r\n\r\n")
         .unwrap();
     client.flush().unwrap();
     let mut answer = String::new();
     client.read_to_string(&mut answer).unwrap();
     assert!(
-        answer.contains(ANSWER),
-        "a client is relayed through the adapter to the service: {answer}"
+        answer.starts_with("HTTP/1.1 200") && answer.contains(ANSWER),
+        "a client is relayed through the adapter to the serving object API: {answer}"
     );
     deployment.report["startup"] = json!(said);
     deployment.report["status"] = status;
@@ -165,6 +150,8 @@ fn a_silent_authority_does_not_keep_the_resolver_from_serving_its_store() {
         "status is not ready while the published state is a dead process's"
     );
     deployment.report["after_exit"] = after;
+    deployment.report["authority_log"] = json!(authority.log());
+    deployment.report["service"] = service.describe();
     deployment.report["outcome"] = json!("passed");
     deployment.save();
 }

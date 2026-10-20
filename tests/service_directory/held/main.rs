@@ -6,8 +6,14 @@ mod closed_channel;
 mod held;
 mod held_answer;
 mod held_deployment;
+#[path = "../../host_silence/hung_ssh.rs"]
+mod hung_ssh;
 mod inflight;
 mod self_loop;
 mod session;
 mod silent;
+#[path = "../../host_silence/refusal_in_flight/store.rs"]
+// The silent journey relays to the store's second object API only.
+#[allow(dead_code)]
+mod store;
 mod takeover;

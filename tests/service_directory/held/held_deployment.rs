@@ -114,7 +114,7 @@ impl Deployment {
     }
 
     /// A loopback port this machine hands out now, as the product binds one.
-    fn free_port(&mut self) -> u16 {
+    pub(crate) fn free_port(&mut self) -> u16 {
         let printed = self.cli(&["host", "local", "port"]);
         match printed.trim().parse() {
             Ok(port) => port,
@@ -137,7 +137,7 @@ impl Deployment {
             for accepted in listener.incoming() {
                 match accepted {
                     Ok(stream) => held.push(stream),
-                    Err(_) => return,
+                    Err(error) => panic!("the silent service could not accept: {error}"),
                 }
             }
         });

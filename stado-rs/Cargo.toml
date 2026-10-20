@@ -144,6 +144,8 @@ path = "../tests/service_directory/beside.rs"
 # A fixture shared by several journeys is compiled into exactly one test
 # binary with all of them (each group's `main.rs`): compiled into several
 # binaries, it is dead code in every one that uses only part of it.
+# The silent journey relays to a real object API on a real Skarbiec (SKARBIEC
+# names its binary); run with STADO_TEST_REQUEST_LIMITS declared.
 [[test]]
 name = "service-directory-held"
 path = "../tests/service_directory/held/main.rs"
