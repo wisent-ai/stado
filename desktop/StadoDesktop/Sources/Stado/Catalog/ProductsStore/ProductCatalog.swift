@@ -72,14 +72,14 @@ struct ProductOperation: Decodable, Sendable {
     }
 }
 
-struct ProductCancellationReceipt: Decodable, Sendable {
-    let cancelled: ProductCancellation
-}
+struct ProductRestartReceipt: Decodable, Sendable {
+    let bundle: String
+    let bundleID: String
+    let state: String
 
-struct ProductCancellation: Decodable, Sendable {
-    let runningAfterSignal: Bool?
     enum CodingKeys: String, CodingKey {
-        case runningAfterSignal = "running_after_signal"
+        case bundle, state
+        case bundleID = "bundle_id"
     }
 }
 
@@ -209,20 +209,6 @@ final class ProductsStore: ObservableObject {
         guard !mutation.isWorking else { return }
         mutation = .working("\(verb.capitalized) \(product) \(surface)")
         do {
-            if verb == "cancel" {
-                let receipt = try await cli.json(
-                    ProductCancellationReceipt.self,
-                    arguments: Self.lifecycleArguments(verb, product: product, surface: surface, host: host),
-                    confirmsMutation: true,
-                    destination: surface == "service" ? .selected : .localDevice
-                )
-                mutation = .succeeded(receipt.cancelled.runningAfterSignal == true
-                    ? "\(product)/\(surface): termination requested; process still running at read-back"
-                    : "\(product)/\(surface): cancellation signalled; reading current state")
-                await status(product: product, surface: surface, host: host)
-                await refreshLocks()
-                return
-            }
             let state = try await cli.json(
                 ProductLifecycleState.self,
                 arguments: Self.lifecycleArguments(verb, product: product, surface: surface, host: host,
@@ -240,6 +226,23 @@ final class ProductsStore: ObservableObject {
                 await plan(product: product, surface: surface, host: host,
                            releaseVersion: releaseVersion, sourceCommit: sourceCommit)
             }
+        } catch {
+            mutation = .failed(Self.message(error))
+        }
+    }
+
+    func restart(bundle: String, product: String) async {
+        guard !mutation.isWorking else { return }
+        mutation = .working("Restarting \(product)")
+        do {
+            let receipt = try await cli.json(
+                ProductRestartReceipt.self,
+                arguments: ["product", "restart", bundle, "--if-running", "--json"],
+                confirmsMutation: true,
+                destination: .localDevice
+            )
+            mutation = .succeeded("\(product): \(receipt.state) \(receipt.bundle) (\(receipt.bundleID))")
+            await status(product: product, surface: "desktop", host: nil)
         } catch {
             mutation = .failed(Self.message(error))
         }

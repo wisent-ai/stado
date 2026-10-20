@@ -62,11 +62,13 @@ struct HostReclaimSheet: View {
                 previewSection
                 reasonSection
             }
+            if let pass = applied ?? preview {
+                reclaimDiagnostics(pass)
+            }
             WisentMutationBar(outcome: store.mutation, clear: { store.clearMutation() })
             footer
         }
         .padding(WisentDesign.Space.x6)
-        .frame(width: 640)
         .background(WisentDesign.canvas)
         .task {
             guard applied == nil, !store.hasPreview(for: host) else { return }
@@ -77,7 +79,7 @@ struct HostReclaimSheet: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
             Text("Reclaim disk on \(host)")
-                .font(WisentTypography.heading(17))
+                .font(WisentTypeScale.section())
                 .foregroundStyle(WisentDesign.ink)
             Text("Reclamation runs the disk-full rule on this host now. At 80% used it deletes everything the fleet put there — build caches, job outputs, proven backup copies, unused release versions, recordings, logs and local snapshots — and keeps ~/.ssh, user data, declared and installed releases and running jobs. Under 80% it deletes nothing. It is a deletion: it does not ask the host twice.")
                 .font(WisentTypeScale.body())

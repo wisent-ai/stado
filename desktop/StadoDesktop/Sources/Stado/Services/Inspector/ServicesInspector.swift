@@ -69,6 +69,19 @@ extension ServicesView {
                     detail: fleetFailureDetail(entry)
                 )
             }
+            if let error = entry.answeringReadError {
+                WisentAlertPanel(
+                    tone: .danger,
+                    title: "The API-question reading cannot be decoded",
+                    detail: error
+                )
+            } else if let answering = entry.answering, answering.needsAttention {
+                WisentAlertPanel(
+                    tone: .danger,
+                    title: "The API-question reading needs attention",
+                    detail: answering.detail
+                )
+            }
             if let finding = entry.misdeclaredDomain {
                 // The finding gets a panel, and the panel carries the CLI's own
                 // sentence unedited. This is where the launchd domain and the
@@ -99,10 +112,10 @@ extension ServicesView {
                 WisentField(label: "Domain this host can load", value: finding.loadableDomain)
                 WisentField(label: "Where the machine service belongs", value: finding.daemonPath)
             }
-            WisentField(
-                label: "Beacon reported",
-                value: entry.reportedAt.isEmpty ? "Not reported" : entry.reportedAt
-            )
+            WisentField(label: "Beacon reported", value: entry.reportedAtText)
+            if let answering = entry.answering, entry.answeringReadError == nil, !answering.needsAttention {
+                WisentField(label: "API question", value: answering.detail)
+            }
             WisentField(label: "Unit file", value: entry.path.isEmpty ? "Not reported" : entry.path)
             WisentField(label: "Kind", value: entry.kind.isEmpty ? "Not reported" : entry.kind)
             if !entry.detail.isEmpty {

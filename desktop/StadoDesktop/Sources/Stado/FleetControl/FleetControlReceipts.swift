@@ -59,24 +59,16 @@ struct RegistryImportReceipt: Decodable, Sendable {
         schema = try values.decode(String.self, forKey: .schema)
         state = try values.decode(RegistryImportState.self, forKey: .state)
         sourceSHA256 = try values.decode(String.self, forKey: .sourceSHA256)
-        if let number = try? values.decode(Int.self, forKey: .generation) {
-            generation = String(number)
-        } else {
-            generation = try values.decodeIfPresent(String.self, forKey: .generation)
-        }
-        if let number = try? values.decode(Int.self, forKey: .previousGeneration) {
-            previousGeneration = String(number)
-        } else {
-            previousGeneration = try values.decodeIfPresent(String.self, forKey: .previousGeneration)
-        }
-        importedTargets = try values.decodeIfPresent([String].self, forKey: .importedTargets) ?? []
-        unchangedTargets = try values.decodeIfPresent([String].self, forKey: .unchangedTargets) ?? []
-        importedFleets = try values.decodeIfPresent([String].self, forKey: .importedFleets) ?? []
-        unchangedFleets = try values.decodeIfPresent([String].self, forKey: .unchangedFleets) ?? []
-        importedSections = try values.decodeIfPresent([String].self, forKey: .importedSections) ?? []
-        unchangedSections = try values.decodeIfPresent([String].self, forKey: .unchangedSections) ?? []
-        conflicts = try values.decodeIfPresent([RegistryImportConflict].self, forKey: .conflicts) ?? []
-        rejected = try values.decodeIfPresent([String].self, forKey: .rejected) ?? []
+        generation = try values.decodeIfPresent(String.self, forKey: .generation)
+        previousGeneration = try values.decodeIfPresent(String.self, forKey: .previousGeneration)
+        importedTargets = try values.decode([String].self, forKey: .importedTargets)
+        unchangedTargets = try values.decode([String].self, forKey: .unchangedTargets)
+        importedFleets = try values.decode([String].self, forKey: .importedFleets)
+        unchangedFleets = try values.decode([String].self, forKey: .unchangedFleets)
+        importedSections = try values.decode([String].self, forKey: .importedSections)
+        unchangedSections = try values.decode([String].self, forKey: .unchangedSections)
+        conflicts = try values.decode([RegistryImportConflict].self, forKey: .conflicts)
+        rejected = try values.decode([String].self, forKey: .rejected)
     }
 }
 
@@ -106,15 +98,15 @@ struct OperatorCommandResult: Decodable, Sendable {
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        ok = try values.decodeIfPresent(Bool.self, forKey: .ok) ?? false
+        ok = try values.decode(Bool.self, forKey: .ok)
         exitCode = try values.decodeIfPresent(Int.self, forKey: .exitCode)
-        readOnly = try values.decodeIfPresent(Bool.self, forKey: .readOnly) ?? true
-        arguments = try values.decodeIfPresent([String].self, forKey: .arguments) ?? []
-        standardOutput = try values.decodeIfPresent(String.self, forKey: .standardOutput) ?? ""
-        standardError = try values.decodeIfPresent(String.self, forKey: .standardError) ?? ""
+        readOnly = try values.decode(Bool.self, forKey: .readOnly)
+        arguments = try values.decode([String].self, forKey: .arguments)
+        standardOutput = try values.decode(String.self, forKey: .standardOutput)
+        standardError = try values.decode(String.self, forKey: .standardError)
         standardInputError = try values.decodeIfPresent(String.self, forKey: .standardInputError)
-        standardOutputTruncated = try values.decodeIfPresent(Bool.self, forKey: .standardOutputTruncated) ?? false
-        standardErrorTruncated = try values.decodeIfPresent(Bool.self, forKey: .standardErrorTruncated) ?? false
+        standardOutputTruncated = try values.decode(Bool.self, forKey: .standardOutputTruncated)
+        standardErrorTruncated = try values.decode(Bool.self, forKey: .standardErrorTruncated)
     }
 
     /// The command's own words, in the order an operator reads them: what it

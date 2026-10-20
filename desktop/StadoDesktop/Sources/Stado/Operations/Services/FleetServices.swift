@@ -1,7 +1,5 @@
 import Foundation
 
-// MARK: - Fleet services
-
 /// Which launchd domain a declared unit-file path places the unit in.
 ///
 /// The same classification the CLI's `UnitDomain::from_path` performs, done
@@ -35,8 +33,7 @@ enum ServiceDomain: String, Sendable {
     var requiresPrivilegedBootstrap: Bool { self == .system }
 }
 
-/// Why one `failed` unit died, gathered best-effort from the host itself.
-///
+/// Why a failed unit died, gathered best-effort from the host.
 /// `stado service status <name> --json` attaches this to failed entries; the
 /// fields are optional because the evidence is gathered over a channel that
 /// may itself be the thing that is down.
@@ -59,15 +56,6 @@ struct ServiceFailure: Decodable, Sendable {
         case errorLines = "error_lines"
     }
 
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        lastExit = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .lastExit))
-        stderrRead = try values.decodeIfPresent(Bool.self, forKey: .stderrRead) ?? false
-        errorOrigin = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .errorOrigin))
-        errorLines = try values.decodeIfPresent([String].self, forKey: .errorLines) ?? []
-        note = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .note))
-    }
-
     /// The sentence the CLI's `failure:` block prints when the stderr tail
     /// was not asked for, naming the two commands that read it.
     func stderrNotRead(unit: String, host: String) -> String? {
@@ -81,19 +69,9 @@ struct ServiceFailure: Decodable, Sendable {
 /// The `misdeclared_domain` object a `stado service list --json` row carries
 /// when the unit is declared in a launchd domain its host cannot have.
 ///
-/// The finding is checkable without going anywhere: the unit-file path says
-/// which domain the declaration asks for, and the registry says the host runs
-/// unattended. `control-host` carries three of them, and the first is why
-/// the fleet's own agent has never loaded there — which is why that host
-/// publishes no capacity, which is why a job pinned to it waited 122 hours.
-/// Nothing on any screen reported any of that.
-///
-/// `detail` is the one sentence `stado service list` and `stado registry
-/// doctor` both print; the Rust accessor is `sentence()` and the wire key is
-/// `detail`, deliberately, so two surfaces do not disagree about the name of
-/// one fact. It is carried verbatim, like every other backend sentence here:
-/// a console that rewords it becomes a second opinion about why a unit cannot
-/// load.
+/// The finding is checkable without another host read: the declared path
+/// names a launchd domain the target host cannot load. The backend's
+/// `detail` sentence is carried verbatim across CLI and Desktop surfaces.
 struct MisdeclaredDomain: Decodable, Sendable {
     let host: String
     /// The launchd label, as the host names the unit.
@@ -107,9 +85,8 @@ struct MisdeclaredDomain: Decodable, Sendable {
     let loadableDomain: String
     /// Where the daemon spelling of this unit belongs.
     let daemonPath: String
-    /// The one privileged command that closes the gap, verbatim. Never
-    /// composed here: an install command this console assembled itself is a
-    /// command nobody has ever run.
+    /// The privileged command supplied by the service layer, never assembled
+    /// from UI fields.
     let installCommand: String
     /// The finding, in the CLI's own sentence.
     let detail: String
@@ -121,18 +98,6 @@ struct MisdeclaredDomain: Decodable, Sendable {
         case daemonPath = "daemon_path"
         case installCommand = "install_command"
     }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
-        unit = try values.decodeIfPresent(String.self, forKey: .unit) ?? ""
-        path = try values.decodeIfPresent(String.self, forKey: .path) ?? ""
-        declaredDomain = try values.decodeIfPresent(String.self, forKey: .declaredDomain) ?? ""
-        loadableDomain = try values.decodeIfPresent(String.self, forKey: .loadableDomain) ?? ""
-        daemonPath = try values.decodeIfPresent(String.self, forKey: .daemonPath) ?? ""
-        installCommand = try values.decodeIfPresent(String.self, forKey: .installCommand) ?? ""
-        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
-    }
 }
 
 /// `stado service list --json`: one registry-managed service on one host,
@@ -141,9 +106,8 @@ struct MisdeclaredDomain: Decodable, Sendable {
 /// The read is beacon-only — no ssh, no per-host round trip — so it stays
 /// answerable while a host is wedged, and a host that never published a
 /// beacon arrives as `unknown` rows whose detail says so, not as an absent
-/// answer. Every field decodes leniently: the beacon and the registry
-/// document are both operator-facing state, and a half-filled record should
-/// read as a listed service with blanks rather than vanish from the list.
+/// answer. The CLI emits each required field for every row; a missing one
+/// refuses decoding with its key instead of appearing as a blank service.
 struct FleetServiceEntry: Decodable, Identifiable, Sendable {
     let host: String
     /// The name the CLI addresses the service by.
@@ -163,14 +127,16 @@ struct FleetServiceEntry: Decodable, Identifiable, Sendable {
     let state: String
     /// The beacon's `reported_at`, verbatim: a confident-looking `active`
     /// from a five-day-old beacon is visibly five days old.
-    let reportedAt: String
+    let reportedAt: String?
     /// Why the state is what it is, when that is not self-evident.
     let detail: String
-    /// The registry finding for this row, when the row carries one: the unit
-    /// is declared in a launchd domain its host cannot have, so no beacon will
-    /// ever report it running. Absent — not null — on every row where the
-    /// declaration and the host agree, which is 19 of the 22 rows the fleet
-    /// answers with today.
+    /// Independent of process state: the host's declared API question.
+    let answering: ServiceAnswering?
+    /// A malformed question is local to this row, not a reason to lose the
+    /// entire fleet list. The CLI JSON retains its raw beacon value.
+    let answeringReadError: String?
+    /// The registry finding for this row when its declared launchd domain
+    /// cannot be loaded on the target host.
     let misdeclaredDomain: MisdeclaredDomain?
     /// Failure evidence, merged in by the store from `service status --json`;
     /// `service list --json` itself does not carry it.
@@ -182,6 +148,10 @@ struct FleetServiceEntry: Decodable, Identifiable, Sendable {
     var id: String { "\(host)/\(unitID.isEmpty ? name : unitID)" }
 
     var domain: ServiceDomain { ServiceDomain(path: path) }
+    var reportedAtText: String {
+        guard let reportedAt else { return "No beacon timestamp reported" }
+        return reportedAt
+    }
 
     var isFailed: Bool { state == "failed" }
 
@@ -194,81 +164,38 @@ struct FleetServiceEntry: Decodable, Identifiable, Sendable {
         case host, name, unit, label, path, kind, state, detail, failure
         case unitID = "unit_id"
         case reportedAt = "reported_at"
+        case answering
+        case answeringError = "answering_error"
         case misdeclaredDomain = "misdeclared_domain"
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
-        name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
-        unit = try values.decodeIfPresent(String.self, forKey: .unit) ?? ""
-        label = try values.decodeIfPresent(String.self, forKey: .label) ?? ""
-        unitID = try values.decodeIfPresent(String.self, forKey: .unitID) ?? ""
-        path = try values.decodeIfPresent(String.self, forKey: .path) ?? ""
-        kind = try values.decodeIfPresent(String.self, forKey: .kind) ?? ""
-        state = try values.decodeIfPresent(String.self, forKey: .state) ?? ""
-        reportedAt = try values.decodeIfPresent(String.self, forKey: .reportedAt) ?? ""
-        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        host = try values.decode(String.self, forKey: .host)
+        name = try values.decode(String.self, forKey: .name)
+        unit = try values.decode(String.self, forKey: .unit)
+        label = try values.decode(String.self, forKey: .label)
+        unitID = try values.decode(String.self, forKey: .unitID)
+        path = try values.decode(String.self, forKey: .path)
+        kind = try values.decode(String.self, forKey: .kind)
+        state = try values.decode(String.self, forKey: .state)
+        reportedAt = try values.decodeIfPresent(String.self, forKey: .reportedAt)
+        detail = try values.decode(String.self, forKey: .detail)
+        let reportedAnsweringError = try values.decodeIfPresent(String.self, forKey: .answeringError)
+        do {
+            answering = try values.decodeIfPresent(ServiceAnswering.self, forKey: .answering)
+            answeringReadError = reportedAnsweringError
+        } catch {
+            answering = nil
+            if let reportedAnsweringError {
+                answeringReadError = "\(reportedAnsweringError); Desktop decoding also failed: \(error)"
+            } else {
+                answeringReadError = "Beacon API-question reading cannot be decoded: \(error); inspect `stado service list --json` for its raw value"
+            }
+        }
         failure = try values.decodeIfPresent(ServiceFailure.self, forKey: .failure)
         failureReadError = nil
         misdeclaredDomain = try values.decodeIfPresent(MisdeclaredDomain.self, forKey: .misdeclaredDomain)
     }
 }
 
-/// One element of the `stado service restart <name> --host <host> --json`
-/// payload: the remote program's own markers, plus the postcondition probe
-/// the host ran before the connection closed.
-struct ServiceRestartReport: Decodable, Sendable {
-    let host: String
-    let unit: String
-    /// The outcome word from the `STADO_SERVICE` marker; `restarted` is the
-    /// one this command wants.
-    let status: String
-    let detail: String
-    let postcondition: Postcondition?
-
-    struct Postcondition: Decodable, Sendable {
-        let intent: String
-        /// `met`, `unmet`, or `unobserved`.
-        let state: String
-        let detail: String
-
-        enum CodingKeys: String, CodingKey {
-            case intent, state, detail
-        }
-
-        init(from decoder: Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            intent = try values.decodeIfPresent(String.self, forKey: .intent) ?? ""
-            state = try values.decodeIfPresent(String.self, forKey: .state) ?? ""
-            detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
-        }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case host, unit, status, detail, postcondition
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
-        unit = try values.decodeIfPresent(String.self, forKey: .unit) ?? ""
-        status = try values.decodeIfPresent(String.self, forKey: .status) ?? ""
-        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
-        postcondition = try values.decodeIfPresent(Postcondition.self, forKey: .postcondition)
-    }
-
-    /// The CLI's success rule, mirrored: the outcome word AND the host
-    /// observed in the state the restart intended. A step that succeeds is
-    /// not the same fact as a machine that works.
-    var succeeded: Bool {
-        status == "restarted" && (postcondition == nil || postcondition?.state == "met")
-    }
-
-    /// The one-line failure, in the same shape the CLI prints.
-    var failureText: String {
-        let reported = detail.isEmpty ? status : "\(status): \(detail)"
-        guard let postcondition, postcondition.state != "met" else { return reported }
-        return "\(reported); postcondition \(postcondition.state): \(postcondition.intent) (\(postcondition.detail))"
-    }
-}

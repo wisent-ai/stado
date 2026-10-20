@@ -35,7 +35,7 @@ enum NativeProductOperations {
             .init(id: "add-integration", label: "Integrations to add or replace, one per line", option: "--add-integration", multiple: true),
             .init(id: "remove-integration", label: "Integration products to remove, one per line", option: "--remove-integration", multiple: true),
             .init(id: "add-dependency", label: "Needs of another product to add or replace, one JSON object per line: {\"product\",\"surface\",\"for_surface\",\"alternative\",\"alternative_source\"} or {…,\"bound_because\"}", option: "--add-dependency", multiple: true),
-            .init(id: "remove-dependency", label: "Products whose every declared need to remove, one per line", option: "--remove-dependency", multiple: true),
+            .init(id: "remove-dependency", label: "Products this one no longer needs, one per line: every declared need on each is removed", option: "--remove-dependency", multiple: true),
             .init(id: "add-rival", label: "Rivals to add or replace, one JSON object per line: {\"id\",\"name\",\"url\",\"evidence\"}", option: "--add-rival", multiple: true),
             .init(id: "remove-rival", label: "Rival ids to remove, one per line", option: "--remove-rival", multiple: true),
             .init(id: "add-roadmap", label: "Roadmap items to add or replace, one JSON object per line: {\"title\",\"status\",\"outcome\",\"source\"}", option: "--add-roadmap", multiple: true),
@@ -72,11 +72,6 @@ enum NativeProductOperations {
             .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
             .init(id: "host", label: "Stado host for a service surface", option: "--host"),
         ], mutates: false),
-        .init(id: "cancel", title: "Stop the product surface's active installation operation", path: ["product", "cancel"], hostPlacement: .none, fields: [
-            .init(id: "product", label: "Product", required: true),
-            .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
-            .init(id: "host", label: "Stado host for a service surface", option: "--host"),
-        ]),
         .init(id: "paths", title: "Inspect executable ownership and PATH collisions", path: ["product", "paths"], hostPlacement: .none, mutates: false),
         // Ends the running application through LaunchServices, waits on its
         // process in the wait register, opens the bundle and reads it running.
@@ -128,8 +123,21 @@ enum NativeProductOperations {
         // to the compiler, so it is part of the path here.
         .init(id: "cargo", title: "Run Cargo against canonical checkouts or release inputs", path: ["product", "cargo", "--json"], hostPlacement: .none, fields: [
             .init(id: "manifest", label: "Cargo.toml on the selected Stado API host", option: "--manifest-path", required: true),
-            .init(id: "operation", label: "Operation: build, check, test, run, metadata or stage", required: true, initial: "check"),
+            .init(id: "operation", label: "Operation: build, check, test, run, metadata, stage, or a Cargo subcommand the tree's compiling quality gates run (clippy)", required: true, initial: "check"),
             .init(id: "forward", label: "Arguments for Cargo, one per line", multiple: true),
+        ], jsonOutput: false),
+        // The receipts `cargo` retained: each run's state, operation, pinned
+        // sources, evidence directory and, for a refused one, its error.
+        .init(id: "cargo-results", title: "Read the Cargo runs retained for a checkout, or for every workspace checkout", path: ["product", "cargo", "--json"], hostPlacement: .none, fields: [
+            .init(id: "manifest", label: "Cargo.toml of one checkout on the selected Stado API host (blank when every checkout is read)", option: "--manifest-path"),
+            .init(id: "all", label: "Every canonical workspace checkout", option: "--all", flag: true),
+        ], fixedArguments: ["results"], mutates: false, jsonOutput: false),
+        // The answer names the changelog, the entries moved and every file written.
+        .init(id: "changelog", title: "Move CHANGELOG.md's Unreleased entries into changelog/: as a release, or spilled while it is prepared", path: ["product", "changelog"], hostPlacement: .none, fields: [
+            .init(id: "root", label: "Repository checkout on the selected Stado API host", option: "--root", required: true),
+            .init(id: "line-limit", label: "The repository's file length limit, in lines", option: "--line-limit", required: true),
+            .init(id: "version", label: "Release the entries go out in (blank with spill set)", option: "--version"),
+            .init(id: "spill", label: "Spill the entries written so far into changelog/unreleased-part-N.md", option: "--spill", flag: true),
         ], jsonOutput: false),
         .init(id: "swift", title: "Build or index canonical Swift sources", path: ["product", "swift", "--json"], hostPlacement: .none, fields: [
             .init(id: "package", label: "Canonical package directory", option: "--package-path", required: true),

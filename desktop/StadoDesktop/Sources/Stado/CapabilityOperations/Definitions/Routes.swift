@@ -7,15 +7,11 @@ enum NativeRouteOperations {
             .init(id: "bind", label: "Exact adapter host:port on the selected API host (optional)", option: "--bind"),
             .init(id: "consumer", label: "Consumer identity (optional)", option: "--consumer"),
         ], mutates: false),
-        // The services the selected host found standing on a beacon pass —
-        // its own, answering nothing on the question their catalog entry
-        // declares longer than the resolver's refresh interval, and other
-        // hosts', holding this host's resolver requests that long while
-        // their own host did not act — and repaired, restarted, recorded
-        // and alerted, as the CLI reads the register: each line names the
-        // host the service runs on and, for another host's, this host.
-        .init(id: "service-recoveries", title: "Read the services this host found standing and recovered, here or on another host", path: ["service", "recoveries"], hostPlacement: .none, fields: [
-            .init(id: "service", label: "Only this service (blank reads every recovery)", option: "--service"),
+        // The selected host's recorded service recovery attempts, including
+        // refused repair steps and restarts. Each record names the host the
+        // service runs on and, for a peer attempt, the observing host.
+        .init(id: "service-recoveries", title: "Read this host's service recovery attempts, including refusals", path: ["service", "recoveries"], hostPlacement: .none, fields: [
+            .init(id: "service", label: "Only this service (blank reads every recovery attempt)", option: "--service"),
         ], mutates: false),
         .init(id: "directory-connect", title: "Resolve a consumer's service route and diagnose its connection", path: ["service", "directory", "connect"], hostPlacement: .none, fields: [
             .init(id: "service", label: "Declared service", required: true),

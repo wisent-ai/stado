@@ -96,15 +96,6 @@ extension FleetServicesStore {
     /// decode site reading like the command it runs.
     private typealias FleetServiceList = [FleetServiceEntry]
 
-    /// Decode one `service list --json` payload without running anything, so
-    /// the shape this console reads can be exercised against a recorded
-    /// answer — including the registry finding three of the fleet's rows
-    /// carry today.
-    nonisolated static func decode(from output: String) -> [FleetServiceEntry]? {
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(FleetServiceList.self, from: data)
-    }
 
     nonisolated static func message(for error: Error) -> String {
         if let localized = error as? LocalizedError, let description = localized.errorDescription {

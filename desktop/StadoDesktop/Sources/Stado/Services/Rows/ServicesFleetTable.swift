@@ -62,51 +62,19 @@ extension ServicesView {
             emptyFleet
         } else {
             ConsoleTable(head: [
-                ConsoleHeaderCell("Host", width:
-                    150),
-                ConsoleHeaderCell("Service", width:
-                    200),
-                ConsoleHeaderCell("State", width:
-                    92),
-                ConsoleHeaderCell("Domain", width:
-                    90),
-                ConsoleHeaderCell("Beacon reported", width:
-                    190),
-                ConsoleHeaderCell("Unit file"),
+                ConsoleHeaderCell("Host"), ConsoleHeaderCell("Service"), ConsoleHeaderCell("State"),
+                ConsoleHeaderCell("Domain"), ConsoleHeaderCell("Beacon reported"), ConsoleHeaderCell("Unit file"),
             ]) {
                 ForEach(rows) { row in
                     switch row {
                     case let .service(entry):
                         ConsoleTableRow(isSelected: selection == row.id, select: { selection = row.id }) {
-                            ConsoleCell(text: entry.host, width:
-                                150, identifier: true, strong: true)
-                            ConsoleCell(
-                                text: entry.unitID.isEmpty ? entry.name : entry.unitID,
-                                width:
-                                    200,
-                                identifier: true
-                            )
-                            ConsoleCell(
-                                text: entry.state.isEmpty ? "Not reported" : entry.state,
-                                width:
-                                    92,
-                                // An unreadable unit is not a stopped one: the
-                                // host could not answer for it, and the row
-                                // has to say so rather than look calm.
-                                tone: entry.isFailed ? .danger : (entry.isUnreadable ? .warning : .neutral)
-                            )
-                            ConsoleCell(
-                                text: entry.domain.rawValue,
-                                width:
-                                    90,
-                                tone: entry.misdeclaredDomain == nil ? .neutral : .warning
-                            )
-                            ConsoleCell(
-                                text: entry.reportedAt.isEmpty ? "Not reported" : entry.reportedAt,
-                                width:
-                                    190,
-                                identifier: true
-                            )
+                            ConsoleCell(text: entry.host, identifier: true, strong: true)
+                            ConsoleCell(text: entry.unitID.isEmpty ? entry.name : entry.unitID, identifier: true)
+                            ConsoleCell(text: entry.state.isEmpty ? "Not reported" : entry.state,
+                                        tone: entry.isFailed ? .danger : (entry.isUnreadable ? .warning : .neutral))
+                            ConsoleCell(text: entry.domain.rawValue, tone: entry.misdeclaredDomain == nil ? .neutral : .warning)
+                            ConsoleCell(text: entry.reportedAtText, identifier: true)
                             ConsoleCell(text: entry.path.isEmpty ? "Not reported" : entry.path, identifier: true)
                         }
                         if entry.isFailed, let evidence = failureEvidenceLine(entry) {
@@ -115,21 +83,21 @@ extension ServicesView {
                         if entry.isUnreadable, !entry.detail.isEmpty {
                             fleetFailureLine(entry.detail)
                         }
+                        if let error = entry.answeringReadError {
+                            fleetFailureLine("API question: \(error)")
+                        } else if let answering = entry.answering, answering.needsAttention {
+                            fleetFailureLine("API question: \(answering.detail)")
+                        }
                         if let finding = entry.misdeclaredDomain {
                             declarationLine(finding)
                         }
                     case let .unavailable(host, _):
                         ConsoleTableRow(isSelected: selection == row.id, select: { selection = row.id }) {
-                            ConsoleCell(text: host, width:
-                                150, identifier: true, strong: true)
-                            ConsoleCell(text: "host unavailable", width:
-                                200, tone: .warning)
-                            ConsoleCell(text: "unknown", width:
-                                92, tone: .warning)
-                            ConsoleCell(text: "", width:
-                                90)
-                            ConsoleCell(text: "Not reported", width:
-                                190)
+                            ConsoleCell(text: host, identifier: true, strong: true)
+                            ConsoleCell(text: "host unavailable", tone: .warning)
+                            ConsoleCell(text: "unknown", tone: .warning)
+                            ConsoleCell(text: "")
+                            ConsoleCell(text: "Not reported")
                             ConsoleCell(text: "stado service list gave no answer for this host")
                         }
                     }
@@ -146,7 +114,11 @@ extension ServicesView {
     private func failureEvidenceLine(_ entry: FleetServiceEntry) -> String? {
         var parts: [String] = []
         if let failure = entry.failure {
-            parts.append(failure.lastExit.map { "last launchd exit \($0)" } ?? "last launchd exit unknown")
+            if let lastExit = failure.lastExit {
+                parts.append("last launchd exit \(lastExit)")
+            } else {
+                parts.append("\(entry.host) did not report a launchd last exit for \(entry.name); the exit cause cannot be inferred")
+            }
             if let notRead = failure.stderrNotRead(unit: entry.name, host: entry.host) {
                 parts.append(notRead)
             }
@@ -173,43 +145,23 @@ extension ServicesView {
     /// for the same finding: nobody is at the screen, the unit is registered
     /// as a user service, so this machine will never start it.
     ///
-    /// Three of 22 rows carry it, which is what makes it a row marker rather
-    /// than a column.
+    /// The finding belongs beside its affected unit, with the full declaration in the inspector.
     private func declarationLine(_ finding: MisdeclaredDomain) -> some View {
-        Text(
-            "Nobody is logged in on the screen of \(finding.host), and this unit is registered as a user service, "
-                + "so that machine cannot start it."
-        )
-        .font(WisentTypeScale.identifierSmall())
-        .foregroundStyle(WisentDesign.warning)
-        .lineLimit(2)
-        .truncationMode(.tail)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, WisentDesign.Space.x4)
-        .padding(.vertical, WisentDesign.Space.x2)
-        .background(WisentDesign.warning.opacity(0.06))
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(WisentDesign.border.opacity(0.6))
-                .frame(height: WisentDesign.hairline)
-        }
+        Text("Nobody is logged in on the screen of \(finding.host), and this unit is registered as a user service, so that machine cannot start it.")
+            .font(WisentTypeScale.identifierSmall())
+            .foregroundStyle(WisentDesign.warning)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, WisentDesign.Space.x4)
+            .padding(.vertical, WisentDesign.Space.x2)
     }
 
     private func fleetFailureLine(_ text: String) -> some View {
         Text(text)
             .font(WisentTypeScale.identifierSmall())
             .foregroundStyle(WisentDesign.danger)
-            .lineLimit(2)
-            .truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, WisentDesign.Space.x4)
             .padding(.vertical, WisentDesign.Space.x2)
-            .background(WisentDesign.danger.opacity(0.06))
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(WisentDesign.border.opacity(0.6))
-                    .frame(height: WisentDesign.hairline)
-            }
     }
 
     @ViewBuilder

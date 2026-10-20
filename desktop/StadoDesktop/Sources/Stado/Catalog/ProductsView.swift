@@ -211,6 +211,7 @@ struct ProductsView: View {
                     action("Update", symbol: "arrow.triangle.2.circlepath", product, installation, host, pinsRelease: true)
                     action("Rollback", symbol: "arrow.uturn.backward", product, installation, host, pinsRelease: false)
                     action("Remove", symbol: "trash", product, installation, host, pinsRelease: false, destructive: true)
+                    ProductRestartButtons(store: store, product: product, surface: installation.surface, paths: state?.installedPaths)
                 }
                 ProductPrerequisitesView(store: store, product: product.id,
                     surface: installation.surface, host: host,
