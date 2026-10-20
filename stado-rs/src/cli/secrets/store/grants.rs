@@ -13,9 +13,15 @@ pub(crate) async fn migrate(destination: Option<&str>) -> Result<(), CmdError> {
     )
     .await
     .map_err(CmdError::from)?;
-    println!(
-        "migrated {} credential item(s): {} -> {}",
-        report.moved_items, report.source, report.destination
-    );
+    match report.moved_items {
+        Some(moved) => println!(
+            "migrated {moved} credential item(s): {} -> {}",
+            report.source, report.destination
+        ),
+        None => println!(
+            "credentials already live in {}: the selector is kept and nothing was copied",
+            report.destination
+        ),
+    }
     Ok(())
 }

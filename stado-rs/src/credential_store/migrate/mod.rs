@@ -2,20 +2,22 @@
 //! `STADO_CREDENTIALS_STORE` (or an explicit CLI destination) is the target.
 //! Normal credential access refuses a selector mismatch, so no process can
 //! silently start against an empty store after an environment change.
+mod selector;
+
 use super::write::{delete_item_at, list_items_at, read_item_at, write_item_at};
 use super::{configured_selector, parse_selector, requested_selector, Backend, ENV_STORE};
 use crate::skarbiec::SkarbiecError;
+use selector::persist_selector;
 use serde::Serialize;
-use serde_json::{Map, Value};
-#[cfg(unix)]
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use serde_json::Value;
 
 #[derive(Debug, Serialize)]
 pub struct MigrationReport {
     pub source: String,
     pub destination: String,
-    pub moved_items: usize,
+    /// How many items were copied and cleared from the source; `None` when
+    /// the source and destination are one store and nothing was migrated.
+    pub moved_items: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -29,136 +31,6 @@ fn deployment(detail: impl Into<String>) -> SkarbiecError {
     SkarbiecError::Deployment(detail.into())
 }
 
-fn config_path_for_write() -> Result<PathBuf, SkarbiecError> {
-    // The selected file is written even before it exists; a selection that
-    // is not text is refused rather than read as none.
-    match std::env::var(crate::config_file::FILE_ENV) {
-        Ok(raw) if !raw.trim().is_empty() => {
-            return Ok(crate::config_file::expand_tilde(raw.trim()))
-        }
-        Ok(_) | Err(std::env::VarError::NotPresent) => {}
-        Err(error) => {
-            return Err(deployment(format!(
-                "{} cannot be read: {error}",
-                crate::config_file::FILE_ENV
-            )))
-        }
-    }
-    if let Some(path) =
-        crate::config_file::find_config_file().map_err(|error| deployment(error.to_string()))?
-    {
-        return Ok(path);
-    }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| deployment("HOME is not set; cannot persist credentials.store"))?;
-    Ok(home.join(".stado").join("config.json"))
-}
-
-#[cfg(unix)]
-fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let parent = path
-        .parent()
-        .ok_or_else(|| deployment(format!("config path {} has no parent", path.display())))?;
-    std::fs::create_dir_all(parent).map_err(|source| {
-        deployment(format!(
-            "cannot create config directory {}: {source}",
-            parent.display()
-        ))
-    })?;
-    let temporary = parent.join(format!(".stado-config-{}.tmp", std::process::id()));
-    let owner_mode = crate::primitives::file_mode::owner_read_write();
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    if let Ok(metadata) = std::fs::metadata(path) {
-        use std::os::unix::fs::PermissionsExt;
-        options.mode(metadata.permissions().mode());
-    } else {
-        options.mode(owner_mode);
-    }
-    let mut file = options.open(&temporary).map_err(|source| {
-        deployment(format!(
-            "cannot create temporary config {}: {source}",
-            temporary.display()
-        ))
-    })?;
-    file.write_all(body)
-        .and_then(|_| file.sync_all())
-        .map_err(|source| {
-            deployment(crate::primitives::staging::failed_with(
-                format!(
-                    "cannot write temporary config {}: {source}",
-                    temporary.display()
-                ),
-                &temporary,
-            ))
-        })?;
-    std::fs::rename(&temporary, path).map_err(|source| {
-        deployment(crate::primitives::staging::failed_with(
-            format!("cannot replace config {}: {source}", path.display()),
-            &temporary,
-        ))
-    })
-}
-
-#[cfg(not(unix))]
-fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|source| deployment(format!("cannot create config directory: {source}")))?;
-    }
-    std::fs::write(path, body)
-        .map_err(|source| deployment(format!("cannot write config {}: {source}", path.display())))
-}
-
-fn persist_selector(locator: &str) -> Result<(), SkarbiecError> {
-    let path = config_path_for_write()?;
-    // Only a config that does not exist starts empty: one that cannot be
-    // read was started empty too, and the write below replaced it whole.
-    let mut document = match std::fs::read_to_string(&path) {
-        Ok(body) => serde_json::from_str::<Value>(&body).map_err(|source| {
-            deployment(format!(
-                "config {} is invalid JSON: {source}",
-                path.display()
-            ))
-        })?,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
-        Err(source) => {
-            return Err(deployment(format!(
-                "cannot read config {}: {source}",
-                path.display()
-            )))
-        }
-    };
-    let root = document
-        .as_object_mut()
-        .ok_or_else(|| deployment(format!("config {} must be a JSON object", path.display())))?;
-    match root.get_mut("credentials") {
-        None => {
-            root.insert(
-                "credentials".to_string(),
-                serde_json::json!({"store": locator}),
-            );
-        }
-        Some(Value::Object(credentials)) => {
-            credentials.insert("store".to_string(), Value::String(locator.to_string()));
-        }
-        Some(_) => {
-            return Err(deployment(format!(
-                "config {} field credentials must be an object",
-                path.display()
-            )));
-        }
-    }
-    let body = format!(
-        "{}\n",
-        serde_json::to_string_pretty(&document).map_err(|source| deployment(source.to_string()))?
-    );
-    write_config(&path, body.as_bytes())
-}
-
 async fn snapshot(
     backend: &Backend,
     url: &str,
@@ -168,13 +40,21 @@ async fn snapshot(
 ) -> Result<Vec<SnapshotItem>, SkarbiecError> {
     let mut snapshot = Vec::new();
     for info in list_items_at(backend, url, consumer, token_file, grant_mode).await? {
-        if info.deleted == Some(true) {
+        if info.deleted {
             continue;
         }
+        // The copy is written under the type the source states; an item it
+        // lists with none is refused by id, never rewritten under a guess.
+        let Some(item_type) = info.item_type else {
+            return Err(deployment(format!(
+                "credential item {} is listed without a type; the migration cannot write it to the destination as any type",
+                info.id
+            )));
+        };
         let value = read_item_at(backend, url, consumer, token_file, grant_mode, &info.id).await?;
         snapshot.push(SnapshotItem {
             id: info.id,
-            item_type: info.item_type.unwrap_or_else(|| "stado-secret".to_string()),
+            item_type,
             value,
         });
     }
@@ -223,7 +103,13 @@ pub async fn migrate(
 ) -> Result<MigrationReport, SkarbiecError> {
     let source_raw = configured_selector()?;
     let requested_raw = requested_selector()?;
-    let destination_raw = explicit_destination.unwrap_or(&requested_raw).trim();
+    // `--to` names the destination when given; else it is the store the
+    // environment requests.
+    let destination_raw = match explicit_destination {
+        Some(explicit) => explicit,
+        None => requested_raw.as_str(),
+    }
+    .trim();
     if explicit_destination.is_none() && source_raw == requested_raw {
         return Err(deployment(format!(
             "no credential-store change is pending; set {ENV_STORE} or pass --to"
@@ -247,17 +133,14 @@ pub async fn migrate(
         return Ok(MigrationReport {
             source: source.locator(),
             destination: destination.locator(),
-            moved_items: 0,
+            moved_items: None,
         });
     }
 
     let items = snapshot(&source, url, consumer, token_file, grant_mode).await?;
     let destination_items =
         list_items_at(&destination, url, consumer, token_file, grant_mode).await?;
-    if destination_items
-        .iter()
-        .any(|item| item.deleted != Some(true))
-    {
+    if destination_items.iter().any(|item| !item.deleted) {
         return Err(deployment(format!(
             "destination {} is not empty; refusing to overwrite credentials",
             destination.locator()
@@ -302,7 +185,7 @@ pub async fn migrate(
     Ok(MigrationReport {
         source: source.locator(),
         destination: destination.locator(),
-        moved_items: items.len(),
+        moved_items: Some(items.len()),
     })
 }
 

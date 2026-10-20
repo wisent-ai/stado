@@ -30,7 +30,11 @@ pub(crate) async fn read_token_fields(
 
     let in_flight = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
-        .unwrap_or_else(|_| std::num::NonZeroUsize::MIN.get());
+        .map_err(|error| {
+            SkarbiecError::Deployment(format!(
+                "this machine's available parallelism, which bounds concurrent verifier reads, cannot be read: {error}"
+            ))
+        })?;
     futures::stream::iter(
         items
             .into_iter()
@@ -60,7 +64,7 @@ pub async fn validate_integration_verifier() -> Result<usize, SkarbiecError> {
         .list_items()
         .await?
         .into_iter()
-        .filter(|item| item.deleted != Some(true))
+        .filter(|item| !item.deleted)
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
     if !expected.is_subset(&visible) {
@@ -104,7 +108,7 @@ pub async fn validate_integration_provider(domain: &str) -> Result<usize, Skarbi
         .list_items()
         .await?
         .into_iter()
-        .filter(|item| item.deleted != Some(true))
+        .filter(|item| !item.deleted)
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
     if !expected.is_subset(&visible) {

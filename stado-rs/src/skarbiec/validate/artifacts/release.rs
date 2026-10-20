@@ -23,7 +23,7 @@ pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
         .list_items()
         .await?
         .into_iter()
-        .filter(|item| item.deleted != Some(true))
+        .filter(|item| !item.deleted)
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
     if !expected.is_subset(&visible) {

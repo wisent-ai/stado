@@ -31,7 +31,7 @@ pub async fn validate_registry_verifier() -> Result<usize, SkarbiecError> {
         ))
     })?;
     if clients.is_empty() {
-        return Ok(0);
+        return Ok(clients.len());
     }
     let client = Client::stado()?;
     let expected = clients
@@ -42,7 +42,7 @@ pub async fn validate_registry_verifier() -> Result<usize, SkarbiecError> {
         .list_items()
         .await?
         .into_iter()
-        .filter(|item| item.deleted != Some(true))
+        .filter(|item| !item.deleted)
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
     if !expected.is_subset(&visible) {

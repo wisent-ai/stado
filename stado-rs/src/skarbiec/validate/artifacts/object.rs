@@ -32,7 +32,7 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
         .list_items()
         .await?
         .into_iter()
-        .filter(|item| item.deleted != Some(true))
+        .filter(|item| !item.deleted)
         .collect::<Vec<_>>();
     let visible = listed
         .iter()

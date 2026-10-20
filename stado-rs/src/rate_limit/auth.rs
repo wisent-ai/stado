@@ -10,11 +10,11 @@ use crate::skarbiec::Client as SkarbiecClient;
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     let left = Sha256::digest(left);
     let right = Sha256::digest(right);
-    let mut difference = 0;
-    for (left, right) in left.iter().zip(right) {
-        difference |= left ^ right;
-    }
-    difference == 0
+    // Every byte pair is compared, with no early return, so the time taken
+    // does not say where the digests first differ.
+    left.iter()
+        .zip(right.iter())
+        .fold(true, |same, (left, right)| same & (left == right))
 }
 
 pub async fn authenticate(
@@ -54,7 +54,7 @@ pub async fn validate_verifier() -> Result<usize, RateLimitError> {
         .list_items()
         .await?
         .into_iter()
-        .filter(|item| item.deleted != Some(true))
+        .filter(|item| !item.deleted)
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
     if visible != expected {

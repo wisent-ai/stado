@@ -98,10 +98,7 @@ fn owner_items() -> Result<Vec<crate::skarbiec::ItemInfo>, SkarbiecError> {
         serde_json::from_slice(&output.stdout).map_err(|error| {
             SkarbiecError::Deployment(format!("skarbiec owner list is not valid JSON: {error}"))
         })?;
-    Ok(items
-        .into_iter()
-        .filter(|item| item.deleted != Some(true))
-        .collect())
+    Ok(items.into_iter().filter(|item| !item.deleted).collect())
 }
 
 /// Check the owner vault itself for one live item.

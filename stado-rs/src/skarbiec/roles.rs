@@ -16,7 +16,7 @@ pub fn role_tag(role: &str) -> String {
 }
 
 fn live(item: &ItemInfo) -> bool {
-    !item.deleted.unwrap_or(false)
+    !item.deleted
 }
 
 fn plays(item: &ItemInfo, tag: &str) -> bool {

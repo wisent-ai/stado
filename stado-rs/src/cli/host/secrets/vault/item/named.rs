@@ -40,7 +40,7 @@ pub(crate) async fn write_named_role_item(
     let tag = roles::role_tag(role);
     let named = items
         .iter()
-        .find(|candidate| candidate.id == item && candidate.deleted != Some(true));
+        .find(|candidate| candidate.id == item && !candidate.deleted);
     match (roles::holders(&items, role).as_slice(), named) {
         ([one], _) if one.id == item => {
             Ok(json!({ "created": false, "target": target, "item": item, "kind": item_type }))

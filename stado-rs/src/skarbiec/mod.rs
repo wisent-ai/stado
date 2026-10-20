@@ -42,7 +42,9 @@ pub struct ItemInfo {
     pub item_type: Option<String>,
     pub tags: Option<Vec<String>>,
     pub updated_at: Option<DateTime<Utc>>,
-    pub deleted: Option<bool>,
+    /// Whether the item sits in Skarbiec's trash. Skarbiec's item list
+    /// always states it, so a listing without it is refused as no listing.
+    pub deleted: bool,
     pub versions: Option<usize>,
 }
 

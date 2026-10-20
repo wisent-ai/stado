@@ -34,11 +34,11 @@ fn catalog_roles(catalog: &str) -> Vec<String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let Some(role) = line
-            .split('|')
-            .nth(1)
-            .and_then(|item| item.strip_prefix("role:"))
-        else {
+        let mut fields = line.split('|');
+        let (Some(_consumer), Some(named)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let Some(role) = named.strip_prefix("role:") else {
             continue;
         };
         if !roles.iter().any(|known| known == role) {
@@ -52,7 +52,7 @@ fn catalog_roles(catalog: &str) -> Vec<String> {
 fn former_item<'a>(items: &'a [ItemInfo], role: &str) -> Option<&'a ItemInfo> {
     items.iter().find(|item| {
         item.id == role
-            && item.deleted != Some(true)
+            && !item.deleted
             && !item
                 .tags
                 .iter()
@@ -78,7 +78,7 @@ pub(super) async fn settle_role_holders(
             ))
         })?;
     let roles = catalog_roles(&text);
-    let mut held = 0usize;
+    let mut held = Vec::new();
     let mut adopted = Vec::new();
     let mut unheld = Vec::new();
     let mut contested = Vec::new();
@@ -95,11 +95,15 @@ pub(super) async fn settle_role_holders(
         let skarbiec =
             crate::cli::host::release_managed_skarbiec(&host.target, runner, &host.home).await?;
         for role in roles {
-            match holders(&items, &role).len() {
-                1 => held += 1,
-                0 => match former_item(&items, &role) {
+            match holders(&items, &role).as_slice() {
+                [_] => held.push(role),
+                [] => match former_item(&items, &role) {
                     Some(item) => {
-                        let mut tags = item.tags.clone().unwrap_or_default();
+                        // An item listed without tags carries none.
+                        let mut tags = match &item.tags {
+                            Some(tags) => tags.clone(),
+                            None => Vec::new(),
+                        };
                         tags.push(role_tag(&role));
                         let retagged = run_retag(
                             &host.target,
@@ -155,7 +159,7 @@ pub(super) async fn settle_role_holders(
         );
     }
     Ok(json!({
-        "held": held,
+        "held": held.len(),
         "adopted": adopted,
         "unadopted": unadopted,
         "unheld": unheld,

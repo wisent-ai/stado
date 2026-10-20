@@ -40,12 +40,13 @@ fn direct_client(
             "internal error: direct Skarbiec client requested for file backend".to_string(),
         ));
     };
-    Client::direct(
-        store_url.as_deref().unwrap_or(url),
-        consumer,
-        token_file,
-        grant_mode,
-    )
+    // The address the backend declares is the one it serves; a backend that
+    // declares none is reached at the address the caller resolved.
+    let address = match store_url {
+        Some(declared) => declared.as_str(),
+        None => url,
+    };
+    Client::direct(address, consumer, token_file, grant_mode)
 }
 
 pub(crate) async fn read_item_at(
@@ -154,7 +155,8 @@ pub(crate) fn file_items(path: &std::path::Path) -> Result<Vec<ItemInfo>, Skarbi
                 .map(str::to_string),
             tags: None,
             updated_at: None,
-            deleted: None,
+            // The file store has no trash: an item it holds is live.
+            deleted: false,
             versions: None,
         })
         .collect::<Vec<_>>();
