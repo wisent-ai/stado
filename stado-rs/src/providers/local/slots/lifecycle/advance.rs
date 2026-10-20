@@ -9,10 +9,13 @@ use super::*;
 // advance_slot
 // ---------------------------------------------------------------------------
 
-/// Advance one slot. Python `advance_slot` — returns [`SlotOutcome::Running`]
-/// while the job runs, [`SlotOutcome::Done`] once completed/failed/dropped.
+/// Advance one slot in place. Python `advance_slot` — returns
+/// [`SlotOutcome::Running`] while the job runs, [`SlotOutcome::Done`] once
+/// completed/failed/dropped. An error leaves the slot with its caller, which
+/// keeps it: a slot dropped on an error would leave its job's process running
+/// with nothing tracking it.
 pub async fn advance_slot(
-    mut slot: ActiveSlot,
+    slot: &mut ActiveSlot,
     store: &JobStorage,
     sizing: &Sizing,
     vast_active: bool,
@@ -27,7 +30,7 @@ pub async fn advance_slot(
         crate::queue::runs::CANCELLED,
     ] {
         if store.read_job(terminal_prefix, &job_id).await?.is_some() {
-            terminate_cancelled_slot(&mut slot, log_fn).await?;
+            terminate_cancelled_slot(slot, log_fn).await?;
             slot.close_log();
             let output_dir = job_work_dir(&job_id)?.join("output");
             if let Err(error) = upload_output(store, &slot.slot.job, &output_dir).await {
@@ -63,7 +66,7 @@ pub async fn advance_slot(
         }
     }
     if !held {
-        terminate_cancelled_slot(&mut slot, log_fn).await?;
+        terminate_cancelled_slot(slot, log_fn).await?;
         slot.close_log();
         log_fn(&format!(
             "end orphaned slot {job_id}: the queue holds no record of it under queue/, \
@@ -85,8 +88,8 @@ pub async fn advance_slot(
     // `reap` and not `child.try_wait`: observing the exit is what releases the
     // janitor's shared cleanup hold, so nothing below this line can retain it.
     let Some(exit_status) = slot.reap(log_fn)? else {
-        running_tick(&mut slot, store, &job_id, pid, log_fn).await?;
-        return Ok(SlotOutcome::Running(slot));
+        running_tick(slot, store, &job_id, pid, log_fn).await?;
+        return Ok(SlotOutcome::Running);
     };
 
     let workload_exit_code = python_returncode(exit_status);
@@ -104,7 +107,7 @@ pub async fn advance_slot(
     }
     let mut verification_failed = false;
     let verify_cmd = verify_command(&slot.slot.job);
-    if ret == 0 && !slot.workdir_missing && !verify_cmd.is_empty() {
+    if ret == nix::libc::EXIT_SUCCESS && !slot.workdir_missing && !verify_cmd.is_empty() {
         if let Some(code) = verification_failure(
             &slot.slot.job,
             &verify_cmd,
@@ -125,7 +128,7 @@ pub async fn advance_slot(
     // command_output.log uploads: completions with zero-byte logs despite
     // the subprocess running.
     slot.close_log();
-    let terminal_failed = ret != 0 || slot.workdir_missing;
+    let terminal_failed = ret != nix::libc::EXIT_SUCCESS || slot.workdir_missing;
     let status = if terminal_failed {
         format!("FAILED exit={ret}")
     } else {
@@ -217,7 +220,7 @@ pub async fn advance_slot(
         // unbounded on purpose, so nothing scoped to a live workload may
         // ride along with it; `reap` has already released the janitor
         // hold. See [`release_hold_for_exited_workload`].
-        return Ok(SlotOutcome::Running(slot));
+        return Ok(SlotOutcome::Running);
     }
     // The terminal writes are retried the same way. Returning their storage
     // error ended the agent loop, and the restarted loop no longer held this
@@ -228,7 +231,7 @@ pub async fn advance_slot(
         log_fn(&format!(
             "terminal status write failed for {job_id}; retaining running state for retry: {error}"
         ));
-        return Ok(SlotOutcome::Running(slot));
+        return Ok(SlotOutcome::Running);
     }
     let to_prefix = job.state.clone();
     if let Err(error) = store.move_job(&job, "running", &to_prefix).await {
@@ -252,7 +255,7 @@ pub async fn advance_slot(
         log_fn(&format!(
             "terminal transition to {to_prefix} failed for {job_id}; retaining running state for retry: {error}"
         ));
-        return Ok(SlotOutcome::Running(slot));
+        return Ok(SlotOutcome::Running);
     }
     // Mirror to job.output_uri if set. Runs for both COMPLETED and
     // FAILED so debugging logs and partial artifacts also land at
@@ -261,10 +264,12 @@ pub async fn advance_slot(
     mirror_to_output_uri(store, &job, log_fn).await;
     // log_file already flushed+closed above before upload_output.
     if job.state == job_state::FAILED {
-        log_fn(&format!(
-            "Job {job_id} failed ret={ret} error_tail={}",
-            tail_chars(job.error.as_deref().unwrap_or(""), 500)
-        ));
+        match &job.error {
+            Some(error) => log_fn(&format!("Job {job_id} failed ret={ret}: {error}")),
+            None => log_fn(&format!(
+                "Job {job_id} failed ret={ret} and recorded no error"
+            )),
+        }
     } else {
         log_fn(&format!("Job {job_id} {}", job.state));
     }

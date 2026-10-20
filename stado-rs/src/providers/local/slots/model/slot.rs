@@ -158,12 +158,11 @@ pub fn release_hold_for_exited_workload(
 }
 
 /// The result of one [`advance_slot`] tick (Python's bool return: True =
-/// still running).
-// ActiveSlot is large (owns the Job + child handle), but the enum moves
-// once per tick per slot — boxing would buy nothing measurable.
-#[allow(clippy::large_enum_variant)]
+/// still running). The slot stays with the caller, which advanced it in
+/// place, so an error on one tick cannot take the slot with it.
 pub enum SlotOutcome {
-    Running(ActiveSlot),
+    /// The job still runs, or its finalization is retried next tick.
+    Running,
     /// Completed, failed, OOM-escalated, or dropped as a duplicate.
     Done,
 }

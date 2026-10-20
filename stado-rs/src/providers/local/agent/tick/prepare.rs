@@ -112,9 +112,15 @@ pub(super) async fn start(
     log_fn("init: JobStorage done");
     let (storage_backend, store_answers_for_fleet) = bound_store(log_fn);
     let consumer_id = format!("{kind}-{hostname}");
-    let fleet_staging = std::env::var("STADO_HF_FLUSH_STAGING_DIR")
-        .ok()
-        .filter(|path| !path.trim().is_empty());
+    // Unset or blank names no staging directory; a value that is not UTF-8
+    // names one this agent cannot use, and says so.
+    let fleet_staging = match std::env::var("STADO_HF_FLUSH_STAGING_DIR") {
+        Ok(path) if !path.trim().is_empty() => Some(path),
+        Ok(_) | Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(raw)) => {
+            anyhow::bail!("STADO_HF_FLUSH_STAGING_DIR is not UTF-8: {raw:?}")
+        }
+    };
     let (janitor_reports, janitor) = spawn_janitor(poll);
     // The broadcast keeps its declared cadence while the tick works. See
     // [`crate::providers::local::agent::heartbeat`] for why this is not a
@@ -201,13 +207,28 @@ pub(super) async fn advance_slots(
     } else {
         false
     };
+    // A slot whose tick failed is kept for the next tick, its error said and
+    // published under `slot_errors`: one job's storage error is that job's,
+    // and returning it ended the worker and dropped every slot not yet
+    // advanced, their processes running on with nothing tracking them.
     let mut survivors: Vec<ActiveSlot> = Vec::with_capacity(slots.len());
-    for slot in slots.drain(..) {
-        match advance_slot(slot, store, sizing, vast_active, log_fn).await? {
-            SlotOutcome::Running(slot) => survivors.push(slot),
-            SlotOutcome::Done => {}
+    let mut slot_errors = Map::new();
+    for mut slot in slots.drain(..) {
+        match advance_slot(&mut slot, store, sizing, vast_active, log_fn).await {
+            Ok(SlotOutcome::Running) => survivors.push(slot),
+            Ok(SlotOutcome::Done) => {}
+            Err(error) => {
+                let job_id = slot.slot.job.job_id.clone();
+                log_fn(&format!(
+                    "loop: slot {job_id} could not be advanced this tick and is kept for the \
+                     next: {error}"
+                ));
+                slot_errors.insert(job_id, Value::from(error.to_string()));
+                survivors.push(slot);
+            }
         }
     }
+    agent_diag.insert("slot_errors".into(), Value::Object(slot_errors));
     *slots = survivors;
     if slots.is_empty() {
         if let Some(installed) = installed_stado_release_mismatch(log_fn) {
