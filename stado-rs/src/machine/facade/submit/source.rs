@@ -97,7 +97,7 @@ impl MachineFacade {
                     MachineError::retryable("SOURCE_UPLOAD_FAILED", error.to_string())
                 })?
                 .len();
-            if readback_bytes != source_bytes {
+            if Some(readback_bytes) != source_bytes {
                 return Err(MachineError::retryable(
                     "SOURCE_UPLOAD_FAILED",
                     "retained source archive byte count differs from its reservation",

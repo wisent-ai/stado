@@ -29,7 +29,8 @@ struct SubmitRequestContext {
 struct ClaimedReservation {
     source_uri: String,
     source_sha: String,
-    source_bytes: u64,
+    /// The archive's size; `None` for a request that carries no archive.
+    source_bytes: Option<u64>,
     staged_source: Option<OwnedMachineFile>,
     replayed_reservation: bool,
 }
@@ -48,10 +49,15 @@ impl MachineFacade {
     /// IDEMPOTENCY_CONFLICT.
     pub async fn submit_request(&self, request: &Value) -> Result<Value, MachineError> {
         let request = validate_request(request)?;
-        let request_id = request["client_request_id"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
+        let request_id = match request["client_request_id"].as_str() {
+            Some(request_id) => request_id.to_string(),
+            None => {
+                return Err(MachineError::new(
+                    "INVALID_REQUEST",
+                    "client_request_id is required and must be text",
+                ))
+            }
+        };
         let source_requested = request["source_archive_path"]
             .as_str()
             .is_some_and(|path| !path.is_empty());
