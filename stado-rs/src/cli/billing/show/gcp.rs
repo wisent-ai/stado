@@ -3,20 +3,14 @@
 
 use serde_json::Value;
 
-use crate::cli::billing::format::text;
+use crate::cli::reporting::{field, NOT_REPORTED};
 
 pub(super) fn print_gcp(section: &Value) {
     if section.get("status").and_then(Value::as_str) != Some("ok") {
         println!(
             "GCP: {} — {}",
-            section
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("unavailable"),
-            section
-                .get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or("no detail")
+            field(&section["status"]),
+            field(&section["detail"])
         );
         return;
     }
@@ -24,18 +18,19 @@ pub(super) fn print_gcp(section: &Value) {
         .get("monthly")
         .and_then(Value::as_array)
         .and_then(|rows| rows.last());
-    if let Some(month) = month {
-        println!(
+    match month {
+        Some(month) => println!(
             "GCP {}: gross={} credits={} net={} {}",
-            text(month.get("month")),
-            text(month.get("gross")),
-            text(month.get("credits")),
-            text(month.get("net")),
-            text(month.get("currency")),
-        );
+            field(&month["month"]),
+            field(&month["gross"]),
+            field(&month["credits"]),
+            field(&month["net"]),
+            field(&month["currency"]),
+        ),
+        None => println!("GCP monthly billing: {NOT_REPORTED}"),
     }
     println!(
         "GCP credit burn: {}/day",
-        text(section.get("avg_daily_credit_applied_7d"))
+        field(&section["avg_daily_credit_applied_7d"])
     );
 }

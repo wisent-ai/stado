@@ -4,34 +4,34 @@
 
 use serde_json::Value;
 
-use crate::cli::billing::format::text;
+use crate::cli::reporting::field;
 
 pub(super) fn print_azure(section: &Value) {
     if section.get("status").and_then(Value::as_str) != Some("ok") {
         println!(
             "Azure: {} — {}",
-            text(section.get("status")),
-            text(section.get("detail"))
+            field(&section["status"]),
+            field(&section["detail"])
         );
         return;
     }
     println!(
         "Azure credits: current={} estimated={} {}",
-        text(section.get("available_balance")),
-        text(section.get("estimated_balance")),
-        text(section.get("currency"))
+        field(&section["available_balance"]),
+        field(&section["estimated_balance"]),
+        field(&section["currency"])
     );
     println!(
         "Azure grant: amount={} used={}, valid {} — {}",
-        text(section.get("grant_amount")),
-        text(section.get("credit_used")),
-        text(section.get("grant_start_date")),
-        text(section.get("grant_end_date")),
+        field(&section["grant_amount"]),
+        field(&section["credit_used"]),
+        field(&section["grant_start_date"]),
+        field(&section["grant_end_date"]),
     );
     println!(
         "Azure pending eligible charges={} expired={}",
-        text(section.get("pending_eligible_charges")),
-        text(section.get("expired_credit")),
+        field(&section["pending_eligible_charges"]),
+        field(&section["expired_credit"]),
     );
     if section.get("overage_risk").and_then(Value::as_bool) == Some(true) {
         println!("Azure warning: spending limit is off; charges may continue after credits are exhausted");

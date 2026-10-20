@@ -5,14 +5,13 @@
 use serde_json::Value;
 
 use super::mail::MailProbe;
-use crate::cli::billing::format::text;
-use crate::cli::reporting::table;
+use crate::cli::reporting::{field, table};
 use crate::monitor::billing::{self, HealthEvaluation};
 
 pub(super) fn print_watch(document: &Value, evaluation: &HealthEvaluation, mail: &MailProbe) {
     println!(
         "[{}] providers={} degraded={} firing={} new={} mail={}",
-        text(document.get("reported_at")),
+        field(&document["reported_at"]),
         evaluation.providers.len(),
         evaluation
             .providers

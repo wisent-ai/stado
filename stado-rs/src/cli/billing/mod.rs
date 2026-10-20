@@ -23,12 +23,11 @@
 //! missing.
 //!
 //! The components follow the verbs and the reads: `show` renders a
-//! published snapshot for a human, `watch` holds the watchdog pass with its
-//! mail sweep and report, and `format` is the scalar renderer the two output
-//! paths share. Command dispatch, the `--json` emitter and `refresh` stay
-//! here.
+//! published snapshot for a human and `watch` holds the watchdog pass with
+//! its mail sweep and report; both print a field through the shared
+//! `cli::reporting::field`. Command dispatch, the `--json` emitter and
+//! `refresh` stay here.
 
-mod format;
 mod show;
 mod watch;
 
