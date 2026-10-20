@@ -13,7 +13,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Harsh-Review-Attacked: whether a live group's EPERM is now ignored; EPERM is read as an exited group only when the slot's own leader has exited, the wait reaps it, and any other EPERM is still refused.
 Repairs: "Job output uploads and the yield hook refuse an output, log or work directory they cannot examine, and a yield hook is not run without its secrets" its cancelled-slot termination refused every killpg error but ESRCH.
 
+Harsh-Review-Attacked: whether a live group's EPERM is now ignored; EPERM is read as an exited group only when the slot's own leader has exited, the wait reaps it, and any other EPERM is still refused.
 Repaired-By: "Every count Stado keeps adds one item through one tally" repairs it in this push, naming this commit on its Repairs line
