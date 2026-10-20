@@ -253,20 +253,20 @@ pub(super) async fn reconcile_verifier(
             .await?;
         }
     }
-    let common = format!(
+    let mut command = format!(
         "set -eu; \
-         PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin; export PATH; \
+         {}; export PATH; \
          GNUPGHOME={}; export GNUPGHOME; \
          SKARBIEC_VAULT_FILE={}; export SKARBIEC_VAULT_FILE; \
          token_file={}; \
          if [ ! -f \"$token_file\" ] || [ -L \"$token_file\" ]; then \
            printf '%s\\n' 'Stado grant file is missing or a symlink' >&2; exit 40; \
          fi",
+        crate::primitives::tool_path::assignment(),
         crate::deploy::shlex_quote(&gnupg_home),
         crate::deploy::shlex_quote(&vault),
         crate::deploy::shlex_quote(&token_file),
     );
-    let mut command = common;
     for (_, item) in &played {
         command.push_str(&format!(
             "; {} grant ensure {} {} --field token --token-file \"$token_file\" > /dev/null",

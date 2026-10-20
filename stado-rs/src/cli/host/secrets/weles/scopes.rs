@@ -94,14 +94,13 @@ pub(super) async fn register_acquisition_scopes(
     // Skarbiec validates the generated public key by spawning `openssl`.
     // Give that child the same implementation selected above; otherwise
     // macOS resolves `/usr/bin/openssl`, which rejects Homebrew's Ed25519 key.
-    let openssl_search_path = openssl
-        .rsplit_once('/')
-        .map(|(directory, _)| {
-            format!("{directory}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
-        })
-        .unwrap_or_else(|| {
-            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string()
-        });
+    // The directory of the openssl chosen above comes first; an openssl named
+    // without a directory is found on the declared search path itself.
+    let search_path = crate::primitives::tool_path::SEARCH_PATH;
+    let openssl_search_path = match openssl.rsplit_once('/') {
+        Some((directory, _)) => format!("{directory}:{search_path}"),
+        None => search_path.to_string(),
+    };
 
     let public_key =
         match acquisition_scratch(resolved, &home, "weles-acquisition-public.XXXXXX", runner).await

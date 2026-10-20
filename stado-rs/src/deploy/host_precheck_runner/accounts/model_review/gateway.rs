@@ -24,7 +24,7 @@ pub(super) async fn reconcile_brama_introspection_grant(
     let token_file = format!("{}/.stado/{BRAMA_INTROSPECTION_TOKEN_FILE}", context.home);
     let script = format!(
         "set -eu\n\
-         PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; export PATH\n\
+         {}; export PATH\n\
          export {}\n\
          export {}\n\
          export {}\n\
@@ -47,6 +47,7 @@ pub(super) async fn reconcile_brama_introspection_grant(
            /bin/mv -f \"$staged\" \"$token_file\"\n\
            trap - EXIT HUP INT TERM\n\
          fi\n",
+        crate::primitives::tool_path::assignment(),
         shlex_quote(&context.vault),
         shlex_quote(&context.routes),
         shlex_quote(&context.gnupg),
@@ -75,7 +76,7 @@ pub(super) async fn reconcile_model_review_route(
     target: &ComputeTarget,
     context: &BramaSkarbiecContext,
 ) -> Result<String, DeployError> {
-    let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    let program_path = crate::primitives::tool_path::assignment();
     let read = host_channel::run_program(
         target,
         &[
@@ -83,7 +84,7 @@ pub(super) async fn reconcile_model_review_route(
             &context.vault,
             &context.routes,
             &context.gnupg,
-            program_path,
+            &program_path,
             &context.skarbiec,
             "get",
             BRAMA_DESKTOP_MODEL_ROUTER_ROLE,
