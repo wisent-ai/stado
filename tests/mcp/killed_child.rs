@@ -4,20 +4,26 @@
 //! The shared subprocess capture once reported a child a signal ended as an
 //! invented exit code, and the MCP server named every spawn failure "stado
 //! CLI not found". The real `stado mcp` runs with an isolated `HOME` under
-//! Cargo's test directory, and its tools' `stado` children read a fleet store
-//! this test owns, which accepts every connection and answers none:
+//! Cargo's test directory, and its tools' `stado` children read a real fleet
+//! store (`../host_silence/refusal_in_flight/store.rs`), a `stado serve --api`
+//! on a real Skarbiec that answers one request and is then stopped with
+//! SIGSTOP, so it accepts every connection and answers none:
 //!
-//! - `stado_status` starts `stado status`, which stands on the silent store;
-//!   once the store holds its connection, the child is ended with SIGKILL,
+//! - `stado_status` starts `stado status`, which stands on the stopped store;
+//!   once the child's wait register names its read of the store, the child
+//!   is ended with SIGKILL,
 //!   and the answer is an error saying `stado status did not run to an exit`
 //!   because it was ended by that signal and returned no exit code;
 //! - with `STADO_BIN` naming a program that does not exist, the answer says
 //!   the child did not run to an exit, not that the CLI is missing.
+#[path = "../host_silence/refusal_in_flight/store.rs"]
+mod store;
+
 use std::io::{BufRead, BufReader, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
-use std::sync::mpsc;
+
+use store::Store;
 
 use serde_json::{json, Value};
 
@@ -35,6 +41,7 @@ impl Run {
             std::fs::remove_dir_all(&root).unwrap();
         }
         std::fs::create_dir_all(root.join("tmp")).unwrap();
+        std::fs::create_dir_all(root.join("waits")).unwrap();
         let revision = Command::new("git")
             .arg("-C")
             .arg(env!("CARGO_MANIFEST_DIR"))
@@ -60,47 +67,52 @@ impl Run {
             .env("PATH", "/usr/bin:/bin")
             .env("HOME", &self.root)
             .env("STADO_CONFIG", self.root.join("no-config.json"))
+            .env("STADO_WAITS_DIR", self.root.join("waits"))
             .env("TMPDIR", self.root.join("tmp"));
         command
     }
 
-    /// A fleet store that accepts every connection, keeps it and answers
-    /// none, on a loopback port Stado hands out; each accepted connection
-    /// arrives on the receiver.
-    fn silent_store(&self) -> (String, mpsc::Receiver<TcpStream>) {
-        let printed = self
-            .stado()
-            .args(["host", "local", "port"])
-            .output()
-            .expect("stado host local port runs");
-        assert!(printed.status.success(), "{printed:?}");
-        let printed = String::from_utf8_lossy(&printed.stdout);
-        let Ok(port) = printed.trim().parse::<u16>() else {
-            panic!("stado host local port printed {printed:?}");
-        };
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
-        let address = listener.local_addr().unwrap().to_string();
-        let (keep, held) = mpsc::channel();
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                if keep.send(stream).is_err() {
-                    return;
+    /// The real fleet store, stopped once it has answered its probe.
+    fn hung_store(&mut self) -> Store {
+        let store = Store::serve(self.root.join("store.token"));
+        store.hang();
+        self.report["store"] = store.describe();
+        self.save();
+        store
+    }
+
+    /// The open wait a child holds on `store`, as the wait register names it;
+    /// the register is read again until the child's read of the store is in
+    /// it, which is the product's own record of the read standing.
+    fn store_wait(&self, store: &str) -> String {
+        let place = format!("gdzie: object API http://{store}");
+        loop {
+            for entry in std::fs::read_dir(self.root.join("waits")).unwrap() {
+                let path = entry.unwrap().path();
+                let line = match std::fs::read_to_string(&path) {
+                    Ok(line) => line,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => panic!(
+                        "the wait register entry {} is unreadable: {error}",
+                        path.display()
+                    ),
+                };
+                if line.contains(&place) {
+                    return line.trim().to_string();
                 }
             }
-        });
-        (address, held)
+        }
     }
 
     /// The real `stado mcp`, with every tool's child reading `store`.
-    fn mcp(&self, store: &str, stado_bin: Option<&Path>) -> (Child, BufReader<ChildStdout>) {
-        let token = self.root.join("object-api.token");
-        std::fs::write(&token, "mcp-killed-child").unwrap();
+    fn mcp(&self, store: &Store, stado_bin: Option<&Path>) -> (Child, BufReader<ChildStdout>) {
         let mut command = self.stado();
         command
             .arg("mcp")
             .env("WC_STORAGE_BACKEND", "stado")
-            .env("WC_STADO_STORAGE_URL", format!("http://{store}"))
-            .env("WC_STADO_STORAGE_TOKEN_FILE", &token)
+            .env("WC_STADO_STORAGE_URL", format!("http://{}", store.address))
+            .env("WC_STADO_STORAGE_NAMESPACE", store::NAMESPACE)
+            .env("WC_STADO_STORAGE_TOKEN_FILE", &store.token_file)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(std::fs::File::create(self.root.join("mcp.stderr.log")).unwrap());
@@ -177,14 +189,12 @@ fn children(parent: u32) -> Vec<String> {
 #[test]
 fn a_child_ended_by_a_signal_is_answered_with_that_signal() {
     let mut run = Run::new("signal");
-    let (store, held) = run.silent_store();
+    let store = run.hung_store();
     let (mut mcp, mut stdout) = run.mcp(&store, None);
     run.send(&mut mcp, &call("status-killed", "stado_status"));
 
-    // The child stands on the silent store once the store holds its read.
-    let connection = held
-        .recv()
-        .expect("stado status opens a connection to the store");
+    // The child stands on the stopped store once its read is registered.
+    run.report["store_wait"] = json!(run.store_wait(&store.address));
     let listed = children(mcp.id());
     let [child] = listed.as_slice() else {
         panic!("stado mcp runs one child for the call, not {listed:?}");
@@ -197,7 +207,6 @@ fn a_child_ended_by_a_signal_is_answered_with_that_signal() {
     run.report["killed_child"] = json!(child);
 
     let answer = run.answer(&mut stdout);
-    drop(connection);
     let message = refusal(&answer);
     assert!(
         message.contains("stado status did not run to an exit: "),
@@ -223,7 +232,7 @@ fn a_child_ended_by_a_signal_is_answered_with_that_signal() {
 #[test]
 fn a_child_that_cannot_start_is_answered_with_the_spawn_error() {
     let mut run = Run::new("spawn");
-    let (store, _held) = run.silent_store();
+    let store = run.hung_store();
     let absent = run.root.join("absent-stado");
     let (mut mcp, mut stdout) = run.mcp(&store, Some(&absent));
     run.send(&mut mcp, &call("status-unstarted", "stado_status"));
