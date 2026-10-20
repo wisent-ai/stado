@@ -18,6 +18,8 @@ Repairs: "stado sandbox keeps a sandbox's disk as a template and gives ports URL
 Repairs: "stado sandbox runs long commands in the background and reports cost" its client module map and its journey header did not cover environments
 Repairs: "stado sandbox steers a working agent and shows the desktop" its client module map and its journey header did not cover environments
 Repairs: "stado sandbox takes files back out of a stopped sandbox's snapshots" its segment encoder was private to the file module, so environment paths would have needed a second copy
+Repairs: "stado sandbox covers what an agent does in a sandbox besides its life" its lines in CHANGELOG.md, SandboxOperations.swift, agent.rs, boat_sandbox.mjs, mod.rs, verbs.rs are replaced by this change.
+Repairs: "The pre-push quality check does not export a pushed notes ref as a product tree" its lines in mod.rs are replaced by this change.
 
 Harsh-Review-Attacked: whether request_change loosens the envelope check for other calls; only the environment changes use it, and every other call still goes through request_json with ok and its expected type.
 Harsh-Review-Attacked: whether a secret can reach a command line or the process list; set-var's value comes only from standard input and a secret file's text only from a local file, and the Desktop passes the value through its standard-input field.
