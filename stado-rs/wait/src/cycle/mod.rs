@@ -1,57 +1,68 @@
-//! The wait-for graph of this machine's lock waits, and the cycles in it.
+//! The wait-for graph of this machine's waits, and the cycles in it.
 //!
-//! A wait on a lock file ([`crate::blocking_on_lock`]) records, beside the
-//! register, the lock it awaits: `<register>.graph/<id>` holding the lock's
-//! path. A lock that takes part names its holder as `"pid": <n>` in its own
-//! file, as every product installation lock does. Together they are a graph:
-//! a process awaits a lock, the lock's file names the process holding it,
-//! and that process may itself await another lock.
+//! A wait on a resource ([`crate::blocking_on`], [`crate::begin_on`],
+//! [`crate::blocking_on_lock`], `stado waits open --awaits`) records, beside
+//! the register, what it awaits: `<register>.graph/<id>` holding the
+//! resource as `<kind>:<id>` ([`Resource`]): a lock file, a host, a
+//! service, a product revision, a unit or a port. What a process holds is
+//! recorded beside it too ([`holds`]): a lock names its holder as
+//! `"pid": <n>` in its own file, as every product installation lock does,
+//! and every other resource is held as `<register>.holds/<id>` says.
+//! Together they are a graph: a process awaits a resource, the resource is
+//! held by processes, and each of those may itself await another resource.
 //!
 //! A wait that would close a cycle never starts. Before a process waits on a
-//! lock it follows that graph from the lock's holder; when the chain reaches
-//! the waiter itself, or a process whose completion needs the waiter (one of
-//! its ancestors, which waits for the waiter to end), the wait is refused at
-//! once with every link named. Such a wait could only stand until someone
-//! killed a process by hand: an installation holding a product's lock whose
-//! own step waits on that lock, or two installations each waiting on the
-//! other's lock. `stado waits cycles` lists the cycles already standing among
-//! the waits a running process holds.
+//! resource it follows that graph from the resource's holders; when a chain
+//! reaches the waiter itself, or a process whose completion needs the
+//! waiter (one of its ancestors, which waits for the waiter to end), the
+//! wait is refused at once with every link named. Such a wait could only
+//! stand until someone killed a process by hand: an installation holding a
+//! product's lock whose own step waits on that lock, an installation whose
+//! converge waits on a service whose new revision only that installation's
+//! lock can deliver, or two installations each waiting on the other's lock.
+//! `stado waits cycles` lists the cycles already standing among the waits
+//! running processes hold.
 //!
-//! The graph follows locks only: a wait on a host, a service or a child
-//! process names nothing that holds what it waits on, so no edge leaves it.
+//! A resource no running process holds ends every chain through it: the
+//! wait starts as it always did.
 
+pub mod holds;
+pub(crate) mod on;
 mod read;
+mod resource;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use read::{holder, needing, ps};
+use holds::{held, holders, Held};
+use read::{needing, ps};
+pub use resource::{Resource, ResourceKind};
 
 /// What follows the register directory's name in the graph's: the graph
 /// sits beside the register, whose every file is a wait's line.
 const GRAPH: &str = ".graph";
 
-/// One link of a cycle: a process, what it runs, and the lock it awaits.
+/// One link of a cycle: a process, what it runs, and the resource it awaits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
     pub pid: u32,
     /// The process's command line, when `ps` could read it.
     pub command: Option<String>,
-    pub awaits: PathBuf,
+    pub awaits: Resource,
 }
 
-/// A chain of lock waits that ends at a process whose completion needs the
+/// A chain of waits that ends at a process whose completion needs the
 /// first one: none of its waits can end.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cycle {
     pub links: Vec<Link>,
-    /// The process holding the last link's lock, which needs the first.
+    /// The process holding the last link's resource, which needs the first.
     pub closed_by: u32,
 }
 
 impl Cycle {
-    /// Each link with the process holding the lock it awaits: the next
+    /// Each link with the process holding the resource it awaits: the next
     /// link's process, and for the last link the one that closes the cycle.
     pub fn held(&self) -> Vec<(&Link, u32)> {
         let mut holders = self
@@ -77,8 +88,7 @@ impl fmt::Display for Cycle {
                 };
                 format!(
                     "process {}{command} waits on {}, held by process {holder}",
-                    link.pid,
-                    link.awaits.display()
+                    link.pid, link.awaits
                 )
             })
             .collect();
@@ -103,14 +113,14 @@ fn awaits_directory() -> Result<PathBuf, String> {
     Ok(PathBuf::from(graph))
 }
 
-/// Record that the wait `id` awaits `lock`. A record that cannot be written
-/// does not stop the wait; it is said beside the wait's line.
-pub(crate) fn record(id: &str, lock: &Path) {
+/// Record that the wait `id` awaits `resource`. A record that cannot be
+/// written does not stop the wait; it is said beside the wait's line.
+pub(crate) fn record(id: &str, resource: &Resource) {
     let written = awaits_directory().and_then(|directory| {
         std::fs::create_dir_all(&directory)
             .map_err(|error| format!("creating {}: {error}", directory.display()))?;
         let file = directory.join(id);
-        std::fs::write(&file, lock.as_os_str().as_encoded_bytes())
+        std::fs::write(&file, resource.key())
             .map_err(|error| format!("writing {}: {error}", file.display()))
     });
     if let Err(cause) = written {
@@ -121,8 +131,8 @@ pub(crate) fn record(id: &str, lock: &Path) {
     }
 }
 
-/// Remove what the wait `id` awaited: it ended. A wait that awaited no lock
-/// has nothing here.
+/// Remove what the wait `id` awaited: it ended. A wait that awaited no
+/// resource has nothing here.
 pub(crate) fn forget(id: &str) {
     let removed = awaits_directory().and_then(|directory| {
         let file = directory.join(id);
@@ -140,16 +150,16 @@ pub(crate) fn forget(id: &str) {
     }
 }
 
-/// The lock each running process awaits now, from the register; the records
-/// of processes that no longer run are removed.
-fn awaited() -> Result<BTreeMap<u32, PathBuf>, String> {
+/// The resources each running process awaits now, from the register; the
+/// records of processes that no longer run are removed.
+fn awaited() -> Result<BTreeMap<u32, Vec<Resource>>, String> {
     let directory = awaits_directory()?;
     let entries = match std::fs::read_dir(&directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(error) => return Err(format!("listing {}: {error}", directory.display())),
     };
-    let mut awaited = BTreeMap::new();
+    let mut awaited: BTreeMap<u32, Vec<Resource>> = BTreeMap::new();
     for entry in entries {
         let entry = entry.map_err(|error| format!("listing {}: {error}", directory.display()))?;
         let file = entry.path();
@@ -179,8 +189,10 @@ fn awaited() -> Result<BTreeMap<u32, PathBuf>, String> {
             continue;
         }
         match std::fs::read_to_string(&file) {
-            Ok(lock) => {
-                awaited.insert(pid, PathBuf::from(lock.trim()));
+            Ok(text) => {
+                let resource = Resource::read(&text)
+                    .map_err(|cause| format!("{}: {cause}", file.display()))?;
+                awaited.entry(pid).or_default().push(resource);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(format!("reading {}: {error}", file.display())),
@@ -189,73 +201,102 @@ fn awaited() -> Result<BTreeMap<u32, PathBuf>, String> {
     Ok(awaited)
 }
 
-/// Follow the graph from `waiter` awaiting `lock`; the cycle when the chain
-/// reaches a process in `needs_waiter`.
-fn follow(
-    waiter: u32,
-    lock: &Path,
-    needs_waiter: &BTreeSet<u32>,
-    awaited: &BTreeMap<u32, PathBuf>,
-) -> Result<Option<Cycle>, String> {
-    let mut links = vec![Link {
-        pid: waiter,
-        command: ps(waiter, "command")?,
-        awaits: lock.to_path_buf(),
-    }];
-    let mut seen = BTreeSet::from([waiter]);
-    let mut lock = lock.to_path_buf();
-    loop {
-        let Some(held_by) = holder(&lock)? else {
+/// What one search of the graph reads: the waits and the holdings.
+struct Graph {
+    awaited: BTreeMap<u32, Vec<Resource>>,
+    held: Vec<Held>,
+}
+
+impl Graph {
+    fn read() -> Result<Self, String> {
+        Ok(Self {
+            awaited: awaited()?,
+            held: held()?,
+        })
+    }
+
+    /// Follow the graph from the last link of `links`; the cycle when a
+    /// chain reaches a process in `needs_waiter`. `seen` keeps each process
+    /// on one chain once: a cycle that does not pass through the waiter is
+    /// not this wait's.
+    fn search(
+        &self,
+        links: &mut Vec<Link>,
+        needs_waiter: &BTreeSet<u32>,
+        seen: &mut BTreeSet<u32>,
+    ) -> Result<Option<Cycle>, String> {
+        let Some(resource) = links.last().map(|link| link.awaits.clone()) else {
             return Ok(None);
         };
-        if needs_waiter.contains(&held_by) {
-            return Ok(Some(Cycle {
-                links,
-                closed_by: held_by,
-            }));
+        for held_by in holders(&resource, &self.held)? {
+            if needs_waiter.contains(&held_by) {
+                return Ok(Some(Cycle {
+                    links: links.clone(),
+                    closed_by: held_by,
+                }));
+            }
+            if !seen.insert(held_by) {
+                continue;
+            }
+            for next in self.awaited.get(&held_by).into_iter().flatten() {
+                links.push(Link {
+                    pid: held_by,
+                    command: ps(held_by, "command")?,
+                    awaits: next.clone(),
+                });
+                if let Some(cycle) = self.search(links, needs_waiter, seen)? {
+                    return Ok(Some(cycle));
+                }
+                links.pop();
+            }
         }
-        // A cycle that does not pass through the waiter is not this wait's.
-        if !seen.insert(held_by) {
-            return Ok(None);
-        }
-        let Some(next) = awaited.get(&held_by) else {
-            return Ok(None);
-        };
-        lock = next.clone();
-        links.push(Link {
-            pid: held_by,
-            command: ps(held_by, "command")?,
-            awaits: lock.clone(),
-        });
+        Ok(None)
+    }
+
+    fn follow(&self, waiter: u32, resource: &Resource) -> Result<Option<Cycle>, String> {
+        let mut links = vec![Link {
+            pid: waiter,
+            command: ps(waiter, "command")?,
+            awaits: resource.clone(),
+        }];
+        let mut seen = BTreeSet::from([waiter]);
+        self.search(&mut links, &needing(waiter)?, &mut seen)
     }
 }
 
-/// The cycle a wait of this process on `lock` would close, when it would.
-pub fn closed_by_waiting_on(lock: &Path) -> Result<Option<Cycle>, String> {
-    let me = std::process::id();
-    follow(me, lock, &needing(me)?, &awaited()?)
+/// The cycle a wait of process `pid` on `resource` would close, when it
+/// would.
+pub fn closed_by(pid: u32, resource: &Resource) -> Result<Option<Cycle>, String> {
+    Graph::read()?.follow(pid, resource)
 }
 
-/// Every cycle standing among the lock waits of running processes, each
-/// named once.
+/// The cycle a wait of this process on `resource` would close, when it would.
+pub fn closed_by_waiting_on(resource: &Resource) -> Result<Option<Cycle>, String> {
+    closed_by(std::process::id(), resource)
+}
+
+/// Every cycle standing among the waits of running processes, each named
+/// once.
 pub fn standing() -> Result<Vec<Cycle>, String> {
-    let awaited = awaited()?;
+    let graph = Graph::read()?;
     let mut cycles: Vec<Cycle> = Vec::new();
-    for (pid, lock) in &awaited {
-        let Some(cycle) = follow(*pid, lock, &needing(*pid)?, &awaited)? else {
-            continue;
-        };
-        let members: BTreeSet<u32> = cycle.links.iter().map(|link| link.pid).collect();
-        let named = cycles.iter().any(|known| {
-            known
-                .links
-                .iter()
-                .map(|link| link.pid)
-                .collect::<BTreeSet<_>>()
-                == members
-        });
-        if !named {
-            cycles.push(cycle);
+    for (pid, resources) in &graph.awaited {
+        for resource in resources {
+            let Some(cycle) = graph.follow(*pid, resource)? else {
+                continue;
+            };
+            let members: BTreeSet<u32> = cycle.links.iter().map(|link| link.pid).collect();
+            let named = cycles.iter().any(|known| {
+                known
+                    .links
+                    .iter()
+                    .map(|link| link.pid)
+                    .collect::<BTreeSet<_>>()
+                    == members
+            });
+            if !named {
+                cycles.push(cycle);
+            }
         }
     }
     Ok(cycles)

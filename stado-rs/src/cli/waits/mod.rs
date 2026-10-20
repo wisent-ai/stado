@@ -3,9 +3,13 @@
 //! ended, with the line it held when its process died, and that reading
 //! removes it from the register. `stado waits open` registers a wait for
 //! another process — one a program does not perform in Rust itself, such
-//! as a grant dialog or a terminal read — and `stado waits close` removes
-//! one. `stado waits cycles` names the lock-wait cycles standing on this
-//! machine: waits none of which can end.
+//! as a grant dialog or a terminal read — optionally on a resource of the
+//! wait-for graph, and `stado waits close` removes one. `stado waits hold`,
+//! `release` and `holds` record what a process holds in that graph, and
+//! `stado waits cycles` names the wait cycles standing on this machine:
+//! waits none of which can end.
+
+mod holds;
 
 use serde_json::{json, Value};
 
@@ -35,7 +39,7 @@ fn rows(waits: &[Open]) -> Value {
     )
 }
 
-/// `stado waits [open|close|cycles]`.
+/// `stado waits [open|close|hold|release|holds|cycles]`.
 pub(crate) fn dispatch(action: Option<WaitsAction>, as_json: bool) -> Result<(), CmdError> {
     match action {
         None => run(as_json),
@@ -44,9 +48,24 @@ pub(crate) fn dispatch(action: Option<WaitsAction>, as_json: bool) -> Result<(),
             what,
             place,
             pid,
+            awaits,
             json,
-        }) => register(&kind, &what, &place, pid, json || as_json),
+        }) => register(
+            &kind,
+            &what,
+            &place,
+            pid,
+            awaits.as_deref(),
+            json || as_json,
+        ),
         Some(WaitsAction::Close { id, json }) => close(&id, json || as_json),
+        Some(WaitsAction::Hold {
+            resource,
+            pid,
+            json,
+        }) => holds::hold(&resource, pid, json || as_json),
+        Some(WaitsAction::Release { id, json }) => holds::release(&id, json || as_json),
+        Some(WaitsAction::Holds { json }) => holds::list(json || as_json),
         Some(WaitsAction::Cycles { json }) => cycles(json || as_json),
     }
 }
@@ -62,7 +81,22 @@ fn written(error: RegisterError) -> CmdError {
     .stating(code)
 }
 
-fn register(kind: &str, what: &str, place: &str, pid: u32, as_json: bool) -> Result<(), CmdError> {
+/// A refusal naming the cycle a wait would have closed.
+fn closes(cycle: &cycle::Cycle) -> CmdError {
+    CmdError::click(format!(
+        "the wait was not registered: it would close {cycle}"
+    ))
+    .stating(FailureCode::Refused)
+}
+
+fn register(
+    kind: &str,
+    what: &str,
+    place: &str,
+    pid: u32,
+    awaits: Option<&str>,
+    as_json: bool,
+) -> Result<(), CmdError> {
     let Some(kind) = Kind::from_word(kind) else {
         let words: Vec<&str> = Kind::ALL.iter().map(|kind| kind.word()).collect();
         return Err(CmdError::usage(format!(
@@ -77,17 +111,32 @@ fn register(kind: &str, what: &str, place: &str, pid: u32, as_json: bool) -> Res
             )));
         }
     }
-    let id = external::register_for(pid, kind, what, place).map_err(written)?;
+    let awaits = match awaits {
+        Some(text) => Some(holds::resource("open --awaits", text)?),
+        None => None,
+    };
+    let id = match &awaits {
+        Some(resource) => external::register_awaiting(pid, kind, what, place, resource)
+            .map_err(|cycle| closes(&cycle))?
+            .map_err(written)?,
+        None => external::register_for(pid, kind, what, place).map_err(written)?,
+    };
+    let awaited = awaits.as_ref().map(cycle::Resource::key);
     if as_json {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "id": id, "pid": pid, "kind": kind.word(), "what": what, "where": place,
+                "awaits": awaited,
             }))?
         );
     } else {
+        let on = match &awaits {
+            Some(resource) => format!(", awaiting {resource}"),
+            None => String::new(),
+        };
         println!(
-            "registered {id}: process {pid} waits on {} for {what} at {place}",
+            "registered {id}: process {pid} waits on {} for {what} at {place}{on}",
             kind.word()
         );
     }
@@ -109,11 +158,11 @@ fn close(id: &str, as_json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// The lock-wait cycles standing now; a refusal naming each when any does.
+/// The wait cycles standing now; a refusal naming each when any does.
 fn cycles(as_json: bool) -> Result<(), CmdError> {
     let standing = cycle::standing().map_err(|cause| {
         CmdError::click(format!(
-            "the wait-for graph of this machine's lock waits cannot be read: {cause}"
+            "the wait-for graph of this machine's waits cannot be read: {cause}"
         ))
         .stating(FailureCode::Config)
     })?;
@@ -128,7 +177,7 @@ fn cycles(as_json: bool) -> Result<(), CmdError> {
                         json!({
                             "pid": link.pid,
                             "command": link.command,
-                            "awaits": link.awaits.display().to_string(),
+                            "awaits": link.awaits.key(),
                             "held_by": holder,
                         })
                     })
@@ -141,14 +190,14 @@ fn cycles(as_json: bool) -> Result<(), CmdError> {
             serde_json::to_string_pretty(&json!({ "cycles": rows }))?
         );
     } else if standing.is_empty() {
-        println!("no wait cycle stands among this machine's lock waits");
+        println!("no wait cycle stands among this machine's waits");
     }
     match standing.as_slice() {
         [] => Ok(()),
         cycles => {
             let said: Vec<String> = cycles.iter().map(ToString::to_string).collect();
             Err(CmdError::click(format!(
-                "{} lock-wait cycle(s) stand on this machine; end one process in each: {}",
+                "{} wait cycle(s) stand on this machine; end one process in each: {}",
                 cycles.len(),
                 said.join(" | ")
             ))

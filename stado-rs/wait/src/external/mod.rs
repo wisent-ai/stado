@@ -55,6 +55,37 @@ pub fn register_for(
     Ok(id)
 }
 
+/// [`register_for`] for a wait of process `pid` that awaits `resource`: the
+/// resource is recorded in the wait-for graph with the wait. A wait that
+/// would close a cycle — the resource held, directly or through other
+/// waits, by `pid` or a process whose completion needs it — is not
+/// registered, and the cycle is returned with every link named. A graph
+/// that cannot be read is the refusal naming it, since the registrant asked
+/// for the check.
+pub fn register_awaiting(
+    pid: u32,
+    kind: Kind,
+    what: &str,
+    place: &str,
+    resource: &crate::cycle::Resource,
+) -> Result<Result<String, RegisterError>, crate::cycle::Cycle> {
+    match crate::cycle::closed_by(pid, resource) {
+        Ok(Some(cycle)) => return Err(cycle),
+        Ok(None) => {}
+        Err(cause) => {
+            return Ok(Err(RegisterError {
+                cause: format!("the wait-for graph cannot be read: {cause}"),
+                io: None,
+            }))
+        }
+    }
+    let registered = register_for(pid, kind, what, place);
+    if let Ok(id) = &registered {
+        crate::cycle::record(id, resource);
+    }
+    Ok(registered)
+}
+
 /// Remove the wait `id` from the register: it ended. Answers whether the
 /// register held it; one already gone (ended, or its process gone and read)
 /// is not an error.
@@ -67,6 +98,7 @@ pub fn unregister(id: &str) -> Result<bool, RegisterError> {
         });
     }
     let file = directory.join(id);
+    crate::cycle::forget(id);
     match std::fs::remove_file(&file) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),

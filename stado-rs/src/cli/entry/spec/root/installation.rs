@@ -120,7 +120,10 @@ pub(crate) enum WaitsAction {
     /// Register for process --pid a wait on --kind (one of the register's
     /// `rodzaj` words: siec, object-api, host, blokada, proces, baza,
     /// terminal, zgoda, sesja), for --what at --where. It ends when that
-    /// process does or with `stado waits close <id>`.
+    /// process does or with `stado waits close <id>`. With --awaits
+    /// `<kind>:<id>` (lock, host, service, revision, unit or port) the wait
+    /// is an edge of the wait-for graph, and one that would close a cycle is
+    /// refused naming every link instead of being registered.
     Open {
         #[arg(long)]
         kind: String,
@@ -130,7 +133,37 @@ pub(crate) enum WaitsAction {
         place: String,
         #[arg(long)]
         pid: u32,
+        /// The resource the wait awaits, `<kind>:<id>`.
+        #[arg(long)]
+        awaits: Option<String>,
         /// Emit the registered wait as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Record that process --pid holds --resource `<kind>:<id>` (lock,
+    /// host, service, revision, unit or port) until `stado waits release
+    /// <id>` or until that process ends: a wait on that resource is then a
+    /// wait on that process.
+    Hold {
+        #[arg(long)]
+        resource: String,
+        #[arg(long)]
+        pid: u32,
+        /// Emit the holding as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the holding <id>: its resource is released.
+    Release {
+        id: String,
+        /// Emit the answer as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Every resource a running process holds, as recorded beside the
+    /// register; the holdings of processes that ended are removed.
+    Holds {
+        /// Emit the holdings as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -141,11 +174,11 @@ pub(crate) enum WaitsAction {
         #[arg(long)]
         json: bool,
     },
-    /// Every cycle standing among this machine's lock waits: a process
-    /// waiting on a lock held, directly or through other lock waits, by a
-    /// process whose completion needs it. Each link names the process, its
-    /// command, the lock it waits on and who holds that lock. Fails with
-    /// the refusal status when any cycle stands.
+    /// Every cycle standing among this machine's waits: a process waiting
+    /// on a resource held, directly or through other waits, by a process
+    /// whose completion needs it. Each link names the process, its command,
+    /// the resource it waits on and who holds that resource. Fails with the
+    /// refusal status when any cycle stands.
     Cycles {
         /// Emit the cycles as JSON.
         #[arg(long)]

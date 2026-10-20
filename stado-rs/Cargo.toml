@@ -233,6 +233,10 @@ name = "wait-cycle-install-lock"
 path = "../tests/wait/cycle/install_lock.rs"
 
 [[test]]
+name = "wait-cycle-resource"
+path = "../tests/wait/cycle/resource.rs"
+
+[[test]]
 name = "release-untested-enroll"
 path = "../tests/release/untested/enroll.rs"
 

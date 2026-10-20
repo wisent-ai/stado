@@ -13,6 +13,7 @@ struct WaitsSection: View {
     @State private var problem: String?
     @State private var working = false
     @State private var cycles: [String]?
+    @State private var holdings: [String]?
 
     var body: some View {
         Section("Open waits on the Stado API host") {
@@ -41,12 +42,20 @@ struct WaitsSection: View {
             Button("Read wait cycles") { Task { await readCycles() } }
                 .disabled(working || !fleetStore.isConfigured)
             if let cycles {
-                LabeledContent("Lock-wait cycles", value: String(cycles.count))
+                LabeledContent("Wait cycles", value: String(cycles.count))
                 if cycles.isEmpty {
-                    Text("No wait cycle stands among this host's lock waits.")
+                    Text("No wait cycle stands among this host's waits.")
                 }
                 ForEach(cycles, id: \.self) { cycle in
                     Text(cycle).font(WisentTypeScale.identifier()).foregroundStyle(WisentDesign.danger).textSelection(.enabled)
+                }
+            }
+            Button("Read held resources") { Task { await readHoldings() } }
+                .disabled(working || !fleetStore.isConfigured)
+            if let holdings {
+                LabeledContent("Held resources", value: String(holdings.count))
+                ForEach(holdings, id: \.self) { holding in
+                    Text(holding).font(WisentTypeScale.identifier()).textSelection(.enabled)
                 }
             }
             if let receipt {
@@ -140,6 +149,46 @@ struct WaitsSection: View {
                     throw WaitsReadFailure("stado waits cycles --json listed a cycle without its text: \(row)")
                 }
                 return said
+            }
+        } catch {
+            guard generation == fleetStore.requestGeneration else { return }
+            problem = error.localizedDescription
+        }
+    }
+
+    /// `stado waits holds --json`: every resource a running process holds
+    /// in the wait-for graph, as `process <pid> holds <kind>:<id>`.
+    @MainActor
+    private func readHoldings() async {
+        guard !working, let address = fleetStore.address else { return }
+        let generation = fleetStore.requestGeneration
+        working = true
+        problem = nil
+        defer { working = false }
+        do {
+            // Reading the holdings removes those of processes that ended,
+            // so it is sent as a confirmed mutation.
+            let result = try await fleetStore.client.run(
+                arguments: ["waits", "holds", "--json"], confirmsMutation: true, at: address,
+                authorizationToken: fleetStore.authorizationToken
+            )
+            guard generation == fleetStore.requestGeneration else { return }
+            receipt = result
+            holdings = nil
+            guard result.ok else {
+                problem = result.message
+                return
+            }
+            guard let document = try JSONSerialization.jsonObject(with: Data(result.standardOutput.utf8)) as? [String: Any],
+                  let rows = document["holds"] as? [[String: Any]]
+            else {
+                throw WaitsReadFailure("stado waits holds --json answered a document without holds: \(result.standardOutput)")
+            }
+            holdings = try rows.map { row in
+                guard let pid = row["pid"] as? Int, let resource = row["resource"] as? String else {
+                    throw WaitsReadFailure("stado waits holds --json listed a holding without its pid and resource: \(row)")
+                }
+                return "process \(pid) holds \(resource)"
             }
         } catch {
             guard generation == fleetStore.requestGeneration else { return }
