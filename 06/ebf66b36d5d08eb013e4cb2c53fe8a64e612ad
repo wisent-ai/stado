@@ -13,6 +13,24 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Deliver the push gate first, then push every checkout and read its CI" its lines in CHANGELOG.md, push-order.mjs are replaced by this change.
+Repairs: "A recorded repair that names no repository is refused, not dropped" its lines in CHANGELOG.md, delivery-queue-order.mjs are replaced by this change.
+Repairs: "The delivery loop queues repaired commits and release newest delivers them" its lines in delivery-loop.mjs are replaced by this change.
+Repairs: "CI: check every new commit of main and install only the last green one" its lines in CHANGELOG.md, delivery_run.mjs, main_check.mjs are replaced by this change.
+Repairs: "Real journey of the delivery queue's serve role: queued at start and on a branch move, nothing built" its lines in delivery-queue-serve.mjs are replaced by this change.
+Repairs: "Build newest --queued: a real journey and a Desktop operation for the daily batch" its lines in queued.mjs are replaced by this change.
+Repairs: "Real journey of the delivery loop: nothing carried, a refused release kept on the commit and its defect, no second attempt" its lines in delivery-loop.mjs are replaced by this change.
+Repairs: "Refuse a release run record that names no product, version, id or commit" its lines in version-taken.mjs are replaced by this change.
+Repairs: "Preserve candidate quarantine until recovery is established" its lines in CHANGELOG.md, admission.mjs are replaced by this change.
+Repairs: "Keep when a queued release was published and recorded, and read the queue's register" its lines in CHANGELOG.md, queue-register.mjs are replaced by this change.
+Repairs: "Order queued jobs across the model priority range" its lines in CHANGELOG.md, priority.mjs are replaced by this change.
+Repairs: "Delivery routine asks the operator's rulings for its purpose before it is declared or run" its lines in CHANGELOG.md, delivery_ruling.mjs, delivery_run.mjs are replaced by this change.
+Repairs: "List every stored object unless a limit is requested" its lines in CHANGELOG.md, journey.mjs are replaced by this change.
+Repairs: "Stado delivers the declared plan itself: stado ci plan and stado ci run" its lines in CHANGELOG.md, delivery_run.mjs are replaced by this change.
+Repairs: "Test release newest reading a version another commit's run holds" its lines in version-taken.mjs are replaced by this change.
+Repairs: "The delivery order is the caller's, and the plan names every repair the queue cannot place" its lines in CHANGELOG.md, delivery-queue-order.mjs are replaced by this change.
+Repairs: "Real journey of the delivery queue's gates step: a refusing format gate fails the commit at gates and keeps it from release" its lines in delivery-queue-gates.mjs are replaced by this change.
+
 Harsh-Review-Attacked: whether a signalled or unstarted process now passes; exitedCleanly requires no spawn error, no signal and the success status, so neither does.
 Harsh-Review-Attacked: whether the refusal checks that required a status still do; exitedRefusing requires an integer failure status, which the null-status assertions it replaces demanded.
 Harsh-Review-Attacked: whether the policy comparison loosened; it now compares the desired values exactly, where both sides used to be widened to null.
