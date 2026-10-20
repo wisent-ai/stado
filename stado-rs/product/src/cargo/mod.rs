@@ -167,8 +167,8 @@ pub(crate) fn execute_revision(
         // and the program it builds and runs — a test that pushes to a local
         // bare remote, a command that talks to a Git host — keeps the
         // caller's transports.
-        let command = |operation: &str| {
-            let mut command = toolchain_command("cargo");
+        let command = |operation: &str| -> Result<std::process::Command> {
+            let mut command = toolchain_command("cargo")?;
             command
                 .arg(operation)
                 .args(&options)
@@ -176,7 +176,7 @@ pub(crate) fn execute_revision(
                 .env("CARGO_NET_OFFLINE", "true")
                 .env("CARGO_RESOLVER_LOCKFILE_PATH", &lockfile)
                 .env("TMPDIR", &scratch);
-            command
+            Ok(command)
         };
         // Registry crates this host never downloaded would stop the offline
         // resolution below. They are fetched first into Cargo's own cache,
@@ -185,7 +185,7 @@ pub(crate) fn execute_revision(
         report["state"] = json!("fetching_registry_crates");
         atomic_json(&evidence.join("result.json"), &report)?;
         checked(
-            toolchain_command("cargo")
+            toolchain_command("cargo")?
                 .arg("fetch")
                 .args(
                     options
@@ -200,7 +200,7 @@ pub(crate) fn execute_revision(
         report["state"] = json!("resolving_canonical_sources");
         atomic_json(&evidence.join("result.json"), &report)?;
         let graph = checked(
-            command("metadata")
+            command("metadata")?
                 .args(["--format-version", "1"])
                 .env("GIT_ALLOW_PROTOCOL", ""),
         )?;
@@ -208,7 +208,7 @@ pub(crate) fn execute_revision(
         checks::canonical_graph(runtime, pinned.as_ref(), &graph)?;
         atomic_json(&evidence.join("resolved-graph.json"), &graph)?;
         fs::copy(&lockfile, evidence.join("Cargo.lock"))?;
-        let mut process = command(operation);
+        let mut process = command(operation)?;
         // Every compiling operation runs through the declared compiler cache,
         // so a crate this host compiled for any earlier build — another run
         // directory, another product — is restored instead of compiled again.

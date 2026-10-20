@@ -26,11 +26,14 @@ tests/*/*/target/
 # one machine's run state, not this product's source.
 /target/
 .jeden/
+# The lock `stado product registry set` takes beside the catalog it writes:
+# the holder's pid, birth time and command, one machine's run state.
+catalog/products.lock
 # One machine's local assistant and editor state, which is not this product's
-# source and does not belong in a public repository. `.claude/`s scheduled
-# task lock was committed in May 2026 carrying a session id, a pid and the
-# wall-clock start of a process on one laptop; nothing in the fleet reads it
-# and every checkout would have fought over it.
+# source and does not belong in a public repository: a scheduled task lock
+# there carries a session id, a pid and the wall-clock start of a process on
+# one machine; nothing in the fleet reads it and every checkout would fight
+# over it.
 .claude/
 .vscode/
 .idea/

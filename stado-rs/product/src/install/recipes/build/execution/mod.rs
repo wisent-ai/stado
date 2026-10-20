@@ -16,15 +16,23 @@ pub(super) fn step(
         .map(|value| value.as_str().context("release argv must contain strings"))
         .collect::<Result<Vec<_>>>()?;
     let (program, arguments) = argv.split_first().context("release argv is empty")?;
-    let mut command = Command::new(step_program(program));
-    command.args(arguments).envs(environment).current_dir(root);
-    if !environment.contains_key("PATH") {
-        let inherited = std::env::var_os("PATH")
-            .context("PATH is missing; release steps need it to find their tools")?;
-        if let Some(path) = step_search_path(None, &inherited) {
-            command.env("PATH", path);
+    // A recipe that declares PATH runs with it; otherwise a step runs with
+    // Stado's and the toolchains' homes ahead of the inherited PATH. Its
+    // program is looked up on that same PATH.
+    let path = match environment.get("PATH") {
+        Some(declared) => std::ffi::OsString::from(declared),
+        None => {
+            let inherited = std::env::var_os("PATH")
+                .context("PATH is missing; release steps need it to find their tools")?;
+            step_search_path(None, Some(&inherited))?
         }
-    }
+    };
+    let mut command = Command::new(step_program(program, Some(&path))?);
+    command
+        .args(arguments)
+        .envs(environment)
+        .env("PATH", &path)
+        .current_dir(root);
     let output = checked(&mut command)?;
     if let Some(directory) = environment.get("WISENT_INSTALL_EVIDENCE_DIR") {
         let path = Path::new(directory).join("build-steps.json");

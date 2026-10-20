@@ -11,12 +11,10 @@
 //! fails says which step failed instead of building without Node.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use stado_wait as wait;
 
 use crate::common::emit;
 
@@ -70,18 +68,13 @@ fn root(home: &Path) -> PathBuf {
     home.join(".local/share/stado-node")
 }
 
-/// The declared release's `node` when it is installed and answers with it;
-/// `None` when it is absent or answers another version, which an install
-/// replaces. A `node` that is there and cannot be run is the error naming it.
+/// The declared release's `node` when it is installed and answers with it
+/// ([`published::answering`]).
 fn installed(home: &Path, declaration: &Declaration) -> Result<Option<PathBuf>> {
-    let node = root(home).join(&declaration.version).join("bin/node");
-    if !node.is_file() {
-        return Ok(None);
-    }
-    let output = wait::output(Command::new(&node).arg("--version"))
-        .with_context(|| format!("running {} --version", node.display()))?;
-    let answered = String::from_utf8_lossy(&output.stdout);
-    Ok((output.status.success() && answered.trim() == declaration.version).then_some(node))
+    published::answering(
+        root(home).join(&declaration.version).join("bin/node"),
+        &declaration.version,
+    )
 }
 
 /// Download, verify and unpack the declared release under the root.

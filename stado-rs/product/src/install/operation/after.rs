@@ -49,7 +49,7 @@ pub(in crate::install) fn after_install(
         return Ok(writer);
     };
     let pid = i32::try_from(std::process::id())?;
-    let started_at = crate::common::process::started_at(pid)?
+    let started_at = crate::common::process::birth::started_at(pid)?
         .ok_or_else(|| anyhow::anyhow!("the installing process pid {pid} has already exited"))?;
     installed.extra.insert(
         "after_install_running".to_owned(),

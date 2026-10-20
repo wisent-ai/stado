@@ -108,7 +108,7 @@ pub fn command() -> Command {
             .arg(
                 value(
                     "remove-dependency",
-                    "Remove every declared need of this product",
+                    "Remove every declared need on the named product; repeatable, and refused when this product declares none on it",
                 )
                 .action(ArgAction::Append),
             ),

@@ -1,8 +1,11 @@
+pub(crate) mod birth;
+
 use super::{atomic_json, now, sha256, Runtime};
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 use stado_wait as wait;
 use std::{
+    ffi::{OsStr, OsString},
     fs::{self, File},
     path::PathBuf,
     process::{Command, Output, Stdio},
@@ -15,28 +18,6 @@ static EXECUTABLE_HASH: LazyLock<std::result::Result<String, String>> = LazyLock
         .and_then(|path| sha256(&path))
         .map_err(|error| format!("{error:#}"))
 });
-/// The operating system's birth time for a PID, or absence when it has
-/// exited. A PID alone can be reused before a later install reads its record.
-pub fn started_at(pid: i32) -> Result<Option<String>> {
-    let output =
-        wait::output(Command::new("/bin/ps").args(["-p", &pid.to_string(), "-o", "lstart="]))
-            .with_context(|| format!("reading the start time of pid {pid}"))?;
-    if !output.status.success() {
-        if !super::alive(pid) {
-            return Ok(None);
-        }
-        bail!(
-            "ps could not read the start time of live pid {pid} ({}): {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let started = String::from_utf8(output.stdout)?.trim().to_owned();
-    if started.is_empty() {
-        bail!("ps returned no start time for live pid {pid}");
-    }
-    Ok(Some(started))
-}
 
 fn recorded(command: &mut Command) -> Result<(Output, PathBuf)> {
     let runtime = Runtime::new(None)?;
@@ -48,7 +29,10 @@ fn recorded(command: &mut Command) -> Result<(Output, PathBuf)> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(
+            &folder,
+            fs::Permissions::from_mode(u32::from(libc::S_IRWXU)),
+        )?;
     }
     let stdout = folder.join("stdout.log");
     let stderr = folder.join("stderr.log");
@@ -189,23 +173,36 @@ pub fn checked(command: &mut Command) -> Result<Output> {
 /// names a bare `cargo` dies `No such file or directory (os error 2)` inside
 /// the host's own agent while it runs over an SSH channel, whose login shell
 /// carries a fuller PATH. A relative program is looked up in the homes Stado
-/// and the toolchains install into first; a name none of them carries falls
-/// through to the spawn's own PATH lookup, so a correctly provisioned PATH
-/// keeps working unchanged. The release worker and `stado product install`
-/// resolve their steps here, so a recipe runs the same program under both.
-pub fn step_program(program: &str) -> PathBuf {
-    let path = std::path::Path::new(program);
-    if path.is_absolute() || program.contains('/') {
-        return path.to_path_buf();
+/// and the toolchains install into first, then in `path`, the PATH the
+/// program will run with; a name none of them carries is refused with every
+/// directory searched, so a missing tool is named before anything spawns.
+/// The release worker and `stado product install` resolve their steps here,
+/// so a recipe runs the same program under both.
+pub fn step_program(program: &str, path: Option<&OsStr>) -> Result<PathBuf> {
+    let named = std::path::Path::new(program);
+    if named.is_absolute() || program.contains('/') {
+        return Ok(named.to_path_buf());
     }
     // A candidate must be an executable file, as `execvp` requires. uv's
     // installer writes `~/.local/bin/env`, a shell snippet meant to be
     // sourced; where that file comes first it shadows `/usr/bin/env`.
-    step_search_directories()
+    let searched: Vec<PathBuf> = step_search_directories()
         .into_iter()
+        .chain(
+            path.into_iter()
+                .flat_map(|path| std::env::split_paths(path)),
+        )
+        .collect();
+    searched
+        .iter()
         .map(|directory| directory.join(program))
         .find(|candidate| executable_file(candidate))
-        .unwrap_or_else(|| path.to_path_buf())
+        .with_context(|| {
+            format!(
+                "no executable {program} in Stado's and the toolchains' homes or on the PATH it runs with; searched {}",
+                listed(&searched)
+            )
+        })
 }
 
 /// A command for a toolchain program Stado starts itself, `cargo` above all:
@@ -214,13 +211,13 @@ pub fn step_program(program: &str) -> PathBuf {
 /// (`rustc`, a `RUSTC_WRAPPER`, a build script's tools) resolve there too.
 /// A bare `Command::new("cargo")` finds nothing on the host agent's minimal
 /// PATH, which is how the compiler-cache install failed every darwin build.
-pub fn toolchain_command(program: &str) -> Command {
-    let mut command = Command::new(step_program(program));
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
-    if let Some(path) = step_search_path(None, &inherited) {
-        command.env("PATH", path);
-    }
-    command
+/// A program none of those directories carries is refused by name.
+pub fn toolchain_command(program: &str) -> Result<Command> {
+    let inherited = std::env::var_os("PATH");
+    let path = step_search_path(None, inherited.as_deref())?;
+    let mut command = Command::new(step_program(program, Some(&path))?);
+    command.env("PATH", path);
+    Ok(command)
 }
 
 /// The directories [`step_program`] looks a bare program up in, in order:
@@ -245,29 +242,46 @@ pub fn step_search_directories() -> Vec<PathBuf> {
     directories
 }
 
-/// `first`, then [`step_search_directories`], then `inherited`, each
-/// directory once: the PATH a step and every program it starts resolve
-/// against.
-pub fn step_search_path(
-    first: Option<PathBuf>,
-    inherited: &std::ffi::OsStr,
-) -> Option<std::ffi::OsString> {
+/// `first`, then [`step_search_directories`], then `inherited` (absent when
+/// this process has no PATH), each directory once: the PATH a step and every
+/// program it starts resolve against. A directory that holds the PATH
+/// separator cannot be joined into one, so the whole list is refused with it.
+pub fn step_search_path(first: Option<PathBuf>, inherited: Option<&OsStr>) -> Result<OsString> {
     let mut directories: Vec<PathBuf> = Vec::new();
-    for directory in first
-        .into_iter()
-        .chain(step_search_directories())
-        .chain(std::env::split_paths(inherited))
-    {
+    for directory in first.into_iter().chain(step_search_directories()).chain(
+        inherited
+            .into_iter()
+            .flat_map(|path| std::env::split_paths(path)),
+    ) {
         if !directories.contains(&directory) {
             directories.push(directory);
         }
     }
-    std::env::join_paths(directories).ok()
+    std::env::join_paths(&directories).with_context(|| {
+        format!(
+            "these directories cannot form one PATH: {}",
+            listed(&directories)
+        )
+    })
+}
+
+fn listed(directories: &[PathBuf]) -> String {
+    directories
+        .iter()
+        .map(|directory| directory.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn executable_file(candidate: &std::path::Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     candidate
         .metadata()
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .is_ok_and(|metadata| metadata.is_file() && any_execute_bit(metadata.permissions().mode()))
+}
+
+/// Whether `mode` lets its owner, its group or anyone else execute the file.
+fn any_execute_bit(mode: u32) -> bool {
+    let execute = u32::from(libc::S_IXUSR | libc::S_IXGRP | libc::S_IXOTH);
+    std::num::NonZeroU32::new(mode & execute).is_some()
 }

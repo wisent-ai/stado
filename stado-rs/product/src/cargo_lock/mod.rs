@@ -87,18 +87,21 @@ impl std::error::Error for UnlockedManifest {}
 pub fn unlocked(workspace: &Path) -> Result<Vec<String>> {
     let manifest = workspace.join("Cargo.toml");
     let output = stado_wait::output(
-        Command::new(crate::common::step_program("cargo"))
-            .args([
-                "metadata",
-                "--no-deps",
-                "--offline",
-                "--format-version",
-                "1",
-                "--manifest-path",
-            ])
-            .arg(&manifest)
-            .current_dir(workspace)
-            .stdin(Stdio::null()),
+        Command::new(crate::common::step_program(
+            "cargo",
+            std::env::var_os("PATH").as_deref(),
+        )?)
+        .args([
+            "metadata",
+            "--no-deps",
+            "--offline",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(&manifest)
+        .current_dir(workspace)
+        .stdin(Stdio::null()),
     )
     .with_context(|| {
         format!(

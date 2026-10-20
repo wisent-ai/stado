@@ -98,14 +98,15 @@ fn package(root: &Path, name: &str) -> Result<PathBuf> {
             matches.insert(path);
         }
     }
-    if matches.len() != 1 {
-        bail!(
-            "canonical Cargo package {name} has {} manifests in {}",
-            matches.len(),
+    let count = matches.len();
+    let mut found = matches.into_iter();
+    match (found.next(), found.next()) {
+        (Some(manifest), None) => Ok(manifest),
+        _ => bail!(
+            "canonical Cargo package {name} has {count} manifests in {}",
             root.display()
-        );
+        ),
     }
-    Ok(matches.into_iter().next().unwrap())
 }
 
 struct Resolver<'a> {
@@ -149,7 +150,7 @@ impl Resolver<'_> {
         }
         self.roots.insert(identity, root);
         let output = checked(
-            toolchain_command("cargo")
+            toolchain_command("cargo")?
                 .args(["metadata", "--manifest-path"])
                 .arg(&path)
                 .args(["--format-version", "1", "--no-deps", "--offline"])

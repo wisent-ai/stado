@@ -15,10 +15,16 @@ struct Journey {
 }
 
 impl Journey {
+    /// `program` in `directory`, its Git reading only the journey's own
+    /// configuration: the operator's global hooks (a commit attestation gate,
+    /// a push review) belong to the operator's repositories, not to a fixture.
     fn run(&mut self, directory: &Path, program: &str, args: &[&str]) -> Result<String> {
         let output = Command::new(program)
             .args(args)
             .current_dir(directory)
+            // The operator's global Git configuration, its hooks path
+            // included, never judges the fixture's own history.
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .output()?;
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();

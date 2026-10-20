@@ -15,15 +15,14 @@ pub(super) struct Report {
 }
 
 impl Report {
-    pub(super) fn new(runtime: &Runtime, source_install: bool) -> Self {
-        Self {
-            keychain: if source_install {
-                runtime.signing.keychain_path()
-            } else {
-                None
+    pub(super) fn new(runtime: &Runtime, source_install: bool) -> Result<Self> {
+        Ok(Self {
+            keychain: match source_install {
+                true => runtime.signing.keychain_path()?,
+                false => None,
             },
             signatures: Map::new(),
-        }
+        })
     }
 
     pub(super) fn observe(&mut self, placement: &Placement) -> Result<()> {

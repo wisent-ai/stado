@@ -51,7 +51,7 @@ pub fn export(root: &Path) -> Result<Export> {
     };
     let vendor = exported.directory.join("vendor");
     checked(
-        toolchain_command("cargo")
+        toolchain_command("cargo")?
             .args(["vendor", "--locked", "--versioned-dirs", "--quiet"])
             .arg(&vendor)
             .current_dir(&root),

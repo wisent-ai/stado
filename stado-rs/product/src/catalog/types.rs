@@ -118,8 +118,10 @@ pub enum RecipeKind {
 }
 
 impl RecipeKind {
-    pub fn parse(word: &str) -> Option<Self> {
-        Self::deserialize(serde_json::Value::String(word.to_string())).ok()
+    /// The kind `word` names; a word that names none is serde's refusal,
+    /// which lists the kinds there are.
+    pub fn parse(word: &str) -> serde_json::Result<Self> {
+        Self::deserialize(serde_json::Value::String(word.to_string()))
     }
 
     /// The field a bare `registry` installation value fills; every recipe of
@@ -183,4 +185,45 @@ pub const SIGNING_KEYCHAIN: &str = "signing_keychain";
 /// Whether a recipe field holds a comma-separated list.
 pub fn list_field(field: &str) -> bool {
     field == BINARIES || field == ENTRYPOINTS || field == FEATURES
+}
+
+/// The local keychain a recipe's `signing_keychain` names: an absolute path,
+/// or `$HOME/<path>` inside the installing account's home, never with `..`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclaredKeychain<'a> {
+    Absolute(&'a std::path::Path),
+    Home(&'a std::path::Path),
+}
+
+impl<'a> DeclaredKeychain<'a> {
+    /// The keychain `named` declares, refused naming the rule it breaks.
+    pub fn parse(named: &'a str) -> anyhow::Result<Self> {
+        use std::path::{Component, Path};
+        let declared = match named.strip_prefix("$HOME/") {
+            Some(relative) => Self::Home(Path::new(relative)),
+            None => Self::Absolute(Path::new(named)),
+        };
+        let (path, placed) = match declared {
+            Self::Absolute(path) => (path, path.is_absolute()),
+            Self::Home(path) => (path, !path.is_absolute() && !path.as_os_str().is_empty()),
+        };
+        if !placed
+            || path
+                .components()
+                .any(|part| matches!(part, Component::ParentDir))
+        {
+            anyhow::bail!(
+                "{SIGNING_KEYCHAIN} {named:?}: name an absolute local keychain or $HOME/<path> without .."
+            );
+        }
+        Ok(declared)
+    }
+
+    /// The keychain's path on a machine whose account home is `home`.
+    pub fn under(self, home: &std::path::Path) -> std::path::PathBuf {
+        match self {
+            Self::Absolute(path) => path.to_path_buf(),
+            Self::Home(path) => home.join(path),
+        }
+    }
 }

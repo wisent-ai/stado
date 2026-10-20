@@ -127,7 +127,7 @@ pub fn augment(command: Command) -> Command {
 
 /// Run one parsed `stado product` invocation as `build`, returning its exit status.
 pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
-    let _ = crate::BUILD.set(build);
+    crate::register_build(build);
     if let Some(workspace) = matches.get_one::<String>("workspace") {
         crate::common::use_workspace(PathBuf::from(workspace))?;
     }
@@ -154,7 +154,6 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
         "update" => crate::install::run(&action, arguments, &runtime),
         "finish" => crate::install::run(&action, arguments, &runtime),
         "status" => crate::install::run(&action, arguments, &runtime),
-        "cancel" => crate::install::run(&action, arguments, &runtime),
         "remove" => crate::install::run(&action, arguments, &runtime),
         "rollback" => crate::install::run(&action, arguments, &runtime),
         "sync" => crate::install::run(&action, arguments, &runtime),

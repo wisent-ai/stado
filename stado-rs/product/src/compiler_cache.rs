@@ -166,7 +166,7 @@ pub fn ensure(home: &Path) -> Result<Wrapper> {
             }
         }
     }
-    let mut install = toolchain_command("cargo");
+    let mut install = toolchain_command("cargo")?;
     install.args([
         "install",
         "--locked",
@@ -223,7 +223,7 @@ pub fn remove(home: &Path) -> Result<Value> {
             installed.display()
         );
     }
-    let output = capture(toolchain_command("cargo").args(["uninstall", &declaration.crate_name]))?;
+    let output = capture(toolchain_command("cargo")?.args(["uninstall", &declaration.crate_name]))?;
     if !output.status.success() {
         bail!(
             "cargo uninstall {} failed ({}): {}",

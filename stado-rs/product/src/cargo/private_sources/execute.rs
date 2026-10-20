@@ -26,7 +26,7 @@ pub(in crate::cargo) fn execute(
         );
     }
     let located = checked(
-        toolchain_command("cargo")
+        toolchain_command("cargo")?
             .args([
                 "locate-project",
                 "--workspace",
@@ -54,7 +54,7 @@ pub(in crate::cargo) fn execute(
         .join("cargo")
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&evidence)?;
-    let mut command = toolchain_command("cargo");
+    let mut command = toolchain_command("cargo")?;
     command
         .arg(operation)
         .arg("--manifest-path")
@@ -78,7 +78,9 @@ pub(in crate::cargo) fn execute(
         "source_revision": crate::build().source_revision,
         "started_at": now(), "state": "running",
     });
-    if matches!(operation, "build" | "check" | "test" | "run") {
+    // Every operation but `metadata` may compile (`clippy` and `doc` do), so
+    // it runs through the declared compiler cache, as a canonical run does.
+    if operation != "metadata" {
         let declaration = crate::compiler_cache::declaration()?;
         let wrapper = crate::compiler_cache::ensure(&runtime.home)?;
         command.env("RUSTC_WRAPPER", &wrapper.path);

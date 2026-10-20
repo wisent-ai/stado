@@ -55,10 +55,14 @@ pub struct Choice {
     require_signature: bool,
 }
 
-fn environment(variable: &str) -> Option<String> {
-    std::env::var(variable)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
+/// What `variable` declares, a blank value as none; a value that is not
+/// Unicode is refused naming it, not read as unset.
+pub(crate) fn environment(variable: &str) -> Result<Option<String>> {
+    match std::env::var(variable) {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => bail!("{variable} cannot be read: {error}"),
+    }
 }
 
 impl Choice {
@@ -69,7 +73,7 @@ impl Choice {
             (keychain, "--signing-keychain", KEYCHAIN_VARIABLE),
             (identity, "--signing-identity", IDENTITY_VARIABLE),
         ] {
-            if let (Some(value), Some(set)) = (value, environment(variable)) {
+            if let (Some(value), Some(set)) = (value, environment(variable)?) {
                 if set != value {
                     bail!("{flag} {value} and {variable}={set} name two signing choices; name one");
                 }
@@ -107,19 +111,23 @@ impl Choice {
     }
 
     /// The keychain named here, else in [`KEYCHAIN_VARIABLE`].
-    fn keychain(&self) -> Option<String> {
-        self.keychain
-            .clone()
-            .or_else(|| environment(KEYCHAIN_VARIABLE))
+    fn keychain(&self) -> Result<Option<String>> {
+        match &self.keychain {
+            Some(keychain) => Ok(Some(keychain.clone())),
+            None => environment(KEYCHAIN_VARIABLE),
+        }
     }
 
     /// The identity `requested` by a caller, else named here, else in
     /// [`IDENTITY_VARIABLE`].
-    pub fn identity(&self, requested: Option<&str>) -> Option<String> {
-        requested
+    pub fn identity(&self, requested: Option<&str>) -> Result<Option<String>> {
+        match requested
             .map(str::to_owned)
             .or_else(|| self.identity.clone())
-            .or_else(|| environment(IDENTITY_VARIABLE))
+        {
+            Some(identity) => Ok(Some(identity)),
+            None => environment(IDENTITY_VARIABLE),
+        }
     }
 
     /// A catalog recipe may bind a source installation to a keychain on the
@@ -131,25 +139,10 @@ impl Choice {
         };
         let named = declared
             .as_str()
-            .filter(|name| !name.is_empty())
             .context("signing_keychain must name a local keychain")?;
-        let path = if let Some(relative) = named.strip_prefix("$HOME/") {
-            if relative.is_empty() || Path::new(relative).is_absolute() {
-                bail!("signing_keychain {named} must name a path inside $HOME");
-            }
-            home.join(relative)
-        } else {
-            PathBuf::from(named)
-        };
-        if !path.is_absolute()
-            || path
-                .components()
-                .any(|part| matches!(part, std::path::Component::ParentDir))
-        {
-            bail!("signing_keychain {named} must be an absolute path or $HOME/<path> without ..");
-        }
+        let path = crate::catalog::DeclaredKeychain::parse(named)?.under(home);
         let selected = path.to_string_lossy().into_owned();
-        if let Some(other) = self.keychain() {
+        if let Some(other) = self.keychain()? {
             if other != selected {
                 bail!("signing_keychain {named} declares {selected}, but the invocation names {other}; no other signing source was tried");
             }
@@ -164,7 +157,7 @@ impl Choice {
 
     /// The effective keychain selected by a command line, environment or
     /// catalog recipe. Receipts use this path, never credential bytes.
-    pub fn keychain_path(&self) -> Option<String> {
+    pub fn keychain_path(&self) -> Result<Option<String>> {
         self.keychain()
     }
 
@@ -179,10 +172,10 @@ impl Source {
     /// Resolve the source from `choice`, the environment and `requested`,
     /// the identity a caller named on its own command line.
     pub fn resolve(choice: &Choice, requested: Option<&str>) -> Result<Self> {
-        let certificate = environment(CERTIFICATE_VARIABLE);
-        let private_key = environment(PRIVATE_KEY_VARIABLE);
-        let role = environment(ROLE_VARIABLE);
-        let keychain = choice.keychain();
+        let certificate = environment(CERTIFICATE_VARIABLE)?;
+        let private_key = environment(PRIVATE_KEY_VARIABLE)?;
+        let role = environment(ROLE_VARIABLE)?;
+        let keychain = choice.keychain()?;
         let pem = match (certificate, private_key) {
             (Some(certificate), Some(private_key)) => Some((certificate, private_key)),
             (None, None) => None,
@@ -219,7 +212,7 @@ impl Source {
                 bail!("{KEYCHAIN_VARIABLE} names the keychain {keychain}, which is not a regular file");
             }
             Self::Keychain(resolved)
-        } else if choice.identity(requested).is_some() {
+        } else if choice.identity(requested)?.is_some() {
             Self::SearchList
         } else {
             let fleet = crate::build().signing_role;

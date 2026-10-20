@@ -72,17 +72,25 @@ pub fn commit(
     // Every placed file whose signing identity the operator changed, as
     // `previous` -> `new`, so the installation's receipt and report name it.
     let mut identity_changes = serde_json::Map::new();
-    let mut signer_report = signer_report::Report::new(runtime, plan.release.is_none());
+    let mut signer_report = signer_report::Report::new(runtime, plan.release.is_none())?;
     for placement in &plan.placements {
         destination(runtime, &placement.destination)?;
         paths::admit_name(&placement.destination, &placement.source, runtime)?;
         if !selected.insert(placement.destination.clone()) {
             bail!("two artifacts target {}", placement.destination.display());
         }
-        let resolved = placement
-            .destination
-            .canonicalize()
-            .unwrap_or(placement.destination.clone());
+        // A destination not placed yet is its own path; one that exists and
+        // cannot be resolved is refused, not compared by its unresolved name.
+        let resolved = match placement.destination.canonicalize() {
+            Ok(resolved) => resolved,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                placement.destination.clone()
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("resolving {}", placement.destination.display()))
+            }
+        };
         if owned
             .get(&resolved)
             .is_some_and(|previous| previous.split_once('/').map(|(id, _)| id) != Some(product))
@@ -133,33 +141,27 @@ pub fn commit(
     {
         crate::callers::refuse_removed(runtime, &placement.destination, &placement.source)?;
     }
-    let retired: Vec<PathBuf> = if let Some(state) = existing
-        .as_ref()
-        .filter(|state| state.status == crate::state::InstallStatus::Installing)
-    {
-        serde_json::from_value(
-            state
-                .extra
-                .get("retired_paths")
-                .cloned()
-                .unwrap_or_else(|| json!([])),
-        )?
-    } else {
-        existing
-            .as_ref()
-            .map(|state| {
-                state
-                    .installed_paths
-                    .iter()
-                    .filter(|path| {
-                        !selected.contains(*path)
-                            && !ownership::overlaps(path, &shared)
-                            && !ownership::sibling_owns(&siblings, path)
-                    })
-                    .cloned()
-                    .collect()
+    // An unfinished installation recorded what it retires; one that recorded
+    // nothing retires nothing, and a receipt to replace retires what the new
+    // placements no longer cover. No receipt retires nothing.
+    let retired: Vec<PathBuf> = match existing.as_ref() {
+        Some(state) if state.status == crate::state::InstallStatus::Installing => {
+            match state.extra.get("retired_paths") {
+                Some(recorded) => serde_json::from_value(recorded.clone())?,
+                None => Vec::new(),
+            }
+        }
+        Some(state) => state
+            .installed_paths
+            .iter()
+            .filter(|path| {
+                !selected.contains(*path)
+                    && !ownership::overlaps(path, &shared)
+                    && !ownership::sibling_owns(&siblings, path)
             })
-            .unwrap_or_default()
+            .cloned()
+            .collect(),
+        None => Vec::new(),
     };
     // A path the previous installation owned inside a path this one places is
     // replaced by that placement: its bytes after placement are this

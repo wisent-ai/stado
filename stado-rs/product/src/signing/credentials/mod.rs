@@ -10,6 +10,7 @@ mod source;
 
 pub(super) use keychain::keep_apple_issuers;
 use keychain::{blocks, put_first, take_off};
+pub(crate) use source::environment;
 pub use source::{Choice, Source, IDENTITY_VARIABLE, KEYCHAIN_VARIABLE};
 
 mod selection;

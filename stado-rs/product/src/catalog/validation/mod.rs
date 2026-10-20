@@ -1,18 +1,15 @@
 use super::{
     text,
     types::{
-        list_field, Dependency, Family, Integration, ProductStatus, RecipeKind, RoadmapItem,
-        SurfaceKind, Visibility, FEATURES,
+        list_field, DeclaredKeychain, Dependency, Family, Integration, ProductStatus, RecipeKind,
+        RoadmapItem, SurfaceKind, Visibility, FEATURES,
     },
 };
 use crate::common::slug;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
-use std::{
-    collections::HashSet,
-    path::{Component, Path},
-};
+use std::collections::HashSet;
 
 mod public_status;
 mod service;
@@ -24,8 +21,11 @@ fn choice<'a, T: Deserialize<'a>>(value: &'a Value, field: &str) -> Result<T> {
 }
 
 pub fn validate(document: &Value) -> Result<()> {
-    if document["schema_version"] != 1 {
-        bail!("catalog schema_version must be 1");
+    let readable = super::embedded_schema()?;
+    if &document["schema_version"] != readable {
+        bail!(
+            "catalog schema_version must be {readable}, the schema this build's own catalog is written in"
+        );
     }
     let products = document["products"]
         .as_array()
@@ -107,9 +107,8 @@ pub fn validate(document: &Value) -> Result<()> {
             }
             repository(text(recipe, "repository")?)?;
             let kind_word = text(recipe, "kind")?;
-            let Some(kind) = RecipeKind::parse(kind_word) else {
-                bail!("{id}: unsupported installation kind {kind_word}");
-            };
+            let kind = RecipeKind::parse(kind_word)
+                .with_context(|| format!("{id}: unsupported installation kind {kind_word}"))?;
             for field in std::iter::once(kind.primary()).chain(kind.also_required()) {
                 if list_field(field) {
                     strings(recipe, field)?;
@@ -124,21 +123,8 @@ pub fn validate(document: &Value) -> Result<()> {
                 strings(recipe, FEATURES)?;
             }
             if recipe.get("signing_keychain").is_some() {
-                let keychain = text(recipe, "signing_keychain")?;
-                let relative = keychain.strip_prefix("$HOME/");
-                let path = if let Some(relative) = relative {
-                    Path::new(relative)
-                } else {
-                    Path::new(keychain)
-                };
-                if (relative.is_none() && !path.is_absolute())
-                    || (relative.is_some() && (path.is_absolute() || path.as_os_str().is_empty()))
-                    || path
-                        .components()
-                        .any(|component| matches!(component, Component::ParentDir))
-                {
-                    bail!("{id}.{surface}.signing_keychain: name an absolute local keychain or $HOME/<path> without ..");
-                }
+                DeclaredKeychain::parse(text(recipe, "signing_keychain")?)
+                    .with_context(|| format!("{id}.{surface}"))?;
             }
             if let Some(commands) = recipe.get("after_install") {
                 for command in commands
@@ -270,19 +256,19 @@ fn strings(value: &Value, field: &str) -> Result<()> {
     Ok(())
 }
 
+/// `OWNER/REPO`: exactly two names, each of letters, digits, `-`, `_` and `.`,
+/// and neither `.` nor `..`.
 fn repository(value: &str) -> Result<()> {
-    let parts: Vec<_> = value.split('/').collect();
-    if parts.len() != 2
-        || parts.iter().any(|part| {
-            part.is_empty()
-                || *part == "."
-                || *part == ".."
-                || !part
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
-        })
-    {
-        bail!("invalid repository {value:?}; expected OWNER/REPO");
+    let named = |part: &str| {
+        !part.is_empty()
+            && part != "."
+            && part != ".."
+            && part
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+    };
+    match value.split_once('/') {
+        Some((owner, repo)) if named(owner) && named(repo) => Ok(()),
+        _ => bail!("invalid repository {value:?}; expected OWNER/REPO"),
     }
-    Ok(())
 }

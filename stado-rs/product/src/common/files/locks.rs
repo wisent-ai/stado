@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use stado_wait as wait;
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Seek, Write},
     path::Path,
 };
 
@@ -69,7 +69,9 @@ fn take(path: &Path, mode: Take, product_scope: bool) -> Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        options
+            .mode(u32::from(libc::S_IRUSR | libc::S_IWUSR))
+            .custom_flags(libc::O_NOFOLLOW);
     }
     let mut file = options.open(path)?;
     if let Err(error) = file.try_lock() {
@@ -129,7 +131,7 @@ fn take(path: &Path, mode: Take, product_scope: bool) -> Result<File> {
     }
     let taken = chrono::Utc::now().to_rfc3339();
     let pid = i32::try_from(std::process::id())?;
-    let started = super::super::process::started_at(pid)?.with_context(|| {
+    let started = super::super::process::birth::started_at(pid)?.with_context(|| {
         format!(
             "installing process pid {pid} has exited before locking {}",
             path.display()
@@ -227,8 +229,10 @@ fn write_record(
         "phase": phase,
         "step": step,
     });
-    file.set_len(0)?;
+    file.rewind()?;
     file.write_all(format!("{record}\n").as_bytes())?;
+    let end = file.stream_position()?;
+    file.set_len(end)?;
     file.flush()?;
     Ok(())
 }
@@ -251,6 +255,6 @@ fn same_request(recorded: &str) -> bool {
 }
 
 pub fn alive(pid: i32) -> bool {
-    // Signal 0 delivers nothing and only asks whether the pid exists.
-    unsafe { libc::kill(pid, 0) == 0 }
+    // No signal is delivered; the kernel only answers whether the pid exists.
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
 }

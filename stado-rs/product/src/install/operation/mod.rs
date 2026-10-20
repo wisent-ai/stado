@@ -26,7 +26,7 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::process::Command;
 
-use crate::common::{alive, checked, process::started_at, Runtime};
+use crate::common::{alive, checked, process::birth::started_at, Runtime};
 use crate::state::{self, ProductState};
 
 /// The record a held lock carries, with whether its holder still runs;

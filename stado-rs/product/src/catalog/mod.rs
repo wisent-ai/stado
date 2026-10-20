@@ -8,7 +8,9 @@ use anyhow::{bail, Context, Result};
 pub use command::{cli_catalog, run, services};
 use serde_json::{json, Value};
 use std::{fs, path::Path};
-pub use types::{list_field, Dependency, Family, RecipeKind, Visibility, FEATURES};
+pub use types::{
+    list_field, DeclaredKeychain, Dependency, Family, RecipeKind, Visibility, FEATURES,
+};
 pub use validation::validate;
 
 /// The authority at the root of the Stado repository, compiled into the binary.
@@ -35,6 +37,19 @@ pub fn embedded() -> Result<Value> {
     let document: Value = serde_yaml::from_str(EMBEDDED)?;
     validate(&document)?;
     Ok(document)
+}
+
+/// The `schema_version` the compiled catalog is written in: the one schema
+/// this build reads, read once from the catalog itself rather than restated.
+fn embedded_schema() -> Result<&'static Value> {
+    static SCHEMA: std::sync::LazyLock<Result<Value, String>> = std::sync::LazyLock::new(|| {
+        serde_yaml::from_str::<Value>(EMBEDDED)
+            .map(|document| document["schema_version"].clone())
+            .map_err(|error| {
+                format!("the catalog compiled into this build does not parse: {error}")
+            })
+    });
+    SCHEMA.as_ref().map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 pub fn product<'a>(catalog: &'a Value, id: &str) -> Result<&'a Value> {

@@ -66,5 +66,8 @@ pub fn run(name: &str, json_output: bool, home: &Path) -> Result<i32> {
     // A removal succeeds by removing; the others when the declared version answers.
     let succeeded = operation == Operation::Remove
         || CacheState::deserialize(&report["state"]).is_ok_and(|state| state == CacheState::Ready);
-    Ok(i32::from(!succeeded))
+    Ok(match succeeded {
+        true => libc::EXIT_SUCCESS,
+        false => libc::EXIT_FAILURE,
+    })
 }

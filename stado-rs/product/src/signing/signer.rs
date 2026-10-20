@@ -1,7 +1,7 @@
 use super::{
     constants::APPLE_ISSUERS_PEM,
     core::{absolute, command, compatible, inspect, native, validate_identifier},
-    credentials::{Choice, Credentials, Source},
+    credentials::{environment, Choice, Credentials, Source},
     Policy,
 };
 use crate::common::sha256;
@@ -33,9 +33,10 @@ impl Signer {
         if !cfg!(target_os = "macos") {
             bail!("macOS code signing requires a Darwin host");
         }
-        let requested = choice
-            .identity(requested)
-            .or_else(|| std::env::var("MACOS_SIGN_IDENTITY").ok());
+        let requested = match choice.identity(requested)? {
+            Some(identity) => Some(identity),
+            None => environment("MACOS_SIGN_IDENTITY")?,
+        };
         if requested.as_deref() == Some("-") {
             bail!("ad-hoc signing is not an installation identity");
         }

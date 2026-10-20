@@ -53,7 +53,7 @@ pub use cargo::private_sources::{
 use std::sync::OnceLock;
 
 /// The Stado build executing these operations.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Build {
     /// The Stado package version.
     pub version: &'static str,
@@ -73,13 +73,19 @@ pub struct Build {
 
 static BUILD: OnceLock<Build> = OnceLock::new();
 
-/// The build [`cli::run`] was given. Records written before that call, which
-/// only this crate's own tests could make, say `unknown`.
+/// Declare the compiled Stado identity before any product operation records
+/// an external command. A second declaration must name the same build.
+pub fn register_build(build: Build) {
+    let recorded = BUILD.get_or_init(|| build);
+    assert_eq!(
+        *recorded, build,
+        "product build identity changed within one process"
+    );
+}
+
+/// The Stado build registered at process entry.
 pub(crate) fn build() -> Build {
-    BUILD.get().copied().unwrap_or(Build {
-        version: "unknown",
-        source_revision: "unknown",
-        signing_role: "",
-        product: "unknown",
-    })
+    *BUILD
+        .get()
+        .expect("product build identity must be registered before product operations")
 }

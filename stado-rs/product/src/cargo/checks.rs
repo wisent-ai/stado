@@ -9,26 +9,31 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::{fs, path::Path};
 
+/// The toolchain Stado declares for itself, compiled in: the Cargo it is
+/// built and verified with, which reads an isolated lockfile.
+const TOOLCHAIN: &str = include_str!("../../../../rust-toolchain.toml");
+
 /// The version line of the Cargo this host runs, refused when it is older
-/// than the release that reads an isolated lockfile.
+/// than the toolchain Stado declares in `rust-toolchain.toml`.
 pub(super) fn cargo_version() -> Result<String> {
-    let version = checked(toolchain_command("cargo").arg("--version"))?;
+    let declared: toml::Value = toml::from_str(TOOLCHAIN)
+        .context("Stado's compiled-in rust-toolchain.toml is unreadable")?;
+    let channel = declared["toolchain"]["channel"]
+        .as_str()
+        .context("Stado's compiled-in rust-toolchain.toml names no toolchain channel")?;
+    let floor = semver::Version::parse(channel).with_context(|| {
+        format!("Stado's compiled-in rust-toolchain.toml channel {channel} is no version")
+    })?;
+    let version = checked(toolchain_command("cargo")?.arg("--version"))?;
     let version = String::from_utf8(version.stdout)?.trim().to_owned();
-    let mut numbers = version
-        .split_whitespace()
-        .nth(1)
-        .context("Cargo did not report its version")?
-        .split('.');
-    let major: u32 = numbers
-        .next()
-        .context("Cargo version has no major")?
-        .parse()?;
-    let minor: u32 = numbers
-        .next()
-        .context("Cargo version has no minor")?
-        .parse()?;
-    if (major, minor) < (1, 97) {
-        bail!("canonical Cargo requires 1.97 or later for isolated lockfiles; observed {version}");
+    let word = version
+        .strip_prefix("cargo ")
+        .and_then(|rest| rest.split_whitespace().next())
+        .with_context(|| format!("Cargo did not report its version: {version}"))?;
+    let observed = semver::Version::parse(word)
+        .with_context(|| format!("Cargo reported a version that is no version: {version}"))?;
+    if observed < floor {
+        bail!("canonical Cargo is the toolchain Stado declares, {floor}, or later, which reads isolated lockfiles; observed {version}");
     }
     Ok(version)
 }
