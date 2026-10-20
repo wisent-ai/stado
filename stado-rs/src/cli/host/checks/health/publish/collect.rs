@@ -2,15 +2,9 @@
 //! what the init system holds under each of those identities, and how much
 //! room the volume the fleet writes to has left.
 //!
-//! Why the product owns this and a host script no longer may: the collector
-//! that used to build this document read each label with
-//! `launchctl print … 2>/dev/null || true` and published `inactive` when the
-//! read produced nothing. A read the host refuses produces nothing, so a
-//! daemon that was loaded and running was published as not loaded — and
-//! `stado service status`, `registry doctor` and Stado Desktop all repeated
-//! it, because a beacon is the only thing they have. The refusal and the
-//! absence are two different facts here, and they stay two facts all the way
-//! to the operator's screen.
+//! An init-system read refusal and a confirmed absent unit are different
+//! facts. Keep the refusal in the beacon so every CLI and Desktop reader
+//! describes what was observed rather than inferring inactivity.
 
 use serde_json::{json, Map, Value};
 
@@ -159,7 +153,9 @@ async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
 
     let mut units = Map::new();
     let mut verdicts = std::collections::BTreeMap::new();
-    for service in crate::deploy::service::declared_services(&target) {
+    let services = crate::deploy::service::declared_services(&target);
+    let mut questions = std::collections::HashMap::new();
+    for service in &services {
         let unit = service.unit_id();
         if unit.is_empty() || unit.contains(char::is_whitespace) || unit.contains(',') {
             continue;
@@ -199,13 +195,15 @@ async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
         // The question the service is for, asked at its own listen port
         // and judged against the resolver's declared refresh interval; a
         // service that stands is recovered here, on the host that runs it.
-        if let Some(answering) = answering_entry(&hostname, &target, &service, unit).await {
+        if let Some(answering) = answering_entry(&hostname, &target, service, unit).await {
+            questions.insert(answering.name, answering.asked);
             if let Value::Object(fields) = &mut entry {
-                fields.insert("answering".to_string(), answering);
+                fields.insert("answering".to_string(), answering.document);
             }
         }
         units.insert(unit.to_string(), entry);
     }
+    crate::deploy::service_answering::retain_declared(&questions);
     // A unit read failing is a crash loop Oko is told of once (`runtime::
     // stops::units`). What Oko answered joins the unit's `detail`, which
     // `stado service list` and Stado Desktop's Managed services show, and a

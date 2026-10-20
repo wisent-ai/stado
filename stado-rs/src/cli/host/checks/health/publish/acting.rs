@@ -53,56 +53,102 @@ pub(super) fn roles_and_strays(home: &std::path::Path, strays: Strays) -> Result
     }))
 }
 
+pub(super) struct Answering {
+    pub name: String,
+    pub document: Value,
+    /// The service had a usable declaration, port and standing bound.
+    pub asked: bool,
+}
+
+fn unreadable(name: String, cause: impl Into<String>) -> Answering {
+    Answering {
+        name,
+        document: crate::deploy::service_answering::Reading::Unreadable {
+            cause: cause.into(),
+        }
+        .document(),
+        asked: false,
+    }
+}
+
 /// The `answering` block of one unit: the declared question asked at the
 /// service's recorded listen port, the reading of it against the
-/// resolver's declared refresh interval, and, for a service that stands,
-/// the recovery this pass ran. `None` for a service whose catalog entry
-/// declares no question. A port the directory does not record, or a
-/// resolver that declares no interval, is said in the block instead of
-/// being guessed.
+/// resolver's declared refresh interval, and the recovery attempted for
+/// this failed-answering episode. An already recovered episode reports its
+/// last attempt instead of restarting again. `None` for a service whose
+/// catalog entry declares no question. A missing directory port or resolver
+/// interval is named rather than guessed.
 pub(super) async fn answering_entry(
     hostname: &str,
     target: &crate::targets::ComputeTarget,
     service: &crate::deploy::service::ManagedService,
     unit: &str,
-) -> Option<Value> {
+) -> Option<Answering> {
     let entry = match crate::deploy::service_catalog::lookup(&service.name) {
         Ok(Some(entry)) => entry,
         Ok(None) => return None,
-        Err(error) => return Some(json!({ "unreadable": error })),
+        Err(error) => return Some(unreadable(service.name.clone(), error.to_string())),
     };
-    entry.answering.as_ref()?;
+    let probe = entry.answering.as_ref()?;
     let port = match crate::cli::directory::recorded_listen_port(&entry, &target.name).await {
         Ok(Some(port)) => port,
         Ok(None) => {
-            return Some(json!({
-                "unreadable": format!("the service directory records no listen port for {} on {hostname}", entry.name)
-            }))
+            let cause = format!(
+                "the service directory records no listen port for {} on {hostname}",
+                entry.name
+            );
+            return Some(unreadable(entry.name, cause));
         }
-        Err(error) => return Some(json!({ "unreadable": error.to_string() })),
+        Err(error) => return Some(unreadable(entry.name, error.to_string())),
     };
     let bound_seconds = match crate::cli::resolver::declared_bound_seconds() {
         Ok(Some(seconds)) => seconds,
         Ok(None) => {
-            return Some(json!({
-                "unreadable": "this host's resolver declares no directory refresh interval, the bound a standing question is judged by"
-            }))
+            return Some(unreadable(
+                entry.name,
+                "this host's resolver declares no directory refresh interval, the bound a standing question is judged by"
+            ))
         }
-        Err(unreadable) => return Some(json!({ "unreadable": unreadable })),
+        Err(cause) => return Some(unreadable(entry.name, cause)),
     };
-    let reading = crate::deploy::service_answering::ask_and_read(&entry, port, bound_seconds)?;
+    let reading =
+        crate::deploy::service_answering::ask_and_read(&entry, unit, port, bound_seconds)?;
+    crate::deploy::service_answering::episode::observe(&entry.name, &reading);
     let mut block = reading.document();
     if reading.stands() {
+        if let Some(previous) =
+            crate::deploy::service_answering::episode::begin(&entry.name, unit, port, probe)
+        {
+            crate::deploy::service_answering::forget(&entry.name);
+            block["recovery"] = previous;
+            return Some(Answering {
+                name: entry.name,
+                document: block,
+                asked: true,
+            });
+        }
         let home = crate::config_file::expand_tilde("~");
         let recovered = crate::deploy::service_answering::recover::recover(
             &home, hostname, &entry, unit, &reading, None,
         )
         .await;
         crate::deploy::service_answering::forget(&entry.name);
-        block["recovery"] = match recovered {
+        let record = match recovered {
             Ok(record) => record,
             Err(error) => json!({ "refusal": error.to_string() }),
         };
+        crate::deploy::service_answering::episode::finish(
+            &entry.name,
+            unit,
+            port,
+            probe,
+            record.clone(),
+        );
+        block["recovery"] = record;
     }
-    Some(block)
+    Some(Answering {
+        name: entry.name,
+        document: block,
+        asked: true,
+    })
 }
