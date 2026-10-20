@@ -13,6 +13,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Janitor walks the build caches of a full volume whatever the load" its lines in recover.rs are replaced by this change.
+
 Harsh-Review-Attacked: whether an enforcing walk can run without pressure; cleanup_once returns before the walk below the threshold unless it is a preview, so admit_relief is reached only on a full volume.
 Harsh-Review-Attacked: whether the relief admission hides the load; it reads and records the load and ceiling as an admission, so the beacon shows what load the walk ran under.
 Harsh-Review-Attacked: the test runs the real binary with the ceiling below any working host's load and checks the preview is skipped and leaves the cache while the enforcing pass removes it.
