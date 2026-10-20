@@ -14,6 +14,7 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Repairs: "GPU clouds: every vendor's documented instance status is a serde enum mapped to MachineState through http::state (Lambda, Crusoe, Cudo, Hyperstack, Latitude, Nebius, Oblivus, Oracle, RunPod, Salad, Scaleway, Voltage Park; Vast.ai's actual/intended status and Vultr's status/power_status as their own enums); a status a vendor documents as exhaustive is refused when unknown, the others read as still coming up, as before" its Vultr state read a missing or unreadable status as running
+Repaired-By: "A RunPod pod whose launch stamp does not read is refused" repairs it in this push, naming this commit on its Repairs line
+
 Harsh-Review-Attacked: whether a named agent stops being found; live_agents still matches the instance prefix on every name a vendor reports, and only an unnamed machine, which never carried the prefix, is left out.
 Harsh-Review-Attacked: whether a launch now fails where it worked; every launch path sets the name Stado gave, so its reference forms as before.
-Repaired-By: "A RunPod pod whose launch stamp does not read is refused" repairs it in this push, naming this commit on its Repairs line
