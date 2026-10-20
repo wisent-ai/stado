@@ -14,6 +14,7 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Repairs: "Recover a service that accepts and never answers on the host that runs it" its answering declaration could name one repair step, so a standing caused by a second known cause was restarted without the step that clears it, and its changelog entry and recovery record said one step
+Repairs: "Lay out the service answering recovery and the forge status reader as rustfmt does" the recovery lines it laid out ran one repair step where the answering declaration lists several
 
 Harsh-Review-Attacked: whether a failing step stops the others or the restart; each step's refusal is recorded beside its name and the next step and the restart still run, as the module says.
 Harsh-Review-Attacked: whether a step runs whose cause is absent and does harm; each declared repair step reads its own cause and refuses when that cause is absent, so listing crypto before audit-lock clears whichever stands.
