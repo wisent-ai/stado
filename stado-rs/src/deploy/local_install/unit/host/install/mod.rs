@@ -8,6 +8,7 @@
 //! and which leaves the exact previous definition on disk for rollback.
 
 mod retire;
+mod unit_file;
 
 use std::path::{Path, PathBuf};
 
@@ -15,12 +16,14 @@ use crate::deploy::local_install::activation::commands::current_uid;
 use crate::deploy::local_install::activation::execute_plan;
 use crate::deploy::local_install::{systemd_unit, LocalOs};
 use crate::deploy::service::{
-    parse_local_unit_file, LocalUnitFile, UnitFile, KIND_LAUNCHD, KIND_SYSTEMD,
+    parse_local_unit_file, UnitFile, KIND_LAUNCHD, KIND_SYSTEMD, LAUNCHD_DAEMONS,
+    USER_LAUNCHD_AGENTS,
 };
 use crate::deploy::{DeployError, Runner};
 
 use super::{merge, Component, InstallPlan};
 use retire::retire;
+use unit_file::read_unit;
 
 /// Which planned component a native executable belongs to. Only the program
 /// decides; the merge then parses the actual arguments.
@@ -69,9 +72,9 @@ fn discover(
     let mut directories = vec![own.clone()];
     if host.os == LocalOs::Darwin {
         directories.push(if host.daemon.is_some() {
-            home.join("Library/LaunchAgents")
+            home.join(USER_LAUNCHD_AGENTS)
         } else {
-            PathBuf::from(SYSTEM_DAEMON_DIRECTORY)
+            PathBuf::from(LAUNCHD_DAEMONS)
         });
     }
     let mut found = Vec::new();
@@ -127,7 +130,7 @@ fn discover(
         // A unit that runs the bare binary serves no role: launchd starts it,
         // it prints its help and exits. There is nothing to merge, and it must
         // not refuse the one unit that replaces it.
-        if parsed.arguments.len() <= 1 {
+        if matches!(parsed.arguments.as_slice(), [] | [_]) {
             eprintln!(
                 "[host] {} runs {:?} with no command; left out of the host unit",
                 path.display(),
@@ -162,9 +165,6 @@ fn discover(
     Ok(components)
 }
 
-/// Where launchd keeps system-domain daemons.
-const SYSTEM_DAEMON_DIRECTORY: &str = "/Library/LaunchDaemons";
-
 /// The roles an installed host unit already runs. Its argv and the
 /// environment of the units it retired are the only record of them once
 /// those units are `.retired-*` files, so a later installation starts from
@@ -181,7 +181,7 @@ fn adopt_installed(mut host: InstallPlan, home: &Path) -> Result<InstallPlan, De
     let Some(installed) = read_unit(&path, kind)? else {
         return Ok(host);
     };
-    if installed.arguments.get(1).map(String::as_str) != Some("serve") {
+    if !matches!(installed.arguments.as_slice(), [_, command, ..] if command == "serve") {
         return Ok(host);
     }
     let mut environment: std::collections::BTreeMap<String, String> =
@@ -189,8 +189,8 @@ fn adopt_installed(mut host: InstallPlan, home: &Path) -> Result<InstallPlan, De
     environment.extend(installed.env.clone());
     let mut directories = vec![path.parent().map(Path::to_path_buf)];
     if host.os == LocalOs::Darwin {
-        directories.push(Some(PathBuf::from(SYSTEM_DAEMON_DIRECTORY)));
-        directories.push(Some(home.join("Library/LaunchAgents")));
+        directories.push(Some(PathBuf::from(LAUNCHD_DAEMONS)));
+        directories.push(Some(home.join(USER_LAUNCHD_AGENTS)));
     }
     let mut retired: Vec<PathBuf> = Vec::new();
     for directory in directories.into_iter().flatten() {
@@ -226,30 +226,25 @@ fn adopt_installed(mut host: InstallPlan, home: &Path) -> Result<InstallPlan, De
             environment.insert(name.clone(), value.clone());
         }
     }
+    let planned = host.exec_args.first().cloned().ok_or_else(|| {
+        DeployError(format!(
+            "the host unit plan for {} names no program to run",
+            host.label
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let mut arguments = installed.arguments;
-    arguments[0] = host.exec_args.first().cloned().unwrap_or(installed.program);
+    let Some(program) = arguments.first_mut() else {
+        return Err(DeployError(format!(
+            "the installed unit {} names no program",
+            path.display()
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
+    };
+    *program = planned;
     host.exec_args = arguments;
     host.env = environment.into_iter().collect();
     Ok(host)
-}
-
-/// One unit file this installation owns: `None` when it is not there, an
-/// error naming it when it cannot be read, is not text or does not parse.
-fn read_unit(path: &Path, kind: &str) -> Result<Option<LocalUnitFile>, DeployError> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(DeployError::io(format!("reading {}", path.display()))(
-                error,
-            ))
-        }
-    };
-    let content = String::from_utf8(bytes)
-        .map_err(|error| DeployError(format!("{} is not text: {error}", path.display())))?;
-    parse_local_unit_file(&content, kind)
-        .map(Some)
-        .map_err(|error| error.within(path.display().to_string()))
 }
 
 /// Merge, install and retire, in that order. Nothing is written before the
@@ -265,10 +260,26 @@ pub(crate) async fn install(
     let components = discover(&host, home, component_plan)?;
     let mut merged = merge(host, &components)?;
     // The first continuous unit supplies the native lifetime settings the
-    // default rendering does not know, such as a raised descriptor limit.
-    merged.startup = components
-        .iter()
-        .find_map(|component| component.render_startup(&merged).ok());
+    // default rendering does not know, such as a raised descriptor limit; a
+    // unit that cannot supply them is said, and one that fails to render
+    // refuses the installation.
+    for component in &components {
+        match component.render_startup(&merged) {
+            Ok(rendered) => {
+                merged.startup = Some(rendered);
+                break;
+            }
+            Err(error)
+                if error.failure == Some(crate::primitives::failure::FailureCode::Refused) =>
+            {
+                echo(&format!(
+                    "[host] {} supplies no lifetime settings: {}",
+                    component.plan.label, error.message
+                ))
+            }
+            Err(error) => return Err(error),
+        }
+    }
     for component in &components {
         echo(&format!(
             "[host] {} joins {}",
