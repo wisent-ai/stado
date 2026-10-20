@@ -18,6 +18,53 @@ const RECOVERY_PROGRAM: &str = concat!(
     include_str!("../../../../../../deploy/recover_object_api/recovery.sh"),
 );
 
+/// The program the recovery runs its readers with: the host's delivered Stado,
+/// the `program` its prologue names.
+const HOST_PROGRAM: &str = "$HOME/.stado/bin/stado";
+
+/// Every `host local api` verb the recovery program runs, read from the
+/// program itself: each line's words after `"$program" host local api `, up
+/// to the first option or quoted argument. Read rather than listed, so a verb
+/// added to the program is checked without a second list to keep.
+fn host_verbs() -> std::collections::BTreeSet<String> {
+    RECOVERY_PROGRAM
+        .lines()
+        .filter_map(|line| line.split_once("\"$program\" host local api "))
+        .map(|(_, rest)| {
+            rest.split_whitespace()
+                .take_while(|word| !word.starts_with('-') && !word.starts_with('"'))
+                .collect::<Vec<&str>>()
+                .join(" ")
+        })
+        .filter(|verb| !verb.is_empty())
+        .collect()
+}
+
+/// The shell that asks the host's Stado, before anything runs, for each verb
+/// the program needs: a host Stado that predates one is refused naming the
+/// verb and what that Stado said, instead of failing halfway through with
+/// its usage hint. A host with no Stado at `HOST_PROGRAM` is left to the
+/// prologue, which refuses it as `program_missing`.
+fn verb_check() -> String {
+    let verbs: Vec<String> = host_verbs()
+        .iter()
+        .map(|verb| crate::deploy::shlex_quote(verb))
+        .collect();
+    format!(
+        r#"program="{HOST_PROGRAM}"
+if [ -x "$program" ]; then
+  for verb in {verbs}; do
+    if ! said=$("$program" host local api $verb --help 2>&1 >/dev/null); then
+      printf 'host_stado_lacks_verb %s does not declare host local api %s: %s\n' "$program" "$verb" "$said" >&2
+      false
+    fi
+  done
+fi
+"#,
+        verbs = verbs.join(" ")
+    )
+}
+
 /// Restore the core object API without depending on the API being available.
 ///
 /// Storage authority changes belong to the resident storage-root transaction.
@@ -32,12 +79,13 @@ async fn recover_object_api_on_target(
     // storage-root transaction's flock for as long as it runs.
     let script = format!(
         r#"set -eu
-if [ "$(uname)" = Linux ]; then decode=--decode; else decode=-D; fi
+{checks}if [ "$(uname)" = Linux ]; then decode=--decode; else decode=-D; fi
 stado="$HOME/.stado/bin/stado"
 [ -x "$stado" ] || stado="$(command -v stado)"
-printf '%s' '{}' | /usr/bin/base64 "$decode" |
+printf '%s' '{encoded}' | /usr/bin/base64 "$decode" |
   "$stado" host local run "$HOME/.stado/recovery/storage-root-reconcile.lock" -- /bin/bash"#,
-        STANDARD.encode(RECOVERY_PROGRAM),
+        checks = verb_check(),
+        encoded = STANDARD.encode(RECOVERY_PROGRAM),
     );
     let recovered = crate::deploy::host_channel::run_script(resolved, &script, runner)
         .await
