@@ -13,6 +13,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "A held route is one resolver status blocker that counts its connections, not one sentence per connection" its lines in waiting.rs are replaced by this change.
+
 Harsh-Review-Attacked: whether any token changed while re-laying the lines; the diff moves only whitespace and line breaks and swaps two use lines, and each new layout is the one the gate's formatter printed for that site.
 Harsh-Review-Attacked: whether swapping the two re-exports changes what is visible; both lines stay, with their own visibility, and use order has no meaning in Rust.
 Harsh-Review-Attacked: whether another site in these files still differs from rustfmt; the gate's report names every differing site in them, and each one is here.
