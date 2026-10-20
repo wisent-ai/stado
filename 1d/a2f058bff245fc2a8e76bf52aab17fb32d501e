@@ -13,5 +13,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Service bootout: the state the bootout program reports is a serde enum (BootoutState: booted_out, absent, refused) parsed once, a word outside it a malformed report, with gone(); the init-system scope is a serde enum parsed from --domain; release gate, service probe, writer fencing and label retirement match variants" its lines in bootout.rs, mod.rs are replaced by this change.
+
 Harsh-Review-Attacked: whether the script receives the same scope word; Display writes the serde word word() returned, so @SCOPE@ is replaced with any, system or user as before.
 Harsh-Review-Attacked: whether a scope that fails to serialize now behaves differently; word() panicked as unreachable and to_string() panics on the formatting error, and neither can happen for a unit enum.
