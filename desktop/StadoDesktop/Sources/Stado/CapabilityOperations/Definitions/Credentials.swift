@@ -21,6 +21,12 @@ enum NativeCredentialOperations {
             .init(id: "item", label: "Item identifier", required: true),
             .init(id: "tags", label: "Comma-separated tags (blank reads only)", option: "--tags"),
         ]),
+        .init(id: "item-delete", title: "Delete a retired credential item (restorable)", path: ["credentials", "item", "delete"], fields: [
+            .init(id: "item", label: "Item identifier", required: true),
+        ]),
+        .init(id: "item-restore", title: "Restore a deleted credential item", path: ["credentials", "item", "restore"], fields: [
+            .init(id: "item", label: "Item identifier", required: true),
+        ]),
         .init(id: "signing-profile-ensure", title: "Store code-signing provisioning profiles in a signing item", path: ["credentials", "signing-profile", "ensure"], fields: [
             .init(id: "provider", label: "Profile provider (apple)", option: "--provider", required: true, initial: "apple"),
             .init(id: "item", label: "Signing item (for example tama-desktop-signing)", required: true),
