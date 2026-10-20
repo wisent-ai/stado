@@ -13,6 +13,16 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Format the committed sources the format gate refused" the lines of it this change rewrites are replaced by it.
+Repairs: "Clear the six clippy refusals that stop every install from main" the lines of it this change rewrites are replaced by it.
+Repairs: "Include undocumented command entries without reading wrapped prose as verbs" the lines of it this change rewrites are replaced by it.
+Repairs: "Discover declared command children from structured help" the lines of it this change rewrites are replaced by it.
+Repairs: "Audit built CLI command trees and consolidate local space reclaim" the lines of it this change rewrites are replaced by it.
+Repairs: "Admit resident unit arguments and restore failed activations" the lines of it this change rewrites are replaced by it.
+Repairs: "Quality check's executable mask states why its conversion is allowed" the lines of it this change rewrites are replaced by it.
+Repairs: "fleet approve names an enrollment request without a status" the lines of it this change rewrites are replaced by it.
+Repairs: "Quality check reads the executable bits through nix's file modes" the lines of it this change rewrites are replaced by it.
+
 Harsh-Review-Attacked: whether a non-Clap help with a Usage line is read as a leaf; it must also carry Clap's own -h, --help line saying Print help and a usage line naming exactly this command path, which are Clap's grammar, not a guess about behaviour.
 Harsh-Review-Attacked: whether a catalog error is still read as no CLI; a catalog whose products are not an array is refused naming it, and only a product the catalog does not carry answers false.
 Harsh-Review-Attacked: whether the move to commands/mod.rs changes a path; the module is still check::commands and its super:: imports resolve as before.
