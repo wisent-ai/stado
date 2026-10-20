@@ -49,35 +49,35 @@ pub(in crate::fleet_shape) async fn listener_count(
             return None;
         }
     };
-    let listeners = reading
-        .get("listeners")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let state = reading
-        .get("listeners_state")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let state = reading.get("listeners_state").and_then(Value::as_str);
     // A table nobody could read is not an empty table. Without this the check
     // would report "one listener per port" on a host whose `lsof` failed,
     // which is the exact false pass this module exists to refuse.
-    if listeners.is_empty() && state != crate::deploy::host_inventory::LISTENERS_READ {
-        out.push(Finding {
-            check: PORT_CHECK,
-            subject: target.name.clone(),
-            declared: "the host reports its listeners".to_string(),
-            observed: format!("listener table unread ({state})"),
-            command: format!("stado host inventory {}", target.name),
-        });
-        return Some(reading);
-    }
+    let listeners = match (reading.get("listeners").and_then(Value::as_array), state) {
+        (Some(listeners), _) if !listeners.is_empty() => listeners.clone(),
+        (_, Some(read)) if read == crate::deploy::host_inventory::LISTENERS_READ => Vec::new(),
+        (_, state) => {
+            let state = match state {
+                Some(state) => state.to_string(),
+                None => "the inventory reports no listeners_state".to_string(),
+            };
+            out.push(Finding {
+                check: PORT_CHECK,
+                subject: target.name.clone(),
+                declared: "the host reports its listeners".to_string(),
+                observed: format!("listener table unread ({state})"),
+                command: format!("stado host inventory {}", target.name),
+            });
+            return Some(reading);
+        }
+    };
     let mut holders: BTreeMap<u64, Vec<String>> = BTreeMap::new();
     for listener in &listeners {
         let Some(port) = listener.get("port").and_then(Value::as_u64) else {
             continue;
         };
-        // A listener row without its address or pid says so; it was shown
-        // as "?" and pid 0, which read as a process.
+        // A listener row without its address or pid says so, never as a mark
+        // or a pid of zero that reads as a process.
         let address = match listener.get("address").and_then(Value::as_str) {
             Some(address) => address.to_string(),
             None => "address not reported".to_string(),
@@ -90,9 +90,10 @@ pub(in crate::fleet_shape) async fn listener_count(
         holders.entry(port).or_default().push(who);
     }
     for (port, who) in holders {
-        if who.len() < 2 {
+        // One process on a declared port is the rule; a second is a finding.
+        let [_, _, ..] = who.as_slice() else {
             continue;
-        }
+        };
         out.push(Finding {
             check: PORT_CHECK,
             subject: format!("{}:{port}", target.name),
