@@ -15,6 +15,12 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Repairs: "Keep the refusal dedupe working after a thread panics holding its table", "Quota output names what a provider left out instead of printing \"?\"" and "Refuse a stream decision on a field the host did not report" — the defect that the committed tree called helpers a later commit removed and constants no commit holds, so no build of it compiled.
 Repairs: "Four unit-directory readers use the one declaration; file retirement says why it failed", "overview names the job stamps it cannot read", "stado host privacy refuses a measurement it cannot read" and "The module check resolves a declaration inside an inline module where rustc does" — the defect that their lines fail the declared clippy gate (a needless dereference and borrow, a hand-written ok, a non-consuming into_iter and an unnamed complex type), so no installation of the tree passed its gates.
+Repairs: "The module check resolves a declaration inside an inline module where rustc does" its lines in vocabulary.rs are replaced by this change.
+Repairs: "stado host privacy refuses a measurement it cannot read" its lines in privacy.rs are replaced by this change.
+Repairs: "Quota output names what a provider left out instead of printing "?"" its lines in increase.rs are replaced by this change.
+Repairs: "overview names the job stamps it cannot read" its lines in outcomes.rs are replaced by this change.
+Repairs: "Refuse a stream decision on a field the host did not report" its lines in session.rs are replaced by this change.
+
 Harsh-Review-Attacked: the quota rows could print differently - the removed helper answered a missing field with the same not-reported word the shared renderer prints, and text fields print bare in both.
 Harsh-Review-Attacked: the stream status could hide a log line it showed before - the comparison still skips exactly the not-reported word, now the shared constant.
 Harsh-Review-Attacked: the deletion count could change - the shared tally adds one to the same counter the removed function added one to.
