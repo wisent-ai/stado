@@ -78,6 +78,12 @@ enum NativeProductOperations {
             .init(id: "host", label: "Stado host for a service surface", option: "--host"),
         ]),
         .init(id: "paths", title: "Inspect executable ownership and PATH collisions", path: ["product", "paths"], hostPlacement: .none, mutates: false),
+        // Ends the running application through LaunchServices, waits on its
+        // process in the wait register, opens the bundle and reads it running.
+        .init(id: "restart", title: "Restart a local macOS application bundle after its installed bytes change", path: ["product", "restart"], hostPlacement: .none, fields: [
+            .init(id: "bundle", label: "Application bundle (APP.app) on this Mac", required: true),
+            .init(id: "if-running", label: "Leave a stopped application stopped", option: "--if-running", flag: true),
+        ]),
         // The answer lists, per product, each product its code reaches, the
         // standing the catalog gives it and every line that reaches it; a
         // product not shown running alone ends the operation as refused.

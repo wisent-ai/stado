@@ -72,6 +72,13 @@ pub fn augment(command: Command) -> Command {
             lifecycle::Shape::Builds,
         ))
         .subcommands(lifecycle::changes())
+        .subcommand(
+            Command::new("restart")
+                .about("Restart a local macOS application bundle after its installed bytes change")
+                .arg(Arg::new("bundle").value_name("APP.app").required(true))
+                .arg(flag("if-running", "Leave a stopped application stopped"))
+                .arg(flag("json", "Print the observed LaunchServices result")),
+        )
         .subcommand(lifecycle::locks())
         .subcommand(lifecycle::sync())
         .subcommand(lifecycle::signing())
@@ -124,10 +131,13 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
     if let Some(workspace) = matches.get_one::<String>("workspace") {
         crate::common::use_workspace(PathBuf::from(workspace))?;
     }
-    let runtime = Runtime::new(matches.get_one::<String>("catalog").map(PathBuf::from))?;
     let (action, mut arguments) = matches
         .remove_subcommand()
         .context("product command is missing")?;
+    if action == "restart" {
+        return crate::desktop_app::from_arguments(&arguments);
+    }
+    let runtime = Runtime::new(matches.get_one::<String>("catalog").map(PathBuf::from))?;
     match action.as_str() {
         "catalog" => crate::catalog::run(arguments, &runtime),
         "dependencies" => crate::dependencies::run(arguments, &runtime),

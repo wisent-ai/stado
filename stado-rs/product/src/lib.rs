@@ -18,6 +18,7 @@ pub mod common;
 pub mod compiler_cache;
 mod creation;
 mod dependencies;
+mod desktop_app;
 mod documentation;
 mod install;
 mod native;
