@@ -14,27 +14,24 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::Write,
     path::Path,
 };
 
 /// Free bytes the filesystem reports at `path`, shared by the installer and
 /// its build-tree reclaimer.
 pub fn available_space(path: &Path) -> Result<u64> {
-    use std::os::unix::ffi::OsStrExt;
-    let name = std::ffi::CString::new(path.as_os_str().as_bytes())?;
-    let mut state = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: `name` is NUL-terminated and `state` has room for statvfs.
-    if unsafe { libc::statvfs(name.as_ptr(), state.as_mut_ptr()) } != libc::EXIT_SUCCESS {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("reading free space under {}", path.display()));
-    }
-    // SAFETY: a successful statvfs initialized the output structure.
-    let state = unsafe { state.assume_init() };
+    // statvfs(3) through nix answers its own errno, so the call's return
+    // value is never compared by hand.
+    let state = nix::sys::statvfs::statvfs(path)
+        .with_context(|| format!("reading free space under {}", path.display()))?;
     // fsblkcnt_t is u32 on macOS and u64 on Linux, and f_frsize is c_ulong:
     // the conversions are real on one and the identity on the other.
     #[allow(clippy::useless_conversion)]
-    let (blocks, size) = (u64::from(state.f_bavail), u64::from(state.f_frsize));
+    let (blocks, size) = (
+        u64::from(state.blocks_available()),
+        u64::from(state.fragment_size()),
+    );
     Ok(blocks.saturating_mul(size))
 }
 
@@ -69,9 +66,18 @@ pub fn tag_cache(directory: &Path, writer: &str) -> Result<()> {
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("output has no parent directory")?;
     fs::create_dir_all(parent)?;
-    if path
-        .symlink_metadata()
-        .is_ok_and(|m| m.file_type().is_symlink())
+    // An output that does not exist yet is written new; one that cannot be
+    // examined is refused rather than taken for absent.
+    let existing = match path.symlink_metadata() {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| format!("examining output {}", path.display()))
+        }
+    };
+    if existing
+        .as_ref()
+        .is_some_and(|metadata| metadata.file_type().is_symlink())
     {
         bail!("refusing symlinked output {}", path.display());
     }
@@ -88,10 +94,12 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+            // A new output is its owner's alone until it takes the mode of
+            // the file it replaces.
+            options.mode(u32::from(libc::S_IRUSR | libc::S_IWUSR));
         }
         let mut file = options.open(&temporary)?;
-        if let Ok(metadata) = path.metadata() {
+        if let Some(metadata) = &existing {
             file.set_permissions(metadata.permissions())?;
         }
         file.write_all(bytes)?;
@@ -100,10 +108,18 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         File::open(parent)?.sync_all()?;
         Ok(())
     })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+    let Err(error) = result else {
+        return Ok(());
+    };
+    // The write failed; the temporary file it leaves, if any, is said.
+    match fs::remove_file(&temporary) {
+        Ok(()) => Err(error),
+        Err(removal) if removal.kind() == std::io::ErrorKind::NotFound => Err(error),
+        Err(removal) => Err(error.context(format!(
+            "the temporary file {} stays: {removal}",
+            temporary.display()
+        ))),
     }
-    result
 }
 
 pub fn atomic_json(path: &Path, value: &Value) -> Result<()> {
@@ -115,13 +131,6 @@ pub fn atomic_json(path: &Path, value: &Value) -> Result<()> {
 pub fn sha256(path: &Path) -> Result<String> {
     let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut hash = Sha256::new();
-    let mut buffer = [0u8; 65536];
-    loop {
-        let length = file.read(&mut buffer)?;
-        if length == 0 {
-            break;
-        }
-        hash.update(&buffer[..length]);
-    }
+    std::io::copy(&mut file, &mut hash).with_context(|| format!("reading {}", path.display()))?;
     Ok(hex::encode(hash.finalize()))
 }

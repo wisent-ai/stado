@@ -30,7 +30,7 @@ tar = "0.4"
 flate2 = "1"
 base64 = "0.22"
 libc = "0.2"
-nix = { version = "0.30", features = ["signal"] }
+nix = { version = "0.30", features = ["signal", "fs"] }
 regex = "1"
 scraper = "0.24"
 stado-wait = { version = "0.1.0", path = "../wait" }
