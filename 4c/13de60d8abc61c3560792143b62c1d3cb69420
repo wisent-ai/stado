@@ -13,8 +13,9 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repaired-By: "A service repair renders its unit the way service ensure does" repairs it in this push, naming this commit on its Repairs line
+
 Harsh-Review-Attacked: a product's own unit refused; an entry whose name or unit is the label is still excluded, so the product's one unit passes whether it runs the launcher or the binary.
 Harsh-Review-Attacked: a stranger refused for a coincidental name; only a program file named exactly as a catalog product matches, the file a release installs for that product.
 Harsh-Review-Attacked: a platform guess; the darwin default is gone, every caller passes the target's release platform, and the None arm, which no caller reaches, leaves the placeholder visible instead of choosing a directory.
 Harsh-Review-Attacked: the placeholder order; $HOME and $STADO_HOST are replaced before $STADO_PLATFORM, and none of the three values can contain another's placeholder.
-Repaired-By: "A service repair renders its unit the way service ensure does" repairs it in this push, naming this commit on its Repairs line
