@@ -14,7 +14,7 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Repairs: "fleet approve names an enrollment request without a status" its command-tree audit and space reclaim were not laid out as the format gate asks, and the reclaim reason said it was recorded where only fleet apply records it
+Repaired-By: "A refused gate's findings are read from Cargo's records" repairs it in this push, naming this commit on its Repairs line
 
 Harsh-Review-Attacked: whether the audit reads the built CLI; it runs the built binary's --help over every command path and asks the Brama judgment, refusing an unreachable judgment with its cause, and its journey reads the verdict over the real binary.
 Harsh-Review-Attacked: whether the reclaim change alters behaviour; it only lays the dispatch out and corrects the reason's help to say fleet apply records it.
-Repaired-By: "A refused gate's findings are read from Cargo's records" repairs it in this push, naming this commit on its Repairs line
