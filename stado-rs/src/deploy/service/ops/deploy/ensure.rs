@@ -107,7 +107,11 @@ impl EnsureOutcome {
 /// it for a host whose declaration has not caught up yet.
 pub fn ensure_unit_path(plan: &DeployPlan) -> String {
     if plan.force_daemon {
-        format!("/Library/LaunchDaemons/{}.plist", plan.label)
+        format!(
+            "{}/{}.plist",
+            crate::deploy::service::LAUNCHD_DAEMONS,
+            plan.label
+        )
     } else {
         String::new()
     }
@@ -152,8 +156,13 @@ pub async fn ensure_service(
     )
     .await?;
     report.name_unloaded(&plan.label, "ensure");
-    let (domain, pid, path) = parse_ensure(&report.stdout)
-        .unwrap_or_else(|| (report.domain.clone(), String::new(), report.path.clone()));
+    // Only a pass that settled the unit prints the STADO_ENSURE marker. A pass
+    // that failed is reported with the domain and path its prelude derived on
+    // the host, and no pid, beside the failure word in `action`.
+    let (domain, pid, path) = match parse_ensure(&report.stdout) {
+        Some(settled) => settled,
+        None => (report.domain.clone(), String::new(), report.path.clone()),
+    };
     Ok(EnsureOutcome {
         action: report.status.clone(),
         domain,
