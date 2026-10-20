@@ -24,7 +24,7 @@ pub(crate) async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     }
     let pid = match receipt.pid {
         Some(pid) => pid.to_string(),
-        None => "not reported".to_string(),
+        None => crate::cli::reporting::NOT_REPORTED.to_string(),
     };
     table::print(
         &["HOST", "SERVICE", "LABEL", "DOMAIN", "ACTION", "PID"],

@@ -113,7 +113,7 @@ pub(crate) async fn inspect_host_vault(
     }
     let shown = |value: &Option<String>| match value {
         Some(value) => value.clone(),
-        None => "not reported".to_string(),
+        None => crate::cli::reporting::NOT_REPORTED.to_string(),
     };
     println!("host:      {}", resolved.name);
     println!("vault:     {}", broker.vault);
