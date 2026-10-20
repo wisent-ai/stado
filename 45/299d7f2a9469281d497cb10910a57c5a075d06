@@ -18,6 +18,7 @@ Repairs: "Audit built CLI command trees and consolidate local space reclaim" its
 Repairs: "Check the exact revisions selected by Git push updates" the gate loop lines it last touched now choose the diagnostics reading by the gate's kind
 Repairs: "Job work directories are reclaimed only by the queue_workdirs stage" the gate runner lines it last touched are replaced by the one that reads Cargo's records
 Repairs: "fleet approve names an enrollment request without a status" the gate runner lines it last touched are replaced by the one that reads Cargo's records
+Repairs: "Stop failing directory reads from waiting on the host they failed to reach" its lines in CHANGELOG.md are replaced by this change.
 
 Harsh-Review-Attacked: whether a gate's argv changes for anything but a compiling Cargo gate; format gates, other programs and metadata run exactly as declared.
 Harsh-Review-Attacked: whether the flag lands among the arguments Cargo hands on; it is inserted before the first --, among Cargo's own options.
