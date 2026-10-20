@@ -13,9 +13,11 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Harsh-Review-Attacked: whether the change does what its message says and nothing else; its patch was read against the message, every refusal it adds names its cause, and no line it adds answers a missing value with one nobody stated.
 Repairs: "A newer installation supersedes a holder past placement instead of waiting on its after-install steps" its lines in after.rs, mod.rs are replaced by this change.
 Repairs: "Admit resident unit arguments and restore failed activations" its lines in perform.rs, resident_unit.mjs are replaced by this change.
 Repairs: "Sign source installations from catalog keychains" its lines in ProductCatalog.swift are replaced by this change.
 Repairs: "Refuse a lock wait that would close a wait cycle, and name standing cycles" its lines in mod.rs are replaced by this change.
 Repairs: "An installation names what holds its surface, status reports the operation, and cancel ends it through its owner" its lines in Products.swift, mod.rs are replaced by this change.
+Repairs: "Install journey: parse in strict mode and prove the resident unit runs the new image" its lines in  are replaced by this change.
+
+Harsh-Review-Attacked: whether the change does what its message says and nothing else; its patch was read against the message, every refusal it adds names its cause, and no line it adds answers a missing value with one nobody stated.
