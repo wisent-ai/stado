@@ -16,11 +16,9 @@ function required(name) {
 }
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const binary = realpathSync(required('STADO_BIN'));
-const base = Number(required('STADO_TEST_PRIORITY_BASE'));
 const negative = Number(required('STADO_TEST_PRIORITY_NEGATIVE'));
 const high = Number.MAX_SAFE_INTEGER;
-assert.ok(Number.isSafeInteger(base) && base < high);
-assert.ok(Number.isSafeInteger(negative) && negative < base);
+assert.ok(Number.isSafeInteger(negative) && negative < high);
 const home = join(repository, '.build', 'queue-priority', randomUUID());
 const store = join(home, 'store');
 mkdirSync(store, { recursive: true });
@@ -60,17 +58,30 @@ function records(prefix) {
 }
 function queued() { return records('queue').map(row => row.value); }
 function order() { return records('queue_priority').map(row => row.value.job_id); }
-function submit(label, priority) {
-  command(['submit', '--run-id', label, `--priority=${priority}`, 'true']);
+function persisted(label) {
   const job = queued().find(value => value.run_id === label);
   assert.ok(job, `submission ${label} did not persist a queued job`);
+  return job;
+}
+function submit(label, priority) {
+  command(['submit', '--run-id', label, `--priority=${priority}`, 'true']);
+  const job = persisted(label);
   assert.equal(job.priority, priority);
   return job.job_id;
 }
 const submitted = new Set();
 try {
   command(['config', 'init']);
-  const lower = submit('priority-lower', base);
+  // A submission naming no priority takes the one `stado submit` declares by
+  // default, the lowest it admits; the journey reads it from the job the
+  // product persisted instead of being told it.
+  command(['submit', '--run-id', 'priority-lower', 'true']);
+  const lowest = persisted('priority-lower');
+  const base = lowest.priority;
+  assert.ok(Number.isSafeInteger(base) && base < high, `default priority ${base}`);
+  assert.ok(negative < base, `STADO_TEST_PRIORITY_NEGATIVE ${negative} must be below the default ${base}`);
+  report.default_priority = base;
+  const lower = lowest.job_id;
   submitted.add(lower);
   const higher = submit('priority-higher', high);
   submitted.add(higher);
