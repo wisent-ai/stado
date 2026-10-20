@@ -13,8 +13,9 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repaired-By: "Every report field a host did not send reads not reported through one renderer" repairs it in this push, naming this commit on its Repairs line
+
 Harsh-Review-Attacked: whether a GPU process without an identity can still be released by a word nobody stated; the blocker listing refuses it naming the host and quoting the row, and the display-only columns say "not reported".
 Harsh-Review-Attacked: whether inference status still names a state "unknown"; the JSON answers a null state with its detail, and the text line says "not reported" with the beacon's detail or that the entry carries no state.
 Harsh-Review-Attacked: whether the GUI still reads the answer; Stado Desktop decoded the state as required text, so a null failed its inference screen, and "Stado Desktop reads an inference beacon that reports no state" repairs it in this push, naming this commit on its Repairs line.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
-Repaired-By: "Every report field a host did not send reads not reported through one renderer" repairs it in this push, naming this commit on its Repairs line
