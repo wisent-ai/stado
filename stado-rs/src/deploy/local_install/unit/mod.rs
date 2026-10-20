@@ -60,17 +60,15 @@ impl InstallPlan {
     /// `/Library/LaunchDaemons` and `home` names only the account it runs as.
     pub fn unit_path(&self, home: &Path) -> PathBuf {
         if self.daemon.is_some() {
-            return PathBuf::from("/Library/LaunchDaemons").join(format!("{}.plist", self.label));
+            return Path::new(crate::deploy::service::LAUNCHD_DAEMONS)
+                .join(format!("{}.plist", self.label));
         }
         match self.os {
             LocalOs::Darwin => home
-                .join("Library")
-                .join("LaunchAgents")
+                .join(crate::deploy::service::USER_LAUNCHD_AGENTS)
                 .join(format!("{}.plist", self.label)),
             LocalOs::Linux => home
-                .join(".config")
-                .join("systemd")
-                .join("user")
+                .join(crate::deploy::service::USER_SYSTEMD_UNITS)
                 .join(systemd_unit(&self.label)),
         }
     }
