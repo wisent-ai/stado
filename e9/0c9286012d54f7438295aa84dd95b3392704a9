@@ -15,6 +15,7 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Repairs: "A remote command to a host whose services stand is refused before it is sent" it refused every command to a host whose resolver session stood, although the command channel is a new connection that may answer, and its module comment retold an incident
 Repairs: "A starting resolver publishes its waiting list, and a held host is refused before its channel key is read" its refuse_held refused the same command before the channel was asked, leaving the host's one diagnostic unsent
+Repairs: "A declared repair is sent to a host whose services stand" a command to a held host was refused for the resolver's own session instead of asking the host's own paths
 
 Harsh-Review-Attacked: whether a held host now receives commands silently; the held reading is said on stderr naming the path that answered, and when no declared path answers the refusal names the held wait and every path's failure.
 Harsh-Review-Attacked: whether a key failure hides the host's state; when the key cannot be read for a held host, the refusal carries the held wait and the key failure together.
