@@ -15,3 +15,5 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 Repairs: "Job work directories are reclaimed only by the queue_workdirs stage" its push check ran the installation selection, building and testing on every push
 
 Harsh-Review-Attacked: whether a push now lets a defect through unchecked; it runs the lock resolution, module declarations and format gates of the pushed commits, the lint and test gates run in the one build over every repair, and quality check without --pre-push still runs the installation selection.
+
+Repairs: "Quality: the pre-push check, a change hand-off and a release submission run the gates a product installation runs, selected by each gate's kind (format, lint and test), so a commit the push passes is not refused by its installation; stado quality format keeps the format gates; the gate set type is DeclaredGates" 1b328d14 it made the pre-push check select every gate kind, so each push compiled and tested
