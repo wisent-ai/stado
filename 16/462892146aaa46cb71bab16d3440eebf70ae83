@@ -13,6 +13,20 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "The delivery pass lock probe calls fs2's shared lock, not std's inherent one, so the library compiles" its lines in state.rs are replaced by this change.
+Repairs: "Build trees take a .build for SwiftPM's only beside a Package.swift" its lines in locks.rs, mod.rs are replaced by this change.
+Repairs: "Format the committed sources the format gate refused" its lines in sanitize.rs are replaced by this change.
+Repairs: "Bind product locks to verified process identities" its lines in cancel.rs, locks.mjs, locks.rs, mod.rs are replaced by this change.
+Repairs: "Expose and cancel post-placement installation waits" its lines in cancel.rs are replaced by this change.
+Repairs: "stado ci delivery: whether the delivery path stands, and every way it is down" its lines in Cargo.toml, state.rs are replaced by this change.
+Repairs: "Bind editor connections to parent lifetime and workspace ownership" its lines in instances.rs are replaced by this change.
+Repairs: "A superseded run another Stado already removed counts as removed" the lines of it this change rewrites are replaced by it.
+Repairs: "A tree of a shed run another Stado already removed counts as removed" its lines in Cargo.toml are replaced by this change.
+Repairs: "Stado delivers the declared plan itself: stado ci plan and stado ci run" its lines in state.rs are replaced by this change.
+Repairs: "Format the editor connection lifetime code and its journey as the format gate requires" its lines in instances.rs are replaced by this change.
+Repairs: "Move local reclamation under the space reclaim engine" its lines in file.rs, locks.rs, mod.rs, ownership.rs, sanitize.rs, slot.rs, workload.rs, write.rs are replaced by this change.
+Repairs: "A run removed while the runs are listed is not a failure" the lines of it this change rewrites are replaced by it.
+
 Harsh-Review-Attacked: whether contention reads differently; std's File::try_lock and try_lock_shared take the same flock(2) lock fs2 took and report contention as TryLockError::WouldBlock, so every call site that read WouldBlock as another holder still does, and every other error keeps its io::Error.
 Harsh-Review-Attacked: whether dropping the EACCES and EAGAIN contention test loses a holder; flock(2) with LOCK_NB reports a held lock as EWOULDBLOCK, which is EAGAIN on the platforms Stado runs on, and std maps that to WouldBlock; EACCES belonged to fcntl locks, which no caller takes.
 Harsh-Review-Attacked: whether creating a run or an editor instance could now pass on a lock it does not hold; each try_lock that finds the new file held refuses naming it.
