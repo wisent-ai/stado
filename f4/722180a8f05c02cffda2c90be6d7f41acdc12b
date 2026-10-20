@@ -13,6 +13,9 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "A held connection names the client holding it" its status wrote one blocker sentence per held connection, so one held route filled resolver status with repeats
+Repairs: "Format the client-address lines as rustfmt lays them out" its laid-out client-address lines went with the per-connection sentence they wrote
+
 Harsh-Review-Attacked: whether the compile repair states a value nobody chose; the catalog entries a declared unit is rendered from carry no answering probe of their own, so None says exactly that, and the probe is read only from the product catalog's service declaration.
 Harsh-Review-Attacked: whether grouping hides a held connection; every published wait is still listed whole in the JSON, and the blocker names each route once with how many connections stand there and the oldest one's own held sentence.
 Harsh-Review-Attacked: whether the oldest wait is chosen right; waits on one route are compared by their published start, which shares one RFC 3339 format, so the earliest start sorts first and its measured age is reported with it.
