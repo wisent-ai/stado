@@ -13,6 +13,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repaired-By: "stado web declare carries a unit's host, port and consumer only for a unit" repairs it in this push, naming this commit on its Repairs line
+
 Harsh-Review-Attacked: whether a secret reference that is not text still reads as empty; it is refused naming the flag, and the change word is printed from the typed value the JSON carries.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
-Repaired-By: "stado web declare carries a unit's host, port and consumer only for a unit" repairs it in this push, naming this commit on its Repairs line
