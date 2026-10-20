@@ -20,6 +20,9 @@ use crate::release_agent::state::document::{load_state, proxy_state_path, save_s
 use crate::release_agent::state::records::HostReleaseState;
 use crate::release_control::ProductReleasePolicy;
 
+mod retire;
+pub(crate) use retire::retire_untargeted;
+
 /// What happened to `product`'s blue-green serving on `target_name` this
 /// pass, or `None` when it has none left.
 pub(crate) async fn hand_over_to_unit(
@@ -42,13 +45,14 @@ pub(crate) async fn hand_over_to_unit(
     }
     let (served, bind) = served_unit(document, &policy.service, target_name)?;
     // The unit the port goes to is the product's one catalog unit — the unit
-    // enrollment converted the policy towards. The directory's unit is only
-    // the fallback for a product the catalog does not name: it still names
-    // the old label until an ensure of the new unit is recorded, and that
-    // ensure cannot succeed while the proxy holds the port.
-    let unit = crate::deploy::service_catalog::lookup(product)?
-        .and_then(|entry| entry.unit)
-        .unwrap_or(served);
+    // enrollment converted the policy towards. A product the catalog names no
+    // unit for is served by the directory's unit: it still names the old label
+    // until an ensure of the new unit is recorded, and that ensure cannot
+    // succeed while the proxy holds the port.
+    let unit = match crate::deploy::service_catalog::lookup(product)?.and_then(|entry| entry.unit) {
+        Some(unit) => unit,
+        None => served,
+    };
     if !unit_loaded(&unit)? {
         return Ok(Some(format!(
             "{product} is still served blue-green on {bind}: its unit {unit} is not loaded on \
@@ -197,116 +201,4 @@ fn unit_loaded(unit: &str) -> Result<bool, String> {
     };
     Ok(asked("systemctl", &["--user", "is-enabled", &service])?
         || asked("systemctl", &["is-enabled", &service])?)
-}
-
-/// Retire what release control left on this host for every product whose
-/// policy no longer targets it: the proxy its state file owns, the release
-/// processes it launched (only processes running out of the product's
-/// release directory with the agent's launch marker — a pid from an old
-/// state file may belong to anything by now), and its state and proxy files.
-/// `targeted` names the products whose policy lists this host; `home` is the
-/// account's home, under which every target keeps `.stado/release-state` and
-/// `.stado/services/<product>`. Returns one line per product acted on.
-pub(crate) async fn retire_untargeted(
-    home: &str,
-    targeted: &std::collections::BTreeSet<String>,
-) -> Vec<String> {
-    let state_dir = std::path::Path::new(home).join(".stado/release-state");
-    // No release-state directory means release control never left anything
-    // here. Any other failure is reported: read as empty, a product taken off
-    // this host kept its proxy and processes running with nothing said.
-    let entries = match std::fs::read_dir(&state_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-        Err(error) => {
-            return vec![format!(
-                "release state {} could not be listed; nothing was retired: {error}",
-                state_dir.display()
-            )]
-        }
-    };
-    let mut lines = Vec::new();
-    let mut products: Vec<String> = Vec::new();
-    for entry in entries {
-        match entry {
-            Ok(entry) => products.extend(
-                entry
-                    .file_name()
-                    .into_string()
-                    .ok()
-                    .and_then(|name| name.strip_suffix("-proxy.json").map(str::to_string))
-                    .filter(|product| !targeted.contains(product)),
-            ),
-            Err(error) => lines.push(format!(
-                "an entry of release state {} could not be read: {error}",
-                state_dir.display()
-            )),
-        }
-    }
-    products.sort();
-    for product in products {
-        let proxy = state_dir.join(format!("{product}-proxy.json"));
-        if let Err(error) = control::retire(Some(home), &proxy).await {
-            lines.push(format!(
-                "{product} is no longer released to this host, but its release proxy could \
-                 not be retired: {error}"
-            ));
-            continue;
-        }
-        let install_root = format!("{home}/.stado/services/{product}");
-        let processes = match super::inventory::release_processes(&install_root) {
-            Ok(processes) => processes,
-            Err(error) => {
-                lines.push(format!(
-                    "{product} is no longer released to this host and its release proxy was \
-                     retired, but its release processes could not be listed: {error}"
-                ));
-                continue;
-            }
-        };
-        let spawned: Vec<i32> = processes
-            .iter()
-            .filter(|process| process.agent_spawned)
-            .map(|process| process.process_group)
-            .collect();
-        let mut ended = Vec::new();
-        for process in &processes {
-            if process.agent_spawned || spawned.contains(&process.process_group) {
-                match super::inventory::terminate(process) {
-                    Ok(()) => ended.push(format!(
-                        "{} pid {} port {:?}",
-                        process.version, process.pid, process.port
-                    )),
-                    Err(failed) => lines.push(format!("{product}: {failed}")),
-                }
-            }
-        }
-        if !ended.is_empty() {
-            // Removed on the pass that finds nothing left running, so a
-            // process that ignored this SIGTERM is found and signalled again.
-            lines.push(format!(
-                "{product} is no longer released to this host: retired its release proxy and \
-                 ended {}",
-                ended.join(", ")
-            ));
-            continue;
-        }
-        let left: Vec<String> = [proxy.clone(), state_dir.join(format!("{product}.json"))]
-            .iter()
-            .filter_map(|path| crate::primitives::staging::remove(path))
-            .collect();
-        lines.push(if left.is_empty() {
-            format!(
-                "{product} is no longer released to this host: nothing of it runs here; its \
-                 release state was removed"
-            )
-        } else {
-            format!(
-                "{product} is no longer released to this host: nothing of it runs here, but its \
-                 release state stays: {}",
-                left.join("; ")
-            )
-        });
-    }
-    lines
 }
