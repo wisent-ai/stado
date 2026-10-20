@@ -14,6 +14,10 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Repairs: "A missing provider verb says why the installed provider does not serve it", "A product installs against what is installed of its dependencies, and a provider the machine does not have binds nothing", "Keep verb dependencies compatible with predecessor installers" and "Plan and install declared product prerequisites" - the defect that an installed provider lacking a verb, with no qualified revision to replace it, refused the consumer and held two mutually dependent products out of every install.
+Repairs: "A product installs against what is installed of its dependencies, and a provider the machine does not have binds nothing" its lines in mod.rs, prerequisites.mjs are replaced by this change.
+Repairs: "Plan and install declared product prerequisites" its lines in mod.rs, prerequisites.mjs are replaced by this change.
+Repairs: "Keep verb dependencies compatible with predecessor installers" its lines in mod.rs, prerequisites.mjs are replaced by this change.
+
 Harsh-Review-Attacked: the unqualified cause could be swallowed - it is printed whole on standard error with the verb, provider and installed revision, and the plan names no step for the verb.
 Harsh-Review-Attacked: a qualified provider could be skipped - the fallback runs only when no qualified revision is found; a found one is still installed in the provider's place.
 Harsh-Review-Attacked: a consumer could silently lose a verb it needs - the consumer's own use of the verb says the provider does not serve it, as for an absent provider, and standard error names it at install.
