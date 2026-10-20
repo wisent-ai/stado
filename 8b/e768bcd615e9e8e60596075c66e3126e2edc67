@@ -15,6 +15,7 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Repairs: "Quota commands name a missing region, family, limit or grant" its ticket tables read a row without ok as N and counted it failed
 Repairs: "Quota output names what a provider left out instead of printing \"?\"" its reported helper and the two copied tables duplicated the shared renderer
+Repairs: "Quota output names what a provider left out instead of printing "?"" its lines in mod.rs are replaced by this change.
 
 Harsh-Review-Attacked: whether the escalation filter changed; the relevant rows are chosen exactly as before and only their printing moved into the shared table.
 Harsh-Review-Attacked: whether the reply table now rewrites dry-run actions it printed raw; it does, naming what would be done instead of the bare word dry_run.
