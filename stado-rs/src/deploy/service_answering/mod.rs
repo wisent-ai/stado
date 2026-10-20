@@ -26,7 +26,7 @@ pub mod register;
 
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -82,12 +82,15 @@ impl Reading {
     }
 }
 
+/// One question in flight. Held behind an `Arc` so the task that asked it
+/// can tell, when its answer comes back, whether the question is still the
+/// one recorded or was forgotten or replaced since.
 struct Pending {
     since: String,
     started: Instant,
 }
 
-static PENDING: Mutex<BTreeMap<String, Pending>> = Mutex::new(BTreeMap::new());
+static PENDING: Mutex<BTreeMap<String, Arc<Pending>>> = Mutex::new(BTreeMap::new());
 static FINISHED: Mutex<BTreeMap<String, Finished>> = Mutex::new(BTreeMap::new());
 
 pub(super) fn now_iso() -> String {
@@ -135,8 +138,10 @@ fn build(
 pub fn ask_and_read(entry: &CatalogService, port: u16, bound_seconds: u64) -> Option<Reading> {
     let declared = entry.answering.as_ref()?;
     let name = entry.name.clone();
-    let in_flight = held(&PENDING).contains_key(&name);
-    if !in_flight {
+    // Checked and recorded under one hold of the pending map, so two passes
+    // cannot both send a question for one service.
+    let mut active = held(&PENDING);
+    if !active.contains_key(&name) {
         let client = reqwest::Client::new();
         match build(&client, declared, port) {
             Err(cause) => {
@@ -149,13 +154,11 @@ pub fn ask_and_read(entry: &CatalogService, port: u16, bound_seconds: u64) -> Op
                 );
             }
             Ok(request) => {
-                held(&PENDING).insert(
-                    name.clone(),
-                    Pending {
-                        since: now_iso(),
-                        started: Instant::now(),
-                    },
-                );
+                let pending = Arc::new(Pending {
+                    since: now_iso(),
+                    started: Instant::now(),
+                });
+                active.insert(name.clone(), Arc::clone(&pending));
                 let service = name.clone();
                 tokio::spawn(async move {
                     let started = Instant::now();
@@ -170,12 +173,22 @@ pub fn ask_and_read(entry: &CatalogService, port: u16, bound_seconds: u64) -> Op
                             at: now_iso(),
                         },
                     };
-                    held(&PENDING).remove(&service);
-                    held(&FINISHED).insert(service, found);
+                    // Settle only the question this task asked: a question
+                    // forgotten since, or replaced by a newer one for a new
+                    // process, is not this answer's to close.
+                    let mut active = held(&PENDING);
+                    if active
+                        .get(&service)
+                        .is_some_and(|current| Arc::ptr_eq(current, &pending))
+                    {
+                        active.remove(&service);
+                        held(&FINISHED).insert(service, found);
+                    }
                 });
             }
         }
     }
+    drop(active);
     Some(read(&name, bound_seconds))
 }
 
@@ -210,9 +223,12 @@ pub fn read(service: &str, bound_seconds: u64) -> Reading {
     }
 }
 
-/// Forget the in-flight question of `service`, after its process was
-/// restarted: the request that stood belongs to the process that is gone,
-/// and the next pass asks the new one afresh.
+/// Forget the in-flight question of `service` and the last answer, after its
+/// process was restarted: both belong to the process that is gone, and the
+/// next pass asks the new one afresh. An answer the old question still
+/// brings back settles nothing ([`ask_and_read`] closes only its own).
 pub fn forget(service: &str) {
-    held(&PENDING).remove(service);
+    let mut active = held(&PENDING);
+    active.remove(service);
+    held(&FINISHED).remove(service);
 }
