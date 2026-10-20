@@ -51,8 +51,8 @@ pub const TMUX_PROGRAM: &str = TMUX_CLI;
 
 /// The Docker CLI, at the paths this fleet's hosts install it at. A Supabase
 /// schema release's post-build test starts its scratch database through the
-/// Supabase CLI, which needs a running Docker daemon on the builder; whether
-/// one runs there could not be asked at all.
+/// Supabase CLI, which needs a running Docker daemon on the builder; this is
+/// how the host channel asks whether one runs there.
 pub const DOCKER_CLI: &str = "/usr/bin/docker";
 
 /// The Kimi Code CLI. Its installed help defines the supported login flags;
