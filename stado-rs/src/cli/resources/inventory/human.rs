@@ -61,7 +61,7 @@ pub(super) fn print_human(report: &ResourcesReport) {
                     {
                         Some(true) => "authoritative".to_string(),
                         Some(false) => "not authoritative".to_string(),
-                        None => "not reported".to_string(),
+                        None => crate::cli::reporting::NOT_REPORTED.to_string(),
                     },
                     text(provider, "error"),
                 ]

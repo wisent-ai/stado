@@ -156,7 +156,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
                         None => "never",
                     }
                 ),
-                _ => "not reported".to_string(),
+                _ => crate::cli::reporting::NOT_REPORTED.to_string(),
             };
             let desired = match report["desired"]["version"].as_str() {
                 Some(version) => version,

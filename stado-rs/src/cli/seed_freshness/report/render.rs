@@ -79,11 +79,11 @@ pub(in crate::cli::seed_freshness) fn render(report: &Value) -> String {
         // count of zero nobody measured.
         let field = |name: &str| match finding.get(name).and_then(Value::as_str) {
             Some(text) => text.to_string(),
-            None => "not reported".to_string(),
+            None => crate::cli::reporting::NOT_REPORTED.to_string(),
         };
         let count = |name: &str| match finding.get(name).and_then(Value::as_i64) {
             Some(count) => count.to_string(),
-            None => "not reported".to_string(),
+            None => crate::cli::reporting::NOT_REPORTED.to_string(),
         };
         let item = field("login_item");
         let verdict = field("verdict");

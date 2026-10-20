@@ -77,11 +77,11 @@ pub(in crate::cli::storage) async fn objects(args: &StorageObjectsArgs) -> Resul
                 uri.to_string(),
                 match value.get("size").and_then(Value::as_u64) {
                     Some(size) => size.to_string(),
-                    None => "not reported".to_string(),
+                    None => crate::cli::reporting::NOT_REPORTED.to_string(),
                 },
                 match value["updated_at"].as_str() {
                     Some(stamp) => stamp.to_string(),
-                    None => "not reported".to_string(),
+                    None => crate::cli::reporting::NOT_REPORTED.to_string(),
                 },
             ]);
         }

@@ -92,7 +92,7 @@ pub(super) async fn requests(
             for r in sorted {
                 let state = match r.get("state").and_then(Value::as_str) {
                     Some(state) if !state.is_empty() => state,
-                    _ => "not reported",
+                    _ => crate::cli::reporting::NOT_REPORTED,
                 };
                 let family = match r.get("gpu_family").and_then(Value::as_str) {
                     Some(family) if !family.is_empty() => family,

@@ -89,6 +89,6 @@ fn installed(profile: &Value) -> &'static str {
     match profile.get("installed").and_then(Value::as_bool) {
         Some(true) => "yes",
         Some(false) => "no",
-        None => "not reported",
+        None => crate::cli::reporting::NOT_REPORTED,
     }
 }

@@ -110,7 +110,7 @@ pub(super) async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), Cm
             for row in sorted {
                 let quota_id = match row.get("quota_id").and_then(Value::as_str) {
                     Some(quota_id) if !quota_id.is_empty() => quota_id,
-                    _ => "not reported",
+                    _ => crate::cli::reporting::NOT_REPORTED,
                 };
                 // A quota without a family or region dimension says so, and a
                 // limit GCP did not give reads as not reported; a dash read
@@ -125,7 +125,7 @@ pub(super) async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), Cm
                 };
                 let limit = match row.get("limit") {
                     Some(Value::Number(n)) => n.to_string(),
-                    _ => "not reported".to_string(),
+                    _ => crate::cli::reporting::NOT_REPORTED.to_string(),
                 };
                 println!(
                     "  {:<52} {:<20} {:<16} {:>6}",
