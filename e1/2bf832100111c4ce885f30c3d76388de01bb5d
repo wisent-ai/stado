@@ -14,5 +14,6 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Repairs: "release status: a rollout target the registry does not declare fails" its failure counter and run window carried an unstated zero and a fallback to every run
+
 Harsh-Review-Attacked: whether the exit status changes; it is non-zero exactly when a target failed its judgment or is undeclared, the same two sets the counter summed.
 Harsh-Review-Attacked: whether a duration of an hour or more prints differently; hours, minutes past the hour and seconds past the minute come from the same span, so 2h05m stays 2h05m.
