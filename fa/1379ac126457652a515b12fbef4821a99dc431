@@ -1,4 +1,5 @@
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
 No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
 This commit adds no needless abstraction and no second copy of something that already exists.
 No error is swallowed and no missing or failed value is answered with one nobody stated.
