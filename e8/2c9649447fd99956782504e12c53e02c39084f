@@ -13,6 +13,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repaired-By: "release status refuses a limit it cannot count and shows a negative duration" repairs it in this push, naming this commit on its Repairs line
+
 Harsh-Review-Attacked: whether a rollout target the registry does not declare still judges against no managed versions; release status fails naming each undeclared target.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
-Repaired-By: "release status refuses a limit it cannot count and shows a negative duration" repairs it in this push, naming this commit on its Repairs line
