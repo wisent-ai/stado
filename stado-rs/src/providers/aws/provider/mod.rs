@@ -9,10 +9,11 @@ mod lifecycle;
 
 use std::sync::Arc;
 
+use aws_sdk_ec2::types::InstanceStateName;
 use tokio::sync::OnceCell;
 
 use crate::config;
-use crate::providers::ProviderError;
+use crate::providers::{Lifecycle, LifecyclePhase, ProviderError};
 
 use super::api::Ec2Api;
 use super::client::Ec2Client;
@@ -23,6 +24,24 @@ pub fn az_order(region: &str) -> Vec<String> {
         .iter()
         .map(|suffix| format!("{region}{suffix}"))
         .collect()
+}
+
+/// What an EC2 instance state word means for the VM's life, by the
+/// documented `InstanceState.Name` values the SDK types: EC2 keeps the
+/// volumes of a stopping or stopped instance and releases a shutting-down or
+/// terminated one. A word the SDK does not name is unknown, never taken for a
+/// released VM.
+pub(super) fn ec2_lifecycle(word: &str) -> Lifecycle {
+    let phase = match InstanceStateName::from(word) {
+        InstanceStateName::Pending | InstanceStateName::Running => LifecyclePhase::Running,
+        InstanceStateName::Stopping | InstanceStateName::Stopped => LifecyclePhase::Stopped,
+        InstanceStateName::ShuttingDown | InstanceStateName::Terminated => LifecyclePhase::Ended,
+        _ => LifecyclePhase::Unknown,
+    };
+    Lifecycle {
+        word: word.to_owned(),
+        phase,
+    }
 }
 
 /// Env-resolved settings for the provider (Python reads them from

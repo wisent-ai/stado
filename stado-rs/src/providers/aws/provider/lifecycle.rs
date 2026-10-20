@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use crate::catalog::AWS_INSTANCE_TO_ACCEL;
 use crate::providers::aws::api::RunInstanceArgs;
 use crate::providers::aws::diagnostics::log;
-use crate::providers::{Provider, ProviderError};
+use crate::providers::{Lifecycle, LifecyclePhase, Provider, ProviderError};
 
 use super::{az_order, AwsProvider};
 
@@ -109,9 +109,30 @@ impl Provider for AwsProvider {
         self.api().await?.start_instance(instance_ref).await
     }
 
+    /// Booting or running, by the instance's EC2 state; a state the
+    /// documented list does not name is refused, not read as no VM.
     async fn instance_exists(&self, instance_ref: &str) -> Result<bool, ProviderError> {
+        let Some(state) = self.api().await?.instance_state(instance_ref).await? else {
+            return Ok(false);
+        };
+        match super::ec2_lifecycle(&state).phase {
+            LifecyclePhase::Running => Ok(true),
+            LifecyclePhase::Stopped | LifecyclePhase::Ended => Ok(false),
+            LifecyclePhase::Unknown => Err(ProviderError::Value(format!(
+                "EC2 instance {instance_ref} returned unknown state {state}; \
+                 existence cannot be decided"
+            ))),
+        }
+    }
+
+    /// The instance's EC2 state and what it means, so the reaper tells a
+    /// spot instance EC2 interrupted from one that is gone.
+    async fn instance_lifecycle_state(
+        &self,
+        instance_ref: &str,
+    ) -> Result<Option<Lifecycle>, ProviderError> {
         let state = self.api().await?.instance_state(instance_ref).await?;
-        Ok(matches!(state.as_deref(), Some("running" | "pending")))
+        Ok(state.as_deref().map(super::ec2_lifecycle))
     }
 
     async fn instance_removed(
@@ -136,13 +157,23 @@ impl Provider for AwsProvider {
 
     async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError> {
         let types = self.api().await?.running_instance_types().await?;
-        let mut counts: BTreeMap<String, i64> = BTreeMap::new();
+        let mut by_accel: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for instance_type in types {
             if let Some(accel) = AWS_INSTANCE_TO_ACCEL.get(instance_type.as_str()) {
-                *counts.entry((*accel).to_string()).or_insert(0) += 1;
+                by_accel
+                    .entry((*accel).to_string())
+                    .or_default()
+                    .push(instance_type);
             }
         }
-        Ok(counts)
+        by_accel
+            .into_iter()
+            .map(|(accel, instances)| {
+                i64::try_from(instances.len())
+                    .map(|count| (accel, count))
+                    .map_err(|error| ProviderError::Value(error.to_string()))
+            })
+            .collect()
     }
 
     async fn list_running_instance_refs_with_age(
