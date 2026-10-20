@@ -21,10 +21,10 @@ Repairs: "A wait begins from one description value" its Began carried the client
 Repairs: "Bound every registry read by the interval this machine's record declares, and converge this machine from its own record" its comment on the refresh interval retold what registry readers used to do without it
 Repairs: "A held request counts from the accept of its connection" its comment on since_accepted retold what the list used to show
 Repairs: "Recover a service that accepts and never answers on the host that runs it" its held_to_service grew the waiting module past its size limit, and now sits with the list's other readers
+
 Harsh-Review-Attacked: whether an older published list fails to read; an absent Option field deserializes as None, so a list written before the address was recorded reads as waits with no client.
 Harsh-Review-Attacked: whether the journey's expectations still hold; a named client still serializes as the same address string, the relay still says "request from <address> sent to", and the held sentence still names the address and its lsof port.
 Harsh-Review-Attacked: whether the moved held_to_service behaves differently; its body is unchanged, it reads the same published() list, and the resolver still re-exports it from the waiting module.
 Harsh-Review-Attacked: whether poisoned-lock recovery is a fallback; every change to the list is one insert or remove under the lock, so a poisoned guard still holds a whole list, and begin and end now read it the same way since_accepted and start did.
 Harsh-Review-Attacked: whether starting keys at one changes anything; keys only identify waits within this process and are never compared with a number.
-
 Repaired-By: "Every count Stado keeps adds one item through one tally" repairs it in this push, naming this commit on its Repairs line
