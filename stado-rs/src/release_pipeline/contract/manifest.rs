@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::recipe::{Delivery, PlatformRecipe, PromotionPolicy, ReleaseInput, RuntimeContract};
+use super::recipe::{
+    Delivery, PlatformRecipe, PromotionPolicy, QualityGate, ReleaseInput, RuntimeContract,
+};
 
 // One manifest is parsed per release operation and the two variants are the two
 // shapes a product may legally declare. Boxing the release arm would put an
@@ -29,6 +31,12 @@ pub struct NonReleaseManifest {
     #[serde(default)]
     pub requires: Vec<RequiredVerb>,
     pub reason: String,
+    /// The quality gates a product that publishes no release still keeps:
+    /// they read the same source on every host, so they are declared once,
+    /// not per platform, and `stado quality` runs them at push and on
+    /// request as it runs a releasing product's. None declared is none run.
+    #[serde(default)]
+    pub quality: Vec<QualityGate>,
 }
 
 /// A product CLI operation promised by this source revision.
