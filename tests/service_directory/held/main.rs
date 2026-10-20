@@ -13,7 +13,7 @@ mod self_loop;
 mod session;
 mod silent;
 #[path = "../../host_silence/refusal_in_flight/store.rs"]
-// The silent journey relays to the store's second object API only.
+// The held journeys take its object APIs, not the resolver's bearer.
 #[allow(dead_code)]
 mod store;
 mod takeover;

@@ -6,7 +6,7 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Lines};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, Command, Output, Stdio};
 
@@ -127,21 +127,13 @@ impl Deployment {
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, self.free_port()).to_string()
     }
 
-    /// A service that accepts every connection and answers none, held open
-    /// for as long as the test runs, at an address this machine handed out.
-    pub(crate) fn silent_service(&mut self) -> (String, std::thread::JoinHandle<()>) {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, self.free_port())).unwrap();
-        let bind = listener.local_addr().unwrap().to_string();
-        let holder = std::thread::spawn(move || {
-            let mut held = Vec::new();
-            for accepted in listener.incoming() {
-                match accepted {
-                    Ok(stream) => held.push(stream),
-                    Err(error) => panic!("the silent service could not accept: {error}"),
-                }
-            }
-        });
-        (bind, holder)
+    /// A service that accepts every connection and answers none: a real
+    /// object API on a real Skarbiec (`store.rs`), stopped with SIGSTOP once
+    /// it answered its probe, held for as long as the returned store lives.
+    pub(crate) fn silent_service(&mut self) -> (String, crate::store::Store) {
+        let service = crate::store::Store::serve(self.root.join("silent-service.token"));
+        service.hang();
+        (service.address.clone(), service)
     }
 
     /// The command with its store being the service behind the adapter, as
