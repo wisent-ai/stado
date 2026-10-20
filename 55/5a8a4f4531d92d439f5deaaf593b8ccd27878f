@@ -14,5 +14,7 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Repairs: "Quota output names what a provider left out instead of printing \"?\"" its Azure table read a ticket without awaiting_customer as N and its sorts keyed absent fields as empty text
+Repairs: "Quota output names what a provider left out instead of printing "?"" its lines in report.rs are replaced by this change.
+
 Harsh-Review-Attacked: whether the state buckets changed; each row lands under its state or not reported exactly as before, and the count is the bucket size.
 Harsh-Review-Attacked: whether the summary still sums to the row count; customer, Microsoft and not reported partition the rows by the three answers of one field.
