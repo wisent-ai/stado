@@ -13,6 +13,9 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "stado product dependencies: reads every call each catalog product's source makes to another product (program, resolver forward, hosted API, state directory, environment namespace) and refuses a product the catalog declares without a dependency it has or one it lacks, and a dependency it needs with no alternative" a dependency with no alternative read the same whether nobody had decided on it or the product is a surface of the other by design
+Repairs: "Products screen runs stado product dependencies; real test of every dependency standing against git checkouts of an isolated workspace" its real test had no case for a dependency bound by design
+
 Harsh-Review-Attacked: whether bound_because lets a dependency pass as independent; a bound need is still a refusal and the command still exits non-zero, it only says the reason instead of asking whether a runner is missing.
 Harsh-Review-Attacked: whether a reason can sit beside an alternative or be empty; catalog validation refuses both, naming the product and the dependency, and the journey asserts the beside-an-alternative refusal.
 Harsh-Review-Attacked: whether the install refusal and the dependencies refusal say the same thing; both name the declared reason when there is one and the missing alternative when there is none.
