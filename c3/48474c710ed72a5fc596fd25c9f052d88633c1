@@ -13,6 +13,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "A remote command to a host whose services stand is refused before it is sent" it refused the declared repair of those very services, so a host whose services stood could never be repaired
+
 Harsh-Review-Attacked: whether REPAIRING.try_with's error is swallowed; its only error is that the current task runs outside a repair scope, which is exactly the case the command is refused in, with the held sentence.
 Harsh-Review-Attacked: whether the exemption leaks to commands that are not repairs; the task-local value exists only inside repairing(), which only stado repair --apply calls around a declared service's executable.
 Harsh-Review-Attacked: whether the held reading is hidden when the repair goes; it is written to stderr naming the service, the host and the held wait's sentence before the command is sent.
