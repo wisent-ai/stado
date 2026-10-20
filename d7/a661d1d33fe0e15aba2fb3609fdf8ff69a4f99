@@ -13,7 +13,6 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Harsh-Review-Attacked: whether the change does what its message says and nothing else; its patch was read against the message, every refusal it adds names its cause, and no line it adds answers a missing value with one nobody stated.
 Repairs: "Expose cleanup hold provenance and qualify editor concurrency" its lines in product.rs are replaced by this change.
 Repairs: "A build the janitor's cleanup holds is refused before Oko is asked about it" its lines in product.rs are replaced by this change.
 Repairs: "Name the product and surface holding cleanup admission" its lines in product.rs are replaced by this change.
@@ -21,3 +20,8 @@ Repairs: "stado product swift sourcekit no longer holds the disk janitor's clean
 Repairs: "Janitor walks build caches without excluding running workloads, and builds wait for a cleanup pass instead of being refused" its lines in mod.rs, product.rs are replaced by this change.
 Repairs: "Move local reclamation under the space reclaim engine" its lines in product.rs are replaced by this change.
 Repairs: "A product build holds the janitor's cleanup lock for its whole run" its lines in product.rs are replaced by this change.
+Repairs: "An install whose committed manifest its Cargo.lock does not cover names the revision, manifest and dependencies" its lines in  are replaced by this change.
+Repairs: "Product builds and releases ask Oko whether the operator's rulings allow them" its lines in  are replaced by this change.
+Repairs: "Attribute committed lock mismatches to source configuration" its lines in  are replaced by this change.
+
+Harsh-Review-Attacked: whether the change does what its message says and nothing else; its patch was read against the message, every refusal it adds names its cause, and no line it adds answers a missing value with one nobody stated.
