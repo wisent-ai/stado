@@ -41,13 +41,12 @@ pub(in crate::cli::host) fn report_outcome(report: &Value, expected: &str) -> Re
     Err(CmdError::click(detail).stating(crate::primitives::failure::FailureCode::InfraDown))
 }
 
-/// A JSON value as one table cell: strings bare, a missing or null value as
-/// "not reported", anything else in its JSON spelling. A dash read as a value
-/// the host had reported.
+/// A JSON value as one table cell, as every report shows a field
+/// ([`crate::cli::reporting::field`]): a missing value is the same absence as
+/// a null one.
 pub(in crate::cli::host) fn cell(value: Option<&Value>) -> String {
     match value {
-        None | Some(Value::Null) => "not reported".to_string(),
-        Some(Value::String(text)) => text.clone(),
-        Some(other) => other.to_string(),
+        Some(value) => crate::cli::reporting::field(value),
+        None => crate::cli::reporting::NOT_REPORTED.to_string(),
     }
 }

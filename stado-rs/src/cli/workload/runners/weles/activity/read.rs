@@ -141,10 +141,7 @@ pub(crate) async fn weles_activity(target: &str, json_output: bool) -> Result<()
     }
     // A field the host's report does not carry is said as not reported:
     // "unknown" read as a release, a status or an endpoint the host stated.
-    let reported = |value: &Value| match value.as_str() {
-        Some(text) => text.to_string(),
-        None => "not reported".to_string(),
-    };
+    let reported = crate::cli::reporting::field;
     let worker = &report["worker"];
     let api = match report["api"]["listening"].as_bool() {
         Some(true) => "TCP connected",
