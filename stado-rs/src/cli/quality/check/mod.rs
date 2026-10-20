@@ -65,6 +65,10 @@ async fn export_check(
     )
     .map_err(|error| CmdError::click(format!("{error:#}")))?
     .join("quality");
+    report.say(&format!(
+        "stado quality check: reclaiming abandoned quality runs in {}",
+        runs.display()
+    ));
     remove_abandoned(&runs);
     let run_area = runs.join(format!(
         "{}-{}",
