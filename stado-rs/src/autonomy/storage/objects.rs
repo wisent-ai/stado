@@ -55,7 +55,12 @@ pub(in crate::autonomy::storage) async fn list_record_index(
     let blobs = store.list_blobs_with_meta(prefix).await?;
     let mut index = Vec::with_capacity(blobs.len());
     for blob in blobs {
-        let name = blob.name.rsplit('/').next().unwrap_or_default();
+        // The last segment of the object name; a name without a separator
+        // is its own last segment.
+        let name = match blob.name.rsplit_once('/') {
+            Some((_, last)) => last,
+            None => blob.name.as_str(),
+        };
         let Some(id) = name.strip_suffix(".json") else {
             continue;
         };
@@ -86,7 +91,10 @@ where
     T: for<'de> Deserialize<'de>,
 {
     let mut records = Vec::new();
-    for path in store.list_paths(prefix, 0).await? {
+    for path in store
+        .list_paths(prefix, crate::queue::Listing::Every)
+        .await?
+    {
         let Some(raw) = store.download_text(&path).await? else {
             continue;
         };

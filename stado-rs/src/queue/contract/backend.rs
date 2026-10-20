@@ -3,12 +3,23 @@
 //! unchanged.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use super::{BlobInfo, StorageError, VersionedText};
+
+/// Which names under a prefix [`BlobBackend::list_paths`] returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listing {
+    /// Every name under the prefix, in no promised order.
+    Every,
+    /// The given number of names, oldest by creation time first: a bounded
+    /// read of a hot prefix.
+    Oldest(NonZeroUsize),
+}
 
 /// Backend-neutral blob contract shared by local filesystem, GCS, S3, and
 /// Azure Blob Storage. `path` is always a backend-root-relative name using
@@ -108,17 +119,14 @@ pub trait BlobBackend: Send + Sync {
     /// Whether the blob exists.
     async fn exists(&self, path: &str) -> Result<bool, StorageError>;
 
-    /// Blob names under `prefix`. When `oldest_first > 0`, return only that
-    /// many names sorted by creation time ascending — bounded listing for
-    /// hot prefixes (queue/ has 14k+ blobs).
-    async fn list_paths(
-        &self,
-        prefix: &str,
-        oldest_first: usize,
-    ) -> Result<Vec<String>, StorageError>;
+    /// Blob names under `prefix`: every one, or with [`Listing::Oldest`] only
+    /// that many, sorted by creation time ascending — bounded listing for hot
+    /// prefixes (queue/ has 14k+ blobs).
+    async fn list_paths(&self, prefix: &str, listing: Listing)
+        -> Result<Vec<String>, StorageError>;
 
     /// One ordered page of blob names under `prefix`: name-ascending,
-    /// strictly after `start_after`, at most `limit` names (`0` = no cap).
+    /// strictly after `start_after`, at most `limit` names when one is given.
     ///
     /// This is the primitive an ordered-index walk needs and [`Self::list_paths`]
     /// cannot give it. `list_paths` materializes the whole prefix before
@@ -132,18 +140,18 @@ pub trait BlobBackend: Send + Sync {
         &self,
         prefix: &str,
         start_after: &str,
-        limit: usize,
+        limit: Option<NonZeroUsize>,
     ) -> Result<Vec<String>, StorageError> {
         // Correct for every backend and cheap for none: the whole prefix is
         // listed and then cut. Backends whose listing API can express "after
         // this name, at most this many" override this with the server-side
         // form; the ones that cannot at least keep the semantics honest.
-        let mut names = self.list_paths(prefix, 0).await?;
+        let mut names = self.list_paths(prefix, Listing::Every).await?;
         names.sort_unstable();
         let cut = names.partition_point(|name| name.as_str() <= start_after);
         names.drain(..cut);
-        if limit > 0 {
-            names.truncate(limit);
+        if let Some(limit) = limit {
+            names.truncate(limit.get());
         }
         Ok(names)
     }

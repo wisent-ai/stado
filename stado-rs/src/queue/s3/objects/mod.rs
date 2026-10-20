@@ -8,13 +8,14 @@
 //! (`listing`).
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use async_trait::async_trait;
 use aws_sdk_s3::primitives::ByteStream;
 use chrono::{DateTime, Utc};
 
-use crate::queue::{BlobBackend, BlobInfo, StorageError, VersionedText};
+use crate::queue::{BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 
 use super::{
     client::to_utc,
@@ -133,14 +134,14 @@ impl BlobBackend for S3Backend {
     async fn list_paths(
         &self,
         prefix: &str,
-        oldest_first: usize,
+        listing: Listing,
     ) -> Result<Vec<String>, StorageError> {
         let mut objects = self.list_objects(prefix).await?;
-        if oldest_first > 0 {
-            // Python: sort by LastModified ascending (None sorts as
-            // datetime.min), then take the N oldest.
+        if let Listing::Oldest(count) = listing {
+            // Sorted by LastModified ascending (an object without one sorts
+            // first), the given number of oldest kept.
             objects.sort_by_key(|(_, modified)| *modified);
-            objects.truncate(oldest_first);
+            objects.truncate(count.get());
         }
         Ok(objects.into_iter().map(|(key, _)| key).collect())
     }
@@ -155,7 +156,7 @@ impl BlobBackend for S3Backend {
         &self,
         prefix: &str,
         start_after: &str,
-        limit: usize,
+        limit: Option<NonZeroUsize>,
     ) -> Result<Vec<String>, StorageError> {
         self.list_objects_page(prefix, start_after, limit).await
     }

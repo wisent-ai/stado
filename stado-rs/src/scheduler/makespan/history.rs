@@ -17,28 +17,32 @@ use regex::Regex;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::queue::{JobStorage, StorageError};
+use crate::queue::{JobStorage, Listing, StorageError};
 
 static MODEL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"--model\s+(\S+)").expect("static regex compiles"));
+    LazyLock::new(|| Regex::new(r"--model\s+(?P<value>\S+)").expect("static regex compiles"));
 static TASK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"--task\s+(\S+)").expect("static regex compiles"));
+    LazyLock::new(|| Regex::new(r"--task\s+(?P<value>\S+)").expect("static regex compiles"));
 
 /// (model, task) -> mean runtime seconds. Python `_history_cache` shape.
 pub type History = HashMap<(String, String), f64>;
 
+/// The quote-stripped value `flag` names in `command`, or empty when the
+/// command does not carry the flag.
+fn flag_value(flag: &Regex, command: &str) -> String {
+    match flag.captures(command).and_then(|found| found.name("value")) {
+        Some(value) => value.as_str().trim_matches(['\'', '"']).to_string(),
+        None => String::new(),
+    }
+}
+
 /// Python `_extract_model_task`: `--model`/`--task` out of a command
 /// line, quote-stripped; "" for whichever flag is absent.
 pub fn extract_model_task(command: &str) -> (String, String) {
-    let model = MODEL_RE
-        .captures(command)
-        .map(|c| c[1].trim_matches(['\'', '"']).to_string())
-        .unwrap_or_default();
-    let task = TASK_RE
-        .captures(command)
-        .map(|c| c[1].trim_matches(['\'', '"']).to_string())
-        .unwrap_or_default();
-    (model, task)
+    (
+        flag_value(&MODEL_RE, command),
+        flag_value(&TASK_RE, command),
+    )
 }
 
 /// Mean runtime in seconds per (model, task), from the completed/ blobs
@@ -74,12 +78,16 @@ async fn build_history(
         let completed = DateTime::parse_from_rfc3339(ct).map_err(|e| {
             StorageError::Other(format!("makespan history: bad completed_at {ct:?}: {e}"))
         })?;
-        let elapsed = (completed - started).num_milliseconds() as f64 / 1000.0;
-        if elapsed <= 0.0 {
+        // A run that took no positive time says nothing about its runtime.
+        let elapsed = (completed - started).as_seconds_f64();
+        if !(elapsed.is_normal() && elapsed.is_sign_positive()) {
             continue;
         }
-        let (model, task) =
-            extract_model_task(doc.get("command").and_then(Value::as_str).unwrap_or(""));
+        // A completed job without a command cannot be keyed by its run.
+        let Some(command) = doc.get("command").and_then(Value::as_str) else {
+            continue;
+        };
+        let (model, task) = extract_model_task(command);
         if model.is_empty() || task.is_empty() {
             continue;
         }
@@ -125,7 +133,7 @@ impl HistoryCache {
         store: &JobStorage,
         log_fn: &dyn Fn(&str),
     ) -> Result<History, StorageError> {
-        let paths: Vec<String> = store.list_paths("completed/", 0).await?;
+        let paths: Vec<String> = store.list_paths("completed/", Listing::Every).await?;
         let mut guard = self.inner.lock().await;
         if guard.1.as_ref() != Some(&paths) {
             let rebuilt = build_history(store, &paths, log_fn).await?;

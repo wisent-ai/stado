@@ -23,7 +23,10 @@ pub async fn dispatch(command: OperationsCommands) -> Result<(), CmdError> {
 }
 
 async fn list(journal: &Journal, json_output: bool) -> Result<(), CmdError> {
-    let names = journal.store.list_paths("operations/", 0).await?;
+    let names = journal
+        .store
+        .list_paths("operations/", crate::queue::Listing::Every)
+        .await?;
     let mut ids = BTreeSet::new();
     for name in names {
         if let Some(rest) = name.strip_prefix("operations/") {
@@ -79,7 +82,10 @@ async fn show(journal: &Journal, operation_id: &str, json_output: bool) -> Resul
     let state = journal.load_state(operation_id).await?;
     let event_names = journal
         .store
-        .list_paths(&format!("operations/{operation_id}/events/"), 0)
+        .list_paths(
+            &format!("operations/{operation_id}/events/"),
+            crate::queue::Listing::Every,
+        )
         .await?;
     let mut events = Vec::new();
     for path in event_names {

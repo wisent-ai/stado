@@ -2,12 +2,14 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::ErrorKind;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::queue::{json_str, BlobBackend, BlobInfo, StorageError, VersionedText};
+use crate::queue::{json_str, BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 
 use super::paths::remove_missing_ok;
 use super::LocalBackend;
@@ -122,25 +124,31 @@ impl BlobBackend for LocalBackend {
     async fn list_paths(
         &self,
         prefix: &str,
-        oldest_first: usize,
+        listing: Listing,
     ) -> Result<Vec<String>, StorageError> {
         let mut paths = self.relative_names(prefix)?;
-        if oldest_first > 0 {
-            // Python sorts by st_ctime (inode change time) ascending.
-            let ctime = |value: &String| -> (i64, i64) {
-                use std::os::unix::fs::MetadataExt;
-                self.root
-                    .join(value)
-                    .metadata()
-                    .map(|md| (md.ctime(), md.ctime_nsec()))
-                    .unwrap_or_default()
-            };
-            paths.sort_by(|a, b| ctime(a).cmp(&ctime(b)).then_with(|| a.cmp(b)));
-            paths.truncate(oldest_first);
-            Ok(paths)
-        } else {
-            paths.sort();
-            Ok(paths)
+        match listing {
+            Listing::Oldest(count) => {
+                // Oldest by inode change time, names breaking ties. A name
+                // removed since the walk saw it is no longer under the
+                // prefix; any other metadata failure is refused.
+                let mut dated = Vec::with_capacity(paths.len());
+                for name in paths {
+                    use std::os::unix::fs::MetadataExt;
+                    match self.root.join(&name).metadata() {
+                        Ok(found) => dated.push(((found.ctime(), found.ctime_nsec()), name)),
+                        Err(error) if error.kind() == ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                dated.sort();
+                dated.truncate(count.get());
+                Ok(dated.into_iter().map(|(_, name)| name).collect())
+            }
+            Listing::Every => {
+                paths.sort();
+                Ok(paths)
+            }
         }
     }
 
@@ -157,14 +165,14 @@ impl BlobBackend for LocalBackend {
         &self,
         prefix: &str,
         start_after: &str,
-        limit: usize,
+        limit: Option<NonZeroUsize>,
     ) -> Result<Vec<String>, StorageError> {
         let mut names = self.relative_names(prefix)?;
         names.sort_unstable();
         let cut = names.partition_point(|name| name.as_str() <= start_after);
         names.drain(..cut);
-        if limit > 0 {
-            names.truncate(limit);
+        if let Some(limit) = limit {
+            names.truncate(limit.get());
         }
         Ok(names)
     }
@@ -205,11 +213,15 @@ impl BlobBackend for LocalBackend {
 
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
         let mut out = Vec::new();
-        for path in self.list_paths(prefix, 0).await? {
+        for path in self.list_paths(prefix, Listing::Every).await? {
             let metadata = read_sidecar(&self.metadata_path(&path))?;
-            let size = fs::metadata(self.path(&path)?)
-                .ok()
-                .map(|entry| entry.len());
+            // A blob removed since the listing has no size; any other failure
+            // to read it is refused.
+            let size = match fs::metadata(self.path(&path)?) {
+                Ok(entry) => Some(entry.len()),
+                Err(error) if error.kind() == ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
             out.push(BlobInfo {
                 updated: self.updated_at(&path).await?,
                 name: path,

@@ -7,16 +7,20 @@
 //! `x-stado-version` pair ([`versioned`]).
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::{Method, StatusCode};
 
-use crate::queue::{BlobBackend, BlobInfo, StorageError, VersionedText};
+use super::StadoObjectBackend;
+use crate::queue::{BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 use crate::remote::object_store::ObjectRef;
 
-use super::StadoObjectBackend;
+/// Bytes in one gibibyte, the unit `memory_gb` answers in
+/// (https://physics.nist.gov/cuu/Units/binary.html).
+const BYTES_PER_GIB: f64 = (1u64 << 30) as f64;
 
 mod listing;
 mod metadata;
@@ -59,10 +63,16 @@ impl BlobBackend for StadoObjectBackend {
         // than the memory this host has available now is refused before its
         // body is requested: the operating system's own measure, read at the
         // moment of the read. A host whose memory cannot be read reads the
-        // document unbounded, because an unknown is not a limit.
-        let room = crate::providers::local::helpers::memory_gb()
-            .ok()
-            .map(|(available_gib, _)| (available_gib * f64::from(1u32 << 30)) as usize);
+        // document unbounded, because an unknown is not a limit, and says so.
+        let room = match crate::providers::local::helpers::memory_gb() {
+            Ok((available_gib, _)) => Some((available_gib * BYTES_PER_GIB) as usize),
+            Err(cause) => {
+                tracing::warn!(
+                    "{path} is read without a memory bound: this host's available memory cannot be read: {cause}"
+                );
+                None
+            }
+        };
         let Some(bytes) = self.download_bytes_limited(path, room).await? else {
             return Ok(None);
         };
@@ -166,16 +176,16 @@ impl BlobBackend for StadoObjectBackend {
     async fn list_paths(
         &self,
         prefix: &str,
-        oldest_first: usize,
+        listing: Listing,
     ) -> Result<Vec<String>, StorageError> {
-        self.list_sorted_paths(prefix, oldest_first).await
+        self.list_sorted_paths(prefix, listing).await
     }
 
     async fn list_page(
         &self,
         prefix: &str,
         start_after: &str,
-        limit: usize,
+        limit: Option<NonZeroUsize>,
     ) -> Result<Vec<String>, StorageError> {
         self.list_key_page(prefix, start_after, limit).await
     }

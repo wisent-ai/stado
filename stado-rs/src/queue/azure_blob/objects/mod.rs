@@ -7,13 +7,14 @@
 //! walk (`listing`) and the response parse it feeds on (`xml`).
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::{Method, StatusCode};
 
-use crate::queue::{BlobBackend, BlobInfo, StorageError, VersionedText};
+use crate::queue::{BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 
 use super::{client::header_str, AzureBlobBackend, LIST_MAX_RESULTS};
 
@@ -161,14 +162,14 @@ impl BlobBackend for AzureBlobBackend {
     async fn list_paths(
         &self,
         prefix: &str,
-        oldest_first: usize,
+        listing: Listing,
     ) -> Result<Vec<String>, StorageError> {
         let mut entries = self.list_entries(prefix, false).await?;
-        if oldest_first > 0 {
-            // Python: sort by creation_time ascending (None sorts as
-            // datetime.min), take the N oldest.
+        if let Listing::Oldest(count) = listing {
+            // Sorted by creation time ascending (an entry without one sorts
+            // first), the given number of oldest kept.
             entries.sort_by_key(|entry| entry.creation_time);
-            entries.truncate(oldest_first);
+            entries.truncate(count.get());
         }
         Ok(entries.into_iter().map(|entry| entry.name).collect())
     }
@@ -192,26 +193,28 @@ impl BlobBackend for AzureBlobBackend {
         &self,
         prefix: &str,
         start_after: &str,
-        limit: usize,
+        limit: Option<NonZeroUsize>,
     ) -> Result<Vec<String>, StorageError> {
         // A page smaller than the window would force extra round trips, and
         // a page sized to the window would do the same while skipping to a
         // cursor, whose names have to cross the wire either way. So ask for
         // exactly the window only when there is nothing to skip.
-        let page = if limit == 0 || !start_after.is_empty() {
-            LIST_MAX_RESULTS
-        } else {
-            limit.min(LIST_MAX_RESULTS)
+        let page = match limit {
+            Some(limit) if start_after.is_empty() => limit.get().min(LIST_MAX_RESULTS),
+            _ => LIST_MAX_RESULTS,
         };
         // Uncapped listings grow as they go; a window pre-sizes to itself.
-        let mut names: Vec<String> = Vec::with_capacity(limit.min(page));
+        let mut names: Vec<String> = match limit {
+            Some(limit) => Vec::with_capacity(limit.get().min(page)),
+            None => Vec::new(),
+        };
         self.walk_list_pages(prefix, false, Some(page), |entries| {
             for entry in entries {
                 if entry.name.as_str() <= start_after {
                     continue;
                 }
                 names.push(entry.name);
-                if limit > 0 && names.len() >= limit {
+                if limit.is_some_and(|limit| names.len() >= limit.get()) {
                     return false;
                 }
             }

@@ -69,21 +69,21 @@ pub(super) fn list_url(
 
 /// Object listing endpoint for one bounded, ordered page: `startOffset`
 /// makes the server begin the name-ordered scan at the resume point and
-/// `maxResults` caps the page. `startOffset` is INCLUSIVE, so the caller
-/// still has to drop a name equal to its cursor.
+/// `maxResults`, when given, caps the page. `startOffset` is INCLUSIVE, so
+/// the caller still has to drop a name equal to its cursor.
 pub(super) fn list_page_url(
     bucket: &str,
     prefix: &str,
     page_token: Option<&str>,
     fields: &str,
     start_offset: &str,
-    max_results: usize,
+    max_results: Option<usize>,
 ) -> String {
     let mut url = list_url(bucket, prefix, page_token, fields);
     if !start_offset.is_empty() {
         url.push_str(&format!("&startOffset={}", percent_encode(start_offset)));
     }
-    if max_results > 0 {
+    if let Some(max_results) = max_results {
         url.push_str(&format!("&maxResults={max_results}"));
     }
     url

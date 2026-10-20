@@ -16,7 +16,10 @@ pub(super) async fn cleanup_residue_job_ids(
     let mut job_ids = HashSet::new();
     for prefix in ALL_PREFIXES {
         let start = format!("{prefix}/");
-        for path in store.list_paths(&start, 0).await? {
+        for path in store
+            .list_paths(&start, crate::queue::Listing::Every)
+            .await?
+        {
             if let Some(job_id) = path
                 .strip_prefix(&start)
                 .and_then(|tail| tail.strip_suffix(".json"))
@@ -26,7 +29,10 @@ pub(super) async fn cleanup_residue_job_ids(
             }
         }
     }
-    for path in store.list_paths("status/", 0).await? {
+    for path in store
+        .list_paths("status/", crate::queue::Listing::Every)
+        .await?
+    {
         if let Some(job_id) = path
             .strip_prefix("status/")
             .and_then(|tail| tail.split('/').next())
@@ -36,7 +42,10 @@ pub(super) async fn cleanup_residue_job_ids(
         }
     }
     for prefix in ["queue_priority/", "job-transitions/"] {
-        for path in store.list_paths(prefix, 0).await? {
+        for path in store
+            .list_paths(prefix, crate::queue::Listing::Every)
+            .await?
+        {
             if prefix == "queue_priority/" && !crate::queue::listing::is_marker(&path) {
                 continue;
             }

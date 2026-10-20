@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::artifacts_models::{ArtifactError, ArtifactRef};
+use crate::artifacts_models::{ArtifactError, ArtifactManifest, ArtifactRef};
 use crate::queue::StorageError;
 
 use super::{
@@ -42,9 +42,11 @@ impl ArtifactRegistry {
         } else {
             updated_by.to_string()
         };
+        // An alias record is written under the registry schema this Stado
+        // writes, the one its manifests carry.
+        let schema_version = ArtifactManifest::new(alias_ref.clone(), String::new()).schema_version;
         let record = serde_json::json!({
-            "schema_version":
-                1,
+            "schema_version": schema_version,
             "ref": alias_ref.coordinate(),
             "alias": alias,
             "target_version": target.version,
@@ -166,15 +168,20 @@ impl ArtifactRegistry {
     }
 
     /// Aliases (sorted) currently pointing at this exact version. Python
-    /// `ArtifactRegistry.aliases_for`. An alias record that does not parse is
-    /// the error: skipped, the version read as carrying no alias it might.
+    /// `ArtifactRegistry.aliases_for`. An alias record that does not parse,
+    /// or that names no alias, is the error, never skipped or named after
+    /// its file.
     pub async fn aliases_for(&self, reference: &ArtifactRef) -> Result<Vec<String>, RegistryError> {
         let prefix = format!(
             "{ALIAS_PREFIX}/{}/{}/{}/",
             reference.r#type, reference.namespace, reference.name
         );
         let mut aliases: Vec<String> = Vec::new();
-        for path in self.store.list_paths(&prefix, 0).await? {
+        for path in self
+            .store
+            .list_paths(&prefix, crate::queue::Listing::Every)
+            .await?
+        {
             let Some(raw) = self.store.download_text(&path).await? else {
                 continue;
             };
@@ -191,13 +198,12 @@ impl ArtifactRegistry {
                     .get("alias")
                     .map(stringify_json_scalar)
                     .filter(|alias| !alias.is_empty())
-                    .unwrap_or_else(|| {
-                        path.rsplit('/')
-                            .next()
-                            .unwrap_or("")
-                            .trim_end_matches(".json")
-                            .to_string()
-                    });
+                    .ok_or_else(|| {
+                        ArtifactError::new(
+                            "ARTIFACT_CORRUPT_ALIAS",
+                            format!("alias record {path} names no alias"),
+                        )
+                    })?;
                 aliases.push(alias);
             }
         }

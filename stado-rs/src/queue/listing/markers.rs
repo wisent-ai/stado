@@ -54,7 +54,10 @@ pub async fn delete_markers_scanning(
     keep: Option<&str>,
 ) -> Result<(), StorageError> {
     let suffix = format!("-{job_id}.json");
-    for path in store.list_paths(MARKER_PREFIX, 0).await? {
+    for path in store
+        .list_paths(MARKER_PREFIX, crate::queue::Listing::Every)
+        .await?
+    {
         if is_marker(&path) && path.ends_with(&suffix) && Some(path.as_str()) != keep {
             store.delete_blob(&path).await?;
         }

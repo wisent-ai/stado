@@ -1,9 +1,10 @@
 //! The persistence backend seen from the facade: thin, unconditional
 //! delegates onto the bound `BlobBackend` (Python `_upload_text` etc.).
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 
-use crate::queue::{BlobInfo, StorageError, VersionedText};
+use crate::queue::{BlobInfo, Listing, StorageError, VersionedText};
 
 use super::JobStorage;
 
@@ -134,18 +135,19 @@ impl JobStorage {
         self.backend.delete(blob_path).await
     }
 
-    /// Blob names under `prefix`; `oldest_first > 0` bounds the listing to
-    /// the N oldest by creation time. Python `_list_paths`.
+    /// Blob names under `prefix`: every one, or with [`Listing::Oldest`] only
+    /// that many, oldest by creation time first. Python `_list_paths`.
     pub async fn list_paths(
         &self,
         prefix: &str,
-        oldest_first: usize,
+        listing: Listing,
     ) -> Result<Vec<String>, StorageError> {
-        self.backend.list_paths(prefix, oldest_first).await
+        self.backend.list_paths(prefix, listing).await
     }
 
     /// One name-ascending page of `prefix`, strictly after `start_after`, at
-    /// most `limit` names. See [`BlobBackend::list_page`] for the contract.
+    /// most `limit` names when one is given. See [`BlobBackend::list_page`]
+    /// for the contract.
     ///
     /// The ordered walk of the priority index is built on this rather than on
     /// [`Self::list_paths`], which cannot answer "the next few names" without
@@ -154,7 +156,7 @@ impl JobStorage {
         &self,
         prefix: &str,
         start_after: &str,
-        limit: usize,
+        limit: Option<NonZeroUsize>,
     ) -> Result<Vec<String>, StorageError> {
         self.backend.list_page(prefix, start_after, limit).await
     }

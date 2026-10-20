@@ -59,7 +59,10 @@ pub(super) async fn read_snapshot_index(store: &JobStorage) -> Result<SnapshotIn
     }
 
     let mut queued_cancellations = HashSet::new();
-    for path in store.list_paths("cancellations/", 0).await? {
+    for path in store
+        .list_paths("cancellations/", crate::queue::Listing::Every)
+        .await?
+    {
         let Some(job_id) = path
             .strip_prefix("cancellations/")
             .and_then(|tail| tail.strip_suffix(".json"))

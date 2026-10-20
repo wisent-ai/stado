@@ -46,9 +46,6 @@ const UPDATE_SUFFIX: &str = ".zip";
 /// Where release runs are stored, one `<run id>/run.json` each.
 const RUNS_PREFIX: &str = "runs/release-pipeline/";
 const RUN_LEAF: &str = "/run.json";
-/// `list_paths` reads every path under the prefix when asked for none of
-/// the oldest in particular.
-const EVERY_PATH: usize = 0;
 
 const APPCAST_TYPE: &str = "application/xml";
 const ARCHIVE_TYPE: &str = "application/zip";
@@ -214,7 +211,11 @@ impl Dashboard {
         version: Option<&str>,
     ) -> Result<Option<ReleaseRun>, DashboardError> {
         let mut newest: Option<ReleaseRun> = None;
-        for path in self.store.list_paths(RUNS_PREFIX, EVERY_PATH).await? {
+        for path in self
+            .store
+            .list_paths(RUNS_PREFIX, crate::queue::Listing::Every)
+            .await?
+        {
             if !path.ends_with(RUN_LEAF) {
                 continue;
             }

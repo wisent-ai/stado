@@ -27,7 +27,7 @@ async fn runs_of(
 ) -> Result<Vec<ReleaseRun>, CmdError> {
     let mut runs = Vec::new();
     for path in store
-        .list_paths("runs/release-pipeline/", 0)
+        .list_paths("runs/release-pipeline/", crate::queue::Listing::Every)
         .await
         .map_err(CmdError::from)?
     {
@@ -83,8 +83,16 @@ pub(in crate::cli::release_submit) fn replaces(later: &ReleaseRun, earlier: &Rel
         Ok(std::cmp::Ordering::Equal) => later.created_at > earlier.created_at,
         Ok(std::cmp::Ordering::Less) => false,
         // A run whose version is not SemVer was never admitted by submit;
-        // between two such records only the submission order is known.
-        Err(_) => later.created_at > earlier.created_at,
+        // between two such records only the submission order is known, and
+        // the reason the versions do not order is said.
+        Err(unordered) => {
+            tracing::warn!(
+                "release runs {} and {} are ordered by submission time: {unordered}",
+                later.run_id,
+                earlier.run_id
+            );
+            later.created_at > earlier.created_at
+        }
     }
 }
 

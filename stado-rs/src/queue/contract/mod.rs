@@ -12,7 +12,7 @@ mod factory;
 mod json;
 mod types;
 
-pub use backend::{BlobBackend, ChangeWatch};
+pub use backend::{BlobBackend, ChangeWatch, Listing};
 pub use types::{BlobInfo, StorageError, VersionedText};
 
 pub(crate) use factory::{construct_backend, BackendLocator};

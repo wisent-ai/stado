@@ -2,20 +2,43 @@
 //! admitting jobs right now, how much VRAM each already owes to running
 //! work, and the per-job runtime estimate both paths share. Split out of
 //! `makespan/mod.rs`; the matcher itself lives in `matcher`.
+//!
+//! Every field the projection reads is one the publisher or the job record
+//! always writes, so a document without it is refused with its path rather
+//! than read as zero.
 
 use std::collections::{BTreeMap, HashMap};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde_json::Value;
 use std::sync::LazyLock;
 
-use crate::queue::{JobStorage, StorageError};
+use crate::queue::{JobStorage, Listing, StorageError};
 
 use super::history::{extract_model_task, History};
 
 static INSTANCE_HOST_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[^@]+@(.+)$").expect("static regex compiles"));
+    LazyLock::new(|| Regex::new(r"^[^@]+@(?P<host>.+)$").expect("static regex compiles"));
+
+/// A runtime estimate as a job states it: a positive duration in seconds.
+/// The job record writes an unset estimate as zero, which states none.
+fn stated(seconds: f64) -> Option<f64> {
+    (seconds.is_normal() && seconds.is_sign_positive()).then_some(seconds)
+}
+
+/// The stated estimate, else the history of the job's (model, task).
+fn estimate(command: &str, stated: Option<f64>, history: &History) -> Option<f64> {
+    if stated.is_some() {
+        return stated;
+    }
+    let (model, task) = extract_model_task(command);
+    if model.is_empty() || task.is_empty() {
+        return None;
+    }
+    history.get(&(model, task)).copied()
+}
 
 /// Per-job runtime estimate in seconds. Returns None when neither an
 /// explicit estimate nor a matching history entry is available; the
@@ -30,14 +53,7 @@ pub(super) fn estimate_runtime(
     runtime_seconds_estimate: f64,
     history: &History,
 ) -> Option<f64> {
-    if runtime_seconds_estimate > 0.0 {
-        return Some(runtime_seconds_estimate);
-    }
-    let (model, task) = extract_model_task(command);
-    if model.is_empty() || task.is_empty() {
-        return None;
-    }
-    history.get(&(model, task)).copied()
+    estimate(command, stated(runtime_seconds_estimate), history)
 }
 
 /// Live-worker projection state.
@@ -50,6 +66,15 @@ pub struct AgentInfo {
     pub active_jobs: Vec<(f64, i64)>,
 }
 
+/// A whole number of gigabytes a document states as an integer or a float.
+fn gigabytes(doc: &Value, field: &str) -> Option<i64> {
+    doc.get(field).and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_f64().map(|float| float as i64))
+    })
+}
+
 /// Workers with a fresh publication and an explicit positive admission
 /// decision. A live row alone is not capacity: a worker can keep publishing
 /// while disk, RAM, CPU, or accelerator state prevents another claim.
@@ -57,28 +82,24 @@ pub(super) async fn live_agents(
     store: &JobStorage,
     now: DateTime<Utc>,
 ) -> Result<BTreeMap<String, AgentInfo>, StorageError> {
-    let paths = store.list_paths("capacity/", 0).await?;
+    let paths = store.list_paths("capacity/", Listing::Every).await?;
     let texts = download_many(store, &paths).await?;
     let mut agents: BTreeMap<String, AgentInfo> = BTreeMap::new();
     for text in texts.into_iter().flatten() {
         let doc: Value = serde_json::from_str(&text)?;
+        let refused =
+            |what: &str| StorageError::Other(format!("makespan: capacity blob {what}: {doc}"));
         // Every agent is keyed by its consumer id; a row without one was keyed
-        // "", so every such row folded into one phantom agent. Refused like a
-        // malformed published_at, with the row.
+        // "", so every such row folded into one phantom agent.
         let cid = doc
             .get("consumer_id")
             .and_then(Value::as_str)
-            .ok_or_else(|| {
-                StorageError::Other(format!(
-                    "makespan: capacity blob names no consumer_id: {doc}"
-                ))
-            })?
+            .ok_or_else(|| refused("names no consumer_id"))?
             .to_string();
         let pub_at = doc
             .get("published_at")
             .and_then(Value::as_str)
-            .unwrap_or("");
-        // Python lets a malformed published_at crash the tick (no try).
+            .ok_or_else(|| refused("states no published_at"))?;
         let published = DateTime::parse_from_rfc3339(pub_at).map_err(|e| {
             StorageError::Other(format!(
                 "makespan: capacity blob has malformed published_at {pub_at:?}: {e}"
@@ -106,19 +127,17 @@ pub(super) async fn live_agents(
         let kind = doc
             .get("kind")
             .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| cid.split('-').next().unwrap_or("").to_string());
-        let total_vram_gb = doc
-            .get("total_vram_gb")
-            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
-            .unwrap_or(0);
+            .ok_or_else(|| refused("states no kind"))?
+            .to_string();
+        let total_vram_gb =
+            gigabytes(&doc, "total_vram_gb").ok_or_else(|| refused("states no total_vram_gb"))?;
         agents.insert(
             cid,
             AgentInfo {
                 kind,
                 available_accelerators,
                 total_vram_gb,
-                active_jobs: vec![],
+                active_jobs: Vec::new(),
             },
         );
     }
@@ -144,61 +163,71 @@ pub(super) async fn seed_running_jobs(
             host_to_cid.insert(host.to_string(), cid.clone());
         }
     }
-    let paths = store.list_paths("running/", 0).await?;
+    let paths = store.list_paths("running/", Listing::Every).await?;
     let texts = download_many(store, &paths).await?;
     for (path, text) in paths.iter().zip(&texts) {
         let Some(text) = text else { continue }; // moved to completed/failed mid-tick
         let doc: Value = serde_json::from_str(text)?;
+        let refused =
+            |what: &str| StorageError::Other(format!("makespan: running blob {path} {what}"));
         let iref = doc
             .get("instance_ref")
             .and_then(Value::as_str)
-            .unwrap_or("");
-        let Some(caps) = INSTANCE_HOST_RE.captures(iref) else {
-            return Err(StorageError::Other(format!(
-                "makespan: running blob {path} has malformed instance_ref {iref:?}; \
-                 cannot map to consumer_id"
+            .ok_or_else(|| refused("names no instance_ref"))?;
+        let Some(host) = INSTANCE_HOST_RE
+            .captures(iref)
+            .and_then(|caps| caps.name("host"))
+            .map(|host| host.as_str())
+        else {
+            return Err(refused(&format!(
+                "has malformed instance_ref {iref:?}; cannot map to consumer_id"
             )));
         };
-        let host = &caps[1];
         let Some(cid) = host_to_cid.get(host) else {
             // Running job points to an agent we no longer track as live.
             // Leave its VRAM out of the projection; the reaper will move
             // the running blob to failed on its own pass. Logging only.
-            // Named by its running blob, which every job has; its job_id
-            // field read as "" printed a job named nothing.
             log_fn(&format!(
                 "makespan: running {path} on dead host {host}; skipping projection"
             ));
             continue;
         };
         let Some(st) = doc.get("started_at").and_then(Value::as_str) else {
-            return Err(StorageError::Other(format!(
-                "makespan: running blob {path} has no started_at"
-            )));
+            return Err(refused("has no started_at"));
         };
         let started = DateTime::parse_from_rfc3339(st).map_err(|e| {
             StorageError::Other(format!(
                 "makespan: running blob {path} bad started_at {st:?}: {e}"
             ))
         })?;
-        let elapsed = (now - started.with_timezone(&Utc)).num_milliseconds() as f64 / 1000.0;
-        let command = doc.get("command").and_then(Value::as_str).unwrap_or("");
+        let command = doc
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| refused("has no command"))?;
         let runtime_hint = doc
             .get("runtime_seconds_estimate")
-            .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)))
-            .unwrap_or(0.0);
-        let Some(est) = estimate_runtime(command, runtime_hint, history) else {
+            .and_then(Value::as_f64)
+            .and_then(stated);
+        let Some(est) = estimate(command, runtime_hint, history) else {
             // Admin/maintenance commands have no parseable (model, task); the
             // matcher can't predict their finish time. Agent-side smi_free
             // enforces actual VRAM at claim time.
             log_fn(&format!("makespan: skip running {path} for seeding"));
             continue;
         };
-        let remaining = (est - elapsed.max(0.0)).max(0.0);
-        let vram = doc
-            .get("gpu_mem_gb")
-            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
-            .unwrap_or(0);
+        let estimated = Duration::try_from_secs_f64(est).map_err(|error| {
+            refused(&format!(
+                "has a runtime estimate {est} that is no duration: {error}"
+            ))
+        })?;
+        // A start stamped after this clock's now has run for no time yet.
+        let elapsed = match (now - started.with_timezone(&Utc)).to_std() {
+            Ok(elapsed) => elapsed,
+            Err(_ahead) => Duration::ZERO,
+        };
+        // A job past its estimate owes no more time.
+        let remaining = estimated.saturating_sub(elapsed).as_secs_f64();
+        let vram = gigabytes(&doc, "gpu_mem_gb").ok_or_else(|| refused("states no gpu_mem_gb"))?;
         if let Some(info) = agents.get_mut(cid) {
             info.active_jobs.push((remaining, vram));
         }

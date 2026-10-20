@@ -13,11 +13,6 @@ use crate::queue::leases::{LeaseError, LeaseState, ProviderLease, ProviderLeaseS
 use crate::queue::migrations::bulk_workers;
 use crate::queue::JobStorage;
 
-/// `JobStorage::list_jobs` / `list_paths` take `oldest_first = 0` for "no
-/// bound" (Python `limit=None`); naming the sentinel keeps the call sites
-/// honest about what zero means there.
-const UNBOUNDED: usize = 0;
-
 /// The blob prefix `queue/leases.rs::ProviderLeaseStore::path` writes under.
 /// Already carried by `queue/copy.rs::CANONICAL_PREFIXES`; these commands
 /// only read it.
@@ -43,7 +38,9 @@ impl Holders {
         // Running job documents. `instance_ref` is written by the dispatcher
         // as the provider ref and by local agents as "local@<hostname>";
         // both forms are matched in `Holders::keys`.
-        for job in store.list_jobs("running", UNBOUNDED).await? {
+        for job in
+            crate::queue::listing::list_jobs(store, "running", crate::queue::Listing::Every).await?
+        {
             let Some(reference) = job.instance_ref.filter(|value| !value.is_empty()) else {
                 continue;
             };
@@ -62,7 +59,7 @@ impl Holders {
         // size bound).
         let lease_store = ProviderLeaseStore::new(store.clone());
         let job_ids: Vec<String> = store
-            .list_paths(LEASE_PREFIX, UNBOUNDED)
+            .list_paths(LEASE_PREFIX, crate::queue::Listing::Every)
             .await?
             .iter()
             .filter_map(|path| lease_job_id(path))
@@ -98,7 +95,8 @@ impl Holders {
     }
 
     /// Every string a holder may have recorded for one VM: the provider's
-    /// own `name@zone`, the `local@<hostname>` form an agent stamps onto the
+    /// own name joined to its zone, the local form joined to the hostname an
+    /// agent stamps onto the
     /// job it claims (both are checked by
     /// `monitor/monitor.rs::reap_dead_agents`), and the bare VM name a lease
     /// records as its `provider_resource_id`.
@@ -141,8 +139,9 @@ fn lease_job_id(path: &str) -> Option<String> {
 /// Whether a lease still holds its provider resource: not released, and its
 /// resource TTL has not lapsed.
 ///
-/// An absent or unparseable `resource_expires_at` counts as HELD. The reaper
-/// must never delete a VM on the strength of a timestamp it could not read.
+/// An absent or unparseable `resource_expires_at` counts as HELD, and the
+/// reason it could not be read is said. The reaper must never delete a VM on
+/// the strength of a timestamp it could not read.
 fn lease_holds_resource(lease: &ProviderLease) -> bool {
     if lease.state == LeaseState::Released.as_str() {
         return false;
@@ -151,6 +150,12 @@ fn lease_holds_resource(lease: &ProviderLease) -> bool {
     // same normalization `queue/leases.rs::parse_timestamp` applies.
     match DateTime::parse_from_rfc3339(&lease.resource_expires_at.replace('Z', "+00:00")) {
         Ok(expires) => Utc::now() < expires.with_timezone(&Utc),
-        Err(_) => true,
+        Err(unread) => {
+            tracing::warn!(
+                "a lease's resource_expires_at {:?} cannot be read, so the lease counts as holding its resource: {unread}",
+                lease.resource_expires_at
+            );
+            true
+        }
     }
 }

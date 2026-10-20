@@ -77,10 +77,6 @@ pub const RUNNING_PREFIX: &str = "running";
 /// display order: what is waiting, and what still has to finish.
 pub const WATCHED_PREFIXES: &[&str] = &[QUEUED_PREFIX, RUNNING_PREFIX];
 
-/// `JobStorage::list_paths`'s "no oldest-first bound" sentinel — the
-/// parameter caps the listing only when it is greater than zero.
-const UNBOUNDED_LISTING: usize = 0;
-
 /// The pause switch. Absent blob == every field defaulted == not paused,
 /// so a fleet that has never been paused needs no bootstrap write.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,7 +200,7 @@ pub async fn set_paused(
 /// bodies, which is what `JobStorage::list_jobs` would do.
 async fn job_blobs(store: &JobStorage, prefix: &str) -> Result<Vec<String>, StorageError> {
     let paths = store
-        .list_paths(&format!("{prefix}/"), UNBOUNDED_LISTING)
+        .list_paths(&format!("{prefix}/"), crate::queue::Listing::Every)
         .await?;
     Ok(paths
         .into_iter()

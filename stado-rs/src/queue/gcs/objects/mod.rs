@@ -8,13 +8,14 @@
 //! `objects.list` walks (`listing`).
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::{Method, StatusCode};
 
-use crate::queue::{BlobBackend, BlobInfo, StorageError, VersionedText};
+use crate::queue::{BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 
 use super::{client::parse_timestamp, refusals::ensure_success, uri::object_url, GcsBackend};
 
@@ -116,16 +117,16 @@ impl BlobBackend for GcsBackend {
     async fn list_paths(
         &self,
         prefix: &str,
-        oldest_first: usize,
+        listing: Listing,
     ) -> Result<Vec<String>, StorageError> {
-        self.list_sorted_paths(prefix, oldest_first).await
+        self.list_sorted_paths(prefix, listing).await
     }
 
     async fn list_page(
         &self,
         prefix: &str,
         start_after: &str,
-        limit: usize,
+        limit: Option<NonZeroUsize>,
     ) -> Result<Vec<String>, StorageError> {
         self.list_name_page(prefix, start_after, limit).await
     }

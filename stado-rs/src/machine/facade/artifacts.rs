@@ -1,7 +1,6 @@
 //! Downloading a terminal job's canonical output, with every path rule the
 //! Python original enforced.
 
-use std::io::Read;
 use std::path::Path;
 
 use serde_json::{Map, Value};
@@ -47,7 +46,11 @@ impl MachineFacade {
         // private/var would otherwise fail every tempfile-adjacent path).
         let temp_root = std::env::temp_dir();
         let trusted: std::collections::HashSet<&Path> = temp_root.ancestors().collect();
-        for component in requested_root.ancestors().skip(1) {
+        for component in requested_root
+            .parent()
+            .into_iter()
+            .flat_map(Path::ancestors)
+        {
             if component.exists() && component.is_symlink() && !trusted.contains(component) {
                 return Err(security("output path must not contain symlinks"));
             }
@@ -60,7 +63,7 @@ impl MachineFacade {
         let prefix = format!("status/{job_id}/output/");
         let mut paths: Vec<String> = self
             .store
-            .list_paths(&prefix, 0)
+            .list_paths(&prefix, crate::queue::Listing::Every)
             .await?
             .into_iter()
             .filter(|path| *path != prefix)
@@ -93,7 +96,10 @@ impl MachineFacade {
                 destination.push(part);
             }
             let mut current = root.clone();
-            for part in &parts[..parts.len() - 1] {
+            let Some((_, directories)) = parts.split_last() else {
+                return Err(security("storage returned an artifact with an empty path"));
+            };
+            for part in directories {
                 current.push(part);
                 if current.exists() && (current.is_symlink() || !current.is_dir()) {
                     return Err(security(format!(
@@ -115,7 +121,15 @@ impl MachineFacade {
                     py_repr(relative)
                 )));
             }
-            let parent = destination.parent().unwrap_or(&root).to_path_buf();
+            let parent = destination
+                .parent()
+                .ok_or_else(|| {
+                    security(format!(
+                        "artifact destination {} has no directory",
+                        py_repr(relative)
+                    ))
+                })?
+                .to_path_buf();
             let temporary = tempfile::Builder::new()
                 .prefix(".stado-")
                 .suffix(".download")
@@ -131,16 +145,7 @@ impl MachineFacade {
                 }
                 let mut file = std::fs::File::open(&temporary)?;
                 let mut digest = Sha256::new();
-                let mut size: u64 = 0;
-                let mut chunk = [0u8; 1024 * 1024];
-                loop {
-                    let n = file.read(&mut chunk)?;
-                    if n == 0 {
-                        break;
-                    }
-                    size += n as u64;
-                    digest.update(&chunk[..n]);
-                }
+                let size = std::io::copy(&mut file, &mut digest)?;
                 std::fs::rename(&temporary, &destination)?;
                 Ok::<(u64, String), MachineError>((size, hex::encode(digest.finalize())))
             }

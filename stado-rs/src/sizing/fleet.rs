@@ -46,7 +46,9 @@ impl Sizing {
     pub async fn live_total_vrams(&self, store: &JobStorage) -> Result<Vec<i64>, StorageError> {
         let now = Utc::now();
         let mut vrams: Vec<i64> = Vec::new();
-        let paths = store.list_paths("capacity/", 0).await?;
+        let paths = store
+            .list_paths("capacity/", crate::queue::Listing::Every)
+            .await?;
         let texts = download_many(store, &paths).await?;
         for (path, text) in paths.iter().zip(texts) {
             let Some(text) = text else {

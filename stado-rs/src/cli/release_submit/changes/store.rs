@@ -11,7 +11,7 @@ use super::{source, status, Change, PREFIX};
 /// Every ticket object under [`PREFIX`].
 pub(super) async fn ticket_paths(store: &JobStorage) -> Result<Vec<String>, CmdError> {
     Ok(store
-        .list_paths(PREFIX, 0)
+        .list_paths(PREFIX, crate::queue::Listing::Every)
         .await
         .map_err(CmdError::from)?
         .into_iter()

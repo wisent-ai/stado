@@ -2,28 +2,41 @@
 //! the fan-out that resolves them, and the resumable cursor.
 
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 
 use futures::StreamExt;
 
 use crate::models::Job;
+use crate::primitives::tally::Tally;
 use crate::queue::listing::{is_marker, marker_path, MARKER_PREFIX};
 use crate::queue::storage::JobStorage;
 use crate::queue::StorageError;
 
 use super::scan::JobScan;
 
+/// What is left of one of the scan's bounds after `used` of it, when the
+/// scan states that bound (a scan writes an unbounded one as none). A spent
+/// bound still asks for one name: the window and budget checks around the
+/// page are what end the walk.
+fn left(bound: usize, used: usize) -> Option<NonZeroUsize> {
+    NonZeroUsize::new(bound).map(|bound| {
+        match NonZeroUsize::new(bound.get().saturating_sub(used)) {
+            Some(left) => left,
+            None => NonZeroUsize::MIN,
+        }
+    })
+}
+
 /// How many marker names the next page pulls: as many as the scan can still
 /// use. Every name on a page has its marker body fetched before the window is
 /// checked, so a page never asks for more names than the jobs still wanted or
 /// the downloads still allowed, whichever is fewer; an unbounded scan asks for
-/// every name (`0`), in the backend's own pages.
-fn marker_page(scan: &JobScan<'_>, found: usize, scanned: usize) -> usize {
-    let wanted = (scan.want > 0).then(|| scan.want.saturating_sub(found).max(1));
-    let allowed = (scan.scan_budget > 0).then(|| scan.scan_budget.saturating_sub(scanned).max(1));
-    match (wanted, allowed) {
-        (Some(wanted), Some(allowed)) => wanted.min(allowed),
-        (Some(bound), None) | (None, Some(bound)) => bound,
-        (None, None) => 0,
+/// every name, in the backend's own pages.
+fn marker_page(scan: &JobScan<'_>, found: usize, scanned: usize) -> Option<NonZeroUsize> {
+    match (left(scan.want, found), left(scan.scan_budget, scanned)) {
+        (Some(wanted), Some(allowed)) => Some(wanted.min(allowed)),
+        (Some(bound), None) | (None, Some(bound)) => Some(bound),
+        (None, None) => None,
     }
 }
 
@@ -38,7 +51,7 @@ async fn download_many_or_none(
 ) -> Vec<Result<Option<String>, StorageError>> {
     futures::stream::iter(paths)
         .map(|path| async move { store.download_text(path).await })
-        .buffered(workers.max(1))
+        .buffered(workers)
         .collect()
         .await
 }
@@ -81,7 +94,9 @@ pub(super) async fn collect_from_index(
     // `from_head` opts out of the rotation in both directions: the walk
     // starts at the head and the cursor is not moved, so a priority-fidelity
     // read neither observes nor perturbs the claim loops sharing it.
-    let rotates = (scan.want > 0 || scan.scan_budget > 0) && !scan.from_head;
+    let bounded =
+        NonZeroUsize::new(scan.want).is_some() || NonZeroUsize::new(scan.scan_budget).is_some();
+    let rotates = bounded && !scan.from_head;
     let origin = if rotates {
         store.scan_cursor()
     } else {
@@ -142,7 +157,7 @@ pub(super) async fn collect_from_index(
                     entries.push((marker.as_str(), job_id));
                 }
                 _ => {
-                    *scanned += 1;
+                    scanned.tally();
                     if scan.budget_spent(*scanned) {
                         stopped_at = (*marker).to_string();
                         break 'walk;
@@ -170,7 +185,7 @@ pub(super) async fn collect_from_index(
             // markers exhaust the budget, which is the input the bound exists
             // for; charging only the ones that resolve would leave it no
             // bound at all there.
-            *scanned += 1;
+            scanned.tally();
             if let Some(data) = body? {
                 let job = Job::from_json(&data)?;
                 // A superseded key cannot give a job its former priority.

@@ -176,7 +176,7 @@ pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<Release
     let store = JobStorage::new().await.map_err(CmdError::from)?;
     let mut latest: Option<ReleaseRun> = None;
     for path in store
-        .list_paths("runs/release-pipeline/", 0)
+        .list_paths("runs/release-pipeline/", crate::queue::Listing::Every)
         .await
         .map_err(CmdError::from)?
     {

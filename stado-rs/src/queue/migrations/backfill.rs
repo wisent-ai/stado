@@ -31,7 +31,10 @@ use super::sentinel::write_sentinel;
 /// [`super::listing::is_marker`]: crate::queue::listing::is_marker
 async fn existing_marker_names(store: &JobStorage) -> Result<HashSet<String>, StorageError> {
     let mut out = HashSet::new();
-    for path in store.list_paths(listing::MARKER_PREFIX, 0).await? {
+    for path in store
+        .list_paths(listing::MARKER_PREFIX, crate::queue::Listing::Every)
+        .await?
+    {
         if listing::is_marker(&path) {
             out.insert(path);
         }
@@ -60,7 +63,7 @@ pub async fn backfill_priority_markers(store: &JobStorage) -> Result<bool, Stora
     // see `prune_stale_markers` for the race it closes.
     let have = existing_marker_names(store).await?;
     let paths: Vec<String> = store
-        .list_paths("queue/", 0)
+        .list_paths("queue/", crate::queue::Listing::Every)
         .await?
         .into_iter()
         .filter(|p| p.ends_with(".json"))

@@ -1,15 +1,16 @@
 //! Reads over a lifecycle prefix itself: the bulk job fetch, and the
 //! id-only walk that answers from the listing alone.
 
+use std::num::NonZeroUsize;
+
 use futures::StreamExt;
 
 use crate::models::Job;
 use crate::queue::storage::{is_transition_sentinel_state, JobStorage};
-use crate::queue::StorageError;
+use crate::queue::{Listing, StorageError};
 
-/// Parallel-fetch job JSONs under `{prefix}/`.
-///
-/// `oldest_first` limits the answer to jobs picked by creation time.
+/// Parallel-fetch job JSONs under `{prefix}/`: every one, or with
+/// [`Listing::Oldest`] only that many live jobs, picked by creation time.
 /// Reads are grouped by the measured worker count so an early exit does not
 /// fetch the whole prefix before applying the requested window.
 ///
@@ -22,9 +23,14 @@ use crate::queue::StorageError;
 pub async fn list_jobs(
     store: &JobStorage,
     prefix: &str,
-    oldest_first: usize,
+    listing: Listing,
 ) -> Result<Vec<Job>, StorageError> {
-    let ordered = if oldest_first > 0 { usize::MAX } else { 0 };
+    // A window orders the whole prefix by age and stops at the window's
+    // live jobs; every job needs no order.
+    let ordered = match listing {
+        Listing::Oldest(_) => Listing::Oldest(NonZeroUsize::MAX),
+        Listing::Every => Listing::Every,
+    };
     // The prefix is a DIRECTORY, so it is matched at the delimiter and not as
     // a string. The store answers `starts_with`, and `queue/` is a string
     // prefix of `queue_priority/`: a listing asking for the handful of
@@ -60,8 +66,10 @@ pub async fn list_jobs(
                 continue;
             }
             jobs.push(job);
-            if oldest_first > 0 && jobs.len() >= oldest_first {
-                return Ok(jobs);
+            if let Listing::Oldest(count) = listing {
+                if jobs.len() >= count.get() {
+                    return Ok(jobs);
+                }
             }
         }
     }
@@ -94,7 +102,7 @@ pub async fn list_job_ids(store: &JobStorage, prefix: &str) -> Result<Vec<String
     // `starts_with` hands over both.
     let directory = format!("{prefix}/");
     Ok(store
-        .list_paths(&directory, 0)
+        .list_paths(&directory, Listing::Every)
         .await?
         .into_iter()
         .filter_map(|path| {

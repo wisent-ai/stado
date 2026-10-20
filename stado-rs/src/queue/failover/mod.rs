@@ -44,6 +44,22 @@ impl ReadFailoverBackend {
         );
     }
 
+    /// A read the primary refused, answered by the backup. The primary's
+    /// refusal is reported with the operation and its subject, so a failover
+    /// read is never silent; the backup's own answer, a refusal included, is
+    /// returned as it is.
+    fn failed_over<T>(
+        operation: &str,
+        subject: &str,
+        primary: StorageError,
+        backup: Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        eprintln!(
+            "[storage-failover] primary {operation} failed for {subject}: {primary}; read from the backup instead"
+        );
+        backup
+    }
+
     /// Whether a key the primary reports absent may be answered from the
     /// mirror and written back.
     ///

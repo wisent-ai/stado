@@ -4,9 +4,11 @@
 //! `objects/mod.rs` carries the trait entries; the work is here because the
 //! whole-prefix response and its metadata parse are one seam.
 
+use std::num::NonZeroUsize;
+
 use reqwest::Method;
 
-use crate::queue::{BlobBackend, BlobInfo, StorageError};
+use crate::queue::{BlobBackend, BlobInfo, Listing, StorageError};
 
 use super::super::{ObjectList, StadoObjectBackend};
 
@@ -14,18 +16,19 @@ impl StadoObjectBackend {
     pub(super) async fn list_sorted_paths(
         &self,
         prefix: &str,
-        oldest_first: usize,
+        listing: Listing,
     ) -> Result<Vec<String>, StorageError> {
         let mut blobs = self.list_blobs_with_meta(prefix).await?;
-        if oldest_first > 0 {
-            blobs.sort_by(|left, right| {
-                left.updated
-                    .cmp(&right.updated)
-                    .then(left.name.cmp(&right.name))
-            });
-            blobs.truncate(oldest_first);
-        } else {
-            blobs.sort_by(|left, right| left.name.cmp(&right.name));
+        match listing {
+            Listing::Oldest(count) => {
+                blobs.sort_by(|left, right| {
+                    left.updated
+                        .cmp(&right.updated)
+                        .then(left.name.cmp(&right.name))
+                });
+                blobs.truncate(count.get());
+            }
+            Listing::Every => blobs.sort_by(|left, right| left.name.cmp(&right.name)),
         }
         Ok(blobs.into_iter().map(|blob| blob.name).collect())
     }
@@ -51,7 +54,7 @@ impl StadoObjectBackend {
         &self,
         prefix: &str,
         start_after: &str,
-        limit: usize,
+        limit: Option<NonZeroUsize>,
     ) -> Result<Vec<String>, StorageError> {
         let response =
             Self::send_through_boundary(self.request(Method::GET, self.list_url(prefix)?)).await?;
@@ -67,8 +70,8 @@ impl StadoObjectBackend {
         names.sort_unstable();
         let cut = names.partition_point(|name| name.as_str() <= start_after);
         names.drain(..cut);
-        if limit > 0 {
-            names.truncate(limit);
+        if let Some(limit) = limit {
+            names.truncate(limit.get());
         }
         Ok(names)
     }

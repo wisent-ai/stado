@@ -1,12 +1,13 @@
 //! The [`BlobBackend`] surface of the read-authority store.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::queue::{BlobBackend, BlobInfo, StorageError, VersionedText};
+use crate::queue::{BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 
 use super::{ReadFailoverBackend, ReadMode};
 
@@ -52,7 +53,7 @@ impl BlobBackend for ReadFailoverBackend {
                 None => Ok(None),
             },
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
-            Err(_) => self.backup.download_text(path).await,
+            Err(e) => Self::failed_over("download", path, e, self.backup.download_text(path).await),
         }
     }
 
@@ -61,7 +62,10 @@ impl BlobBackend for ReadFailoverBackend {
             Ok(Some(content)) => Ok(Some(content)),
             Ok(None) => self.mirrored_bytes(path).await,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
-            Err(_) => self.backup.download_bytes(path).await,
+            Err(e) => {
+                let backup = self.backup.download_bytes(path).await;
+                Self::failed_over("download", path, e, backup)
+            }
         }
     }
 
@@ -83,7 +87,10 @@ impl BlobBackend for ReadFailoverBackend {
                 None => Ok(None),
             },
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
-            Err(_) => self.backup.download_release(uri).await,
+            Err(e) => {
+                let backup = self.backup.download_release(uri).await;
+                Self::failed_over("release download", uri, e, backup)
+            }
         }
     }
 
@@ -98,7 +105,10 @@ impl BlobBackend for ReadFailoverBackend {
                 None => Ok(false),
             },
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
-            Err(_) => self.backup.download_to_filename(path, dest).await,
+            Err(e) => {
+                let backup = self.backup.download_to_filename(path, dest).await;
+                Self::failed_over("download", path, e, backup)
+            }
         }
     }
 
@@ -141,7 +151,10 @@ impl BlobBackend for ReadFailoverBackend {
         match self.primary.download_text_versioned(path).await {
             answer @ Ok(_) => answer,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
-            Err(_) => self.backup.download_text_versioned(path).await,
+            Err(e) => {
+                let backup = self.backup.download_text_versioned(path).await;
+                Self::failed_over("versioned read", path, e, backup)
+            }
         }
     }
 
@@ -186,19 +199,25 @@ impl BlobBackend for ReadFailoverBackend {
                 }
             }
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
-            Err(_) => self.backup.list_blobs_with_meta(path).await.map(exact),
+            Err(e) => {
+                let backup = self.backup.list_blobs_with_meta(path).await.map(exact);
+                Self::failed_over("existence check", path, e, backup)
+            }
         }
     }
 
     async fn list_paths(
         &self,
         prefix: &str,
-        oldest_first: usize,
+        listing: Listing,
     ) -> Result<Vec<String>, StorageError> {
-        match self.primary.list_paths(prefix, oldest_first).await {
+        match self.primary.list_paths(prefix, listing).await {
             answer @ Ok(_) => answer,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
-            Err(_) => self.backup.list_paths(prefix, oldest_first).await,
+            Err(e) => {
+                let backup = self.backup.list_paths(prefix, listing).await;
+                Self::failed_over("listing", prefix, e, backup)
+            }
         }
     }
 
@@ -212,12 +231,15 @@ impl BlobBackend for ReadFailoverBackend {
         &self,
         prefix: &str,
         start_after: &str,
-        limit: usize,
+        limit: Option<NonZeroUsize>,
     ) -> Result<Vec<String>, StorageError> {
         match self.primary.list_page(prefix, start_after, limit).await {
             answer @ Ok(_) => answer,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
-            Err(_) => self.backup.list_page(prefix, start_after, limit).await,
+            Err(e) => {
+                let backup = self.backup.list_page(prefix, start_after, limit).await;
+                Self::failed_over("page listing", prefix, e, backup)
+            }
         }
     }
 
@@ -231,7 +253,10 @@ impl BlobBackend for ReadFailoverBackend {
         match self.primary.list_blobs_with_meta(path).await {
             Ok(blobs) => Ok(exact(blobs)),
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
-            Err(_) => self.backup.list_blobs_with_meta(path).await.map(exact),
+            Err(e) => {
+                let backup = self.backup.list_blobs_with_meta(path).await.map(exact);
+                Self::failed_over("modification read", path, e, backup)
+            }
         }
     }
 
@@ -251,7 +276,10 @@ impl BlobBackend for ReadFailoverBackend {
         match self.primary.list_blobs_with_meta(prefix).await {
             answer @ Ok(_) => answer,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
-            Err(_) => self.backup.list_blobs_with_meta(prefix).await,
+            Err(e) => {
+                let backup = self.backup.list_blobs_with_meta(prefix).await;
+                Self::failed_over("metadata listing", prefix, e, backup)
+            }
         }
     }
 

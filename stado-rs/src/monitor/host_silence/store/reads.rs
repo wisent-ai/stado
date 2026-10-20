@@ -14,7 +14,9 @@ use crate::queue::{JobStorage, StorageError};
 /// reverse chronological sort and the caller downloads only the documents
 /// it is going to keep.
 async fn newest_first(store: &JobStorage, prefix: &str) -> Result<Vec<String>, StorageError> {
-    let mut paths = store.list_paths(prefix, 0).await?;
+    let mut paths = store
+        .list_paths(prefix, crate::queue::Listing::Every)
+        .await?;
     paths.retain(|path| path.ends_with(".json"));
     paths.sort_unstable_by(|left, right| right.cmp(left));
     Ok(paths)
@@ -22,10 +24,11 @@ async fn newest_first(store: &JobStorage, prefix: &str) -> Result<Vec<String>, S
 
 /// Parse one stored document, or `None` when it is absent or unreadable.
 ///
-/// A corrupt record is skipped rather than propagated. These blobs are read
-/// while something is already broken; refusing to report five silences
-/// because one of them was truncated by a host that lost power mid-write is
-/// the diagnostic failing for the same reason as its subject.
+/// A corrupt record is skipped rather than propagated, and named with its
+/// parse error. These blobs are read while something is already broken;
+/// refusing to report five silences because one of them was truncated by a
+/// host that lost power mid-write is the diagnostic failing for the same
+/// reason as its subject.
 pub(super) async fn read_document<T: serde::de::DeserializeOwned>(
     store: &JobStorage,
     path: &str,
@@ -33,7 +36,13 @@ pub(super) async fn read_document<T: serde::de::DeserializeOwned>(
     let Some(body) = store.download_text(path).await? else {
         return Ok(None);
     };
-    Ok(serde_json::from_str(&body).ok())
+    match serde_json::from_str(&body) {
+        Ok(document) => Ok(Some(document)),
+        Err(error) => {
+            tracing::warn!("{path} is skipped: it is not a readable record: {error}");
+            Ok(None)
+        }
+    }
 }
 
 /// Every silence record for `host`, newest first.

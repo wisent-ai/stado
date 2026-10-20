@@ -95,7 +95,11 @@ impl ArtifactRegistry {
         }
         let prefix = format!("{}/", parts.join("/"));
         let mut manifests: Vec<ArtifactManifest> = Vec::new();
-        for path in self.store.list_paths(&prefix, 0).await? {
+        for path in self
+            .store
+            .list_paths(&prefix, crate::queue::Listing::Every)
+            .await?
+        {
             if !path.ends_with(".json") {
                 continue;
             }

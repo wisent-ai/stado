@@ -131,7 +131,7 @@ pub async fn read_plan(store: &JobStorage, id: &str) -> Result<ExpansionReport, 
 
 pub async fn history(store: &JobStorage) -> Result<Vec<ExpansionReport>, CmdError> {
     let paths = store
-        .list_paths(PLAN_PREFIX, 0)
+        .list_paths(PLAN_PREFIX, crate::queue::Listing::Every)
         .await
         .map_err(|e| CmdError::from(e).within(format!("list {PLAN_PREFIX}")))?;
     let mut plans = Vec::new();

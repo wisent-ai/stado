@@ -59,12 +59,17 @@ async fn read_fresh_text(store: &JobStorage, path: &str) -> Result<Option<String
 
 /// Schedule ids of every `schedules/<id>.json` blob.
 pub async fn list_schedule_ids(store: &JobStorage) -> Result<Vec<String>, StorageError> {
-    let paths = store.list_paths(&format!("{PREFIX}/"), 0).await?;
+    let paths = store
+        .list_paths(&format!("{PREFIX}/"), crate::queue::Listing::Every)
+        .await?;
     Ok(paths
         .iter()
-        .filter_map(|name| name.rsplit('/').next())
-        .filter(|base| base.ends_with(".json"))
-        .map(|base| base[..base.len() - ".json".len()].to_string())
+        .map(|name| match name.rsplit_once('/') {
+            Some((_, base)) => base,
+            None => name.as_str(),
+        })
+        .filter_map(|base| base.strip_suffix(".json"))
+        .map(str::to_string)
         .collect())
 }
 

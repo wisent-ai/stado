@@ -16,7 +16,10 @@ use crate::queue::{JobStorage, StorageError};
 /// the next pass to resume.
 async fn delete_status_dir(store: &JobStorage, job_id: &str) -> Result<(), StorageError> {
     let mut failure = None;
-    for path in store.list_paths(&format!("status/{job_id}/"), 0).await? {
+    for path in store
+        .list_paths(&format!("status/{job_id}/"), crate::queue::Listing::Every)
+        .await?
+    {
         if let Err(error) = store.delete_blob(&path).await {
             failure = failure.or(Some(error));
         }
