@@ -35,11 +35,30 @@ pub async fn build(
     } else {
         print!("{}", outcome.stdout);
         eprint!("{}", outcome.stderr);
+        eprintln!("{}", space_line(&outcome));
     }
-    if exit_code == 0 {
+    if exit_code == nix::libc::EXIT_SUCCESS {
         Ok(())
     } else {
         Err(CmdError::silent(exit_code))
+    }
+}
+
+/// What the build took from the target's volume, or why that is not known.
+fn space_line(outcome: &crate::deploy::host_run::BuildOutcome) -> String {
+    let target = &outcome.target;
+    match (outcome.consumed_gib(), &outcome.free_bytes_after_error) {
+        (Some(gib), _) => format!(
+            "{target}: the build took {gib:.1} GiB of free space on its volume \
+             (`stado space report {target}`)"
+        ),
+        (None, Some(error)) => {
+            format!("{target}: the volume's free space after the build was not read: {error}")
+        }
+        (None, None) => format!(
+            "{target}: the host reported no free-space reading, so the space the build took \
+             is not known"
+        ),
     }
 }
 
@@ -70,7 +89,7 @@ pub async fn run_attached(
         print_json(&serde_json::to_value(&outcome)?);
     }
     match outcome.exit_code {
-        Some(0) => Ok(()),
+        Some(code) if code == nix::libc::EXIT_SUCCESS => Ok(()),
         Some(code) => Err(CmdError::silent(code)),
         None => Err(CmdError::click(format!(
             "{program} on {target} ended with {} and returned no exit code",

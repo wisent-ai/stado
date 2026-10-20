@@ -17,6 +17,26 @@ pub struct BuildOutcome {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
+    /// Free bytes on the target's volume before the build and after it, from
+    /// the host's own `df -Pk` reading (`stado host gates`); `None` when the
+    /// host reported no reading.
+    pub free_bytes_before: Option<u64>,
+    pub free_bytes_after: Option<u64>,
+    /// Why there is no after-build reading, when the host did not answer it.
+    /// The build's own result stands either way.
+    pub free_bytes_after_error: Option<String>,
+}
+
+impl BuildOutcome {
+    /// The volume's free space this build took, in GiB: what the two
+    /// readings differ by, other writers on the volume included.
+    pub fn consumed_gib(&self) -> Option<f64> {
+        let (Some(before), Some(after)) = (self.free_bytes_before, self.free_bytes_after) else {
+            return None;
+        };
+        let gib = crate::providers::local::host_memory::constants::GIB as f64;
+        Some((before as f64 - after as f64) / gib)
+    }
 }
 
 pub async fn build(
@@ -55,9 +75,10 @@ pub async fn build(
             "if [ -z \"$cargo\" ] && [ -x {candidate} ]; then cargo={candidate}; fi\n"
         ));
     }
-    script.push_str(
-        "if [ -z \"$cargo\" ]; then printf '%s\\n' 'Cargo is not installed at a Stado-approved path' >&2; exit 69; fi\n",
-    );
+    script.push_str(&format!(
+        "if [ -z \"$cargo\" ]; then printf '%s\\n' 'Cargo is not installed at a Stado-approved path' >&2; exit {}; fi\n",
+        nix::libc::EX_UNAVAILABLE
+    ));
     script.push_str("export PATH=\"${cargo%/*}:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin\"\n");
     // The declared compiler cache: installed on the target with its own Cargo
     // when absent or another version, then Cargo's RUSTC_WRAPPER, so a crate
@@ -75,24 +96,43 @@ pub async fn build(
     // fresh multi-gigabyte target inside every run directory.
     script
         .push_str("export CARGO_TARGET_DIR=\"$HOME/.stado/build-cache/host-build/cargo-target\"\n");
-    script.push_str("mkdir -p \"$CARGO_TARGET_DIR\" || exit 73\n");
+    script.push_str(&format!(
+        "mkdir -p \"$CARGO_TARGET_DIR\" || exit {cantcreat}\n",
+        cantcreat = nix::libc::EX_CANTCREAT
+    ));
     script.push_str(&format!(
         "\"$cargo\" build --locked --release --manifest-path \"$path\" --bin {binary} || exit $?\n\
          # Only the executable enters the run directory, where run attach\n\
          # accepts it and run remove takes it away again.\n\
-         mkdir -p \"${{path%/*}}/target/release\" || exit 73\n\
-         cp \"$CARGO_TARGET_DIR/release/\"{binary} \"${{path%/*}}/target/release/\"{binary} || exit 73\n",
-        binary = shlex_quote(binary)
+         mkdir -p \"${{path%/*}}/target/release\" || exit {cantcreat}\n\
+         cp \"$CARGO_TARGET_DIR/release/\"{binary} \"${{path%/*}}/target/release/\"{binary} || exit {cantcreat}\n",
+        binary = shlex_quote(binary),
+        cantcreat = nix::libc::EX_CANTCREAT
     ));
 
     let output = host_channel::run_script(target, &script, runner).await?;
+    // The same reading again, so the outcome says what the build took from
+    // the volume; a host that does not answer it leaves the build's own
+    // result standing and says why the reading is missing.
+    let (free_bytes_after, free_bytes_after_error) =
+        match crate::deploy::host_gates::read_host_gates(&target.name, runner).await {
+            Ok(after) => (after.free_bytes, None),
+            Err(error) => (None, Some(error.to_string())),
+        };
     Ok(BuildOutcome {
         target: target.name.clone(),
         manifest_path: manifest_path.to_string(),
         binary: binary.to_string(),
-        status: if output.ok() { "built" } else { "failed" },
+        status: if output.succeeded() {
+            "built"
+        } else {
+            "failed"
+        },
         exit_code: output.code,
         stdout: output.stdout,
         stderr: output.stderr,
+        free_bytes_before: gates.free_bytes,
+        free_bytes_after,
+        free_bytes_after_error,
     })
 }
