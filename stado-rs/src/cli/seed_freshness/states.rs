@@ -35,22 +35,37 @@ pub async fn seed_states(
         &arguments,
     )
     .await?;
-    Ok(rows_of(&answer))
+    rows_of(&answer).map_err(|error| {
+        CmdError::click(format!("{target}: {error}"))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })
 }
 
 /// One item answers as an object, a sweep as `{rows: [...]}`. Both are the
-/// same list to a caller. Reachable from the crate because the enrolment
-/// command's test reads real Skarbiec answers through it.
-pub(crate) fn rows_of(answer: &Value) -> Vec<(String, String)> {
-    let rows = match answer.get("rows").and_then(Value::as_array) {
-        Some(rows) => rows.clone(),
+/// same list to a caller. A row naming no item or no seed state is refused
+/// with the row: dropped, the item read as absent from the vault, which the
+/// enrolment command takes for a row it may write. Reachable from the crate
+/// because the enrolment command's test reads real Skarbiec answers through
+/// it.
+pub(crate) fn rows_of(answer: &Value) -> Result<Vec<(String, String)>, String> {
+    let rows = match answer.get("rows") {
+        Some(Value::Array(rows)) => rows.clone(),
+        Some(other) => {
+            return Err(format!(
+                "the vault's seed sweep rows are not a list: {other}"
+            ))
+        }
         None => vec![answer.clone()],
     };
     rows.iter()
-        .filter_map(|row| {
-            let item = row.get("item").and_then(Value::as_str)?;
-            let state = row.get("seed_state").and_then(Value::as_str)?;
-            Some((item.to_string(), state.to_string()))
+        .map(|row| {
+            let text = |name: &str| {
+                row.get(name)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("a vault seed row states no {name}: {row}"))
+            };
+            Ok((text("item")?, text("seed_state")?))
         })
         .collect()
 }

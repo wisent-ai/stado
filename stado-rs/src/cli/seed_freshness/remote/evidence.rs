@@ -47,25 +47,39 @@ const MARKERS = [
 ];
 
 const attempts = [];
-let journalRecords = 0;
+const signInRecords = [];
+// Records the journal holds but this reader could not take: lines that are
+// not JSON, sign-ins naming no login item, and sign-ins carrying no detail
+// text to match markers in. Each is reported, never silently skipped, so a
+// count over the journal says how much of it was read.
+const unreadableLines = [];
+const unattributedRecords = [];
 let journalPresent = false;
 
 try {
   const text = fs.readFileSync(journalPath, 'utf8');
   journalPresent = true;
-  for (const line of text.split('\n')) {
+  for (const [index, line] of text.split('\n').entries()) {
     if (!line.trim()) continue;
     let record;
     try {
       record = JSON.parse(line);
-    } catch {
+    } catch (error) {
+      unreadableLines.push({ line_index: index, error: String(error?.message ?? error) });
       continue;
     }
     if (!record || record.kind !== 'subscription_sign_in') continue;
-    journalRecords += 1;
-    const loginItem = typeof record.login_item === 'string' ? record.login_item : '';
-    if (!loginItem) continue;
-    const detail = typeof record.detail === 'string' ? record.detail : '';
+    signInRecords.push(index);
+    if (typeof record.login_item !== 'string' || !record.login_item) {
+      unattributedRecords.push(index);
+      continue;
+    }
+    const loginItem = record.login_item;
+    if (typeof record.detail !== 'string') {
+      unreadableLines.push({ line_index: index, error: `the sign-in of ${loginItem} carries no detail text` });
+      continue;
+    }
+    const detail = record.detail;
     const names = [];
     for (const [name, pattern] of MARKERS) {
       if (pattern.test(detail)) names.push(name);
@@ -79,17 +93,18 @@ try {
     // proof that codes were submitted and refused, even on a run that gave up
     // before typing another one.
     const submitted = has('code_submitted') || rejected;
-    // The instant, named once here rather than inside the property below: a
-    // record whose `at` is missing or unreadable is dated 0, which sorts it
-    // oldest, and `at_ms` is preferred whenever the record carries one.
-    const atText = record.at || '';
-    const atParsed = Date.parse(atText);
-    const atTextMs = atParsed || 0;
+    // The instant: `at_ms` when the record carries one, else `at` parsed. A
+    // record dated by neither carries null, which the report refuses rather
+    // than sorting it as the oldest attempt.
+    const atTextMs = typeof record.at === 'string' ? Date.parse(record.at) : Number.NaN;
+    const atMs = Number.isFinite(record.at_ms)
+      ? record.at_ms
+      : (Number.isFinite(atTextMs) ? atTextMs : null);
     attempts.push({
       login_item: loginItem,
       provider: typeof record.provider === 'string' ? record.provider : null,
       at: typeof record.at === 'string' ? record.at : null,
-      at_ms: Number.isFinite(record.at_ms) ? record.at_ms : atTextMs,
+      at_ms: atMs,
       result: typeof record.result === 'string' ? record.result : null,
       code_submitted: submitted,
       code_rejected: rejected,
@@ -109,7 +124,7 @@ try {
 // Corroboration only: how many reauth runs the recording store holds, so a
 // report can say whether the journal is the whole picture. Same roots
 // `weles-activity` reads, and no artifact content is opened.
-let reauthRunsSeen = 0;
+const unreadableRecordings = [];
 const recordingRoots = [
   path.join(home, '.stado/services/weles-admission/current/runtime/recordings'),
 ];
@@ -139,25 +154,25 @@ try {
 } catch (error) {
   if (error?.code !== 'ENOENT') throw error;
 }
+// A root that does not exist holds no runs; one that exists but cannot be
+// listed is reported with its error, so the count is known to be partial.
+const listed = (directory) => {
+  try {
+    return fs.readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      unreadableRecordings.push({ path: directory, error: String(error?.message ?? error) });
+    }
+    return [];
+  }
+};
 const countedRuns = new Set();
 for (const root of recordingRoots) {
-  let entries = [];
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    continue;
-  }
-  for (const entry of entries) {
+  for (const entry of listed(root)) {
     if (!entry.isDirectory() || entry.name === '_costs' || countedRuns.has(entry.name)) continue;
-    let actions = [];
-    try {
-      actions = fs.readdirSync(path.join(root, entry.name), { withFileTypes: true });
-    } catch {
-      continue;
-    }
+    const actions = listed(path.join(root, entry.name));
     if (actions.some((action) => action.isDirectory() && /_reauth$/.test(action.name))) {
       countedRuns.add(entry.name);
-      reauthRunsSeen += 1;
     }
   }
 }
@@ -165,10 +180,13 @@ for (const root of recordingRoots) {
 process.stdout.write(`STADO-SEED-EVIDENCE ${JSON.stringify({
   journal: {
     path_present: journalPresent,
-    sign_in_records: journalRecords,
+    sign_in_records: signInRecords.length,
     attributed_attempts: attempts.length,
+    unattributed_records: unattributedRecords.length,
+    unreadable_lines: unreadableLines,
   },
-  reauth_runs_seen: reauthRunsSeen,
+  reauth_runs_seen: countedRuns.size,
+  unreadable_recordings: unreadableRecordings,
   attempts,
 })}\n`);
 "#;
