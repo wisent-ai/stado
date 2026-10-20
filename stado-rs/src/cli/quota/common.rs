@@ -45,12 +45,10 @@ impl From<QuotaError> for CmdError {
             QuotaError::Gcp(GceError::Auth(_)) | QuotaError::Azure(AzureError::Auth(_)) => {
                 FailureCode::Auth
             }
-            QuotaError::Gcp(GceError::Http(http)) | QuotaError::Azure(AzureError::Http(http)) => {
-                if http.is_timeout() {
-                    FailureCode::Timeout
-                } else {
-                    FailureCode::InfraDown
-                }
+            // No request here carries a time limit, so a transport failure
+            // is a provider that could not be reached.
+            QuotaError::Gcp(GceError::Http(_)) | QuotaError::Azure(AzureError::Http(_)) => {
+                FailureCode::InfraDown
             }
             QuotaError::Gcp(GceError::Api(_)) | QuotaError::Azure(AzureError::Api(_)) => {
                 FailureCode::Unknown
@@ -141,13 +139,20 @@ pub(super) fn parse_regions(arg: &str) -> Option<Vec<String>> {
     }
 }
 
-/// `--email` or $WC_QUOTA_CONTACT_EMAIL; "" when neither is set.
+/// `--email`, else `$WC_QUOTA_CONTACT_EMAIL`; empty when neither names one,
+/// which each caller refuses where a contact is required. A variable that is
+/// set but is not text names no contact, and stderr says so and why, so the
+/// refusal that follows is not read as the variable being unset.
 pub(super) fn contact_email(flag: &str) -> String {
     if !flag.is_empty() {
         return flag.to_string();
     }
-    std::env::var("WC_QUOTA_CONTACT_EMAIL")
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+    match std::env::var("WC_QUOTA_CONTACT_EMAIL") {
+        Ok(value) => value.trim().to_string(),
+        Err(std::env::VarError::NotPresent) => String::new(),
+        Err(error @ std::env::VarError::NotUnicode(_)) => {
+            eprintln!("stado: WC_QUOTA_CONTACT_EMAIL names no contact: {error}");
+            String::new()
+        }
+    }
 }

@@ -36,10 +36,7 @@ pub enum GpuMode {
 
 impl std::fmt::Display for GpuMode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 
@@ -112,10 +109,18 @@ pub fn set_route(
     expected: &str,
 ) -> Result<Value, String> {
     let mut registry = parse(document)?;
-    let current = registry.routes.get(alias).map(String::as_str).unwrap_or("");
-    if current != expected {
+    let current = registry.routes.get(alias).map(String::as_str);
+    let unchanged = match current {
+        Some(found) => found == expected,
+        None => expected.is_empty(),
+    };
+    if !unchanged {
+        let found = match current {
+            Some(found) => format!("'{found}'"),
+            None => "no route".to_string(),
+        };
         return Err(format!(
-            "route '{alias}' changed: expected '{expected}', found '{current}'"
+            "route '{alias}' changed: expected '{expected}', found {found}"
         ));
     }
     registry

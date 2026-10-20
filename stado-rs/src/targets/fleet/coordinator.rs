@@ -20,10 +20,7 @@ pub enum CoordinatorRuntime {
 
 impl std::fmt::Display for CoordinatorRuntime {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match serde_json::to_value(self) {
-            Ok(Value::String(word)) => formatter.write_str(&word),
-            _ => Err(std::fmt::Error),
-        }
+        crate::primitives::word::write(self, formatter)
     }
 }
 
@@ -33,7 +30,7 @@ pub struct Coordinator {
     pub name: String,
     #[serde(default)]
     pub runtime: CoordinatorRuntime,
-    /// ssh user@host for daemon/cron, None = local.
+    /// The SSH destination, user and machine, for daemon/cron; None = local.
     #[serde(default)]
     pub host: Option<String>,
     /// Resolve this coordinator onto the unique local target carrying the

@@ -281,9 +281,9 @@ pub(crate) enum CiPlanCommands {
             required = true
         )]
         steps: Vec<String>,
-        /// After every step is installed from its checkout's `main` HEAD,
-        /// push `main` of every checkout through the push gates just
-        /// installed. Without it a pass installs and pushes nothing upstream.
+        /// After every step is installed from its checkout's last green
+        /// commit of `main`, push `main` of every checkout through the push
+        /// gates just installed. Without it a pass pushes nothing upstream.
         #[arg(long)]
         push: bool,
         #[arg(long)]
