@@ -2,9 +2,9 @@
 //! named with its defects and the steps it needs, for the release the build
 //! gate admits.
 //!
-//! A repair recorded in Oko (`oko defects repaired`) used to stop at the
-//! commit, with nothing saying which commit owed which release, so every
-//! session met again the failure its source already fixed. For each product
+//! A repair recorded in Oko (`oko defects repaired`) is owed a release, and
+//! the queue says which commit owes which, so a failure its source already
+//! fixed is not met again. For each product
 //! checkout of the workspace the queue reads the commit the checkout stands
 //! on and Oko's open defects whose recorded repair that commit carries. With
 //! none, nothing is owed (`nothing_carried`). With some, the commit is
