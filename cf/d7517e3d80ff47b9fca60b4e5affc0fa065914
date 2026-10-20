@@ -13,6 +13,11 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "A remote command to a host whose services stand is refused before it is sent" its held-route refusal counted waits left on a replaced session, so they kept refusing callers
+Repairs: "A held adapter whose waits stand on the resolver's own SSH session rides a new session to the same host" it replaced a standing session only when a caller connected, which a caller that reads the waiting list first never does
+Repairs: "Waits left on a replaced resolver session say so in resolver status" its status kept a replaced session's waits among those that refuse callers
+Repairs: "A native SSH destination may name its port, and a real journey carries a held route over a new session" its session journey had a second client replace the session instead of following the resolver's own replacement
+
 Harsh-Review-Attacked: whether the refresh-tick renewal hides a failure by waiting; it is the resolver's own maintenance loop at the declared interval, it says every replacement and every failure to replace on stderr, and it runs apart from the directory refresh so a host that answers no new session holds only this loop.
 Harsh-Review-Attacked: whether a replaced session's waits still refuse callers; held_at, held_on_host and youngest_held_seconds now skip waits marked session_replaced_at, so only waits on the session new connections ride can refuse a caller, while every wait stays listed.
 Harsh-Review-Attacked: whether a route that moved host is renewed against the wrong one; a route whose service now resolves to another active host is left alone, and a route whose endpoint names no port, or a port that is not one, is said on stderr and skipped, never dialled.
