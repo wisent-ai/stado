@@ -21,9 +21,13 @@ if [ ! -x \"$program\" ]; then
 fi
 ";
 
-/// The Darwin unit and its log, written owner-only at `$unit_path`.
+/// The Darwin unit and its log, written owner-only at `$unit_path`. A
+/// directory that cannot be made is reported with mkdir's own words.
 const DARWIN_WRITE: &str =
-    "  /bin/mkdir -p \"$HOME/Library/LaunchAgents\" \"$HOME/.stado/logs\" >/dev/null 2>&1 || exit 1
+    "  detail=$(/bin/mkdir -p \"$HOME/@USER_LAUNCHD_AGENTS@\" \"$HOME/.stado/logs\" 2>&1) || {
+    say 'write_failed' \"$detail\"
+    exit 0
+  }
   /bin/chmod u=rwx,go= \"$HOME/.stado/logs\" || exit 1
   log=\"$HOME/.stado/logs/$unit.log\"
   : >> \"$log\" || exit 1
@@ -38,8 +42,12 @@ const DARWIN_WRITE: &str =
   /bin/chmod u=rw,go= \"$unit_path\" || exit 1
 ";
 
-/// The systemd unit, written owner-only at `$unit_path`.
-const LINUX_WRITE: &str = "  /bin/mkdir -p \"$HOME/.config/systemd/user\" >/dev/null 2>&1 || true
+/// The systemd unit, written owner-only at `$unit_path`, its directory made
+/// first and reported with mkdir's own words when it cannot be.
+const LINUX_WRITE: &str = "  detail=$(/bin/mkdir -p \"$HOME/@USER_SYSTEMD_UNITS@\" 2>&1) || {
+    say 'write_failed' \"$detail\"
+    exit 0
+  }
   template=\"$unit_path.template.$$\"
   /bin/cat > \"$template\" <<'@HEREDOC@'
 @LINUX_UNIT@
@@ -113,16 +121,28 @@ const LINUX_RELOAD: &str = "  detail=$(stado_systemctl daemon-reload 2>&1) || {
 
 /// `service deploy`: write the rendered unit, then bootstrap it.
 pub(crate) static DEPLOY_BODY: LazyLock<String> = LazyLock::new(|| {
-    format!(
+    unit_directories(format!(
         "{PROGRAM_PRESENT}if [ \"$os\" = \"Darwin\" ]; then\n{DARWIN_WRITE}{DARWIN_BOOTSTRAP}else\n{LINUX_WRITE}{LINUX_ENABLE}fi\n"
-    )
+    ))
 });
 
 /// A standby stage: write the rendered unit where a move starts it and leave
 /// it unloaded. It reports `staged` with the unit path, or `loaded` when the
 /// unit already runs here, which is refused before anything is written.
 pub(crate) static STAGE_BODY: LazyLock<String> = LazyLock::new(|| {
-    format!(
+    unit_directories(format!(
         "{PROGRAM_PRESENT}if [ \"$os\" = \"Darwin\" ]; then\n{DARWIN_UNLOADED}{DARWIN_WRITE}  say 'staged' \"$unit_path\"\nelse\n{LINUX_UNLOADED}{LINUX_WRITE}{LINUX_RELOAD}  say 'staged' \"$unit_path\"\nfi\n"
-    )
+    ))
 });
+
+/// The account's unit directories, as `deploy::service` declares them.
+fn unit_directories(body: String) -> String {
+    body.replace(
+        "@USER_LAUNCHD_AGENTS@",
+        crate::deploy::service::USER_LAUNCHD_AGENTS,
+    )
+    .replace(
+        "@USER_SYSTEMD_UNITS@",
+        crate::deploy::service::USER_SYSTEMD_UNITS,
+    )
+}
