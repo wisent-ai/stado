@@ -18,8 +18,10 @@ macro_rules! define_capabilities {
             }
         ),+ $(,)?
     ) => {
-        #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-        #[serde(rename_all = "kebab-case")]
+        // The id each entry declares is the capability's one spelling: the
+        // JSON, the display and the lookup all read it, as ProviderId's do,
+        // so no name derived from the variant can disagree with it.
+        #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
         pub enum CapabilityKind {
             $($variant,)+
         }
@@ -29,6 +31,15 @@ macro_rules! define_capabilities {
                 match self {
                     $(Self::$variant => $id,)+
                 }
+            }
+        }
+
+        impl Serialize for CapabilityKind {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                serializer.serialize_str(self.as_str())
             }
         }
 
