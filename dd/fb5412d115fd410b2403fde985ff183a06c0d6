@@ -15,6 +15,10 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Repairs: "placement standby stages each unit where the move starts it, instead of declaring and running it" its stage_unit call, commit_host binding, standby_port fallback, directory lookup and Darwin unit script constant were not laid out as rustfmt lays them
 Repairs: "Version promotion refuses a release_platform that is not a platform name and names an inventory that failed without saying why" its release_platform refusal was not laid out as rustfmt lays it
+Repairs: "Skarbiec declares that its own vault runs without Stado" its lines in journeys.rs, lock_steps.rs are replaced by this change.
+Repairs: "The diagnostics watchdog keeps a failed upload under the Stado home per host and refuses a payload with no host" its lines in upload.rs are replaced by this change.
+Repairs: "Fleet enroll takeover refuses a release_platform that is not a platform name" its lines in legacy.rs are replaced by this change.
+Repairs: "Identity verification never probes an Apple account under an empty user name" its lines in mod.rs are replaced by this change.
 
 Harsh-Review-Attacked: the journey could pass while a staged unit runs; it asks launchd for every staged label and fails on any that is loaded.
 Harsh-Review-Attacked: the journey writes the fleet registry; it runs only the product verb an operator runs to prepare a declared host, names the profile and host by caller-supplied variables, and reads every result back from the registry and the host.
