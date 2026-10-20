@@ -78,11 +78,18 @@ async fn build_history(
         let completed = DateTime::parse_from_rfc3339(ct).map_err(|e| {
             StorageError::Other(format!("makespan history: bad completed_at {ct:?}: {e}"))
         })?;
-        // A run that took no time, or ended before it started, says nothing
-        // about its runtime.
+        // A run that took no time says nothing about its runtime; one that
+        // ended before it started is said and skipped.
         let elapsed = match (completed - started).to_std() {
             Ok(elapsed) if !elapsed.is_zero() => elapsed.as_secs_f64(),
-            Ok(_) | Err(_) => continue,
+            Ok(_) => continue,
+            Err(backwards) => {
+                tracing::warn!(
+                    "makespan history: a completed job ended at {ct} before it started: \
+                     {backwards}"
+                );
+                continue;
+            }
         };
         // A completed job without a command cannot be keyed by its run.
         let Some(command) = doc.get("command").and_then(Value::as_str) else {
