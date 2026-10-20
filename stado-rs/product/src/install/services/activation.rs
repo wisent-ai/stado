@@ -41,6 +41,14 @@ impl Activation<'_> {
                 };
             }
         };
+        // A running desktop application keeps its old image until it is
+        // started again from the bundle just placed; a stopped one stays
+        // stopped. The answer is kept on the receipt.
+        if self.surface == "desktop" {
+            let restarted = crate::desktop_app::restart_placed(&installed.installed_paths)?;
+            installed.extra.insert("restarted".into(), restarted);
+            installed.save(self.runtime)?;
+        }
         let Some(host) = self.resident_host else {
             return Ok(writer);
         };

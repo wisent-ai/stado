@@ -1,6 +1,7 @@
 //! Restart a macOS application bundle through LaunchServices after its bytes
-//! have been replaced. This is a local desktop lifecycle operation, not a
-//! fleet service restart or a build step.
+//! have been replaced: `stado product restart`, and the desktop surface's
+//! installation once it has placed its bundle. This is a local desktop
+//! lifecycle operation, not a fleet service restart or a build step.
 
 use anyhow::{bail, Context, Result};
 #[cfg(target_os = "macos")]
@@ -129,6 +130,28 @@ pub fn run(bundle: &Path, only_if_running: bool, as_json: bool) -> Result<i32> {
             );
         }
         Ok(libc::EXIT_SUCCESS)
+    }
+}
+
+/// Restart, where it runs, every application bundle a desktop installation
+/// placed; a placed application that is not running stays stopped. Answers
+/// each bundle's report.
+pub fn restart_placed(paths: &[std::path::PathBuf]) -> Result<serde_json::Value> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = paths;
+        bail!("restarting a desktop application requires macOS LaunchServices");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut reports = Vec::new();
+        for bundle in paths
+            .iter()
+            .filter(|path| path.extension().is_some_and(|extension| extension == "app"))
+        {
+            reports.push(restart(bundle, true)?);
+        }
+        Ok(serde_json::Value::Array(reports))
     }
 }
 
