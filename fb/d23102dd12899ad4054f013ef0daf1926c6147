@@ -13,6 +13,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Brama's maintenance schedule presents the bearer the gateway admits" its schedule entries were created anew on every install, and a schedule standing under the same id refused the install instead of converging
+
 Harsh-Review-Attacked: whether converge leaves a declared field on its old value; I compared Schedule's fields with the ones converge sets: every declared field is taken from the new declaration, and only identity and history are kept (schedule_id, deleted, created_at, created_by, last_fired_at, last_run_id, last_job_id, fire_count, pending_occurrence), which is what its doc says.
 Harsh-Review-Attacked: whether converge can raise a deleted schedule; a deleted record is refused before converge, and one removed while it runs is refused saying it is not declared again.
 Harsh-Review-Attacked: whether --converge can be used without an owned id; clap requires --id with it, and without --converge a different declaration is still refused naming what differs.
