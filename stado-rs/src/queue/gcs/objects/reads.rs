@@ -53,9 +53,11 @@ impl GcsBackend {
         &self,
         path: &str,
     ) -> Result<Option<VersionedText>, StorageError> {
-        // Python retries up to 3 times: between the generation read and the
-        // pinned download another writer can bump the object (412).
-        for attempt in 0..3 {
+        // Between the generation read and the pinned download another writer
+        // can replace the object, and the pinned download answers 412. That
+        // is a newer generation to read, not a failure: the loop reads it and
+        // ends on what the object is, a document at one generation or none.
+        loop {
             let Some(object) = self.get_object(path).await? else {
                 return Ok(None);
             };
@@ -75,15 +77,13 @@ impl GcsBackend {
                     }));
                 }
                 Ok(None) => return Ok(None),
-                Err(StorageError::Gcs { status: 412, .. }) if attempt < 2 => continue,
-                Err(StorageError::Gcs { status: 412, .. }) => {
-                    return Err(StorageError::StorageConflict(format!(
-                        "{path} changed concurrently"
-                    )));
+                Err(StorageError::Gcs { status, .. })
+                    if status == StatusCode::PRECONDITION_FAILED.as_u16() =>
+                {
+                    continue
                 }
                 Err(err) => return Err(err),
             }
         }
-        Err(StorageError::Other("unreachable versioned GCS read".into()))
     }
 }
