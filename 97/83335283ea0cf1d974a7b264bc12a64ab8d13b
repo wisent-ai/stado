@@ -13,5 +13,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Backup audit is unavailable when a row it printed does not read" its lines in parse.rs are replaced by this change.
+
 Harsh-Review-Attacked: whether the shared object-row reader reads both row kinds alike; requested and inventoried rows carry the same twelve identity fields after the path, and only the inventoried path is hex-encoded, which each caller decodes before handing it over.
 Harsh-Review-Attacked: the hex and UTF-8 decoding of paths and namespaces dropped the decoder's error and a later unreadable row replaced an earlier cause; "The backup audit keeps every unreadable row's cause" repairs it in this push, naming this commit on its Repairs line.
