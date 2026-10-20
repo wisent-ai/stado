@@ -3,7 +3,10 @@
 //! of ending the adapter and standing `failed` with every held socket open.
 //!
 //! The deployment (`deployment.rs`) places `elsewhere-api` on this machine
-//! at a listener this test holds and never answers on; the refresh interval
+//! at a real object API (`../../host_silence/refusal_in_flight/store.rs`) on
+//! a real Skarbiec, which answers one request and is then stopped with
+//! SIGSTOP, so it accepts every relayed connection and answers none; the
+//! refresh interval
 //! and the descriptor limit are the test's own inputs
 //! (`STADO_TEST_REFRESH_SECONDS`, `STADO_TEST_FD_LIMIT`). A first wave of
 //! clients each sends a request the service never answers; `stado resolver
@@ -13,11 +16,16 @@
 //! refusal naming the descriptors and the interval, a client connecting
 //! afterwards is accepted, and the published state is not `failed`.
 mod deployment;
+#[path = "../../host_silence/refusal_in_flight/store.rs"]
+// The journey takes only the stopped object API, not the resolver's bearer.
+#[allow(dead_code)]
+mod store;
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 
 use deployment::Deployment;
+use store::Store;
 
 const REQUEST: &[u8] = b"GET / HTTP/1.1\r\nHost: elsewhere\r\n\r\n";
 
@@ -57,21 +65,11 @@ fn held_relays_are_shed_when_the_listener_runs_out_of_descriptors() {
     deployment.cli(&["config", "init"]);
     let api_bind = deployment.free_bind();
     let adapter_bind = deployment.free_bind();
-    let service_bind = deployment.free_bind();
-    deployment.import_registry(&api_bind, &adapter_bind, &service_bind, refresh_seconds);
-
-    // The service: accepts every connection and answers none of them.
-    let service = TcpListener::bind(&service_bind).expect("hold the service's bind");
-    let accepted = std::thread::spawn(move || {
-        let mut held = Vec::new();
-        for stream in service.incoming() {
-            match stream {
-                Ok(stream) => held.push(stream),
-                Err(_) => break,
-            }
-        }
-        held
-    });
+    // The service: a real object API, stopped, so it accepts every
+    // connection and answers none of them.
+    let service = Store::serve(deployment.root.join("service.token"));
+    service.hang();
+    deployment.import_registry(&api_bind, &adapter_bind, &service.address, refresh_seconds);
     let log = deployment.serve(fd_limit);
 
     // The first wave: each client sends a request and waits on it, until the
@@ -124,5 +122,5 @@ fn held_relays_are_shed_when_the_listener_runs_out_of_descriptors() {
         said.contains("shed") && said.contains("accepts again"),
         "the resolver's log says what it shed: {said}"
     );
-    drop(accepted);
+    drop(service);
 }

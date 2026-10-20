@@ -403,6 +403,8 @@ path = "../tests/resolver/relay.rs"
 name = "resolver-unserved"
 path = "../tests/resolver/unserved.rs"
 
+# Its relayed service is a real object API on a real Skarbiec (SKARBIEC names
+# its binary); run with STADO_TEST_REQUEST_LIMITS declared.
 [[test]]
 name = "resolver-shed"
 path = "../tests/resolver/shed/mod.rs"
