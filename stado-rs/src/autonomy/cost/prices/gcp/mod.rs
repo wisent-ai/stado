@@ -51,7 +51,7 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
         }
     };
     let mut page_token: Option<String> = None;
-    let mut skus_without_id: Vec<String> = Vec::new();
+    let mut left_out: Vec<String> = Vec::new();
     loop {
         let mut url = format!("https://cloudbilling.googleapis.com/v1/services/{COMPUTE_ENGINE_SERVICE}/skus?currencyCode=USD&pageSize=5000");
         if let Some(page) = page_token.as_deref() {
@@ -92,27 +92,18 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
             .into_iter()
             .flatten()
         {
-            let Some((rate, unit)) = gcp_sku_hourly_rate(sku) else {
-                continue;
-            };
-            let description = sku
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or("GCP SKU")
-                .to_string();
             // The SKU's own category says how it is bought: OnDemand and
             // Preemptible (Spot) are hourly prices a job can take; Commit1Yr,
-            // Commit3Yr and every other usage type are commitments or
-            // reservations and are not quoted. Sole-tenant nodes are their own
-            // resource group.
+            // Commit3Yr and every other usage type, or none, are commitments
+            // or reservations and are not quoted. Sole-tenant nodes are their
+            // own resource group.
             let category = sku.get("category");
-            let usage_type = category
+            let purchase_option = match category
                 .and_then(|category| category.get("usageType"))
                 .and_then(Value::as_str)
-                .unwrap_or("");
-            let purchase_option = match usage_type {
-                "OnDemand" => "on_demand",
-                "Preemptible" => "spot",
+            {
+                Some("OnDemand") => "on_demand",
+                Some("Preemptible") => "spot",
                 _ => continue,
             };
             if category
@@ -122,29 +113,40 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
             {
                 continue;
             }
-            // A price without its SKU id cannot be classified or bought; it
-            // was quoted as SKU "unknown". It is now left out and counted in
-            // the source's error.
-            let Some(sku_id) = sku.get("skuId").and_then(Value::as_str) else {
-                skus_without_id.push(description);
+            // A price without its SKU id or its description cannot be
+            // classified, bought or shown, so it is left out and named in the
+            // source's error.
+            let (Some(sku_id), Some(description)) = (
+                sku.get("skuId").and_then(Value::as_str),
+                sku.get("description").and_then(Value::as_str),
+            ) else {
+                left_out.push(format!("a SKU without its skuId or description: {sku}"));
                 continue;
+            };
+            let description = description.to_string();
+            let (rate, unit) = match gcp_sku_hourly_rate(sku) {
+                Ok(Some(rated)) => rated,
+                Ok(None) => continue,
+                Err(why) => {
+                    left_out.push(format!("{sku_id} ({description}): {why}"));
+                    continue;
+                }
             };
             // Custom-shape cores and memory share their family's taxonomy and
             // cost at least the predefined shape's rate, so the cheapest quote
             // of a family is the predefined one and they need no exclusion.
             let classified = taxonomy.get(sku_id);
-            let regions: Vec<Option<String>> = sku
-                .get("serviceRegions")
-                .and_then(Value::as_array)
-                .map(|regions| {
-                    regions
+            let regions: Vec<Option<String>> =
+                match sku.get("serviceRegions").and_then(Value::as_array) {
+                    Some(listed) if !listed.is_empty() => listed
                         .iter()
                         .filter_map(Value::as_str)
                         .map(|region| Some(region.to_string()))
-                        .collect()
-                })
-                .filter(|regions: &Vec<Option<String>>| !regions.is_empty())
-                .unwrap_or_else(|| vec![None]);
+                        .collect(),
+                    // A SKU priced for no region is one price that holds in
+                    // every region.
+                    _ => vec![None],
+                };
             let family = match classified {
                 Some(SkuTaxonomy::Family(family)) => Some(family.clone()),
                 _ => None,
@@ -180,11 +182,11 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
             break;
         }
     }
-    if !skus_without_id.is_empty() {
+    if !left_out.is_empty() {
         let left_out = format!(
-            "Cloud Billing Catalog prices left out for carrying no skuId: {} ({})",
-            skus_without_id.len(),
-            skus_without_id.join("; ")
+            "Cloud Billing Catalog prices left out: {} ({})",
+            left_out.len(),
+            left_out.join("; ")
         );
         source.state = PriceState::Partial;
         source.error = Some(match source.error.take() {
@@ -201,35 +203,47 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
 
 /// The SKU's hourly price and the unit it is priced in: `hour` for a price per
 /// instance, core or accelerator hour, `gib_hour` for a price per GiB of
-/// memory per hour. The unit comes from the SKU's `usageUnit`, which is how a
-/// core price and a memory price of one machine family are told apart.
-fn gcp_sku_hourly_rate(sku: &Value) -> Option<(f64, &'static str)> {
-    let expression = sku.pointer("/pricingInfo/0/pricingExpression")?;
-    let usage_unit = expression
-        .get("usageUnit")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let unit = match usage_unit {
-        "h" | "hour" => "hour",
-        "GiBy.h" | "GBy.h" => "gib_hour",
-        _ => return None,
+/// memory per hour; none for a SKU priced in any other unit, which is not an
+/// hourly price. The unit comes from the SKU's `usageUnit`, which is how a
+/// core price and a memory price of one machine family are told apart. A
+/// price that cannot be read is refused with why.
+fn gcp_sku_hourly_rate(sku: &Value) -> Result<Option<(f64, &'static str)>, String> {
+    let Some(expression) = sku.pointer("/pricingInfo/0/pricingExpression") else {
+        return Err("it carries no pricing expression".to_string());
     };
-    let price = expression.pointer("/tieredRates/0/unitPrice")?;
-    let units = price
-        .get("units")
-        .and_then(|value| {
+    let unit = match expression.get("usageUnit").and_then(Value::as_str) {
+        Some("h" | "hour") => "hour",
+        Some("GiBy.h" | "GBy.h") => "gib_hour",
+        _ => return Ok(None),
+    };
+    let Some(price) = expression.pointer("/tieredRates/0/unitPrice") else {
+        return Err("its pricing expression carries no unit price".to_string());
+    };
+    // `google.type.Money` writes `units` as an int64 string and `nanos` as
+    // billionths of a unit, the same scale as std's nanoseconds of a second;
+    // proto3 JSON leaves out a field that is zero, so either may be absent.
+    let units = match price.get("units") {
+        None => None,
+        Some(Value::String(text)) => Some(
+            text.parse::<f64>()
+                .map_err(|error| format!("its units {text:?} are not a number: {error}"))?,
+        ),
+        Some(other) => return Err(format!("its units {other} are not an int64 string")),
+    };
+    let nanos = match price.get("nanos") {
+        None => None,
+        Some(value) => Some(
             value
-                .as_str()
-                .and_then(|text| text.parse::<f64>().ok())
-                .or_else(|| value.as_f64())
-        })
-        .unwrap_or_default();
-    // `google.type.Money.nanos` counts billionths of a unit, the same scale
-    // as std's nanoseconds of a second.
-    let nanos = price
-        .get("nanos")
-        .and_then(Value::as_u64)
-        .map(|nanos| std::time::Duration::from_nanos(nanos).as_secs_f64())
-        .unwrap_or_default();
-    Some((units + nanos, unit))
+                .as_u64()
+                .map(|nanos| std::time::Duration::from_nanos(nanos).as_secs_f64())
+                .ok_or_else(|| format!("its nanos {value} are not a count of billionths"))?,
+        ),
+    };
+    let rate = match (units, nanos) {
+        (Some(units), Some(nanos)) => units + nanos,
+        (Some(units), None) => units,
+        (None, Some(nanos)) => nanos,
+        (None, None) => return Err(format!("its unit price {price} states no amount")),
+    };
+    Ok(Some((rate, unit)))
 }

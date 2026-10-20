@@ -21,8 +21,8 @@ pub(super) fn print_billing(document: &Value) {
     let gcp = &billing[crate::capabilities::ProviderId::Gcp.as_str()];
     let credit = |value: Option<&Value>| figure(value).credited();
     if gcp.get("status").and_then(Value::as_str) == Some("ok") {
-        // A figure the report does not carry is said as not reported; 0.00
-        // and the word "current" stood in for a bill and a month nobody read.
+        // A figure the report does not carry is said as not reported, never
+        // as a zero bill or a month nobody read.
         match gcp
             .get("monthly")
             .and_then(Value::as_array)
@@ -58,9 +58,8 @@ pub(super) fn print_billing(document: &Value) {
     }
     let azure = &billing[crate::capabilities::ProviderId::Azure.as_str()];
     if azure.get("status").and_then(Value::as_str) == Some("ok") {
-        // A figure Azure's answer does not carry is said as not reported; the
-        // word "unknown" and a currency of USD were both stand-ins nobody
-        // reported.
+        // A figure Azure's answer does not carry is said as not reported,
+        // never as a word or a currency nobody reported.
         let figure = |key: &str| match azure.get(key) {
             Some(Value::String(text)) => text.clone(),
             Some(value) if !value.is_null() => value.to_string(),

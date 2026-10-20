@@ -22,10 +22,17 @@ use super::{call, field, item_fields, pooler, provider, text, token, TOKEN_ROLE}
 
 const RUNNING: &str = "ACTIVE_HEALTHY";
 
-fn price(key: &str) -> u64 {
-    provider()[key]
-        .as_u64()
-        .unwrap_or_else(|| panic!("supabase-pricing.json declares no {key}"))
+/// A whole-dollar price of the provider declaration, refused by name when
+/// the declaration does not carry it as a whole number.
+fn price(key: &str) -> Result<u64, CmdError> {
+    match provider()[key].as_u64() {
+        Some(value) => Ok(value),
+        None => Err(CmdError::click(format!(
+            "the Supabase provider declaration (provider/supabase-pricing.json) carries no \
+             whole-dollar {key}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)),
+    }
 }
 
 fn organization_of(project: &Value) -> Option<String> {
@@ -36,17 +43,16 @@ fn organization_of(project: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// What one more running project adds to the organization's monthly bill.
-pub(super) fn cost(plan: &str, running: usize) -> u64 {
+/// What one more running project adds to the organization's monthly bill:
+/// the plan's compute credit pays for the first projects it covers, and one
+/// beyond them costs a micro instance's month.
+pub(super) fn cost(plan: &str, running: usize) -> Result<u64, CmdError> {
     if plan == "free" {
         return price("free_plan_compute_usd");
     }
-    let covered = (price("paid_plan_compute_credit_usd") / price("micro_monthly_usd")) as usize;
-    if running < covered {
-        0
-    } else {
-        price("micro_monthly_usd")
-    }
+    let monthly = price("micro_monthly_usd")?;
+    let covered = (price("paid_plan_compute_credit_usd")? / monthly) as usize;
+    Ok(monthly * u64::from(running >= covered))
 }
 
 /// The organization and region a new project joins: the anchor database's
@@ -119,8 +125,8 @@ async fn priced_creation(
         None,
     )
     .await?;
-    // The plan decides what one more project costs; an organization answer
-    // without one was priced as a paid plan under the name "unknown".
+    // The plan decides what one more project costs, so an organization
+    // answer without one refuses the creation instead of pricing it.
     let Some(plan) = org["plan"].as_str().map(str::to_string) else {
         return Err(CmdError::click(format!(
             "the Supabase management API's answer for organization {slug} names no plan, so the \
@@ -132,7 +138,7 @@ async fn priced_creation(
         .iter()
         .filter(|p| p["status"] == RUNNING && organization_of(p).as_deref() == Some(slug.as_str()))
         .count();
-    let added = cost(&plan, running);
+    let added = cost(&plan, running)?;
     let source = text("source")?;
     let billing_page = text("billing_page")?.replace("{slug}", &slug);
     let report = json!({

@@ -1,8 +1,8 @@
 //! Two sections of the human-readable space report: the host's other
-//! volumes, and its memory.
-//!
-//! Split out of `space/report/mod.rs`, which had grown past the module line
-//! cap; the report itself stays there and calls both.
+//! volumes, and its memory. The report itself is `space/report/mod.rs`,
+//! which calls both.
+
+use crate::providers::local::host_memory::constants::{GIB, MIB};
 
 use serde_json::Value;
 
@@ -38,8 +38,8 @@ pub(super) fn print_volumes(report: &Value) {
         .and_then(Value::as_str);
     let work_root = report.get("work_root").and_then(Value::as_str);
     let work_root_mount = report.get("work_root_mount").and_then(Value::as_str);
-    // A volume field the probe did not report is said as such, not as the
-    // word "unknown" sitting where a size or a mount point goes.
+    // A volume field the probe did not report is said as not reported where
+    // its size or mount point goes.
     let text = |value: &Value, key: &str| -> String {
         match value.get(key).and_then(Value::as_str) {
             Some(text) => text.to_string(),
@@ -69,7 +69,10 @@ pub(super) fn print_volumes(report: &Value) {
             text(volume, "capacity"),
         );
     }
-    let devices = report.get("block_devices").unwrap_or(&Value::Null);
+    // A probe that did not read the block devices has none to name here.
+    let Some(devices) = report.get("block_devices") else {
+        return;
+    };
     if devices.get("read").and_then(Value::as_bool) != Some(true) {
         return;
     }
@@ -81,13 +84,10 @@ pub(super) fn print_volumes(report: &Value) {
         .iter()
         .filter(|device| device.get("unmounted").and_then(Value::as_bool) == Some(true))
     {
-        let size_gib = device
-            .get("size_bytes")
-            .and_then(Value::as_i64)
-            .map_or_else(
-                || "size not reported".to_string(),
-                |bytes| format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0)),
-            );
+        let size_gib = match device.get("size_bytes").and_then(Value::as_i64) {
+            Some(bytes) => format!("{:.1} GiB", bytes as f64 / GIB as f64),
+            None => "size not reported".to_string(),
+        };
         let fstype = text(device, "fstype");
         println!(
             "attached, not mounted: /dev/{} {size_gib} {} ({}); nothing on this host can write to it until it is mounted",
@@ -102,15 +102,15 @@ pub(super) fn print_volumes(report: &Value) {
 /// what its paging looks like. Readings only — nothing is measured against
 /// a watermark and nothing reclaims memory.
 pub(super) fn print_memory(reading: &Value) {
-    // A reading the host did not publish is said as not reported; the word
-    // "unknown", and a page size of zero, stood in for measurements.
+    // A reading the host did not publish is said as not reported, never as a
+    // word or a page size standing in for a measurement.
     let number = |key: &str| -> String {
         match reading.get(key).and_then(Value::as_i64) {
             Some(found) => found.to_string(),
             None => format!("<{key} not reported>"),
         }
     };
-    const MIB: i64 = 1024 * 1024;
+    // Whole mebibytes of the host's memory.
     let total_mb = match reading.get("total_bytes").and_then(Value::as_i64) {
         Some(bytes) => (bytes / MIB).to_string(),
         None => "<total_bytes not reported>".to_string(),

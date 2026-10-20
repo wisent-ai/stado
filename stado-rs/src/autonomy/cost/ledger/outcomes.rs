@@ -64,18 +64,14 @@ pub async fn measure_outcomes(
             pending_savings.push(record);
         }
     }
-    let artifact_seconds =
-        i64::try_from(policy.idle.artifact_days * crate::monitor::billing::SECONDS_PER_DAY)
-            .unwrap_or(i64::MAX);
+    let retention_days = policy.idle.artifact_days;
     let mut outstanding: std::collections::BTreeSet<String> =
         super::storage::list_decision_index(store)
             .await?
             .into_iter()
             .filter(|(decision_id, updated)| {
                 !feedback_ids.contains(decision_id)
-                    && updated.is_none_or(|updated| {
-                        now.signed_duration_since(updated).num_seconds() < artifact_seconds
-                    })
+                    && updated.is_none_or(|updated| within_retention(now, updated, retention_days))
             })
             .map(|(decision_id, _)| decision_id)
             .collect();
@@ -108,9 +104,8 @@ pub async fn measure_outcomes(
             continue;
         };
         // Feedback is what placement learns a target from. A decision whose
-        // selection names no target was written as feedback about target
-        // "unknown"; it is now withheld and named in the summary, since no
-        // target earned or lost anything by it.
+        // selection names no target is withheld from feedback and named in
+        // the summary, since no target earned or lost anything by it.
         let target_id = decision
             .selected
             .as_ref()
@@ -132,13 +127,15 @@ pub async fn measure_outcomes(
                     target_id,
                     observed_at: Utc::now().to_rfc3339(),
                     startup_seconds: elapsed(
+                        &decision.subject_id,
                         Some(job.created_at.as_str()),
                         job.started_at.as_deref(),
-                    ),
+                    )?,
                     runtime_seconds: elapsed(
+                        &decision.subject_id,
                         job.started_at.as_deref(),
                         job.completed_at.as_deref().or(job.failed_at.as_deref()),
-                    ),
+                    )?,
                     realized_cost_usd: costs
                         .iter()
                         .find(|row| row.job_id == decision.subject_id)
@@ -189,8 +186,28 @@ pub async fn measure_outcomes(
     Ok(summary)
 }
 
-fn elapsed(start: Option<&str>, end: Option<&str>) -> Option<f64> {
-    let start = DateTime::parse_from_rfc3339(start?).ok()?;
-    let end = DateTime::parse_from_rfc3339(end?).ok()?;
-    Some(end.signed_duration_since(start).as_seconds_f64())
+/// Whether a decision last updated at `updated` is still inside an artifact
+/// retention of `days` at `now`; one dated after `now` is as young as one
+/// dated now.
+fn within_retention(now: DateTime<Utc>, updated: DateTime<Utc>, days: u64) -> bool {
+    let age = now.signed_duration_since(updated).num_days();
+    age.is_negative() || age.unsigned_abs() < days
+}
+
+/// Seconds between two of job `job`'s stamps: none while either is not
+/// recorded yet, and a refusal naming the job and the stamp when one is
+/// recorded but is not an RFC 3339 time.
+fn elapsed(job: &str, start: Option<&str>, end: Option<&str>) -> Result<Option<f64>, StorageError> {
+    let (Some(start), Some(end)) = (start, end) else {
+        return Ok(None);
+    };
+    let read = |stamp: &str| {
+        DateTime::parse_from_rfc3339(stamp).map_err(|error| {
+            StorageError::Other(format!(
+                "job {job} records the time {stamp:?}, which is not an RFC 3339 time: {error}"
+            ))
+        })
+    };
+    let (start, end) = (read(start)?, read(end)?);
+    Ok(Some(end.signed_duration_since(start).as_seconds_f64()))
 }
