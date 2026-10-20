@@ -24,6 +24,14 @@ const UNREACHED: &str = "uses modules no declaration reaches";
 
 fn git(directory: &Path, args: &[&str]) {
     let status = Command::new("git")
+        // The operator's global Git configuration, its hooks path included,
+        // never judges the fixture's own history; the fixture's commits
+        // carry their own author.
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Stado quality fixture")
+        .env("GIT_AUTHOR_EMAIL", "")
+        .env("GIT_COMMITTER_NAME", "Stado quality fixture")
+        .env("GIT_COMMITTER_EMAIL", "")
         .args(args)
         .current_dir(directory)
         .stdout(Stdio::null())

@@ -1,8 +1,8 @@
 //! Which of a product's declared quality gates `stado quality` runs, chosen
-//! by each gate's declared kind: the gates an installation runs (the
-//! pre-push check, a change hand-off and a release submission run exactly
-//! those, so a commit that passes them is not refused by the install), or
-//! the `format` gates `stado quality format` writes with.
+//! by each gate's declared kind. An installation runs every kind; pre-push
+//! selects the gates declared as `format`. A web product can declare
+//! `stado web quality` with that kind; it installs locked dependencies and
+//! runs declared typecheck and lint scripts, but writes no formatter output.
 
 use std::path::PathBuf;
 
@@ -16,13 +16,12 @@ const MANIFEST: &str = ".wisent-release.json";
 /// Which declared gates a check runs.
 #[derive(Clone, Copy)]
 pub(crate) enum Selection {
-    /// The `format` gates, whose check `stado quality format` turns into a
-    /// write.
+    /// The gates declared as `format`; a web gate may run more than a
+    /// formatter and cannot be rewritten by `stado quality format`.
     Formatting,
-    /// The gates a product installation runs before it builds: every kind.
-    /// `stado quality check` (the pre-push check), a change hand-off and a
-    /// release submission run these, so a commit they pass is not refused by
-    /// the installation's gate afterwards.
+    /// Every gate a product installation runs before it builds. The full
+    /// `stado quality check`, change hand-off and release submission use
+    /// this selection; pre-push uses `Formatting`.
     Installation,
     /// No gate: the product's CLI built as its installation builds it, and
     /// its command tree read and judged (`stado quality command-tree`).
@@ -57,6 +56,10 @@ pub(super) struct DeclaredGates {
     pub(super) build: Vec<String>,
     pub(super) stage: std::collections::BTreeMap<String, String>,
     pub(super) env: std::collections::BTreeMap<String, String>,
+    /// The recipe's `secret_env`, `NAME` to `role#field`: a gate needs the
+    /// value the release worker would put in its environment, so a check
+    /// reads each from the operator's credential store by role.
+    pub(super) secret_env: std::collections::BTreeMap<String, String>,
     /// For the web platform, whose gates are `stado web quality`: the version
     /// the release would cut, which the gate's worker contract carries.
     pub(super) web_version: Option<String>,
@@ -72,16 +75,15 @@ pub(super) struct DeclaredGates {
     pub(super) inputs: std::collections::BTreeMap<String, release_pipeline::ReleaseInput>,
 }
 
-/// What a manifest declares for a check: its gates, or the sentence saying
-/// why it declares none (`releases:false`, or no gate of the selected kinds on
-/// this host's platform) — an answer about the product, not a failure to read it.
+/// What a committed tree declares for a check: gates, or the reason it has
+/// none (no manifest, `releases:false`, or no gate of the selected kind).
+/// A present but unreadable declaration is not an undeclared product.
 pub(super) enum Declaration {
     Gates(Box<DeclaredGates>),
     Undeclared(String),
 }
 
-/// The gates `selection` runs, refused with the manifest's own sentence when
-/// it declares none.
+/// The gates `selection` runs, refusing with the reason when none are declared.
 pub(super) fn selected_gates(
     root: Option<&str>,
     selection: Selection,
@@ -94,8 +96,7 @@ pub(super) fn selected_gates(
 
 /// What the committed tree at `root` declares for `selection`. An absent
 /// manifest has no gates; a present manifest that cannot be read or parsed,
-/// or names no platform this host runs, is refused; one that declares no
-/// such gate is answered with why.
+/// or names no platform this host runs, is refused.
 pub(super) fn declared_gates(
     root: Option<&str>,
     selection: Selection,
@@ -137,14 +138,13 @@ pub(super) fn declared_gates(
             .stating(crate::cli::entry::error::io_failure_code(error.kind())));
         }
     };
-    let ProductManifest::Release(manifest) =
-        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)?
-    else {
-        return Ok(Declaration::Undeclared(format!(
-            "{} declares releases:false, so it declares no quality gate",
-            manifest_path.display()
-        )));
-    };
+    let manifest =
+        match release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::declaration)? {
+            ProductManifest::Release(manifest) => manifest,
+            ProductManifest::NonRelease(manifest) => {
+                return non_release_gates(root, &manifest_path, manifest, selection)
+            }
+        };
     let (platform, recipe) = recipe_for_this_host(&manifest.platforms)?;
     let gates: Vec<QualityGate> = recipe
         .quality
@@ -194,9 +194,59 @@ pub(super) fn declared_gates(
         build: recipe.build.argv.clone(),
         stage: recipe.stage.clone(),
         env: recipe.env.clone(),
+        secret_env: recipe.secret_env.clone(),
         platform: platform.to_owned(),
         contract_version: version,
         inputs: manifest.inputs.clone(),
+    })))
+}
+
+/// The gates a product that publishes no release declares in its top-level
+/// `quality` list. They read the same source on every host, so they are not
+/// per platform; there is no build, stage or release input. Only the
+/// formatting check runs them: an installation builds the release a
+/// non-releasing product does not have.
+fn non_release_gates(
+    root: PathBuf,
+    manifest_path: &std::path::Path,
+    manifest: release_pipeline::NonReleaseManifest,
+    selection: Selection,
+) -> Result<Declaration, CmdError> {
+    if selection.builds() {
+        return Ok(Declaration::Undeclared(format!(
+            "{} declares releases:false, so no installation builds it and it has no CLI command \
+             tree to read; its declared quality gates run in the formatting check at push",
+            manifest_path.display()
+        )));
+    }
+    let gates: Vec<QualityGate> = manifest
+        .quality
+        .into_iter()
+        .filter(|gate| selection.runs(gate.kind))
+        .collect();
+    if gates.is_empty() {
+        return Ok(Declaration::Undeclared(format!(
+            "{} declares releases:false and no gate of kind {} in its top-level \"quality\" \
+             list; declare the gate that checks formatting there",
+            manifest_path.display(),
+            GateKind::Format,
+        )));
+    }
+    let platform =
+        crate::cli::fleet::enroll::release_platform(std::env::consts::OS, std::env::consts::ARCH)
+            .map_err(CmdError::refused)?;
+    Ok(Declaration::Gates(Box::new(DeclaredGates {
+        product: manifest.product,
+        root,
+        gates,
+        build: Vec::new(),
+        stage: std::collections::BTreeMap::new(),
+        env: std::collections::BTreeMap::new(),
+        secret_env: std::collections::BTreeMap::new(),
+        web_version: None,
+        platform: platform.to_owned(),
+        contract_version: None,
+        inputs: std::collections::BTreeMap::new(),
     })))
 }
 

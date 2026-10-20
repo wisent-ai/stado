@@ -7,6 +7,7 @@ mod commands;
 mod modules;
 pub use command::{check, command_tree};
 mod paths;
+mod secrets;
 pub(crate) use modules::check_source;
 use std::path::Path;
 use std::process::Command;
@@ -66,15 +67,11 @@ async fn export_check(
     .map_err(|error| CmdError::click(format!("{error:#}")))?
     .join("quality");
     report.say(&format!(
-        "stado quality check: reclaiming abandoned quality runs in {}",
+        "stado quality check: reclaiming abandoned quality runs for {revision} in {}",
         runs.display()
     ));
-    remove_abandoned(&runs);
-    let run_area = runs.join(format!(
-        "{}-{}",
-        std::process::id(),
-        &revision[..12.min(revision.len())]
-    ));
+    paths::remove_abandoned(&runs, revision);
+    let run_area = runs.join(format!("{}-{revision}", std::process::id()));
     let scratch = run_area.join("source");
     report.say(&format!(
         "stado quality check: exporting committed revision {revision} from {} into {}",
@@ -116,56 +113,6 @@ async fn export_check(
         checkout.display()
     ));
     Ok(())
-}
-
-/// Remove the run areas under `runs` whose process is gone: a check that was
-/// killed never reached its own removal. A run area is named
-/// `<pid>-<revision>`; one whose process still lives is another check's, and
-/// a removal that fails is said on stderr and leaves the area to a later run.
-/// So is a runs directory, or an entry in it, that cannot be read: dropped in
-/// silence, abandoned run areas piled up with nothing saying why.
-fn remove_abandoned(runs: &Path) {
-    let entries = match std::fs::read_dir(runs) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => {
-            eprintln!(
-                "stado quality check: cannot list the run areas in {}: {error}",
-                runs.display()
-            );
-            return;
-        }
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                eprintln!(
-                    "stado quality check: cannot read a run area in {}: {error}",
-                    runs.display()
-                );
-                continue;
-            }
-        };
-        let name = entry.file_name();
-        let Some(pid) = name
-            .to_str()
-            .and_then(|name| name.split_once('-'))
-            .and_then(|(pid, _)| pid.parse::<i32>().ok())
-        else {
-            continue;
-        };
-        let gone = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
-            == Err(nix::errno::Errno::ESRCH);
-        if gone {
-            if let Err(error) = std::fs::remove_dir_all(entry.path()) {
-                eprintln!(
-                    "stado quality check: cannot remove the abandoned run {}: {error}",
-                    entry.path().display()
-                );
-            }
-        }
-    }
 }
 
 /// The committed revision a check runs over and the SHA-256 of the archive it
@@ -218,6 +165,9 @@ async fn check_tree(
     // pushed it can still repair it, instead of by the build that fetches it;
     // a gate that reads an input finds it where the worker would put it.
     let staged = inputs::stage(&declared, inputs_area, report).await?;
+    // A gate reads the secrets the worker would put in its environment, such
+    // as a web install's GITHUB_TOKEN for private dependencies.
+    let secret = secrets::resolved(&declared.secret_env).await?;
     let contract = match &declared.contract_version {
         Some(version) => web::worker_contract(tree, inputs_area, version, &declared.platform)?,
         None => Vec::new(),
@@ -239,6 +189,7 @@ async fn check_tree(
     .chain(
         staged
             .iter()
+            .chain(secret.iter())
             .map(|(name, value)| (name.as_str(), value.clone())),
     )
     .collect();
@@ -257,9 +208,10 @@ async fn check_tree(
                 declared.product,
                 checkout.display()
             ));
-            // Only a format gate reads what `stado quality format` writes; a
-            // lint or test gate's refusal is repaired in the source it names.
             match gate.kind {
+                GateKind::Format if declared.web_version.is_some() => refused.also(
+                    "web gate: inspect the failed command and output; `stado quality format` does not write web source",
+                ),
                 GateKind::Format => refused.also("`stado quality format` writes what it reads"),
                 GateKind::Lint | GateKind::Test => refused.also(format!(
                     "a {} gate's refusal is repaired in the source it names; `stado quality format` \

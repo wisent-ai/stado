@@ -48,10 +48,9 @@ async fn checked(
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?,
     };
-    // A push runs only what compiles nothing (locks, module declarations,
-    // the `format` gates): no session builds, compiles or tests before every
-    // task and defect is closed, and then one build over everything runs the
-    // lint and test gates and records every refusal at once.
+    // Pre-push selects format-kind gates plus source and lock checks. A web
+    // format gate can itself run the product's typecheck and lint scripts;
+    // the full check selects every gate the installation runs.
     let (revisions, selection) = if pre_push {
         (pushed_revisions(&checkout, report)?, Selection::Formatting)
     } else {

@@ -1,21 +1,23 @@
-//! `stado quality check` (the pre-push check) runs the gates a product
-//! installation runs: every declared gate, each kind — `format`, `lint` and
-//! `test` — so a commit the push passes is not refused by its installation.
+//! The full `stado quality check` runs every gate a product installation
+//! declares, each kind — `format`, `lint` and `test`. The pre-push selection
+//! runs format-kind gates only, which a web product may use for typecheck.
 //!
-//! One isolated deployment per case: a local store, a committed product
-//! checkout and the real `stado` executable. Expected: a manifest whose
-//! `lint` gate exits non-zero beside a passing `format` gate is refused,
-//! naming the failing gate, after the format gate ran; a manifest whose
-//! `lint` and `test` gates pass passes the check and reports both; a
-//! manifest whose gate declares no kind is refused before any gate runs,
-//! naming the missing field. The checkout commits with the identity of the
-//! account running the test, and its manifest takes its schema version from
-//! Stado's own manifest.
+//! One isolated deployment per case: a local store, committed Rust source
+//! and the real `stado` executable. The declared gates run rustfmt, compile
+//! test code and execute its assertion; an absent gate kind is refused.
+//! The checkout commits with the identity of the account running the test,
+//! and its manifest takes its schema version from Stado's own manifest.
+#[path = "gate_kind/journey.rs"]
+mod journey;
+
 #[path = "command_tree/mod.rs"]
 mod command_tree;
 
 #[path = "push/mod.rs"]
 mod pushed_revisions;
+
+#[path = "gate_kind/non_release.rs"]
+mod non_release;
 
 use serde_json::{json, Value};
 use std::fs;
@@ -28,6 +30,8 @@ const MANIFEST: &str = ".wisent-release.json";
 struct Deployment {
     repository: PathBuf,
     root: PathBuf,
+    rustup_home: PathBuf,
+    toolchain: String,
     report: Value,
 }
 
@@ -42,15 +46,116 @@ impl Deployment {
             .join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(root.join("tmp")).unwrap();
         fs::create_dir_all(root.join("store")).unwrap();
-        let source_revision = git_output(&repository, &["rev-parse", "HEAD"]);
+        eprintln!("report: {}", root.join("report.json").display());
+        let report_path = root.join("report.json");
+        let mut report = json!({
+            "source_revision": null,
+            "source_changes": null,
+            "commands": [],
+            "outcome": "failed",
+        });
+        fs::write(&report_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        let source_revision = git_output(
+            &repository,
+            &["rev-parse", "HEAD"],
+            &mut report,
+            &report_path,
+        );
+        report["source_revision"] = json!(source_revision);
+        fs::write(&report_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        let source_changes = git_output(
+            &repository,
+            &["status", "--porcelain"],
+            &mut report,
+            &report_path,
+        );
+        report["source_changes"] = json!(source_changes);
+        fs::write(&report_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        let rustup = Command::new("rustup").args(["show", "home"]).output();
+        let observation = match &rustup {
+            Ok(output) => json!({
+                "program": "rustup",
+                "args": ["show", "home"],
+                "exit_status": output.status.code(),
+                "stdout": String::from_utf8_lossy(&output.stdout),
+                "stderr": String::from_utf8_lossy(&output.stderr),
+            }),
+            Err(error) => json!({
+                "program": "rustup",
+                "args": ["show", "home"],
+                "launch_error": error.to_string(),
+            }),
+        };
+        report["commands"].as_array_mut().unwrap().push(observation);
+        fs::write(&report_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        let rustup = match rustup {
+            Ok(output) => output,
+            Err(error) => panic!(
+                "rustup show home did not run: {error}; report: {}",
+                report_path.display()
+            ),
+        };
+        assert!(
+            rustup.status.success(),
+            "rustup show home failed: {}; report: {}",
+            String::from_utf8_lossy(&rustup.stderr),
+            report_path.display()
+        );
+        let rustup_home = PathBuf::from(String::from_utf8_lossy(&rustup.stdout).trim());
+        assert!(
+            !rustup_home.as_os_str().is_empty(),
+            "rustup show home returned no path; report: {}",
+            report_path.display()
+        );
+        // The exported test checkout has no rust-toolchain.toml. Pass the
+        // source repository's actual active toolchain through to its gates.
+        let active = Command::new("rustup")
+            .args(["show", "active-toolchain"])
+            .current_dir(&repository)
+            .output();
+        let observation = match &active {
+            Ok(output) => json!({
+                "program": "rustup",
+                "args": ["show", "active-toolchain"],
+                "directory": repository.display().to_string(),
+                "exit_status": output.status.code(),
+                "stdout": String::from_utf8_lossy(&output.stdout),
+                "stderr": String::from_utf8_lossy(&output.stderr),
+            }),
+            Err(error) => json!({
+                "program": "rustup",
+                "args": ["show", "active-toolchain"],
+                "directory": repository.display().to_string(),
+                "launch_error": error.to_string(),
+            }),
+        };
+        report["commands"].as_array_mut().unwrap().push(observation);
+        fs::write(&report_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        let active = match active {
+            Ok(output) => output,
+            Err(error) => panic!(
+                "rustup show active-toolchain did not run: {error}; report: {}",
+                report_path.display()
+            ),
+        };
+        assert!(
+            active.status.success(),
+            "rustup show active-toolchain failed: {}; report: {}",
+            String::from_utf8_lossy(&active.stderr),
+            report_path.display()
+        );
+        let active_text = String::from_utf8_lossy(&active.stdout);
+        let toolchain = active_text
+            .split_whitespace()
+            .next()
+            .expect("rustup show active-toolchain returned no selected toolchain")
+            .to_string();
         Self {
             repository,
             root,
-            report: json!({
-                "source_revision": source_revision,
-                "commands": [],
-                "outcome": "failed",
-            }),
+            rustup_home,
+            toolchain,
+            report,
         }
     }
 
@@ -59,6 +164,8 @@ impl Deployment {
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap())
             .env("HOME", &self.root)
+            .env("RUSTUP_HOME", &self.rustup_home)
+            .env("RUSTUP_TOOLCHAIN", &self.toolchain)
             .env("STADO_CONFIG", self.root.join(".stado").join("config.json"))
             .env("TMPDIR", self.root.join("tmp"))
             .env("WC_STORAGE_BACKEND", "local")
@@ -68,6 +175,7 @@ impl Deployment {
             .output()
             .unwrap();
         self.report["commands"].as_array_mut().unwrap().push(json!({
+            "program": env!("CARGO_BIN_EXE_stado"),
             "args": args,
             "exit_status": output.status.code(),
             "stdout": String::from_utf8_lossy(&output.stdout),
@@ -85,15 +193,49 @@ impl Deployment {
         .unwrap();
     }
 
-    /// A committed product checkout named `name` whose one platform declares
-    /// `gates`.
-    fn checkout(&self, name: &str, gates: Value) -> String {
+    fn git(&mut self, directory: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            // The operator's global Git configuration, its hooks path
+            // included, never judges the fixture's own history; the
+            // fixture's commits carry their own author.
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Stado quality fixture")
+            .env("GIT_AUTHOR_EMAIL", "")
+            .env("GIT_COMMITTER_NAME", "Stado quality fixture")
+            .env("GIT_COMMITTER_EMAIL", "")
+            .env_remove("GIT_ALLOW_PROTOCOL")
+            .args(args)
+            .current_dir(directory)
+            .output()
+            .unwrap();
+        self.report["commands"].as_array_mut().unwrap().push(json!({
+            "directory": directory.display().to_string(),
+            "program": "git",
+            "args": args,
+            "exit_status": output.status.code(),
+            "stdout": String::from_utf8_lossy(&output.stdout),
+            "stderr": String::from_utf8_lossy(&output.stderr),
+        }));
+        self.save();
+        assert!(
+            output.status.success(),
+            "git {args:?} in {}: {}",
+            directory.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// A committed product checkout named `name` whose Rust `source` and
+    /// quality `gates` are part of the same revision.
+    fn checkout(&mut self, name: &str, source: &str, gates: Value) -> String {
         let checkout = self.root.join(name);
         fs::create_dir_all(&checkout).unwrap();
-        git(&checkout, &["init", "--quiet", "--initial-branch=main"]);
+        self.git(&checkout, &["init", "--quiet", "--initial-branch=main"]);
         let own: Value =
             serde_json::from_slice(&fs::read(self.repository.join(MANIFEST)).unwrap()).unwrap();
         fs::write(checkout.join("VERSION"), "0.1.0\n").unwrap();
+        fs::create_dir_all(checkout.join("src")).unwrap();
+        fs::write(checkout.join("src/lib.rs"), source).unwrap();
         let manifest = json!({
             "schema_version": own["schema_version"],
             "product": PRODUCT,
@@ -114,112 +256,47 @@ impl Deployment {
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        git(&checkout, &["add", "VERSION", MANIFEST]);
-        git(&checkout, &["commit", "--quiet", "-m", "declare the gates"]);
+        self.git(&checkout, &["add", "VERSION", "src/lib.rs", MANIFEST]);
+        self.git(&checkout, &["commit", "--quiet", "-m", "declare the gates"]);
         checkout.to_string_lossy().into_owned()
     }
 }
 
-fn git(directory: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .env_remove("GIT_ALLOW_PROTOCOL")
-        .args(args)
-        .current_dir(directory)
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} in {}", directory.display());
-}
-
-fn git_output(directory: &Path, args: &[&str]) -> String {
+fn git_output(directory: &Path, args: &[&str], report: &mut Value, report_path: &Path) -> String {
     let output = Command::new("git")
         .args(args)
         .current_dir(directory)
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "git {args:?}");
+        .output();
+    let observation = match &output {
+        Ok(output) => json!({
+            "program": "git",
+            "args": args,
+            "directory": directory.display().to_string(),
+            "exit_status": output.status.code(),
+            "stdout": String::from_utf8_lossy(&output.stdout),
+            "stderr": String::from_utf8_lossy(&output.stderr),
+        }),
+        Err(error) => json!({
+            "program": "git",
+            "args": args,
+            "directory": directory.display().to_string(),
+            "launch_error": error.to_string(),
+        }),
+    };
+    report["commands"].as_array_mut().unwrap().push(observation);
+    fs::write(report_path, serde_json::to_vec_pretty(report).unwrap()).unwrap();
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => panic!(
+            "cannot run git {args:?}: {error}; report: {}",
+            report_path.display()
+        ),
+    };
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}; report: {}",
+        String::from_utf8_lossy(&output.stderr),
+        report_path.display()
+    );
     String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-#[test]
-fn the_check_runs_every_gate_the_installation_runs() {
-    let mut deployment = Deployment::start();
-    let initialised = deployment.run(&["config", "init"]);
-    assert!(
-        initialised.status.success(),
-        "config init: {}",
-        String::from_utf8_lossy(&initialised.stderr)
-    );
-
-    // A failing `lint` gate is the installation's to run, so the check runs
-    // it too and refuses, after the passing `format` gate.
-    let lint_fails = deployment.checkout(
-        "lint-fails",
-        json!([
-            {"name": "style", "kind": "format", "argv": ["cat", "VERSION"]},
-            {"name": "clippy", "kind": "lint", "argv": ["false"]}
-        ]),
-    );
-    let refused = deployment.run(&["quality", "check", "--root", &lint_fails]);
-    let said = format!(
-        "{}{}",
-        String::from_utf8_lossy(&refused.stdout),
-        String::from_utf8_lossy(&refused.stderr)
-    );
-    assert!(
-        !refused.status.success(),
-        "the check passed a commit whose lint gate the installation refuses: {said}"
-    );
-    assert!(
-        said.contains("stado quality check: cat VERSION")
-            && said.contains("stado quality check: false"),
-        "the check did not run the format gate and then the failing lint gate: {said}"
-    );
-    assert!(
-        said.contains("gate \"clippy\" (lint)")
-            && said.contains("a lint gate's refusal is repaired in the source it names")
-            && !said.contains("`stado quality format` writes what it reads"),
-        "a lint gate's refusal was not named by its kind, or was sent to the formatter: {said}"
-    );
-
-    // Gates of other kinds, passing, are run and pass.
-    let lint_and_test = deployment.checkout(
-        "lint-and-test",
-        json!([
-            {"name": "check", "kind": "lint", "argv": ["cat", "VERSION"]},
-            {"name": "journey", "kind": "test", "argv": ["test", "-f", "VERSION"]}
-        ]),
-    );
-    let passed = deployment.run(&["quality", "check", "--root", &lint_and_test]);
-    let said = format!(
-        "{}{}",
-        String::from_utf8_lossy(&passed.stdout),
-        String::from_utf8_lossy(&passed.stderr)
-    );
-    assert!(
-        passed.status.success(),
-        "a commit whose lint and test gates pass was refused: {said}"
-    );
-    assert!(
-        said.contains("stado quality check: cat VERSION")
-            && said.contains("stado quality check: test -f VERSION"),
-        "the check did not run the lint and the test gate: {said}"
-    );
-
-    // A gate without a kind is refused before any gate runs.
-    let no_kind = deployment.checkout(
-        "no-kind",
-        json!([{"name": "fmt", "argv": ["cat", "VERSION"]}]),
-    );
-    let refused = deployment.run(&["quality", "check", "--root", &no_kind]);
-    let said = String::from_utf8_lossy(&refused.stderr).into_owned();
-    assert!(!refused.status.success(), "a gate without a kind passed");
-    assert!(
-        said.contains("kind"),
-        "the refusal does not name the missing field: {said}"
-    );
-
-    deployment.report["outcome"] = json!("passed");
-    deployment.save();
-    eprintln!("report: {}", deployment.root.join("report.json").display());
 }

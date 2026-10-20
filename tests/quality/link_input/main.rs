@@ -12,10 +12,10 @@
 //! its own origin, and the real `stado` this test builds (its directory leads
 //! PATH, so the gate's `stado` is the same binary). The product's package.json
 //! depends on `file:../sibling`, which the gate answers by linking the pinned
-//! archive's `sibling` directory there. The check runs twice and both runs
-//! must pass, the second after the first left its work area; the run areas
-//! live in the checkout's build area under the isolated home, which must be
-//! empty after each, and the checkout must hold no `.wisent-output/quality`.
+//! archive's `sibling` directory there. Repeated checks pass and remove their
+//! own run areas. An unrelated, unrecognized run area is reported with its
+//! path and preserved, then removed by the isolated test before the final
+//! check. The checkout never holds `.wisent-output/quality`.
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -201,13 +201,19 @@ impl Deployment {
             sibling.join("package.json"),
         )
         .unwrap();
-        let status = Command::new("npm")
+        let output = Command::new("npm")
             .args(["install", "--package-lock-only", "--ignore-scripts"])
+            .env("HOME", self.root.join("home"))
+            .env("NPM_CONFIG_CACHE", self.root.join("npm-cache"))
+            .env("TMPDIR", self.root.join("tmp"))
             .current_dir(&checkout)
-            .stdout(Stdio::null())
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success(), "npm could not write the fixture's lock");
+        assert!(
+            output.status.success(),
+            "npm could not write the fixture's lock: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         fs::remove_dir_all(&sibling).unwrap();
         git(&checkout, &["add", "."]);
         git(
@@ -220,6 +226,17 @@ impl Deployment {
         );
         git(&checkout, &["push", "--quiet", "origin", "main"]);
         checkout
+    }
+
+    fn runs(&self, checkout: &Path) -> PathBuf {
+        checkout
+            .components()
+            .filter(|part| matches!(part, std::path::Component::Normal(_)))
+            .fold(
+                self.root.join("home/.stado/products/builds/outside-home"),
+                |area, part| area.join(part),
+            )
+            .join("quality")
     }
 
     /// One `stado quality check` of `checkout`, which must link the input,
@@ -236,16 +253,7 @@ impl Deployment {
             !checkout.join(".wisent-output/quality").exists(),
             "the {which} check wrote its run area into the checkout"
         );
-        // The checkout is not below the isolated home, so its build area is
-        // named by its whole absolute path.
-        let runs = checkout
-            .components()
-            .filter(|part| matches!(part, std::path::Component::Normal(_)))
-            .fold(
-                self.root.join("home/.stado/products/builds/outside-home"),
-                |area, part| area.join(part),
-            )
-            .join("quality");
+        let runs = self.runs(checkout);
         let left = left_behind(&runs);
         assert!(
             left.is_empty(),
@@ -256,7 +264,7 @@ impl Deployment {
 }
 
 #[test]
-fn a_linked_input_is_linked_again_on_every_check_and_nothing_is_left_behind() {
+fn linked_inputs_survive_repeated_checks_and_unrecognized_run_areas_are_diagnosed() {
     let mut deployment = Deployment::start();
     deployment.cli(&["config", "init"]);
     let archive = deployment.sibling_archive();
@@ -266,6 +274,20 @@ fn a_linked_input_is_linked_again_on_every_check_and_nothing_is_left_behind() {
     let checkout = deployment.checkout(&uri, &sha256);
 
     deployment.check_passes_and_cleans_up(&checkout, "first");
+    let runs = deployment.runs(&checkout);
+    let unrecognized = runs.join(format!("{}-a", std::process::id()));
+    fs::create_dir_all(&unrecognized).unwrap();
+    let root = checkout.to_string_lossy().into_owned();
+    let observed = deployment.run(&["quality", "check", "--root", &root]);
+    let said = String::from_utf8_lossy(&observed.stderr);
+    assert!(observed.status.success(), "the quality gate failed: {said}");
+    assert!(
+        said.contains("cannot identify the revision of")
+            && said.contains(unrecognized.to_string_lossy().as_ref())
+            && unrecognized.exists(),
+        "the check hid or removed an unrecognized run area: {said}"
+    );
+    fs::remove_dir(&unrecognized).unwrap();
     deployment.check_passes_and_cleans_up(&checkout, "repeated");
 
     deployment.report["outcome"] = json!("passed");

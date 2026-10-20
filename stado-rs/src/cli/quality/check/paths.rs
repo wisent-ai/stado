@@ -6,6 +6,9 @@
 //! without `mod guard;` in `rulings/mod.rs` is the shape. It is read from the
 //! files alone, without name resolution: a segment naming an item, or a
 //! module the tree holds no file for, is left to the build.
+//!
+//! This module also reclaims abandoned exported-source run paths, leaving
+//! unreadable or unrecognized entries intact with a diagnostic.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -97,4 +100,82 @@ fn held_as_spelled<'a>(
         }
     }
     Ok(None)
+}
+
+/// Reclaim run areas left by terminated checks. The revision being checked
+/// supplies this repository's commit ID width, without assuming Git's object
+/// format. Unrecognized or unreadable entries are reported and left intact.
+pub(super) fn remove_abandoned(runs: &Path, current_revision: &str) {
+    let entries = match std::fs::read_dir(runs) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            eprintln!(
+                "stado quality check: cannot list run areas in {}: {error}",
+                runs.display()
+            );
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!(
+                    "stado quality check: cannot read a run area in {}: {error}",
+                    runs.display()
+                );
+                continue;
+            }
+        };
+        let name = entry.file_name();
+        let Some((pid, revision)) = name.to_str().and_then(|name| name.split_once('-')) else {
+            eprintln!("stado quality check: cannot identify the owning process of {}: expected <pid>-<revision>", entry.path().display());
+            continue;
+        };
+        let pid = match pid.parse::<std::num::NonZeroU32>() {
+            Ok(pid) => pid,
+            Err(error) => {
+                eprintln!(
+                    "stado quality check: cannot parse the owning process of {}: {error}",
+                    entry.path().display()
+                );
+                continue;
+            }
+        };
+        if revision.len() != current_revision.len()
+            || !revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            eprintln!(
+                "stado quality check: cannot identify the revision of {}: expected a full hexadecimal commit id",
+                entry.path().display()
+            );
+            continue;
+        }
+        let pid = match i32::try_from(pid.get()) {
+            Ok(pid) => pid,
+            Err(error) => {
+                eprintln!(
+                    "stado quality check: owning process of {} is outside the platform PID range: {error}",
+                    entry.path().display()
+                );
+                continue;
+            }
+        };
+        match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) {
+            Ok(()) => {}
+            Err(nix::errno::Errno::ESRCH) => {
+                if let Err(error) = std::fs::remove_dir_all(entry.path()) {
+                    eprintln!(
+                        "stado quality check: cannot remove the abandoned run {}: {error}",
+                        entry.path().display()
+                    );
+                }
+            }
+            Err(error) => eprintln!(
+                "stado quality check: cannot inspect the owning process of {}: {error}",
+                entry.path().display()
+            ),
+        }
+    }
 }

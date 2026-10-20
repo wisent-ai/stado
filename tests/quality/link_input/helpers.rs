@@ -9,6 +9,14 @@ pub(super) fn git(directory: &Path, args: &[&str]) {
     // The cargo runner limits git to network transports for dependency
     // fetches; this fixture's origin is a directory beside the checkout.
     let status = Command::new("git")
+        // The operator's global Git configuration, its hooks path included,
+        // never judges the fixture's own history; the fixture's commits
+        // carry their own author.
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Stado quality fixture")
+        .env("GIT_AUTHOR_EMAIL", "")
+        .env("GIT_COMMITTER_NAME", "Stado quality fixture")
+        .env("GIT_COMMITTER_EMAIL", "")
         .env_remove("GIT_ALLOW_PROTOCOL")
         .args(args)
         .current_dir(directory)

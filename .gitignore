@@ -18,9 +18,12 @@ stado-rs/target/
 stado-rs/target-*/
 # A real-test package under tests/<area>/ is its own Cargo workspace (the
 # product manifest refuses new test entries from a gate), so Cargo builds it
-# under that area unless CARGO_TARGET_DIR says otherwise.
+# under that area unless CARGO_TARGET_DIR says otherwise, and writes the
+# lockfile it resolved there; neither is source.
 tests/*/target/
 tests/*/*/target/
+tests/*/Cargo.lock
+tests/*/*/Cargo.lock
 # A build directory at the repository root, and the Jeden session state a
 # detached or attached session writes in the workspace it runs in. Both are
 # one machine's run state, not this product's source.
