@@ -23,3 +23,21 @@ pub fn field(value: &Value) -> String {
         other => other.to_string(),
     }
 }
+
+/// A text field a reading carries as a word: the word, or [`NOT_REPORTED`]
+/// for an empty one, which would print as nothing measured.
+pub fn text(value: &str) -> String {
+    if value.is_empty() {
+        NOT_REPORTED.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+/// [`text`] for a field the reading may not carry at all.
+pub fn optional_text(value: Option<&str>) -> String {
+    match value {
+        Some(word) => text(word),
+        None => NOT_REPORTED.to_string(),
+    }
+}

@@ -246,23 +246,9 @@ fn unmanaged(name: &str, host: Option<&str>) -> CmdError {
     CmdError::click(message).stating(FailureCode::NotFound)
 }
 
-/// A text cell, or "not reported" for an empty one, the words the host
-/// health report prints for a field it does not have; a dash read as a value.
-fn reported_cell(value: &str) -> String {
-    if value.is_empty() {
-        "not reported".to_string()
-    } else {
-        value.to_string()
-    }
-}
-
-/// [`reported_cell`] for a field the reading may not carry at all.
-fn optional_cell(value: Option<&str>) -> String {
-    match value {
-        Some(text) => reported_cell(text),
-        None => "not reported".to_string(),
-    }
-}
+// A text cell is printed by the shared report renderer: the word, or "not
+// reported" for an empty or absent one, as every other report prints it.
+use crate::cli::reporting::{optional_text as optional_cell, text as reported_cell};
 
 fn print_json(value: &Value) -> Result<(), CmdError> {
     println!("{}", serde_json::to_string_pretty(value)?);
