@@ -6,11 +6,16 @@
 # Collected first and judged after, because an empty socket table makes every
 # marker on the host look stale, and that is a fleet-wide incident report.
 # "netstat did not answer" has to be a state of its own rather than an empty
-# list passed off as "nothing is listening".
+# list passed off as "nothing is listening", and it carries netstat's own
+# words in listeners_error. netstat's stderr is read with its table: a row
+# it writes there is no LISTEN row, so the table read below passes it by.
 listeners_state=read
 listeners_json=""
-if ! netstat_raw=$(/usr/sbin/netstat -anv -p tcp 2>/dev/null); then
+listeners_error=""
+if ! netstat_raw=$(/usr/sbin/netstat -anv -p tcp 2>&1); then
   listeners_state=failed
+  sanitize "$netstat_raw"
+  listeners_error=$sanitized
   netstat_raw=""
 fi
 if [ "$listeners_state" = read ]; then
@@ -27,7 +32,7 @@ if [ "$listeners_state" = read ]; then
     # FIRST row per port, which made two facts unrepresentable: that a port has
     # more than one holder, and that anything is listening on a routable
     # address at all. A host can carry several servers on one port — the
-    # declared unit on 127.0.0.1, a stale duplicate on ::1, and an undeclared
+    # declared unit on IPv4 loopback, a stale duplicate on IPv6 loopback, and an undeclared
     # proxy on the tailnet address serving every external caller — and a
     # de-duplicated table shows exactly one of them. Consumers that only care
     # about loopback filter for it themselves; a de-duplicating collector
@@ -47,6 +52,6 @@ if [ "$listeners_state" = read ]; then
     listeners_json=""
   fi
 fi
-printf '],"listeners":[%s],"listeners_state":"%s","subcommands":[' \
-  "$listeners_json" "$listeners_state"
+printf '],"listeners":[%s],"listeners_state":"%s","listeners_error":"%s","subcommands":[' \
+  "$listeners_json" "$listeners_state" "$listeners_error"
 

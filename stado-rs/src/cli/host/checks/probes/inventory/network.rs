@@ -65,9 +65,10 @@ pub(super) fn print_network(report: &Value, section: &dyn Fn(&str) -> Vec<Value>
         // An empty table above and this line missing would read as "nothing
         // is listening on this host", which is the opposite of what happened.
         println!(
-            "listeners: {} — the kernel socket table could not be read, so no \
+            "listeners: {} — the kernel socket table could not be read ({}), so no \
              marker above could be checked against it",
-            cell(listeners_state)
+            cell(listeners_state),
+            crate::cli::reporting::field(&report["listeners_error"])
         );
     }
     if !listeners.is_empty() {

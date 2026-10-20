@@ -41,6 +41,10 @@ pub struct Inventory {
     /// against a table that was never read is how one failed `netstat`
     /// becomes a report that every forward on the host is stale.
     pub listeners_state: String,
+    /// What `netstat` said when the table could not be read; empty when it
+    /// was, and absent from a report that does not carry it.
+    #[serde(default)]
+    pub listeners_error: Option<String>,
     pub subcommands: Vec<Subcommand>,
     /// The active vaults: exactly `$HOME/.stado/*.vault.json`.
     pub vaults: Vec<VaultFile>,

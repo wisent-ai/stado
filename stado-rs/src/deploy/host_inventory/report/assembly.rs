@@ -161,6 +161,10 @@ pub fn to_report(
         "listeners_state".to_string(),
         json!(inventory.listeners_state),
     );
+    report.insert(
+        "listeners_error".to_string(),
+        json!(inventory.listeners_error),
+    );
     report.insert("subcommands".to_string(), json!(inventory.subcommands));
     report.insert("vaults".to_string(), json!(inventory.vaults));
     report.insert("vaults_seen".to_string(), json!(inventory.vaults_seen));
