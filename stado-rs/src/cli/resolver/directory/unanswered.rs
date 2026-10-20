@@ -80,21 +80,14 @@ pub(in crate::cli::resolver) fn remember(host: &str, seconds: u64, cause: &str) 
         seconds,
         cause: cause.to_string(),
     };
-    if let Err(error) = write_atomically(&path, &record) {
+    if let Err(error) = crate::primitives::document::write(&path, &record, "unanswered read record")
+    {
         eprintln!(
             "stado: the unanswered read of the registry authority {host} could not be kept at {}: {error}",
             path.display()
         );
     }
     answered(host);
-}
-
-fn write_atomically<T: Serialize>(path: &std::path::Path, record: &T) -> Result<(), String> {
-    let bytes = serde_json::to_vec(record).map_err(|error| error.to_string())?;
-    let staged = path.with_extension(format!("{}.tmp", std::process::id()));
-    std::fs::write(&staged, bytes)
-        .and_then(|()| std::fs::rename(&staged, path))
-        .map_err(|error| error.to_string())
 }
 
 /// Say that a read of `host`, allowed to stand `seconds`, is being sent now.
@@ -108,7 +101,7 @@ pub(in crate::cli::resolver) fn asking(host: &str, seconds: u64) {
         asked_at: Utc::now(),
         seconds,
     };
-    if let Err(error) = write_atomically(&path, &record) {
+    if let Err(error) = crate::primitives::document::write(&path, &record, "asking read record") {
         eprintln!(
             "stado: the read of the registry authority {host} being sent could not be kept at {}: {error}",
             path.display()
@@ -191,22 +184,13 @@ fn standing_record(path: &std::path::Path) -> Option<Unanswered> {
     read_record(path)
 }
 
+/// The record at `path`, `None` when there is none; one that cannot be read
+/// or parsed is said and read as none, the best effort every record here is.
 fn read_record<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> Option<T> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+    match crate::primitives::document::read(path, "registry authority read record") {
+        Ok(record) => record,
         Err(error) => {
-            eprintln!("stado: {} cannot be read: {error}", path.display());
-            return None;
-        }
-    };
-    match serde_json::from_str(&text) {
-        Ok(record) => Some(record),
-        Err(error) => {
-            eprintln!(
-                "stado: {} is not a record of a registry authority read: {error}",
-                path.display()
-            );
+            eprintln!("stado: {error}");
             None
         }
     }

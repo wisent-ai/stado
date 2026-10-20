@@ -40,23 +40,12 @@ fn path() -> PathBuf {
 /// Every service this host declares beside its placement. No file is none;
 /// a file that cannot be read or parsed is refused naming it.
 pub(crate) fn read() -> Result<BTreeMap<String, Local>, CmdError> {
-    let path = path();
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => {
-            return Err(CmdError::click(format!(
-                "this host's beside placements in {} cannot be read: {error}",
-                path.display()
-            )))
-        }
-    };
-    serde_json::from_str(&text).map_err(|error| {
-        CmdError::declaration(format!(
-            "this host's beside placements in {} are not a placement document: {error}",
-            path.display()
-        ))
-    })
+    match crate::primitives::document::read(&path(), "beside placement record")
+        .map_err(CmdError::click)?
+    {
+        Some(placements) => Ok(placements),
+        None => Ok(BTreeMap::new()),
+    }
 }
 
 /// The address this host runs `service` at beside its placement, if it does.
@@ -65,30 +54,8 @@ pub(crate) fn local_url(service: &str) -> Result<Option<String>, CmdError> {
 }
 
 fn write(placements: &BTreeMap<String, Local>) -> Result<(), CmdError> {
-    let path = path();
-    let body = serde_json::to_vec_pretty(placements).map_err(|error| {
-        CmdError::click(format!("beside placements cannot be serialized: {error}"))
-    })?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            CmdError::click(format!(
-                "the directory of {} cannot be made: {error}",
-                path.display()
-            ))
-        })?;
-    }
-    let staged = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    std::fs::write(&staged, body)
-        .and_then(|()| std::fs::rename(&staged, &path))
-        .map_err(|error| {
-            CmdError::click(crate::primitives::staging::failed_with(
-                format!(
-                    "this host's beside placements could not be written to {}: {error}",
-                    path.display()
-                ),
-                &staged,
-            ))
-        })
+    crate::primitives::document::write(&path(), placements, "beside placement record")
+        .map_err(CmdError::click)
 }
 
 /// A loopback `http(s)://host:port` URL, or the refusal naming what it is not.
