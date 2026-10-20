@@ -13,8 +13,9 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repaired-By: "stado overview names what its fleet lines did not read" repairs it in this push, naming this commit on its Repairs line
+
 Harsh-Review-Attacked: whether "unknown" can still match a registry target as a kind; a capacity row without a kind keeps a null kind and the target lookup runs only for a stated one.
 Harsh-Review-Attacked: whether the text view still prints values nobody measured; a missing kind or stado version and a capability with no value print "not reported", and a report without generated_at says nothing below is dated.
 Harsh-Review-Attacked: whether Stado Desktop reads a null kind; its overview models decode kind as optional already.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
-Repaired-By: "stado overview names what its fleet lines did not read" repairs it in this push, naming this commit on its Repairs line
