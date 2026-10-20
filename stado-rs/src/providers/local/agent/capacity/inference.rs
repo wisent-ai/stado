@@ -24,8 +24,8 @@ pub(crate) async fn queued_gpu_job_for_inference(
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: 0,
-                scan_budget: 0,
+                want: None,
+                scan_budget: None,
                 max_gpu_mem_gb: total_vram_gb,
                 eligible: &|job| {
                     helpers::job_eligible(
@@ -80,15 +80,22 @@ pub(crate) async fn queued_gpu_job_for_inference(
     Ok(None)
 }
 
+/// The container an inference reservation names: its deployment, which must
+/// be lowercase letters, digits, `.`, `-` and `_`. Docker refuses a name it
+/// cannot take itself, and says why, when the container is asked about.
 fn inference_container_name(deployment: &str) -> Result<String, String> {
     let valid = !deployment.is_empty()
-        && deployment.len() <= 128
         && deployment.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-_".contains(&byte)
         });
     valid
         .then(|| format!("stado-inference-{deployment}"))
-        .ok_or_else(|| "inference reservation contains an invalid deployment name".to_string())
+        .ok_or_else(|| {
+            format!(
+                "inference reservation names deployment {deployment:?}, which is not lowercase \
+                 letters, digits, '.', '-' and '_'"
+            )
+        })
 }
 
 pub(crate) async fn inference_container_running(deployment: &str) -> Result<bool, String> {

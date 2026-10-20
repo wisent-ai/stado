@@ -1,6 +1,8 @@
 //! The scan request: the window, the budget, the prefilter, the caller's
 //! admission rule, and the three questions both passes ask of them.
 
+use std::num::NonZeroUsize;
+
 use crate::models::Job;
 use crate::queue::storage::is_transition_sentinel_state;
 
@@ -18,13 +20,13 @@ use crate::queue::storage::is_transition_sentinel_state;
 /// scanning cost is bounded separately by [`JobScan::scan_budget`] — the two
 /// are different quantities and conflating them is what produced both faults.
 pub struct JobScan<'a> {
-    /// Jobs to return. 0 means "every eligible job in the prefix".
-    pub want: usize,
-    /// Job documents this scan may download while looking for them. 0 means
-    /// "as many as the prefix holds". A scan that exhausts its budget returns
-    /// what it found; the next poll starts from the same ordered head, so
-    /// nothing is permanently unreachable.
-    pub scan_budget: usize,
+    /// Jobs to return; none returns every eligible job in the prefix.
+    pub want: Option<NonZeroUsize>,
+    /// Job documents this scan may download while looking for them; none
+    /// downloads as many as the prefix holds. A scan that exhausts its budget
+    /// returns what it found; the next poll starts from the same ordered
+    /// head, so nothing is permanently unreachable.
+    pub scan_budget: Option<NonZeroUsize>,
     /// Cheap pre-download filter off the blob's stamped `gpu_mem_gb`, so a job
     /// that cannot fit is never fetched. `i64::MAX` disables it.
     pub max_gpu_mem_gb: i64,
@@ -48,11 +50,12 @@ pub struct JobScan<'a> {
 
 impl JobScan<'_> {
     pub(super) fn window_full(&self, found: usize) -> bool {
-        self.want > 0 && found >= self.want
+        self.want.is_some_and(|want| found >= want.get())
     }
 
     pub(super) fn budget_spent(&self, scanned: usize) -> bool {
-        self.scan_budget > 0 && scanned >= self.scan_budget
+        self.scan_budget
+            .is_some_and(|budget| scanned >= budget.get())
     }
 
     pub(super) fn accepts(&self, job: &Job) -> bool {

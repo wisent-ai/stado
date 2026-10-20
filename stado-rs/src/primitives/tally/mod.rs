@@ -7,11 +7,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// (<https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.count>).
 const STEP: u8 = 1;
 
-/// A count that one more item joins.
+/// A count that one more item joins, or one item leaves.
 pub trait Tally {
     /// Add one item. A count at its type's maximum stays there rather than
     /// wrapping to a count of fewer items than it saw.
     fn tally(&mut self);
+    /// Take one item away. A count at its type's minimum stays there rather
+    /// than wrapping to a count of more items than it holds.
+    fn retract(&mut self);
 }
 
 macro_rules! tally {
@@ -19,6 +22,10 @@ macro_rules! tally {
         impl Tally for $kind {
             fn tally(&mut self) {
                 *self = self.saturating_add(<$kind>::from(STEP));
+            }
+
+            fn retract(&mut self) {
+                *self = self.saturating_sub(<$kind>::from(STEP));
             }
         }
     )*};

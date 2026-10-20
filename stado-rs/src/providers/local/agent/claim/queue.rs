@@ -14,7 +14,7 @@ use crate::queue::JobStorage;
 /// the pressure rule. It is also the one job that starts while a janitor pass
 /// holds the workload lock ([`super::start`]).
 pub(crate) fn is_signed_stado_delivery(job: &Job) -> bool {
-    job.gpu_mem_gb == 0
+    !job.gpu_mem_gb.is_positive()
         && job.priority == crate::primitives::constants::RELEASE_JOB_PRIORITY
         && !job.run_id.is_empty()
         && !job.pinned_host.is_empty()
@@ -34,7 +34,7 @@ pub(crate) fn is_signed_stado_delivery(job: &Job) -> bool {
 /// refusing it only stops the host's upkeep — forever on a host whose disk
 /// the user's own data keeps above the rule.
 pub(crate) fn stages_nothing(job: &Job) -> bool {
-    job.gpu_mem_gb == 0
+    !job.gpu_mem_gb.is_positive()
         && !job.pinned_host.is_empty()
         && job.repo.is_empty()
         && job.apt_packages.is_empty()
@@ -73,8 +73,8 @@ pub(crate) async fn claimable(
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: 0,
-                scan_budget: 0,
+                want: None,
+                scan_budget: None,
                 max_gpu_mem_gb: free_vram_gb,
                 eligible: &|job| {
                     helpers::job_eligible(
@@ -118,7 +118,8 @@ pub(crate) async fn claimable(
                 .cmp(&a.created_at)
                 .then_with(|| b.job_id.cmp(&a.job_id))
         });
-        deliveries.truncate(1);
+        // Only the newest delivery runs; the rest are superseded.
+        let deliveries: Vec<Job> = deliveries.into_iter().next().into_iter().collect();
         let in_place: Vec<Job> = others.into_iter().filter(stages_nothing).collect();
         agent_diag.insert(
             "disk_pressure_superseded_deliveries".into(),

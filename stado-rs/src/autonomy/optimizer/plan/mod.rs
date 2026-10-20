@@ -17,6 +17,7 @@ use crate::autonomy::model::{DecisionKind, DecisionRecord};
 use crate::autonomy::policy::AutonomyPolicy;
 use crate::capabilities::ProviderId;
 use crate::models::Job;
+use crate::primitives::tally::Tally;
 use crate::providers::Provider;
 use crate::queue::{JobStorage, StorageError};
 
@@ -70,8 +71,8 @@ pub async fn plan_queued(
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: 0,
-                scan_budget: 0,
+                want: None,
+                scan_budget: None,
                 max_gpu_mem_gb: i64::MAX,
                 eligible: &|_| true,
                 // Unbounded: this walk covers the whole index from the head
@@ -173,24 +174,33 @@ pub async fn plan_queued(
                         ProviderId::Gcp | ProviderId::Aws | ProviderId::Azure
                     )
                 {
+                    // The budget guard admitted this offer only at a rate and
+                    // cost within what remains, so what remains never goes
+                    // below nothing.
                     if let (Some(remaining), Some(hourly)) = (
                         new_cloud_hourly_budget_usd.as_mut(),
                         selected.hourly_compute_usd,
                     ) {
-                        *remaining = (*remaining - hourly).max(0.0);
+                        *remaining -= hourly;
                     }
                     if let (Some(remaining), Some(cost)) = (
                         new_cloud_cost_budget_usd.as_mut(),
                         selected.expected_total_cost_usd,
                     ) {
-                        *remaining = (*remaining - cost).max(0.0);
+                        *remaining -= cost;
                     }
                 }
             }
             Ok(false) => {}
             Err(error) => {
-                let _ =
-                    super::storage::release_placement_lease(store, &job.job_id, &lease.token).await;
+                if let Err(release) =
+                    super::storage::release_placement_lease(store, &job.job_id, &lease.token).await
+                {
+                    log(&format!(
+                        "optimizer: placement lease of {} stays held until {}: {release}",
+                        job.job_id, lease.expires_at
+                    ));
+                }
                 return Err(error);
             }
         }
@@ -202,7 +212,7 @@ fn reserve_offer(offers: &mut [CapacityOffer], selected: &PlacementCandidate) {
     if let Some(offer) = offers.iter_mut().find(|offer| {
         offer.target_id == selected.target_id && offer.accelerator_type == selected.accelerator_type
     }) {
-        offer.available_instances = offer.available_instances.saturating_sub(1);
+        offer.available_instances.retract();
     }
 }
 
@@ -217,22 +227,36 @@ fn job_order(left: &Job, right: &Job) -> std::cmp::Ordering {
     })
 }
 
+/// The job's deadline; one that is no RFC 3339 time is said and orders as
+/// none, after every dated job.
 fn job_deadline(job: &Job) -> Option<chrono::DateTime<Utc>> {
-    job.deadline_at
-        .as_deref()
-        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
-        .map(|deadline| deadline.with_timezone(&Utc))
+    let raw = job.deadline_at.as_deref()?;
+    match chrono::DateTime::parse_from_rfc3339(raw) {
+        Ok(deadline) => Some(deadline.with_timezone(&Utc)),
+        Err(unparsed) => {
+            tracing::warn!(
+                "job {} has a deadline_at {raw:?} that is no RFC 3339 time, so it orders as \
+                 undated: {unparsed}",
+                job.job_id
+            );
+            None
+        }
+    }
+}
+
+/// Known values first, smallest first; an unknown one orders after every
+/// known one.
+fn known_first(left: Option<f64>, right: Option<f64>) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => left.total_cmp(&right),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
 }
 
 fn candidate_order(left: &PlacementCandidate, right: &PlacementCandidate) -> std::cmp::Ordering {
-    left.expected_total_cost_usd
-        .unwrap_or(f64::INFINITY)
-        .partial_cmp(&right.expected_total_cost_usd.unwrap_or(f64::INFINITY))
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| {
-            left.expected_finish_seconds
-                .partial_cmp(&right.expected_finish_seconds)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+    known_first(left.expected_total_cost_usd, right.expected_total_cost_usd)
+        .then_with(|| known_first(left.expected_finish_seconds, right.expected_finish_seconds))
         .then_with(|| left.target_id.cmp(&right.target_id))
 }

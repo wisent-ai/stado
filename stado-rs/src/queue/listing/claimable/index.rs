@@ -14,17 +14,12 @@ use crate::queue::StorageError;
 
 use super::scan::JobScan;
 
-/// What is left of one of the scan's bounds after `used` of it, when the
-/// scan states that bound (a scan writes an unbounded one as none). A spent
-/// bound still asks for one name: the window and budget checks around the
-/// page are what end the walk.
-fn left(bound: usize, used: usize) -> Option<NonZeroUsize> {
-    NonZeroUsize::new(bound).map(|bound| {
-        match NonZeroUsize::new(bound.get().saturating_sub(used)) {
-            Some(left) => left,
-            None => NonZeroUsize::MIN,
-        }
-    })
+/// What is left of one of the scan's bounds after `used` of it: none for a
+/// scan that states no such bound, and none for a spent one, which the walk
+/// never asks a page for because it ends on a full window or a spent budget
+/// first.
+fn left(bound: Option<NonZeroUsize>, used: usize) -> Option<NonZeroUsize> {
+    bound.and_then(|bound| NonZeroUsize::new(bound.get().saturating_sub(used)))
 }
 
 /// How many marker names the next page pulls: as many as the scan can still
@@ -94,8 +89,7 @@ pub(super) async fn collect_from_index(
     // `from_head` opts out of the rotation in both directions: the walk
     // starts at the head and the cursor is not moved, so a priority-fidelity
     // read neither observes nor perturbs the claim loops sharing it.
-    let bounded =
-        NonZeroUsize::new(scan.want).is_some() || NonZeroUsize::new(scan.scan_budget).is_some();
+    let bounded = scan.want.is_some() || scan.scan_budget.is_some();
     let rotates = bounded && !scan.from_head;
     let origin = if rotates {
         store.scan_cursor()

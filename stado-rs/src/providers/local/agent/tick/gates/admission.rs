@@ -150,14 +150,19 @@ pub(crate) async fn publish_and_admit(
         return Ok(Step::Done);
     }
     if !accepting_jobs && !pressure_active {
-        let reason = last_cap
+        match last_cap
             .as_ref()
             .and_then(|capacity| capacity.diag.get("admission_reason"))
             .and_then(Value::as_str)
-            .unwrap_or("resources_busy");
-        log_fn(&format!(
-            "admission refused by live resources: {reason}; skipping claims"
-        ));
+        {
+            Some(reason) => log_fn(&format!(
+                "admission refused by live resources: {reason}; skipping claims"
+            )),
+            None => log_fn(
+                "admission refused by live resources, whose capacity reading names no \
+                 admission_reason; skipping claims",
+            ),
+        }
         return Ok(Step::Done);
     }
     // Disk pressure is enforced after the assigned queue is read. One exact
@@ -170,7 +175,7 @@ pub(crate) async fn publish_and_admit(
     // the full-GPU early-return below because that is exactly when it's
     // needed. Inert (single any() over slots) unless a yieldable job runs.
     if !pressure_active
-        && maybe_yield_for_priority(
+        && !maybe_yield_for_priority(
             store,
             sizing,
             slots,
@@ -182,7 +187,7 @@ pub(crate) async fn publish_and_admit(
             log_fn,
         )
         .await?
-            > 0
+        .is_empty()
     {
         // re-loop: recompute free VRAM, then claim the freed room
         return Ok(Step::Done);

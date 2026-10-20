@@ -65,8 +65,8 @@ pub(super) async fn waiting_jobs(
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: 0,
-                scan_budget: 0,
+                want: None,
+                scan_budget: None,
                 max_gpu_mem_gb: i64::MAX,
                 eligible: &pinned_here,
                 from_head: true,
@@ -91,9 +91,18 @@ pub(super) async fn waiting_jobs(
     }
     let mut waiting = Vec::new();
     for job in queued {
-        let age_seconds = DateTime::parse_from_rfc3339(&job.created_at)
-            .ok()
-            .map(|created| (now - created.with_timezone(&Utc)).num_seconds());
+        let age_seconds = match DateTime::parse_from_rfc3339(&job.created_at) {
+            Ok(created) => Some((now - created.with_timezone(&Utc)).num_seconds()),
+            Err(unparsed) => {
+                tracing::warn!(
+                    "queued job {} has a created_at {:?} that is no RFC 3339 time, so its \
+                     wait is unknown: {unparsed}",
+                    job.job_id,
+                    job.created_at
+                );
+                None
+            }
+        };
         waiting.push(WaitingJob {
             job_id: job.job_id,
             age_seconds,

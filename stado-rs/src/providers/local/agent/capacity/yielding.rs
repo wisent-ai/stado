@@ -43,9 +43,10 @@ pub fn choose_yield_slots(
     now: Instant,
     floor: Duration,
 ) -> Vec<usize> {
-    let mut evictable: Vec<usize> = (0..slots.len())
-        .filter(|&i| {
-            let s = &slots[i];
+    let mut evictable: Vec<usize> = slots
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| {
             // The job's own budget, as stated: a job that says it may be
             // yielded no times is protected from the start, not given five.
             s.yieldable
@@ -54,30 +55,25 @@ pub fn choose_yield_slots(
                 && s.yield_count < s.max_yields_before_protected
                 && now.saturating_duration_since(s.started_mono) >= floor
         })
+        .map(|(index, _)| index)
         .collect();
-    if evictable.is_empty() {
-        return Vec::new();
-    }
     evictable.sort_by_key(|&i| (slots[i].priority, -slots[i].vram_gb));
-    let mut freed = 0i64;
     let mut chosen = Vec::new();
     for i in evictable {
         chosen.push(i);
-        freed += slots[i].vram_gb;
+        let freed: i64 = chosen.iter().map(|&c| slots[c].vram_gb).sum();
         if free_vram_gb + freed >= need {
-            break;
+            return chosen;
         }
     }
-    if free_vram_gb + freed < need {
-        return Vec::new();
-    }
-    chosen
+    // Even every candidate does not make room: yield none.
+    Vec::new()
 }
 
 /// If a strictly-higher-priority eligible queued job can't fit in the
 /// current free VRAM, cooperatively yield just enough lower-priority
-/// yieldable slots to make room. Returns the number of slots yielded
-/// (removed from `slots`); 0 means no action.
+/// yieldable slots to make room. Returns the job ids of the slots yielded
+/// (removed from `slots`); none means no action.
 /// Python `_maybe_yield_for_priority`.
 ///
 /// Inert by construction: returns immediately unless a yieldable job is
@@ -94,9 +90,10 @@ pub async fn maybe_yield_for_priority(
     kind: &str,
     consumer_id: &str,
     log_fn: &mut dyn FnMut(&str),
-) -> Result<usize, StorageError> {
+) -> Result<Vec<String>, StorageError> {
+    let mut yielded: Vec<String> = Vec::new();
     if !slots.iter().any(|s| s.slot.job.yieldable) {
-        return Ok(0);
+        return Ok(yielded);
     }
     // Highest-priority queued job that needs MORE than current free VRAM but
     // could fit on the full GPU, and is eligible for THIS agent.
@@ -107,8 +104,8 @@ pub async fn maybe_yield_for_priority(
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: 0,
-                scan_budget: 0,
+                want: None,
+                scan_budget: None,
                 max_gpu_mem_gb: total_vram_gb,
                 eligible: &|job| {
                     helpers::job_eligible(
@@ -164,7 +161,7 @@ pub async fn maybe_yield_for_priority(
         break;
     }
     let Some((target, need)) = target else {
-        return Ok(0);
+        return Ok(yielded);
     };
     let target_prio = target.priority;
 
@@ -182,32 +179,35 @@ pub async fn maybe_yield_for_priority(
             vram_gb: helpers::slot_vram(&s.slot, sizing, store).await?,
         });
     }
-    let floor = crate::providers::local::agent::POLL
-        .get()
-        .copied()
-        .unwrap_or_default();
-    let chosen = choose_yield_slots(&infos, target_prio, need, free_vram_gb, now, floor);
-    if chosen.is_empty() {
-        return Ok(0);
-    }
+    // A slot is judged against one full poll period; before the agent has
+    // one, no slot has run long enough to be judged.
+    let Some(floor) = crate::providers::local::agent::POLL.get().copied() else {
+        log_fn(
+            "yield: the agent's poll period is not set yet, so no slot is judged; nothing yielded",
+        );
+        return Ok(yielded);
+    };
+    let mut chosen = choose_yield_slots(&infos, target_prio, need, free_vram_gb, now, floor);
     let freed: i64 = chosen.iter().map(|&i| infos[i].vram_gb).sum();
-    let mut n = 0usize;
     // Remove in descending index order so earlier removals don't shift the
     // indices of later ones (Python `slots.remove(s)` on identity).
-    for &idx in chosen.iter().rev() {
+    chosen.sort_unstable_by(|left, right| right.cmp(left));
+    for idx in chosen {
         let s = slots.remove(idx);
         let jid = s.slot.job.job_id.clone();
         match request_yield(s, store, log_fn).await {
-            Ok(true) => n += 1,
+            Ok(true) => yielded.push(jid),
             Ok(false) => {}
             Err(exc) => log_fn(&format!("yield: request_yield raised for {jid}: {exc}")),
         }
     }
-    if n > 0 {
+    if !yielded.is_empty() {
         log_fn(&format!(
-            "yield: freed ~{freed}G via {n} slot(s) for higher-priority {} (need={need}G prio={target_prio})",
+            "yield: freed ~{freed}G via {} slot(s) ({}) for higher-priority {} (need={need}G prio={target_prio})",
+            yielded.len(),
+            yielded.join(", "),
             target.job_id
         ));
     }
-    Ok(n)
+    Ok(yielded)
 }

@@ -49,9 +49,9 @@ pub(crate) use probes::placement::reconcile_placement_policy;
 /// reads at the operator's cadence.
 pub(crate) static POLL: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
 
-// Claim and yield scans read every eligible queued job (JobScan want 0,
-// scan_budget 0): CPU, RAM, VRAM and disk budgets decide what this agent
-// admits, so no window or scan budget is chosen here.
+// Claim and yield scans read every eligible queued job (a JobScan with no
+// window and no scan budget): CPU, RAM, VRAM and disk budgets decide what
+// this agent admits, so no window or scan budget is chosen here.
 
 /// What the poll loop does next once one of its phases has spoken.
 ///
