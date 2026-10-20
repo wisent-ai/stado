@@ -2,6 +2,8 @@
 // What the resolver publishes about itself
 // ---------------------------------------------------------------------------
 
+mod lifetime;
+
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -149,8 +151,7 @@ impl PublishedState {
     }
 
     pub(crate) fn backing_off(target: &str, attempt: u32, reason: &str, refresh: Duration) -> Self {
-        let ahead =
-            chrono::Duration::from_std(refresh).unwrap_or_else(|_| chrono::Duration::zero());
+        let due = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now() + refresh);
         Self {
             updated_at: now_iso(),
             target: target.to_string(),
@@ -158,7 +159,7 @@ impl PublishedState {
             state: RESOLVER_BACKING_OFF.to_string(),
             reason: Some(reason.to_string()),
             attempt,
-            next_attempt_at: Some((chrono::Utc::now() + ahead).to_rfc3339()),
+            next_attempt_at: Some(due.to_rfc3339()),
             ..Self::default()
         }
     }
@@ -217,6 +218,15 @@ pub(in crate::cli::resolver) fn state_path() -> Option<std::path::PathBuf> {
 pub(crate) fn publish(state: &PublishedState) {
     let Some(path) = state_path() else { return };
     let Some(parent) = path.parent() else { return };
+    // The lifetime lock is held from the first publication on, so a reader
+    // can tell a running publisher from a pid that outlived it.
+    if let Err(error) = std::fs::create_dir_all(parent) {
+        eprintln!(
+            "stado resolver could not create {}: {error}",
+            parent.display()
+        );
+    }
+    lifetime::hold(&path);
     let body = match serde_json::to_vec_pretty(state) {
         Ok(body) => body,
         Err(error) => {
@@ -274,13 +284,18 @@ pub(in crate::cli::resolver) fn published_state() -> Option<PublishedState> {
 /// Whether the process that published `state` is still running: a state
 /// file outlives the resolver that wrote it, and a reader that trusts a
 /// dead resolver's `listening: true` sends traffic to ports nobody holds.
-/// A process this user may not signal is alive all the same.
+/// Read from the lifetime lock the publisher holds ([`lifetime`]), never
+/// from its pid alone, which the system hands on once it exits. A lock that
+/// cannot be read is said on stderr and answers that no publisher runs.
 pub(crate) fn publisher_running(state: &PublishedState) -> bool {
-    let Ok(pid) = i32::try_from(state.pid) else {
+    let Some(path) = state_path() else {
         return false;
     };
-    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) {
-        Ok(()) => true,
-        Err(errno) => errno == nix::errno::Errno::EPERM,
+    match lifetime::held_by(&path, state.pid) {
+        Ok(held) => held,
+        Err(cause) => {
+            eprintln!("stado resolver state: whether its publisher runs cannot be read: {cause}");
+            false
+        }
     }
 }
