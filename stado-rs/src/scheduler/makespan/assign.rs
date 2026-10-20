@@ -30,8 +30,8 @@ pub async fn repair_conflicting_pinned_assignments(
     store: &JobStorage,
     log_fn: &dyn Fn(&str),
 ) -> Result<usize, StorageError> {
-    let mut repaired = 0;
-    for candidate in store.list_jobs("queue", 0).await? {
+    let mut repaired: Vec<String> = Vec::new();
+    for candidate in store.list_jobs("queue").await? {
         if candidate.pinned_host.is_empty()
             || candidate
                 .assigned_to
@@ -57,17 +57,17 @@ pub async fn repair_conflicting_pinned_assignments(
             .await
         {
             Ok(_) => {
-                repaired += 1;
                 log_fn(&format!(
                     "assigned host-pinned job {} to {pinned_host} instead of {previous:?}",
                     job.job_id
                 ));
+                repaired.push(job.job_id);
             }
             Err(StorageError::StorageConflict(_)) | Err(StorageError::NotFound(_)) => {}
             Err(error) => return Err(error),
         }
     }
-    Ok(repaired)
+    Ok(repaired.len())
 }
 
 /// [`assign_jobs`] with an injectable clock + history map, so tests can
@@ -78,19 +78,20 @@ pub async fn assign_jobs_at(
     history: &History,
     log_fn: &dyn Fn(&str),
 ) -> Result<usize, StorageError> {
+    let mut to_write: Vec<Job> = Vec::new();
     let mut agents = live_agents(store, now).await?;
     if agents.is_empty() {
-        return Ok(0);
+        return Ok(to_write.len());
     }
     seed_running_jobs(store, &mut agents, now, history, log_fn).await?;
     // Aggregate skip counts + parallel writes: hundreds of per-job skip log
     // lines eat most of a tick's budget, and serial assignment writes add
     // seconds more.
     let mut schedulable: Vec<(i64, f64, Job)> = Vec::new();
-    // Insertion-ordered (model, task) -> count; ties keep first-seen order.
-    let mut skip_by_key: Vec<((String, String), usize)> = Vec::new();
-    let mut to_write: Vec<Job> = Vec::new();
-    for mut job in store.list_jobs("queue", 0).await? {
+    // Insertion-ordered (model, task) -> the jobs skipped for it; ties keep
+    // first-seen order.
+    let mut skip_by_key: Vec<((String, String), Vec<String>)> = Vec::new();
+    for mut job in store.list_jobs("queue").await? {
         // Host-pinned jobs route outside the makespan model. The coordinator
         // repairs contradictory derived assignments before routing begins.
         if !job.pinned_host.is_empty() {
@@ -100,10 +101,9 @@ pub async fn assign_jobs_at(
             Some(rt) => rt,
             None => {
                 let mt = extract_model_task(&job.command);
-                if let Some(entry) = skip_by_key.iter_mut().find(|(k, _)| *k == mt) {
-                    entry.1 += 1;
-                } else {
-                    skip_by_key.push((mt, 1));
+                match skip_by_key.iter_mut().find(|(k, _)| *k == mt) {
+                    Some((_, skipped)) => skipped.push(job.job_id.clone()),
+                    None => skip_by_key.push((mt, vec![job.job_id.clone()])),
                 }
                 // Priority does not supply a runtime. Clear any obsolete
                 // derived assignment so eligible workers can claim this job
@@ -117,17 +117,14 @@ pub async fn assign_jobs_at(
         };
         schedulable.push((-job.priority, -rt, job));
     }
-    schedulable.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then_with(|| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-    });
-    let mut unassigned = 0usize;
+    schedulable.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+    let mut unassigned: Vec<String> = Vec::new();
     for (_, neg_rt, mut job) in schedulable {
         let vram = job.gpu_mem_gb;
         let chosen = assign_one(&job, &mut agents, -neg_rt, vram);
         match chosen {
             None => {
-                unassigned += 1;
+                unassigned.push(job.job_id.clone());
                 if !job.assigned_to.is_empty() {
                     job.assigned_to = String::new();
                     to_write.push(job);
@@ -159,22 +156,23 @@ pub async fn assign_jobs_at(
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
     }
-    let skipped: usize = skip_by_key.iter().map(|(_, n)| n).sum();
-    if skipped > 0 {
+    if !skip_by_key.is_empty() {
+        let skipped: usize = skip_by_key.iter().map(|(_, jobs)| jobs.len()).sum();
         // Preserve first-seen order for groups with the same count.
-        skip_by_key.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+        skip_by_key.sort_by_key(|entry| std::cmp::Reverse(entry.1.len()));
         let groups: Vec<String> = skip_by_key
             .into_iter()
-            .map(|((m, t), n)| format!("({m},{t}):{n}"))
+            .map(|((m, t), jobs)| format!("({m},{t}):{}", jobs.len()))
             .collect();
         log_fn(&format!(
             "makespan: {skipped} skipped; by model/task: {}",
             groups.join(", ")
         ));
     }
-    if unassigned > 0 {
+    if !unassigned.is_empty() {
         log_fn(&format!(
-            "makespan: {unassigned} unassigned (no eligible agent)"
+            "makespan: {} unassigned (no eligible agent)",
+            unassigned.len()
         ));
     }
     Ok(to_write.len())

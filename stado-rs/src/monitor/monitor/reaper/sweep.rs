@@ -10,13 +10,32 @@ use serde_json::Value;
 use crate::monitor::heartbeat_guard as hg;
 use crate::providers::Provider;
 use crate::queue::capacity::read_consumer_capacity;
-use crate::queue::JobStorage;
+use crate::queue::{JobStorage, StorageError};
 
 use super::super::lifecycle::requeue_jids_after_reap;
 use super::super::{dedup_preserve_order, log, py_str_list, MonitorError};
 use super::completions::instance_refs_with_completions;
 use super::measured::KindDurations;
 use super::race::safety_is_real_race;
+
+/// The VM name an instance ref carries before its `@`; a ref without one is
+/// the name itself.
+fn vm_name(instance_ref: &str) -> &str {
+    match instance_ref.split_once('@') {
+        Some((name, _)) => name,
+        None => instance_ref,
+    }
+}
+
+/// The free VRAM a capacity row states, in whole gigabytes, written as an
+/// integer or a float.
+fn free_vram_gb(payload: &Value) -> Option<i64> {
+    let value = payload.get("free_vram_gb")?;
+    match value.as_i64() {
+        Some(whole) => Some(whole),
+        None => value.as_f64().map(|float| float as i64),
+    }
+}
 
 /// Delete RUNNING VMs whose `wc agent` has stopped doing useful work.
 ///
@@ -32,8 +51,10 @@ use super::race::safety_is_real_race;
 ///   C (wedged): a live row that refuses work with no free VRAM while no job
 ///     on the VM is alive by its own promise.
 /// Every branch defers while any job on the VM is alive by its worker's
-/// promise or wrote a pulse or checkpoint after it. With no measurement for
-/// a kind, A and B keep the VM and say so.
+/// promise or wrote a pulse or checkpoint after it, and while running/ cannot
+/// be listed again to say which jobs claim the VM. With no measurement for a
+/// kind, A and B keep the VM and say so; a wedged-looking row that states no
+/// free VRAM keeps it too.
 pub async fn reap_dead_agents(
     store: &JobStorage,
     provider: &dyn Provider,
@@ -41,26 +62,23 @@ pub async fn reap_dead_agents(
 ) -> Result<i64, MonitorError> {
     let live = read_consumer_capacity(store).await?; // consumer_id -> payload, promise holds
     let refs = provider.list_running_instance_refs_with_age().await?;
-    let mut deleted: i64 = 0;
+    let mut reaped: Vec<String> = Vec::new();
     let completed_refs = if refs.is_empty() {
         HashSet::new()
     } else {
         instance_refs_with_completions(store, kind).await?
     };
     let mut active_refs: HashSet<String> = HashSet::new();
-    for job in store.list_jobs("running", 0).await? {
+    for job in store.list_jobs("running").await? {
         if let Some(r) = job.instance_ref.filter(|r| !r.is_empty()) {
             active_refs.insert(r);
         }
     }
     let mut durations = KindDurations::load(store, kind).await?;
     let before = durations.clone();
-    let running_names: HashSet<String> = refs
-        .iter()
-        .map(|(r, _)| r.split('@').next().unwrap_or("").to_string())
-        .collect();
+    let running_names: HashSet<String> = refs.iter().map(|(r, _)| vm_name(r).to_string()).collect();
     for (instance_ref_full, age_seconds) in &refs {
-        let name = instance_ref_full.split('@').next().unwrap_or("");
+        let name = vm_name(instance_ref_full);
         if live.contains_key(&format!("{kind}-{name}")) {
             durations.saw_live(name, *age_seconds);
         }
@@ -75,71 +93,95 @@ pub async fn reap_dead_agents(
     let ref_to_jids = hg::build_ref_to_jids(store).await?;
     let now = Utc::now();
     for (instance_ref_full, age_seconds) in refs {
-        let name = instance_ref_full.split('@').next().unwrap_or("");
+        let name = vm_name(&instance_ref_full);
         let consumer_id = format!("{kind}-{name}");
         let instance_ref = format!("local@{name}");
-        let mut jids = ref_to_jids
+        let jids: Vec<String> = ref_to_jids
             .get(&instance_ref_full)
+            .into_iter()
+            .chain(ref_to_jids.get(&instance_ref))
+            .flatten()
             .cloned()
-            .unwrap_or_default();
-        jids.extend(ref_to_jids.get(&instance_ref).cloned().unwrap_or_default());
+            .collect();
         if hg::any_job_alive(store, &jids, now).await {
             continue;
         }
-        let safety = hg::fresh_jids_pointing_to_ref(store, &instance_ref).await;
-        let (reason, requeue_reason) = if !live.contains_key(&consumer_id) {
-            // Branch A (dead agent).
-            let Some(boot) = durations.boot_seconds else {
+        let safety = match hg::fresh_jids_pointing_to_ref(store, &instance_ref).await {
+            Ok(safety) => safety,
+            Err(error) => {
                 log(&format!(
-                    "keep {instance_ref_full}: it has published no capacity row \
-                     (age={age_seconds:.0}s) and no {kind} VM has been seen to boot yet, \
-                     so nothing says how long a boot takes"
+                    "defer reap of {instance_ref_full}: running/ cannot be listed again to say \
+                     which jobs claim it: {error}"
                 ));
                 continue;
-            };
-            if age_seconds <= boot {
-                continue;
             }
-            (
-                format!(
-                    "dead agent: no live capacity row at age={age_seconds:.0}s, longer than any \
-                     {kind} VM has taken to boot ({boot:.0}s)"
-                ),
-                format!("VM reaped (dead agent, age={age_seconds:.0}s)"),
-            )
-        } else if !completed_refs.contains(&instance_ref) && !active_refs.contains(&instance_ref) {
-            // Branch B (never worked).
-            let Some(first_work) = durations.first_work_seconds else {
-                continue;
-            };
-            if age_seconds <= first_work {
-                continue;
+        };
+        let (reason, requeue_reason) = match live.get(&consumer_id) {
+            None => {
+                // Branch A (dead agent).
+                let Some(boot) = durations.boot_seconds else {
+                    log(&format!(
+                        "keep {instance_ref_full}: it has published no capacity row \
+                         (age={age_seconds:.0}s) and no {kind} VM has been seen to boot yet, \
+                         so nothing says how long a boot takes"
+                    ));
+                    continue;
+                };
+                if age_seconds <= boot {
+                    continue;
+                }
+                (
+                    format!(
+                        "dead agent: no live capacity row at age={age_seconds:.0}s, longer than \
+                         any {kind} VM has taken to boot ({boot:.0}s)"
+                    ),
+                    format!("VM reaped (dead agent, age={age_seconds:.0}s)"),
+                )
             }
-            (
-                format!(
-                    "never worked: publishing with 0 completions and no running job at \
-                     age={age_seconds:.0}s, longer than any {kind} VM has taken to finish its \
-                     first job ({first_work:.0}s)"
-                ),
-                "VM reaped (never-worked)".to_string(),
-            )
-        } else {
-            // Branch C (wedged).
-            let payload = live.get(&consumer_id).unwrap_or(&Value::Null);
-            let free_vram_gb = payload
-                .get("free_vram_gb")
-                .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
-                .unwrap_or(0);
-            let refusing = payload.get("accepting_jobs").and_then(Value::as_bool) == Some(false);
-            if !(free_vram_gb <= 0 && refusing) {
-                continue;
+            Some(_)
+                if !completed_refs.contains(&instance_ref)
+                    && !active_refs.contains(&instance_ref) =>
+            {
+                // Branch B (never worked).
+                let Some(first_work) = durations.first_work_seconds else {
+                    continue;
+                };
+                if age_seconds <= first_work {
+                    continue;
+                }
+                (
+                    format!(
+                        "never worked: publishing with no completion and no running job at \
+                         age={age_seconds:.0}s, longer than any {kind} VM has taken to finish \
+                         its first job ({first_work:.0}s)"
+                    ),
+                    "VM reaped (never-worked)".to_string(),
+                )
             }
-            (
-                "wedged: publishing but not accepting jobs with free_vram_gb<=0, and no job on \
-                 it alive by its worker's promise"
-                    .to_string(),
-                "VM reaped (wedged agent)".to_string(),
-            )
+            Some(payload) => {
+                // Branch C (wedged).
+                let refusing =
+                    payload.get("accepting_jobs").and_then(Value::as_bool) == Some(false);
+                if !refusing {
+                    continue;
+                }
+                let Some(free) = free_vram_gb(payload) else {
+                    log(&format!(
+                        "keep {instance_ref_full}: its capacity row refuses work but states no \
+                         free_vram_gb, so whether it is wedged is unknown"
+                    ));
+                    continue;
+                };
+                if free.is_positive() {
+                    continue;
+                }
+                (
+                    "wedged: publishing but not accepting jobs with no free VRAM, and no job \
+                     on it alive by its worker's promise"
+                        .to_string(),
+                    "VM reaped (wedged agent)".to_string(),
+                )
+            }
         };
         if !safety.is_empty() && safety_is_real_race(store, &safety).await {
             log(&format!(
@@ -150,12 +192,21 @@ pub async fn reap_dead_agents(
         }
         provider.delete_instance(&instance_ref_full).await?;
         log(&format!("reaped VM {instance_ref_full} ({reason})"));
-        deleted += 1;
+        reaped.push(instance_ref_full.clone());
         let deduped = dedup_preserve_order([jids, safety].concat());
         requeue_jids_after_reap(store, &deduped, &requeue_reason).await?;
     }
-    if deleted > 0 {
-        log(&format!("reap_dead_agents: deleted {deleted} VM(s)"));
+    if !reaped.is_empty() {
+        log(&format!(
+            "reap_dead_agents: deleted {} VM(s): {}",
+            reaped.len(),
+            py_str_list(&reaped)
+        ));
     }
-    Ok(deleted)
+    i64::try_from(reaped.len()).map_err(|error| {
+        MonitorError::Storage(StorageError::Other(format!(
+            "{} reaped VMs do not fit the reap count: {error}",
+            reaped.len()
+        )))
+    })
 }

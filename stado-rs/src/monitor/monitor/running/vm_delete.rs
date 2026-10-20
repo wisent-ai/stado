@@ -19,17 +19,17 @@ use super::super::log;
 /// old subprocess.
 ///
 /// Looks up the full <name>@<zone> ref from `vm_cache` (a dict
-/// {hostname: full_ref} built by the caller) and falls back to a fresh
-/// list-and-search on cache miss (handles the exact transient-miss case
-/// that caused the ghost-trainer bug). Never raises; returns True iff
-/// a delete call returned cleanly. Idempotent and safe on a VM that is
-/// truly gone (returns False).
+/// {hostname: full_ref} built by the caller, or none when the caller built
+/// none) and lists the fleet fresh on a miss (handles the exact
+/// transient-miss case that caused the ghost-trainer bug). Never raises;
+/// returns True iff a delete call returned cleanly. Idempotent and safe on a
+/// VM that is truly gone (returns False).
 pub(super) async fn safe_delete_vm_by_hostname(
     provider: &dyn Provider,
     hostname: &str,
-    vm_cache: &BTreeMap<String, String>,
+    vm_cache: Option<&BTreeMap<String, String>>,
 ) -> bool {
-    let mut full_ref = vm_cache.get(hostname).cloned();
+    let mut full_ref = vm_cache.and_then(|cache| cache.get(hostname)).cloned();
     if full_ref.is_none() {
         match provider.list_running_instance_refs_with_age().await {
             Ok(refs) => {

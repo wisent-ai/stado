@@ -110,7 +110,7 @@ pub async fn reclaim_host(
             Ok(store) => {
                 let mut ids = Vec::new();
                 for state in crate::queue::control::WATCHED_PREFIXES.iter().copied() {
-                    match store.list_jobs(state, 0).await {
+                    match store.list_jobs(state).await {
                         Ok(jobs) => ids.extend(jobs.into_iter().map(|job| job.job_id)),
                         Err(error) => unreadable.push(format!("{state}/: {error}")),
                     }

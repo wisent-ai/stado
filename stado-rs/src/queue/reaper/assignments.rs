@@ -4,6 +4,7 @@
 use chrono::Utc;
 
 use crate::models::{job_state, Job};
+use crate::primitives::tally::Tally;
 use crate::queue::{capacity, JobStorage, StorageError};
 
 use super::ReaperSummary;
@@ -22,7 +23,7 @@ pub(super) async fn clear_silent_assignments(
     summary: &mut ReaperSummary,
 ) -> Result<(), StorageError> {
     let live = capacity::read_consumer_capacity(store).await?;
-    for candidate in store.list_jobs("queue", 0).await? {
+    for candidate in store.list_jobs("queue").await? {
         store.recover_job_transition(&candidate.job_id).await?;
         let Some(current) = store.read_job("queue", &candidate.job_id).await? else {
             continue;
@@ -54,7 +55,7 @@ pub(super) async fn clear_silent_assignments(
             .await
         {
             Ok(_) => {
-                summary.assignments_cleared += 1;
+                summary.assignments_cleared.tally();
                 let broadcast = store
                     .backend()
                     .updated_at(&format!("{}{worker}.json", capacity::CAPACITY_PREFIX))

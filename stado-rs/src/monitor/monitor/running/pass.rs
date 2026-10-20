@@ -25,7 +25,7 @@ pub async fn check_running_jobs(
     store: &JobStorage,
     provider: &dyn Provider,
 ) -> Result<(), MonitorError> {
-    let running = store.list_jobs("running", 0).await?;
+    let running = store.list_jobs("running").await?;
     log(&format!("Checking {} running jobs", running.len()));
 
     // Lazily-built per-call caches (Python: _live_consumers_cache /
@@ -89,8 +89,12 @@ pub async fn check_running_jobs(
                     )
                     .await?
                     {
-                        let cache = running_vm_names_cache.clone().unwrap_or_default();
-                        safe_delete_vm_by_hostname(provider, hostname, &cache).await;
+                        safe_delete_vm_by_hostname(
+                            provider,
+                            hostname,
+                            running_vm_names_cache.as_ref(),
+                        )
+                        .await;
                     }
                     continue;
                 }
@@ -101,7 +105,10 @@ pub async fn check_running_jobs(
                                 .list_running_instance_refs_with_age()
                                 .await?
                                 .into_iter()
-                                .map(|(r, _age)| (r.split('@').next().unwrap_or("").to_string(), r))
+                                .map(|(r, _age)| match r.split_once('@') {
+                                    Some((name, _)) => (name.to_string(), r),
+                                    None => (r.clone(), r),
+                                })
                                 .collect(),
                         );
                     }
@@ -127,7 +134,7 @@ pub async fn check_running_jobs(
                                 .await?
                         };
                         if moved {
-                            safe_delete_vm_by_hostname(provider, hostname, cache).await;
+                            safe_delete_vm_by_hostname(provider, hostname, Some(cache)).await;
                         }
                         continue;
                     }
@@ -147,10 +154,12 @@ pub async fn check_running_jobs(
                     provider.delete_instance(&instance_ref).await?;
                 }
             } else if !alive {
-                // Python f-string renders a None lifecycle as "None".
-                let lifecycle_str = lifecycle
-                    .as_ref()
-                    .map_or("None", |known| known.word.as_str());
+                // A lifecycle the provider did not report is written as
+                // `None`, the word the monitor's log has always used for it.
+                let lifecycle_str = match lifecycle.as_ref() {
+                    Some(known) => known.word.as_str(),
+                    None => "None",
+                };
                 if requeue(
                     store,
                     &mut job,

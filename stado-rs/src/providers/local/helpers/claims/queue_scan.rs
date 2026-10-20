@@ -22,7 +22,7 @@ pub async fn no_eligible_in_queue(
     consumer_id: &str,
     active_job_count: usize,
 ) -> Result<bool, StorageError> {
-    let queued = store.list_jobs("queue", 0).await?;
+    let queued = store.list_jobs("queue").await?;
     for job in queued {
         let need = job
             .gpu_mem_gb

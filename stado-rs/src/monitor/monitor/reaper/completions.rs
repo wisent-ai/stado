@@ -20,7 +20,7 @@ pub(super) async fn instance_refs_with_completions(
     // Python keeps `kind` in the signature (unused in the body there too).
     let _ = kind;
     let mut refs = HashSet::new();
-    for job in store.list_jobs("completed", 0).await? {
+    for job in store.list_jobs("completed").await? {
         if let Some(r) = job.instance_ref.filter(|r| !r.is_empty()) {
             refs.insert(r);
         }

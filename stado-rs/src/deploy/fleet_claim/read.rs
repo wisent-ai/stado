@@ -26,10 +26,7 @@ pub async fn read_fleet_claim(
     let publications = capacity::read_publications(store)
         .await
         .map_err(DeployError::from)?;
-    let queued = store
-        .list_jobs("queue", 0)
-        .await
-        .map_err(DeployError::from)?;
+    let queued = store.list_jobs("queue").await.map_err(DeployError::from)?;
 
     let mut hosts: Vec<HostVerdict> = Vec::new();
     let mut publishing: Vec<String> = Vec::new();
@@ -72,16 +69,26 @@ pub async fn read_fleet_claim(
 }
 
 /// The longest-waiting queued job. A job whose `created_at` will not parse
-/// sorts last rather than out: it is still queued, and dropping it would
-/// shrink the count the headline prints.
+/// sorts last rather than out, and the reason is said: it is still queued,
+/// and dropping it would shrink the count the headline prints. An unknown
+/// wait orders below every known one.
 fn oldest_wait(queued: &[Job], now: DateTime<Utc>) -> Option<OldestWait> {
     queued
         .iter()
         .map(|job| OldestWait {
             job_id: job.job_id.clone(),
-            age_seconds: DateTime::parse_from_rfc3339(&job.created_at)
-                .ok()
-                .map(|created| (now - created.with_timezone(&Utc)).num_seconds()),
+            age_seconds: match DateTime::parse_from_rfc3339(&job.created_at) {
+                Ok(created) => Some((now - created.with_timezone(&Utc)).num_seconds()),
+                Err(unparsed) => {
+                    tracing::warn!(
+                        "queued job {} has a created_at {:?} that is no RFC 3339 time, so its \
+                         wait is unknown: {unparsed}",
+                        job.job_id,
+                        job.created_at
+                    );
+                    None
+                }
+            },
         })
-        .max_by_key(|wait| wait.age_seconds.unwrap_or(i64::MIN))
+        .max_by_key(|wait| wait.age_seconds)
 }

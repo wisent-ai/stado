@@ -33,10 +33,6 @@ pub use heartbeat::{any_job_alive, job_liveness, JobLiveness};
 pub use running_refs::{build_ref_to_jids, fresh_jids_pointing_to_ref};
 pub use self_terminating::finalize_if_self_terminating;
 
-/// Sentinel returned by [`fresh_jids_pointing_to_ref`] when the running/
-/// listing itself fails, so callers defer (treat the VM as in-use).
-pub const LIST_FAILED_SENTINEL: &str = "__list_failed__";
-
 /// Lenient ISO-8601 → UTC parse used for job.started_at / diag timestamps.
 /// Job timestamps are Strings produced by Python `datetime.isoformat()` /
 /// Rust `Utc::to_rfc3339()`; parse RFC3339 first, then accept a naive

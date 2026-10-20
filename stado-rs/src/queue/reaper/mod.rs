@@ -58,6 +58,8 @@ mod requeued_release;
 
 use chrono::Utc;
 
+use crate::primitives::tally::Tally;
+
 use super::{JobStorage, StorageError};
 use assignments::clear_silent_assignments;
 use expiry::reap_one;
@@ -110,7 +112,7 @@ async fn reap_or_report(
     summary: &mut ReaperSummary,
 ) {
     if let Err(error) = reap_one(store, job_id, now, log, summary).await {
-        summary.unreadable += 1;
+        summary.unreadable.tally();
         log(&format!("{job_id}: not reaped: {error}"));
     }
 }
@@ -136,7 +138,7 @@ pub async fn reap_expired_leases(
         index_swept,
         ..Default::default()
     };
-    for candidate in store.list_jobs("running", 0).await? {
+    for candidate in store.list_jobs("running").await? {
         if candidate.job_id.is_empty() {
             continue;
         }
@@ -154,19 +156,18 @@ pub async fn reap_expired_leases(
     Ok(summary)
 }
 
-/// Retire the settled sentinels under one prefix and log what was retired.
+/// Retire the settled sentinels under one prefix and say what the sweep saw,
+/// a sweep that retired nothing included, so every pass states its outcome.
 async fn retire_sentinels(
     store: &JobStorage,
     prefix: &str,
     log: &dyn Fn(&str),
 ) -> Result<usize, StorageError> {
     let sweep = store.retire_settled_sentinels(prefix).await?;
-    if sweep.retired > 0 {
-        log(&format!(
-            "reaper: {prefix}/ settled sentinels retired={} kept={} inspected={}",
-            sweep.retired, sweep.kept, sweep.inspected,
-        ));
-    }
+    log(&format!(
+        "reaper: {prefix}/ settled sentinels retired={} kept={} inspected={}",
+        sweep.retired, sweep.kept, sweep.inspected,
+    ));
     if !sweep.unreadable.is_empty() {
         log(&format!(
             "reaper: {prefix}/ holds {} object(s) that are not job records, left in place: {}",

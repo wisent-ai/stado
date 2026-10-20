@@ -19,13 +19,28 @@ pub async fn collect_completed(store: &JobStorage) -> Result<Vec<CostRow>, Stora
         .and_then(|policy| policy.local_hourly_cost_usd);
     let mut rows = Vec::new();
     for state in [crate::queue::runs::COMPLETED, crate::queue::runs::FAILED] {
-        for job in store.list_jobs(state, 0).await? {
+        for job in store.list_jobs(state).await? {
             let Some(wall) = wall_seconds(&job) else {
                 continue;
             };
             let target = target_kind(&job);
-            let provider: Option<crate::capabilities::ProviderId> =
-                target.as_deref().and_then(|target| target.parse().ok());
+            // A target that names no provider Stado prices leaves the job
+            // unpriced, and says which target it was.
+            let provider: Option<crate::capabilities::ProviderId> = match target
+                .as_deref()
+                .map(str::parse::<crate::capabilities::ProviderId>)
+            {
+                None => None,
+                Some(Ok(provider)) => Some(provider),
+                Some(Err(unknown)) => {
+                    tracing::warn!(
+                        "job {} ran on target {target:?}, which names no provider Stado \
+                             prices, so it is unpriced: {unknown}",
+                        job.job_id
+                    );
+                    None
+                }
+            };
             let rate = match provider {
                 Some(crate::capabilities::ProviderId::Local) => local_rate,
                 Some(provider) => prices

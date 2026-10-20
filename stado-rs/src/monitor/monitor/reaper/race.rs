@@ -15,17 +15,15 @@ use crate::queue::JobStorage;
 /// its job is alive. On a dead agent, record existence alone must not defer
 /// reaping forever.
 ///
-/// A real race is only when a job is plausibly alive: the re-list itself
-/// failed (fail-safe defer), OR some jid is alive by its worker's promise —
-/// which covers a job just claimed, since its claim wrote that promise — or
-/// wrote a pulse or checkpoint after it. Otherwise every jid is a stale
-/// orphan on a dead VM -> false, so the caller reaps and requeues them.
+/// A real race is only when a job is plausibly alive: some jid is alive by
+/// its worker's promise — which covers a job just claimed, since its claim
+/// wrote that promise — or wrote a pulse or checkpoint after it. A re-list
+/// that failed never reaches here: the sweep defers on it by name. Otherwise
+/// every jid is a stale orphan on a dead VM -> false, so the caller reaps and
+/// requeues them.
 pub(super) async fn safety_is_real_race(store: &JobStorage, jids: &[String]) -> bool {
     if jids.is_empty() {
         return false;
-    }
-    if jids.iter().any(|j| j == hg::LIST_FAILED_SENTINEL) {
-        return true; // re-list failure: never reap on unknown state
     }
     hg::any_job_alive(store, jids, Utc::now()).await
 }

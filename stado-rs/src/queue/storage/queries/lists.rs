@@ -9,20 +9,11 @@ use crate::queue::{listing, Listing, StorageError};
 use super::JobStorage;
 
 impl JobStorage {
-    /// Parallel-fetch job JSONs under `{prefix}/`. Python
-    /// `JobStorage.list_jobs`: `oldest_first` bounds the answer to that many
-    /// oldest live jobs, and none bounds it to every job. New callers name
-    /// the window with [`listing::list_jobs`] and a [`Listing`].
-    pub async fn list_jobs(
-        &self,
-        prefix: &str,
-        oldest_first: usize,
-    ) -> Result<Vec<Job>, StorageError> {
-        let window = match std::num::NonZeroUsize::new(oldest_first) {
-            Some(count) => Listing::Oldest(count),
-            None => Listing::Every,
-        };
-        listing::list_jobs(self, prefix, window).await
+    /// Every job JSON under `{prefix}/`, fetched in parallel. A caller that
+    /// wants only the oldest few names that window with
+    /// [`listing::list_jobs`] and a [`Listing`].
+    pub async fn list_jobs(&self, prefix: &str) -> Result<Vec<Job>, StorageError> {
+        listing::list_jobs(self, prefix, Listing::Every).await
     }
 
     /// Every job id under `{prefix}/`, without downloading one document.

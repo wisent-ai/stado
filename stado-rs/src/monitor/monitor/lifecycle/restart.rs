@@ -12,6 +12,7 @@ use crate::queue::JobStorage;
 
 use super::super::{log, MonitorError};
 use super::current::{current_running, running_lease_live};
+use crate::primitives::tally::Tally;
 
 /// Move job back to queue, or fail it when [`Job::restart_refusal`] says so.
 ///
@@ -56,7 +57,7 @@ pub(in crate::monitor::monitor) async fn requeue(
         return Ok(moved);
     }
 
-    next.restarts += 1;
+    next.restarts.tally();
     next.state = job_state::QUEUED.to_string();
     next.instance_ref = None;
     next.started_at = None;
@@ -93,7 +94,7 @@ pub(in crate::monitor::monitor) async fn requeue_jids_after_reap(
         return Ok(());
     }
     let running: BTreeMap<String, Job> = store
-        .list_jobs("running", 0)
+        .list_jobs("running")
         .await?
         .into_iter()
         .map(|j| (j.job_id.clone(), j))
