@@ -41,7 +41,7 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
     let vault = std::path::Path::new(&home).join(".stado/skarbiec.vault.json");
     let inherited =
         std::env::var("PATH").map_err(|error| format!("PATH cannot be read: {error}"))?;
-    let path = format!("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{inherited}");
+    let path = format!("{}:{inherited}", crate::primitives::tool_path::SEARCH_PATH);
     // The vault answers or the process exits; a keychain prompt on a loaded
     // host is not a failed read.
     let output = crate::wait::output_async(
@@ -59,15 +59,9 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
     }
     let raw = String::from_utf8(output.stdout)
         .map_err(|error| format!("Skarbiec returned non-UTF-8 password bytes: {error}"))?;
-    let password = match serde_json::from_str::<Value>(&raw) {
-        Ok(document) => document
-            .get("fields")
-            .and_then(|fields| fields.get("password"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        Err(_) => Some(raw.trim_end_matches(['\n', '\r']).to_string()),
-    };
-    Ok(password.filter(|value| !value.is_empty()))
+    // `skarbiec get --field` prints the field's value itself.
+    let password = raw.trim_end_matches(['\n', '\r']).to_string();
+    Ok(Some(password).filter(|value| !value.is_empty()))
 }
 
 pub(crate) async fn restart(

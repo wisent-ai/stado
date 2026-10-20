@@ -6,8 +6,13 @@
 //! or by none of them.
 
 /// Homebrew's prefix on Apple silicon, then Homebrew's prefix on Intel Macs
-/// and the conventional local prefix elsewhere, then the system directories.
+/// and the conventional local prefix elsewhere, then the system directories:
+/// the path of a launchd unit and of a command run on a macOS host.
 pub const SEARCH_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
+/// The path of a systemd unit on a Linux host: the local prefix before the
+/// distribution's directories, administrative directories first in each.
+pub const LINUX_SEARCH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 /// The same path as a shell assignment, for a command line a host runs.
 pub fn assignment() -> String {

@@ -4,15 +4,9 @@
 
 use std::path::Path;
 
-/// Explicit inputs used by the provider-neutral unit renderer.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct EnvInputs<'a> {
-    pub path: Option<&'a str>,
-}
-
 /// The unit environment, in Python dict insertion order (the plist/unit
 /// renderers iterate this order byte-exactly).
-pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
+pub fn build_env(kind: &str) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = vec![("PYTHONUNBUFFERED".to_string(), "1".to_string())];
     let agent_url = crate::config::agent_skarbiec_url();
     let (skarbiec_url, skarbiec_consumer, skarbiec_token_file) = (
@@ -57,13 +51,14 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
         ));
     }
     // The host carries the workload grant separately from its control-plane
-    // grant. Job payloads inherit PATH; their runtime is the workload's own.
+    // grant. Job payloads inherit PATH: the declared search path, never the
+    // installing shell's, so every host unit finds the same tools.
     let runs_local_agent = kind == "host";
     if runs_local_agent {
-        let path = inputs
-            .path
-            .unwrap_or("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
-        env.push(("PATH".to_string(), path.to_string()));
+        env.push((
+            "PATH".to_string(),
+            crate::primitives::tool_path::SEARCH_PATH.to_string(),
+        ));
     }
     // Unspecified installer defaults are omitted here. Renderers retain explicit
     // empty values read from existing native declarations during consolidation.
@@ -74,11 +69,7 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
 /// [`build_env`] with the provider-neutral process inputs used by installed
 /// services. Backend routing comes only from `STADO_CONFIG`.
 pub fn install_env(_home: &Path, kind: &str, _hf_token: &str) -> Vec<(String, String)> {
-    let path = std::env::var("PATH").ok();
-    let inputs = EnvInputs {
-        path: path.as_deref(),
-    };
-    let mut env = build_env(kind, &inputs);
+    let mut env = build_env(kind);
     if let Ok(Some(path)) = crate::config_file::config_path() {
         env.push((
             "STADO_CONFIG".to_string(),

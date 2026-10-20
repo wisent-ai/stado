@@ -101,12 +101,13 @@ pub async fn set_item_field_on_host(
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     let body = r#"set -eu
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export @TOOL_PATH@
 export GNUPGHOME="$HOME/.gnupg"
 "$HOME/.stado/bin/skarbiec" set-json "$STADO_ITEM" --field "$STADO_FIELD" --from-file "$STADO_FROM"
 echo 'STADO_ITEM_SET	ok'"#;
     let body = body
         .replace("{vault_file}", "")
+        .replace("@TOOL_PATH@", &crate::primitives::tool_path::assignment())
         .replace("$STADO_ITEM", &shlex_quote(item))
         .replace("$STADO_FIELD", &shlex_quote(field))
         .replace("$STADO_FROM", &shlex_quote(value_file));

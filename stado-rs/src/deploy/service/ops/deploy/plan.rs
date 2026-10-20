@@ -133,12 +133,12 @@ pub fn plan_deploy_labelled(
     let label = label.to_string();
     let render = |os: LocalOs| {
         let path = match os {
-            LocalOs::Darwin => "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-            LocalOs::Linux => "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            LocalOs::Darwin => crate::primitives::tool_path::SEARCH_PATH,
+            LocalOs::Linux => crate::primitives::tool_path::LINUX_SEARCH_PATH,
         };
-        let mut exec_args = Vec::with_capacity(args.len() + 1);
-        exec_args.push(program.to_string());
-        exec_args.extend(args.iter().cloned());
+        let exec_args: Vec<String> = std::iter::once(program.to_string())
+            .chain(args.iter().cloned())
+            .collect();
         InstallPlan {
             // Both spellings are rendered here and the host picks between them
             // (`ensure_unit_path` / the remote prelude), so this plan never
@@ -155,15 +155,21 @@ pub fn plan_deploy_labelled(
     };
     let darwin = render(LocalOs::Darwin);
     let linux = render(LocalOs::Linux);
-    let unit = linux
-        .unit_path(Path::new(HOME_PREFIX))
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| label.clone());
+    let unit_path = linux.unit_path(Path::new(HOME_PREFIX));
+    let unit = match unit_path.file_name() {
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => {
+            return Err(DeployError(format!(
+                "the systemd unit path {} of {label} names no file",
+                unit_path.display()
+            ))
+            .stating(crate::primitives::failure::FailureCode::Refused))
+        }
+    };
     let remote_home = Path::new(REMOTE_HOME_PLACEHOLDER);
-    let mut exec_args = Vec::with_capacity(args.len() + 1);
-    exec_args.push(program.to_string());
-    exec_args.extend(args.iter().cloned());
+    let exec_args: Vec<String> = std::iter::once(program.to_string())
+        .chain(args.iter().cloned())
+        .collect();
     let plan = DeployPlan {
         label: label.clone(),
         unit,

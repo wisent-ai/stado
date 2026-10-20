@@ -7,8 +7,8 @@ use std::path::Path;
 use plist::{Dictionary, Value as Plist};
 
 use super::config::{home, object_api_bind, object_api_port};
+use crate::primitives::tool_path::SEARCH_PATH;
 
-const LAUNCHD_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 pub(super) struct Definition<'a> {
     pub(super) label: &'a str,
     pub(super) program: &'a str,
@@ -44,14 +44,12 @@ pub(super) fn render(installed: &Path, staged: &Path, wanted: &Definition) -> Re
                 )
             })?,
     };
-    let mut environment = document
-        .remove("EnvironmentVariables")
-        .and_then(Plist::into_dictionary)
-        .unwrap_or_default();
+    let mut environment = environment(document.remove("EnvironmentVariables"), installed)
+        .map_err(|error| format!("object API recovery refused: {error}"))?;
     document.remove("Program");
     let owned = [
         ("HOME", home.clone()),
-        ("PATH", LAUNCHD_PATH.to_string()),
+        ("PATH", SEARCH_PATH.to_string()),
         ("STADO_CONFIG", wanted.config.to_string()),
         ("GNUPGHOME", format!("{home}/.gnupg")),
         (
@@ -88,7 +86,7 @@ pub(super) fn render(installed: &Path, staged: &Path, wanted: &Definition) -> Re
         "--port",
         port.as_str(),
     ];
-    let settings: [(&str, Plist); 8] = [
+    let settings = [
         ("Label", Plist::String(wanted.label.to_string())),
         (
             "ProgramArguments",
@@ -119,6 +117,17 @@ pub(super) fn same(left: &Path, right: &Path) -> bool {
     matches!((Plist::from_file(left), Plist::from_file(right)), (Ok(a), Ok(b)) if a == b)
 }
 
-pub(super) fn dictionary(value: Option<Plist>) -> Dictionary {
-    value.and_then(Plist::into_dictionary).unwrap_or_default()
+/// A definition's environment: an absent one is empty, and one that is not a
+/// dictionary is refused naming the definition, since reading or rendering
+/// over it as empty would drop what it holds.
+pub(super) fn environment(value: Option<Plist>, source: &Path) -> Result<Dictionary, String> {
+    match value {
+        None => Ok(Dictionary::new()),
+        Some(value) => value.into_dictionary().ok_or_else(|| {
+            format!(
+                "the EnvironmentVariables of {} is not a dictionary",
+                source.display()
+            )
+        }),
+    }
 }

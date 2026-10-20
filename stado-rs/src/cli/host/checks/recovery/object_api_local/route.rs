@@ -21,17 +21,18 @@ use regex::Regex;
 use serde_json::Value;
 
 use super::config::{home, real, text};
-use super::definition::dictionary;
+use super::definition::environment;
 
 static ENVIRONMENT_OPEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*environment = \{\s*$").expect("static"));
 static BLOCK_CLOSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*\}\s*$").expect("static"));
-static ENTRY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*([^=\s]+)\s+=>\s+(.*?)\s*$").expect("static"));
+static ENTRY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*(?P<key>[^=\s]+)\s+=>\s+(?P<value>.*?)\s*$").expect("static")
+});
 static STATE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*state = (.*?)\s*$").expect("static"));
+    LazyLock::new(|| Regex::new(r"^\s*state = (?P<state>.*?)\s*$").expect("static"));
 static PID: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*pid = ([0-9]+)\s*$").expect("static"));
+    LazyLock::new(|| Regex::new(r"^\s*pid = (?P<pid>[0-9]+)\s*$").expect("static"));
 
 fn refuse(detail: &str) -> String {
     format!("object API recovery refused: {detail}")
@@ -50,15 +51,15 @@ fn from_launchctl(text: &str) -> (BTreeMap<String, String>, String, String) {
             if BLOCK_CLOSE.is_match(line) {
                 inside = false;
             } else if let Some(found) = ENTRY.captures(line) {
-                environment.insert(found[1].to_string(), found[2].to_string());
+                environment.insert(found["key"].to_string(), found["value"].to_string());
             }
             continue;
         }
         if let Some(found) = STATE.captures(line) {
-            state.get_or_insert_with(|| found[1].to_string());
+            state.get_or_insert_with(|| found["state"].to_string());
         }
         if let Some(found) = PID.captures(line) {
-            pid.get_or_insert_with(|| found[1].to_string());
+            pid.get_or_insert_with(|| found["pid"].to_string());
         }
     }
     // launchctl prints no state line for a job it does not hold and no pid
@@ -88,8 +89,10 @@ fn definition(path: &Path) -> Result<plist::Dictionary, String> {
 
 fn from_plist(source: &Path) -> Result<BTreeMap<String, String>, String> {
     let document = definition(source)?;
+    let declared = environment(document.get("EnvironmentVariables").cloned(), source)
+        .map_err(|error| refuse(&error))?;
     let mut environment = BTreeMap::new();
-    for (key, value) in dictionary(document.get("EnvironmentVariables").cloned()) {
+    for (key, value) in declared {
         let value = value
             .into_string()
             .ok_or_else(|| refuse("invalid environment dictionary"))?;
@@ -118,14 +121,15 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
     // An unreadable expected definition compared as an empty one would make
     // every loaded unit "match" it, and recovery would leave a wrong unit in
     // place.
-    let expected: BTreeMap<String, String> = definition(request.expected)?
-        .get("EnvironmentVariables")
-        .cloned()
-        .and_then(Plist::into_dictionary)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|(key, value)| value.into_string().map(|value| (key, value)))
-        .collect();
+    let expected_document = definition(request.expected)?;
+    let expected: BTreeMap<String, String> = environment(
+        expected_document.get("EnvironmentVariables").cloned(),
+        request.expected,
+    )
+    .map_err(|error| refuse(&error))?
+    .into_iter()
+    .filter_map(|(key, value)| value.into_string().map(|value| (key, value)))
+    .collect();
     let (environment, state, pid) = if request.mode == "launchctl" {
         let text =
             std::fs::read_to_string(request.source).map_err(|error| refuse(&error.to_string()))?;
@@ -152,21 +156,22 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
             real(value, &home_path).display().to_string()
         }
     };
-    let config_path = environment
-        .get("STADO_CONFIG")
-        .map(String::as_str)
-        .filter(|v| !v.is_empty())
-        .unwrap_or(request.default_config);
+    // The unit's own STADO_CONFIG decides; the caller's default stands only
+    // for a unit that names none.
+    let config_path = match environment.get("STADO_CONFIG").filter(|v| !v.is_empty()) {
+        Some(declared) => declared.as_str(),
+        None => request.default_config,
+    };
     let configuration: Value = std::fs::read(expand(config_path))
         .map_err(|error| error.to_string())
         .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|error| error.to_string()))
         .map_err(|error| refuse(&format!("cannot read loaded host config: {error}")))?;
-    let resolve = |name: &str, pointer: &str| {
-        environment
-            .get(name)
-            .filter(|v| !v.is_empty())
-            .cloned()
-            .unwrap_or_else(|| text(&configuration, pointer).to_string())
+    // A setting the unit's environment names decides; the loaded host config
+    // answers for one the unit leaves out.
+    let resolve = |name: &str, pointer: &str| match environment.get(name).filter(|v| !v.is_empty())
+    {
+        Some(declared) => declared.clone(),
+        None => text(&configuration, pointer).to_string(),
     };
     let primary_backend = canonical_backend(&resolve("WC_STORAGE_BACKEND", "/storage/backend"));
     let primary_setting = resolve("WC_LOCAL_STORAGE_PATH", "/storage/local/path");
@@ -248,16 +253,15 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
     let matches = expected
         .iter()
         .all(|(key, value)| environment.get(key) == Some(value));
-    let explicit_backend = environment
-        .get("WC_STORAGE_BACKEND")
-        .cloned()
-        .unwrap_or_default();
-    let explicit_root = expand(
-        environment
-            .get("WC_LOCAL_STORAGE_PATH")
-            .map(String::as_str)
-            .unwrap_or(""),
-    );
+    // What the unit itself names, shown as `-` when it names nothing.
+    let explicit_backend = match environment.get("WC_STORAGE_BACKEND") {
+        Some(declared) => declared.clone(),
+        None => String::new(),
+    };
+    let explicit_root = match environment.get("WC_LOCAL_STORAGE_PATH") {
+        Some(declared) => expand(declared),
+        None => String::new(),
+    };
     let yes = |flag: bool| if flag { "yes" } else { "no" }.to_string();
     let fields = [
         primary_backend,
