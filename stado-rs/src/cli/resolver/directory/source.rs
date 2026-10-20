@@ -80,7 +80,7 @@ impl SnapshotSource {
                 // finds this read standing instead of sending its own.
                 let route = crate::cli::resolver::Route::Host(target);
                 match crate::cli::resolver::bound_seconds(&route) {
-                    Ok(Some(seconds)) => super::unanswered::asking(target, seconds),
+                    Ok(Some(bound)) => super::unanswered::asking(target, bound.seconds),
                     Ok(None) => {}
                     Err(unreadable) => eprintln!(
                         "stado: the read of the registry authority {target} is sent without \
@@ -115,8 +115,8 @@ impl SnapshotSource {
                         // interval that cannot be read is added to the
                         // refusal instead of the read being remembered.
                         match crate::cli::resolver::bound_seconds(&route) {
-                            Ok(Some(seconds)) => {
-                                super::unanswered::remember(target, seconds, &held)
+                            Ok(Some(bound)) => {
+                                super::unanswered::remember(target, bound.seconds, &held)
                             }
                             Ok(None) => {}
                             Err(unreadable) => {

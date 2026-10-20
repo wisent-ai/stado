@@ -90,6 +90,13 @@ impl Route<'_> {
     }
 }
 
+/// The refresh interval that measures a request, and who declares it.
+pub(crate) struct Bound {
+    pub(crate) seconds: u64,
+    /// Where the interval was read, as the refusal names it.
+    pub(crate) declared: String,
+}
+
 /// The refresh interval that measures a request on `route`: the one this
 /// host's resolver publishes or declares, else, for a channel to a host, the
 /// interval that host's own resolver is declared with in this machine's
@@ -97,9 +104,12 @@ impl Route<'_> {
 /// so a snapshot read that outlasts it is not being served, whether or not
 /// this machine runs a resolver of its own. `None` only when neither is
 /// declared.
-pub(crate) fn bound_seconds(route: &Route<'_>) -> Result<Option<u64>, String> {
+pub(crate) fn bound_seconds(route: &Route<'_>) -> Result<Option<Bound>, String> {
     if let Some(seconds) = declared_refresh_seconds()? {
-        return Ok(Some(seconds));
+        return Ok(Some(Bound {
+            seconds,
+            declared: "this host's resolver declares".to_string(),
+        }));
     }
     let Route::Host(host) = route else {
         return Ok(None);
@@ -109,31 +119,36 @@ pub(crate) fn bound_seconds(route: &Route<'_>) -> Result<Option<u64>, String> {
     else {
         return Ok(None);
     };
-    crate::service_resolution::declared_resolver_config(&document, host)
-        .map(|config| config.map(|config| config.refresh_seconds))
-        .map_err(|error| {
+    let declared =
+        crate::service_resolution::declared_resolver_config(&document, host).map_err(|error| {
             format!(
-                "the refresh interval cannot be read: the resolver declaration of {host}: \
-                 {error}"
+                "the refresh interval cannot be read: the resolver declaration of {host}: {error}"
             )
-        })
+        })?;
+    Ok(declared.map(|config| Bound {
+        seconds: config.refresh_seconds,
+        declared: format!(
+            "{host}'s resolver is declared with in this machine's last-known-good registry"
+        ),
+    }))
 }
 
-/// Wait for `sent` unless it outlasts the refresh interval this host's
-/// resolver declares: `Ok(answer)` when the request answered or failed on
-/// its own within it, `Err` with the sentence when it was abandoned — on a
-/// route published held, with the held wait's own sentence; otherwise with
-/// the interval it outlasted and where to ask, since a request the far side
-/// accepted and answers nothing on stands in no list of this host's — or
-/// when whether the route is held cannot be read, since then nobody can say:
-/// the refresh interval that measures it included, which is a refusal before
-/// the request is sent, not a request sent unwatched.
+/// Wait for `sent` unless it outlasts the refresh interval that measures
+/// its route ([`bound_seconds`]): `Ok(answer)` when the request answered or
+/// failed on its own within it, `Err` with the sentence when it was
+/// abandoned — on a route published held, with the held wait's own
+/// sentence; otherwise with the interval it outlasted, who declares it, and
+/// where to ask, since a request the far side accepted and answers nothing
+/// on stands in no list of this host's — or when whether the route is held
+/// cannot be read, since then nobody can say: the refresh interval that
+/// measures it included, which is a refusal before the request is sent,
+/// not a request sent unwatched.
 pub(crate) async fn unless_held<T, F>(route: Route<'_>, sent: F) -> Result<T, String>
 where
     F: Future<Output = T>,
 {
-    let seconds = match bound_seconds(&route) {
-        Ok(Some(seconds)) => seconds,
+    let Bound { seconds, declared } = match bound_seconds(&route) {
+        Ok(Some(bound)) => bound,
         Ok(None) => return Ok(sent.await),
         Err(unreadable) => {
             return Err(format!(
@@ -152,7 +167,7 @@ where
                 Ok(None) if route.unlisted() => {
                     return Err(format!(
                         "{} request abandoned unanswered: it stood longer than the {seconds}s \
-                         refresh interval this host's resolver declares; {}",
+                         refresh interval {declared}; {}",
                         route.name(),
                         route.ask()
                     ))
