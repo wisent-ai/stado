@@ -49,6 +49,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ### Fixed
 
+- **Stado works without Skarbiec everywhere a file credential store is selected:** `STADO_CREDENTIALS_STORE=file:///…` moved only the `stado credentials` commands and build secrets onto the file, while every read through Stado's own grant still dialed Skarbiec: the object, release, machine, registry, service and integration API verifiers, `stado service secret-sync`, the dashboard's operator sign-in, the public status checks, the release catalogue's publishers and a local agent's workload secrets. Stado's own client now reads, lists and rotates through the selected store, a field read (`read_field`) is routed like every other read, and `stado azure` reads the operator session from the store it writes it to. With Skarbiec selected the vault is asked exactly as before.
+
 - **The precheck runner's Skarbiec reads beside Brama take the vault commands' search path:** the Probierz agent credential lookup and the model review bearer mint ran Skarbiec with a `PATH` of their own, without GPG Suite's directory or the account's `~/.local/bin`. Both now take `primitives::tool_path::vault_assignment` for the Brama host's home, like every other Skarbiec command Stado runs on a host.
 
 - **The Weles trust document is rendered with the vault commands' search path, and a refusal is quoted whole:** the renderer ran its Skarbiec reads with a `PATH` of its own; it now takes `primitives::tool_path::vault_assignment`, so a host whose `gpg` is in GPG Suite's directory or `~/.local/bin` renders like the rest. A refused render quotes the host's whole failure with its exit status instead of its last line.

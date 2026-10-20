@@ -5,23 +5,14 @@ use serde_json::{json, Value};
 
 use super::super::{CmdError, AZURE_CLI_CLIENT_ID};
 
-fn credential_client() -> Result<crate::skarbiec::Client, CmdError> {
-    let credentials = crate::credential_store::admin_credentials().map_err(CmdError::from)?;
-    crate::skarbiec::Client::direct(
-        &credentials.url,
-        &credentials.consumer,
-        &credentials.token_file,
-        crate::skarbiec::GrantMode::RereadPerRequest,
-    )
-    .map_err(CmdError::from)
-}
-
-/// One named field of the credential item that plays `role`. The whole-item
-/// form is refused by a broker that requires a named field, and every caller
-/// here knows the field it wants.
+/// One named field of the credential item that plays `role`, read through the
+/// selected credential store, the same store [`store_operator_item`] writes:
+/// a machine whose store is a file reads the session it stored there instead
+/// of asking a Skarbiec it does not have. The whole-item form is refused by a
+/// broker that requires a named field, and every caller here knows the field
+/// it wants.
 pub(super) async fn credential_field(role: &str, field: &str) -> Result<Option<String>, CmdError> {
-    credential_client()?
-        .read_string(role, field)
+    crate::credential_store::read_string(role, field)
         .await
         .map_err(|error| {
             CmdError::click(format!(

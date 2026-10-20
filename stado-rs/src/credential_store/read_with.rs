@@ -23,14 +23,9 @@ pub async fn read_item_with(
 ) -> Result<Value, SkarbiecError> {
     match selected()? {
         Backend::Skarbiec { url: store_url } => {
-            Client::direct(
-                store_url.as_deref().unwrap_or(url),
-                consumer,
-                token_file,
-                grant_mode,
-            )?
-            .read_item(id)
-            .await
+            Client::direct(vault_url(&store_url, url), consumer, token_file, grant_mode)?
+                .read_item(id)
+                .await
         }
         Backend::File { path } => file::file_read_item(&path, id),
     }
@@ -54,14 +49,9 @@ pub async fn read_string_with(
 ) -> Result<Option<String>, SkarbiecError> {
     match selected()? {
         Backend::Skarbiec { url: store_url } => {
-            Client::direct(
-                store_url.as_deref().unwrap_or(url),
-                consumer,
-                token_file,
-                grant_mode,
-            )?
-            .read_string(id, field)
-            .await
+            Client::direct(vault_url(&store_url, url), consumer, token_file, grant_mode)?
+                .read_string(id, field)
+                .await
         }
         Backend::File { path } => file::file_read_string(&path, id, field),
     }
@@ -79,14 +69,9 @@ pub async fn read_declared_string_with(
 ) -> Result<Option<String>, SkarbiecError> {
     match selected()? {
         Backend::Skarbiec { url: store_url } => {
-            Client::direct(
-                store_url.as_deref().unwrap_or(url),
-                consumer,
-                token_file,
-                grant_mode,
-            )?
-            .read_declared_string(item, field)
-            .await
+            Client::direct(vault_url(&store_url, url), consumer, token_file, grant_mode)?
+                .read_declared_string(item, field)
+                .await
         }
         Backend::File { path } => file::file_read_string(&path, item, field),
     }

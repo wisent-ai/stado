@@ -85,6 +85,35 @@ impl Client {
     }
 
     async fn read_field_inner(&self, role: &str, field: &str) -> Result<Value, SkarbiecError> {
+        // A routed client reads the field from the selected store: a file
+        // store answers from its item, and a Skarbiec store is asked with this
+        // client's grant at the address the store declares, else this one's.
+        if self.route_store {
+            return match crate::credential_store::selected()? {
+                crate::credential_store::Backend::File { .. } => {
+                    Box::pin(crate::credential_store::read_item_with(
+                        &self.base_url,
+                        &self.consumer,
+                        &self.token_file,
+                        self.grant_mode,
+                        role,
+                    ))
+                    .await?
+                    .get(field)
+                    .cloned()
+                    .ok_or_else(|| SkarbiecError::MissingValue(format!("{role}.{field}")))
+                }
+                crate::credential_store::Backend::Skarbiec { url } => {
+                    let address = match url.as_deref() {
+                        Some(declared) => declared,
+                        None => self.base_url.as_str(),
+                    };
+                    let direct =
+                        Self::direct(address, &self.consumer, &self.token_file, self.grant_mode)?;
+                    Box::pin(direct.read_field(role, field)).await
+                }
+            };
+        }
         let id = self.required_item(role).await?;
         let response = self
             .send(
