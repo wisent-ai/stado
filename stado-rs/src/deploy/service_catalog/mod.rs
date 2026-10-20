@@ -67,6 +67,18 @@ pub struct CatalogService {
     pub answering: Option<AnsweringProbe>,
 }
 
+impl CatalogService {
+    /// The launchd/systemd label this service is installed under: its
+    /// declared `unit` where the deployed identity differs from the product
+    /// name, and the product name where the catalog declares none.
+    pub fn unit_label(&self) -> &str {
+        match &self.unit {
+            Some(unit) => unit,
+            None => &self.name,
+        }
+    }
+}
+
 /// How a service is asked whether it answers, and what to do when it does
 /// not: the method and path of a request on its own API, the body to send,
 /// and the repair steps of its repair declaration to run before the restart.

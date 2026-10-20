@@ -2,24 +2,6 @@
 // Which image a unit's live process is executing, on this machine
 // ---------------------------------------------------------------------------
 
-/// The three directories this fleet installs launchd units into, in the
-/// order [`crate::deploy::service::LOADED_UNITS_SCRIPT`] walks them.
-///
-/// Same list and same order deliberately: a unit one enumeration can see and
-/// the other cannot is how a label ends up in nobody's set, which is the
-/// defect `service list --undeclared` was built for.
-pub(crate) const LAUNCHD_UNIT_DIRECTORIES: &[&str] = &[
-    "/Library/LaunchDaemons",
-    "$HOME/Library/LaunchAgents",
-    "/Library/LaunchAgents",
-];
-
-/// The two directories this fleet writes systemd units into: system units
-/// through `sudo tee` (bootstrap, stream, storage reconcile) and user units
-/// through the service deploy and ensure scripts.
-pub(crate) const SYSTEMD_UNIT_DIRECTORIES: &[&str] =
-    &["/etc/systemd/system", "$HOME/.config/systemd/user"];
-
 /// One executable file, as the kernel identifies it rather than as a path
 /// spells it.
 ///

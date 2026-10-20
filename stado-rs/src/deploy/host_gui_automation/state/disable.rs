@@ -164,7 +164,10 @@ pub(in crate::deploy::host_gui_automation) async fn disable_inner(
         }
     }
     for path in [
-        format!("{home}/Library/LaunchAgents/{CUA_DRIVER_RUNTIME_LABEL}.plist"),
+        format!(
+            "{home}/{}/{CUA_DRIVER_RUNTIME_LABEL}.plist",
+            crate::deploy::service::USER_LAUNCHD_AGENTS
+        ),
         format!("{home}/Library/Caches/cua-driver/probierz.sock"),
         format!("{home}/.local/bin/cua-driver"),
         format!("{home}/.stado/cache/cua-driver"),

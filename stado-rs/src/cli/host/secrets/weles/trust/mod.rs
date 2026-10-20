@@ -17,11 +17,12 @@ use crate::targets::ComputeTarget;
 fn skarbiec_unit_plists(home: &str) -> Result<Vec<String>, String> {
     let product = crate::deploy::service_catalog::lookup("skarbiec")?
         .ok_or_else(|| "the service catalog does not declare Skarbiec".to_string())?;
-    let label = product.unit.unwrap_or(product.name);
+    let label = product.unit_label();
+    use crate::deploy::service::{LAUNCHD_AGENTS, LAUNCHD_DAEMONS, USER_LAUNCHD_AGENTS};
     Ok([
-        "/Library/LaunchDaemons".to_string(),
-        "/Library/LaunchAgents".to_string(),
-        format!("{home}/Library/LaunchAgents"),
+        LAUNCHD_DAEMONS.to_string(),
+        LAUNCHD_AGENTS.to_string(),
+        format!("{home}/{USER_LAUNCHD_AGENTS}"),
     ]
     .into_iter()
     .map(|directory| format!("{directory}/{label}.plist"))

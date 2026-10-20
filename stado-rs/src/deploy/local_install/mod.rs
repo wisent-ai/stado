@@ -123,7 +123,7 @@ pub fn stado_unit() -> Result<String, DeployError> {
             DeployError("the service catalog does not declare Stado".to_string())
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-    Ok(product.unit.unwrap_or(product.name))
+    Ok(product.unit_label().to_string())
 }
 
 /// The systemd unit name for a label, or an already-suffixed name unchanged.
