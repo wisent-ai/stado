@@ -18,5 +18,6 @@ use ensure_tail::ENSURE_BODY_TAIL;
 /// source file in this tree may exceed 300 lines and the body alone is 419.
 /// They are concatenated once, here, so every caller reads exactly the bytes
 /// the single constant carried.
-pub(crate) static ENSURE_BODY: LazyLock<String> =
-    LazyLock::new(|| format!("{ENSURE_BODY_HEAD}{ENSURE_BODY_TAIL}"));
+pub(crate) static ENSURE_BODY: LazyLock<String> = LazyLock::new(|| {
+    deploy_body::unit_directories(format!("{ENSURE_BODY_HEAD}{ENSURE_BODY_TAIL}"))
+});

@@ -135,8 +135,9 @@ pub(crate) static STAGE_BODY: LazyLock<String> = LazyLock::new(|| {
     ))
 });
 
-/// The account's unit directories, as `deploy::service` declares them.
-fn unit_directories(body: String) -> String {
+/// The account's unit directories, as `deploy::service` declares them, put
+/// into a deploy, stage or ensure body.
+pub(super) fn unit_directories(body: String) -> String {
     body.replace(
         "@USER_LAUNCHD_AGENTS@",
         crate::deploy::service::USER_LAUNCHD_AGENTS,

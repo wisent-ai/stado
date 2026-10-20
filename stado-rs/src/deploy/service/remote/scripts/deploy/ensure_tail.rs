@@ -139,7 +139,7 @@ if [ \"$declared_argv\" != \"$argv\" ]; then
 
   if [ \"$os\" = \"Darwin\" ]; then
     /bin/rm -f \"$staged\" \"$rendered\"
-    /bin/mkdir -p \"$HOME/.stado/logs\" >/dev/null 2>&1 || bail 'cannot create the log directory'
+    made=$(/bin/mkdir -p \"$HOME/.stado/logs\" 2>&1) || bail \"cannot create the log directory: $made\"
     /bin/chmod u=rwx,go= \"$HOME/.stado/logs\" || bail 'cannot protect the log directory'
     log=\"$HOME/.stado/logs/$unit.log\"
     : >> \"$log\" || bail \"cannot create $log\"
@@ -150,7 +150,7 @@ if [ \"$declared_argv\" != \"$argv\" ]; then
 @DARWIN_DAEMON_UNIT@
 @HEREDOC@
     else
-      /bin/mkdir -p \"$HOME/Library/LaunchAgents\" >/dev/null 2>&1 || bail 'cannot create LaunchAgents'
+      made=$(/bin/mkdir -p \"$HOME/@USER_LAUNCHD_AGENTS@\" 2>&1) || bail \"cannot create LaunchAgents: $made\"
       /bin/cat > \"$staged\" <<'@HEREDOC@'
 @DARWIN_UNIT@
 @HEREDOC@
@@ -167,7 +167,7 @@ if [ \"$declared_argv\" != \"$argv\" ]; then
     /bin/rm -f \"$staged\" \"$staged.rendered\"
   else
     /bin/rm -f \"$staged\" \"$rendered\"
-    /bin/mkdir -p \"$HOME/.config/systemd/user\" >/dev/null 2>&1 || bail 'cannot create the systemd user directory'
+    made=$(/bin/mkdir -p \"$HOME/@USER_SYSTEMD_UNITS@\" 2>&1) || bail \"cannot create the systemd user directory: $made\"
     staged=\"$HOME/.stado/$unit.ensure.$$\"
     /bin/cat > \"$staged\" <<'@HEREDOC@'
 @LINUX_UNIT@
