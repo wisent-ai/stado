@@ -37,6 +37,24 @@ pub(in crate::cli::database) enum Password {
     /// A new one, set on the project before the item is written.
     Rotate,
 }
+
+/// The object `member` of the item `item`'s stored `document`: none when
+/// the item records no such member, refused naming it when it is not an
+/// object, since rewriting the item from it would drop what it holds.
+fn object_member(
+    document: &Value,
+    member: &str,
+    item: &str,
+) -> Result<serde_json::Map<String, Value>, CmdError> {
+    match document.get(member) {
+        None => Ok(serde_json::Map::new()),
+        Some(Value::Object(object)) => Ok(object.clone()),
+        Some(other) => Err(CmdError::click(format!(
+            "{item} holds {member} that is not an object, so it is not rewritten: {other}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)),
+    }
+}
 /// Adopt one database; its report row, and whether its item drifted.
 /// `project_ref` and `password` come from the command line, when given; the
 /// item's own `project_ref` and `db_password` stand otherwise.
@@ -52,13 +70,27 @@ async fn adopt_one(
     token: &str,
     check: bool,
 ) -> Result<(Value, bool), CmdError> {
-    let document = owner.document(item).await?.unwrap_or_else(|| json!({}));
-    let existing = document["fields"].as_object().cloned().unwrap_or_default();
-    let mut context = document["context"].as_object().cloned().unwrap_or_default();
-    let supabase_item = context.get("provider").is_none_or(|provider| {
-        <DatabaseProvider as serde::Deserialize>::deserialize(provider).ok()
-            == Some(DatabaseProvider::Supabase)
-    });
+    let (existing, mut context) = match owner.document(item).await? {
+        // An item the vault does not hold yet records no fields and no context.
+        None => (serde_json::Map::new(), serde_json::Map::new()),
+        Some(document) => (
+            object_member(&document, "fields", item)?,
+            object_member(&document, "context", item)?,
+        ),
+    };
+    let supabase_item = match context.get("provider") {
+        None => true,
+        Some(provider) => {
+            let provider = <DatabaseProvider as serde::Deserialize>::deserialize(provider)
+                .map_err(|error| {
+                    CmdError::click(format!(
+                        "{item} records a provider {provider} Stado does not know: {error}"
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+                })?;
+            provider == DatabaseProvider::Supabase
+        }
+    };
     let recorded = existing
         .get("project_ref")
         .and_then(Value::as_str)
@@ -179,7 +211,7 @@ pub(in crate::cli::database) async fn adopt(
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let mut rows = Vec::new();
-    let mut drift = 0;
+    let mut drifted_items = Vec::new();
     let present = owner.item_ids().await?;
     for (database, item) in &targets {
         if present.as_ref().is_some_and(|ids| !ids.contains(item)) {
@@ -199,24 +231,27 @@ pub(in crate::cli::database) async fn adopt(
             check,
         )
         .await?;
-        drift += usize::from(drifted);
+        if drifted {
+            drifted_items.push(item.clone());
+        }
         rows.push(row);
     }
     if json_output {
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
         for row in &rows {
-            println!(
-                "{}: {} ({} fields)",
-                row["item"].as_str().unwrap_or_default(),
-                row["status"].as_str().unwrap_or_default(),
-                row["fields"]
-            );
+            let (Some(item), Some(status)) = (row["item"].as_str(), row["status"].as_str()) else {
+                return Err(CmdError::click(format!(
+                    "database adopt made a report row without its item or status: {row}"
+                )));
+            };
+            println!("{item}: {status} ({} fields)", row["fields"]);
         }
     }
-    if check && drift > 0 {
+    if check && !drifted_items.is_empty() {
         return Err(CmdError::refused(format!(
-            "{drift} item(s) differ from their Supabase projects"
+            "{} differ from their Supabase projects",
+            drifted_items.join(", ")
         )));
     }
     Ok(())
