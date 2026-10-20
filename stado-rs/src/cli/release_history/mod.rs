@@ -11,7 +11,9 @@
 //! and the branch moves only when the new history keeps HEAD's tree exactly
 //! and the branch still points where it did when the rewrite began. The
 //! working tree and the checkout's index are left as they were, since the
-//! tree they stand on does not change.
+//! tree they stand on does not change. A merge that brought the upstream
+//! into the line adds nothing the upstream lacks, so the line's
+//! single-parent commits are replayed onto the upstream without it.
 
 mod plan;
 mod replay;
@@ -91,15 +93,38 @@ fn rewrite(git: &Git, args: &ReleaseHistoryArgs, area: &Path) -> Result<Value, C
     ])?;
     let base = git.one(&["merge-base", &upstream, &head])?;
     let range = format!("{base}..{head}");
+    // A merge that brought the upstream into the line adds nothing the base
+    // does not hold: its other parents are under the base. The line is then
+    // replayed onto the base without it, and the tree check below refuses the
+    // move if the merge carried anything of its own. Any other merge joins a
+    // second line of unpushed work, which a plan of one line cannot name.
     let merges = git.one(&["rev-list", "--min-parents=2", &range])?;
-    if !merges.is_empty() {
-        return Err(CmdError::refused(format!(
-            "{range} holds merge commits ({}); a plan rewrites a line of single-parent commits",
-            merges.lines().collect::<Vec<_>>().join(", ")
-        )));
+    for merge in merges.lines() {
+        let parents = git.one(&["rev-parse", &format!("{merge}^@")])?;
+        let parents: Vec<&str> = parents.lines().collect();
+        let Some((_, joined)) = parents.split_first() else {
+            return Err(CmdError::click(format!(
+                "git names no parent of the merge {merge}"
+            )));
+        };
+        for parent in joined {
+            // A commit is under the base exactly when it is their merge base.
+            if git.one(&["merge-base", parent, &base])? != *parent {
+                return Err(CmdError::refused(format!(
+                    "{range} holds the merge {merge} of {parent}, which {upstream} does not \
+                     hold; a plan rewrites one line of unpushed commits"
+                )));
+            }
+        }
     }
     let unpushed: Vec<String> = git
-        .one(&["rev-list", "--reverse", &range])?
+        .one(&[
+            "rev-list",
+            "--reverse",
+            "--first-parent",
+            "--no-merges",
+            &range,
+        ])?
         .lines()
         .map(str::to_string)
         .collect();
