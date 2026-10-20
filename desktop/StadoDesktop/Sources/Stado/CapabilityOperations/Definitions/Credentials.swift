@@ -86,8 +86,8 @@ enum NativeCredentialOperations {
         .init(id: "grant-revoke", title: "Revoke a retired consumer Stado covers", path: ["credentials", "grant", "revoke"], fields: [
             .init(id: "consumer", label: "Retired consumer", required: true),
         ]),
-        .init(id: "grant-renew", title: "Renew this host's workload-agent grant", path: ["credentials", "grant", "renew"], hostPlacement: .none, fields: [
-            .init(id: "force", label: "Renew even when the grant already lives until revoked", option: "--force", flag: true),
+        .init(id: "grant-renew", title: "Renew this host's agent grant and keep declared consumer grants", path: ["credentials", "grant", "renew"], hostPlacement: .none, fields: [
+            .init(id: "force", label: "Renew the agent grant even when it already lives until revoked", option: "--force", flag: true),
         ]),
         .init(id: "migrate-identities", title: "Migrate this Stado source's identity configuration", path: ["config", "migrate-identities"],
             hostPlacement: .none, jsonOutput: false),

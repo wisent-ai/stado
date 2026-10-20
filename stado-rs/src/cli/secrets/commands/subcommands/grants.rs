@@ -72,9 +72,13 @@ pub enum CredentialGrantCommands {
     /// Renew this host's own workload-agent grant until revoked, the way
     /// the agent's tick does when the vault still records an end for it: at
     /// the authoritative vault, with the capabilities the grant already
-    /// carries. The consumer is the one the workload agent's configuration names.
+    /// carries. The consumer is the one the workload agent's configuration
+    /// names. Then, on the host that holds the owner vault, keep until revoked
+    /// every consumer grant the service directory declares and the vault
+    /// still records with an end (`skarbiec grant keep`: same capabilities,
+    /// same bearer), naming each grant with an end that no declaration owns.
     Renew {
-        /// Re-issue even when the grant already lives until revoked.
+        /// Re-issue the agent grant even when it already lives until revoked.
         #[arg(long)]
         force: bool,
         #[arg(long)]

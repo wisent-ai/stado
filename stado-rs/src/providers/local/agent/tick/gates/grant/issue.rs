@@ -103,7 +103,9 @@ pub(super) fn here(
     match output {
         Ok(output) if output.status.success() => {
             let reissued = launcher_json(launcher, vault, &["grant", "list"])
-                .map(|listing| grant_record(&listing, consumer).map(|(expires_at, _)| expires_at));
+                .map_err(|error| error.to_string())
+                .and_then(|listing| grant_record(&listing, consumer))
+                .map(|record| record.map(|(expires_at, _)| expires_at));
             log_fn(&format!(
                 "agent grant: {consumer} {state}; re-issued until revoked, the vault now records \
                  it {}",
