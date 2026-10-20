@@ -87,8 +87,22 @@ impl JobStorage {
             }
             None => {
                 let Some(destination) = self.read_job(&transition.to_prefix, job_id).await? else {
+                    // The source is gone and the destination was never
+                    // written: another writer moved or settled the job after
+                    // this transition was prepared. When the job stands under
+                    // another lifecycle prefix, that move is the job's state,
+                    // and this transition promised a move from a source that
+                    // no longer exists, so it is aborted rather than ending
+                    // its caller. A job no prefix holds is lost, and said.
+                    for prefix in crate::queue::runs::ALL_PREFIXES {
+                        if self.read_job(prefix, job_id).await?.is_some() {
+                            self.set_transition_state(&transition, "aborted").await?;
+                            return Ok(false);
+                        }
+                    }
                     return Err(StorageError::StorageConflict(format!(
-                        "transition {} lost both source and destination",
+                        "transition {} lost both source and destination, and no lifecycle \
+                         prefix holds job {job_id}",
                         transition.transition_id
                     )));
                 };

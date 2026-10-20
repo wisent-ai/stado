@@ -101,15 +101,26 @@ impl JobStorage {
         transition: &JobTransition,
     ) -> Result<bool, StorageError> {
         let destination_path = format!("{}/{}.json", transition.to_prefix, transition.job_id);
-        let destination = self
+        let Some(destination) = self
             .read_job(&transition.to_prefix, &transition.job_id)
             .await?
-            .ok_or_else(|| {
-                StorageError::StorageConflict(format!(
-                    "completed transition {} has no destination",
-                    transition.transition_id
-                ))
-            })?;
+        else {
+            // The move completed and a later writer has since moved the job
+            // out of this destination. When the job stands under another
+            // lifecycle prefix, this settled record has nothing left to
+            // finish and is retired rather than ending its caller; a job no
+            // prefix holds is lost, and said.
+            for prefix in crate::queue::runs::ALL_PREFIXES {
+                if self.read_job(prefix, &transition.job_id).await?.is_some() {
+                    self.retire_transition_record(transition).await?;
+                    return Ok(false);
+                }
+            }
+            return Err(StorageError::StorageConflict(format!(
+                "completed transition {} has no destination, and no lifecycle prefix holds job {}",
+                transition.transition_id, transition.job_id
+            )));
+        };
         if crate::queue::submit::immutable_job_projection(&destination)
             != crate::queue::submit::immutable_job_projection(&transition.destination_job)
             || destination.state != prefix_state(&transition.to_prefix)
