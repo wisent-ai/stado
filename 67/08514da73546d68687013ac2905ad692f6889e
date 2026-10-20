@@ -18,9 +18,9 @@ Repairs: "Weles activity, backup audit and host privacy name what was not report
 Repairs: "Rollout bind check and backup audit stop reading failures as nothing" a size that did not read was said without its parser's error
 Repairs: "The backup audit reads every row it is given or says which it could not" a path or namespace that was not hex-encoded UTF-8 lost its decoder's error, and a namespace end without a root was passed over
 Repairs: "The backup audit no longer lists a largest-five sample per class" a class row whose size did not read was said without its parser's error
+Repaired-By: "The backup audit report says why a pair stayed unproven and a deletion was refused" repairs it in this push, naming this commit on its Repairs line
+Repaired-By: "Every count Stado keeps adds one item through one tally" repairs it in this push, naming this commit on its Repairs line
 
 Harsh-Review-Attacked: whether a readable audit reads differently; every well-formed row folds into the same fields as before, and only rows that do not read change what unavailable says.
 Harsh-Review-Attacked: whether keeping every cause makes unavailable unbounded; it holds one sentence per unreadable marker row the program printed, which is the evidence an operator needs to see which rows failed.
 Harsh-Review-Attacked: whether a non-marker line is now an error; lines that are no STADO_ marker still take no part, as the program prints its own output between them.
-Repaired-By: "The backup audit report says why a pair stayed unproven and a deletion was refused" repairs it in this push, naming this commit on its Repairs line
-Repaired-By: "Every count Stado keeps adds one item through one tally" repairs it in this push, naming this commit on its Repairs line
