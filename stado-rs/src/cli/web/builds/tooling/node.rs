@@ -15,20 +15,22 @@ use crate::cli::CmdError;
 /// set it — Homebrew is not on it. A Mac that carries node and npm under
 /// `/opt/homebrew/bin` would, to a build that trusted `PATH`, be a host with
 /// no Node toolchain at all.
-const NODE_TOOLCHAIN_DIRECTORIES: [&str; 3] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
+const NODE_TOOLCHAIN_DIRECTORIES: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
 
 /// The absolute path of one Node toolchain program, or its bare name.
 ///
-/// Falling back to the bare name rather than refusing keeps a builder that
-/// installs Node somewhere else working: `PATH` is then the answer, and
-/// [`run`]'s own refusal names the toolchain if that fails too.
+/// A builder that installs Node somewhere else has none of these
+/// directories, and its `PATH` is then the answer: the bare name is run,
+/// and [`run`]'s own refusal names the toolchain if that fails too.
 fn toolchain_program(name: &str) -> String {
-    NODE_TOOLCHAIN_DIRECTORIES
+    let found = NODE_TOOLCHAIN_DIRECTORIES
         .iter()
         .map(|directory| PathBuf::from(directory).join(name))
-        .find(|candidate| candidate.is_file())
-        .map(|candidate| candidate.to_string_lossy().into_owned())
-        .unwrap_or_else(|| name.to_string())
+        .find(|candidate| candidate.is_file());
+    match found {
+        Some(candidate) => candidate.display().to_string(),
+        None => name.to_string(),
+    }
 }
 
 /// Run one `npm` verb with the interpreter its shim needs.
@@ -44,8 +46,8 @@ pub(in crate::cli::web::builds) fn npm(
     variables: &[(String, String)],
 ) -> Result<(), CmdError> {
     let program = toolchain_program("npm");
-    // Unset is no inherited PATH; one that is not text is refused, where it
-    // was read as unset and npm ran without the directories it named.
+    // Unset is no inherited PATH; one that is not text is refused, never
+    // read as unset so that npm runs without the directories it names.
     let mut path = match std::env::var("PATH") {
         Ok(path) => path,
         Err(std::env::VarError::NotPresent) => String::new(),
