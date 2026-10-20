@@ -13,5 +13,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Keep the refusal dedupe working after a thread panics holding its table" its lines in mod.rs are replaced by this change.
+
 Harsh-Review-Attacked: whether the cleaner now follows the link; the arm still returns None before opening anything, and only adds the refusal to the report.
 Harsh-Review-Attacked: whether an absent root now reports an error; NotFound is matched first and still only counts root_absent.
