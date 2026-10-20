@@ -8,6 +8,9 @@
 //! a terminal queue state, so it never blocks the agent on a builder, and it
 //! walks each one through the same `finish_run` that `stado release resume`
 //! uses by hand.
+//!
+//! A bad unfinished marker or unreadable run is reported after the pass, not
+//! returned before independent runs have been considered.
 
 use crate::cli::release_submit::builds::jobs::terminal::terminal;
 use crate::cli::release_submit::run::resume::finish_run;
@@ -29,6 +32,7 @@ pub async fn finish_ready_runs() -> Result<Vec<String>, String> {
     }
     let store = JobStorage::new().await.map_err(|error| error.to_string())?;
     let mut finished = Vec::new();
+    let mut refused = Vec::new();
     let markers = store
         .list_blobs_with_meta(UNFINISHED_RUN_PREFIX)
         .await
@@ -38,11 +42,18 @@ pub async fn finish_ready_runs() -> Result<Vec<String>, String> {
         if id.is_empty() {
             continue;
         }
-        let Some(stored) = load(id).await.map_err(|error| error.to_string())? else {
-            eprintln!(
-                "stado release agent run={id} is indexed as unfinished but has no run object"
-            );
-            continue;
+        let stored = match load(id).await {
+            Ok(Some(stored)) => stored,
+            Ok(None) => {
+                refused.push(format!(
+                    "run={id} is indexed as unfinished but has no run object"
+                ));
+                continue;
+            }
+            Err(error) => {
+                refused.push(format!("run={id} could not be read: {error}"));
+                continue;
+            }
         };
         if !matches!(
             stored.state,
@@ -50,9 +61,20 @@ pub async fn finish_ready_runs() -> Result<Vec<String>, String> {
         ) {
             continue;
         }
-        let run = serde_json::to_value(&stored).map_err(|error| error.to_string())?;
-        if !builds_terminal(&store, &run).await? {
-            continue;
+        let run = match serde_json::to_value(&stored) {
+            Ok(run) => run,
+            Err(error) => {
+                refused.push(format!("run={id} could not be serialized: {error}"));
+                continue;
+            }
+        };
+        match builds_terminal(&store, &run).await {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                refused.push(format!("run={id} build state could not be read: {error}"));
+                continue;
+            }
         }
         match finish_run(id, false, false).await {
             Ok(()) => finished.push(id.to_string()),
@@ -61,7 +83,16 @@ pub async fn finish_ready_runs() -> Result<Vec<String>, String> {
             Err(error) => eprintln!("stado release agent run={id} finish failed: {error}"),
         }
     }
-    Ok(finished)
+    if refused.is_empty() {
+        Ok(finished)
+    } else {
+        Err(format!(
+            "release finishing pass could not read {} run(s): {}; finished run(s): {}",
+            refused.len(),
+            refused.join("; "),
+            finished.join(", ")
+        ))
+    }
 }
 
 /// Every platform this run submitted has a job that ended: a record the

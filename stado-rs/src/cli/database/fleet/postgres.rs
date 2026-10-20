@@ -100,7 +100,7 @@ pub(super) async fn place(
     )?;
     append(
         &data.join("pg_hba.conf"),
-        "\n# Written by stado database place: every remote connection is TLS with a password.\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n",
+        "\n# Written by stado database place: every remote connection is TLS with a password.\nhostssl all all all scram-sha-256\n",
     )?;
 
     // The password exists only in this process until the item holds it, so
@@ -182,23 +182,13 @@ pub(super) async fn place(
 /// host agent, whose PATH is minimal, so a lookup on that PATH alone refused a
 /// host that has the server programs.
 fn program(name: &str) -> Result<PathBuf, CmdError> {
-    let found = stado_product::common::step_program(name);
-    if found.is_absolute() && found.is_file() {
-        return Ok(found);
-    }
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path)
-        .map(|directory| directory.join(name))
-        .find(|candidate| candidate.is_file())
-        .ok_or_else(|| {
-            let searched = stado_product::common::step_search_path(None, &path)
-                .unwrap_or_default();
-            CmdError::click(format!(
-                "{name} is not installed where Stado looks on this host ({}); install the engine's server programs here or place the database on a host that has them",
-                searched.to_string_lossy()
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config)
-        })
+    let path = std::env::var_os("PATH");
+    stado_product::common::step_program(name, path.as_deref()).map_err(|error| {
+        CmdError::click(format!(
+            "{error:#}; install the engine's server programs here or place the database on a host that has them"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
+    })
 }
 
 fn run(command: &mut Command, step: &str) -> Result<(), CmdError> {
@@ -226,7 +216,8 @@ fn write_private(path: &Path, text: &str) -> Result<(), CmdError> {
 
 fn restrict(path: &Path) -> Result<(), CmdError> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    let owner_only = u32::from(nix::libc::S_IRUSR | nix::libc::S_IWUSR);
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(owner_only))
         .map_err(|error| CmdError::from(error).within(format!("restrict {}", path.display())))
 }
 

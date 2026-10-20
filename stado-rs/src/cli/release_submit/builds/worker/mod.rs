@@ -95,7 +95,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     let evidence_root = queue_work_dir.join("output/qualification");
     std::fs::create_dir_all(&evidence_root)?;
     let mut environment =
-        build_environment(&request, &source, &output, &inputs_root, &evidence_root);
+        build_environment(&request, &source, &output, &inputs_root, &evidence_root)?;
     environment::add_compiler_cache(&source, &mut environment)?;
     environment::ensure_node(&source)?;
 

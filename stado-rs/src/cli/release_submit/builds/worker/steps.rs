@@ -2,43 +2,45 @@
 //! its receipt says, and the toolchain components its gates demand.
 
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::Command;
 
-use stado_product::common::step_program as resolve_step_program;
+use stado_product::common::step_program;
 
 use crate::cli::CmdError;
 use crate::release_pipeline::{StepReceipt, StepStatus};
 
 /// A step written `env NAME=VALUE… program args…` sets variables for one
 /// program. Run through `env` itself, the program is looked up on the
-/// LaunchAgent's minimal PATH, which `resolve_step_program` exists to avoid:
+/// LaunchAgent's minimal PATH, which [`step_program`] exists to avoid:
 /// a step written this way stops with `env: cargo: No such file or directory`
 /// while every step naming `cargo` directly finds it. So the assignments
 /// become the step's environment and the program after them is resolved like
 /// any other.
 fn split_env_prefix(argv: &[String]) -> (&[String], BTreeMap<String, String>) {
     let mut assignments = BTreeMap::new();
-    if Path::new(&argv[0])
-        .file_name()
-        .and_then(|name| name.to_str())
-        != Some("env")
-    {
+    let Some((program, mut rest)) = argv.split_first() else {
+        return (argv, assignments);
+    };
+    if Path::new(program).file_name() != Some(OsStr::new("env")) {
         return (argv, assignments);
     }
-    let mut rest = &argv[1..];
-    while let Some((name, value)) = rest.first().and_then(|word| word.split_once('=')) {
+    while let Some((word, after)) = rest.split_first() {
+        let Some((name, value)) = word.split_once('=') else {
+            break;
+        };
         if name.is_empty() || name.starts_with('-') {
             break;
         }
         assignments.insert(name.to_string(), value.to_string());
-        rest = &rest[1..];
+        rest = after;
     }
-    if rest.is_empty() || rest[0].starts_with('-') {
+    match rest.first() {
+        Some(program) if !program.starts_with('-') => (rest, assignments),
         // `env` with no program, or with its own options: run it as written.
-        return (argv, BTreeMap::new());
+        _ => (argv, BTreeMap::new()),
     }
-    (rest, assignments)
 }
 
 pub(crate) fn execute(
@@ -48,7 +50,23 @@ pub(crate) fn execute(
     environment: &BTreeMap<String, String>,
 ) -> Result<StepReceipt, CmdError> {
     let (command, assignments) = split_env_prefix(argv);
-    let program = resolve_step_program(&command[0]);
+    let Some((named, arguments)) = command.split_first() else {
+        return Err(
+            CmdError::click(format!("step {name} declares an empty argv"))
+                .stating(crate::primitives::failure::FailureCode::Config),
+        );
+    };
+    // The program is looked up on the PATH the step runs with: its own `env`
+    // assignment, else the worker's step environment, else this process's.
+    let path = match (assignments.get("PATH"), environment.get("PATH")) {
+        (Some(own), _) => Some(OsString::from(own)),
+        (None, Some(worker)) => Some(OsString::from(worker)),
+        (None, None) => std::env::var_os("PATH"),
+    };
+    let program = step_program(named, path.as_deref()).map_err(|error| {
+        CmdError::click(format!("step {name}: {error:#}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     // The step's start is logged before the spawn, so a step that hangs or
     // dies leaves its name and argv in the job output instead of silence.
     // The start time and the exit's duration are what `stado build status`
@@ -57,7 +75,7 @@ pub(crate) fn execute(
     println!(
         "[release-worker] step {name}: {} {}",
         program.display(),
-        command[1..].join(" ")
+        arguments.join(" ")
     );
     println!(
         "[release-worker] step {name}: started at {}",
@@ -66,7 +84,7 @@ pub(crate) fn execute(
     let started = std::time::Instant::now();
     let status = crate::wait::status(
         Command::new(&program)
-            .args(&command[1..])
+            .args(arguments)
             .current_dir(source)
             .envs(environment)
             .envs(&assignments),
@@ -106,23 +124,21 @@ pub(super) fn require_free_space(
     recipe: &crate::release_pipeline::PlatformRecipe,
     work: &Path,
 ) -> Result<(), CmdError> {
-    if recipe.min_free_gb == 0 {
+    let Some(required) = std::num::NonZeroU64::new(recipe.min_free_gb) else {
         return Ok(());
-    }
-    let free = free_gibibytes(work).ok_or_else(|| {
+    };
+    let free = free_gibibytes(work).map_err(|error| {
         CmdError::click(format!(
-            "this build declares {} GiB of free space and the free space of {} could not be read",
-            recipe.min_free_gb,
+            "this build declares {required} GiB of free space and the free space of {} could not be read: {error}",
             work.display()
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
-    if free < recipe.min_free_gb as f64 {
+    if free < required.get() as f64 {
         return Err(CmdError::refused(format!(
-            "this build needs {} GiB free on {} and the volume has {free:.1} GiB; \
+            "this build needs {required} GiB free on {} and the volume has {free:.1} GiB; \
              reclaim space on this host (`stado space reclaim <host> --apply --reason …`) \
              or move the work root, then submit again",
-            recipe.min_free_gb,
             work.display()
         )));
     }
@@ -159,11 +175,10 @@ pub(super) fn require_node_toolchain(
         )));
     };
     for program in [NODE_INTERPRETER, NODE_RUNNER] {
-        let found = std::env::split_paths(path).any(|directory| directory.join(program).is_file());
-        if !found {
+        if let Err(error) = step_program(program, Some(OsStr::new(path))) {
             return Err(CmdError::refused(format!(
                 "this {platform} build is a Node source ({NODE_MANIFEST}) and this builder has \
-                 no `{program}` on its step PATH ({path}); give the {platform} platform a \
+                 no `{program}` for its steps ({error:#}); give the {platform} platform a \
                  `runner_platform` whose host carries the Node toolchain, or install Node on \
                  this builder, then submit again"
             )));
@@ -176,10 +191,10 @@ pub(super) fn require_node_toolchain(
 /// own `statvfs` answer: blocks available to an unprivileged writer times the
 /// block size. The two figures are widened to `u128` because their width
 /// differs between platforms, and the product is read back as `f64`.
-fn free_gibibytes(path: &Path) -> Option<f64> {
-    let stats = nix::sys::statvfs::statvfs(path).ok()?;
+fn free_gibibytes(path: &Path) -> Result<f64, nix::Error> {
+    let stats = nix::sys::statvfs::statvfs(path)?;
     let bytes = u128::from(stats.blocks_available()) * u128::from(stats.fragment_size());
-    Some(bytes as f64 / crate::providers::local::space_reclaim::GIB as f64)
+    Ok(bytes as f64 / crate::providers::local::space_reclaim::GIB as f64)
 }
 
 /// Whether the unpacked source is a Cargo one: a `Cargo.toml` at its root or
@@ -218,27 +233,36 @@ pub(super) fn ensure_rust_components(
 ) -> Result<(), CmdError> {
     let mut needed: Vec<&str> = Vec::new();
     for gate in &recipe.quality {
-        let program = gate.argv.first().map(String::as_str).unwrap_or("");
-        let subcommand = gate.argv.get(1).map(String::as_str).unwrap_or("");
-        if program == "cargo" || program.ends_with("/cargo") {
-            match subcommand {
-                "fmt" if !needed.contains(&"rustfmt") => needed.push("rustfmt"),
-                "clippy" if !needed.contains(&"clippy") => needed.push("clippy"),
-                _ => {}
-            }
+        let Some((program, arguments)) = gate.argv.split_first() else {
+            continue;
+        };
+        if Path::new(program).file_name() != Some(OsStr::new("cargo")) {
+            continue;
+        }
+        // The rustup component that carries the Cargo subcommand a gate runs.
+        let component = match arguments.first().map(String::as_str) {
+            Some("fmt") => "rustfmt",
+            Some("clippy") => "clippy",
+            _ => continue,
+        };
+        if !needed.contains(&component) {
+            needed.push(component);
         }
     }
     if needed.is_empty() {
         return Ok(());
     }
-    let rustup = resolve_step_program("rustup");
-    if !rustup.is_absolute() || !rustup.is_file() {
-        println!(
-            "[release-worker] no rustup on this host; assuming {} are already provided",
-            needed.join(", ")
-        );
-        return Ok(());
-    }
+    let path = std::env::var_os("PATH");
+    let rustup = match step_program("rustup", path.as_deref()) {
+        Ok(rustup) => rustup,
+        Err(error) => {
+            println!(
+                "[release-worker] {error:#}; this host's cargo is not rustup-managed, so {} are taken as provided",
+                needed.join(", ")
+            );
+            return Ok(());
+        }
+    };
     println!(
         "[release-worker] ensuring toolchain components: {}",
         needed.join(", ")

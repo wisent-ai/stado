@@ -35,14 +35,7 @@ pub(super) fn build_environment(
     output: &Path,
     inputs_root: &Path,
     evidence_root: &Path,
-) -> BTreeMap<String, String> {
-    // `WISENT_SOURCE_COMMIT` and `WISENT_SOURCE_SHA256` are the snapshot's own
-    // identity, and a build that needs them has nowhere else to get them: the
-    // worker unpacks a `git archive`, so there is no repository to ask. Both
-    // names are set from the immutable request so a build script cannot inherit
-    // an unrelated parent `STADO_SOURCE_REVISION`; Stado's build script requires
-    // them to agree exactly. The source commit was already validated before the
-    // archive existed.
+) -> Result<BTreeMap<String, String>, CmdError> {
     let mut environment = BTreeMap::from([
         ("WISENT_SOURCE_DIR".into(), source.display().to_string()),
         ("WISENT_OUTPUT_DIR".into(), output.display().to_string()),
@@ -91,20 +84,40 @@ pub(super) fn build_environment(
     // reach a different installed Stado than the one running the job. The
     // directories a bare step program is looked up in come next, so a step
     // that is a script finds the same `cargo` the worker would have run.
-    let own = std::env::current_exe()
-        .ok()
-        .and_then(|executable| executable.parent().map(Path::to_path_buf));
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
-    if let Some(path) = stado_product::common::step_search_path(own, &inherited) {
-        environment.insert("PATH".into(), path.to_string_lossy().into_owned());
-    }
+    let executable = std::env::current_exe().map_err(|error| {
+        CmdError::click(format!(
+            "cannot locate this Stado release worker for build PATH: {error}"
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    })?;
+    let parent = executable.parent().ok_or_else(|| {
+        CmdError::click(format!(
+            "release worker executable {} has no parent directory for build PATH",
+            executable.display()
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    let inherited = std::env::var_os("PATH").ok_or_else(|| {
+        CmdError::click("PATH is not set for release build step lookup")
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    let path =
+        stado_product::common::step_search_path(Some(parent.to_path_buf()), Some(&inherited))
+            .map_err(|error| {
+                CmdError::click(format!(
+            "cannot assemble release build PATH from worker {} and inherited PATH: {error:#}",
+            executable.display()
+        ))
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
+    environment.insert("PATH".into(), path.to_string_lossy().into_owned());
     for (name, input) in &request.inputs {
         environment.insert(
             input_variable(name),
             inputs_root.join(&input.mount).display().to_string(),
         );
     }
-    environment
+    Ok(environment)
 }
 
 /// The variable a release step reads one declared input from:
