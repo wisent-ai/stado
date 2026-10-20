@@ -6,10 +6,8 @@ use serde_json::Value;
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 
-use super::jobs::{
-    candidate_prefixes, compile_progress, job_state_and_cost, settled_reading, JobReading, Progress,
-};
-use super::legs::{published_every_submitted_platform, required_leg_failed};
+use super::jobs::{candidate_prefixes, job_state_and_cost, settled_reading, JobReading};
+use super::phase;
 use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX};
 
 /// One platform leg joined to its queue job: which run it belongs to, which
@@ -222,90 +220,6 @@ pub(crate) async fn matching_runs(
             record["build_seconds"] = Value::from(seconds);
         }
     }
-    for run in &mut runs {
-        // Where the run stands, decided once here: failed, published or
-        // still going. The desktop console used to re-decide it by matching
-        // the state word, which is the same list in a second language.
-        let state = run["state"]
-            .as_str()
-            .and_then(crate::release_pipeline::ReleaseRunState::named);
-        if let Some(state) = &state {
-            run["phase"] = Value::String(state.phase().to_owned());
-        }
-        // A run replaced after every platform it submitted was published
-        // still published those bytes: they are signed, in the store and on
-        // the hosts its deliveries reached. Reading it as failed told Oko no
-        // release of that source exists.
-        if state == Some(crate::release_pipeline::ReleaseRunState::Superseded)
-            && published_every_submitted_platform(run)
-        {
-            run["phase"] = Value::String("published".to_owned());
-        }
-        // Whether a failed leg fails the release is submit's rule, not this
-        // listing's: only a platform the build manifest marks required does.
-        // Every failed leg is weighed — one the run already recorded (a build
-        // refresh can adopt a failed leg while the run stays waiting) as well
-        // as one whose job was just seen ending — so state and phase agree
-        // for the CLI line (which prints `state`), the JSON and the Desktop
-        // console (which reads `phase`). The stored word is kept as
-        // `recorded_state` for whoever resumes the run.
-        let unfinished = state
-            .as_ref()
-            .is_some_and(|state| !state.finished() && !state.published());
-        if unfinished && required_leg_failed(&store, run).await {
-            let failed = crate::release_pipeline::ReleaseRunState::Failed;
-            run["recorded_state"] = run["state"].clone();
-            run["state"] = serde_json::to_value(&failed).expect("a run state serializes");
-            run["phase"] = Value::String(failed.phase().to_owned());
-            continue;
-        }
-        let live = state.is_some_and(|state| !state.finished() && !state.published());
-        if !live {
-            continue;
-        }
-        // A run that names no product has no previous run of its own to be
-        // measured against; read as "", it was compared with runs of "" and
-        // shown without a denominator as though none had been built.
-        let product_name = run["product"].as_str().map(str::to_owned);
-        let Some(platforms) = run["platforms"].as_object_mut() else {
-            continue;
-        };
-        for (platform_name, record) in platforms.iter_mut() {
-            let Some(job_id) = record["job_id"].as_str().map(str::to_owned) else {
-                continue;
-            };
-            // The build's own progress, measured against this platform's
-            // previous run ([`compile_progress`]).
-            if record["job_state"].as_str() == Some("running") {
-                let measured = compile_progress(
-                    &store,
-                    &job_id,
-                    &older,
-                    product_name.as_deref(),
-                    platform_name,
-                )
-                .await;
-                if let Progress::Unreadable(cause) = &measured {
-                    record["compile_progress"] = serde_json::json!({ "unreadable": cause });
-                }
-                if let Progress::Compiled {
-                    compiled,
-                    mut progress,
-                    previous,
-                } = measured
-                {
-                    if let Some(total) = previous {
-                        progress.insert("of_previous_run".into(), Value::from(total));
-                        // The measured ratio, as it is: a run that compiles
-                        // more crates than the last one reads past a hundred.
-                        if let Some(ratio) = (compiled * 100).checked_div(total) {
-                            progress.insert("percent".into(), Value::from(ratio));
-                        }
-                    }
-                    record["compile_progress"] = Value::Object(progress);
-                }
-            }
-        }
-    }
+    phase::settle(&store, &mut runs, &older).await?;
     Ok(runs)
 }

@@ -95,5 +95,6 @@ pub(crate) async fn recorded_runs(
 mod jobs;
 mod legs;
 mod listing;
+mod phase;
 
 pub(crate) use listing::{matching_runs, recent_runs, RunFilter};
