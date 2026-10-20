@@ -280,8 +280,11 @@ fn executable_file(candidate: &std::path::Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && any_execute_bit(metadata.permissions().mode()))
 }
 
-/// Whether `mode` lets its owner, its group or anyone else execute the file.
+/// Whether `mode` lets its owner, its group or anyone else execute the file:
+/// any of the three execute bits is set in it.
 fn any_execute_bit(mode: u32) -> bool {
-    let execute = u32::from(libc::S_IXUSR | libc::S_IXGRP | libc::S_IXOTH);
-    std::num::NonZeroU32::new(mode & execute).is_some()
+    [libc::S_IXUSR, libc::S_IXGRP, libc::S_IXOTH]
+        .into_iter()
+        .map(u32::from)
+        .any(|bit| mode & bit == bit)
 }

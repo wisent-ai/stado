@@ -78,11 +78,12 @@ async fn build_history(
         let completed = DateTime::parse_from_rfc3339(ct).map_err(|e| {
             StorageError::Other(format!("makespan history: bad completed_at {ct:?}: {e}"))
         })?;
-        // A run that took no positive time says nothing about its runtime.
-        let elapsed = (completed - started).as_seconds_f64();
-        if !(elapsed.is_normal() && elapsed.is_sign_positive()) {
-            continue;
-        }
+        // A run that took no time, or ended before it started, says nothing
+        // about its runtime.
+        let elapsed = match (completed - started).to_std() {
+            Ok(elapsed) if !elapsed.is_zero() => elapsed.as_secs_f64(),
+            Ok(_) | Err(_) => continue,
+        };
         // A completed job without a command cannot be keyed by its run.
         let Some(command) = doc.get("command").and_then(Value::as_str) else {
             continue;

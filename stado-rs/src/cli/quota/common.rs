@@ -141,18 +141,16 @@ pub(super) fn parse_regions(arg: &str) -> Option<Vec<String>> {
 
 /// `--email`, else `$WC_QUOTA_CONTACT_EMAIL`; empty when neither names one,
 /// which each caller refuses where a contact is required. A variable that is
-/// set but is not text names no contact, and stderr says so and why, so the
-/// refusal that follows is not read as the variable being unset.
-pub(super) fn contact_email(flag: &str) -> String {
+/// set but is not text is refused naming it, never read as unset.
+pub(super) fn contact_email(flag: &str) -> Result<String, CmdError> {
     if !flag.is_empty() {
-        return flag.to_string();
+        return Ok(flag.to_string());
     }
     match std::env::var("WC_QUOTA_CONTACT_EMAIL") {
-        Ok(value) => value.trim().to_string(),
-        Err(std::env::VarError::NotPresent) => String::new(),
-        Err(error @ std::env::VarError::NotUnicode(_)) => {
-            eprintln!("stado: WC_QUOTA_CONTACT_EMAIL names no contact: {error}");
-            String::new()
-        }
+        Ok(value) => Ok(value.trim().to_string()),
+        Err(std::env::VarError::NotPresent) => Ok(String::new()),
+        Err(error @ std::env::VarError::NotUnicode(_)) => Err(CmdError::declaration(format!(
+            "WC_QUOTA_CONTACT_EMAIL cannot be read as a contact address: {error}"
+        ))),
     }
 }

@@ -22,10 +22,18 @@ use super::history::{extract_model_task, History};
 static INSTANCE_HOST_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[^@]+@(?P<host>.+)$").expect("static regex compiles"));
 
-/// A runtime estimate as a job states it: a positive duration in seconds.
-/// The job record writes an unset estimate as zero, which states none.
+/// A runtime estimate as a job states it: a duration in seconds that is not
+/// empty. The job record writes an unset estimate as zero, which states none;
+/// one that is no duration (negative, not a number) is said and states none.
 fn stated(seconds: f64) -> Option<f64> {
-    (seconds.is_normal() && seconds.is_sign_positive()).then_some(seconds)
+    match Duration::try_from_secs_f64(seconds) {
+        Ok(duration) if duration.is_zero() => None,
+        Ok(_) => Some(seconds),
+        Err(error) => {
+            tracing::warn!("a job's runtime_seconds_estimate {seconds} is no duration: {error}");
+            None
+        }
+    }
 }
 
 /// The stated estimate, else the history of the job's (model, task).

@@ -26,7 +26,7 @@ pub(in crate::cli::quota) async fn request(
     as_json: bool,
 ) -> Result<(), CmdError> {
     let providers = parse_providers(providers_arg)?;
-    let email = contact_email(email_arg);
+    let email = contact_email(email_arg)?;
     if email.is_empty()
         && providers
             .iter()
@@ -51,9 +51,9 @@ pub(in crate::cli::quota) async fn request(
         echo_json(&serde_json::to_value(&results)?);
         return Ok(());
     }
-    println!("{:<8} {:<18} {:<3} DETAIL", "PROVIDER", "REGION/LOC", "OK");
-    println!("{}", "-".repeat(80));
-    let mut ok_count = 0;
+    let header = format!("{:<8} {:<18} {:<3} DETAIL", "PROVIDER", "REGION/LOC", "OK");
+    println!("{header}");
+    println!("{}", "-".repeat(header.len()));
     for r in &results {
         let rkey = match r
             .get("region")
@@ -63,10 +63,7 @@ pub(in crate::cli::quota) async fn request(
             Some(rkey) => rkey,
             None => "(no region)",
         };
-        let ok = r.get("ok").and_then(Value::as_bool).unwrap_or(false);
-        if ok {
-            ok_count += 1;
-        }
+        let ok = succeeded(r);
         let detail = if ok {
             field(&r["name"])
         } else {
@@ -78,8 +75,15 @@ pub(in crate::cli::quota) async fn request(
             if ok { "Y" } else { "N" }
         );
     }
+    let ok_count = results.iter().filter(|r| succeeded(r)).count();
     println!("\n{ok_count}/{} succeeded", results.len());
     Ok(())
+}
+
+/// Whether a result row states that its request succeeded; a row that does
+/// not say so did not.
+fn succeeded(row: &Value) -> bool {
+    row.get("ok").and_then(Value::as_bool) == Some(true)
 }
 
 /// Python `quota_request_all`: one request per GPU family x region.
@@ -92,8 +96,12 @@ pub(in crate::cli::quota) async fn request_all(
     as_json: bool,
 ) -> Result<(), CmdError> {
     let providers = parse_providers(providers_arg)?;
-    let explicit_regions = parse_regions(regions_arg).unwrap_or_default();
-    let email = contact_email(email_arg);
+    // No --regions names no region explicitly; the plan then reads them.
+    let explicit_regions = match parse_regions(regions_arg) {
+        Some(regions) => regions,
+        None => Vec::new(),
+    };
+    let email = contact_email(email_arg)?;
     if email.is_empty()
         && providers
             .iter()
@@ -144,12 +152,12 @@ pub(in crate::cli::quota) async fn request_all(
         echo_json(&serde_json::to_value(&results)?);
         return Ok(());
     }
-    println!(
+    let header = format!(
         "{:<8} {:<18} {:<22} {:<3} DETAIL",
         "PROVIDER", "REGION/LOC", "FAMILY", "OK"
     );
-    println!("{}", "-".repeat(100));
-    let mut ok_count = 0;
+    println!("{header}");
+    println!("{}", "-".repeat(header.len()));
     for r in &results {
         let rkey = match r
             .get("region")
@@ -167,10 +175,7 @@ pub(in crate::cli::quota) async fn request_all(
             Some(fam) => fam,
             None => "(no family)",
         };
-        let ok = r.get("ok").and_then(Value::as_bool).unwrap_or(false);
-        if ok {
-            ok_count += 1;
-        }
+        let ok = succeeded(r);
         let detail = if ok {
             field(&r["name"])
         } else {
@@ -185,6 +190,7 @@ pub(in crate::cli::quota) async fn request_all(
             detail
         );
     }
+    let ok_count = results.iter().filter(|r| succeeded(r)).count();
     println!("\n{ok_count}/{} requests submitted", results.len());
     Ok(())
 }

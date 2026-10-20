@@ -61,7 +61,7 @@ fn print_results(rows: &[&Value]) -> usize {
 /// Python `quota_azure_replies`: respond to Open Azure quota tickets
 /// awaiting customer info.
 pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), CmdError> {
-    let email = contact_email(email_arg);
+    let email = contact_email(email_arg)?;
     if email.is_empty() {
         return Err(CmdError::refused(
             "--email is required (or set WC_QUOTA_CONTACT_EMAIL); the \
@@ -90,7 +90,7 @@ pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), 
 /// Python `quota_azure_escalate`: post the credit-funded-subscription
 /// escalation on billing-decline tickets.
 pub(super) async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(), CmdError> {
-    let email = contact_email(email_arg);
+    let email = contact_email(email_arg)?;
     if email.is_empty() {
         return Err(CmdError::refused(
             "--email is required (or set WC_QUOTA_CONTACT_EMAIL); the \
