@@ -142,8 +142,8 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
         for report in &reports {
             let software = &report["software"];
             // A target whose report carries no software verdict or counts is
-            // said to report none; it was printed as verdict "failed" with
-            // zero unmanaged of zero reported.
+            // said to report none, never as a failed verdict over counts of
+            // zero.
             let software_line = match (
                 software["verdict"].as_str(),
                 software["unmanaged"].as_u64(),

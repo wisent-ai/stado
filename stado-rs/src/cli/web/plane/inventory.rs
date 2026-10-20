@@ -8,24 +8,21 @@ use crate::cli::web::{deploy, route, schedules, unit_label};
 use crate::cli::CmdError;
 
 pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
-    let products = match crate::config::web_api_products() {
-        Ok(products) => products,
-        // An empty plane is not a broken one: the parser refuses an empty map
-        // so that a half-written section cannot pass, and "nothing declared"
-        // has to read as nothing declared.
-        Err(_) if crate::config_file::get("web_api.products").is_none() => {
-            if json_output {
-                println!("[]");
-            } else {
-                println!("no web products are declared");
-            }
-            return Ok(());
+    // An empty plane is not a broken one: the parser refuses an empty map so
+    // that a half-written section cannot pass, and "nothing declared" has to
+    // read as nothing declared, so the section's absence is asked first.
+    if crate::config_file::get("web_api.products").is_none() {
+        if json_output {
+            println!("[]");
+        } else {
+            println!("no web products are declared");
         }
-        Err(problems) => {
-            return Err(CmdError::click(problems.join("; "))
-                .stating(crate::primitives::failure::FailureCode::Config))
-        }
-    };
+        return Ok(());
+    }
+    let products = crate::config::web_api_products().map_err(|problems| {
+        CmdError::click(problems.join("; "))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let rows: Vec<Value> = products
         .iter()
         .map(|(name, product)| {
@@ -97,11 +94,13 @@ pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
 }
 
 /// Every product hostname has an equivalent in both product zones.
-const TWIN_ZONES: [&str; 2] = ["wisent.com", "wisent.ai"];
+const TWIN_ZONES: &[&str] = &["wisent.com", "wisent.ai"];
 
 /// The same name in the other zone, for a hostname in one of the two.
 fn twin(hostname: &str) -> Option<String> {
-    let [first, second] = TWIN_ZONES;
+    let &[first, second] = TWIN_ZONES else {
+        return None;
+    };
     [(first, second), (second, first)]
         .into_iter()
         .find_map(|(zone, other)| {
@@ -143,7 +142,7 @@ fn print_row(row: &Value) {
     let product = text("product");
     let hostname = text("hostname");
     let edge = text("edge");
-    // A unit row without a port says so; it was printed as port 0.
+    // A unit row without a port says so, never as a port of zero.
     let port = match row["port"].as_u64() {
         Some(port) => port.to_string(),
         None => "not declared".to_string(),
