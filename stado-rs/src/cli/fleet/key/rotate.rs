@@ -1,108 +1,19 @@
 //! Key generation and rotation in the selected credential store.
 //!
-//! `generate` creates a fresh ed25519 pair for a target. `rotate` installs the
+//! `generate` creates a fresh SSH key pair for a target. `rotate` installs the
 //! new public key through the still-valid old key, overwrites the store item,
 //! verifies the channel with the new key, and only then removes the old public
 //! key. Failed verification restores the old item.
 
 use crate::cli::CmdError;
-use crate::deploy::{CommandSpec, Runner};
-use crate::primitives::failure::FailureCode;
+use crate::deploy::Runner;
 use serde_json::{json, Value};
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::host::{install_public_key, remove_public_key, verify_new_key};
-use super::{
-    configured_client, item_id, read_back, run_checked, settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
-};
+use super::{configured_client, item_id, read_back, settle_readable, CHANNEL_FIELDS, ITEM_TYPE};
 
-struct KeyPair {
-    private_key: String,
-    public_key: String,
-    fingerprint: String,
-}
-struct GeneratedFiles {
-    private: PathBuf,
-    public: PathBuf,
-}
-
-impl Drop for GeneratedFiles {
-    // A transient private key left behind is an unencrypted key on disk, so a
-    // removal that fails is said with the path rather than ignored.
-    fn drop(&mut self) {
-        for path in [&self.private, &self.public] {
-            if let Err(error) = std::fs::remove_file(path) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!(
-                        "stado fleet key: the transient key {} could not be removed and is still on disk: {error}",
-                        path.display()
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// Generate an ed25519 pair in a unique transient path guarded by Drop.
-async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, CmdError> {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| {
-            CmdError::declaration(format!(
-                "the system clock reads before the Unix epoch: {error}"
-            ))
-        })?
-        .as_nanos();
-    let path =
-        std::env::temp_dir().join(format!("stado-fleet-keygen-{}-{nonce}", std::process::id()));
-    let path_str = path.to_string_lossy().to_string();
-    run_checked(
-        runner,
-        CommandSpec::new(vec![
-            "ssh-keygen".to_string(),
-            "-t".to_string(),
-            "ed25519".to_string(),
-            "-f".to_string(),
-            path_str.clone(),
-            "-N".to_string(),
-            String::new(),
-            "-C".to_string(),
-            comment.to_string(),
-        ]),
-        "ssh-keygen ed25519",
-        FailureCode::InfraDown,
-    )
-    .await?;
-    let files = GeneratedFiles {
-        private: path,
-        public: PathBuf::from(format!("{path_str}.pub")),
-    };
-    let read = |path: &PathBuf| {
-        std::fs::read_to_string(path).map_err(|exc| {
-            CmdError::from(exc).within(format!("cannot read the generated key {}", path.display()))
-        })
-    };
-    let private_key = read(&files.private)?;
-    let public_key = read(&files.public)?;
-    let fingerprint_line = run_checked(
-        runner,
-        CommandSpec::new(vec!["ssh-keygen".to_string(), "-lf".to_string(), path_str]),
-        "ssh-keygen -lf",
-        FailureCode::InfraDown,
-    )
-    .await?;
-    let fingerprint = fingerprint_line
-        .split_whitespace()
-        .find(|part| part.starts_with("SHA256:"))
-        .unwrap_or_default()
-        .to_string();
-    Ok(KeyPair {
-        private_key: private_key.trim().to_string(),
-        public_key: public_key.trim().to_string(),
-        fingerprint,
-    })
-}
+mod pair;
+use pair::{generate_pair, KeyPair};
 
 /// Store the pair, grant the channel's reader, and read the public half back
 /// through that same reader.
@@ -238,15 +149,28 @@ pub async fn rotate(runner: &Runner, target: &str, as_json: bool) -> Result<bool
             ))
         })?;
     let old_fields = Value::Object(old_fields);
+    // A rotation restores the old key when the new one fails, so the stored
+    // fingerprint and public key it restores to are read before anything
+    // changes, and a stored item without them is refused by name.
     let old_fingerprint = old_context
         .get("fingerprint")
         .and_then(Value::as_str)
-        .unwrap_or_default()
+        .ok_or_else(|| {
+            CmdError::missing(format!(
+                "the context of {} records no fingerprint, which a failed rotation restores",
+                item_id(target)
+            ))
+        })?
         .to_string();
     let old_public = old_fields
         .get("public_key")
         .and_then(Value::as_str)
-        .unwrap_or_default()
+        .ok_or_else(|| {
+            CmdError::missing(format!(
+                "{} stores no public_key, which a successful rotation removes from the host",
+                item_id(target)
+            ))
+        })?
         .to_string();
     let pair = generate_pair(runner, &item_id(target)).await?;
     // The channel still resolves the old stored key while installing the new
