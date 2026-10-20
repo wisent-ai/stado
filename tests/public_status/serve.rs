@@ -14,6 +14,7 @@
 use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::process::{Child, Stdio};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -31,7 +32,7 @@ impl Drop for Page {
 }
 
 /// Start the page and wait for its own line saying where it listens.
-fn start(deployment: &mut Deployment) -> (Page, String) {
+fn start(deployment: &mut Deployment, head_limit: Option<usize>) -> (Page, String) {
     let free = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, Default::default())))
         .expect("the operating system hands out a port");
     let bind = free
@@ -39,8 +40,26 @@ fn start(deployment: &mut Deployment) -> (Page, String) {
         .expect("the handed-out address")
         .to_string();
     drop(free);
-    let mut child = deployment
-        .command()
+    let mut command = deployment.command();
+    if let Some(limit) = head_limit {
+        command.env(
+            "WC_DASHBOARD_REQUEST_LIMITS",
+            json!({
+                "head_bytes": limit,
+                "body_bytes": limit,
+                "registry_import_bytes": limit,
+                "operator_console": {
+                    "argument_count": limit,
+                    "argument_bytes": limit,
+                    "input_bytes": limit,
+                    "request_bytes": limit
+                },
+                "fleet_join": { "request_bytes": limit, "field_bytes": limit }
+            })
+            .to_string(),
+        );
+    }
+    let mut child = command
         .args(["public-status", "serve", "--bind", &bind])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -67,7 +86,7 @@ async fn get(origin: &str, path: &str) -> (StatusCode, String) {
 #[tokio::test]
 async fn the_page_reads_the_published_status_on_every_request() {
     let mut deployment = Deployment::start("serve");
-    let (_page, origin) = start(&mut deployment);
+    let (_page, origin) = start(&mut deployment, None);
 
     let (status, body) = get(&origin, "/").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
@@ -103,5 +122,93 @@ async fn the_page_reads_the_published_status_on_every_request() {
         .await
         .expect("the page answers a POST");
     assert_eq!(posted.status(), StatusCode::METHOD_NOT_ALLOWED);
+    deployment.passed();
+}
+
+/// A real socket request ending exactly at the declared bound is accepted;
+/// a larger head is refused before the store is read.
+#[tokio::test]
+async fn the_status_page_bounds_request_heads() {
+    let mut deployment = Deployment::start("bounded-head");
+    let valid = b"GET /status.json HTTP/1.1\r\n\r\n";
+    let (_page, origin) = start(&mut deployment, Some(valid.len()));
+    let address = origin.strip_prefix("http://").expect("the page origin");
+
+    let mut accepted = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("connect");
+    accepted.write_all(valid).await.expect("send valid head");
+    let mut accepted_reply = String::new();
+    accepted
+        .read_to_string(&mut accepted_reply)
+        .await
+        .expect("read status");
+    assert!(
+        accepted_reply
+            .lines()
+            .next()
+            .expect("status line")
+            .contains(&StatusCode::SERVICE_UNAVAILABLE.to_string()),
+        "{accepted_reply}"
+    );
+    assert!(
+        accepted_reply.contains("no status is published"),
+        "{accepted_reply}"
+    );
+    let mut with_body = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("connect");
+    with_body
+        .write_all(&[valid.as_slice(), &[u8::MAX]].concat())
+        .await
+        .expect("send head and body");
+    let mut body_reply = String::new();
+    with_body
+        .read_to_string(&mut body_reply)
+        .await
+        .expect("read status");
+    assert!(
+        body_reply
+            .lines()
+            .next()
+            .expect("status line")
+            .contains(&StatusCode::SERVICE_UNAVAILABLE.to_string()),
+        "{body_reply}"
+    );
+
+    let oversized = format!(
+        "GET /status.json HTTP/1.1\r\nX-Fill: {}\r\n\r\n",
+        "x".repeat(valid.len())
+    );
+    let mut refused = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("connect");
+    refused
+        .write_all(oversized.as_bytes())
+        .await
+        .expect("send oversized head");
+    let mut refused_reply = String::new();
+    refused
+        .read_to_string(&mut refused_reply)
+        .await
+        .expect("read refusal");
+    assert!(
+        refused_reply
+            .lines()
+            .next()
+            .expect("status line")
+            .contains(&StatusCode::BAD_REQUEST.to_string()),
+        "{refused_reply}"
+    );
+    assert!(
+        refused_reply.contains("HTTP request head too large"),
+        "{refused_reply}"
+    );
+    deployment.report["bounded_head"] = json!({
+        "limit": valid.len(),
+        "accepted": accepted_reply,
+        "accepted_with_binary_body": body_reply,
+        "refused": refused_reply
+    });
     deployment.passed();
 }

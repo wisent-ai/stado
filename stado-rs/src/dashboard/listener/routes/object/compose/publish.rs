@@ -13,16 +13,16 @@ use crate::remote::object_store::ObjectRef;
 use crate::dashboard::listener::auth::release_upload_target_key;
 use crate::dashboard::listener::{http_status, storage_error_response, Dashboard, Response};
 
-use super::{object_compose_error, object_compose_response, ObjectComposeRequest};
+use super::{object_compose_error, object_compose_response, ObjectComposeRequest, Sha256Digest};
 
 impl Dashboard {
     pub(crate) async fn publish_composition(
         &self,
         payload: &ObjectComposeRequest,
         object: &ObjectRef,
-        chunks: &[(ObjectRef, [u8; 32])],
+        chunks: &[(ObjectRef, Sha256Digest)],
         metadata: &BTreeMap<String, String>,
-        expected_upload_digest: [u8; 32],
+        expected_upload_digest: Sha256Digest,
     ) -> Response {
         // Hold across publication, metadata, mirror writes and chunk cleanup:
         // a handoff must not capture half of an accepted composition.
@@ -40,7 +40,6 @@ impl Dashboard {
             }
         };
         let mut object_digest = Sha256::new();
-        let mut assembled_size = 0usize;
         for ((chunk_object, expected_digest), declared) in chunks.iter().zip(&payload.chunks) {
             let bytes = match self.store.read_bytes(&chunk_object.storage_path()).await {
                 Ok(Some(bytes)) => bytes,
@@ -57,7 +56,7 @@ impl Dashboard {
                     )
                 }
             };
-            let actual_digest: [u8; 32] = Sha256::digest(&bytes).into();
+            let actual_digest = Sha256::digest(&bytes);
             if bytes.len() != declared.size || actual_digest != *expected_digest {
                 return object_compose_error(
                     http_status(reqwest::StatusCode::UNPROCESSABLE_ENTITY),
@@ -71,25 +70,35 @@ impl Dashboard {
                 );
             }
             object_digest.update(&bytes);
-            assembled_size += bytes.len();
-        }
-        if assembled_size != payload.size {
-            return object_compose_error(
-                http_status(reqwest::StatusCode::UNPROCESSABLE_ENTITY),
-                "assembled object size differs from the composition request",
-            );
-        }
-        let assembled_digest: [u8; 32] = object_digest.finalize().into();
-        if assembled_digest != expected_upload_digest {
-            return object_compose_error(
-                http_status(reqwest::StatusCode::UNPROCESSABLE_ENTITY),
-                "assembled object SHA-256 differs from upload_id",
-            );
         }
         if let Err(error) = staged.flush() {
             return object_compose_error(
                 http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                 error.to_string(),
+            );
+        }
+        // The size is the staged file's own, measured after every chunk was
+        // written to it.
+        let assembled_size = match staged.as_file().metadata() {
+            Ok(staged_file) => staged_file.len(),
+            Err(error) => {
+                return object_compose_error(
+                    http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
+                    format!("the assembled object's size cannot be read: {error}"),
+                )
+            }
+        };
+        if assembled_size != payload.size as u64 {
+            return object_compose_error(
+                http_status(reqwest::StatusCode::UNPROCESSABLE_ENTITY),
+                "assembled object size differs from the composition request",
+            );
+        }
+        let assembled_digest = object_digest.finalize();
+        if assembled_digest != expected_upload_digest {
+            return object_compose_error(
+                http_status(reqwest::StatusCode::UNPROCESSABLE_ENTITY),
+                "assembled object SHA-256 differs from upload_id",
             );
         }
 
@@ -124,7 +133,7 @@ impl Dashboard {
                         )
                     }
                 };
-                let existing_digest: [u8; 32] = Sha256::digest(&existing).into();
+                let existing_digest = Sha256::digest(&existing);
                 if existing.len() != payload.size || existing_digest != expected_upload_digest {
                     return object_compose_response(
                         http_status(reqwest::StatusCode::CONFLICT),
@@ -197,7 +206,11 @@ impl Dashboard {
 
         let cleanup_paths = if payload.if_absent {
             let prefix = format!("{target_path}.__stado_upload/");
-            match self.store.list_paths(&prefix, 0).await {
+            match self
+                .store
+                .list_paths(&prefix, crate::queue::Listing::Every)
+                .await
+            {
                 Ok(paths) => paths
                     .into_iter()
                     .filter(|path| {

@@ -7,6 +7,10 @@ mod publish;
 use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
+use sha2::Sha256;
+
+/// One SHA-256 output.
+pub(super) type Sha256Digest = sha2::digest::Output<Sha256>;
 
 use crate::remote::object_store::{ObjectRef, OBJECT_API_CHUNK_BYTES};
 
@@ -89,11 +93,11 @@ impl Dashboard {
             );
         }
         let expected_upload_digest = match parse_sha256(&payload.upload_id) {
-            Some(digest) => digest,
-            None => {
+            Ok(digest) => digest,
+            Err(error) => {
                 return object_compose_error(
                     http_status(reqwest::StatusCode::BAD_REQUEST),
-                    "upload_id must be a lowercase SHA-256 digest",
+                    format!("upload_id must be a lowercase SHA-256 digest: {error}"),
                 )
             }
         };
@@ -114,34 +118,26 @@ impl Dashboard {
             );
         }
 
-        let mut declared_total = 0usize;
+        // What the chunks have still to cover. The chunk count was checked
+        // against the object size above, and every chunk must cover exactly
+        // the next window, so together they cover the object exactly.
+        let mut remaining = payload.size;
         let mut chunks = Vec::with_capacity(payload.chunks.len());
         for (index, chunk) in payload.chunks.iter().enumerate() {
-            let expected_size = payload
-                .size
-                .saturating_sub(declared_total)
-                .min(OBJECT_API_CHUNK_BYTES);
+            let expected_size = remaining.min(OBJECT_API_CHUNK_BYTES);
             if chunk.size != expected_size {
                 return object_compose_error(
                     http_status(reqwest::StatusCode::BAD_REQUEST),
                     format!("chunk {index} must declare exactly {expected_size} bytes"),
                 );
             }
-            declared_total = match declared_total.checked_add(chunk.size) {
-                Some(total) => total,
-                None => {
-                    return object_compose_error(
-                        http_status(reqwest::StatusCode::BAD_REQUEST),
-                        "composition chunk sizes overflow",
-                    )
-                }
-            };
+            remaining -= chunk.size;
             let expected_digest = match parse_sha256(&chunk.sha256) {
-                Some(digest) => digest,
-                None => {
+                Ok(digest) => digest,
+                Err(error) => {
                     return object_compose_error(
                         http_status(reqwest::StatusCode::BAD_REQUEST),
-                        format!("chunk {index} sha256 must be a lowercase SHA-256 digest"),
+                        format!("chunk {index} sha256 must be a lowercase SHA-256 digest: {error}"),
                     )
                 }
             };
@@ -169,12 +165,6 @@ impl Dashboard {
                 );
             }
             chunks.push((chunk_object, expected_digest));
-        }
-        if declared_total != payload.size {
-            return object_compose_error(
-                http_status(reqwest::StatusCode::BAD_REQUEST),
-                "composition chunk sizes do not equal the declared object size",
-            );
         }
         let metadata =
             match merged_object_metadata(&object, &payload.content_type, &payload.metadata) {
@@ -238,17 +228,21 @@ impl Dashboard {
     }
 }
 
-fn parse_sha256(value: &str) -> Option<[u8; 32]> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+/// The SHA-256 digest a lowercase hexadecimal text names: refused when the
+/// text holds anything but lowercase hex digits, or is not exactly one
+/// digest long.
+fn parse_sha256(value: &str) -> Result<Sha256Digest, String> {
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return None;
+        return Err(format!(
+            "{value:?} holds a character that is not a lowercase hex digit"
+        ));
     }
-    let mut digest = [0u8; 32];
-    hex::decode_to_slice(value, &mut digest).ok()?;
-    Some(digest)
+    let mut digest = Sha256Digest::default();
+    hex::decode_to_slice(value, &mut digest).map_err(|error| format!("{value:?}: {error}"))?;
+    Ok(digest)
 }
 
 /// Composition has a transport envelope because the client has already
