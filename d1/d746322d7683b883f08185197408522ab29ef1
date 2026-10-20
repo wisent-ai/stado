@@ -17,6 +17,13 @@ Repairs: "fleet approve names an enrollment request without a status" its janito
 Repairs: "stado product swift sourcekit no longer holds the disk janitor's cleanup lock" its lock paths are read from the space reclaim module
 Repairs: "Gates and space report measure the volumes the janitor's rule measures" its volume readers are read from the space reclaim module
 Repairs: "A product build holds the janitor's cleanup lock for its whole run" its workload lock is named space reclaim
+Repairs: "Expose cleanup hold provenance and qualify editor concurrency" its lines in product.rs are replaced by this change.
+Repairs: "Snapshot cleaner and its journey in the project's formatting" the lines of it this change rewrites are replaced by it.
+Repairs: "The janitor keeps a build directory a running build holds" the lines of it this change rewrites are replaced by it.
+Repairs: "Refuse and retain unreadable cleanup turn records" the lines of it this change rewrites are replaced by it.
+Repairs: "Preserve cleanup holder enumeration failures" the lines of it this change rewrites are replaced by it.
+Repairs: "Release store pins: read the version slots through a typed view of the agent state" the lines of it this change rewrites are replaced by it.
+Repairs: "The snapshot cleaner deletes only the snapshots of its home's volume" the lines of it this change rewrites are replaced by it.
 
 Harsh-Review-Attacked: whether a host unit still started with --disk-cleanup breaks on upgrade; the new parser refuses it, and "Migrate resident product unit before replacing its executable" in this push migrates the resident unit before the executable is replaced, which tests/install/resident/resident_unit.mjs reads on a dedicated host.
 Harsh-Review-Attacked: whether a reader of the renamed reason codes is left behind; the codes are written and read by the same Stado release, and no desktop view decodes them.
