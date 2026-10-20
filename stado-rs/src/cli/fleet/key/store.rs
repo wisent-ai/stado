@@ -59,15 +59,10 @@ pub(crate) async fn run_checked(
 }
 
 /// Key management is an operator action routed through the globally selected
-/// credential store; Skarbiec uses the external admin bootstrap grant.
+/// credential store: Stado's own client asks Skarbiec with Stado's grant, and
+/// a machine whose store is a file reads and writes its keys there.
 pub(crate) fn configured_client() -> Result<Client, CmdError> {
-    let credentials = crate::credential_store::admin_credentials()?;
-    Ok(Client::new(
-        &credentials.url,
-        &credentials.consumer,
-        &credentials.token_file,
-        crate::skarbiec::GrantMode::RereadPerRequest,
-    )?)
+    Ok(Client::stado()?)
 }
 
 /// The destination `target`'s channel opens to: its registry entry, through
@@ -89,7 +84,7 @@ pub(in crate::cli::fleet::key) async fn channel_destination(
 /// Fields of a key-pair item the SSH channel's reader must be able to read.
 /// Grants are per item, so these are exactly the capabilities a freshly minted
 /// key is missing.
-pub(in crate::cli::fleet::key) const CHANNEL_FIELDS: [&str; 2] = ["private_key", "public_key"];
+pub(in crate::cli::fleet::key) const CHANNEL_FIELDS: &[&str] = &["private_key", "public_key"];
 
 /// Finish a key write: make the item readable by the consumer the SSH channel
 /// reads it through, then prove it through that same consumer.

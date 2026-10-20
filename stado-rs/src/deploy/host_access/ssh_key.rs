@@ -71,12 +71,12 @@ fn missing_key(id: &str, error: SkarbiecError) -> DeployError {
 fn unreachable_store(
     id: &str,
     target: &str,
-    url: &str,
+    store: &str,
     consumer: &str,
     error: SkarbiecError,
 ) -> DeployError {
     DeployError::unreachable(format!(
-        "reading {id} as {consumer} from the credential store at {url} failed: {error}. That \
+        "reading {id} as {consumer} from {store} failed: {error}. That \
          store may be the one {target} serves, in which case repairing {target} needs a key only \
          {target} can hand out. The owner-only way out of that circle is \
          {OWNER_KEY_FILE_ENV}=<path to this host's key>, which this command reads before it asks \
@@ -145,7 +145,7 @@ fn owner_key_override() -> Result<Option<KeyFile>, DeployError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
+        if crate::primitives::file_mode::open_to_others(metadata.permissions().mode()) {
             return Err(DeployError(format!(
                 "{OWNER_KEY_FILE_ENV} must not grant group or other permissions"
             ))
@@ -191,17 +191,10 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
         }
     }
     let id = item_id(target);
-    let credentials = crate::credential_store::admin_credentials().map_err(|error| {
-        let failure = error.failure_code();
-        DeployError(error.to_string()).stating(failure)
-    })?;
-    let client = Client::new(
-        &credentials.url,
-        &credentials.consumer,
-        &credentials.token_file,
-        crate::skarbiec::GrantMode::RereadPerRequest,
-    )
-    .map_err(|error| {
+    // Stado's own client reads through the selected credential store: a
+    // machine whose store is a file reads the key it holds there, with no
+    // Skarbiec asked.
+    let client = Client::stado().map_err(|error| {
         let failure = error.failure_code();
         DeployError(error.to_string()).stating(failure)
     })?;
@@ -226,13 +219,17 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
         Err(error) => match held_key(target) {
             Some(held) => return write_key(&held),
             None => {
+                let store = match crate::credential_store::skarbiec_url() {
+                    Some(url) => format!("the credential store at {url}"),
+                    None => "the selected credential store".to_string(),
+                };
                 return Err(unreachable_store(
                     &id,
                     target,
-                    &credentials.url,
-                    &credentials.consumer,
+                    &store,
+                    crate::config::skarbiec_consumer(),
                     error,
-                ))
+                ));
             }
         },
     };
