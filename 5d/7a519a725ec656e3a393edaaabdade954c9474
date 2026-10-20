@@ -17,6 +17,6 @@ Repairs: "Align reclaim reports, release gate and real journeys" its lines in .w
 Repairs: "Release: name a required platform without post-build tests before it is built" its lines in enroll.rs, submit.rs are replaced by this change.
 Repairs: "Expose cleanup hold provenance and qualify editor concurrency" its lines in .wisent-release.json are replaced by this change.
 Repairs: "Keep verb dependencies compatible with predecessor installers" its lines in .wisent-release.json are replaced by this change.
+Repaired-By: "Every count Stado keeps adds one item through one tally" repairs it in this push, naming this commit on its Repairs line
 
 Harsh-Review-Attacked: whether the change does what its message says and nothing else; its patch was read against the message, every refusal it adds names its cause, and no line it adds answers a missing value with one nobody stated.
-Repaired-By: "Every count Stado keeps adds one item through one tally" repairs it in this push, naming this commit on its Repairs line
