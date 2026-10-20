@@ -13,6 +13,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Service onboarding: surfaces, onboarding kind and status are enums the CLI and the registry share" its onboarding validation deserialized the surface, kind and status fields one by one beside the record they belong to; the whole block now deserializes as that record
+
 Harsh-Review-Attacked: whether the typed readers accept less than the hand checks did; each refused an object with an unknown key and now deny_unknown_fields does, and each read a missing role, field, name or destination as an empty string, which the typed records now refuse as a missing field, naming it, instead of passing on an empty value.
 Harsh-Review-Attacked: whether the refusals still say where; each refusal keeps its location (secret_env.<name>, the fallback path's index, the onboarding block) and adds serde's own reason.
 Harsh-Review-Attacked: whether the onboarding block and its record agree; the block now deserializes as OnboardingProduct itself, whose fields are the seven keys the validation listed and whose enums are the vocabularies it checked, so a field or word the record does not hold cannot pass validation and fail later.
