@@ -13,6 +13,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Providers report a VM's lifecycle as a typed phase beside the provider's own word" its power and provisioning readers sat among the Azure request builders; they move whole to the power module the inventory sources read the lifecycle through
+
 Harsh-Review-Attacked: whether the stored kind words changed; ResourceKind serializes snake_case to the words the sources wrote (instance, persistent_disk, managed_disk, volume, snapshot, public_ip and the rest) and Other as resource, so stored snapshots, policy rules and canonical ids read the same.
 Harsh-Review-Attacked: whether each phase decision keeps its old meaning for the words the providers send; stopped, stopping, deallocated and deallocating, and GCE's TERMINATED for an instance, are the Stopped phase; AWS shutting-down and terminated, and deleted, deleting and failed, are Ended; running, staging, provisioning and pending are Running; so cost allocation, idle detection and schedules decide as their word lists did.
 Harsh-Review-Attacked: whether an unplaced status word is answered with a phase nobody stated; it is LifecyclePhase::Unknown, the variant that says the mapping does not place it, which no rule acts on, and the provider's own word stays in state.
