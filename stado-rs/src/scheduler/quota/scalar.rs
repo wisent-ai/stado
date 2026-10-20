@@ -9,8 +9,8 @@ use super::QuotaError;
 /// absent key (the callers count it as nothing, Python's default), the number
 /// for a number or a numeric string (a float truncates), and a refusal naming
 /// the field and the value for anything else. Garbage in the operator-written
-/// overlay used to read as 0, so a misspelt reservation freed the capacity it
-/// was meant to hold.
+/// overlay is refused, never read as zero, so a misspelt reservation never
+/// frees the capacity it is meant to hold.
 pub(in crate::scheduler::quota) fn py_int(
     field: &str,
     value: Option<&Value>,
