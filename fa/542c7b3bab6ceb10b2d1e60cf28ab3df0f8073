@@ -13,6 +13,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Autonomy: an inventory record's kind and lifecycle are enums the sources map once" its inventory sources and the stateful policy read a resource's ownership from several spellings of each label and three keys for statefulness; each now reads one declared label
+
 Harsh-Review-Attacked: whether dropping the alternate spellings removes protection from a resource someone marked stateful another way; the autonomy documentation names stado-stateful = true as the one mark and says a resource labelled another way has no value for that field, and kinds that hold data (disks, volumes, databases) stay stateful by kind whatever their labels.
 Harsh-Review-Attacked: whether ownership now widens; Owned needs managed-by = stado, the value the inventory readers themselves write, Adopted needs stado-adopted parsed as the boolean true, and a resource without either is observed or unknown, so fewer resources can be mutated, not more.
 Harsh-Review-Attacked: whether the GCP reader still guesses Stado's resources from a name; it now takes only the probe's stado_managed mark, which the probe sets from the configured INSTANCE_PREFIX agent name for instances and their boot disks, and a missing or false mark is not Stado's.
