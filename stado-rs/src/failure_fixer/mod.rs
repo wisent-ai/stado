@@ -62,9 +62,9 @@ pub struct FailureRecord {
 /// One `failed/<jid>.json` as a record, or `None` when it is absent or cannot
 /// be one. A record that is not JSON, or names no `job_id`, `command` or
 /// `failed_at`, is said on stderr with its path and left out: with an empty
-/// job id every such record shared one state file, with an empty failure
-/// time it was dropped by every `--since`, and with an empty command a fix
-/// was dispatched for nothing. `batch_id` and `error` may be absent; the
+/// job id every such record would share one state file, with an empty
+/// failure time every `--since` would drop it, and with an empty command a
+/// fix would be dispatched for nothing. `batch_id` and `error` may be absent; the
 /// prompt says so.
 async fn parse_failed_blob(
     store: &JobStorage,

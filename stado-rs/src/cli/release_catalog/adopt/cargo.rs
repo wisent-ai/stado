@@ -10,11 +10,11 @@ use serde_json::{json, Map, Value};
 
 use super::{fill, Planned, CARGO_BUILD};
 use crate::cli::CmdError;
-use crate::release_pipeline::{GateKind, PRODUCT_MANIFEST};
+use crate::release_pipeline::{GateKind, PRODUCT_MANIFEST, SCHEMA_VERSION};
 
 /// The platforms a Rust product is released for, as the fleet's builders
 /// declare them.
-const PLATFORMS: [&str; 2] = ["darwin-arm64", "linux-amd64"];
+const PLATFORMS: &[&str] = &["darwin-arm64", "linux-amd64"];
 
 /// The manifest and script a Rust checkout is released with: every binary
 /// target is built and staged and the version is read from Cargo.toml. The
@@ -55,7 +55,7 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         })
         .collect();
     let manifest = json!({
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "product": product,
         "releases": true,
         "version_source": {
@@ -132,24 +132,37 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let root = std::fs::canonicalize(&manifest)?;
-    let package = metadata["packages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|package| {
-            package["manifest_path"]
-                .as_str()
-                .and_then(|path| std::fs::canonicalize(path).ok())
-                .is_some_and(|path| path == root)
-        })
-        .ok_or_else(|| {
-            CmdError::refused(format!(
-                "{} is a workspace without a root package; adopt the member that ships the program",
+    // The root package is the one whose manifest is the checkout's; a
+    // manifest cargo names but that cannot be resolved is refused, never
+    // read as some other package's.
+    let mut root_package = None;
+    for package in metadata["packages"].as_array().into_iter().flatten() {
+        let Some(path) = package["manifest_path"].as_str() else {
+            return Err(CmdError::click(format!(
+                "cargo metadata for {} lists a package without its manifest_path: {package}",
                 manifest.display()
             ))
+            .stating(crate::primitives::failure::FailureCode::Config));
+        };
+        let resolved = std::fs::canonicalize(path).map_err(|error| {
+            CmdError::click(format!(
+                "cargo metadata names the manifest {path}, which cannot be resolved: {error}"
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
-    // A package without its name or version cannot be adopted: read as "",
-    // it was catalogued as a product with no name or version.
+        if resolved == root {
+            root_package = Some(package);
+            break;
+        }
+    }
+    let package = root_package.ok_or_else(|| {
+        CmdError::refused(format!(
+            "{} is a workspace without a root package; adopt the member that ships the program",
+            manifest.display()
+        ))
+    })?;
+    // A package without its name or version cannot be adopted, and is never
+    // catalogued as a product with no name or version.
     let text = |key: &str| {
         package[key]
             .as_str()
