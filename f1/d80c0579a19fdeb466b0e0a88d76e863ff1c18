@@ -15,6 +15,8 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Repairs: "stado ci delivery: whether the delivery path stands, and every way it is down" its unit read ran launchd's event log, holding every reader of the report for minutes
 Repairs: "CI: check every new commit of main and install only the last green one" its help for the delivery report did not say the unit is read by its state alone
+Repairs: "Seed freshness says what it could not read instead of reading it as nothing" its lines in CHANGELOG.md, evidence.rs, join.rs, render.rs, states.rs are replaced by this change.
+
 Harsh-Review-Attacked: a failing unit missed because events are skipped; failing() is computed from state, pid, runs and last exit code, which the script still prints before the event branch
 Harsh-Review-Attacked: the skip word reaching an older script that does not know it; the script travels inside the same binary, and an unknown word would fall through to the log read, never to a wrong state
 Harsh-Review-Attacked: other callers losing their events; only the delivery report calls the state-only inspection, inspect_label and the carrying read keep Read and Same as before
