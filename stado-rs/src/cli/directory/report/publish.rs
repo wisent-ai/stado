@@ -21,17 +21,11 @@ use crate::cli::directory::report::markers::{prune_outcome, sweep_markers, write
 /// one bounded URL - so writing it any other way produces a file the consumer
 /// rejects.
 ///
-/// This end of the directory had a writer and no remover, so the markers only
-/// ever accumulated. operator-host carries 11 of them and the directory
-/// declares 3: one endpoint under three names (`stado-api.local`,
-/// `stado-object.local`, `stado-object-api.local`, all `http://127.0.0.1:8765`),
-/// one relationship under two ports (`weles-skarbiec.local` -> 8786 and
-/// `skarbiec-weles.local` -> 6119, while the registry says 19095), and
-/// `stado-weles-api.local` -> 8766, a port nothing has ever bound. None of
-/// those is a stale copy of a live answer: each is an address some consumer on
-/// this host will dial forever, and no run of anything has ever contradicted
-/// one. So every run now states the difference between what the directory
-/// declares and what the directory left behind.
+/// A marker the directory no longer declares is an address some consumer on
+/// this host will keep dialing: one endpoint can be left under several names,
+/// one relationship under several ports, or a name under a port nothing
+/// binds, and nothing a consumer runs contradicts it. So every run states the
+/// difference between what the directory declares and what it left behind.
 ///
 /// Reporting is the default and deletion is not. `--prune` removes exactly the
 /// undeclared markers and prints each one; a marker the directory does declare
@@ -111,7 +105,6 @@ pub(in crate::cli::directory) async fn publish(
         .collect();
     let sweep = sweep_markers(&forwards, &declared)?;
     let mut pruned: Vec<Value> = Vec::new();
-    let mut failed = 0;
     if prune {
         // One unlink that will not go through does not end the sweep. The
         // markers already removed are removed, the rest are still findings,
@@ -120,10 +113,7 @@ pub(in crate::cli::directory) async fn publish(
         for fossil in &sweep.fossil {
             let (status, detail) = match std::fs::remove_file(&fossil.marker) {
                 Ok(()) => ("removed", Value::Null),
-                Err(error) => {
-                    failed += 1;
-                    ("failed", Value::String(error.to_string()))
-                }
+                Err(error) => ("failed", Value::String(error.to_string())),
             };
             pruned.push(json!({
                 "service": fossil.service,
@@ -134,6 +124,11 @@ pub(in crate::cli::directory) async fn publish(
             }));
         }
     }
+    // The markers that would not go, counted from what the sweep reported.
+    let failed = pruned
+        .iter()
+        .filter(|row| row["status"] == "failed")
+        .count();
     // Of the markers PRESENT, how many a declaration accounts for. Not the
     // size of the declared set: the measured sentence is "11 markers, of which
     // the directory declares 3", and a declared service whose marker this run
@@ -174,10 +169,7 @@ pub(in crate::cli::directory) async fn publish(
     // anyone last confirmed it answers.
     let seen = observations::load();
     // A field a row lacks is said to be unreported, not printed as nothing.
-    let reported = |entry: &Value, key: &str| match entry.get(key).and_then(Value::as_str) {
-        Some(text) => text.to_string(),
-        None => "not reported".to_string(),
-    };
+    let reported = |entry: &Value, key: &str| crate::cli::reporting::field(&entry[key]);
     for entry in &published {
         let service = reported(entry, "service");
         println!(
