@@ -17,6 +17,6 @@ Repairs: "Discover declared command children from structured help" its lines in 
 Repairs: "Audit built CLI command trees and consolidate local space reclaim" its lines in mod.rs are replaced by this change.
 Repairs: "fleet approve names an enrollment request without a status" its lines in mod.rs are replaced by this change.
 Repairs: "Stado's model-judged decisions read a schema-bound choice, not a line's first word" its lines in mod.rs are replaced by this change.
+Repaired-By: "A host's link block names every datum it could not read and why" repairs it in this push, naming this commit on its Repairs line
 
 Harsh-Review-Attacked: a decimal figure such as a version with two dots cannot reach the parser any more; the pattern matches the trailing decimal before the unit, which is the figure PyTorch writes.
-Repaired-By: "A host's link block names every datum it could not read and why" repairs it in this push, naming this commit on its Repairs line
