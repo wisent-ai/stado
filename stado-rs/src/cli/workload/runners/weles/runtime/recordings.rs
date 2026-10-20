@@ -106,7 +106,7 @@ pub(crate) async fn set_weles_recordings_dir(
                 "target": target,
                 "recordings_directory": path,
                 "registry_generation": generation,
-                "updated_launch_agents": 0,
+                "updated_launch_agents": [],
                 "launch_agents_local": false,
             }));
         } else {
@@ -123,8 +123,9 @@ pub(crate) async fn set_weles_recordings_dir(
         .ok_or_else(|| {
             CmdError::declaration("HOME is not set; set it before updating LaunchAgents")
         })?
-        .join("Library/LaunchAgents");
-    let mut touched = 0usize;
+        .join(crate::deploy::service::USER_LAUNCHD_AGENTS);
+    // The plists this host rewrote, by name; the report counts them.
+    let mut updated = Vec::new();
     for item in std::fs::read_dir(&agents_dir)? {
         let plist = item?.path();
         let Some(name) = plist.file_name().and_then(|name| name.to_str()) else {
@@ -134,7 +135,7 @@ pub(crate) async fn set_weles_recordings_dir(
             continue;
         }
         set_plist_recordings_root(&plist, path)?;
-        touched += 1;
+        updated.push(name.to_string());
         if !json_output {
             println!("  {name}: WELES_RECORDINGS_ROOT={path}");
         }
@@ -145,11 +146,14 @@ pub(crate) async fn set_weles_recordings_dir(
             "target": target,
             "recordings_directory": path,
             "registry_generation": generation,
-            "updated_launch_agents": touched,
+            "updated_launch_agents": updated,
             "launch_agents_local": true,
         }));
     } else {
-        println!("updated {touched} LaunchAgent plist(s); reload Weles agents to apply");
+        println!(
+            "updated {} LaunchAgent plist(s); reload Weles agents to apply",
+            updated.len()
+        );
     }
     Ok(())
 }
