@@ -1,24 +1,24 @@
 //! The isolated run `main.rs` drives: the real stado with `HOME` under the
-//! checkout's build directory, a last-known-good registry copy naming this
-//! machine as the reader, and a registry authority that accepts every SSH
-//! connection and sends nothing.
-use std::net::{Ipv4Addr, TcpListener};
+//! test's output directory, a last-known-good registry copy naming this
+//! machine as the reader, and a registry authority served by a real OpenSSH
+//! server that runs the real stado, answers one read and is then stopped, so
+//! it accepts every later connection and sends nothing (`hung_ssh`).
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::hung_ssh::HungSsh;
+
 pub(crate) const AUTHORITY: &str = "other-host";
-const AUTHORITY_STADO: &str = "/usr/local/bin/stado";
 pub(crate) const ABANDONED: &str = "request abandoned unanswered";
+/// What the reader says when the authority answered its read with its own
+/// refusal: the live authority before it is stopped.
+const AUTHORITY_ANSWERED: &str = "registry authority exited with";
 
 pub(crate) struct Run {
     pub(crate) root: PathBuf,
-    /// How many connections the authority accepted; the listener's thread
-    /// keeps each one open, so the authority stays silent rather than closed.
-    accepted: Arc<AtomicUsize>,
+    authority: Option<HungSsh>,
 }
 
 impl Run {
@@ -32,13 +32,8 @@ impl Run {
         std::fs::create_dir_all(root.join("tmp")).expect("create the run's scratch directory");
         Self {
             root,
-            accepted: Arc::default(),
+            authority: None,
         }
-    }
-
-    /// How many connections the silent authority has accepted so far.
-    pub(crate) fn accepted(&self) -> usize {
-        self.accepted.load(Ordering::SeqCst)
     }
 
     /// The real stado with nothing of this account's configuration.
@@ -71,32 +66,31 @@ impl Run {
         }
     }
 
-    /// The authority's SSH destination: a listener that accepts and never
-    /// speaks, so the SSH client waits for a banner that never comes. A
-    /// connection the listener cannot accept ends the test naming why.
-    pub(crate) fn silent_authority(&self) -> String {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, self.free_port()))
-            .expect("bind the loopback port this machine handed out");
-        let address = listener.local_addr().unwrap().to_string();
-        let accepted = Arc::clone(&self.accepted);
-        std::thread::spawn(move || {
-            let mut open = Vec::new();
-            for stream in listener.incoming() {
-                match stream {
-                    Ok(stream) => open.push(stream),
-                    Err(error) => panic!("the silent authority could not accept: {error}"),
-                }
-                accepted.store(open.len(), Ordering::SeqCst);
-            }
-        });
-        address
+    /// Serve the registry authority, let it answer one registry read, then
+    /// stop it. Answers its SSH destination and the refresh interval the
+    /// reader declares, the one measure of the wait.
+    pub(crate) fn hung_authority(&mut self) -> (String, i64) {
+        let authority = HungSsh::serve(&self.root, self.free_port());
+        let destination = authority.destination.clone();
+        let refresh_seconds = self.write_last_good(&destination);
+        self.authority = Some(authority);
+        let answered = self.registry_self("answered");
+        let said = String::from_utf8_lossy(&answered.stderr).into_owned();
+        assert!(
+            said.contains(AUTHORITY_ANSWERED),
+            "the live authority answers the read before it is stopped: {said}"
+        );
+        if let Some(authority) = &self.authority {
+            authority.hang();
+        }
+        (destination, refresh_seconds)
     }
 
     /// The copy this stado resolves its authority through: the shared
-    /// directory template with this machine as the reader and the silent
-    /// listener as the authority's SSH destination. Answers the refresh
-    /// interval the reader declares, the one measure of the wait.
-    pub(crate) fn write_last_good(&self, authority_ssh: &str) -> i64 {
+    /// directory template with this machine as the reader, the served
+    /// authority's SSH destination, and the real stado as the command the
+    /// authority runs. Answers the refresh interval the reader declares.
+    fn write_last_good(&self, authority_ssh: &str) -> i64 {
         let mut document: Value =
             serde_json::from_str(include_str!("../../service_directory/registry.json")).unwrap();
         let targets = document["targets"].as_array_mut().unwrap();
@@ -115,7 +109,7 @@ impl Run {
         authority["ssh"] = json!(authority_ssh);
         authority["services"] = json!([]);
         document["service_directory"]["authority"] =
-            json!({"target": AUTHORITY, "command": AUTHORITY_STADO});
+            json!({"target": AUTHORITY, "command": env!("CARGO_BIN_EXE_stado")});
         document["service_directory"]["services"] = json!({});
         std::fs::write(
             self.root.join(".stado/cache/registry-last-good.json"),
@@ -134,16 +128,29 @@ impl Run {
         refresh_seconds
     }
 
-    pub(crate) fn registry_self(&self) -> Output {
+    /// `stado registry self --name-only`, its stderr kept beside the run as
+    /// `<name>.stderr`.
+    pub(crate) fn registry_self(&self, name: &str) -> Output {
         let output = self
             .stado()
             .args(["registry", "self", "--name-only"])
             .output()
             .expect("run the real stado");
-        std::fs::write(self.root.join("registry-self.stderr"), &output.stderr)
+        std::fs::write(self.root.join(format!("{name}.stderr")), &output.stderr)
             .expect("keep the command's stderr beside the run");
         output
     }
+
+    /// The served authority's own log.
+    pub(crate) fn authority_log(&self) -> Option<&Path> {
+        self.authority.as_ref().map(HungSsh::log)
+    }
+}
+
+/// What a stado command's stderr says when it opened an SSH connection to
+/// `destination`: the wait it announces before the connection answers.
+pub(crate) fn connecting(destination: &str) -> String {
+    format!("czekam: SSH connection; gdzie: {destination};")
 }
 
 pub(crate) fn hostname() -> String {

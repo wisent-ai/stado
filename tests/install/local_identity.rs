@@ -4,27 +4,33 @@
 //! answers at once while the authority accepts connections and answers
 //! nothing, and refuses naming the record when this machine keeps none.
 //!
-//! The real `stado` runs with an isolated `HOME` under the checkout's build
+//! The real `stado` runs with an isolated `HOME` under the test's output
 //! directory. Its last-known-good registry copy names, as the registry
-//! authority, a loopback listener this test owns that accepts every
-//! connection and never speaks; the assertions read the listener's accepted
-//! connections, the exit status and the exact sentences. The test holds no
-//! clock: an answer that waited on the authority would never come.
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+//! authority, a real OpenSSH server on a loopback port that runs the real
+//! stado (`../host_silence/hung_ssh.rs`); it answers one read and is then
+//! stopped, so it accepts every later connection and sends nothing. The
+//! assertions read the wait each command announces, the exit status and the
+//! exact sentences. The test holds no clock: an answer that waited on the
+//! authority would never come.
+#[path = "../host_silence/hung_ssh.rs"]
+mod hung_ssh;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
+use hung_ssh::HungSsh;
+
 const READER: &str = "marker-host";
 const AUTHORITY: &str = "other-host";
-const AUTHORITY_STADO: &str = "/usr/local/bin/stado";
+/// What the reader says when the authority answered its read with its own
+/// refusal: the live authority before it is stopped.
+const AUTHORITY_ANSWERED: &str = "registry authority exited with";
 
 struct Run {
     root: PathBuf,
-    /// The connections the authority accepted, kept open so it stays silent.
-    held: Arc<Mutex<Vec<TcpStream>>>,
+    authority: Option<HungSsh>,
 }
 
 impl Run {
@@ -36,7 +42,7 @@ impl Run {
         std::fs::create_dir_all(root.join("tmp")).expect("create the run's scratch directory");
         Self {
             root,
-            held: Arc::default(),
+            authority: None,
         }
     }
 
@@ -60,7 +66,7 @@ impl Run {
             "exit_status": output.status.to_string(),
             "stdout": String::from_utf8_lossy(&output.stdout),
             "stderr": String::from_utf8_lossy(&output.stderr),
-            "authority_connections": self.held.lock().unwrap().len(),
+            "authority_log": self.authority.as_ref().map(HungSsh::log),
         });
         std::fs::write(
             self.root
@@ -71,28 +77,34 @@ impl Run {
         output
     }
 
-    /// An authority that accepts and never speaks, on a port the product
-    /// hands out now.
-    fn silent_authority(&self) -> String {
+    /// Serve the registry authority on a port the product hands out now,
+    /// write the record naming it, let it answer one registry read and stop
+    /// it. Answers its SSH destination and the record's path.
+    fn hung_authority(&mut self, reader_hostnames: Value) -> (String, PathBuf) {
         let printed = self.stado(&["host", "local", "port"]);
         let port: u16 = String::from_utf8_lossy(&printed.stdout)
             .trim()
             .parse()
             .expect("stado host local port prints a port");
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-            .expect("bind the loopback port this machine handed out");
-        let address = listener.local_addr().unwrap().to_string();
-        let held = Arc::clone(&self.held);
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                held.lock().unwrap().push(stream);
-            }
-        });
-        address
+        let authority = HungSsh::serve(&self.root, port);
+        let destination = authority.destination.clone();
+        let copy = self.write_record(&destination, reader_hostnames);
+        self.authority = Some(authority);
+        let answered = self.stado(&["registry", "self", "--name-only"]);
+        assert!(
+            said(&answered).contains(AUTHORITY_ANSWERED),
+            "the live authority answers the read before it is stopped: {}",
+            said(&answered)
+        );
+        if let Some(authority) = &self.authority {
+            authority.hang();
+        }
+        (destination, copy)
     }
 
     /// The local record: the shared directory template, the reader carrying
-    /// `reader_hostnames`, the silent listener as the registry authority.
+    /// `reader_hostnames`, the served authority as the registry authority
+    /// running the real stado.
     fn write_record(&self, authority_ssh: &str, reader_hostnames: Value) -> PathBuf {
         let mut document: Value =
             serde_json::from_str(include_str!("../service_directory/registry.json")).unwrap();
@@ -110,7 +122,7 @@ impl Run {
         authority["ssh"] = json!(authority_ssh);
         authority["services"] = json!([]);
         document["service_directory"]["authority"] =
-            json!({"target": AUTHORITY, "command": AUTHORITY_STADO});
+            json!({"target": AUTHORITY, "command": env!("CARGO_BIN_EXE_stado")});
         document["service_directory"]["services"] = json!({});
         let copy = self.root.join(".stado/cache/registry-last-good.json");
         std::fs::write(&copy, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
@@ -141,11 +153,16 @@ fn said(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// Whether a command's stderr says it opened an SSH connection to
+/// `destination`: the wait it announces before the connection answers.
+fn connected(output: &Output, destination: &str) -> bool {
+    said(output).contains(&format!("czekam: SSH connection; gdzie: {destination};"))
+}
+
 #[test]
 fn this_machine_is_named_from_its_own_record_while_the_authority_is_silent() {
-    let run = Run::new("named");
-    let authority = run.silent_authority();
-    let copy = run.write_record(&authority, json!([hostname()]));
+    let mut run = Run::new("named");
+    let (authority, copy) = run.hung_authority(json!([hostname()]));
 
     let answer = run.stado(&["registry", "self", "--local", "--json"]);
     assert!(
@@ -166,16 +183,17 @@ fn this_machine_is_named_from_its_own_record_while_the_authority_is_silent() {
     assert_eq!(String::from_utf8_lossy(&bare.stdout).trim(), READER);
 
     assert!(
-        run.held.lock().unwrap().is_empty(),
-        "the registry authority was never asked"
+        !connected(&answer, &authority) && !connected(&bare, &authority),
+        "the registry authority was never asked: {} {}",
+        said(&answer),
+        said(&bare)
     );
 }
 
 #[test]
 fn a_machine_its_record_does_not_carry_is_answered_and_refused_by_name() {
-    let run = Run::new("absent");
-    let authority = run.silent_authority();
-    let copy = run.write_record(&authority, json!(["example-elsewhere"]));
+    let mut run = Run::new("absent");
+    let (authority, copy) = run.hung_authority(json!(["example-elsewhere"]));
 
     let answer = run.stado(&["registry", "self", "--local", "--json"]);
     assert!(
@@ -202,8 +220,10 @@ fn a_machine_its_record_does_not_carry_is_answered_and_refused_by_name() {
         said(&refused)
     );
     assert!(
-        run.held.lock().unwrap().is_empty(),
-        "the registry authority was never asked"
+        !connected(&answer, &authority) && !connected(&refused, &authority),
+        "the registry authority was never asked: {} {}",
+        said(&answer),
+        said(&refused)
     );
 }
 

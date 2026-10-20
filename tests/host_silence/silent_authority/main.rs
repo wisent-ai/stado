@@ -4,25 +4,27 @@
 //! goes on to its last-known-good copy instead of waiting without end.
 //!
 //! The real `stado registry self` runs with an isolated `HOME` under the
-//! checkout's build directory and a last-known-good registry copy that names
-//! this machine as the reader and, as the registry authority, a loopback
-//! listener this test owns that accepts every connection and sends nothing
-//! (`run.rs`): no SSH banner ever comes, so the authority's `stado resolver
-//! snapshot` can never be asked and nothing of this host's resolver records
-//! the wait. The test holds no clock: the command must end by itself.
+//! test's output directory and a last-known-good registry copy that names
+//! this machine as the reader and, as the registry authority, a real OpenSSH
+//! server on a loopback port that runs the real stado (`hung_ssh.rs`). The
+//! authority answers one read with its own refusal and is then stopped with
+//! SIGSTOP: its connections still complete and no SSH banner ever comes, so
+//! the authority's `stado resolver snapshot` can never be asked and nothing
+//! of this host's resolver records the wait. The test holds no clock: the
+//! command must end by itself.
+#[path = "../hung_ssh.rs"]
+mod hung_ssh;
 mod run;
 
 use serde_json::{json, Value};
 
-use run::{hostname, Run, ABANDONED, AUTHORITY};
+use run::{connecting, hostname, Run, ABANDONED, AUTHORITY};
 
 #[test]
 fn a_silent_authority_is_abandoned_after_the_declared_refresh_interval() {
-    let run = Run::new("registry-self");
-    let authority_ssh = run.silent_authority();
-    let refresh_seconds = run.write_last_good(&authority_ssh);
-    let accepted_before = run.accepted();
-    let output = run.registry_self();
+    let mut run = Run::new("registry-self");
+    let (authority_ssh, refresh_seconds) = run.hung_authority();
+    let output = run.registry_self("registry-self");
     let said = String::from_utf8_lossy(&output.stderr).into_owned();
 
     assert!(
@@ -40,13 +42,14 @@ fn a_silent_authority_is_abandoned_after_the_declared_refresh_interval() {
         "the reader goes on to its last-known-good copy: {said}"
     );
     assert!(
-        run.accepted() > accepted_before,
-        "the authority accepted the SSH connection the read was abandoned on"
+        said.contains(&connecting(&authority_ssh)),
+        "the read was abandoned on a connection it opened to the stopped authority: {said}"
     );
     std::fs::write(
         run.root.join("report.json"),
         serde_json::to_vec_pretty(&json!({
             "authority_ssh": authority_ssh,
+            "authority_log": run.authority_log(),
             "refresh_seconds": refresh_seconds,
             "exit_status": output.status.to_string(),
             "stderr": said,
@@ -64,9 +67,8 @@ fn a_silent_authority_is_abandoned_after_the_declared_refresh_interval() {
 /// every read an install's converge makes this way.
 #[test]
 fn a_resolver_state_naming_no_interval_still_bounds_the_read() {
-    let run = Run::new("stale-state");
-    let authority_ssh = run.silent_authority();
-    let refresh_seconds = run.write_last_good(&authority_ssh);
+    let mut run = Run::new("stale-state");
+    let (_, refresh_seconds) = run.hung_authority();
     std::fs::write(
         run.root.join(".stado/resolver-state.json"),
         serde_json::to_vec(&json!({
@@ -79,7 +81,7 @@ fn a_resolver_state_naming_no_interval_still_bounds_the_read() {
         .unwrap(),
     )
     .unwrap();
-    let output = run.registry_self();
+    let output = run.registry_self("stale-state");
     let said = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(
         said.contains(ABANDONED)
@@ -98,17 +100,15 @@ fn a_resolver_state_naming_no_interval_still_bounds_the_read() {
 /// call are.
 #[test]
 fn a_second_reader_is_told_at_once_that_the_authority_went_unanswered() {
-    let run = Run::new("second-reader");
-    let authority_ssh = run.silent_authority();
-    run.write_last_good(&authority_ssh);
-    let first = run.registry_self();
+    let mut run = Run::new("second-reader");
+    let (authority_ssh, _) = run.hung_authority();
+    let first = run.registry_self("first-reader");
     let first_said = String::from_utf8_lossy(&first.stderr).into_owned();
     assert!(
         first_said.contains(ABANDONED),
         "the first read waits and is abandoned: {first_said}"
     );
-    let accepted_before = run.accepted();
-    let second = run.registry_self();
+    let second = run.registry_self("second-reader");
     let said = String::from_utf8_lossy(&second.stderr).into_owned();
     assert!(
         said.contains(&format!(
@@ -120,10 +120,9 @@ fn a_second_reader_is_told_at_once_that_the_authority_went_unanswered() {
         said.contains("reading the last-known-good registry copy"),
         "the second reader goes on to its copy: {said}"
     );
-    assert_eq!(
-        run.accepted(),
-        accepted_before,
-        "the second read opened no connection to the authority"
+    assert!(
+        !said.contains(&connecting(&authority_ssh)),
+        "the second read opened no connection to the authority: {said}"
     );
     assert!(run.root.join(".stado/authority-unanswered.json").is_file());
 }
@@ -135,9 +134,8 @@ fn a_second_reader_is_told_at_once_that_the_authority_went_unanswered() {
 /// seconds, in JSON and on the text authority line.
 #[test]
 fn resolver_status_says_how_long_the_authority_took_to_answer() {
-    let run = Run::new("resolver-status");
-    let authority_ssh = run.silent_authority();
-    let refresh_seconds = run.write_last_good(&authority_ssh);
+    let mut run = Run::new("resolver-status");
+    let (authority_ssh, refresh_seconds) = run.hung_authority();
     let json_answer = run
         .stado()
         .args(["resolver", "status", "--json"])
