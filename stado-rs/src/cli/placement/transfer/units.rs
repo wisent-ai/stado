@@ -46,10 +46,15 @@ fi
     ))
 }
 
+/// A unit as its host's service manager reports it: whether its file is
+/// installed, whether the manager holds it (launchd: bootstrapped; systemd:
+/// active), and whether its process runs now (launchd: `state = running`;
+/// systemd: active).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct UnitStatus {
     pub(super) present: bool,
     pub(super) loaded: bool,
+    pub(super) running: bool,
 }
 
 pub(super) async fn probe_unit(
@@ -62,13 +67,17 @@ pub(super) async fn probe_unit(
         unit_script_head(spec)?,
         r#"present=no
 loaded=no
+running=no
 if [ -f "$unit_path" ]; then present=yes; fi
 if [ "$os" = Darwin ]; then
-  if lc print "$domain/$unit" >/dev/null 2>&1; then loaded=yes; fi
+  if listing=$(lc print "$domain/$unit" 2>/dev/null); then
+    loaded=yes
+    case "$listing" in *"state = running"*) running=yes ;; esac
+  fi
 else
-  if systemctl_user is-active --quiet "$unit"; then loaded=yes; fi
+  if systemctl_user is-active --quiet "$unit"; then loaded=yes; running=yes; fi
 fi
-printf 'STADO_PLACEMENT_UNIT\t%s\t%s\n' "$present" "$loaded"
+printf 'STADO_PLACEMENT_UNIT\t%s\t%s\t%s\n' "$present" "$loaded" "$running"
 "#
     );
     let output = run_host_script(target, &script, runner, "unit probe").await?;
@@ -80,15 +89,17 @@ printf 'STADO_PLACEMENT_UNIT\t%s\t%s\n' "$present" "$loaded"
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let fields: Vec<&str> = line.split('\t').collect();
-    if fields.len() != 3 {
-        return Err(
-            CmdError::click(format!("{}: malformed unit probe marker", target.name))
-                .stating(crate::primitives::failure::FailureCode::InfraDown),
-        );
-    }
+    let [_, present, loaded, running] = fields.as_slice() else {
+        return Err(CmdError::click(format!(
+            "{}: malformed unit probe marker: {line}",
+            target.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    };
     Ok(UnitStatus {
-        present: fields[1] == "yes",
-        loaded: fields[2] == "yes",
+        present: *present == "yes",
+        loaded: *loaded == "yes",
+        running: *running == "yes",
     })
 }
 

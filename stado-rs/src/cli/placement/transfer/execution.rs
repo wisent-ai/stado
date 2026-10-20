@@ -5,7 +5,7 @@
 use chrono::{SecondsFormat, Utc};
 use serde_json::Value;
 
-use super::readiness::{apply_routes, health_probe, preflight};
+use super::readiness::{apply_routes, await_healthy, preflight};
 use super::state::{read_state, restore_state, state_location, write_state};
 use super::units::{act_on_unit, UnitAction};
 use super::{MoveContext, Progress, RegistryCommitter};
@@ -16,24 +16,18 @@ use crate::deploy::Runner;
 use crate::placement::{self, PlacementUnit};
 use crate::targets::ComputeTarget;
 
+/// Release the placement claim `transaction_id` holds. Releasing is a pure
+/// transform of the registry document, so it goes through the registry's
+/// commit, which reapplies it only after a lost race and answers every other
+/// failure as it is; a claim already gone changes nothing.
 pub(in crate::cli::placement) async fn release_claim(transaction_id: &str) -> Result<(), CmdError> {
-    let mut last_error = None;
-    for _ in 0..3 {
-        let (mut document, generation) = registry::fetch_versioned_document().await?;
-        if !placement::release_transaction(&mut document, transaction_id)
-            .map_err(CmdError::declaration)?
-        {
-            return Ok(());
-        }
-        match registry::push_document_if(&document, &generation).await {
-            Ok(_) => return Ok(()),
-            Err(error) => last_error = Some(error),
-        }
-    }
-    Err(last_error.unwrap_or_else(|| {
-        CmdError::click("could not release placement transaction")
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-    }))
+    registry::commit_document(|current| {
+        let mut next = current.clone();
+        placement::release_transaction(&mut next, transaction_id).map_err(CmdError::declaration)?;
+        Ok(next)
+    })
+    .await?;
+    Ok(())
 }
 
 fn destination_record(
@@ -203,7 +197,8 @@ pub(in crate::cli::placement) async fn execute_move(
         println!("  started {}:{}", context.destination.name, logical);
     }
     for probe in &destination_profile.probes {
-        health_probe(&context.destination, &probe.url, 30, runner).await?;
+        let spec = unit(destination_profile, &probe.service)?;
+        await_healthy(&context.destination, spec, &probe.url, runner).await?;
         println!("  healthy {}:{}", context.destination.name, probe.service);
     }
 
