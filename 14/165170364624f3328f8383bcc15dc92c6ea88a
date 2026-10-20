@@ -15,6 +15,7 @@ As a very strict, grumpy senior engineer who hates AI, I tried with everything I
 
 Repairs: "A held route is one resolver status blocker that counts its connections, not one sentence per connection" its oldest-wait line was not in the form rustfmt writes, and the blocker it built could not say a route's session had been replaced
 Repairs: "A starting resolver publishes its waiting list, and a held host is refused before its channel key is read" its comment on start gave a reader's expectation as the reason to publish, where the reason is that a previous resolver's list names connections no process holds
+Repairs: "A held adapter whose waits stand on the resolver's own SSH session rides a new session to the same host" waits left on the session it replaced were not said in resolver status
 
 Harsh-Review-Attacked: whether marking replaced waits can mark the wrong ones; only waits on the same adapter bind, host and endpoint as the replaced session are marked, only once, at the instant the cached session is swapped for the new one.
 Harsh-Review-Attacked: whether an older published list fails to read; session_replaced_at is optional with a default, so a list written before the field reads as waits on the current session.
