@@ -80,41 +80,35 @@ impl BlobBackend for AzureBlobBackend {
         &self,
         path: &str,
     ) -> Result<Option<VersionedText>, StorageError> {
-        // Python:
-        // 3 attempts of (properties -> pinned download); a 412
-        // between HEAD and GET retries, the final 412 re-raises.
-        for attempt in 0..3 {
+        // A precondition failure means the blob changed between the HEAD
+        // and the pinned GET; the next HEAD reads the newer version. The
+        // loop ends on a read the blob held still for, on the blob's
+        // absence, or on any other error, never on a count of tries.
+        loop {
             let Some(props) = self.head(path).await? else {
                 return Ok(None);
             };
-            let etag = props.etag.unwrap_or_default();
+            let Some(etag) = props.etag else {
+                return Err(StorageError::Other(format!(
+                    "azure blob {path} answered HEAD without an ETag, so no version can pin its read"
+                )));
+            };
             match self.get_bytes(path, Some(&etag)).await {
                 GetOutcome::Ok(bytes) => {
                     let content = String::from_utf8(bytes).map_err(|err| {
                         StorageError::Other(format!("invalid UTF-8 in {path}: {err}"))
                     })?;
-                    // Python returns str(props.etag) — the HEAD ETag,
-                    // verbatim (quoted).
+                    // The version is the HEAD ETag, verbatim (quoted).
                     return Ok(Some(VersionedText {
                         content,
                         version: etag,
                     }));
                 }
                 GetOutcome::NotFound => return Ok(None),
-                GetOutcome::PreconditionFailed if attempt < 2 => continue,
-                GetOutcome::PreconditionFailed => {
-                    // Python re-raises ResourceModifiedError here (NOT a
-                    // StorageConflict).
-                    return Err(StorageError::Other(format!(
-                        "azure blob {path} changed during versioned read (3 attempts)"
-                    )));
-                }
+                GetOutcome::PreconditionFailed => continue,
                 GetOutcome::Error(err) => return Err(err),
             }
         }
-        Err(StorageError::Other(
-            "unreachable versioned Azure Blob read".into(),
-        ))
     }
 
     async fn compare_and_swap_text(

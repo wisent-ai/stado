@@ -39,6 +39,16 @@ fn release_build_submission(run_id: &str) -> bool {
     ))
 }
 
+/// How many blobs a pass deleted, as the reap summary counts them.
+fn count(deleted: &[String]) -> Result<i64, StorageError> {
+    i64::try_from(deleted.len()).map_err(|error| {
+        StorageError::Other(format!(
+            "{} deleted blobs do not fit the reap summary's count: {error}",
+            deleted.len()
+        ))
+    })
+}
+
 /// Delete every lifecycle blob and status entry of a retained run, then record
 /// that the cleanup finished. Idempotent: a blob another pass already removed
 /// is simply absent, and the completion marker is written only once every
@@ -51,7 +61,7 @@ pub(super) async fn sweep_retained_run(
 ) -> Result<i64, StorageError> {
     let path = format!("{RUN_PREFIX}/{run_id}.json");
     let Some(retained) = store.read_text_versioned(&path).await? else {
-        return Ok(0);
+        return count(&[]);
     };
     let retained_manifest: Value = serde_json::from_str(&retained.content)?;
     crate::queue::submit::validate_stored_run_manifest(&retained_manifest, run_id)
@@ -61,7 +71,7 @@ pub(super) async fn sweep_retained_run(
             "run {run_id} cannot be swept without complete retained terminal outcomes"
         )));
     }
-    let mut deleted = 0;
+    let mut deleted: Vec<String> = Vec::new();
     for job_id in job_ids {
         // A prepared transition is a lifecycle companion, not an independent
         // source of truth. Resolve it through the canonical transition
@@ -76,7 +86,7 @@ pub(super) async fn sweep_retained_run(
             let blob = format!("{prefix}/{job_id}.json");
             if store.backend().exists(&blob).await? {
                 store.delete_job(prefix, job_id).await?;
-                deleted += 1;
+                deleted.push(blob);
             }
         }
         store.repair_priority_markers(job_id, None).await?;
@@ -84,16 +94,19 @@ pub(super) async fn sweep_retained_run(
             delete_status_dir(store, job_id).await?;
         }
     }
-    for _ in 0..16 {
+    // A lost swap means another writer changed the manifest; the next read
+    // sees what it wrote. The loop ends on what it reads: the marker already
+    // recorded, the manifest gone, the marker written, or any other error.
+    loop {
         let Some(versioned) = store.read_text_versioned(&path).await? else {
-            return Ok(deleted);
+            return count(&deleted);
         };
         let mut manifest: Value = serde_json::from_str(&versioned.content)?;
         let object = manifest.as_object_mut().ok_or_else(|| {
             StorageError::Other(format!("run manifest {run_id} is not a JSON object"))
         })?;
         if object.get(CLEANUP_COMPLETED_AT).is_some_and(py_truthy) {
-            return Ok(deleted);
+            return count(&deleted);
         }
         object.insert(
             CLEANUP_COMPLETED_AT.into(),
@@ -107,13 +120,10 @@ pub(super) async fn sweep_retained_run(
             )
             .await
         {
-            Ok(_) => return Ok(deleted),
+            Ok(_) => return count(&deleted),
             Err(StorageError::StorageConflict(_)) => continue,
-            Err(StorageError::NotFound(_)) => return Ok(deleted),
+            Err(StorageError::NotFound(_)) => return count(&deleted),
             Err(error) => return Err(error),
         }
     }
-    Err(StorageError::StorageConflict(format!(
-        "run manifest {run_id} remained contended while recording cleanup completion"
-    )))
 }

@@ -28,7 +28,9 @@ pub(in crate::schedules) use settle::{
 // Reuses JobStorage's prefix-agnostic blob helpers for the common paths.
 // Every mutation is a compare-and-swap over a versioned read: the occurrence
 // reservation and next_due_at advance in one swap, so two overlapping
-// coordinator invocations can never double-fire the same occurrence.
+// coordinator invocations can never double-fire the same occurrence. A lost
+// swap means another writer changed the record, and the next read sees what
+// it wrote, so each loop ends on what it reads, never on a count of tries.
 // ---------------------------------------------------------------------------
 
 fn path(schedule_id: &str) -> String {
@@ -115,7 +117,7 @@ pub async fn set_schedule_enabled(
     next_due_at: Option<&str>,
 ) -> Result<Option<Schedule>, StorageError> {
     let path = path(schedule_id);
-    for _ in 0..16 {
+    loop {
         let Some(versioned) = store.read_text_versioned(&path).await? else {
             return Ok(None);
         };
@@ -139,9 +141,6 @@ pub async fn set_schedule_enabled(
             Err(error) => return Err(error),
         }
     }
-    Err(StorageError::StorageConflict(format!(
-        "schedule {schedule_id} remained contended during enablement update"
-    )))
 }
 
 /// CAS-apply `edit` to a live schedule, preserving any pending occurrence
@@ -153,7 +152,7 @@ pub async fn edit_schedule(
     edit: impl Fn(&mut Schedule),
 ) -> Result<Option<Schedule>, StorageError> {
     let path = path(schedule_id);
-    for _ in 0..16 {
+    loop {
         let Some(versioned) = store.read_text_versioned(&path).await? else {
             return Ok(None);
         };
@@ -172,15 +171,12 @@ pub async fn edit_schedule(
             Err(error) => return Err(error),
         }
     }
-    Err(StorageError::StorageConflict(format!(
-        "schedule {schedule_id} remained contended during edit"
-    )))
 }
 
 /// CAS-write a durable deletion tombstone; `false` when absent/already deleted.
 pub async fn delete_schedule(store: &JobStorage, schedule_id: &str) -> Result<bool, StorageError> {
     let path = path(schedule_id);
-    for _ in 0..16 {
+    loop {
         let Some(versioned) = store.read_text_versioned(&path).await? else {
             return Ok(false);
         };
@@ -200,7 +196,4 @@ pub async fn delete_schedule(store: &JobStorage, schedule_id: &str) -> Result<bo
             Err(error) => return Err(error),
         }
     }
-    Err(StorageError::StorageConflict(format!(
-        "schedule {schedule_id} remained contended during deletion"
-    )))
 }
