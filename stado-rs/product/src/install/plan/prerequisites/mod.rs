@@ -9,61 +9,25 @@ use crate::{
     state::{InstallStatus, ProductState},
 };
 use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 mod chain;
 mod contract;
+mod enclosing;
 pub use chain::chain;
 use contract::{first_provider, manifest, provides};
+use enclosing::handed;
+pub use enclosing::{Enclosing, ENCLOSING_ENV};
 
 const CI_RECORD: &str = "ci-main.json";
 const CI_RECORD_ENV: &str = "STADO_CI_MAIN_RECORD";
-/// The installations in progress a parent process hands to the binary that
-/// finishes one of their dependencies (`stado product finish`), as JSON.
-pub const ENCLOSING_ENV: &str = "STADO_PRODUCT_ENCLOSING";
 
 #[derive(Clone, Deserialize)]
 pub struct Requirement {
     pub product: String,
     pub surface: String,
     pub verb: String,
-}
-
-/// An installation in progress that the one being planned is a dependency
-/// of: the product and surface it installs and the revision it builds.
-#[derive(Clone, Deserialize, Serialize)]
-pub struct Enclosing {
-    pub product: String,
-    pub surface: String,
-    pub revision: String,
-}
-
-impl Enclosing {
-    pub fn new(product: &str, surface: &str, revision: &str) -> Self {
-        Self {
-            product: product.to_owned(),
-            surface: surface.to_owned(),
-            revision: revision.to_owned(),
-        }
-    }
-
-    pub fn node(&self) -> String {
-        format!("{}/{}", self.product, self.surface)
-    }
-}
-
-/// The enclosing installations this process was handed in `ENCLOSING_ENV`;
-/// none when it was handed none, and a value that is not that list is
-/// refused naming the variable.
-fn handed() -> Result<Vec<Enclosing>> {
-    match std::env::var(ENCLOSING_ENV) {
-        Err(std::env::VarError::NotPresent) => Ok(Vec::new()),
-        Err(error) => bail!("{ENCLOSING_ENV} cannot be read: {error}"),
-        Ok(text) => serde_json::from_str(&text).with_context(|| {
-            format!("{ENCLOSING_ENV} holds no list of enclosing installations: {text}")
-        }),
-    }
 }
 
 pub struct Decision {
@@ -180,7 +144,7 @@ pub fn requirements(
     let handed = handed()?;
     let mut decisions = Vec::new();
     for required in own.requires {
-        if without.iter().any(|name| *name == required.product) {
+        if without.contains(&required.product) {
             continue;
         }
         let provider = catalog::product(document, &required.product)?;
