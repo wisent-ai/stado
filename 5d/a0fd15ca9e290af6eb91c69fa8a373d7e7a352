@@ -13,6 +13,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Refuse a takeover of a predecessor whose state could not be read" its takeover listed the system domain through sudo -n, so a host without passwordless sudo could not tell whether the unit was held, though any account may list that domain
+
 Harsh-Review-Attacked: whether a domain that cannot be read is still told as "not loaded"; the handover lists the login and system domains and refuses a listing that fails with launchctl's words, and the takeover lists the system domain without sudo, which any account may do.
 Harsh-Review-Attacked: whether this commit adds a second copy; its handover reader copied the takeover's listing read, and "launchd presence is read by one shared domain-listing reader" repairs it in this push, naming this commit on its Repairs line.
-Repairs: "Refuse a takeover of a predecessor whose state could not be read" its takeover listed the system domain through sudo -n, so a host without passwordless sudo could not tell whether the unit was held, though any account may list that domain
