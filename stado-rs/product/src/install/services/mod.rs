@@ -18,13 +18,17 @@ const SERVICE_URL_PLACEHOLDER: &str = "$STADO_SERVICE_URL";
 /// Reconcile a resident product's native unit through the prepared candidate
 /// while the predecessor still occupies its installed path. The candidate's
 /// own catalog, rather than the installed binary's old catalog, owns argv.
+/// Only the product this installation runs as owns such a unit: the candidate
+/// is asked `registry self` and `service ensure`, verbs only that program has,
+/// so a product whose id is not the running program's name has none.
 pub fn migrate_host_unit(
     product: &Value,
     home: &std::path::Path,
     plan: &crate::install::plan::Prepared,
 ) -> Result<Option<String>> {
     let id = text(product, "id")?;
-    if id != "stado" {
+    let running = std::env::current_exe().context("reading the running program's path")?;
+    if running.file_name() != Some(std::ffi::OsStr::new(id)) {
         return Ok(None);
     }
     let label = text(&product["service"], "unit")?;
@@ -137,10 +141,10 @@ pub fn ensure(product: &Value, recipe: &Value, host: &str) -> Result<Value> {
             .as_object()
             .context("host_config must be an object")?
         {
-            let value = value
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| value.to_string());
+            let value = match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
             let value = if value.contains(SERVICE_URL_PLACEHOLDER) {
                 value.replace(SERVICE_URL_PLACEHOLDER, &service_url(product, host)?)
             } else {
@@ -183,7 +187,12 @@ fn service_url(product: &Value, host: &str) -> Result<String> {
 pub fn observe(product: &Value, host: &str) -> Result<Value> {
     let id = text(product, "id")?;
     let output = capture(stado().args(["service", "serving", id, "--host", host, "--json"]))?;
-    let payload = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
+    // An answer that is not JSON is kept with its parse error, so the refusal
+    // that follows names why serving could not be read.
+    let payload = match serde_json::from_slice::<Value>(&output.stdout) {
+        Ok(payload) => payload,
+        Err(error) => json!({"unreadable": error.to_string()}),
+    };
     let ready = output.status.success()
         && payload.as_array().is_some_and(|rows| {
             !rows.is_empty() && rows.iter().all(|row| row["serving"] == "serving")
