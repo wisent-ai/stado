@@ -13,6 +13,9 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "A remote command to a host whose services stand is refused before it is sent" a held host was refused only after its channel key had been read
+Repairs: "A declared repair is sent to a host whose services stand" the repair path read the channel key before telling a held host apart
+
 Harsh-Review-Attacked: whether a previous resolver's list is still read as this one's; serve now publishes its own list, empty, before it accepts anything, which replaces what the previous process left.
 Harsh-Review-Attacked: whether every channel path refuses a held host before reading its key; select_ssh_connection, the run path and the script path each obtain the key through channel_key, which runs refuse_held first, so no path reads the vault for a held host.
 Harsh-Review-Attacked: whether the repair exemption still holds; refuse_held keeps the repairing scope's exemption and says the held reading on stderr before letting the repair through.
