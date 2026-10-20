@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use serde::Deserialize;
+
 use crate::deploy::service::*;
 
 // ---------------------------------------------------------------------------
@@ -19,6 +23,12 @@ pub struct ServiceStatus {
     pub reported_at: Option<String>,
     /// Why the state is what it is, when that is not self-evident.
     pub detail: String,
+    /// The host's API-question reading for this unit, absent when no
+    /// question is declared or no beacon carried one.
+    pub answering: Option<Value>,
+    /// Why a present API-question reading cannot be interpreted, preserving
+    /// the raw value in `answering` for CLI and GUI diagnostics.
+    pub answering_error: Option<String>,
     /// Set when this unit's declared launchd domain is one its host cannot
     /// have. Carried on the row rather than recomputed by each surface,
     /// because the check needs the target's `role` and only the join has it.
@@ -26,7 +36,7 @@ pub struct ServiceStatus {
     /// The host's role register from its beacon: `held` (role, pid,
     /// program, since) and `ended_strays`; none on a beacon older than the
     /// register.
-    pub roles: Option<Value>,
+    pub roles: Option<Arc<Value>>,
 }
 
 impl ServiceStatus {
@@ -38,11 +48,17 @@ impl ServiceStatus {
         report.insert("state".to_string(), json!(self.state));
         report.insert("reported_at".to_string(), json!(self.reported_at));
         report.insert("detail".to_string(), json!(self.detail));
+        if let Some(answering) = &self.answering {
+            report.insert("answering".to_string(), answering.clone());
+        }
+        if let Some(error) = &self.answering_error {
+            report.insert("answering_error".to_string(), json!(error));
+        }
         if let Some(misdeclared) = &self.misdeclared_domain {
             report.insert("misdeclared_domain".to_string(), misdeclared.to_json());
         }
         if let Some(roles) = &self.roles {
-            report.insert("roles".to_string(), roles.clone());
+            report.insert("roles".to_string(), roles.as_ref().clone());
         }
         Value::Object(report)
     }
@@ -54,49 +70,93 @@ impl ServiceStatus {
 /// a different fact from "the beacon does not carry this unit" and is kept
 /// as a different state: conflating a silent host with a missing unit is
 /// the class of mistake this whole module exists to stop.
-fn beacon_state(beacon: Option<&Map<String, Value>>, unit_id: &str) -> (String, String) {
+fn beacon_state(
+    beacon: Option<&Map<String, Value>>,
+    unit_id: &str,
+) -> (String, String, Option<Value>) {
     let Some(beacon) = beacon else {
         return (
             STATE_UNKNOWN.to_string(),
             "host has published no health beacon".to_string(),
+            None,
         );
     };
-    let units = beacon.get("units").and_then(Value::as_object);
-    let Some(entry) = units.and_then(|units| units.get(unit_id)) else {
+    let units = match beacon.get("units") {
+        Some(Value::Object(units)) => units,
+        Some(value) => {
+            return (
+                STATE_UNKNOWN.to_string(),
+                format!("health beacon units is not an object: {value}"),
+                None,
+            )
+        }
+        None => {
+            return (
+                STATE_UNKNOWN.to_string(),
+                "health beacon has no units map".to_string(),
+                None,
+            )
+        }
+    };
+    let Some(entry) = units.get(unit_id) else {
         return (
             STATE_MISSING.to_string(),
             "declared here; the latest beacon does not report it".to_string(),
+            None,
         );
     };
-    // The beacon writer emits {"state": ..., "detail": ...} per unit; older
-    // beacons wrote a bare string. Both shapes are in flight, so read both.
-    // The detail is why the state is what it is — for an `unreadable` unit
-    // it is the only thing that says whether the host refused the read or
-    // the read itself failed, and dropping it here would leave the operator
-    // with a word and no cause.
+    let answering = entry.get("answering").cloned();
+    // Older beacons wrote a bare state string; a structured unit may carry
+    // the host's actual error and its independent API-question reading.
     let (state, detail) = match entry {
         Value::String(state) => (state.clone(), String::new()),
-        Value::Object(fields) => (
-            fields
-                .get("state")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            fields
-                .get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-        ),
-        _ => (String::new(), String::new()),
+        Value::Object(fields) => {
+            let state = match fields.get("state") {
+                Some(Value::String(state)) => state.clone(),
+                Some(value) => {
+                    return (
+                        STATE_UNKNOWN.to_string(),
+                        format!("beacon unit {unit_id} state is not a string: {value}"),
+                        answering,
+                    )
+                }
+                None => {
+                    return (
+                        STATE_UNKNOWN.to_string(),
+                        format!("beacon unit {unit_id} has no state"),
+                        answering,
+                    )
+                }
+            };
+            let detail = match fields.get("detail") {
+                Some(Value::String(detail)) => detail.clone(),
+                None => String::new(),
+                Some(value) => {
+                    return (
+                        STATE_UNKNOWN.to_string(),
+                        format!("beacon unit {unit_id} detail is not a string: {value}"),
+                        answering,
+                    )
+                }
+            };
+            (state, detail)
+        }
+        other => {
+            return (
+                STATE_UNKNOWN.to_string(),
+                format!("beacon unit {unit_id} is not a state or object: {other}"),
+                answering,
+            )
+        }
     };
     if state.is_empty() {
         return (
             STATE_UNKNOWN.to_string(),
-            "beacon reports the unit with no state".to_string(),
+            format!("beacon unit {unit_id} has an empty state"),
+            answering,
         );
     }
-    (state, detail)
+    (state, detail, answering)
 }
 
 /// A beacon whose own promised next publication has passed cannot describe
@@ -129,18 +189,40 @@ fn stale_beacon_detail(
 /// [`STATE_UNKNOWN`] rows instead of an error, because one silent host must
 /// not blank the fleet-wide answer.
 pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, DeployError> {
+    read_services(store, None).await
+}
+
+async fn read_services(
+    store: &JobStorage,
+    name: Option<&str>,
+) -> Result<Vec<ServiceStatus>, DeployError> {
     let registry = crate::deploy::host_channel::canonical_registry().await?;
-    let mut rows: Vec<ServiceStatus> = Vec::new();
-    for target in registry.local_targets() {
-        let declared = declared_services(target);
-        if declared.is_empty() {
-            continue;
-        }
-        let report = match host_health::load_host_health(store, &target.name).await {
-            Ok(report) => Some(report),
-            Err(HostHealthError::NoBeacon { .. }) => None,
-            Err(exc) => return Err(DeployError::from(crate::cli::CmdError::from(exc))),
-        };
+    // Independent beacon reads start together; results retain registry order,
+    // so a slow host cannot delay asking every other host for its last report.
+    let reports = futures::future::try_join_all(
+        registry
+            .local_targets()
+            .into_iter()
+            .filter_map(|target| {
+                let mut declared = declared_services(target);
+                if let Some(name) = name {
+                    declared.retain(|service| service.matches(name));
+                }
+                (!declared.is_empty()).then_some((target, declared))
+            })
+            .map(|(target, declared)| async move {
+                let report = match host_health::load_host_health(store, &target.name).await {
+                    Ok(report) => Some(report),
+                    Err(HostHealthError::NoBeacon { .. }) => None,
+                    Err(exc) => return Err(DeployError::from(crate::cli::CmdError::from(exc))),
+                };
+                Ok::<_, DeployError>((target, declared, report))
+            }),
+    )
+    .await?;
+    let mut rows: Vec<ServiceStatus> =
+        Vec::with_capacity(reports.iter().map(|(_, declared, _)| declared.len()).sum());
+    for (target, declared, report) in reports {
         let beacon = report.as_ref().map(|report| &report.beacon);
         let reported_at = beacon
             .and_then(|beacon| beacon.get("reported_at"))
@@ -155,9 +237,22 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
         // list` says how many processes play a role there and from which
         // program, not `active` alone. A beacon from before the register
         // carries none.
-        let roles = beacon.and_then(|beacon| beacon.get("roles")).cloned();
+        let roles = beacon
+            .and_then(|beacon| beacon.get("roles"))
+            .cloned()
+            .map(Arc::new);
         for service in declared {
-            let (mut state, mut detail) = beacon_state(beacon, service.unit_id());
+            let (mut state, mut detail, answering) = beacon_state(beacon, service.unit_id());
+            let answering_error = answering.as_ref().and_then(|reading| {
+                crate::deploy::service_answering::Reading::deserialize(reading)
+                    .err()
+                    .map(|cause| {
+                        format!(
+                            "beacon unit {} has malformed answering: {cause}; value: {reading}",
+                            service.unit_id()
+                        )
+                    })
+            });
             if let Some(stale) = &stale {
                 state = STATE_UNKNOWN.to_string();
                 detail = stale.clone();
@@ -168,6 +263,8 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
                 state,
                 reported_at: reported_at.clone(),
                 detail,
+                answering,
+                answering_error,
                 misdeclared_domain,
                 roles: roles.clone(),
             });
@@ -183,7 +280,5 @@ pub async fn find_services(
     store: &JobStorage,
     name: &str,
 ) -> Result<Vec<ServiceStatus>, DeployError> {
-    let mut rows = list_services(store).await?;
-    rows.retain(|row| row.service.matches(name));
-    Ok(rows)
+    read_services(store, Some(name)).await
 }

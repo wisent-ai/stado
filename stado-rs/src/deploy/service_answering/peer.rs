@@ -15,11 +15,12 @@
 //! neither needing that host's Stado, and the record goes to this host's
 //! recovery register naming both hosts.
 //!
-//! One standing is acted on once: the register keeps its `stood_since`, the
-//! acceptance of the oldest held request, and a later pass that reads the
-//! same oldest request reports the earlier recovery instead of repeating
-//! it. A restart ends the held connections with the process that held
-//! them, so a service that stands again is a new standing with a new
+//! A standing with completed declared repairs and restart is acted on once:
+//! the register keeps `stood_since`, the acceptance of the oldest held
+//! request, and a later pass reports that recovery. A refused repair or
+//! restart is retried. When the register cannot append a completed recovery,
+//! this process remembers the outcome for that same standing until it ends.
+//! A restart ends the held connections, so a subsequent standing has a new
 //! oldest request.
 
 use serde_json::{json, Value};
@@ -27,7 +28,7 @@ use serde_json::{json, Value};
 use crate::cli::resolver::Stood;
 
 use super::recover::{recover, Peer};
-use super::{register, Reading};
+use super::{episode, register, Reading};
 
 /// Every service of another host that stands for this host's clients, each
 /// with what this pass did: the recovery it ran, the earlier recovery of
@@ -38,6 +39,7 @@ pub async fn recoveries(home: &std::path::Path, this_host: &str) -> Value {
         Ok(stood) => stood,
         Err(unreadable) => return json!({ "unreadable": unreadable }),
     };
+    episode::retain_peers(&stood);
     let mut blocks = Vec::with_capacity(stood.len());
     for standing in &stood {
         let mut block = json!({
@@ -60,29 +62,8 @@ pub async fn recoveries(home: &std::path::Path, this_host: &str) -> Value {
 /// `already_recovered` with the earlier record of the same standing, or
 /// `not_recovered` with the reason it could not act.
 async fn act(home: &std::path::Path, this_host: &str, standing: &Stood) -> (&'static str, Value) {
-    let earlier = match register::read(home) {
-        Ok(records) => records.into_iter().find(|record| {
-            record.host == standing.host
-                && record.service == standing.service
-                && record.stood_since == standing.since
-        }),
-        Err(error) => return ("not_recovered", json!(error.to_string())),
-    };
-    if let Some(record) = earlier {
-        return ("already_recovered", json!(record));
-    }
     let entry = match crate::deploy::service_catalog::lookup(&standing.service) {
-        Ok(Some(entry)) if entry.answering.is_some() => entry,
-        Ok(Some(_)) => {
-            return (
-                "not_recovered",
-                json!(format!(
-                    "the catalog declares no answering question for {}, so it declares no \
-                     repair a standing would run",
-                    standing.service
-                )),
-            )
-        }
+        Ok(Some(entry)) => entry,
         Ok(None) => {
             return (
                 "not_recovered",
@@ -93,6 +74,16 @@ async fn act(home: &std::path::Path, this_host: &str, standing: &Stood) -> (&'st
             )
         }
         Err(unreadable) => return ("not_recovered", json!(unreadable)),
+    };
+    let Some(declared) = entry.answering.as_ref() else {
+        return (
+            "not_recovered",
+            json!(format!(
+                "the catalog declares no answering question for {}, so it declares no \
+                 repair a standing would run",
+                standing.service
+            )),
+        );
     };
     let target = match crate::deploy::host_channel::canonical_target(&standing.host).await {
         Ok(target) => target,
@@ -111,6 +102,27 @@ async fn act(home: &std::path::Path, this_host: &str, standing: &Stood) -> (&'st
             )),
         );
     };
+    let question = format!("{} {}", declared.method, declared.path);
+    let earlier = match register::read(home) {
+        Ok(records) => records.into_iter().rev().find(|record| {
+            record.host == standing.host
+                && record.service == standing.service
+                && record.stood_since == standing.since
+                && record.unit == unit
+                && record.question == question
+                && record.answering.as_ref() == Some(declared)
+                && record.restarted
+                && episode::repair_complete(&record.repair)
+                && episode::repair_matches(&record.repair, &declared.repair)
+        }),
+        Err(error) => return ("not_recovered", json!(error.to_string())),
+    };
+    if let Some(record) = earlier {
+        return ("already_recovered", json!(record));
+    }
+    if let Some(record) = episode::prior_peer(standing, &unit, declared) {
+        return ("already_recovered", record);
+    }
     let reading = Reading::Stood {
         since: standing.since.clone(),
         waited_seconds: standing.waited_seconds,
@@ -121,7 +133,15 @@ async fn act(home: &std::path::Path, this_host: &str, standing: &Stood) -> (&'st
         sentence: &standing.sentence,
     };
     match recover(home, &standing.host, &entry, &unit, &reading, Some(peer)).await {
-        Ok(record) => ("recovery", record),
+        Ok(record) => {
+            if record.get("recording_refusal").is_some()
+                && record.get("restarted").and_then(Value::as_bool) == Some(true)
+                && episode::repair_complete(&record["repair"])
+            {
+                episode::remember_peer(standing, &record);
+            }
+            ("recovery", record)
+        }
         Err(error) => ("not_recovered", json!(error.to_string())),
     }
 }

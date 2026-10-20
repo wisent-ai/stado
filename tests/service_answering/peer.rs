@@ -1,6 +1,5 @@
-//! A service on another host that holds this host's resolver requests past
-//! the declared refresh interval is acted on from this host, once per
-//! standing, and only for the waits that say the service itself stands.
+//! A host's real resolver waiting list is classified by its declared refresh
+//! interval, and only answer-phase waits on another host become standings.
 //!
 //! The beacon pass reads the waiting list this host's resolver publishes
 //! beside its state (`STADO_RESOLVER_STATE_FILE`, its sibling
@@ -9,8 +8,6 @@
 //! isolated home in the checkout's build directory, with this test process
 //! as the publisher, and calls the pass the beacon calls. What it proves:
 //!
-//! - a standing already recovered (the register holds its `stood_since`) is
-//!   reported with that record and not acted on again;
 //! - a standing service the catalog does not declare is not acted on, and
 //!   the reason names it;
 //! - a wait still opening its channel, a wait on this host's own service,
@@ -18,21 +15,19 @@
 //! - a list whose publisher no longer runs names nothing, and a list that
 //!   cannot be read is said as unreadable.
 //!
-//! The recovery itself, the declared repair and restart on another host over
-//! its SSH channel, needs that host; the record of one is what the register
-//! holds here. The report beside the run keeps the source revision and every
-//! answer.
+//! The resolver-list journey does not prove recovery of a managed service on
+//! another host. That requires a real host and its declared repair and restart
+//! over the registry channel. The report keeps the source revision and answers.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
 use stado::deploy::service_answering::peer::recoveries;
-use stado::deploy::service_answering::register::{self, Recovery};
 
 const THIS_HOST: &str = "marker-host";
 const OTHER_HOST: &str = "other-host";
-/// A service the catalog declares, with an answering question and repairs.
+/// A catalog-declared service used for a young wait, not a recovery.
 const DECLARED: &str = "brama";
 /// A service no catalog declares.
 const UNDECLARED: &str = "peer-journey-undeclared";
@@ -152,29 +147,10 @@ impl Run {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn another_hosts_standing_service_is_acted_on_once_and_only_for_answer_waits() {
+async fn another_hosts_answer_waits_are_classified_without_touching_a_service() {
     let mut run = Run::new();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let earlier = Recovery {
-        at: now.clone(),
-        host: OTHER_HOST.into(),
-        service: DECLARED.into(),
-        unit: format!("com.wisent.{DECLARED}"),
-        question: "POST /v1/chat/completions".into(),
-        stood_since: LONG_AGO.into(),
-        stood_seconds: bound_seconds(),
-        bound_seconds: bound_seconds(),
-        held_requests: Vec::new(),
-        repair: json!([]),
-        restart: json!([]),
-        restarted: true,
-        alert: json!([]),
-        observed_by: Some(THIS_HOST.into()),
-    };
-    register::append(&run.home, &earlier).expect("the earlier recovery is recorded");
-
     let waits = vec![
-        wait(DECLARED, OTHER_HOST, LONG_AGO, ANSWER, "first-client"),
         wait(DECLARED, OTHER_HOST, &now, ANSWER, "young-client"),
         wait(
             UNDECLARED,
@@ -186,15 +162,6 @@ async fn another_hosts_standing_service_is_acted_on_once_and_only_for_answer_wai
         wait("skarbiec", OTHER_HOST, LONG_AGO, OPEN, "opening-client"),
         wait("skarbiec", THIS_HOST, LONG_AGO, ANSWER, "own-client"),
     ];
-    let declared_standing = waits
-        .iter()
-        .filter(|open| {
-            open["service"] == DECLARED
-                && open["active_host"] == OTHER_HOST
-                && open["phase"] == ANSWER
-                && open["since"] == LONG_AGO
-        })
-        .count();
     run.publish(std::process::id(), &Value::Array(waits));
     let answer = run.pass("published by a running resolver").await;
     let blocks = answer
@@ -206,39 +173,17 @@ async fn another_hosts_standing_service_is_acted_on_once_and_only_for_answer_wai
         .collect();
     assert_eq!(
         services,
-        vec![(DECLARED, OTHER_HOST), (UNDECLARED, OTHER_HOST)],
+        vec![(UNDECLARED, OTHER_HOST)],
         "only the answer-phase waits to another host past the bound are standings: {answer}"
     );
-    let [declared, undeclared] = blocks.as_slice() else {
-        panic!("two standings were read: {answer}");
+    let [undeclared] = blocks.as_slice() else {
+        panic!("one undeclared standing was read: {answer}");
     };
-
-    assert_eq!(
-        declared["held"],
-        json!(declared_standing),
-        "a wait younger than the bound is not counted: {declared}"
-    );
-    assert_eq!(
-        declared["since"],
-        json!(LONG_AGO),
-        "the oldest wait is the standing: {declared}"
-    );
-    assert_eq!(
-        declared["already_recovered"],
-        json!(earlier),
-        "a standing the register already holds is reported, not acted on again: {declared}"
-    );
-    assert!(declared.get("recovery").is_none(), "{declared}");
 
     let reason = text(undeclared, "not_recovered");
     assert!(
         reason.contains(UNDECLARED) && reason.contains("is not a service the catalog declares"),
         "an undeclared service is not acted on, naming it: {undeclared}"
-    );
-    assert_eq!(
-        register::read(&run.home).expect("the register reads back"),
-        vec![earlier.clone()],
-        "nothing was recorded for a standing that was not acted on"
     );
 
     let mut gone = Command::new("/usr/bin/true")

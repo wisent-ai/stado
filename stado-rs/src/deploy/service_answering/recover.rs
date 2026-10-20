@@ -15,10 +15,10 @@
 //! cause is absent, so a standing caused by a wedged daemon is cleared by
 //! the step for it whichever cause the declaration lists first. A recovery
 //! that fails at a repair still restarts: the repairs clear the known
-//! causes, the restart ends the process that holds the requests. A recovery
-//! whose restart fails is recorded as such and alerted, and the beacon
-//! carries the refusal, so a service that cannot be restarted does not read
-//! as recovered.
+//! causes, the restart ends the process that holds the requests. A refused
+//! restart remains a refusal in the beacon and recovery report. Alert delivery
+//! and register append are attempted and their outcomes are retained, so
+//! neither can turn the attempt into a reported recovery.
 
 use serde_json::{json, Value};
 
@@ -69,9 +69,16 @@ pub async fn recover(
             entry.name
         ))
     })?;
-    let held_requests = match crate::cli::resolver::held_to_service(&entry.name) {
-        Ok(held) => held,
-        Err(cause) => vec![json!({ "unreadable": cause })],
+    let (held_requests, held_description) = match crate::cli::resolver::held_to_service(&entry.name)
+    {
+        Ok(held) => {
+            let description = format!("{} request(s)", held.len());
+            (held, description)
+        }
+        Err(cause) => {
+            let description = format!("resolver waiting list unreadable: {cause}");
+            (vec![json!({ "unreadable": cause })], description)
+        }
     };
     let mut repair = Vec::with_capacity(declared.repair.len());
     for step in &declared.repair {
@@ -105,12 +112,11 @@ pub async fn recover(
     let message = match peer {
         None => format!(
             "{host}: {} ({unit}) answered nothing on {} {} for {waited_seconds}s, past the \
-             {bound_seconds}s bound; {} request(s) stood on this host's resolver; repair \
+             {bound_seconds}s bound; this host's resolver: {held_description}; repair \
              {repaired}; restart {restart_word}. `stado service recoveries` lists this event only if recording succeeds.",
             entry.name,
             declared.method,
             declared.path,
-            held_requests.len(),
         ),
         Some(peer) => format!(
             "{host}: {} ({unit}) held {}'s requests for {waited_seconds}s, past the \
@@ -133,6 +139,7 @@ pub async fn recover(
         service: entry.name.clone(),
         unit: unit.to_string(),
         question: format!("{} {}", declared.method, declared.path),
+        answering: Some(declared.clone()),
         stood_since: since.clone(),
         stood_seconds: *waited_seconds,
         bound_seconds: *bound_seconds,

@@ -80,7 +80,37 @@ fn answers(listener: TcpListener) {
             let mut request_line = String::new();
             let _ = reader.read_line(&mut request_line);
             let mut connection = reader.into_inner();
-            let _ = connection.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+            let status = reqwest::StatusCode::NO_CONTENT;
+            let response = format!(
+                "HTTP/1.1 {} {}\r\n\r\n",
+                status.as_u16(),
+                status
+                    .canonical_reason()
+                    .expect("standard HTTP status has a reason")
+            );
+            let _ = connection.write_all(response.as_bytes());
+        }
+    });
+}
+
+/// An actual HTTP failure carries the service's diagnostic body, not a
+/// healthy answer merely because it completed instead of standing.
+fn answers_unready(listener: TcpListener) {
+    std::thread::spawn(move || {
+        for connection in listener.incoming().flatten() {
+            let mut reader = BufReader::new(connection);
+            let mut request_line = String::new();
+            let _ = reader.read_line(&mut request_line);
+            let mut connection = reader.into_inner();
+            let status = reqwest::StatusCode::SERVICE_UNAVAILABLE;
+            let body = r#"{"detail":"canary decryption refused"}"#;
+            let response = format!(
+                "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                status.as_u16(),
+                status.canonical_reason().expect("standard HTTP status has a reason"),
+                body.len(),
+            );
+            let _ = connection.write_all(response.as_bytes());
         }
     });
 }
@@ -96,7 +126,8 @@ async fn a_service_that_answers_nothing_stands_once_the_bound_has_passed_and_an_
     let (silent, silent_port) = listener(&resolver);
     stands_forever(silent);
     let standing = entry("standing-service");
-    let first = ask_and_read(&standing, silent_port, bound).expect("a declared question is asked");
+    let first = ask_and_read(&standing, &standing.name, silent_port, bound)
+        .expect("a declared question is asked");
     assert!(matches!(first, Reading::Asked { .. }), "{first:?}");
     // The pass after the bound: the question is still in flight, so the
     // service stands. The wait is the declared bound itself, measured, not
@@ -125,19 +156,67 @@ async fn a_service_that_answers_nothing_stands_once_the_bound_has_passed_and_an_
     let (live, live_port) = listener(&resolver);
     answers(live);
     let answering = entry("answering-service");
-    let asked = ask_and_read(&answering, live_port, bound).expect("a declared question is asked");
+    let asked = ask_and_read(&answering, &answering.name, live_port, bound)
+        .expect("a declared question is asked");
     assert!(matches!(asked, Reading::Asked { .. }), "{asked:?}");
     let answered = loop {
         match read("answering-service", bound) {
-            Reading::Finished(found) => break found,
+            Reading::Finished { result: found } => break found,
             Reading::Stood { .. } => panic!("the answering service was read as standing"),
             _ => std::thread::yield_now(),
         }
     };
-    let Finished::Answered { status, .. } = answered else {
+    let Finished::Answered {
+        status,
+        successful,
+        detail,
+        ..
+    } = answered
+    else {
         panic!("the answering service's answer was refused: {answered:?}");
     };
     assert_eq!(status, reqwest::StatusCode::NO_CONTENT.as_u16());
+    assert!(
+        successful,
+        "a successful HTTP answer was classified as failed"
+    );
+    assert!(
+        detail.is_none(),
+        "a successful HTTP answer retained an error body"
+    );
+
+    let (unready, unready_port) = listener(&resolver);
+    answers_unready(unready);
+    let unavailable = entry("unready-service");
+    ask_and_read(&unavailable, &unavailable.name, unready_port, bound)
+        .expect("the readiness question is asked");
+    let failed = loop {
+        match read("unready-service", bound) {
+            Reading::Finished { result: found } => break found,
+            Reading::Stood { .. } => {
+                panic!("a finished HTTP refusal was read as a standing request")
+            }
+            _ => std::thread::yield_now(),
+        }
+    };
+    let Finished::Answered {
+        status,
+        successful,
+        detail,
+        ..
+    } = failed
+    else {
+        panic!("the readiness HTTP failure was lost: {failed:?}");
+    };
+    assert_eq!(status, reqwest::StatusCode::SERVICE_UNAVAILABLE.as_u16());
+    assert!(
+        !successful,
+        "a failed readiness HTTP response was classified as healthy"
+    );
+    assert_eq!(
+        detail.as_deref(),
+        Some(r#"{"detail":"canary decryption refused"}"#)
+    );
 
     let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("service-answering")
@@ -152,6 +231,7 @@ async fn a_service_that_answers_nothing_stands_once_the_bound_has_passed_and_an_
         service: "standing-service".into(),
         unit: "com.wisent.standing-service".into(),
         question: "POST /ask".into(),
+        answering: None,
         stood_since: "earlier".into(),
         stood_seconds: *waited_seconds,
         bound_seconds: bound,
@@ -175,18 +255,23 @@ async fn a_service_that_answers_nothing_stands_once_the_bound_has_passed_and_an_
     std::fs::remove_dir_all(&home).expect("the isolated home is removed");
 }
 
-/// The catalog Stado ships declares Skarbiec's repair steps as a list, and
-/// the real `stado product catalog` reads it; the same catalog with the
-/// steps written as one string is refused naming the field, so a catalog
-/// that would run only one of a service's repairs never ships.
+/// The real `stado product catalog` accepts the shipped catalog and refuses
+/// the same structured catalog when one service's repair steps become a
+/// scalar. The refusal names the field rather than silently running one step.
 #[test]
-fn the_catalog_declares_repair_steps_as_a_list_and_refuses_one_string() {
-    const LISTED: &str = "      repair:\n      - crypto\n      - audit-lock\n";
+fn the_catalog_refuses_scalar_repair_steps() {
     let shipped = include_str!("../../catalog/products.yml");
-    assert!(
-        shipped.contains(LISTED),
-        "the shipped catalog declares Skarbiec's repair steps crypto then audit-lock"
-    );
+    let mut invalid = stado_product::catalog::embedded().expect("the shipped catalog is valid");
+    let products = invalid["products"]
+        .as_array_mut()
+        .expect("the catalog holds products");
+    let vault = products
+        .iter_mut()
+        .find(|product| product["id"] == "skarbiec")
+        .expect("the vault is catalogued");
+    let repair = &mut vault["service"]["answering"]["repair"];
+    assert!(repair.is_array(), "the vault declares repair steps");
+    *repair = json!("audit-lock");
     let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("service-answering-catalog")
         .join(std::process::id().to_string());
@@ -206,10 +291,9 @@ fn the_catalog_declares_repair_steps_as_a_list_and_refuses_one_string() {
         "the shipped catalog is read: {}",
         String::from_utf8_lossy(&listed.stderr)
     );
-    let single = read(
-        "single.yml",
-        &shipped.replace(LISTED, "      repair: audit-lock\n"),
-    );
+    let malformed = serde_json::to_string(&invalid)
+        .expect("the altered catalog is JSON, also accepted as YAML");
+    let single = read("single.yml", &malformed);
     let stderr = String::from_utf8_lossy(&single.stderr);
     assert!(
         !single.status.success()

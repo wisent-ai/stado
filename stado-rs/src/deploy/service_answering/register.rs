@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::cli::CmdError;
+use crate::deploy::service_catalog::AnsweringProbe;
 
 /// Where the register lives under the Stado home.
 pub const REGISTER_FILE: &str = "service-recoveries.jsonl";
@@ -26,13 +27,18 @@ pub struct Recovery {
     pub unit: String,
     /// The declared question that stood: method and path.
     pub question: String,
+    /// Exact answering declaration used by this attempt. Older records have
+    /// no snapshot and cannot suppress recovery under a changed catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answering: Option<AnsweringProbe>,
     /// Since when the question stood, and for how long, against the bound.
     pub stood_since: String,
     pub stood_seconds: u64,
     pub bound_seconds: u64,
     /// The requests this host's resolver held unanswered to the service at
-    /// the time, as `resolver-waiting.json` listed them; empty when the
-    /// resolver listed none or publishes no list.
+    /// the time, as `resolver-waiting.json` listed them. Empty means no held
+    /// request was listed; a read refusal is one `{ "unreadable": cause }`
+    /// diagnostic entry, not one held request.
     pub held_requests: Vec<Value>,
     /// What each declared repair step answered, in the order run; empty when
     /// none is declared. A record written before steps were a list holds

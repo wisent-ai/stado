@@ -66,10 +66,8 @@ fn render_status(
             .iter()
             .map(|row| {
                 let mut entry = row.to_json();
-                // Carried in the machine-readable form too, because the
-                // consumers of `--json` are the dashboards and gates that
-                // acted on a twelve-day-old `active` without ever being able
-                // to see how old it was.
+                // The timestamp and independent API question stay beside
+                // process state so consumers can judge freshness and service.
                 let fact = observations::service_fact(&row.service.name, &row.service.host);
                 entry["observed"] = json!(observations::describe_in(&seen, &fact));
                 if let Some(failure) = failures.iter().find(|failure| {
@@ -97,18 +95,19 @@ fn render_status(
                 row.service.host.clone(),
                 row.service.name.clone(),
                 row.service.unit_id().to_string(),
+            ];
+            if show_domain {
+                cells.push(reported_cell(
+                    UnitDomain::from_path(&row.service.path).as_str(),
+                ));
+            }
+            cells.extend([
                 row.service.source.clone(),
                 row.state.clone(),
                 optional_cell(row.reported_at.as_deref()),
                 observations::describe_in(&seen, &fact),
                 reported_cell(&row.detail),
-            ];
-            if show_domain {
-                cells.insert(
-                    3,
-                    reported_cell(UnitDomain::from_path(&row.service.path).as_str()),
-                );
-            }
+            ]);
             cells
         })
         .collect();
@@ -123,9 +122,31 @@ fn render_status(
         "DETAIL",
     ];
     if show_domain {
-        headers.insert(3, "DOMAIN");
+        let source = headers
+            .iter()
+            .position(|heading| *heading == "SOURCE")
+            .expect("the service table declares its source column");
+        headers.insert(source, "DOMAIN");
     }
     table::print(&headers, &cells);
+    for row in rows {
+        if let Some(answering) = &row.answering {
+            println!(
+                "answering: {} {}: {answering}",
+                row.service.host,
+                row.service.unit_id()
+            );
+        }
+    }
+    for row in rows {
+        if let Some(error) = &row.answering_error {
+            println!(
+                "answering-error: {} {}: {error}",
+                row.service.host,
+                row.service.unit_id()
+            );
+        }
+    }
     // A unit declared in a domain its host cannot have, named where the
     // operator is already reading the table it is missing from. This is a
     // fact about the document, so it prints for every row that carries it
@@ -139,7 +160,10 @@ fn render_status(
     for failure in failures {
         let exit = match &failure.last_exit {
             Some(exit) => format!("last launchd exit {exit}"),
-            None => "last launchd exit unknown".to_string(),
+            None => format!(
+                "{} did not report launchd's last exit for {}; the exit cause cannot be inferred",
+                failure.host, failure.unit
+            ),
         };
         println!("failure: {} {}: {}", failure.host, failure.unit, exit);
         // A failed system LaunchDaemon has exactly one repair over the

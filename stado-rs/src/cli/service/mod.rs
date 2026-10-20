@@ -221,7 +221,7 @@ fn catalog_unit(
         service::systemd_service(
             &target.name,
             &format!("{label}.service"),
-            &format!("{home}/.config/systemd/user/{label}.service"),
+            &format!("{home}/{}/{label}.service", service::USER_SYSTEMD_UNITS),
             service::SOURCE_REGISTRY,
             "",
         )
@@ -229,7 +229,7 @@ fn catalog_unit(
         service::launchd_service(
             &target.name,
             &label,
-            &format!("{home}/Library/LaunchAgents/{label}.plist"),
+            &format!("{home}/{}/{label}.plist", service::USER_LAUNCHD_AGENTS),
             service::SOURCE_REGISTRY,
             "",
         )
