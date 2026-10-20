@@ -7,16 +7,19 @@ use crate::deploy::{host_channel, DeployError};
 
 use super::CronOutcome;
 
-/// Decode one base64 marker payload, or return it unchanged when a host
-/// answered something this command cannot decode: a table is operator-facing
-/// text, and dropping it on a decode error would hide the very content the
-/// caller asked to see.
+/// Decode one base64 marker payload. A table is operator-facing text, so a
+/// payload the host sent that does not decode is shown as sent, beside the
+/// reason it could not be decoded, instead of being dropped or passed off as
+/// the decoded table.
 fn decode(payload: &str) -> String {
-    STANDARD
-        .decode(payload.trim().as_bytes())
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .unwrap_or_else(|| payload.trim().to_string())
+    let sent = payload.trim();
+    match STANDARD.decode(sent.as_bytes()) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(table) => table,
+            Err(error) => format!("<the host's table is not UTF-8 ({error}); as sent: {sent}>"),
+        },
+        Err(error) => format!("<the host's table is not base64 ({error}); as sent: {sent}>"),
+    }
 }
 
 pub(super) fn parse(host: &str, stdout: &str) -> Result<CronOutcome, DeployError> {
