@@ -14,6 +14,10 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Repairs: "Keep verb dependencies compatible with predecessor installers", "Plan and install declared product prerequisites" and "Reuse revision-isolated Cargo installation caches and verified dependencies" — the defect that installing one product rebuilt each dependency to its head and refused a consumer whose provider the machine does not have, so products that depend on each other could not be installed and none ran without the others.
+Repairs: "A product whose own dependency requires its new verb can be installed" its lines in chain.rs, mod.rs, perform.rs, prerequisites.rs are replaced by this change.
+Repairs: "Reuse revision-isolated Cargo installation caches and verified dependencies" its lines in planning.rs are replaced by this change.
+Repairs: "Plan and install declared product prerequisites" its lines in chain.rs, mod.rs, perform.rs, prerequisites.mjs, prerequisites.rs are replaced by this change.
+
 Harsh-Review-Attacked: reusing an old dependency could leave a consumer without a capability it calls - the consumer's needs are its contract's verbs, checked by the prerequisite decision against the installed provider's own manifest, and an installed provider without the verb is still refused.
 Harsh-Review-Attacked: a broken or tampered dependency could now be reused - reuse still requires a completed receipt, the same recipe and destination, recorded files and a passing ownership and signature verification.
 Harsh-Review-Attacked: skipping an absent provider could hide that the consumer cannot work - the consumer's own call of the verb reports the provider's absence at run time, as Stado's admission already says no Oko is installed.
