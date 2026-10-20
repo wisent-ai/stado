@@ -84,13 +84,13 @@ pub fn published() -> Result<Value, String> {
 }
 
 /// The block as a line for an operator: `load 3.2 under ceiling 12
-/// (measured_cores)`, with every standing skip named, or `-` before any scan
-/// has asked. A field the block does not carry reads as not reported, never
-/// as a stand-in mark.
+/// (measured_cores)`, with every standing skip named, or `no scan has asked yet`
+/// before any scan has. A field the block does not carry reads as not
+/// reported, never as a stand-in mark.
 pub fn line(block: &Value) -> String {
     use crate::cli::reporting::field;
     let Some(last) = block.get("last").filter(|last| !last.is_null()) else {
-        return "-".to_string();
+        return "no scan has asked yet".to_string();
     };
     let mut sentence = format!(
         "load {} against ceiling {} ({})",

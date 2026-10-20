@@ -73,12 +73,9 @@ fn print_report(report: &Value, json_output: bool) -> Result<(), CmdError> {
         println!("{}", serde_json::to_string_pretty(report)?);
         return Ok(());
     }
-    // A field the report lacks is said to be unreported, as `mint` says it,
-    // not printed as an empty item, state or revision.
-    let reported = |value: &Value| match value.as_str() {
-        Some(text) => text.to_string(),
-        None => "not reported".to_string(),
-    };
+    // A field the report lacks is said to be unreported, as every report says
+    // it, not printed as an empty item, state or revision.
+    let reported = crate::cli::reporting::field;
     let subject = match report["role"].as_str() {
         Some(role) => format!("role {role}"),
         None => reported(&report["item"]),
@@ -194,12 +191,25 @@ pub(crate) async fn write_vault_item(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    // A Skarbiec older than `--if-absent` answers without `created`; its
-    // write is taken as a creation, which is what it did.
-    let created = serde_json::from_str::<Value>(&stored.stdout)
-        .ok()
-        .and_then(|answer| answer.get("created").and_then(Value::as_bool))
-        .unwrap_or(true);
+    // Skarbiec's set-json answers whether it wrote the item. The visibility
+    // check below rests on that answer, so one that is not JSON or does not
+    // say `created` is refused with what Skarbiec printed; it comes from a
+    // Skarbiec older than `--if-absent`, which the host's release replaces.
+    let unanswered = |cause: String| {
+        CmdError::click(format!(
+            "{}: Skarbiec set-json for {item} did not say whether it created the item \
+             ({cause}); it printed: {}",
+            resolved.name,
+            stored.stdout.trim()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
+    let answer: Value = serde_json::from_str(&stored.stdout)
+        .map_err(|error| unanswered(format!("the answer is not JSON: {error}")))?;
+    let created = answer
+        .get("created")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| unanswered("the answer carries no boolean created".to_string()))?;
     let after = read_vault_phase(&resolved, &vault, item, &runner).await?;
     let active = after.state == super::VaultItemState::Held("active".to_string());
     if created && (!active || after.revision == before.revision) {

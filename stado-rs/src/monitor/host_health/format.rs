@@ -16,12 +16,13 @@ fn py_str(value: &Value) -> String {
     }
 }
 
-/// Python truthiness for the `x or '-'` branch.
+/// Whether the beacon stated a value: null, false and an empty string, list
+/// or object say nothing, while a number is a measurement even when it is zero.
 fn py_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64() != Some(0.0),
+        Value::Number(_) => true,
         Value::String(s) => !s.is_empty(),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
@@ -29,12 +30,11 @@ fn py_truthy(value: &Value) -> bool {
 }
 
 /// A beacon field, or that the beacon did not report it. An empty or false
-/// value counts as not reported, as the Python report's `or` did; a dash
-/// read as a value the beacon held.
+/// value counts as not reported; a dash read as a value the beacon held.
 fn reported(value: Option<&Value>) -> String {
     match value {
         Some(v) if py_truthy(v) => py_str(v),
-        _ => "not reported".to_string(),
+        _ => crate::cli::reporting::NOT_REPORTED.to_string(),
     }
 }
 
@@ -43,7 +43,7 @@ fn reported(value: Option<&Value>) -> String {
 fn measured(value: Option<&Value>, unit: &str) -> String {
     match value {
         Some(v) => format!("{}{unit}", py_str(v)),
-        None => "not reported".to_string(),
+        None => crate::cli::reporting::NOT_REPORTED.to_string(),
     }
 }
 
@@ -64,8 +64,8 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
         ),
         format!(
             "object: {}#{}",
-            py_str(metadata.get("uri").unwrap_or(&Value::Null)),
-            py_str(metadata.get("generation").unwrap_or(&Value::Null)),
+            reported(metadata.get("uri")),
+            reported(metadata.get("generation")),
         ),
         format!(
             "disk: {} used; {} available",
@@ -77,7 +77,7 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
             "scans: {}",
             match get("scans") {
                 Some(scans) => crate::deploy::host_scan::record::line(scans),
-                None => "not reported".to_string(),
+                None => crate::cli::reporting::NOT_REPORTED.to_string(),
             }
         ),
         "units:".to_string(),
@@ -92,7 +92,7 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
                 let state_value = state_map.get("state");
                 let state_text = match state_value {
                     Some(v) if py_truthy(v) => py_str(v),
-                    _ => "not reported".to_string(),
+                    _ => crate::cli::reporting::NOT_REPORTED.to_string(),
                 };
                 lines.push(format!("  {name}: {state_text}"));
             } else {
@@ -115,7 +115,7 @@ fn privacy_line(block: Option<&Value>) -> String {
         .and_then(|block| block.get("folders"))
         .and_then(Value::as_object)
     else {
-        return "not reported".to_string();
+        return crate::cli::reporting::NOT_REPORTED.to_string();
     };
     folders
         .iter()
