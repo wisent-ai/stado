@@ -4,8 +4,11 @@
 //! transaction assumes.
 //!
 //! A probe ends on facts, never on a count or a clock: a 2xx answer is
-//! healthy; a destination unit that no longer runs is not, named with what
-//! its URL last answered; anything else, while the unit runs, is read again.
+//! healthy; a 4xx answer says the probe path or the service is wrong and is
+//! refused at once; a destination unit that no longer runs is not healthy,
+//! named with what its URL last answered; any other answer, while the unit
+//! runs, is read again, and each answer that differs from the last is
+//! printed so a waiting operator sees what the destination says.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -32,6 +35,19 @@ struct Answer {
 impl Answer {
     fn healthy(&self) -> bool {
         self.failure.is_none() && self.status.starts_with('2')
+    }
+
+    /// An HTTP 4xx: the service answered and refused the request itself, so
+    /// reading the same URL again cannot turn it into a 2xx.
+    /// https://www.rfc-editor.org/rfc/rfc9110#section-15.5
+    fn refused_by_service(&self) -> bool {
+        self.failure.is_none() && self.status.starts_with('4')
+    }
+}
+
+impl PartialEq for Answer {
+    fn eq(&self, other: &Self) -> bool {
+        self.status == other.status && self.failure == other.failure
     }
 }
 
@@ -120,8 +136,10 @@ pub(super) async fn health_probe(
 }
 
 /// The started unit `spec` on `target` answers 2xx at `url`. Until it does,
-/// the URL is read again while the unit's process runs; once it no longer
-/// runs, the move is refused naming the unit and the URL's last answer.
+/// the URL is read again while the unit's process runs, and each answer that
+/// differs from the one before is printed. A 4xx answer refuses the move at
+/// once, naming it and the URL; once the unit no longer runs, the move is
+/// refused naming the unit and the URL's last answer.
 pub(super) async fn await_healthy(
     target: &ComputeTarget,
     spec: &PlacementUnit,
@@ -130,10 +148,25 @@ pub(super) async fn await_healthy(
 ) -> Result<(), CmdError> {
     let payload = probe_payload(url)?;
     let managed = managed_unit(spec)?;
+    let mut previous: Option<Answer> = None;
     loop {
         let answer = answer(target, url, &payload, runner).await?;
         if answer.healthy() {
             return Ok(());
+        }
+        if answer.refused_by_service() {
+            return Err(CmdError::click(format!(
+                "{}: {url} answered {answer} while unit {} runs; the probe path or the \
+                 service refuses the request, so the move does not wait for it",
+                target.name, managed.unit
+            ))
+            .stating(FailureCode::InfraDown));
+        }
+        if previous.as_ref() != Some(&answer) {
+            println!(
+                "  {}: unit {} runs; {url} answered {answer}; reading it again",
+                target.name, managed.unit
+            );
         }
         if !probe_unit(target, spec, runner).await?.running {
             return Err(CmdError::click(format!(
@@ -142,6 +175,7 @@ pub(super) async fn await_healthy(
             ))
             .stating(FailureCode::InfraDown));
         }
+        previous = Some(answer);
     }
 }
 
