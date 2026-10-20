@@ -13,10 +13,14 @@ enum ManagementMode {
     External,
 }
 
-fn management_mode(management: &serde_json::Map<String, Value>) -> Option<ManagementMode> {
-    management
-        .get("mode")
-        .and_then(|mode| ManagementMode::deserialize(mode).ok())
+/// The item's lifecycle mode, or why `management` names none Stado knows:
+/// no `mode` at all, or the word it holds with serde's own error.
+fn management_mode(management: &serde_json::Map<String, Value>) -> Result<ManagementMode, String> {
+    let Some(mode) = management.get("mode") else {
+        return Err("it records no lifecycle mode".to_string());
+    };
+    ManagementMode::deserialize(mode)
+        .map_err(|error| format!("its lifecycle mode {mode} is not one Stado knows: {error}"))
 }
 
 /// Atomically replace one target-local verifier shadow with the authoritative
@@ -54,9 +58,10 @@ pub(super) async fn converge_item(
             ))
             .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-    let mode = management_mode(source_management).ok_or_else(|| {
+    let mode = management_mode(source_management).map_err(|why| {
         CmdError::click(format!(
-            "authoritative {kind} verifier source item {item} has no supported lifecycle mode"
+            "authoritative {kind} verifier source item {item} has no supported lifecycle mode: \
+             {why}"
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
@@ -89,7 +94,7 @@ pub(super) async fn converge_item(
             .and_then(|entry| entry.get("management"))
             .and_then(Value::as_object)
             .is_some_and(|management| {
-                management_mode(management) == Some(ManagementMode::Owner)
+                matches!(management_mode(management), Ok(ManagementMode::Owner))
                     && management.get("controller").and_then(Value::as_str) == Some(target_owner)
             });
     let compare_command = format!(
@@ -107,7 +112,7 @@ pub(super) async fn converge_item(
     )
     .await
     .map_err(CmdError::from)?;
-    if !shadow_owned || !comparison.ok() {
+    if !shadow_owned || !comparison.succeeded() {
         let payload = serde_json::to_string(&serde_json::json!({
             "schema": "skarbiec.item.v2",
             "kind": "token",
@@ -137,7 +142,7 @@ pub(super) async fn converge_item(
         )
         .await
         {
-            Ok(converged) if converged.ok() => None,
+            Ok(converged) if converged.succeeded() => None,
             // A vault replacement can close the host channel after
             // the atomic move but before the shell reports success.
             // A nonzero transport-shaped result is therefore as
@@ -163,9 +168,10 @@ pub(super) async fn converge_item(
         )
         .await
         .map_err(|error| {
-            let first = convergence_transport_error
-                .as_deref()
-                .unwrap_or("shadow write completed");
+            let first = match convergence_transport_error.as_deref() {
+                Some(transport) => transport,
+                None => "shadow write completed",
+            };
             CmdError::click(format!(
                 "{}: cannot verify {kind} verifier shadow for {item} after {first}: {error}",
                 resolved.name
@@ -173,7 +179,7 @@ pub(super) async fn converge_item(
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     }
-    if !comparison.ok() {
+    if !comparison.succeeded() {
         return Err(CmdError::click(format!(
             "{}: {kind} verifier shadow for {item} differs after reconciliation",
             resolved.name,
