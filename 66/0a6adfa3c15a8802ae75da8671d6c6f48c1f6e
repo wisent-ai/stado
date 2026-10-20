@@ -13,8 +13,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Harsh-Review-Attacked: a client that half-closes its sending side before the answer loses the answer; the commit and the changelog state that a client closing before the answer began ends the relay, which for a relay with no clock is the only point at which a dead caller is seen, and a half-close after the answer began is still read to its end
-Harsh-Review-Attacked: the relay leaves a copy running after it returns; both copies are pinned futures owned by the relay, so returning drops them and closes the channel to the service
-Harsh-Review-Attacked: an error of the finished copy is lost; the first finished copy's error is returned through the same failed mapping before anything else happens
-Harsh-Review-Attacked: the lines it replaces belong to unpublished work; the replaced join and test header come from a commit origin/main already holds
-Harsh-Review-Attacked: the test checks a mock; it drives the real stado serve resolver, drops the real client socket, reads the resolver's own line and published waits, and relays a second real request
+Harsh-Review-Attacked: whether a client that only half-closes after sending its request loses its answer; TCP hands the relay the same end of stream for a dead client and a half-close, the relay's documentation says a client that closes before the answer began is read as gone, and the HTTP clients the resolver relays keep their sending side open until they have read the answer.
+Harsh-Review-Attacked: whether the select drops a failure of the side that did not finish first; the unfinished future is awaited afterwards with the same error mapping, and only the abandoned case returns early, after closing the channel by dropping it.
+Harsh-Review-Attacked: whether the answer flag can race the abandonment check; it is stored with Release before the answer is recorded and loaded with Acquire after the upload ends, so a first byte noticed before the check is seen by it.
+Harsh-Review-Attacked: whether the test only reads its own log; it drives the real stado serve resolver over TCP, reads the published waiting list empty through the product and sends a second request that the resolver relays.
+Harsh-Review-Attacked: whether the commit adds a clock or retry; it adds none, the held request still waits without a deadline while its client waits.
