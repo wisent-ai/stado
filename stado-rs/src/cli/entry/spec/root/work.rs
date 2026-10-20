@@ -167,4 +167,25 @@ pub(crate) enum QualityCommands {
         #[arg(long)]
         json: bool,
     },
+    /// List the one-off commands of a product's CLI: build the committed
+    /// revision's CLI as its installation builds it (no quality gate runs),
+    /// read its whole command tree and have a model name each command that
+    /// duplicates or fragments a general primitive. Exits 0 whenever the tree
+    /// was judged, with the commands left to fold in; non-zero when the CLI
+    /// could not be built, read or judged. A product whose catalog record
+    /// declares no CLI surface has none.
+    CommandTree {
+        /// The checkout to read; the working directory by default.
+        #[arg(long)]
+        root: Option<String>,
+        /// Read this exact committed revision; by default the revision an
+        /// install of the checkout builds.
+        #[arg(long)]
+        revision: Option<String>,
+        /// Progress to stderr and one document on stdout: product,
+        /// revision, whether it has a CLI, and `remaining`, one sentence per
+        /// command.
+        #[arg(long)]
+        json: bool,
+    },
 }

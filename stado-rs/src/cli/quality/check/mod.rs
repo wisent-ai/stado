@@ -5,7 +5,7 @@
 mod command;
 mod commands;
 mod modules;
-pub use command::check;
+pub use command::{check, command_tree};
 mod paths;
 pub(crate) use modules::check_source;
 use std::path::Path;
@@ -265,14 +265,18 @@ async fn check_tree(
             }
         })?;
     }
-    if matches!(selection, Selection::Installation) {
+    if matches!(selection, Selection::Installation | Selection::CommandTree) {
         let area = tree.parent().ok_or_else(|| {
             CmdError::click(format!(
                 "exported source has no run area: {}",
                 tree.display()
             ))
         })?;
-        commands::check(&declared, tree, area, &contract, checkout, revision, report)?;
+        if matches!(selection, Selection::CommandTree) {
+            commands::inventory(&declared, tree, area, &contract, revision, report)?;
+        } else {
+            commands::check(&declared, tree, area, &contract, checkout, revision, report)?;
+        }
     }
     Ok(Some(declared.product))
 }

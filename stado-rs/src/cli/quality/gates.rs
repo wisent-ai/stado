@@ -24,6 +24,9 @@ pub(crate) enum Selection {
     /// release submission run these, so a commit they pass is not refused by
     /// the installation's gate afterwards.
     Installation,
+    /// No gate: the product's CLI built as its installation builds it, and
+    /// its command tree read and judged (`stado quality command-tree`).
+    CommandTree,
 }
 
 impl Selection {
@@ -34,7 +37,14 @@ impl Selection {
             Self::Installation => match kind {
                 GateKind::Format | GateKind::Lint | GateKind::Test => true,
             },
+            Self::CommandTree => false,
         }
+    }
+
+    /// Whether a check under this selection builds the product, so reads
+    /// the release worker's contract: every selection but the formatting one.
+    fn builds(self) -> bool {
+        !matches!(self, Self::Formatting)
     }
 }
 
@@ -142,7 +152,9 @@ pub(super) fn declared_gates(
         .filter(|gate| selection.runs(gate.kind))
         .cloned()
         .collect();
-    if gates.is_empty() {
+    // A command-tree reading runs no gate, so a product declaring none
+    // still has its CLI built and read.
+    if gates.is_empty() && !matches!(selection, Selection::CommandTree) {
         let declared: Vec<String> = recipe
             .quality
             .iter()
@@ -158,7 +170,7 @@ pub(super) fn declared_gates(
                 declared.join(", "),
                 GateKind::Format,
             ),
-            Selection::Installation => format!(
+            Selection::Installation | Selection::CommandTree => format!(
                 "{} declares no quality gate for platform {platform}, so an installation runs \
                  none before it builds",
                 manifest_path.display()
@@ -169,7 +181,7 @@ pub(super) fn declared_gates(
     // installation runs reads the release worker's contract, which carries
     // the version the release would cut.
     let web = web::is_web_platform(platform);
-    let version = if web || matches!(selection, Selection::Installation) {
+    let version = if web || selection.builds() {
         Some(web::declared_version(&root, &manifest)?)
     } else {
         None

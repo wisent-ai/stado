@@ -285,6 +285,10 @@ name = "quality-gate-kind"
 path = "../tests/quality/gate_kind.rs"
 
 [[test]]
+name = "quality-command-tree-inventory"
+path = "../tests/quality/command_tree_inventory.rs"
+
+[[test]]
 name = "quality-link-input"
 path = "../tests/quality/link_input/main.rs"
 

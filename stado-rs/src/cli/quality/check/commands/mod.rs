@@ -1,6 +1,7 @@
 //! Audit the CLI artifact built from the exact committed source being checked.
 
 mod attested;
+mod audit;
 mod help_grammar;
 mod judged;
 
@@ -10,8 +11,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::super::{gates::DeclaredGates, run, Diagnostics, Report};
+use super::super::{gates::DeclaredGates, Report};
 use crate::cli::CmdError;
+pub(super) use audit::inventory;
+use audit::{audit, Audit};
 use help_grammar::clap_children;
 use judged::Reading;
 
@@ -175,46 +178,10 @@ pub(super) fn check(
     revision: &str,
     report: Report,
 ) -> Result<(), CmdError> {
-    if super::super::web::is_web_platform(&declared.platform) || !cli_product(&declared.product)? {
-        return Ok(());
-    }
-    let output = area.join("cli-surface");
-    std::fs::create_dir_all(&output).map_err(|cause| {
-        CmdError::click(format!(
-            "cannot create CLI artifact area {}: {cause}",
-            output.display()
-        ))
-    })?;
-    let mut env = contract.to_vec();
-    env.push(("WISENT_OUTPUT_DIR", output.to_string_lossy().into_owned()));
-    for (name, value) in &declared.env {
-        env.push((name, value.clone()));
-    }
-    report.say(&format!(
-        "stado quality check: building candidate CLI: {}",
-        declared.build.join(" ")
-    ));
-    run(&declared.build, tree, &env, report, Diagnostics::Compiled).map_err(|cause| {
-        cause.within(format!("building CLI command tree of {}", declared.product))
-    })?;
-    let mut command_tree = BTreeMap::new();
-    let mut unjudged = None;
-    for binary in staged_binaries(&output, &declared.stage)? {
-        let mut path = Vec::new();
-        if let Reading::Unanswered(cause) = discover(&binary, &mut path, None, &mut command_tree)? {
-            if unjudged.is_none() {
-                unjudged = Some(cause);
-            }
-        }
-        super::super::units::qualify(&binary, declared, report)?;
-    }
-    let reading = match unjudged {
-        Some(cause) => Reading::Unanswered(cause),
-        None => judged::violations(&declared.product, &command_tree)?,
-    };
-    let issues = match reading {
-        Reading::Answered(issues) => issues,
-        Reading::Unanswered(cause) => {
+    let failures = match audit(declared, tree, area, contract, report, true)? {
+        Audit::NotCli => return Ok(()),
+        Audit::Judged(failures) => failures,
+        Audit::Unjudged(cause) => {
             attested::stands(checkout, revision, &cause)?;
             report.say(&format!(
                 "stado quality check: {} CLI command tree was not judged ({cause}); it stands on \
@@ -224,22 +191,6 @@ pub(super) fn check(
             return Ok(());
         }
     };
-    let mut failures = Vec::new();
-    for issue in issues {
-        if !command_tree.contains_key(&issue.command)
-            || issue.primitive.trim().is_empty()
-            || issue.reason.trim().is_empty()
-        {
-            return Err(CmdError::refused(format!(
-                "{}: CLI audit named an unknown command or omitted its primitive/reason: {} -> {}: {}",
-                declared.product, issue.command, issue.primitive, issue.reason
-            )));
-        }
-        failures.push(format!(
-            "command `{}` duplicates or fragments primitive `{}`: {}",
-            issue.command, issue.primitive, issue.reason
-        ));
-    }
     if !failures.is_empty() {
         return Err(CmdError::refused(format!(
             "{} CLI command tree refuses:\n{}",

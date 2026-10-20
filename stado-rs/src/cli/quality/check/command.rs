@@ -76,6 +76,37 @@ async fn checked(
     Ok(revisions)
 }
 
+/// `stado quality command-tree`: the one-off commands a model reads in the
+/// CLI command tree of `revision` (else the revision an install builds) of
+/// the checkout at `root` (else the working directory), built from its
+/// committed source as the installation builds it, with no gate run. With
+/// `json`, progress goes to stderr and stdout carries one document whose
+/// `remaining` lists them; the command exits 0 whenever the tree was judged,
+/// empty or not, and non-zero when it could not be built, read or judged.
+pub async fn command_tree(
+    root: Option<&str>,
+    revision: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let report = if json { Report::Stderr } else { Report::Stdout };
+    let checkout = match root {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from("."),
+    };
+    let revision = match revision {
+        Some(revision) => resolve(&checkout, revision),
+        None => built_revision(&checkout),
+    }
+    .map_err(|error| error.machine_readable(json))?;
+    export_check(&checkout, &revision, report, Selection::CommandTree, false)
+        .await
+        .map_err(|error| {
+            error
+                .within(format!("command tree of committed revision {revision}"))
+                .machine_readable(json)
+        })
+}
+
 fn resolve(checkout: &Path, revision: &str) -> Result<String, CmdError> {
     git(
         checkout,

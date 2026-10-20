@@ -34,6 +34,13 @@ enum NativeReleaseSourceOperations {
             .init(id: "revision", label: "Exact committed revision to check", option: "--revision", required: true),
             .init(id: "if-declared", label: "Report a committed declaration with no gates instead of refusing", option: "--if-declared", flag: true),
         ], mutates: false),
+        // The one-off commands a model reads in a revision's built CLI, as a
+        // list rather than a refusal: `remaining` is what is left to fold
+        // into a general primitive.
+        .init(id: "quality-command-tree", title: "List the one-off commands of a revision's built CLI", path: ["quality", "command-tree"], hostPlacement: .none, fields: [
+            .init(id: "root", label: "Repository on the selected Stado API host", option: "--root", required: true),
+            .init(id: "revision", label: "Exact committed revision (blank reads the revision an install builds)", option: "--revision"),
+        ], fixedArguments: ["--json"], mutates: false),
         .init(id: "storage-archive", title: "Pack a directory as a release archive", path: ["storage", "archive"], hostPlacement: .none, fields: [
             .init(id: "source", label: "Source directory on the selected Stado API host", required: true),
             .init(id: "output", label: "New archive path on that host, outside the source directory", required: true),

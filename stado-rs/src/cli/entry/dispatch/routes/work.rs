@@ -50,6 +50,13 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                 )
                 .await
             }
+            QualityCommands::CommandTree {
+                root,
+                revision,
+                json,
+            } => {
+                crate::cli::quality::command_tree(root.as_deref(), revision.as_deref(), json).await
+            }
         },
         WorkCommands::Mcp => tokio::task::spawn_blocking(|| {
             let stdin = std::io::stdin();
