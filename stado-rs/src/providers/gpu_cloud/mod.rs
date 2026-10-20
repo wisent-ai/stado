@@ -1,11 +1,13 @@
 //! GPU and cloud compute vendors as Stado compute providers.
 //!
-//! Every vendor in [`GpuCloudVendor`] is an ordinary entry of `WC_PROVIDERS`:
-//! the coordinator dispatches agent machines on it, reaps dead ones, counts
-//! them against `config/quotas.json`, and `stado instances list` and
-//! `stado doctor` read them. The shared lifecycle — names, the guest hostname
-//! the reaper matches, idempotent release, the accelerator census — is
-//! [`GpuCloudProvider`]; each vendor module only translates its own API
+//! A vendor in [`GpuCloudVendor`] is selectable through `WC_PROVIDERS`.
+//! Dispatch-capable vendors boot agents, reap them and count them against
+//! `config/quotas.json`; Arkane only lists, reads and releases machines
+//! because its API has no startup script. `stado instances list` and
+//! `stado doctor` inspect these adapters. The shared lifecycle — names,
+//! the guest identity the reaper matches, idempotent release and accelerator
+//! census — is implemented by [`GpuCloudProvider`]; each vendor module
+//! only translates its own API
 //! ([`GpuCloudApi`]) and declares its settings and its offer ladder
 //! ([`VendorProfile`]).
 //!

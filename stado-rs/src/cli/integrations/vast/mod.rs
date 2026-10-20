@@ -44,11 +44,13 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             bucket,
             json,
         } => {
-            monitor(
-                bucket.as_deref().unwrap_or_else(|| crate::config::bucket()),
-                *json,
-            )
-            .await
+            // `--bucket` names the store when given; else it is the one the
+            // configuration selects.
+            let bucket = match bucket.as_deref() {
+                Some(named) => named,
+                None => crate::config::bucket(),
+            };
+            monitor(bucket, *json).await
         }
         MarketCommands::AutoList {
             provider: MarketProvider::Vast,
@@ -148,9 +150,16 @@ async fn monitor(bucket: &str, json_output: bool) -> Result<(), CmdError> {
     let store = JobStorage::with_bucket(bucket).await?;
     let hostname = vast::system_hostname();
     let capacity = vast::read_capacity_snapshot(&store, &hostname).await;
-    // Python list_blobs(prefix=..., max_results=512) counts.
-    let queued = store.list_paths("queue/", 512).await?.len();
-    let running = store.list_paths("running/", 512).await?.len();
+    // Every queued and running job is counted; a count cut at a page size
+    // nobody stated would read a full queue as a short one.
+    let queued = store
+        .list_paths("queue/", crate::queue::Listing::Every)
+        .await?
+        .len();
+    let running = store
+        .list_paths("running/", crate::queue::Listing::Every)
+        .await?
+        .len();
     crate::cli::print_answer(
         &json!({
             "now": now_utc_iso_z(),
