@@ -13,4 +13,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "The delivery loop queues repaired commits and release newest delivers them" its lines in deliver.rs, mod.rs are replaced by this change.
+Repairs: "A delivery loop takes a commit carrying a recorded repair to its hosts" its lines in deliver.rs, mod.rs are replaced by this change.
+
 Harsh-Review-Attacked: whether anything but the place changed; the enum, its variants and the match move verbatim, and deliver.rs imports them.
