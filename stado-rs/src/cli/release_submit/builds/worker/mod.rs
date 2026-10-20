@@ -38,12 +38,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     let request_bytes = read_named(&args.request, "the worker request")?;
     let request: WorkerRequest = serde_json::from_slice(&request_bytes)?;
     let manifest_bytes = read_named(&request.manifest_path, "the release manifest")?;
-    if request.schema_version != 1
-        || release_control::sha256_bytes(&manifest_bytes) != request.manifest_sha256
-    {
-        return Err(CmdError::click("worker manifest identity mismatch")
-            .stating(crate::primitives::failure::FailureCode::InfraDown));
-    }
+    environment::validate_manifest_identity(&request, &manifest_bytes)?;
     // The worker reads the product and its platform's recipe, nothing
     // else: it runs the Stado its host already has, and a delivery or
     // promotion section that changed shape in this commit is the control

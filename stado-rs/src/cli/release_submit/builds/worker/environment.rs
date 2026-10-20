@@ -9,6 +9,19 @@ use crate::release_pipeline::WorkerRequest;
 
 use super::steps::cargo_source;
 
+pub(super) fn validate_manifest_identity(
+    request: &WorkerRequest,
+    bytes: &[u8],
+) -> Result<(), CmdError> {
+    if request.schema_version != crate::release_pipeline::SCHEMA_VERSION
+        || crate::release_control::sha256_bytes(bytes) != request.manifest_sha256
+    {
+        return Err(CmdError::click("worker manifest identity mismatch")
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
+    }
+    Ok(())
+}
+
 /// `WISENT_SOURCE_COMMIT` and `WISENT_SOURCE_SHA256` are the snapshot's own
 /// identity, and a build that needs them has nowhere else to get them: the
 /// worker unpacks a `git archive`, so there is no repository to ask. Both
