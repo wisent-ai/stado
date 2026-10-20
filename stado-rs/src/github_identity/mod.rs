@@ -25,6 +25,7 @@
 
 mod check;
 mod declaration;
+mod local;
 
 use declaration::parse_declaration;
 
@@ -108,6 +109,9 @@ fn carrying(message: String, cause: impl Into<crate::cli::CmdError>) -> DeployEr
 pub async fn resolve() -> Result<ResolvedCredential, DeployError> {
     let identity = declared().map_err(|error| DeployError(error).stating(FailureCode::Config))?;
     let route = identity.credential_route.as_str();
+    if let Some(resolved) = local::resolve(route).await? {
+        return Ok(resolved);
+    }
     let credentials = crate::credential_store::admin_credentials().map_err(|error| {
         carrying(
             format!("Stado cannot reach Skarbiec to resolve the GitHub route {route:?}: {error}"),
@@ -195,25 +199,25 @@ pub async fn resolve() -> Result<ResolvedCredential, DeployError> {
         .iter()
         .find(|row| row.get("resource").and_then(Value::as_str) == Some(route))
         .ok_or_else(|| {
-            let table = document
-                .get("table")
-                .and_then(Value::as_str)
-                .unwrap_or("not reported");
+            let table = match document.get("table").and_then(Value::as_str) {
+                Some(table) => format!("route table: {table}"),
+                None => "Skarbiec reported no route table".to_string(),
+            };
             unanswered(
                 route,
-                &format!(
-                    "the response from {endpoint} names no such resource; route table: {table}"
-                ),
+                &format!("the response from {endpoint} names no such resource; {table}"),
             )
         })?;
     if row.get("item_present") != Some(&Value::Bool(true))
         || row.get("field_present") != Some(&Value::Bool(true))
     {
-        let problem = row
-            .get("problem")
-            .and_then(Value::as_str)
-            .unwrap_or("the route resolves to no readable field");
-        return Err(unanswered(route, problem));
+        let problem = match row.get("problem").and_then(Value::as_str) {
+            Some(problem) => problem.to_string(),
+            None => {
+                "the route resolves to no readable field and Skarbiec stated no reason".to_string()
+            }
+        };
+        return Err(unanswered(route, &problem));
     }
     let text = |key: &str| {
         row.get(key)
@@ -242,6 +246,9 @@ pub async fn resolve() -> Result<ResolvedCredential, DeployError> {
 /// which coordinate answered does not ask twice.
 pub async fn read(resolved: &ResolvedCredential) -> Result<String, DeployError> {
     let coordinate = format!("{}.{}", resolved.item, resolved.field);
+    if let Some(value) = local::read(resolved).await? {
+        return Ok(value);
+    }
     let credentials = crate::credential_store::admin_credentials().map_err(|error| {
         carrying(
             format!("Stado cannot reach Skarbiec to read {coordinate}: {error}"),
