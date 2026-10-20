@@ -13,6 +13,20 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Align reclaim reports, release gate and real journeys" its lines in Cargo.toml are replaced by this change.
+Repairs: "Disk-cleanup journeys declare their own scan load ceiling" the lines of it this change rewrites are replaced by it.
+Repairs: "The watch-promise journey drains the watch's reports so the janitor it reads never blocks on them" the lines of it this change rewrites are replaced by it.
+Repairs: "macOS scans run under /usr/sbin/taskpolicy and the census keeps only tag paths" the lines of it this change rewrites are replaced by it.
+Repairs: "Expose cleanup hold provenance and qualify editor concurrency" the lines of it this change rewrites are replaced by it.
+Repairs: "Snapshot cleaner and its journey in the project's formatting" the lines of it this change rewrites are replaced by it.
+Repairs: "Format the space reclaim journey" the lines of it this change rewrites are replaced by it.
+Repairs: "The janitor keeps a build directory a running build holds" the lines of it this change rewrites are replaced by it.
+Repairs: "Refuse and retain unreadable cleanup turn records" the lines of it this change rewrites are replaced by it.
+Repairs: "fleet approve names an enrollment request without a status" the lines of it this change rewrites are replaced by it.
+Repairs: "The snapshot cleaner deletes only the snapshots of its home's volume" the lines of it this change rewrites are replaced by it.
+Repairs: "A product build holds the janitor's cleanup lock for its whole run" the lines of it this change rewrites are replaced by it.
+Repairs: "The space report test grows its tree with names no earlier round used" the lines of it this change rewrites are replaced by it.
+
 Harsh-Review-Attacked: whether a valid unit can be retired as obsolete; a host Stado unit is obsolete only when its first word after the executable is no subcommand of the built CLI and no root option clap answers, which the root CLI, having no global options, cannot confuse with a valid command line; valid one-pass units are reported kept.
 Harsh-Review-Attacked: whether the test runs the real product; retired_command.mjs runs on a dedicated macOS service host whose registry and managed unit live under the checkout's ignored build directory, never an operator's installed service, and records the final launchd state.
 Harsh-Review-Attacked: whether it replaces lines of an unpushed commit; every line it replaces was pushed, so no Repairs line is owed.
