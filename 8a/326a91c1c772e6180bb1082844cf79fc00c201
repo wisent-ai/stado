@@ -13,6 +13,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "A process or loaded-unit number the host wrote but that does not parse is refused" its lines in mod.rs, report.rs are replaced by this change.
+
 Harsh-Review-Attacked: whether the report head changed; json!(target.ssh) serializes None as null and Some as its value, which is what the map_or wrote.
 Harsh-Review-Attacked: whether -vvv now lands elsewhere; it is pushed after the options and before the destination popped from the end, the position insert(len - 1) gave.
 Harsh-Review-Attacked: whether session_key now hides an error; try_with fails only when the task local is unset, which means no session, and that is the None the caller reads.
