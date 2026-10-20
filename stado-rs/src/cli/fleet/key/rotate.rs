@@ -191,7 +191,7 @@ async fn store_on_owner(
         .map_err(|error| error.within(format!("{id} was not stored in {owner}'s vault")))?;
     // The same consumer the channel reads with, granted on the owner; progress
     // on stderr, because `fleet invite --json` prints one document on stdout.
-    crate::cli::host::settle_consumer_reads(&id, &CHANNEL_FIELDS)
+    crate::cli::host::settle_consumer_reads(&id, CHANNEL_FIELDS)
         .await
         .map_err(|error| {
             error.within(format!(

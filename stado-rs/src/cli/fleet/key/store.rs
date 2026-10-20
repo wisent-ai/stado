@@ -117,7 +117,7 @@ pub(crate) async fn settle_readable(
             &credentials.consumer,
             std::path::Path::new(&credentials.token_file),
             id,
-            &CHANNEL_FIELDS,
+            CHANNEL_FIELDS,
         )
         .map_err(|exc| {
             CmdError::from(exc).within(format!(
