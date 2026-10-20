@@ -13,6 +13,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Real test of the job outcomes stado overview states" its lines in main.rs, outcomes.rs are replaced by this change.
+
 Harsh-Review-Attacked: whether the journeys lose a dependency; tokio, tracing-subscriber, serde_json, sha2, uuid and reqwest with the same features are dependencies of stado-rs, so each target resolves against the one lock.
 Harsh-Review-Attacked: whether their formatting goes unchecked; cargo fmt --all over stado-rs/Cargo.toml formats every target root and the modules it reaches, these journeys included.
 Harsh-Review-Attacked: whether the reaper count changed meaning; a reaper line that names a count still adds it, and one whose count does not read now fails the journey where it was passed over.
