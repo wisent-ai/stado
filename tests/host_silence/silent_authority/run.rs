@@ -70,9 +70,15 @@ impl Run {
     /// stop it. Answers its SSH destination and the refresh interval the
     /// reader declares, the one measure of the wait.
     pub(crate) fn hung_authority(&mut self) -> (String, i64) {
+        self.hung_authority_declared_on(Declarer::Reader)
+    }
+
+    /// [`Run::hung_authority`] with the resolver declaration, and with it
+    /// the refresh interval answered, on `declarer` alone.
+    pub(crate) fn hung_authority_declared_on(&mut self, declarer: Declarer) -> (String, i64) {
         let authority = HungSsh::serve(&self.root, self.free_port());
         let destination = authority.destination.clone();
-        let refresh_seconds = self.write_last_good(&destination);
+        let refresh_seconds = self.write_last_good(&destination, declarer);
         self.authority = Some(authority);
         let answered = self.registry_self("answered");
         let said = String::from_utf8_lossy(&answered.stderr).into_owned();
@@ -89,25 +95,36 @@ impl Run {
     /// The copy this stado resolves its authority through: the shared
     /// directory template with this machine as the reader, the served
     /// authority's SSH destination, and the real stado as the command the
-    /// authority runs. Answers the refresh interval the reader declares.
-    fn write_last_good(&self, authority_ssh: &str) -> i64 {
+    /// authority runs. The template's resolver declaration stands on
+    /// `declarer` alone. Answers the refresh interval it declares.
+    fn write_last_good(&self, authority_ssh: &str, declarer: Declarer) -> i64 {
         let mut document: Value =
             serde_json::from_str(include_str!("../../service_directory/registry.json")).unwrap();
         let targets = document["targets"].as_array_mut().unwrap();
         let reader = targets
             .first_mut()
             .expect("the template declares the reader first");
-        let refresh_seconds = reader["service_resolver"]["refresh_seconds"]
+        let declaration = reader["service_resolver"].clone();
+        let refresh_seconds = declaration["refresh_seconds"]
             .as_i64()
             .expect("the template declares the reader's refresh interval");
         reader["hostnames"] = json!([hostname()]);
         reader["services"] = json!([]);
+        if let Declarer::Authority = declarer {
+            reader
+                .as_object_mut()
+                .expect("the reader is an object")
+                .remove("service_resolver");
+        }
         let authority = targets
             .last_mut()
             .expect("the template declares the authority last");
         authority["name"] = json!(AUTHORITY);
         authority["ssh"] = json!(authority_ssh);
         authority["services"] = json!([]);
+        if let Declarer::Authority = declarer {
+            authority["service_resolver"] = declaration;
+        }
         document["service_directory"]["authority"] =
             json!({"target": AUTHORITY, "command": env!("CARGO_BIN_EXE_stado")});
         document["service_directory"]["services"] = json!({});
@@ -145,6 +162,15 @@ impl Run {
     pub(crate) fn authority_log(&self) -> Option<&Path> {
         self.authority.as_ref().map(HungSsh::log)
     }
+}
+
+/// Which target of the registry copy declares the resolver whose refresh
+/// interval measures the read.
+pub(crate) enum Declarer {
+    /// This machine, the reader.
+    Reader,
+    /// The registry authority alone; this machine declares none.
+    Authority,
 }
 
 /// What a stado command's stderr says when it opened an SSH connection to

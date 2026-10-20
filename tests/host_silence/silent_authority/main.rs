@@ -18,7 +18,7 @@ mod run;
 
 use serde_json::{json, Value};
 
-use run::{connecting, hostname, Run, ABANDONED, AUTHORITY};
+use run::{connecting, hostname, Declarer, Run, ABANDONED, AUTHORITY};
 
 #[test]
 fn a_silent_authority_is_abandoned_after_the_declared_refresh_interval() {
@@ -87,6 +87,27 @@ fn a_resolver_state_naming_no_interval_still_bounds_the_read() {
         said.contains(ABANDONED)
             && said.contains(&format!("the {refresh_seconds}s refresh interval")),
         "the read is abandoned at the interval the registry copy declares: {said}"
+    );
+    assert!(
+        said.contains("reading the last-known-good registry copy"),
+        "the reader goes on to its last-known-good copy: {said}"
+    );
+}
+
+/// A machine whose registry record declares no resolver of its own still
+/// has a measure for the authority's snapshot: the interval the authority's
+/// own resolver is declared with, at which it serves that snapshot. The read
+/// is abandoned at that interval and the reader goes on to its copy.
+#[test]
+fn a_reader_declaring_no_resolver_is_bounded_by_the_authority_interval() {
+    let mut run = Run::new("authority-interval");
+    let (_, refresh_seconds) = run.hung_authority_declared_on(Declarer::Authority);
+    let output = run.registry_self("authority-interval");
+    let said = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        said.contains(ABANDONED)
+            && said.contains(&format!("the {refresh_seconds}s refresh interval")),
+        "the read is abandoned at the interval the authority is declared with: {said}"
     );
     assert!(
         said.contains("reading the last-known-good registry copy"),

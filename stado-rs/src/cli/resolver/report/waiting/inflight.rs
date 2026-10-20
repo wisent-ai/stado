@@ -7,16 +7,16 @@
 //! request, the registry authority's snapshot over SSH — would otherwise
 //! stand for as long as the route did. At every refresh interval — the one
 //! this host's resolver publishes, or, with no resolver publishing one, the
-//! one this machine's registry record declares for it — the published waits
-//! are read again; once the route has gone unanswered longer than that
+//! one this machine's registry record declares for it, or, for a channel to
+//! a host, the one that host's own resolver is declared with — the published
+//! waits are read again; once the route has gone unanswered longer than that
 //! interval — this request's own connection among them — the request is
 //! dropped, which closes its connection, and refused with the held wait's
 //! sentence, naming the address or host it stood on. A request the far side
 //! accepted and answers nothing on stands in no list of this host's, so a
 //! request that outlasts the interval with nothing published held is
-//! abandoned too, with the interval named and where to ask. Only a machine
-//! whose record declares no resolver has no measure and waits. No other
-//! bound exists: the one measure is the resolver's own.
+//! abandoned too, with the interval named and where to ask. Only a request
+//! no record declares an interval for has no measure and waits.
 
 use std::future::Future;
 use std::time::Duration;
@@ -90,6 +90,35 @@ impl Route<'_> {
     }
 }
 
+/// The refresh interval that measures a request on `route`: the one this
+/// host's resolver publishes or declares, else, for a channel to a host, the
+/// interval that host's own resolver is declared with in this machine's
+/// last-known-good registry. A host serves its snapshot at that interval,
+/// so a snapshot read that outlasts it is not being served, whether or not
+/// this machine runs a resolver of its own. `None` only when neither is
+/// declared.
+pub(crate) fn bound_seconds(route: &Route<'_>) -> Result<Option<u64>, String> {
+    if let Some(seconds) = declared_refresh_seconds()? {
+        return Ok(Some(seconds));
+    }
+    let Route::Host(host) = route else {
+        return Ok(None);
+    };
+    let Some(document) = crate::cli::resolver::directory::document::kept_last_good_document()
+        .map_err(|error| format!("the refresh interval of {host} cannot be read: {error}"))?
+    else {
+        return Ok(None);
+    };
+    crate::service_resolution::declared_resolver_config(&document, host)
+        .map(|config| config.map(|config| config.refresh_seconds))
+        .map_err(|error| {
+            format!(
+                "the refresh interval cannot be read: the resolver declaration of {host}: \
+                 {error}"
+            )
+        })
+}
+
 /// Wait for `sent` unless it outlasts the refresh interval this host's
 /// resolver declares: `Ok(answer)` when the request answered or failed on
 /// its own within it, `Err` with the sentence when it was abandoned — on a
@@ -103,7 +132,7 @@ pub(crate) async fn unless_held<T, F>(route: Route<'_>, sent: F) -> Result<T, St
 where
     F: Future<Output = T>,
 {
-    let seconds = match declared_refresh_seconds() {
+    let seconds = match bound_seconds(&route) {
         Ok(Some(seconds)) => seconds,
         Ok(None) => return Ok(sent.await),
         Err(unreadable) => {

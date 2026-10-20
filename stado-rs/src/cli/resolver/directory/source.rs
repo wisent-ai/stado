@@ -78,7 +78,8 @@ impl SnapshotSource {
                 // Said before it is sent: a command ended at the interval
                 // never reaches the abandonment below, and the next reader
                 // finds this read standing instead of sending its own.
-                match crate::cli::resolver::declared_bound_seconds() {
+                let route = crate::cli::resolver::Route::Host(target);
+                match crate::cli::resolver::bound_seconds(&route) {
                     Ok(Some(seconds)) => super::unanswered::asking(target, seconds),
                     Ok(None) => {}
                     Err(unreadable) => eprintln!(
@@ -113,7 +114,7 @@ impl SnapshotSource {
                         // The interval measures how long the read stood; an
                         // interval that cannot be read is added to the
                         // refusal instead of the read being remembered.
-                        match crate::cli::resolver::declared_bound_seconds() {
+                        match crate::cli::resolver::bound_seconds(&route) {
                             Ok(Some(seconds)) => {
                                 super::unanswered::remember(target, seconds, &held)
                             }

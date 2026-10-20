@@ -39,7 +39,9 @@ pub(crate) use crate::cli::resolver::report::vault::{KeyringLockRepair, VaultCon
 pub(crate) use crate::cli::resolver::report::waiting::host::{
     held_on_host, stood_elsewhere, Stood,
 };
-pub(crate) use crate::cli::resolver::report::waiting::inflight::{unless_held, Route};
+pub(crate) use crate::cli::resolver::report::waiting::inflight::{
+    bound_seconds, unless_held, Route,
+};
 pub(crate) use crate::cli::resolver::report::waiting::{
     declared_bound_seconds, held_at, held_to_service,
 };
