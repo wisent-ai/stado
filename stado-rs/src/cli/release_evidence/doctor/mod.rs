@@ -165,7 +165,7 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
     // A report without its blocker list did not say there are none; it was
     // printed as "none", the all-clear the doctor exists to give.
     let blockers = match report["blockers"].as_array() {
-        None => "not reported".to_string(),
+        None => crate::cli::reporting::NOT_REPORTED.to_string(),
         Some(blockers) if blockers.is_empty() => "none".to_string(),
         Some(blockers) => blockers
             .iter()

@@ -106,11 +106,11 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
             // and an owner "?" read as values that were measured.
             let items = match candidate.get("items").and_then(serde_json::Value::as_u64) {
                 Some(items) => items.to_string(),
-                None => "not reported".to_string(),
+                None => crate::cli::reporting::NOT_REPORTED.to_string(),
             };
             let owner = match candidate.get("owner").and_then(serde_json::Value::as_str) {
                 Some(owner) => owner,
-                None => "not reported",
+                None => crate::cli::reporting::NOT_REPORTED,
             };
             let path = match candidate.get("path").and_then(serde_json::Value::as_str) {
                 Some(path) => path,

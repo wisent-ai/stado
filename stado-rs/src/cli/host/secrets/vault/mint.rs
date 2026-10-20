@@ -166,10 +166,7 @@ pub async fn vault_token_mint(
         if let Some(stored) = &stored {
             // A field Skarbiec's store answer leaves out is said as such,
             // not printed as an empty item name or revision.
-            let reported = |value: &Value| match value.as_str() {
-                Some(text) => text.to_string(),
-                None => "not reported".to_string(),
-            };
+            let reported = crate::cli::reporting::field;
             println!(
                 "Stored as {}#token (revision {} -> {})",
                 reported(&stored["item"]),

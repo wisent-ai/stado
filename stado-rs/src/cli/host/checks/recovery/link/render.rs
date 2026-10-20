@@ -117,7 +117,7 @@ pub(super) fn render(
         "scans:    {}",
         match scans.as_ref() {
             Some(scans) => crate::deploy::host_scan::record::line(scans),
-            None => "not reported".to_string(),
+            None => crate::cli::reporting::NOT_REPORTED.to_string(),
         }
     );
     if changes.is_empty() {
