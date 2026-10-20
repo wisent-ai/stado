@@ -13,5 +13,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Queue: a job's status and heartbeat objects are one StatusLeaf type" its status leaf parsed a segment word with .ok(), so a word outside the leaf read as no status instead of a refusal naming it
+
 Harsh-Review-Attacked: whether parse accepts different segments; it accepts exactly the words the variants serialize to, status and heartbeat, as the serde parse did.
 Harsh-Review-Attacked: whether a removed reader was used; neither read_script nor heartbeat_stale is called anywhere in the source, the tests or the product crate.
