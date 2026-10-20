@@ -26,7 +26,7 @@ pub(super) fn render_lifecycle(report: &Value, json: bool) -> Result<(), CmdErro
 /// A report that ran no host command (a restart or runtime repair) carries
 /// no `exit_code` key and is judged by its route. One that ran it states the
 /// command's own verdict as `status`; its exit code is null when a signal
-/// ended it, which was read as 0 and taken for success.
+/// ended it, which is never read as a zero and taken for success.
 fn lifecycle_outcome(report: &Value) -> Result<(), CmdError> {
     let Some(code) = report.get("exit_code") else {
         return route_outcome(report);
