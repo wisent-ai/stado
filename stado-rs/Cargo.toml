@@ -283,6 +283,10 @@ name = "quality-web-typecheck"
 path = "../tests/quality/web_typecheck.rs"
 
 [[test]]
+name = "quality-absent-manifest"
+path = "../tests/quality/absent_manifest.rs"
+
+[[test]]
 name = "quality-gate-kind"
 path = "../tests/quality/gate_kind.rs"
 
