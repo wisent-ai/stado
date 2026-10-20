@@ -3,7 +3,8 @@
 //! real `stado serve --api` verifying one object namespace against that
 //! vault as consumer `stado`, granted `read` of the namespace item's
 //! `token`. Every command, request and the services' output stay beside
-//! report.json under the checkout's `.build`.
+//! report.json under the checkout's `.build/<journey>`; a journey needing a
+//! stopped fleet store takes it from here ([`Deployment::hang`]).
 use serde_json::{json, Value};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
@@ -32,17 +33,18 @@ pub struct Deployment {
     pub root: PathBuf,
     pub keyring: PathBuf,
     pub report: Value,
-    children: Vec<Child>,
+    children: Vec<(String, Child)>,
 }
 
 impl Deployment {
-    pub fn start() -> Self {
+    pub fn start(journey: &str) -> Self {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .to_path_buf();
         let root = repository
-            .join(".build/vault-consultation")
+            .join(".build")
+            .join(journey)
             .join(uuid::Uuid::new_v4().to_string());
         // gpg-agent's socket lives in the keyring and a Unix socket path is
         // short on macOS, so the keyring sits at a short path of its own.
@@ -137,10 +139,24 @@ impl Deployment {
                 }
             }
         });
-        self.children.push(child);
+        self.children.push((label.to_string(), child));
         match announced.recv() {
             Ok(address) => address,
-            Err(_) => panic!("{label} ended before announcing its address; see {label}.stderr"),
+            Err(error) => {
+                panic!("{label} ended before announcing its address ({error}); see {label}.stderr")
+            }
+        }
+    }
+
+    /// SIGSTOP the service started as `label`: its socket stays open and
+    /// accepts into the backlog, and nothing answers, as a hung host.
+    pub fn hang(&self, label: &str) {
+        let Some((_, child)) = self.children.iter().find(|(named, _)| named == label) else {
+            panic!("no service {label} was started in this deployment");
+        };
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).expect("a pid fits an i32"));
+        if let Err(error) = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP) {
+            panic!("stop {label} ({pid}): {error}");
         }
     }
 
@@ -232,7 +248,7 @@ impl Deployment {
 }
 
 /// One object read with `bearer`: the status and the body as JSON (a body
-/// that is not JSON reads as null).
+/// that is not JSON is kept as text beside its parse error).
 pub async fn get_object(origin: String, bearer: String) -> (reqwest::StatusCode, Value) {
     let response = reqwest::Client::new()
         .get(format!("{origin}/api/object"))
@@ -245,14 +261,14 @@ pub async fn get_object(origin: String, bearer: String) -> (reqwest::StatusCode,
     let text = response.text().await.unwrap();
     let body = match serde_json::from_str(&text) {
         Ok(body) => body,
-        Err(_) => Value::Null,
+        Err(error) => json!({"unparsed_body": text, "parse_error": error.to_string()}),
     };
     (status, body)
 }
 
 impl Drop for Deployment {
     fn drop(&mut self) {
-        for child in &mut self.children {
+        for (_, child) in &mut self.children {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -263,7 +279,7 @@ impl Drop for Deployment {
             .status();
         let _ = fs::remove_dir_all(&self.keyring);
         self.save();
-        eprintln!("vault consultation evidence: {}", self.root.display());
+        eprintln!("vault deployment evidence: {}", self.root.display());
     }
 }
 

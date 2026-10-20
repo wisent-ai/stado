@@ -1,15 +1,19 @@
 //! The isolated run `main.rs` drives: the real stado with `HOME` under the
-//! checkout's build directory, a fleet store that stops answering on demand,
-//! a service that answers, and a report of every command kept beside it,
-//! bound to the checkout's revision.
-use std::io::{BufRead, BufReader, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+//! test's output directory, a real fleet store that is stopped on demand and
+//! a real object API the adapter relays to (`store.rs`), and a report of
+//! every command kept beside it, bound to the checkout's revision.
+#[path = "store.rs"]
+mod store;
+
+use std::io::{BufRead, BufReader};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 
 use serde_json::{json, Value};
+
+pub(crate) use store::Store;
 
 pub(crate) const TARGET: &str = "marker-host";
 pub(crate) const SERVICE: &str = "marker-api";
@@ -17,15 +21,11 @@ const CONSUMER: &str = "marker-consumer";
 const AUTHORITY: &str = "other-host";
 const AUTHORITY_SSH: &str = "other-host.invalid";
 const AUTHORITY_STADO: &str = "/usr/local/bin/stado";
-pub(crate) const ANSWER: &str = "answered by marker-api";
-
-/// The fleet store: resets every connection until `silent` is set, then
-/// hands every connection it accepts to `held` and answers none.
-pub(crate) struct Store {
-    pub(crate) address: String,
-    pub(crate) silent: Arc<AtomicBool>,
-    pub(crate) held: mpsc::Receiver<TcpStream>,
-}
+/// The request a client sends through the adapter: the relayed object API's
+/// own state document, which only a serving object API answers.
+pub(crate) const RELAYED_REQUEST: &str = "GET /api/state.json HTTP/1.1";
+/// The object API serves its state document with this key.
+pub(crate) const RELAYED_ANSWER: &str = "\"vault\"";
 
 pub(crate) struct Run {
     root: PathBuf,
@@ -107,47 +107,13 @@ impl Run {
         }
     }
 
+    /// The real fleet store and relayed service (`store.rs`), kept in the
+    /// report.
     pub(crate) fn store(&mut self) -> Store {
-        let listener = TcpListener::bind(self.free_bind()).unwrap();
-        let address = listener.local_addr().unwrap().to_string();
-        let silent = Arc::new(AtomicBool::default());
-        let switch = Arc::clone(&silent);
-        let (keep, held) = mpsc::channel();
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                if switch.load(Ordering::SeqCst) {
-                    if keep.send(stream).is_err() {
-                        return;
-                    }
-                } else {
-                    let mut request_line = String::new();
-                    let _ = BufReader::new(&stream).read_line(&mut request_line);
-                }
-            }
-        });
-        Store {
-            address,
-            silent,
-            held,
-        }
-    }
-
-    /// The service the adapter relays to: answers every request and closes.
-    pub(crate) fn answering_service(&mut self) -> String {
-        let listener = TcpListener::bind(self.free_bind()).unwrap();
-        let address = listener.local_addr().unwrap().to_string();
-        std::thread::spawn(move || {
-            for mut stream in listener.incoming().flatten() {
-                let mut request_line = String::new();
-                let _ = BufReader::new(&stream).read_line(&mut request_line);
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{ANSWER}",
-                    ANSWER.len()
-                );
-            }
-        });
-        address
+        let store = Store::serve(self.root.join("store.token"));
+        self.report["store"] = store.describe();
+        self.save();
+        store
     }
 
     /// The copy the resolver starts from: this machine as `marker-host`
@@ -190,17 +156,16 @@ impl Run {
         .unwrap();
     }
 
-    /// `stado serve --resolver` with the fleet store at `store`, followed
+    /// `stado serve --resolver` with `store` as its fleet store, followed
     /// until it says it serves; the rest of its log arrives on the receiver.
-    pub(crate) fn serve(&mut self, store: &str) -> mpsc::Receiver<String> {
-        let token = self.root.join("object-api.token");
-        std::fs::write(&token, "refusal-in-flight-probe").unwrap();
+    pub(crate) fn serve(&mut self, store: &Store) -> mpsc::Receiver<String> {
         let mut child = self
             .stado()
             .args(["serve", "--resolver", "--target", TARGET])
             .env("WC_STORAGE_BACKEND", "stado")
-            .env("WC_STADO_STORAGE_URL", format!("http://{store}"))
-            .env("WC_STADO_STORAGE_TOKEN_FILE", &token)
+            .env("WC_STADO_STORAGE_URL", format!("http://{}", store.address))
+            .env("WC_STADO_STORAGE_NAMESPACE", store::NAMESPACE)
+            .env("WC_STADO_STORAGE_TOKEN_FILE", &store.token_file)
             .stdout(Stdio::null())
             .spawn()
             .expect("start the real resolver");
@@ -208,7 +173,11 @@ impl Run {
         self.resolver = Some(child);
         let (lines, received) = mpsc::channel();
         std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            for line in BufReader::new(stderr).lines() {
+                let line = match line {
+                    Ok(line) => line,
+                    Err(error) => format!("reading the resolver's log stopped: {error}"),
+                };
                 if lines.send(line).is_err() {
                     return;
                 }
@@ -240,7 +209,7 @@ impl Run {
     /// The resolver's open waits on `store`, as its wait register holds them.
     /// A file gone between listing and reading is a wait that ended.
     pub(crate) fn store_waits(&self, store: &str) -> Vec<String> {
-        let place = format!("gdzie: object API http://{store}");
+        let place = store_place(store);
         let mut waits = Vec::new();
         for entry in std::fs::read_dir(self.root.join("waits")).unwrap() {
             let path = entry.unwrap().path();
@@ -267,6 +236,11 @@ impl Run {
         )
         .unwrap();
     }
+}
+
+/// Where a wait on the fleet store at `store` says it stands.
+pub(crate) fn store_place(store: &str) -> String {
+    format!("gdzie: object API http://{store}")
 }
 
 impl Drop for Run {

@@ -328,6 +328,8 @@ path = "../tests/host_silence/lost_refusal.rs"
 name = "host-silence-silent-authority"
 path = "../tests/host_silence/silent_authority/main.rs"
 
+# The host-silence store journeys run a real fleet store on a real Skarbiec
+# (SKARBIEC names its binary); run with STADO_TEST_REQUEST_LIMITS declared.
 [[test]]
 name = "host-silence-refusal-in-flight"
 path = "../tests/host_silence/refusal_in_flight/main.rs"

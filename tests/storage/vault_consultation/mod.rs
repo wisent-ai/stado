@@ -44,7 +44,7 @@ fn cause_of(body: &Value) -> &str {
 
 #[tokio::test]
 async fn a_request_behind_a_held_vault_is_refused_with_the_servers_wait_line() {
-    let mut deployment = Deployment::start();
+    let mut deployment = Deployment::start("vault-consultation");
     let first = format!("first-{}", uuid::Uuid::new_v4().simple());
     let second = format!("second-{}", uuid::Uuid::new_v4().simple());
 
