@@ -13,6 +13,9 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Database: the provider is an enum the CLI, the credential items and destroy share" its adopt module imported the database provider by a path the crate does not have, so main did not compile
+Repairs: "Service probe: the unit file and load state of an adopt probe are enums" its unit-file enum shared a name with the fetched unit file, so main did not compile
+
 Harsh-Review-Attacked: whether this commit only patches another commit of the push; it repairs two compile errors that commits before it introduced (two UnitFile types made ambiguous by the service module's glob re-exports, and a DatabaseProvider path three modules up that names cli, not cli::database) and its message says which, so it is the repair the push needs, not a reformat.
 Harsh-Review-Attacked: whether the rename changed a probe word; UnitFilePresence keeps the lowercase present and absent words, and only its Rust name moved apart from the fetched UnitFile.
 Harsh-Review-Attacked: whether the Supabase adopt reads the provider differently; it compares the recorded provider with Supabase through the same enum, now imported by its crate path.
