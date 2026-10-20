@@ -2,6 +2,8 @@
 //! shell preamble, so the Darwin domain and the systemd user session are
 //! decided once rather than at every call site.
 
+use std::num::NonZeroU32;
+
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use super::{marker_line, run_host_script};
@@ -101,6 +103,103 @@ printf 'STADO_PLACEMENT_UNIT\t%s\t%s\t%s\n' "$present" "$loaded" "$running"
         loaded: *loaded == "yes",
         running: *running == "yes",
     })
+}
+
+/// The process a unit's service manager runs for it (launchd's `pid`,
+/// systemd's `MainPID`) and the TCP ports that process listens on, as the
+/// host's socket table states them (`lsof` on Darwin, `ss` on Linux). A
+/// unit with no process has neither.
+pub(super) struct Listening {
+    pub(super) pid: Option<NonZeroU32>,
+    pub(super) ports: Vec<u16>,
+    /// Lines the socket table's reader wrote that are not sockets: its
+    /// refusals, kept so they are shown rather than read as no listener.
+    pub(super) unread: Vec<String>,
+}
+
+pub(super) async fn listening(
+    target: &ComputeTarget,
+    spec: &PlacementUnit,
+    runner: &Runner,
+) -> Result<Listening, CmdError> {
+    let script = format!(
+        "{}{}",
+        unit_script_head(spec)?,
+        r#"pid=
+table=
+if [ "$os" = Darwin ]; then
+  if listing=$(lc print "$domain/$unit" 2>/dev/null); then
+    pid=$(printf '%s\n' "$listing" | /usr/bin/sed -n 's/^[[:space:]]*pid = //p')
+  fi
+  if [ -n "$pid" ]; then table=$(/usr/sbin/lsof -nP -a -p "$pid" -iTCP -sTCP:LISTEN -Fn 2>&1 || :); fi
+else
+  pid=$(systemctl_user show --property MainPID --value "$unit")
+  table=$(/usr/bin/ss -Hltnp 2>&1 || :)
+fi
+printf 'STADO_PLACEMENT_LISTEN\t%s\t%s\n' "$pid" "$(printf '%s' "$table" | /usr/bin/base64 | /usr/bin/tr -d '\n')"
+"#
+    );
+    let output = run_host_script(target, &script, runner, "listener probe").await?;
+    let refused = |detail: String| {
+        CmdError::click(format!("{}: listener probe {detail}", target.name))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
+    let line = marker_line(&output, "STADO_PLACEMENT_LISTEN\t")
+        .ok_or_else(|| refused("returned no placement marker".to_string()))?;
+    let fields: Vec<&str> = line.split('\t').collect();
+    let [_, pid, table] = fields.as_slice() else {
+        return Err(refused(format!("returned a malformed marker: {line}")));
+    };
+    let pid = match pid.is_empty() {
+        true => None,
+        false => NonZeroU32::new(
+            pid.parse::<u32>()
+                .map_err(|error| refused(format!("named process id {pid:?}: {error}")))?,
+        ),
+    };
+    let table = STANDARD.decode(table).map_err(|error| {
+        refused(format!(
+            "returned a socket table that is not base64: {error}"
+        ))
+    })?;
+    let mut found = Listening {
+        pid,
+        ports: Vec::new(),
+        unread: Vec::new(),
+    };
+    let Some(pid) = pid else {
+        return Ok(found);
+    };
+    let owner = format!("pid={pid},");
+    for row in String::from_utf8_lossy(&table).lines() {
+        // lsof -F writes one field per line, named by its first letter: p
+        // the process, f the descriptor, n the address. ss writes a row per
+        // socket whose first address is the local one and whose users field
+        // names the owning process.
+        let address = match row.chars().next() {
+            Some('n') => Some(&row['n'.len_utf8()..]),
+            Some('p') | Some('f') => None,
+            _ => match row.strip_prefix("LISTEN") {
+                Some(socket) => socket
+                    .contains(&owner)
+                    .then(|| socket.split_whitespace().find(|token| token.contains(':')))
+                    .flatten(),
+                None => {
+                    found.unread.push(row.to_string());
+                    None
+                }
+            },
+        };
+        let Some(address) = address else { continue };
+        match address
+            .rsplit_once(':')
+            .map(|(_, port)| port.parse::<u16>())
+        {
+            Some(Ok(port)) => found.ports.push(port),
+            Some(Err(_)) | None => found.unread.push(row.to_string()),
+        }
+    }
+    Ok(found)
 }
 
 #[derive(Debug, Clone, Copy)]
