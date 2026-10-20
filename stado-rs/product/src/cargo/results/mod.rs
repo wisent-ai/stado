@@ -1,6 +1,12 @@
 //! Read every Cargo execution receipt retained in a checkout's Stado build
 //! area. This is the same evidence directory `execute_revision` writes, not a
 //! second build index that could disagree with it.
+//!
+//! `execute_revision` names each receipt's directory by its invocation, a
+//! UUID. The same `cargo` area also holds the installation's Cargo cache
+//! (`<platform>/<lock digest>/<revision>/<recipe>`), which is no receipt;
+//! read as one, its missing `result.json` refused every receipt read, and
+//! with it every supervised send that reads compiler charges.
 use std::fs;
 use std::path::Path;
 
@@ -31,9 +37,32 @@ fn entries(area: &Path) -> Result<Vec<Value>> {
         {
             continue;
         }
+        let invocation = entry.file_name();
+        if invocation
+            .to_str()
+            .and_then(|name| uuid::Uuid::parse_str(name).ok())
+            .is_none()
+        {
+            continue;
+        }
         let path = entry.path().join("result.json");
-        let bytes =
-            fs::read(&path).with_context(|| format!("reading Cargo receipt {}", path.display()))?;
+        // An invocation writes its result when it ends; until then, or when
+        // it ended without writing one, it is listed as unfinished rather
+        // than refusing every other receipt.
+        let unfinished =
+            "the invocation has written no result.json: it has not ended, or it ended \
+                          without one";
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                results.push(json!({ "path": path, "state": "unfinished", "error": unfinished }));
+                continue;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading Cargo receipt {}", path.display()))
+            }
+        };
         let report: Value = serde_json::from_slice(&bytes)
             .with_context(|| format!("decoding Cargo receipt {}", path.display()))?;
         results.push(
