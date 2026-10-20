@@ -6,8 +6,10 @@
 //! recovers is the blocks every other cleaner's deletions left pinned. The
 //! build-cache walk is not here: it reads the whole home, so it runs before
 //! the pass takes the exclusive cleanup lock and takes that lock only for
-//! each cache it removes ([`once`](super::once)).
+//! each cache it removes ([`once`](super::once)). Neither is the queue: the
+//! store cleaners act on answers asked before the lock ([`asked`]).
 
+pub(crate) mod asked;
 pub(crate) mod budget;
 mod store;
 pub(crate) mod summary;
@@ -32,6 +34,9 @@ pub(crate) struct PassInputs<'a> {
     pub declared_release_versions: Option<&'a BTreeMap<String, BTreeSet<String>>>,
     /// The host's declared Weles recordings directory, when it has one.
     pub weles_recordings_dir: Option<&'a str>,
+    /// The queue's answers about the job work trees and outputs on disk,
+    /// asked before the exclusive lock.
+    pub asked: &'a asked::Asked,
 }
 
 /// Run every cleaner, in order.

@@ -10,6 +10,7 @@ use std::time::Instant;
 use serde_json::Value;
 
 use crate::providers::local::space_reclaim::build_caches;
+use crate::providers::local::space_reclaim::janitor::pass::cleaners::asked;
 use crate::providers::local::space_reclaim::janitor::pass::lock::file::LockState;
 use crate::providers::local::space_reclaim::janitor::pass::lock::holds;
 use crate::providers::local::space_reclaim::janitor::pass::lock::ownership::{
@@ -82,13 +83,16 @@ pub(crate) async fn cleanup_once(
         return finish(report, started, Some(&home), persist, attempted_at, log_fn);
     }
     // The registry says which release versions the fleet runs and where this
-    // host's Weles worker records. It is read before the exclusive lock: it
-    // has no filesystem side effects. The workdir keep-list is different: its
-    // candidate names must be captured under the same lock that protects
-    // deletion, so the store cleaners read it themselves.
+    // host's Weles worker records, and the queue says which job work trees
+    // and outputs on disk are live or retired. Both are read before the
+    // exclusive lock: they have no filesystem side effects, and their reads
+    // can stand on the registry authority, which under the lock held every
+    // build on the host for as long as they stood. A work tree that appears
+    // after the queue was asked is kept as live under the lock.
     let store_wait = Instant::now();
     let registry = fetch_canonical_registry().await;
     report.store_wait_ms = store_wait.elapsed().as_millis().min(i64::MAX as u128) as i64;
+    let asked = asked::ask(&home, &mut report).await;
     // The build-cache walk reads the whole home, for minutes on a full
     // developer host. Run under the exclusive lock it refused every running
     // workload's hold for as long as it read, so a host whose pressure the
@@ -174,6 +178,7 @@ pub(crate) async fn cleanup_once(
         &state_dir,
         lock,
         registry,
+        asked,
         report,
         started,
         attempted_at,

@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 
+use crate::providers::local::space_reclaim::janitor::pass::cleaners::asked::Asked;
 use crate::providers::local::space_reclaim::janitor::pass::cleaners::summary::select_outcome;
 use crate::providers::local::space_reclaim::janitor::pass::cleaners::{run_cleaners, PassInputs};
 use crate::providers::local::space_reclaim::janitor::pass::lock::file::ExclusiveLock;
@@ -25,7 +26,7 @@ use crate::providers::local::space_reclaim::rule::read_fleet_volume;
 /// The post-lock half of a pass. Split out so tests can inject the canonical
 /// registry document and a fabricated home without touching the store or the
 /// real `$HOME`. `_lock` holds the exclusive run lock through candidate
-/// enumeration and deletion.
+/// enumeration and deletion; `asked` is what the queue answered before it.
 ///
 /// Below the rule's threshold an enforcing pass deletes nothing and reports
 /// `healthy_noop`. At or above it, every cleaner runs with nothing held back.
@@ -37,6 +38,7 @@ pub(crate) async fn run_with_lock(
     state_dir: &Path,
     _lock: ExclusiveLock,
     registry: Result<Value, JanitorError>,
+    asked: Asked,
     mut report: CleanupReport,
     started: Instant,
     attempted_at: f64,
@@ -78,6 +80,7 @@ pub(crate) async fn run_with_lock(
         enforcing: !preview,
         declared_release_versions: declared_release_versions.as_ref(),
         weles_recordings_dir: weles_recordings_dir.as_deref(),
+        asked: &asked,
     };
     if let Err(exc) = run_cleaners(home, &inputs, &mut report).await {
         report.add_error("runtime", &exc);
