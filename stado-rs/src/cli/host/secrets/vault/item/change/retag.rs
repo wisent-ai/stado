@@ -67,23 +67,8 @@ pub async fn retag_vault_item(
     {
         return Err(refused(format!("no vault at {vault}")));
     }
-    // Whether this build can retag at all. The discriminator is the usage
-    // literal, never the bare command name: rustc packs string literals into
-    // one unterminated blob, so a binary that carries the command shows
-    // `...setgetretagdelete...` on a single line and a whole-line match for
-    // `retag` reports absent on a build that has it. That false negative cost
-    // an hour and sent one diagnosis at the wrong host.
-    let capable = crate::deploy::host_channel::run_command(
-        &resolved,
-        &format!(
-            "strings -a {} 2>/dev/null | grep -q 'usage: retag <id> --tags'",
-            crate::deploy::shlex_quote(&skarbiec)
-        ),
-        &runner,
-    )
-    .await
-    .map_err(CmdError::from)?;
-    if !capable.ok() {
+    // Whether this build can retag at all, read from its usage line.
+    if !super::skarbiec_carries(&resolved, &runner, &skarbiec, "usage: retag <id> --tags").await? {
         return Err(refused(format!(
             "the Skarbiec build at {skarbiec} predates the retag operation"
         )));

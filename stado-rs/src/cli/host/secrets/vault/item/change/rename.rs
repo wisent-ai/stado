@@ -87,19 +87,9 @@ pub(crate) async fn move_vault_item(
             resolved.name
         ))
     };
-    // The usage literal, never the bare command name, for the reason
-    // `retag_vault_item` gives: rustc packs literals into one blob.
-    let capable = crate::deploy::host_channel::run_command(
-        &resolved,
-        &format!(
-            "strings -a {} 2>/dev/null | grep -q 'usage: rename <id> <new-id>'",
-            crate::deploy::shlex_quote(&skarbiec)
-        ),
-        &runner,
-    )
-    .await
-    .map_err(CmdError::from)?;
-    if !capable.ok() {
+    if !super::skarbiec_carries(&resolved, &runner, &skarbiec, "usage: rename <id> <new-id>")
+        .await?
+    {
         return Err(refused(format!(
             "the Skarbiec build at {skarbiec} predates the rename operation"
         )));
