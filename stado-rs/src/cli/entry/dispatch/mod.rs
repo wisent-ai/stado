@@ -13,6 +13,7 @@ use crate::cli::setup::onboarding;
 use crate::cli::{CmdError, CLICK_ERROR_CODE};
 
 mod failure;
+mod host_unit;
 mod routes;
 
 use failure::{failure_point, failure_service};
@@ -24,9 +25,11 @@ use failure::{failure_point, failure_service};
 /// `Error: {msg}` line, unchanged and unabridged; one classified sentence
 /// saying whether this is our outage or their request and whether a retry
 /// can help; and one structured log line for whatever ships this host's
-/// stderr. There is no fourth thing — in particular no HTTP call to an
-/// analytics collector, which on a failure path is just one more dependency
-/// that can hang the tool.
+/// stderr. An outage (`infra_down`) is also followed, between the error line
+/// and the classified sentence, by this machine's own Stado unit when its
+/// supervisor holds it failing ([`host_unit`]). There is no other thing — in
+/// particular no HTTP call to an analytics collector, which on a failure path
+/// is just one more dependency that can hang the tool.
 ///
 /// Exit codes:
 /// `EXIT_SUCCESS` on success, [`CLICK_ERROR_CODE`] on a runtime error,
@@ -64,9 +67,17 @@ pub async fn main_entry() -> i32 {
             };
             // What the failure said about itself is its code; a failure that
             // stated nothing is `unknown`. Its wording is never read for one.
-            let code = err
-                .failure
-                .unwrap_or(crate::primitives::failure::FailureCode::Unknown);
+            let code = match err.failure {
+                Some(code) => code,
+                None => crate::primitives::failure::FailureCode::Unknown,
+            };
+            // The host process carries every local service, so an outage is
+            // read against it before it is reported.
+            let host_unit = if code == crate::primitives::failure::FailureCode::InfraDown {
+                host_unit::failing().await
+            } else {
+                None
+            };
             if err.json {
                 // The same sorted-keys rendering every `--json` command on
                 // this CLI already prints, so a caller parses one shape.
@@ -82,6 +93,7 @@ pub async fn main_entry() -> i32 {
                         "summary": code.operator_summary(),
                         "message": message,
                         "help": err.help,
+                        "host_unit": host_unit,
                         "details": err.details,
                     }))
                 );
@@ -89,6 +101,9 @@ pub async fn main_entry() -> i32 {
                 eprintln!("Error: {message}");
                 if let Some(help) = err.help.as_deref() {
                     eprintln!("{help}");
+                }
+                if let Some(host_unit) = host_unit.as_deref() {
+                    eprintln!("{host_unit}");
                 }
                 eprintln!("{}", crate::primitives::failure::operator_line(code));
             }
