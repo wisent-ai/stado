@@ -78,15 +78,11 @@ pub(in crate::fleet_shape) async fn listener_count(
         };
         // A listener row without its address or pid says so, never as a mark
         // or a pid of zero that reads as a process.
-        let address = match listener.get("address").and_then(Value::as_str) {
-            Some(address) => address.to_string(),
-            None => "address not reported".to_string(),
-        };
-        let pid = match listener.get("pid").and_then(Value::as_u64) {
-            Some(pid) => pid.to_string(),
-            None => "not reported".to_string(),
-        };
-        let who = format!("{address}:{port} pid {pid}");
+        let who = format!(
+            "{}:{port} pid {}",
+            crate::cli::reporting::field(&listener["address"]),
+            crate::cli::reporting::field(&listener["pid"])
+        );
         holders.entry(port).or_default().push(who);
     }
     for (port, who) in holders {

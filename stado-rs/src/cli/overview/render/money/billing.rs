@@ -7,17 +7,12 @@
 use serde_json::Value;
 
 use super::amounts::{dollars, figure, Figure};
+use crate::cli::reporting::{field, NOT_REPORTED};
 
 pub(super) fn print_billing(document: &Value) {
     println!("billing:");
     let billing = &document["billing"];
-    println!(
-        "  reported: {}",
-        match billing.get("reported_at").and_then(Value::as_str) {
-            Some(at) => at,
-            None => "not reported",
-        }
-    );
+    println!("  reported: {}", field(&billing["reported_at"]));
     let gcp = &billing[crate::capabilities::ProviderId::Gcp.as_str()];
     let credit = |value: Option<&Value>| figure(value).credited();
     if gcp.get("status").and_then(Value::as_str) == Some("ok") {
@@ -30,16 +25,13 @@ pub(super) fn print_billing(document: &Value) {
         {
             Some(Some(month)) => println!(
                 "  GCP {}: gross={} credits={} net={}",
-                match month.get("month").and_then(Value::as_str) {
-                    Some(month) => month,
-                    None => "(month not reported)",
-                },
+                field(&month["month"]),
                 dollars(&figure(month.get("gross"))),
                 dollars(&credit(month.get("credits"))),
                 dollars(&figure(month.get("net"))),
             ),
             Some(None) => println!("  GCP monthly: no month reported yet"),
-            None => println!("  GCP monthly: not reported"),
+            None => println!("  GCP monthly: {NOT_REPORTED}"),
         }
         println!(
             "  GCP credit burn (7d avg): {}/day",
@@ -60,19 +52,12 @@ pub(super) fn print_billing(document: &Value) {
     if azure.get("status").and_then(Value::as_str) == Some("ok") {
         // A figure Azure's answer does not carry is said as not reported,
         // never as a word or a currency nobody reported.
-        let figure = |key: &str| match azure.get(key) {
-            Some(Value::String(text)) => text.clone(),
-            Some(value) if !value.is_null() => value.to_string(),
-            _ => "not reported".to_string(),
-        };
+        let figure = |key: &str| field(&azure[key]);
         println!(
             "  Azure credits: current={} estimated={} {}",
             figure("available_balance"),
             figure("estimated_balance"),
-            match azure.get("currency").and_then(Value::as_str) {
-                Some(currency) => currency.to_string(),
-                None => "(currency not reported)".to_string(),
-            },
+            figure("currency"),
         );
         println!(
             "  Azure grant: amount={} used={}, valid {} — {}",
@@ -92,11 +77,11 @@ pub(super) fn print_billing(document: &Value) {
             );
         }
     } else {
-        let said = |key: &str| match azure.get(key).and_then(Value::as_str) {
-            Some(text) => text.to_string(),
-            None => format!("({key} not reported)"),
-        };
-        println!("  Azure credits: {} — {}", said("status"), said("detail"));
+        println!(
+            "  Azure credits: {} — {}",
+            field(&azure["status"]),
+            field(&azure["detail"])
+        );
     }
 }
 

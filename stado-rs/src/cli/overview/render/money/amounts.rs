@@ -45,7 +45,7 @@ pub(super) fn figure(value: Option<&Value>) -> Figure {
 pub(super) fn dollars(figure: &Figure) -> String {
     match figure {
         Figure::Amount(value) => format!("${value:.2}"),
-        Figure::Absent => "not reported".to_string(),
+        Figure::Absent => crate::cli::reporting::NOT_REPORTED.to_string(),
         Figure::Unreadable(value) => format!("unreadable ({value})"),
     }
 }

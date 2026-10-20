@@ -33,10 +33,7 @@ pub(super) fn print_budgets(document: &Value) {
             "  burn: {}/h now, {} projected at month end, budget exceeded={}",
             usd("current_hourly_usd"),
             usd("end_of_month_usd"),
-            match policy.get("budget_exceeded").and_then(Value::as_bool) {
-                Some(exceeded) => exceeded.to_string(),
-                None => "not reported".to_string(),
-            },
+            crate::cli::reporting::field(&policy["budget_exceeded"]),
         );
         match figure(policy.get("credit_runway_days")) {
             Figure::Absent => {}
