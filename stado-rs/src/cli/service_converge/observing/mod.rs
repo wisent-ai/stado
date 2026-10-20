@@ -78,6 +78,12 @@ fn parse_report(stdout: &str) -> BTreeMap<String, Installed> {
                 entry.state = value.to_string();
             } else if let Some(value) = token.strip_prefix("attestation=") {
                 entry.attestation = value.to_string();
+            } else if let Some(value) = token.strip_prefix("revision=") {
+                entry.revision = if value == NONE {
+                    None
+                } else {
+                    Some(value.to_string())
+                };
             } else if let Some(value) = token.strip_prefix("receipt=") {
                 entry.receipt = if value == NONE {
                     String::new()

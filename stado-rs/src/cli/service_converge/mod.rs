@@ -75,6 +75,8 @@
 //! check, one staging tree, one `rename(2)`, one restart — there is one path
 //! that both reports drift and delivers the declaration.
 
+use std::collections::BTreeMap;
+
 use crate::deploy::{host_channel, production_runner, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
@@ -147,6 +149,31 @@ pub async fn converge_result(
     .map_err(click)
 }
 
+/// The revision each declared release was built from, read from its signed
+/// release manifest for the host's release platform
+/// ([`crate::deploy::host_release::catalog_identity`], the read delivery
+/// itself trusts), or why it could not be read.
+async fn declared_revisions(
+    target: &ComputeTarget,
+    declared: &[(String, String)],
+) -> BTreeMap<String, Result<String, String>> {
+    let platform = target.release_platform.trim();
+    let mut revisions = BTreeMap::new();
+    for (binary, version) in declared {
+        let revision = match crate::deploy::products::product(binary) {
+            Ok(product) => {
+                crate::deploy::host_release::catalog_identity(product, version, platform)
+                    .await
+                    .map(|identity| identity.source_commit().to_string())
+                    .map_err(|error| error.to_string())
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        revisions.insert(binary.clone(), revision);
+    }
+    revisions
+}
+
 /// The host visit itself: the drift read, the delivery when asked for, and
 /// the software report, all over one authenticated session.
 async fn visit(
@@ -164,11 +191,12 @@ async fn visit(
         return ServiceConvergeResult::new(resolved.name, None, Vec::new(), software);
     }
 
+    let revisions = declared_revisions(&resolved, declared).await;
     let reported = read_installed(&resolved, runner).await;
-    let mut rows = verdict_rows(declared, &reported);
+    let mut rows = verdict_rows(declared, &revisions, &reported);
     attach_processes(&resolved, &mut rows, runner).await;
     if !apply {
-        let software = refresh_software(&resolved, reported.as_ref().ok(), runner).await;
+        let software = refresh_software(&resolved, reported.iter().next(), runner).await;
         return ServiceConvergeResult::new(resolved.name, None, rows, software);
     }
 
@@ -180,14 +208,13 @@ async fn visit(
     // produced the drift finding, so a successful delivery and a confirmed
     // convergence are not the same claim.
     let reported = read_installed(&resolved, runner).await;
-    let mut rows = verdict_rows(declared, &reported);
+    let mut rows = verdict_rows(declared, &revisions, &reported);
     let stado_root_in_sync = rows.iter().any(|row| {
         row.binary == "stado"
             && row.verdict == IN_SYNC
             && reported
-                .as_ref()
-                .ok()
-                .and_then(|entries| entries.get("stado"))
+                .iter()
+                .find_map(|entries| entries.get("stado"))
                 .is_some_and(|entry| entry.attestation == ATTEST_MATCH)
     });
     let root_delivery_failed = pass
@@ -204,7 +231,7 @@ async fn visit(
     attach_processes(&resolved, &mut rows, runner).await;
     // The report is written from the second read too, so what `release
     // status` judges next is the host after the delivery, not before it.
-    let software = refresh_software(&resolved, reported.as_ref().ok(), runner).await;
+    let software = refresh_software(&resolved, reported.iter().next(), runner).await;
     ServiceConvergeResult::new(resolved.name, Some(pass), rows, software)
 }
 
@@ -221,7 +248,7 @@ pub async fn converge(
         Some(pass) => apply_gate_diagnostics(&result.rows, pass, result.exit_code),
         None => report_gate_diagnostics(&result.rows, result.exit_code),
     }
-    if result.exit_code == 0 {
+    if result.exit_code == nix::libc::EXIT_SUCCESS {
         Ok(())
     } else {
         Err(CmdError::silent(result.exit_code))

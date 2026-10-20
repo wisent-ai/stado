@@ -13,7 +13,7 @@ use crate::cli::service_converge::model::receipts::{
     AppliedPass, Refused, Released, Undeliverable, COMPLETED, FAILED,
 };
 use crate::cli::service_converge::model::vocabulary::{
-    Row, HOST_AHEAD, HOST_BEHIND, HOST_MISSING, UNATTESTED,
+    Row, HOST_AHEAD, HOST_BEHIND, HOST_MISSING, REVISION_MISMATCHED, UNATTESTED,
 };
 use crate::cli::service_converge::verdicts::ordering::version_order;
 
@@ -21,8 +21,9 @@ use crate::cli::service_converge::verdicts::ordering::version_order;
 // Converging
 // ---------------------------------------------------------------------------
 
-/// Deliver the declared version of every binary that is behind it or running
-/// bytes the fleet cannot attest, and refuse only what a delivery would take
+/// Deliver the declared version of every binary that is behind it, running
+/// bytes the fleet cannot attest, or running the declared version string
+/// from another revision, and refuse only what a delivery would take
 /// backwards.
 ///
 /// This is the delivery owned by `stado release version converge`, called
@@ -87,7 +88,7 @@ pub(super) async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) 
             row.installed_cell(),
             row.detail
         );
-        deliver(target, row, runner, &mut pass).await;
+        deliver(target, row, false, runner, &mut pass).await;
     }
     for row in rows.iter().filter(|row| row.verdict == HOST_AHEAD) {
         let remediation = format!(
@@ -109,7 +110,14 @@ pub(super) async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) 
             row.declared,
             row.installed_cell()
         );
-        deliver(target, row, runner, &mut pass).await;
+        deliver(target, row, false, runner, &mut pass).await;
+    }
+    // The declared version string from another revision: the version already
+    // staged here is the other build, so the delivery is a reinstall, which
+    // stages the declared release's bytes over it.
+    for row in rows.iter().filter(|row| row.verdict == REVISION_MISMATCHED) {
+        eprintln!("{}: {}", row.binary, row.detail);
+        deliver(target, row, true, runner, &mut pass).await;
     }
     // A declared binary with no installed copy uses the same delivery path
     // as an update, so convergence also covers the first installation.
@@ -118,16 +126,36 @@ pub(super) async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) 
             "{}: declared {} and this host carries no copy of it",
             row.binary, row.declared
         );
-        deliver(target, row, runner, &mut pass).await;
+        deliver(target, row, false, runner, &mut pass).await;
     }
     pass
 }
 
-/// One delivery, recorded. The only call site of
-/// [`host_release::release_host`] in this command, so a host that is behind and
-/// a host whose bytes cannot be attested are converged by the same path and
-/// cannot drift apart in what "delivered" means.
-async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPass) {
+/// What a delivery report says went wrong: its `error`, or, when it carries
+/// none, that it named neither an error nor (when `status` is empty) a
+/// status.
+fn failure_detail(report: &Value, status: &str) -> String {
+    match report["error"].as_str() {
+        Some(error) if !error.is_empty() => error.to_string(),
+        _ if status.is_empty() => {
+            String::from("the delivery reported neither a status nor an error")
+        }
+        _ => format!("delivery returned non-success status {status} without an error"),
+    }
+}
+
+/// One delivery, recorded; `reinstall` stages the declared release again
+/// over a copy of the same version already staged. The only call site of
+/// [`host_release::release_host`] in this command, so a host that is behind
+/// and a host whose bytes cannot be attested are converged by the same path
+/// and cannot drift apart in what "delivered" means.
+async fn deliver(
+    target: &str,
+    row: &Row,
+    reinstall: bool,
+    runner: &Runner,
+    pass: &mut AppliedPass,
+) {
     if let Err(error) = crate::deploy::products::product(&row.binary) {
         pass.undeliverable.push(Undeliverable {
             binary: row.binary.clone(),
@@ -136,13 +164,14 @@ async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPas
         return;
     }
     eprintln!("{target}: releasing {} {}", row.binary, row.declared);
-    match host_release::release_host(target, &row.binary, &row.declared, false, false, runner).await
+    match host_release::release_host(target, &row.binary, &row.declared, false, reinstall, runner)
+        .await
     {
         Ok(report) => {
-            let status = report
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            let status = match report["status"].as_str() {
+                Some(status) => status,
+                None => "",
+            };
             let delivered = matches!(
                 status,
                 host_release::RELEASED_STATUS | host_release::ALREADY_ACTIVE_STATUS
@@ -155,20 +184,7 @@ async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPas
             let detail = if delivered {
                 status.to_string()
             } else {
-                report
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .filter(|detail| !detail.is_empty())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| {
-                        if status.is_empty() {
-                            String::from("the delivery reported neither a status nor an error")
-                        } else {
-                            format!(
-                                "delivery returned non-success status {status} without an error"
-                            )
-                        }
-                    })
+                failure_detail(&report, status)
             };
             pass.releases.push(Released {
                 binary: row.binary.clone(),

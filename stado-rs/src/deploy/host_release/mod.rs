@@ -165,6 +165,14 @@ pub(crate) struct CatalogIdentity {
     member: String,
 }
 
+impl CatalogIdentity {
+    /// The revision the signed release manifest says the release was built
+    /// from.
+    pub(crate) fn source_commit(&self) -> &str {
+        &self.source_commit
+    }
+}
+
 /// The units whose executable is installed by this product on this host.
 ///
 /// The product declaration names its own unit, and the registry names every

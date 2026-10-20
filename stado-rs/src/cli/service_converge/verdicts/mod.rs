@@ -1,4 +1,5 @@
-//! The verdict two versions imply, and the process columns attached to it.
+//! The verdict two versions and two revisions imply, and the process columns
+//! attached to it.
 
 pub(in crate::cli::service_converge) mod ordering;
 pub(in crate::cli::service_converge) mod reporting;
@@ -12,89 +13,130 @@ use crate::targets::ComputeTarget;
 
 use crate::cli::service_converge::model::vocabulary::{
     Installed, Row, ATTEST_ABSENT, ATTEST_DIFFERS, ATTEST_NEVER_DELIVERED, ATTEST_UNKNOWN,
-    HOST_AHEAD, HOST_BEHIND, HOST_MISSING, IN_SYNC, NONE, UNATTESTED, UNKNOWN, VERSION_HELPER,
+    HOST_AHEAD, HOST_BEHIND, HOST_MISSING, IN_SYNC, NONE, REVISION_MISMATCHED, UNATTESTED, UNKNOWN,
+    VERSION_HELPER,
 };
 use crate::cli::service_converge::verdicts::ordering::version_order;
 
-/// One row per declared binary, each carrying the verdict its two versions
-/// imply.
+/// A reported text column as the table prints it: the word, or `absent` for
+/// a column the host did not fill.
+fn cell(value: Option<&str>, absent: &str) -> String {
+    match value {
+        Some(value) if !value.is_empty() => value.to_string(),
+        _ => absent.to_string(),
+    }
+}
+
+/// The version a row names in a sentence, or `unknown`.
+fn named(installed: Option<&String>) -> &str {
+    match installed {
+        Some(version) => version.as_str(),
+        None => UNKNOWN,
+    }
+}
+
+/// The in-sync row's verdict once the version matches: whether the build is
+/// the declared release's, read from the revision the host's delivery
+/// receipt names against the revision the declared release's signed
+/// manifest names.
+fn same_version(
+    entry: Option<&Installed>,
+    declared_version: &str,
+    declared_revision: &Result<String, String>,
+) -> (&'static str, String) {
+    let installed_revision = match entry {
+        Some(entry) => entry.revision.as_deref(),
+        None => None,
+    };
+    // Provenance, when the host kept a record of it. "-" still means
+    // attested-by-bytes with no receipt, which is every delivery made before
+    // the receipt format.
+    let receipt = cell(entry.map(|entry| entry.receipt.as_str()), "-");
+    match (installed_revision, declared_revision) {
+        (Some(installed), Ok(declared)) if !installed.eq_ignore_ascii_case(declared) => (
+            REVISION_MISMATCHED,
+            format!(
+                "the host runs {declared_version} built from {installed}, and the declared \
+                 {declared_version} release was built from {declared}: the same version \
+                 string, other code; `stado release version converge` delivers the declared \
+                 release"
+            ),
+        ),
+        (Some(_), Ok(_)) => (IN_SYNC, receipt),
+        (None, Ok(declared)) => (
+            IN_SYNC,
+            format!(
+                "{receipt}; its delivery receipt names no revision, so the build was not \
+                 compared with the declared release's {declared}"
+            ),
+        ),
+        (_, Err(cause)) => (
+            IN_SYNC,
+            format!(
+                "{receipt}; the revision the declared release was built from could not be \
+                 read, so the build was not compared: {cause}"
+            ),
+        ),
+    }
+}
+
+/// One row per declared binary, each carrying the verdict its versions and
+/// revisions imply. `revisions` holds, per binary, the revision its declared
+/// release was built from, or why that could not be read.
 pub(super) fn verdict_rows(
     declared: &[(String, String)],
+    revisions: &BTreeMap<String, Result<String, String>>,
     reported: &Result<BTreeMap<String, Installed>, String>,
 ) -> Vec<Row> {
     declared
         .iter()
         .map(|(binary, declared_version)| {
-            let entry = match reported {
-                Ok(reported) => reported.get(binary),
-                Err(_) => None,
+            // A failed report has no entry for any binary; its failure is the
+            // verdict's detail below, once for the host.
+            let entry = reported.iter().find_map(|reported| reported.get(binary));
+            let declared_revision = match revisions.get(binary) {
+                Some(revision) => revision.clone(),
+                None => Err(format!(
+                    "no revision was asked for {binary} {declared_version}"
+                )),
             };
             let installed = entry.and_then(|entry| entry.version.clone());
-            let attestation = entry
-                .map(|entry| entry.attestation.as_str())
-                .unwrap_or(ATTEST_UNKNOWN);
+            let attestation = cell(
+                entry.map(|entry| entry.attestation.as_str()),
+                ATTEST_UNKNOWN,
+            );
+            let shown = named(installed.as_ref());
             // Provenance is judged before drift, because drift between a
             // declaration and bytes nobody delivered is not the finding: the
             // bytes are. Reading these as `host-ahead` is what let a local
             // build offer to promote its own version into the registry.
-            let unattested = match attestation {
+            let unattested = match attestation.as_str() {
                 ATTEST_ABSENT => Some(format!(
-                    "the host runs {} and no delivered copy of {} is staged at \
+                    "the host runs {shown} and no delivered copy of {shown} is staged at \
                      $HOME/.stado/releases, though earlier versions of this binary were \
                      delivered here; these bytes were put at the install path beside the \
                      delivery path, and converge will not move the declaration to a version \
-                     it cannot attest",
-                    installed.as_deref().unwrap_or(UNKNOWN),
-                    installed.as_deref().unwrap_or(UNKNOWN)
+                     it cannot attest"
                 )),
                 ATTEST_NEVER_DELIVERED => Some(format!(
-                    "the host runs {} and this binary has never been delivered here: \
+                    "the host runs {shown} and this binary has never been delivered here: \
                      $HOME/.stado/releases holds no version of it at all. The bootstrap \
                      installer stages nothing, so this is the expected reading for a host \
                      that has not had a release delivery yet — it is not evidence that \
-                     anything was replaced",
-                    installed.as_deref().unwrap_or(UNKNOWN)
+                     anything was replaced"
                 )),
                 ATTEST_DIFFERS => Some(format!(
-                    "the host runs {} and the staged copy of {} does not match the installed \
-                     file byte for byte; the binary was replaced after delivery",
-                    installed.as_deref().unwrap_or(UNKNOWN),
-                    installed.as_deref().unwrap_or(UNKNOWN)
+                    "the host runs {shown} and the staged copy of {shown} does not match the \
+                     installed file byte for byte; the binary was replaced after delivery"
                 )),
                 _ => None,
             };
-            if let Some(detail) = unattested {
-                return Row {
-                    binary: binary.clone(),
-                    declared: declared_version.clone(),
-                    installed,
-                    verdict: UNATTESTED,
-                    detail,
-                    root: entry.map(|entry| entry.root.clone()).unwrap_or_default(),
-                    unit: entry.map(|entry| entry.unit.clone()).unwrap_or_default(),
-                    state: entry.map(|entry| entry.state.clone()).unwrap_or_default(),
-                    attestation: attestation.to_string(),
-                    receipt: entry
-                        .map(|entry| entry.receipt.clone())
-                        .filter(|receipt| !receipt.is_empty())
-                        .unwrap_or_else(|| String::from(NONE)),
-                    running_binary: None,
-                    binary_matches_process: None,
-                    process_error: None,
-                };
-            }
-            let (verdict, detail) = match (&installed, reported) {
-                (Some(version), _) if version == declared_version => (
-                    IN_SYNC,
-                    // Provenance, when the host kept a record of it. "-" still
-                    // means attested-by-bytes with no receipt, which is every
-                    // delivery made before the receipt format.
-                    entry
-                        .map(|entry| entry.receipt.clone())
-                        .filter(|receipt| !receipt.is_empty())
-                        .unwrap_or_else(|| String::from("-")),
-                ),
-                (Some(version), _) => match version_order(version, declared_version) {
+            let (verdict, detail) = match (unattested, &installed, reported) {
+                (Some(detail), _, _) => (UNATTESTED, detail),
+                (None, Some(version), _) if version == declared_version => {
+                    same_version(entry, declared_version, &declared_revision)
+                }
+                (None, Some(version), _) => match version_order(version, declared_version) {
                     // The host is behind the declaration: `--apply` delivers
                     // the declared one, which is an upgrade here.
                     Some(Ordering::Less) => (
@@ -118,9 +160,11 @@ pub(super) fn verdict_rows(
                         ),
                     ),
                     // Equal orderings of unequal strings cannot happen for two
-                    // exact semantic versions, and are reported as in sync
-                    // rather than invented into drift if one ever does.
-                    Some(Ordering::Equal) => (IN_SYNC, String::from("-")),
+                    // exact semantic versions; one that does is compared by
+                    // its build like any matching version.
+                    Some(Ordering::Equal) => {
+                        same_version(entry, declared_version, &declared_revision)
+                    }
                     // Unreachable for two exact semantic versions; reported
                     // unmeasured rather than ordered by invention.
                     None => (
@@ -131,17 +175,15 @@ pub(super) fn verdict_rows(
                         ),
                     ),
                 },
-                (None, Err(failure)) => (UNKNOWN, failure.clone()),
+                (None, None, Err(failure)) => (UNKNOWN, failure.clone()),
                 // The reporter answered and found no artefact at all. Its own
                 // verdict, not `unknown`: this measurement succeeded, and what
                 // it measured is a host that declares a binary it does not
                 // carry. `--apply` delivers it, because there is nothing here
                 // to downgrade and no process running the declared binary to
                 // interrupt.
-                (None, Ok(_))
-                    if entry
-                        .map(|entry| entry.root.is_empty() || entry.root == NONE)
-                        .unwrap_or_default() =>
+                (None, None, Ok(_))
+                    if entry.is_some_and(|entry| entry.root.is_empty() || entry.root == NONE) =>
                 {
                     (
                         HOST_MISSING,
@@ -152,7 +194,7 @@ pub(super) fn verdict_rows(
                         ),
                     )
                 }
-                (None, Ok(_)) => (
+                (None, None, Ok(_)) => (
                     UNKNOWN,
                     match entry {
                         // The reporter found the artefact and could not read a
@@ -176,25 +218,17 @@ pub(super) fn verdict_rows(
                     },
                 ),
             };
-            let cell = |value: Option<&str>| match value {
-                Some(value) if !value.is_empty() => value.to_string(),
-                _ => String::from(NONE),
-            };
             Row {
                 binary: binary.clone(),
                 declared: declared_version.clone(),
                 installed,
-                root: cell(entry.map(|entry| entry.root.as_str())),
-                unit: cell(entry.map(|entry| entry.unit.as_str())),
-                state: cell(entry.map(|entry| entry.state.as_str())),
-                attestation: entry
-                    .map(|entry| entry.attestation.clone())
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| String::from(ATTEST_UNKNOWN)),
-                receipt: entry
-                    .map(|entry| entry.receipt.clone())
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| String::from(NONE)),
+                root: cell(entry.map(|entry| entry.root.as_str()), NONE),
+                unit: cell(entry.map(|entry| entry.unit.as_str()), NONE),
+                state: cell(entry.map(|entry| entry.state.as_str()), NONE),
+                attestation,
+                receipt: cell(entry.map(|entry| entry.receipt.as_str()), NONE),
+                installed_revision: entry.and_then(|entry| entry.revision.clone()),
+                declared_revision,
                 // Filled by [`attach_processes`], which asks the host a second
                 // question. Left empty here so the version comparison — the
                 // answer this command exists for — never depends on a process

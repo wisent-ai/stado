@@ -1,11 +1,17 @@
-//! The words this command reports with — the five verdicts, the attestation
+//! The words this command reports with — the verdicts, the attestation
 //! answers and the wire values the reporter agrees on — and the row that
 //! carries them.
 
 use serde_json::{json, Value};
 
-/// The host runs exactly the declared version.
+/// The host runs exactly the declared version, from the revision the
+/// declared release was built from.
 pub const IN_SYNC: &str = "in-sync";
+/// The host runs the declared version string from another revision than the
+/// declared release was built from: its delivery receipt names a different
+/// source commit. A version string is not a build; `--apply` delivers the
+/// declared release, and report mode fails, as for [`HOST_BEHIND`].
+pub const REVISION_MISMATCHED: &str = "revision-mismatched";
 /// The host runs a version strictly OLDER than the declared one: the host is
 /// behind the declaration and `--apply` delivers the declared one.
 pub const HOST_BEHIND: &str = "host-behind";
@@ -129,6 +135,11 @@ pub(in crate::cli::service_converge) struct Row {
     pub(in crate::cli::service_converge) attestation: String,
     /// The delivery receipt carried beside the staged release, or `none`.
     pub(in crate::cli::service_converge) receipt: String,
+    /// The revision the host's delivery receipt names, when one does.
+    pub(in crate::cli::service_converge) installed_revision: Option<String>,
+    /// The revision the declared release was built from, or why it could not
+    /// be read from the release's signed manifest.
+    pub(in crate::cli::service_converge) declared_revision: Result<String, String>,
     /// The executable the live process under `unit` is running, or `None` when
     /// no process was found to ask about.
     pub(in crate::cli::service_converge) running_binary: Option<String>,
@@ -160,6 +171,11 @@ impl Row {
             "receipt": self.receipt,
             "declared_version": self.declared,
             "installed_version": self.installed,
+            "installed_revision": self.installed_revision,
+            "declared_revision": match &self.declared_revision {
+                Ok(revision) => json!(revision),
+                Err(cause) => json!({ "unreadable": cause }),
+            },
             "running_binary": self.running_binary,
             "binary_matches_process": self.binary_matches_process,
             "process_error": self.process_error,
@@ -170,7 +186,10 @@ impl Row {
 
     /// The installed cell, in the words the table prints.
     pub(in crate::cli::service_converge) fn installed_cell(&self) -> &str {
-        self.installed.as_deref().unwrap_or(UNKNOWN_VERSION)
+        match self.installed.as_deref() {
+            Some(installed) => installed,
+            None => UNKNOWN_VERSION,
+        }
     }
 
     /// The process cell. [`UNKNOWN`] for a unit nothing could be observed
@@ -202,4 +221,7 @@ pub(in crate::cli::service_converge) struct Installed {
     /// the wire. Empty when the delivery predates receipts, which is not a
     /// finding: the byte comparison attests those bytes without it.
     pub(in crate::cli::service_converge) receipt: String,
+    /// The revision the delivery receipt says the staged copy was built
+    /// from; `None` when the bytes are not attested or no receipt names one.
+    pub(in crate::cli::service_converge) revision: Option<String>,
 }
