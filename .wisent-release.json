@@ -25,11 +25,6 @@
           "kind": "format"
         },
         {
-          "name": "fmt-tests-wait",
-          "argv": ["cargo", "fmt", "--manifest-path", "tests/wait/Cargo.toml", "--all", "--", "--check"],
-          "kind": "format"
-        },
-        {
           "name": "clippy",
           "argv": [
             "cargo",
@@ -81,6 +76,13 @@
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
             "--test", "service-directory-beside"
           ]
+        },
+        {
+          "name": "wait-journeys",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "wait-held-lock", "--test", "wait-ended-process", "--test", "wait-registered"
+          ]
         }
       ],
       "stage": {
@@ -101,11 +103,6 @@
             "--",
             "--check"
           ],
-          "kind": "format"
-        },
-        {
-          "name": "fmt-tests-wait",
-          "argv": ["cargo", "fmt", "--manifest-path", "tests/wait/Cargo.toml", "--all", "--", "--check"],
           "kind": "format"
         },
         {
@@ -145,6 +142,13 @@
           "argv": [
             "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
             "--test", "service-directory-beside"
+          ]
+        },
+        {
+          "name": "wait-journeys",
+          "argv": [
+            "cargo", "test", "--release", "--locked", "--manifest-path", "stado-rs/Cargo.toml",
+            "--test", "wait-held-lock", "--test", "wait-ended-process", "--test", "wait-registered"
           ]
         }
       ],
