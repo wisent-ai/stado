@@ -6,6 +6,11 @@ assets/readme-banner.svg
 # Resolved by cargo from stado-rs/Cargo.toml and committed because this crate
 # ships a binary. A person never edits it, and `cargo build` rewrites it whole.
 stado-rs/Cargo.lock
+# Agent sessions' lists of repairs waiting for their defect-register writes.
+# Each line is a defect id, the revision that repairs it and the source
+# construct the register reads, so ids are the content; the directory is
+# under .build/, which git ignores, and is never committed or published.
+.build/register
 # The repository root. Cargo reads rust-toolchain.toml from here, the install
 # and uninstall scripts are fetched by these exact names, the landing tooling
 # reads landing.brief.json, landing.config.json and landing.plan.json, and the
