@@ -13,13 +13,18 @@ import { fileURLToPath } from 'node:url';
 // point there, so the operator's vault, keyring and registry are never read
 // or written).
 //
-// The vault holds the agent's own grant, already until revoked, and two
-// direct grants issued with an end: one a consumer the imported registry's
-// service directory declares, one that no declaration owns. One renew:
-// - keeps the declared grant until revoked, and the bearer it held before
-//   still verifies;
+// The vault holds the agent's own grant, already until revoked, and three
+// direct grants issued with an end: a declared consumer whose bearer file is
+// on this host, a declared consumer whose bearer file is not, and one that no
+// declaration owns. One renew:
+// - re-issues the first until revoked against its bearer file, which still
+//   verifies;
+// - keeps the second until revoked through `skarbiec grant keep` and says its
+//   bearer is checked where it lives;
 // - leaves the undeclared grant with its end and names it;
 // - a second renew keeps nothing more.
+// Then the first consumer's file is given a bearer the vault never bound to
+// it: renew re-binds the grant to that file, which then verifies.
 // Refusal: with the vault's grants unreadable (SKARBIEC_VAULT_FILE names a
 // file that is not a vault), renew exits non-zero naming the failed read.
 //
@@ -85,6 +90,7 @@ const suffix = `${process.pid}-${Date.now()}`;
 const item = `declared-keep-item-${suffix}`;
 const declared = `declared-keep-reader-${suffix}`;
 const undeclared = `undeclared-keep-reader-${suffix}`;
+const remote = `remote-keep-reader-${suffix}`;
 try {
   report.source_revision = success(run('git', ['rev-parse', 'HEAD'], { env: process.env }));
   report.test_sha256 = digest(readFileSync(fileURLToPath(import.meta.url)));
@@ -107,6 +113,11 @@ try {
   writeFileSync(bearer, issued.token, { mode: constants.S_IRUSR | constants.S_IWUSR });
   success(run(skarbiec, ['grant', 'issue', undeclared, '--capabilities', `read:${item}#api_key`,
     '--ttl-seconds', ttl], { secret: true }));
+  // A declared consumer whose bearer file lives on another host: here only
+  // the vault can keep its grant.
+  success(run(skarbiec, ['grant', 'issue', remote, '--capabilities', `read:${item}#api_key`,
+    '--ttl-seconds', ttl], { secret: true }));
+  const remoteBearer = join(output, 'on-another-host', 'remote.token');
   assert.equal(listed(declared).until_revoked, false, 'the declared grant was issued without an end');
 
   success(run(stado, ['config', 'init']));
@@ -117,6 +128,8 @@ try {
   placed.hostnames = [host];
   registry.targets = [placed];
   registry.service_directory.authority = { target: host, command: stado };
+  // The fixture's service placed on a host that is not this one.
+  const elsewhere = registry.service_directory.services['elsewhere-api'].active_host;
   registry.service_directory.services = {
     'keep-api': {
       active_host: host,
@@ -124,6 +137,15 @@ try {
       consumers: {
         'keep-product': {
           grants: [{ consumer: declared, capabilities: [`read:${item}#api_key`], token_file: bearer }],
+        },
+      },
+    },
+    'remote-api': {
+      active_host: elsewhere,
+      endpoints: {},
+      consumers: {
+        'remote-product': {
+          grants: [{ consumer: remote, capabilities: [`read:${item}#api_key`], token_file: remoteBearer }],
         },
       },
     },
@@ -139,6 +161,11 @@ try {
     `renew did not say it kept ${declared}: ${JSON.stringify(renewed.lines)}`);
   assert.ok(renewed.lines.some(line => line.includes(`${undeclared} has an end and no service directory declaration owns it`)),
     `renew did not name ${undeclared}: ${JSON.stringify(renewed.lines)}`);
+  assert.ok(renewed.lines.some(line => line.includes(`kept ${remote} until revoked`)),
+    `renew did not keep ${remote}, whose bearer is elsewhere: ${JSON.stringify(renewed.lines)}`);
+  assert.ok(renewed.lines.some(line => line.includes(`the bearer of ${remote}: ${remoteBearer} on ${elsewhere} is not on this host`)),
+    `renew did not say ${remote}'s bearer is checked where it lives: ${JSON.stringify(renewed.lines)}`);
+  assert.equal(listed(remote).until_revoked, true, 'the grant whose bearer is elsewhere does not live until revoked');
   assert.equal(listed(declared).until_revoked, true, 'the declared grant does not live until revoked');
   assert.equal(listed(undeclared).until_revoked, false, 'the undeclared grant lost its end');
   const verified = JSON.parse(success(run(skarbiec, ['grant', 'verify', declared, item, '--action', 'read',
@@ -147,6 +174,23 @@ try {
 
   const again = JSON.parse(success(run(stado, ['credentials', 'grant', 'renew', '--json'])));
   assert.ok(!again.lines.some(line => line.includes(`kept ${declared}`)), 'a second renew kept the declared grant again');
+
+  // The declared file now holds another bearer, as after a vault restored from
+  // an older copy: renew binds the grant to the file the product presents.
+  const other = JSON.parse(success(run(skarbiec, ['grant', 'issue', `other-bearer-${suffix}`, '--capabilities',
+    `read:${item}#api_key`, '--until-revoked'], { secret: true })));
+  writeFileSync(bearer, other.token, { mode: constants.S_IRUSR | constants.S_IWUSR });
+  const stale = JSON.parse(success(run(skarbiec, ['grant', 'verify', declared, item, '--action', 'read',
+    '--field', 'api_key', '--token-file', bearer])));
+  assert.equal(stale.allowed, false, 'a bearer issued to another consumer opened the declared grant');
+  const rebound = JSON.parse(success(run(stado, ['credentials', 'grant', 'renew', '--json'])));
+  report.rebound = rebound;
+  assert.ok(rebound.lines.some(line => line.includes(`re-bound ${declared}: ${bearer}`)),
+    `renew did not re-bind ${declared}: ${JSON.stringify(rebound.lines)}`);
+  const reopened = JSON.parse(success(run(skarbiec, ['grant', 'verify', declared, item, '--action', 'read',
+    '--field', 'api_key', '--token-file', bearer])));
+  assert.equal(reopened.allowed, true, 'the re-bound grant does not open with the declared bearer');
+  assert.equal(listed(declared).until_revoked, true, 'the re-bound grant has an end');
 
   const notVault = join(output, 'not-a-vault.json');
   writeFileSync(notVault, '{}\n');

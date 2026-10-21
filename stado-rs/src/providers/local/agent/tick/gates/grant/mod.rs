@@ -20,6 +20,7 @@
 //! an operator's `skarbiec grant revoke` stands until the agent starts again
 //! or `stado credentials grant renew` is run.
 
+mod bearer;
 mod declared;
 mod issue;
 mod vault;
@@ -98,7 +99,8 @@ pub(crate) enum RenewOutcome {
 
 /// What `stado credentials grant renew` asks for: the agent's own grant
 /// (`force` renews it when it is not yet due, which the tick never does), and
-/// then every declared consumer grant the owner vault records with an end.
+/// then every declared consumer grant: kept until revoked and bound to its
+/// declared bearer.
 /// Every sentence goes to `log_fn`, including why nothing was done; a failure
 /// of either half is the outcome.
 pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOutcome {
@@ -116,7 +118,9 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOut
         (RenewOutcome::Failed, _) => RenewOutcome::Failed,
         _ if declared_failed => RenewOutcome::Failed,
         (RenewOutcome::Renewed, _) => RenewOutcome::Renewed,
-        (_, Ok(report)) if !report.kept.is_empty() => RenewOutcome::Renewed,
+        (_, Ok(report)) if !report.kept.is_empty() || !report.rebound.is_empty() => {
+            RenewOutcome::Renewed
+        }
         _ => RenewOutcome::NothingToDo,
     }
 }

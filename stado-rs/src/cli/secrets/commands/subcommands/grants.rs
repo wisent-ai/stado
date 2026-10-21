@@ -73,10 +73,13 @@ pub enum CredentialGrantCommands {
     /// the agent's tick does when the vault still records an end for it: at
     /// the authoritative vault, with the capabilities the grant already
     /// carries. The consumer is the one the workload agent's configuration
-    /// names. Then, on the host that holds the owner vault, keep until revoked
-    /// every consumer grant the service directory declares and the vault
-    /// still records with an end (`skarbiec grant keep`: same capabilities,
-    /// same bearer), naming each grant with an end that no declaration owns.
+    /// names. Then, on the host that holds the owner vault, renew and bind
+    /// every consumer grant the service directory declares: one whose
+    /// declared bearer file is on this host and that has an end or that the
+    /// file does not open is re-issued until revoked against that file with
+    /// its capabilities and audience; one whose bearer is elsewhere and that
+    /// has an end is kept (`skarbiec grant keep`). A grant with an end that no
+    /// declaration owns is named and keeps its end.
     Renew {
         /// Re-issue the agent grant even when it already lives until revoked.
         #[arg(long)]
