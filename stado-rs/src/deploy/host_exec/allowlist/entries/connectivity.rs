@@ -1,10 +1,19 @@
 //! Fixed connectivity observations and installed-client diagnostics.
 
 use super::super::arguments::{LINUX_TAILSCALE_LOG_READ, MACOS_TAILSCALE_LOG_READ};
-use super::super::programs::{KIMI_CLI, TAILSCALE_PROGRAM};
+use super::super::programs::{KIMI_CLI, STADO_CLI, TAILSCALE_PROGRAM};
 use super::super::ApprovedCommand;
 
 pub const CONNECTIVITY_READS: &[ApprovedCommand] = &[
+    ApprovedCommand {
+        argv: &[STADO_CLI, "resolver", "status", "--json"],
+        why: "reads the resolver state the host's `stado serve --resolver` role publishes and \
+              the object API's vault consultations: every wait an adapter stands on, the key \
+              a held consultation blocks, and the blocker each one raises. A workstation's \
+              refusal names a request the other host holds unanswered; only that host's \
+              published state says what it stands on. The fixed verb reads files the \
+              resolver already wrote and changes nothing",
+    },
     // Read the host's own power, interface and transport observations.
     ApprovedCommand {
         argv: &["/usr/bin/pmset", "-g", "log"],
