@@ -99,20 +99,32 @@ pub(crate) async fn matching_runs(
         blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
         blobs.into_iter().map(|blob| blob.name).collect()
     };
+    // Each run object is one request to a store that serves one object per
+    // request, and the product a run belongs to is not in its path, so a
+    // product's runs are found by reading the newest objects. They are read
+    // as the bulk budget allows, in the listing's order, and the walk stops
+    // as soon as `limit` admitted runs are in hand; read one after another,
+    // a product with one old run waited on every run object ever written.
     let mut runs = Vec::new();
     let mut examined: Vec<String> = Vec::new();
-    for path in &ordered {
-        if runs.len() >= limit {
-            break;
+    {
+        let mut reads = futures::stream::iter(ordered.iter().map(|path| {
+            let store = &store;
+            async move { (path, load_run_value(store, path).await) }
+        }))
+        .buffered(crate::queue::migrations::bulk_workers()?);
+        while runs.len() < limit {
+            let Some((path, loaded)) = reads.next().await else {
+                break;
+            };
+            examined.push(path.clone());
+            let Some(run) = loaded? else {
+                continue;
+            };
+            if filter.admits(&run) {
+                runs.push(run);
+            }
         }
-        examined.push(path.clone());
-        let Some(run) = load_run_value(&store, path).await? else {
-            continue;
-        };
-        if !filter.admits(&run) {
-            continue;
-        }
-        runs.push(run);
     }
     // Older runs stay unread unless a live build needs its denominator; the
     // ones already consumed above cannot be that denominator.
