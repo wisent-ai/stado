@@ -8,6 +8,7 @@ mod probe;
 pub(super) use probe::await_healthy;
 use probe::health_probe;
 
+use super::cutover::promote_standby;
 use super::state::{root_payload, state_exists, state_location};
 use super::units::{act_on_unit, probe_unit, UnitAction};
 use super::MoveContext;
@@ -38,6 +39,14 @@ pub(super) async fn preflight(context: &MoveContext, runner: &Runner) -> Result<
     ensure_profile_lifecycle_mutable(&context.profile)?;
     let source_profile = profile_host(&context.profile, &context.source.name)?;
     let destination_profile = profile_host(&context.profile, &context.destination.name)?;
+    // The cutover gives the destination its endpoint from the directory; a
+    // destination it cannot name is refused here, before the source is fenced,
+    // rather than at the commit after every unit already moved.
+    promote_standby(
+        &mut context.claimed_document.clone(),
+        &context.profile.name,
+        &context.destination.name,
+    )?;
 
     // Whether anything of this profile is actually running on the source.
     // A profile whose units are all stopped is not a reason to refuse the

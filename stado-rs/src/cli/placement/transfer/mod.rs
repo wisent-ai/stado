@@ -2,6 +2,7 @@
 //! progress a rollback reads, and the one remote-script primitive every step
 //! below is built from.
 
+mod cutover;
 mod execution;
 mod readiness;
 mod state;

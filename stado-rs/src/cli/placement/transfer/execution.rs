@@ -5,6 +5,7 @@
 use chrono::{SecondsFormat, Utc};
 use serde_json::Value;
 
+use super::cutover::promote_standby;
 use super::readiness::{apply_routes, await_healthy, preflight};
 use super::state::{read_state, restore_state, state_location, write_state};
 use super::units::{act_on_unit, UnitAction};
@@ -71,6 +72,11 @@ fn prepare_committed_document(context: &MoveContext) -> Result<Value, CmdError> 
         let managed = destination_record(&context.destination, destination_spec, &managed_since)?;
         service::add_service(&mut document, &managed).map_err(deploy_error)?;
     }
+    promote_standby(
+        &mut document,
+        &context.profile.name,
+        &context.destination.name,
+    )?;
     crate::service_resolution::retarget_profile(
         &mut document,
         &context.profile.name,
