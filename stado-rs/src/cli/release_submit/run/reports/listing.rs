@@ -7,8 +7,9 @@ use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 
 use super::jobs::{candidate_prefixes, job_state_and_cost, settled_reading, JobReading};
+use super::load_run_value;
 use super::phase;
-use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX};
+use crate::release_pipeline::PlatformRunState;
 
 /// One platform leg joined to its queue job: which run it belongs to, which
 /// platform it is, the job id it was looked up by, and the queue's answer —
@@ -20,7 +21,7 @@ type PlatformJoin = (usize, String, String, Result<Option<JobReading>, String>);
 
 /// Which runs a listing is about: one product, one run by id prefix, one
 /// version. Every field left `None` matches every run.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct RunFilter<'a> {
     pub product: Option<&'a str>,
     /// A run id or its first characters, as `release status` prints them.
@@ -65,7 +66,8 @@ pub(crate) async fn recent_runs(
     matching_runs(
         RunFilter {
             product,
-            ..RunFilter::default()
+            run: None,
+            version: None,
         },
         limit,
     )
@@ -80,25 +82,9 @@ pub(crate) async fn matching_runs(
     limit: usize,
 ) -> Result<Vec<Value>, CmdError> {
     let store = JobStorage::new().await.map_err(CmdError::from)?;
-    let mut ordered: Vec<String> = {
-        let mut blobs = store
-            .list_blobs_with_meta(RUN_STATE_PREFIX)
-            .await
-            .map_err(CmdError::from)?
-            .into_iter()
-            .filter(|blob| blob.name.ends_with(RUN_STATE_LEAF))
-            // The run id is the path segment after the prefix, so a run
-            // named by id is found from the listing alone; a version is
-            // not in the path and costs one read per run examined.
-            .filter(|blob| {
-                filter.run.is_none_or(|prefix| {
-                    blob.name[RUN_STATE_PREFIX.len().min(blob.name.len())..].starts_with(prefix)
-                })
-            })
-            .collect::<Vec<_>>();
-        blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
-        blobs.into_iter().map(|blob| blob.name).collect()
-    };
+    // A question about one product reads only that product's runs once they
+    // are indexed (`super::index`); otherwise every run object, newest first.
+    let mut ordered: Vec<String> = super::run_paths(&store, filter.product, filter.run).await?;
     // Each run object is one request to a store that serves one object per
     // request, and the product a run belongs to is not in its path, so a
     // product's runs are found by reading the newest objects. They are read
@@ -190,12 +176,17 @@ pub(crate) async fn matching_runs(
                 let Some(record) = runs[index]["platforms"].get_mut(&platform) else {
                     continue;
                 };
+                // A leg is in flight until the run records it qualified,
+                // published or failed; a state the run names that is none of
+                // its declared states is in flight too, as it was read before.
                 let in_flight = !matches!(
-                    record["state"].as_str(),
-                    Some("published" | "qualified" | "failed")
+                    serde_json::from_value::<PlatformRunState>(record["state"].clone()),
+                    Ok(PlatformRunState::Published
+                        | PlatformRunState::Qualified
+                        | PlatformRunState::Failed)
                 );
                 if in_flight {
-                    record["state"] = Value::String("failed".into());
+                    record["state"] = serde_json::to_value(PlatformRunState::Failed)?;
                     record["failure"] = Value::String(format!(
                         "build job {job_id} is in no queue state (queue, running, completed, uploaded, failed, cancelled) on two walks of the lifecycle, left no receipt, no reaped run retains it and no transition record names how it ended; the job was lost and this leg cannot finish — submit the release again"
                     ));
@@ -218,8 +209,9 @@ pub(crate) async fn matching_runs(
         // on how the build ended; its error is shown on the leg. A leg the
         // run already records as failed keeps the failure text it has.
         if let Some(error) = error {
-            if record["state"].as_str() != Some("failed") {
-                record["state"] = Value::String("failed".into());
+            let failed = serde_json::to_value(PlatformRunState::Failed)?;
+            if record["state"] != failed {
+                record["state"] = failed;
                 record["failure"] =
                     Value::String(format!("build job {job_id} ended {state}: {error}"));
             }

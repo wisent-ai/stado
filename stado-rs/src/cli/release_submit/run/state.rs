@@ -57,13 +57,7 @@ pub(crate) async fn persist_build_failure(build: &mut BuildRun, error: CmdError)
     build.state = BuildRunState::Failed;
     build.failure = Some(error.to_string());
     if let Err(save_error) = save_build(build).await {
-        return CmdError {
-            message: Some(format!(
-                "{error}; failed to persist build failure: {save_error}"
-            )),
-            code: error.code,
-            ..CmdError::default()
-        };
+        return error.also(format!("failed to persist build failure: {save_error}"));
     }
     error
 }
@@ -78,7 +72,9 @@ pub(crate) async fn load_build(id: &str) -> Result<Option<BuildRun>, CmdError> {
         .transpose()
 }
 
-/// Write the run, then keep the unfinished-run index in step with it: the
+/// Write the run, then keep the run indexes in step with it: the product
+/// marker files the run under its product (`reports::marker_path`), so a
+/// question about one product reads only its runs, and the unfinished-run
 /// marker exists exactly while the run has not finished, so a finishing pass
 /// lists the runs it may move instead of reading a window of recent ones.
 pub(crate) async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
@@ -92,6 +88,10 @@ pub(crate) async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
     )
     .await?;
     let store = JobStorage::new().await.map_err(CmdError::from)?;
+    store
+        .upload_text(&super::reports::marker_path(&run.product, &run.run_id), "")
+        .await
+        .map_err(CmdError::from)?;
     let marker = unfinished_run_path(&run.run_id);
     if run.state.finished() {
         store.delete_blob(&marker).await.map_err(CmdError::from)
@@ -108,39 +108,23 @@ pub(crate) async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
 pub(crate) async fn persist_failure(run: &mut ReleaseRun, error: CmdError) -> CmdError {
     match load(&run.run_id).await {
         Ok(Some(stored)) if stored.updated_at != run.updated_at => {
-            return CmdError {
-                message: Some(format!(
-                    "{error}; another pass advanced release run {} since this one read it \
-                     (state {:?}), so this pass's failure was not recorded over it",
-                    run.run_id, stored.state
-                )),
-                code: error.code,
-                ..CmdError::default()
-            };
+            return error.also(format!(
+                "another pass advanced release run {} since this one read it (state {:?}), so this \
+                 pass's failure was not recorded over it",
+                run.run_id, stored.state
+            ));
         }
         Ok(_) => {}
         Err(load_error) => {
-            return CmdError {
-                message: Some(format!(
-                    "{error}; the release run could not be read to record the failure: \
-                     {load_error}"
-                )),
-                code: error.code,
-                ..CmdError::default()
-            };
+            return error.also(format!(
+                "the release run could not be read to record the failure: {load_error}"
+            ));
         }
     }
     run.state = ReleaseRunState::Failed;
     run.failure = Some(error.to_string());
     if let Err(save_error) = save(run).await {
-        return CmdError {
-            message: Some(format!(
-                "{}; failed to persist release failure: {}",
-                error, save_error
-            )),
-            code: error.code,
-            ..CmdError::default()
-        };
+        return error.also(format!("failed to persist release failure: {save_error}"));
     }
     error
 }
@@ -175,11 +159,7 @@ pub(crate) async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
 pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<ReleaseRun>, CmdError> {
     let store = JobStorage::new().await.map_err(CmdError::from)?;
     let mut latest: Option<ReleaseRun> = None;
-    for path in store
-        .list_paths("runs/release-pipeline/", crate::queue::Listing::Every)
-        .await
-        .map_err(CmdError::from)?
-    {
+    for path in super::reports::run_paths(&store, Some(product), None).await? {
         if !path.ends_with("/run.json") {
             continue;
         }

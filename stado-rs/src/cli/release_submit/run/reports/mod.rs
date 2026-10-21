@@ -63,6 +63,7 @@ pub(crate) async fn recorded_runs(
     .collect::<Vec<_>>()
     .await;
     let mut recorded = std::collections::BTreeMap::<_, Vec<RecordedRun>>::new();
+    let mut filed = Vec::new();
     for (body, path) in bodies {
         let Some(run) = body? else { continue };
         // A run object that names no product, version, id or commit is
@@ -78,23 +79,34 @@ pub(crate) async fn recorded_runs(
             })
         };
         let (product, version) = (field("product")?, field("version")?);
+        let run_id = field("run_id")?;
+        filed.push((product.clone(), run_id.clone()));
         recorded
             .entry((product, version))
             .or_default()
             .push(RecordedRun {
-                run_id: field("run_id")?,
+                run_id,
                 state: run["state"]
                     .as_str()
                     .and_then(crate::release_pipeline::ReleaseRunState::named),
                 source_commit: field("source_commit")?,
             });
     }
+    // This walk read every run object, so it is the one that files runs
+    // saved before product markers existed (`index`). The answer stands on
+    // the bodies already read; an index that cannot be written is said, and
+    // product questions keep reading every run object until a walk writes it.
+    if let Err(error) = index::mark_complete(&store, &filed).await {
+        eprintln!("[release runs] runs could not be indexed by product: {error}");
+    }
     Ok(recorded)
 }
 
+mod index;
 mod jobs;
 mod legs;
 mod listing;
 mod phase;
 
+pub(crate) use index::{marker_path, run_paths};
 pub(crate) use listing::{matching_runs, recent_runs, RunFilter};
