@@ -46,14 +46,19 @@ impl LocalBackend {
     /// Root-relative `/`-joined names of every non-internal blob under
     /// `prefix`, unordered.
     ///
-    /// Walk only the subtree the prefix names. Walking the whole root and
-    /// filtering afterwards made every prefix listing cost the size of the
-    /// store: `stado doctor` spent fifty seconds stat-ing 27k queue blobs
-    /// to look at one diagnostics directory. Any relative path that starts
-    /// with the prefix lives under its directory part, so the result set is
-    /// unchanged.
+    /// Walk only what the prefix can name: in the directory part, only the
+    /// entries whose name starts with the prefix's last segment, and the
+    /// whole subtree of each of those. Walking the prefix's whole directory
+    /// made one object's prefix (an object read asks for its own metadata
+    /// this way) cost every object beside it, and a namespace directory
+    /// holds the whole queue. Any relative path that starts with the prefix
+    /// starts, in that directory, with an entry whose name starts with the
+    /// last segment, so the result set is unchanged.
     pub(super) fn relative_names(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
-        let (directory, _) = prefix.rsplit_once('/').unwrap_or(("", prefix));
+        let (directory, leaf) = match prefix.rsplit_once('/') {
+            Some(split) => split,
+            None => ("", prefix),
+        };
         let scan_root = if directory.is_empty() {
             self.root.clone()
         } else {
@@ -61,21 +66,41 @@ impl LocalBackend {
         };
         let mut files = Vec::new();
         if scan_root.is_dir() {
-            walk(&scan_root, &mut files)?;
+            for entry in fs::read_dir(&scan_root)? {
+                let entry = entry?;
+                if !entry.file_name().to_string_lossy().starts_with(leaf) {
+                    continue;
+                }
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, &mut files)?;
+                } else if path.is_file() {
+                    files.push(path);
+                }
+            }
         }
-        Ok(files
-            .into_iter()
-            .filter(|item| !self.is_internal(item))
-            .filter_map(|item| {
-                item.strip_prefix(&self.root).ok().map(|rel| {
-                    rel.components()
-                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                        .collect::<Vec<_>>()
-                        .join("/")
-                })
-            })
-            .filter(|rel| rel.starts_with(prefix))
-            .collect())
+        let mut names = Vec::new();
+        for item in files {
+            if self.is_internal(&item) {
+                continue;
+            }
+            let relative = item.strip_prefix(&self.root).map_err(|error| {
+                std::io::Error::other(format!(
+                    "the listed blob {} is not under the storage root {}: {error}",
+                    item.display(),
+                    self.root.display()
+                ))
+            })?;
+            let name = relative
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            if name.starts_with(prefix) {
+                names.push(name);
+            }
+        }
+        Ok(names)
     }
 }
 
