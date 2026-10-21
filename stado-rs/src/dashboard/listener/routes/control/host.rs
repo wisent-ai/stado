@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use crate::dashboard::listener::auth::authorize_host_health;
-use crate::dashboard::listener::http::{strict_url_decode, valid_beacon_host};
+use crate::dashboard::listener::http::{url_decode, valid_beacon_host};
 use crate::dashboard::listener::{
     http_status, parse_qs, send_json, storage_error_response, Dashboard, Request, Response,
 };
@@ -16,10 +16,9 @@ impl Dashboard {
         query: &str,
         write: bool,
     ) -> Response {
-        if request.header("transfer-encoding").is_some()
-            || request.content_length != 0
-            || !request.body.is_empty()
-        {
+        // The reader reads exactly the Content-Length it was given, so a
+        // declared body is a non-empty one.
+        if request.header("transfer-encoding").is_some() || !request.body.is_empty() {
             return send_json(
                 http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": "storage reconciliation does not accept a request body"}),
@@ -32,14 +31,17 @@ impl Dashboard {
         match crate::cli::host::storage_root_reconcile_result(&target, &transaction, &phase).await {
             Ok(result) => {
                 let (exit_code, refusal) = match result.outcome {
-                    Ok(()) => (0, None),
+                    Ok(()) => (nix::libc::EXIT_SUCCESS, None),
                     Err(error) => {
                         // The error's own sentence, which names its exit code
                         // when it carries no message, never an empty refusal.
                         let message = error.to_string();
-                        let failure = error
-                            .failure
-                            .unwrap_or(crate::primitives::failure::FailureCode::Unknown);
+                        // An error no failure code classifies is the declared
+                        // unknown failure.
+                        let failure = match error.failure {
+                            Some(failure) => failure,
+                            None => crate::primitives::failure::FailureCode::Unknown,
+                        };
                         let code = if error.code == crate::cli::CLICK_ERROR_CODE {
                             failure.exit_code(error.code)
                         } else {
@@ -83,7 +85,10 @@ impl Dashboard {
                 )
             }
         }
-        let values = parse_qs(query);
+        let values = match parse_qs(query) {
+            Ok(values) => values,
+            Err(response) => return response,
+        };
         let host = match values.as_slice() {
             [(key, value)] if key == "host" => value.clone(),
             _ => {
@@ -99,24 +104,31 @@ impl Dashboard {
                 &json!({"error": "host must be a lowercase DNS label"}),
             );
         }
-        let content_type = request
-            .header("content-type")
-            .unwrap_or("")
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim();
-        let content_length = request
-            .header("content-length")
-            .and_then(|value| value.parse::<usize>().ok());
-        if content_type != "application/json"
-            || content_length != Some(request.body.len())
-            || request.body.is_empty()
-        {
-            return send_json(
+        // A beacon is one JSON document framed by its Content-Length (the
+        // reader frames the body by it; a request without one has none).
+        let framing = |reason: String| {
+            send_json(
                 http_status(reqwest::StatusCode::BAD_REQUEST),
-                &json!({"error": "invalid JSON request framing"}),
-            );
+                &json!({"error": format!("invalid JSON request framing: {reason}")}),
+            )
+        };
+        let media_type = match request.header("content-type") {
+            Some(declared) => match declared.split_once(';') {
+                Some((media_type, _)) => media_type.trim(),
+                None => declared.trim(),
+            },
+            None => return framing("the request declares no Content-Type".to_string()),
+        };
+        if media_type != "application/json" {
+            return framing(format!(
+                "its Content-Type is {media_type:?}, not application/json"
+            ));
+        }
+        if request.header("content-length").is_none() || request.body.is_empty() {
+            return framing(format!(
+                "the beacon document must be a non-empty body framed by Content-Length; it carries {} bytes",
+                request.body.len()
+            ));
         }
         let payload: Value = match serde_json::from_slice(&request.body) {
             Ok(value) => value,
@@ -161,14 +173,14 @@ impl Dashboard {
 /// The handler resolves this name through [`crate::deploy::host_inventory::inventory_host`];
 /// it never becomes an SSH address supplied directly by the client.
 pub(crate) fn host_inventory_target(query: &str) -> Result<String, Response> {
-    let values = parse_qs(query);
-    if values.len() != 1 || values[0].0 != "target" || values[0].1.is_empty() {
-        return Err(send_json(
+    let values = parse_qs(query)?;
+    match values.as_slice() {
+        [(key, target)] if key == "target" && !target.is_empty() => Ok(target.clone()),
+        _ => Err(send_json(
             http_status(reqwest::StatusCode::BAD_REQUEST),
             &json!({"error": "exactly one non-empty target is required"}),
-        ));
+        )),
     }
-    Ok(values[0].1.clone())
 }
 
 fn storage_reconciliation_query(
@@ -196,11 +208,14 @@ fn storage_reconciliation_query(
         if encoded_key.is_empty() || encoded_value.is_empty() || encoded_value.contains('=') {
             return Err(invalid());
         }
-        let Some(key) = strict_url_decode(encoded_key) else {
-            return Err(invalid());
-        };
-        let Some(value) = strict_url_decode(encoded_value) else {
-            return Err(invalid());
+        let (key, value) = match (url_decode(encoded_key), url_decode(encoded_value)) {
+            (Ok(key), Ok(value)) => (key, value),
+            (Err(reason), _) | (_, Err(reason)) => {
+                return Err(send_json(
+                    http_status(reqwest::StatusCode::BAD_REQUEST),
+                    &json!({"error": format!("the query field {pair:?} cannot be read: {reason}")}),
+                ))
+            }
         };
         if value.is_empty() || value.trim() != value {
             return Err(invalid());

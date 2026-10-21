@@ -12,10 +12,7 @@ use crate::dashboard::DashboardError;
 
 impl Dashboard {
     pub(crate) async fn get_routes(&self, request: &Request) -> Result<Response, DashboardError> {
-        let (path, query) = match request.path.split_once('?') {
-            Some((path, query)) => (path, query),
-            None => (request.path.as_str(), ""),
-        };
+        let (path, query) = request.target();
         if path == "/api/host/storage-root-reconcile" {
             return Ok(self.storage_root_reconcile(request, query, false).await);
         }
@@ -49,7 +46,8 @@ impl Dashboard {
             //   200: the object bytes, Content-Type from object metadata
             //        (default application/octet-stream), Accept-Ranges: bytes
             //   206/416: byte-range answers from get_object
-            //   400: {"error": ...} — query is not exactly one valid uri
+            //   400: {"error": ...} — query is not exactly one valid uri, or
+            //        holds a field that cannot be decoded (named with why)
             //   403: {"error": ...} — a namespace that is not `releases`
             //   404: {"state": "absent", "uri": ...} — the object is missing
             let object = match public_release_object_from_query(query) {
@@ -148,6 +146,9 @@ impl Dashboard {
             );
         }
 
-        Ok(empty_response(404, "Not Found"))
+        Ok(empty_response(
+            http_status(reqwest::StatusCode::NOT_FOUND),
+            "Not Found",
+        ))
     }
 }

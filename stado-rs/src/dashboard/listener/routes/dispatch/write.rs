@@ -21,10 +21,7 @@ impl Dashboard {
                 &json!({"error": "forbidden"}),
             );
         }
-        let (path, query) = request
-            .path
-            .split_once('?')
-            .unwrap_or((request.path.as_str(), ""));
+        let (path, query) = request.target();
         if path == "/api/host-health" {
             return self.put_host_health(request, query).await;
         }
@@ -48,7 +45,11 @@ impl Dashboard {
         {
             // A release object is only ever created, never replaced; the
             // client resolves its credential from the same routing function.
-            let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
+            let values = match parse_qs(query) {
+                Ok(values) => values,
+                Err(response) => return response,
+            };
+            let immutable = query_value(&values, "if_absent").as_deref() == Some("true");
             if object.is_release_archive() && !immutable {
                 Ok(Some("release_write_must_be_create_only"))
             } else {
@@ -97,10 +98,7 @@ impl Dashboard {
                 &json!({"error": "forbidden"}),
             );
         }
-        let (path, query) = request
-            .path
-            .split_once('?')
-            .unwrap_or((request.path.as_str(), ""));
+        let (path, query) = request.target();
         if path != "/api/object" {
             return empty_response(http_status(reqwest::StatusCode::NOT_FOUND), "Not Found");
         }

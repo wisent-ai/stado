@@ -58,14 +58,15 @@ impl Response {
         }
     }
 
+    /// A JSON answer whose status line carries its status's own reason
+    /// phrase (RFC 9110 §15), so no refusal reads as `OK`; a status without
+    /// one carries an empty phrase, which RFC 9112 §4 allows.
     fn json(status: u16, body: &str) -> Self {
-        let reason = match status {
-            200 => "OK",
-            401 => "Unauthorized",
-            409 => "Conflict",
-            500 => "Internal Server Error",
-            503 => "Service Unavailable",
-            _ => "OK",
+        let code = reqwest::StatusCode::from_u16(status)
+            .expect("every status this listener sends is a StatusCode's (`http_status`)");
+        let reason = match code.canonical_reason() {
+            Some(reason) => reason,
+            None => "",
         };
         Self::new(status, reason, "application/json", body.as_bytes())
     }
@@ -77,14 +78,19 @@ pub(crate) fn parse_byte_range(value: &str, length: usize) -> Option<(usize, usi
         return None;
     }
     let (start, end) = value.split_once('-')?;
-    let start = start.parse::<usize>().ok()?;
+    let Ok(start) = start.parse::<usize>() else {
+        return None;
+    };
     // The last byte that exists at or after `start`; none when the object is
     // empty or the range starts past it.
     let last = (start..length).last()?;
     let end = if end.is_empty() {
         last
     } else {
-        end.parse::<usize>().ok()?.min(last)
+        let Ok(end) = end.parse::<usize>() else {
+            return None;
+        };
+        end.min(last)
     };
     (start <= end).then_some((start, end))
 }

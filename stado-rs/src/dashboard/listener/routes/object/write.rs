@@ -26,11 +26,7 @@ impl Dashboard {
                 &json!({"error": "forbidden"}),
             ));
         }
-        // A request target without a query has an empty one (RFC 3986 §3.4).
-        let (path, query) = match request.path.split_once('?') {
-            Some(split) => split,
-            None => (request.path.as_str(), ""),
-        };
+        let (path, query) = request.target();
         if path != "/api/object" {
             return Some(empty_response(
                 http_status(reqwest::StatusCode::NOT_FOUND),
@@ -71,7 +67,11 @@ impl Dashboard {
         {
             // A release object is only ever created, never replaced; the
             // client resolves its credential from the same routing function.
-            let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
+            let values = match parse_qs(query) {
+                Ok(values) => values,
+                Err(response) => return Some(response),
+            };
+            let immutable = query_value(&values, "if_absent").as_deref() == Some("true");
             if object.is_release_archive() && !immutable {
                 Ok(Some("release_write_must_be_create_only"))
             } else {
@@ -112,7 +112,10 @@ impl Dashboard {
         object: &crate::remote::object_store::ObjectRef,
         query: &str,
     ) -> Result<Response, DashboardError> {
-        let values = parse_qs(query);
+        let values = match parse_qs(query) {
+            Ok(values) => values,
+            Err(response) => return Ok(response),
+        };
         let if_absent = query_value(&values, "if_absent").as_deref() == Some("true");
         let if_version = query_value(&values, "if_version").filter(|value| !value.is_empty());
         let metadata_only = query_value(&values, "metadata_only").as_deref() == Some("true");
@@ -265,5 +268,6 @@ impl Dashboard {
     }
 }
 
-/// The media type a body sent without one is read as (RFC 9110 §8.3).
-const OCTET_STREAM: &str = "application/octet-stream";
+/// The media type a body sent or stored without one is read as (RFC 9110 §8.3,
+/// <https://www.rfc-editor.org/rfc/rfc9110#section-8.3>).
+pub(super) const OCTET_STREAM: &str = "application/octet-stream";

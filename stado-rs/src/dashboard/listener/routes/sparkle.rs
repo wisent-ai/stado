@@ -102,7 +102,10 @@ fn member(archive: &[u8], name: &str) -> Result<Option<Vec<u8>>, std::io::Error>
 
 impl Dashboard {
     pub(crate) async fn get_appcast(&self, query: &str) -> Result<Response, DashboardError> {
-        let values = parse_qs(query);
+        let values = match parse_qs(query) {
+            Ok(values) => values,
+            Err(response) => return Ok(response),
+        };
         let Some(product) = single(&values, "product") else {
             return Ok(refused(
                 reqwest::StatusCode::BAD_REQUEST,
@@ -117,7 +120,10 @@ impl Dashboard {
         &self,
         query: &str,
     ) -> Result<Response, DashboardError> {
-        let values = parse_qs(query);
+        let values = match parse_qs(query) {
+            Ok(values) => values,
+            Err(response) => return Ok(response),
+        };
         let (Some(product), Some(version), Some(file)) = (
             single(&values, "product"),
             single(&values, "version"),
@@ -176,12 +182,15 @@ impl Dashboard {
         };
         let digest = crate::release_control::sha256_bytes(&archive);
         if recorded.as_deref() != Some(digest.as_str()) {
+            let recorded = match recorded.as_deref() {
+                Some(recorded) => format!("recorded {recorded}"),
+                None => "recorded no digest".to_string(),
+            };
             return Ok(refused(
                 reqwest::StatusCode::SERVICE_UNAVAILABLE,
                 format!(
-                    "{uri} has SHA-256 {digest}, but release run {} recorded {}",
-                    run.run_id,
-                    recorded.as_deref().unwrap_or("no digest")
+                    "{uri} has SHA-256 {digest}, but release run {} {recorded}",
+                    run.run_id
                 ),
             ));
         }

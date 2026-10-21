@@ -66,10 +66,7 @@ pub(crate) const ENROLLMENT_REFUSAL: &[u8] = b"not found\n";
 /// Whether `method`+`path` is one of the enrollment pairs. The query string
 /// is not part of the decision; the routes parse their own.
 pub(crate) fn enrollment_route_allowed(method: &str, path: &str) -> bool {
-    let path = match path.split_once('?') {
-        Some((path, _)) => path,
-        None => path,
-    };
+    let (path, _) = http::split_target(path);
     ENROLLMENT_ROUTES
         .iter()
         .any(|(allowed_method, allowed_path)| *allowed_method == method && *allowed_path == path)

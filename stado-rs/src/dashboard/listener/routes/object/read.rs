@@ -13,6 +13,7 @@ use crate::dashboard::listener::{
 };
 use crate::dashboard::DashboardError;
 
+use super::write::OCTET_STREAM;
 use super::{object_from_query, object_list_from_query};
 
 impl Dashboard {
@@ -26,12 +27,12 @@ impl Dashboard {
             Err(response) => return Ok(response),
         };
         let path = object.storage_path();
-        let versioned = query_value(&parse_qs(query), "versioned").as_deref() == Some("true");
-        let public_release_route = request
-            .path
-            .split_once('?')
-            .map_or(request.path.as_str(), |(path, _)| path)
-            == "/api/release/object";
+        let values = match parse_qs(query) {
+            Ok(values) => values,
+            Err(response) => return Ok(response),
+        };
+        let versioned = query_value(&values, "versioned").as_deref() == Some("true");
+        let public_release_route = request.target().0 == "/api/release/object";
         let (bytes, version) = if versioned {
             let Some(value) = self.store.read_text_versioned(&path).await? else {
                 return Ok(send_json(
@@ -62,19 +63,20 @@ impl Dashboard {
             };
             (bytes, None)
         };
-        let metadata = self
+        let listed = self
             .store
             .backend()
             .list_blobs_with_meta(&path)
             .await?
             .into_iter()
-            .find(|blob| blob.name == path)
-            .map(|blob| blob.metadata)
-            .unwrap_or_default();
-        let content_type = metadata
-            .get("content-type")
-            .map(String::as_str)
-            .unwrap_or("application/octet-stream");
+            .find(|blob| blob.name == path);
+        let content_type = match listed
+            .as_ref()
+            .and_then(|blob| blob.metadata.get("content-type"))
+        {
+            Some(stored) => stored.as_str(),
+            None => OCTET_STREAM,
+        };
         if let Some(value) = request.header("range") {
             let Some((start, end)) = parse_byte_range(value, bytes.len()) else {
                 return Ok(Response::new_with_headers(

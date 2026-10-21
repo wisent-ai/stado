@@ -25,7 +25,7 @@ pub(crate) struct Request {
     pub(crate) version: String,
     /// Lowercased names with trimmed values.
     pub(crate) headers: Vec<(String, String)>,
-    pub(crate) content_length: usize,
+    /// Exactly the Content-Length the head declared; none declared is none.
     pub(crate) body: Vec<u8>,
     pub(crate) head_limit: usize,
     pub(crate) console_limits: operator_console::Limits,
@@ -33,6 +33,13 @@ pub(crate) struct Request {
 }
 
 impl Request {
+    /// The request target's route and query: everything before the first `?`
+    /// and everything after it; a target without one has an empty query
+    /// (RFC 3986 §3.4).
+    pub(crate) fn target(&self) -> (&str, &str) {
+        split_target(&self.path)
+    }
+
     pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
@@ -53,6 +60,14 @@ impl Request {
             return false;
         }
         http_1_1 || tokens.any(|token| token == "keep-alive")
+    }
+}
+
+/// `target` split into its route and its query (see [`Request::target`]).
+pub(crate) fn split_target(target: &str) -> (&str, &str) {
+    match target.split_once('?') {
+        Some(split) => split,
+        None => (target, ""),
     }
 }
 
@@ -178,11 +193,7 @@ pub(crate) async fn read_request(
         .iter()
         .find(|(name, _)| name == "content-length")
         .map(|(_, value)| value.as_str());
-    // The target without its query string; a target with none is its route.
-    let route = match path.split_once('?') {
-        Some((route, _)) => route,
-        None => path.as_str(),
-    };
+    let (route, _) = split_target(&path);
     let object_put = method == "PUT" && path.starts_with("/api/object?");
     // A compose names every part of one multipart upload, so its body grows
     // with the object: a large source archive's part list measured 227192
@@ -248,7 +259,6 @@ pub(crate) async fn read_request(
         path,
         version,
         headers,
-        content_length,
         body,
         head_limit: limits.head_bytes.get(),
         console_limits: limits.operator_console,

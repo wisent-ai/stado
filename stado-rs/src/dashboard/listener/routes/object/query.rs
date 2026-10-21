@@ -12,14 +12,16 @@ use crate::dashboard::listener::{http_status, parse_qs, query_value, send_json, 
 pub(crate) fn object_from_query(
     query: &str,
 ) -> Result<crate::remote::object_store::ObjectRef, Response> {
-    let values = parse_qs(query);
-    let uri = query_value(&values, "uri").unwrap_or_default();
-    if uri.is_empty() {
-        return Err(send_json(
-            http_status(reqwest::StatusCode::BAD_REQUEST),
-            &json!({"error": "uri is required"}),
-        ));
-    }
+    let values = parse_qs(query)?;
+    let uri = match query_value(&values, "uri") {
+        Some(uri) if !uri.is_empty() => uri,
+        _ => {
+            return Err(send_json(
+                http_status(reqwest::StatusCode::BAD_REQUEST),
+                &json!({"error": "uri is required"}),
+            ))
+        }
+    };
     crate::remote::object_store::ObjectRef::parse(&uri).map_err(|error| {
         send_json(
             http_status(reqwest::StatusCode::BAD_REQUEST),
@@ -31,14 +33,16 @@ pub(crate) fn object_from_query(
 pub(crate) fn public_release_object_from_query(
     query: &str,
 ) -> Result<crate::remote::object_store::ObjectRef, Response> {
-    let values = parse_qs(query);
-    if values.len() != 1 || values[0].0 != "uri" {
-        return Err(send_json(
-            http_status(reqwest::StatusCode::BAD_REQUEST),
-            &json!({"error": "public release reads accept exactly one uri query field"}),
-        ));
-    }
-    let uri = &values[0].1;
+    let values = parse_qs(query)?;
+    let uri = match values.as_slice() {
+        [(key, uri)] if key == "uri" => uri,
+        _ => {
+            return Err(send_json(
+                http_status(reqwest::StatusCode::BAD_REQUEST),
+                &json!({"error": "public release reads accept exactly one uri query field"}),
+            ))
+        }
+    };
     if uri.is_empty() {
         return Err(send_json(
             http_status(reqwest::StatusCode::BAD_REQUEST),
@@ -54,14 +58,16 @@ pub(crate) fn public_release_object_from_query(
 }
 
 pub(crate) fn object_list_from_query(query: &str) -> Result<(String, String), Response> {
-    let values = parse_qs(query);
-    let raw_namespace = query_value(&values, "namespace").unwrap_or_default();
-    if raw_namespace.is_empty() {
-        return Err(send_json(
-            http_status(reqwest::StatusCode::BAD_REQUEST),
-            &json!({"error": "namespace is required"}),
-        ));
-    }
+    let values = parse_qs(query)?;
+    let raw_namespace = match query_value(&values, "namespace") {
+        Some(namespace) if !namespace.is_empty() => namespace,
+        _ => {
+            return Err(send_json(
+                http_status(reqwest::StatusCode::BAD_REQUEST),
+                &json!({"error": "namespace is required"}),
+            ))
+        }
+    };
     let sentinel = crate::remote::object_store::ObjectRef::new(&raw_namespace, "sentinel")
         .map_err(|error| {
             send_json(
@@ -72,11 +78,12 @@ pub(crate) fn object_list_from_query(query: &str) -> Result<(String, String), Re
     let namespace = sentinel.namespace().to_string();
     // Leading slashes are noise; a trailing one is the request. See
     // `ObjectRef::namespace_prefix`: trimming it turned `prefix=queue/` into a
-    // scan of every `queue*` sibling.
-    let prefix = query_value(&values, "prefix")
-        .unwrap_or_default()
-        .trim_start_matches('/')
-        .to_string();
+    // scan of every `queue*` sibling. A listing without a prefix lists the
+    // whole namespace.
+    let prefix = match query_value(&values, "prefix") {
+        Some(prefix) => prefix.trim_start_matches('/').to_string(),
+        None => String::new(),
+    };
     crate::remote::object_store::ObjectRef::namespace_prefix(&namespace, &prefix).map_err(
         |error| {
             send_json(

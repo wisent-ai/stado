@@ -16,7 +16,7 @@ use crate::dashboard::{fleet_join, registry_policy};
 
 impl Dashboard {
     pub(crate) async fn do_get(&self, request: &Request) -> Response {
-        let path_no_query = request.path.split('?').next().unwrap_or("");
+        let (path_no_query, query) = request.target();
         // The immutable release channel is the recovery root for every other
         // boundary, so its exact read-only routes must not consult host trust or
         // Skarbiec-backed authorization. Namespace validation remains in
@@ -96,8 +96,11 @@ impl Dashboard {
                 .local_storage_path()
                 .filter(|_| self.store.backend_name() == "local")
                 .map(|root| {
-                    crate::queue::LocalBackend::write_fence_state(std::path::Path::new(root))
-                        .unwrap_or_else(|error| json!({"error": error.to_string()}))
+                    match crate::queue::LocalBackend::write_fence_state(std::path::Path::new(root))
+                    {
+                        Ok(state) => state,
+                        Err(error) => json!({"error": error.to_string()}),
+                    }
                 });
             return send_json(
                 http_status(reqwest::StatusCode::OK),
@@ -135,11 +138,6 @@ impl Dashboard {
             || path_no_query == "/api/object/list"
             || path_no_query == "/api/object/stat";
         if object_route {
-            let query = request
-                .path
-                .split_once('?')
-                .map(|(_, query)| query)
-                .unwrap_or("");
             let scope = if path_no_query == "/api/object/list" {
                 object_list_from_query(query).map(|(namespace, prefix)| (namespace, prefix, true))
             } else {
@@ -240,11 +238,6 @@ impl Dashboard {
                 }
             }
             if path_no_query == "/api/service/status" {
-                let query = request
-                    .path
-                    .split_once('?')
-                    .map(|(_, query)| query)
-                    .unwrap_or("");
                 let service = match service_name(query) {
                     Ok(service) => service,
                     Err(response) => return response,

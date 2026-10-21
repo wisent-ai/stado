@@ -20,8 +20,8 @@ use super::{
 };
 
 pub(crate) use host_guard::{trusted_request_host, valid_beacon_host};
-pub(crate) use query::{parse_qs, query_value, strict_url_decode};
-pub(crate) use request::{read_request, Refusal, Request, RequestLimits};
+pub(crate) use query::{parse_qs, query_value, url_decode};
+pub(crate) use request::{read_request, split_target, Refusal, Request, RequestLimits};
 pub(crate) use response::{
     dashboard_error_response, empty_response, http_status, parse_byte_range, send_json,
     storage_error_response, Response,

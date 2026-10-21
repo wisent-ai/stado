@@ -14,10 +14,7 @@ use crate::dashboard::{fleet_join, operator_console, registry_policy};
 
 impl Dashboard {
     pub(crate) async fn do_post(&self, request: &Request) -> Response {
-        let (path, query) = request
-            .path
-            .split_once('?')
-            .unwrap_or((request.path.as_str(), ""));
+        let (path, query) = request.target();
         let control_route = path == "/api/machine/submit"
             || path == "/api/machine/cancel"
             || path == "/api/service/restart"

@@ -15,7 +15,7 @@ use super::{empty_response, http_status, send_json, Boundary, Dashboard, Request
 
 impl Dashboard {
     pub(crate) async fn route(&self, request: &Request) -> Response {
-        let path = request.path.split('?').next().unwrap_or("");
+        let (path, _) = request.target();
         if path.starts_with("/api/integration/") {
             if !self
                 .trusted_request_host(request.header("host"), request.header("x-forwarded-proto"))
@@ -28,14 +28,18 @@ impl Dashboard {
             let available = self.boundaries_available(&[Boundary::Integration]).await;
             return integration::handle(request, available, &self.store).await;
         }
+        // The reader refuses a request line without a method, so every
+        // method reaching here is a token; one no route serves is 501
+        // (RFC 9110 §15.6.2).
         match request.method.as_str() {
-            "" => empty_response(400, "Bad Request"),
             "GET" => self.do_get(request).await,
             "POST" => self.do_post(request).await,
             "PUT" => self.do_put(request).await,
             "DELETE" => self.do_delete(request).await,
-            // Python BaseHTTPRequestHandler: 501 Unsupported method.
-            _ => empty_response(501, "Not Implemented"),
+            _ => empty_response(
+                http_status(reqwest::StatusCode::NOT_IMPLEMENTED),
+                "Not Implemented",
+            ),
         }
     }
 }

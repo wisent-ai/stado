@@ -7,7 +7,7 @@ use crate::deploy::{host_channel, production_runner, service};
 use crate::queue::JobStorage;
 use crate::targets;
 
-use crate::dashboard::listener::http::strict_url_decode;
+use crate::dashboard::listener::http::url_decode;
 use crate::dashboard::listener::{http_status, send_json, Dashboard, Request, Response};
 
 impl Dashboard {
@@ -17,10 +17,9 @@ impl Dashboard {
         query: &str,
         apply: bool,
     ) -> Response {
-        if request.header("transfer-encoding").is_some()
-            || request.content_length != 0
-            || !request.body.is_empty()
-        {
+        // The reader reads exactly the Content-Length it was given, so a
+        // declared body is a non-empty one.
+        if request.header("transfer-encoding").is_some() || !request.body.is_empty() {
             return invalid_service_request("service converge does not accept a request body");
         }
         let (target, binary) = match service_converge_query(query) {
@@ -43,7 +42,7 @@ impl Dashboard {
     }
 
     pub(crate) async fn get_service_status(&self, request: &Request, query: &str) -> Response {
-        if request.content_length != 0 || !request.body.is_empty() {
+        if !request.body.is_empty() {
             return invalid_service_request("service status does not accept a request body");
         }
         let name = match service_name(query) {
@@ -86,10 +85,7 @@ impl Dashboard {
     }
 
     pub(crate) async fn post_service_restart(&self, request: &Request, query: &str) -> Response {
-        if request.header("transfer-encoding").is_some()
-            || request.content_length != 0
-            || !request.body.is_empty()
-        {
+        if request.header("transfer-encoding").is_some() || !request.body.is_empty() {
             return invalid_service_request("service restart does not accept a request body");
         }
         let name = match service_name(query) {
@@ -255,11 +251,13 @@ fn service_converge_query(query: &str) -> Result<(String, Option<String>), Respo
         if encoded_key.is_empty() || encoded_value.is_empty() || encoded_value.contains('=') {
             return Err(invalid());
         }
-        let Some(key) = strict_url_decode(encoded_key) else {
-            return Err(invalid());
-        };
-        let Some(value) = strict_url_decode(encoded_value) else {
-            return Err(invalid());
+        let (key, value) = match (url_decode(encoded_key), url_decode(encoded_value)) {
+            (Ok(key), Ok(value)) => (key, value),
+            (Err(reason), _) | (_, Err(reason)) => {
+                return Err(invalid_service_request(format!(
+                    "the query field {pair:?} cannot be read: {reason}"
+                )))
+            }
         };
         if value.is_empty() || value.trim() != value {
             return Err(invalid());
