@@ -128,6 +128,8 @@ fn execute(
             "--multiroot-data-file".to_owned(),
             workspace.to_string_lossy().into_owned(),
             "--disable-keychain".to_owned(),
+            // Sources were resolved offline; no update here, and the program keeps its transports.
+            "--skip-update".to_owned(),
         ];
         if operation == "index" {
             argv.extend(index::compiler_arguments(&root.path));
@@ -146,7 +148,6 @@ fn execute(
                 // test` holds on that scratch.
                 .env_remove(workspace::SCRATCH_ENV)
                 .env("TMPDIR", &temporary)
-                .env("GIT_ALLOW_PROTOCOL", "")
                 .env(
                     "WISENT_SOURCE_COMMIT",
                     root.revision.trim_end_matches("-dirty"),
