@@ -97,23 +97,36 @@ pub fn fresh_record(parent: &Path, name: &str) -> Result<Run> {
 }
 
 /// Remove every record under `parent` whose command succeeded, and every
-/// failed command's record but the newest of that same command.
+/// failed command's record but the newest of that same command. A prune that
+/// removed records says on stderr how many it removed and how many it kept.
 fn prune_records(parent: &Path) -> Result<()> {
+    let earlier = earlier(parent)?;
     let mut newest = BTreeSet::new();
-    for run in earlier(parent)? {
-        if in_use(&run) {
+    let mut removed = Vec::new();
+    for run in &earlier {
+        if in_use(run) {
             continue;
         }
-        if succeeded(&run) {
-            remove_superseded(&run, "record")?;
+        if succeeded(run) {
+            remove_superseded(run, "record")?;
+            removed.push(run);
             continue;
         }
-        let Some(command) = command_of(&run) else {
+        let Some(command) = command_of(run) else {
             continue;
         };
         if !newest.insert(command) {
-            remove_superseded(&run, "record")?;
+            remove_superseded(run, "record")?;
+            removed.push(run);
         }
+    }
+    if !removed.is_empty() {
+        eprintln!(
+            "stado: removed {} superseded command records under {}; {} kept",
+            removed.len(),
+            parent.display(),
+            earlier.len() - removed.len()
+        );
     }
     Ok(())
 }
