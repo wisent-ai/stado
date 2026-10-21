@@ -29,15 +29,15 @@ const found = spawnSync(
     encoding: 'utf8',
   },
 );
-// git grep answers 1 when nothing matched and above 1 when it failed
-// (https://git-scm.com/docs/git-grep#_exit_status).
-const matched = spawnSync('true').status;
-const nothing = spawnSync('false').status;
+// git grep exits zero when it matched and nonzero both when nothing matched
+// and when it failed (https://git-scm.com/docs/git-grep#_exit_status); only a
+// failure says why on standard error, so that complaint, a launch error or a
+// signal is the failure and a quiet nonzero exit is the missing construct.
 assert.ok(
-  found.status === matched || found.status === nothing,
-  `git grep ${pattern} at ${revision} failed (${found.status}): ${found.stderr}`,
+  !found.error && found.signal === null && !found.stderr,
+  `git grep ${pattern} at ${revision} failed (status ${found.status}, signal ${found.signal}${found.error ? `, ${found.error.message}` : ''}): ${found.stderr}`,
 );
-if (found.status === nothing)
+if (found.status)
   process.stdout.write(
     `missing at ${revision}: ${pattern} in ${paths.join(' ')}\n`,
   );
