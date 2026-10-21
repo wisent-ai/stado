@@ -22,10 +22,10 @@ impl JobStorage {
     /// creates the durable `cancelled/` projection and retires `queue/`; the
     /// request marker and independent `runs/` provenance remain untouched.
     pub async fn settle_queued_cancellations(&self) -> Result<usize, StorageError> {
-        let mut settled = 0;
-        for job_id in self.list_job_ids("queue").await? {
+        let mut settled = Vec::new();
+        for job_id in self.list_job_ids(crate::queue::runs::QUEUE).await? {
             self.recover_job_transition(&job_id).await?;
-            let queue_path = format!("queue/{job_id}.json");
+            let queue_path = format!("{}/{job_id}.json", crate::queue::runs::QUEUE);
             let Some(versioned) = self.read_text_versioned(&queue_path).await? else {
                 continue;
             };
@@ -56,13 +56,18 @@ impl JobStorage {
             job.completed_at = Some(requested_at.to_string());
             job.error = Some("cancelled".to_string());
             if self
-                .transition_job_if_version(&job, "queue", "cancelled", Some(&versioned.version))
+                .transition_job_if_version(
+                    &job,
+                    crate::queue::runs::QUEUE,
+                    crate::queue::runs::CANCELLED,
+                    Some(&versioned.version),
+                )
                 .await?
             {
-                settled += 1;
+                settled.push(job_id);
             }
         }
-        Ok(settled)
+        Ok(settled.len())
     }
 
     /// Claim through a durable transition record. The running job is derived
@@ -102,7 +107,12 @@ impl JobStorage {
         let mut claimed = job.clone();
         claimed.lease_expires_at = Some((Utc::now() + promise).to_rfc3339());
         let moved = self
-            .transition_job_if_version(&claimed, "queue", "running", Some(&versioned.version))
+            .transition_job_if_version(
+                &claimed,
+                crate::queue::runs::QUEUE,
+                crate::queue::runs::RUNNING,
+                Some(&versioned.version),
+            )
             .await?;
         if !moved {
             return Ok(false);

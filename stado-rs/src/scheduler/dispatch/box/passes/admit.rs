@@ -186,6 +186,8 @@ async fn provision_and_move(
     if job.started_at.as_deref().is_none_or(str::is_empty) {
         job.started_at = Some(now_iso());
     }
-    store.move_job(job, "queue", "running").await?;
+    store
+        .move_job(job, crate::queue::runs::QUEUE, crate::queue::runs::RUNNING)
+        .await?;
     Ok(true)
 }

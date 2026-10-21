@@ -84,7 +84,7 @@ pub(super) async fn sweep_retained_run(
         for prefix in TERMINAL_PREFIXES
             .iter()
             .copied()
-            .chain(["queue", "running"])
+            .chain(crate::queue::control::WATCHED_PREFIXES.iter().copied())
         {
             let blob = format!("{prefix}/{job_id}.json");
             if store.backend().exists(&blob).await? {
