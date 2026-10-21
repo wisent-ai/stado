@@ -11,7 +11,13 @@
 //!   the measure of what the next one needs; every older build is superseded
 //!   by it;
 //! - a command record is superseded once its command succeeded; a failed
-//!   command's record is what its error names, so it stays for the reader.
+//!   command's record is what its error names, so it stays for the reader
+//!   until a newer record of the same command (program, arguments,
+//!   directory) supersedes it.
+//!
+//! Command records are pruned once per process, by its first recorded
+//! command: a process that runs many commands reads the earlier records once,
+//! not once for each command it runs.
 //!
 //! An installation's parents live in the checkout's build area under Stado's
 //! home ([`checkout_area`]), never in the checkout: the checkouts sit in
@@ -26,8 +32,10 @@ use probes::{bytes, create, earlier, in_use, measured, succeeded};
 
 use anyhow::{bail, Context, Result};
 use std::{
+    collections::BTreeSet,
     fs::{self, File},
     path::{Component, Path, PathBuf},
+    sync::{LazyLock, Mutex},
 };
 
 /// The directory under `~/.stado/products/builds` holding the build areas of
@@ -47,9 +55,10 @@ pub fn checkout_area(home: &Path, checkout: &Path) -> Result<PathBuf> {
         );
     }
     let builds = home.join(".stado/products/builds");
-    let (area, path) = match checkout.strip_prefix(home) {
-        Ok(below) => (builds, below),
-        Err(_) => (builds.join(OUTSIDE_HOME), checkout),
+    let (area, path) = if checkout.starts_with(home) {
+        (builds, checkout.strip_prefix(home)?)
+    } else {
+        (builds.join(OUTSIDE_HOME), checkout)
     };
     Ok(area.join(
         path.components()
@@ -69,15 +78,74 @@ pub struct Run {
     _in_use: File,
 }
 
-/// A command record: create `<parent>/<name>` after removing every earlier
-/// record whose command succeeded. A record still held is skipped.
+/// The record parents this process has pruned.
+static PRUNED: LazyLock<Mutex<BTreeSet<PathBuf>>> = LazyLock::new(Mutex::default);
+
+/// A command record: create `<parent>/<name>`, after removing, the first time
+/// this process writes under `parent`, every earlier record a later one
+/// supersedes. A record still held is skipped.
 pub fn fresh_record(parent: &Path, name: &str) -> Result<Run> {
+    let mut pruned = PRUNED
+        .lock()
+        .map_err(|poisoned| anyhow::anyhow!("the pruned record parents: {poisoned}"))?;
+    if !pruned.contains(parent) {
+        prune_records(parent)?;
+        pruned.insert(parent.to_path_buf());
+    }
+    drop(pruned);
+    create(parent, name)
+}
+
+/// Remove every record under `parent` whose command succeeded, and every
+/// failed command's record but the newest of that same command.
+fn prune_records(parent: &Path) -> Result<()> {
+    let mut newest = BTreeSet::new();
     for run in earlier(parent)? {
-        if !in_use(&run) && succeeded(&run) {
+        if in_use(&run) {
+            continue;
+        }
+        if succeeded(&run) {
+            remove_superseded(&run, "record")?;
+            continue;
+        }
+        let Some(command) = command_of(&run) else {
+            continue;
+        };
+        if !newest.insert(command) {
             remove_superseded(&run, "record")?;
         }
     }
-    create(parent, name)
+    Ok(())
+}
+
+/// The command a record ran — its program, arguments and directory as the
+/// record states them. A record that cannot be read names no command and is
+/// kept, said on stderr: it is not evidence of which command it was.
+fn command_of(run: &Path) -> Option<String> {
+    let record = run.join(COMMAND_RECORD);
+    let bytes = match fs::read(&record) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            eprintln!(
+                "cannot read {}: {error}; keeping the record",
+                record.display()
+            );
+            return None;
+        }
+    };
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(stated) => {
+            Some(serde_json::json!([stated["program"], stated["args"], stated["cwd"]]).to_string())
+        }
+        Err(error) => {
+            eprintln!(
+                "cannot parse {}: {error}; keeping the record",
+                record.display()
+            );
+            None
+        }
+    }
 }
 
 /// Remove a superseded run. A run another process removed first, wholly or
