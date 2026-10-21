@@ -52,7 +52,11 @@ pub(crate) struct StateLock {
 
 impl Drop for StateLock {
     fn drop(&mut self) {
-        let _ = self.file.unlock();
+        // Closing the file releases the lock too; a refused unlock is said
+        // so the lock's end is not silent.
+        if let Err(error) = self.file.unlock() {
+            eprintln!("release agent: a state lock's unlock was refused, and the lock ends when its file closes: {error}");
+        }
     }
 }
 

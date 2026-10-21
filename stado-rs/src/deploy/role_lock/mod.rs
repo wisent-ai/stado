@@ -151,7 +151,14 @@ pub fn holder(home: &Path, role: &str) -> Result<Option<Holder>, CmdError> {
     };
     match file.try_lock_shared() {
         Ok(()) => {
-            let _ = file.unlock();
+            // The lock was free; the probe's own shared hold ends when the
+            // file closes at return, and a refused unlock is said.
+            if let Err(error) = file.unlock() {
+                eprintln!(
+                    "the role lock {} was free; the probe's shared hold ends when its file closes: {error}",
+                    path.display()
+                );
+            }
             Ok(None)
         }
         Err(std::fs::TryLockError::WouldBlock) => read_holder(&path).map(Some),
