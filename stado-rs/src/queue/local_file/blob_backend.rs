@@ -126,7 +126,7 @@ impl BlobBackend for LocalBackend {
         prefix: &str,
         listing: Listing,
     ) -> Result<Vec<String>, StorageError> {
-        let mut paths = self.relative_names(prefix)?;
+        let mut paths = self.relative_names(prefix).await?;
         match listing {
             Listing::Oldest(count) => {
                 // Oldest by inode change time, names breaking ties. A name
@@ -167,7 +167,7 @@ impl BlobBackend for LocalBackend {
         start_after: &str,
         limit: Option<NonZeroUsize>,
     ) -> Result<Vec<String>, StorageError> {
-        let mut names = self.relative_names(prefix)?;
+        let mut names = self.relative_names(prefix).await?;
         names.sort_unstable();
         let cut = names.partition_point(|name| name.as_str() <= start_after);
         names.drain(..cut);

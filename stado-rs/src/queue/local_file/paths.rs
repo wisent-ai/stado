@@ -32,12 +32,6 @@ impl LocalBackend {
         }
     }
 
-    /// Whether a filesystem path lives under `.locks/` or `.metadata/`
-    /// (excluded from listings).
-    fn is_internal(&self, path: &Path) -> bool {
-        path.starts_with(&self.locks) || path.starts_with(&self.metadata)
-    }
-
     /// SHA-256 hex version token for CAS.
     pub(super) fn version(data: &[u8]) -> String {
         hex::encode(Sha256::digest(data))
@@ -54,54 +48,77 @@ impl LocalBackend {
     /// holds the whole queue. Any relative path that starts with the prefix
     /// starts, in that directory, with an entry whose name starts with the
     /// last segment, so the result set is unchanged.
-    pub(super) fn relative_names(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
-        let (directory, leaf) = match prefix.rsplit_once('/') {
-            Some(split) => split,
-            None => ("", prefix),
-        };
-        let scan_root = if directory.is_empty() {
-            self.root.clone()
-        } else {
-            self.root.join(directory)
-        };
-        let mut files = Vec::new();
-        if scan_root.is_dir() {
-            for entry in fs::read_dir(&scan_root)? {
-                let entry = entry?;
-                if !entry.file_name().to_string_lossy().starts_with(leaf) {
-                    continue;
-                }
-                let path = entry.path();
-                if path.is_dir() {
-                    walk(&path, &mut files)?;
-                } else if path.is_file() {
-                    files.push(path);
-                }
-            }
-        }
-        let mut names = Vec::new();
-        for item in files {
-            if self.is_internal(&item) {
+    ///
+    /// The walk runs on the runtime's blocking pool: a caller such as the
+    /// object API serves every connection on one thread, and a directory
+    /// walk done on it held every other request until it ended.
+    pub(super) async fn relative_names(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        let root = self.root.clone();
+        let internal = [self.locks.clone(), self.metadata.clone()];
+        let wanted = prefix.to_owned();
+        tokio::task::spawn_blocking(move || names_under(&root, &internal, &wanted))
+            .await
+            .map_err(|error| {
+                StorageError::Other(format!(
+                    "listing the local blobs under {prefix:?} did not finish: {error}"
+                ))
+            })?
+    }
+}
+
+/// The walk [`LocalBackend::relative_names`] describes, over `root`, leaving
+/// out every path under one of `internal` (`.locks/`, `.metadata/`).
+fn names_under(
+    root: &Path,
+    internal: &[PathBuf],
+    prefix: &str,
+) -> Result<Vec<String>, StorageError> {
+    let (directory, leaf) = match prefix.rsplit_once('/') {
+        Some(split) => split,
+        None => ("", prefix),
+    };
+    let scan_root = if directory.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(directory)
+    };
+    let mut files = Vec::new();
+    if scan_root.is_dir() {
+        for entry in fs::read_dir(&scan_root)? {
+            let entry = entry?;
+            if !entry.file_name().to_string_lossy().starts_with(leaf) {
                 continue;
             }
-            let relative = item.strip_prefix(&self.root).map_err(|error| {
-                std::io::Error::other(format!(
-                    "the listed blob {} is not under the storage root {}: {error}",
-                    item.display(),
-                    self.root.display()
-                ))
-            })?;
-            let name = relative
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
-            if name.starts_with(prefix) {
-                names.push(name);
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, &mut files)?;
+            } else if path.is_file() {
+                files.push(path);
             }
         }
-        Ok(names)
     }
+    let mut names = Vec::new();
+    for item in files {
+        if internal.iter().any(|area| item.starts_with(area)) {
+            continue;
+        }
+        let relative = item.strip_prefix(root).map_err(|error| {
+            std::io::Error::other(format!(
+                "the listed blob {} is not under the storage root {}: {error}",
+                item.display(),
+                root.display()
+            ))
+        })?;
+        let name = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        if name.starts_with(prefix) {
+            names.push(name);
+        }
+    }
+    Ok(names)
 }
 
 /// Preserve the operation and exact physical target for local I/O failures.
