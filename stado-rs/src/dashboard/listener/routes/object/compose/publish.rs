@@ -7,6 +7,7 @@ use std::io::Write;
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tempfile::NamedTempFile;
 
 use crate::remote::object_store::ObjectRef;
 
@@ -56,20 +57,31 @@ impl Dashboard {
                     )
                 }
             };
-            let actual_digest = Sha256::digest(&bytes);
-            if bytes.len() != declared.size || actual_digest != *expected_digest {
+            let staging =
+                tokio::task::spawn_blocking(move || stage_chunk(staged, object_digest, bytes));
+            let (returned, running, size, digest, written) = match staging.await {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    return object_compose_error(
+                        http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
+                        format!("staging {chunk_object} did not finish: {error}"),
+                    )
+                }
+            };
+            staged = returned;
+            object_digest = running;
+            if size != declared.size || digest != *expected_digest {
                 return object_compose_error(
                     http_status(reqwest::StatusCode::UNPROCESSABLE_ENTITY),
                     format!("stored chunk does not match {}", chunk_object),
                 );
             }
-            if let Err(error) = staged.write_all(&bytes) {
+            if let Err(error) = written {
                 return object_compose_error(
                     http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                     error.to_string(),
                 );
             }
-            object_digest.update(&bytes);
         }
         if let Err(error) = staged.flush() {
             return object_compose_error(
@@ -133,8 +145,18 @@ impl Dashboard {
                         )
                     }
                 };
-                let existing_digest = Sha256::digest(&existing);
-                if existing.len() != payload.size || existing_digest != expected_upload_digest {
+                let existing_size = existing.len();
+                let hashing = tokio::task::spawn_blocking(move || Sha256::digest(&existing));
+                let existing_digest = match hashing.await {
+                    Ok(digest) => digest,
+                    Err(error) => {
+                        return object_compose_error(
+                            http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
+                            format!("hashing the existing {object} did not finish: {error}"),
+                        )
+                    }
+                };
+                if existing_size != payload.size || existing_digest != expected_upload_digest {
                     return object_compose_response(
                         http_status(reqwest::StatusCode::CONFLICT),
                         json!({
@@ -145,12 +167,20 @@ impl Dashboard {
                 }
             }
         } else {
-            let bytes = match std::fs::read(staged.path()) {
-                Ok(bytes) => bytes,
-                Err(error) => {
+            let staged_path = staged.path().to_path_buf();
+            let reading = tokio::task::spawn_blocking(move || std::fs::read(staged_path));
+            let bytes = match reading.await {
+                Ok(Ok(bytes)) => bytes,
+                Ok(Err(error)) => {
                     return object_compose_error(
                         http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                         error.to_string(),
+                    )
+                }
+                Err(error) => {
+                    return object_compose_error(
+                        http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
+                        format!("reading the assembled {object} did not finish: {error}"),
                     )
                 }
             };
@@ -251,4 +281,22 @@ impl Dashboard {
             }),
         )
     }
+}
+
+/// The staging file and the object's running digest handed back, with the
+/// chunk's size, its digest and whether its bytes reached the staging file.
+type StagedChunk = (
+    NamedTempFile,
+    Sha256,
+    usize,
+    Sha256Digest,
+    std::io::Result<()>,
+);
+
+/// Hash and stage one chunk off the API's one request thread.
+fn stage_chunk(mut staged: NamedTempFile, mut running: Sha256, bytes: Vec<u8>) -> StagedChunk {
+    let digest = Sha256::digest(&bytes);
+    let written = staged.write_all(&bytes);
+    running.update(&bytes);
+    (staged, running, bytes.len(), digest, written)
 }
