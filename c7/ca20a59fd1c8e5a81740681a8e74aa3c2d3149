@@ -1,3 +1,8 @@
+The CLI error boxes its findings so no Result of the CLI outgrows the large-error lint
+
+Repairs: "Quality: a refused gate names each finding, and product cargo runs a gate's operation" it carried the findings inline in every CmdError, so each Result of the CLI outgrew clippy's result_large_err and the lint gate refused the tree
+Repairs: "Bind editor connections to parent lifetime and workspace ownership" its editor status printed only JSON, with no form for a person to read
+
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
 The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
 No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
