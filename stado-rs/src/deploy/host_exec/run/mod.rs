@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::deploy::host_channel;
 use crate::deploy::{DeployError, Runner};
 
-use super::allowlist::{approve, home_rooted, PROBIERZ_RUN_ROOT_CREATE};
+use super::allowlist::{approve, home_rooted, PROBIERZ_RUN_ROOT_CREATE, STADO_CLI};
 use super::channel::{
     account_program, account_script, candidate_script, home_rooted_script, probierz_run_root_script,
 };
@@ -104,6 +104,21 @@ fn exec_failure_sentence(command: &str, code: i32, last_line: &str) -> String {
     format!("`{command}` exited {code}; its last line was: {last_line}")
 }
 
+/// Why an approved Stado verb exited with clap's usage status on a host:
+/// the allowlist is this build's, and the host runs a Stado that does not
+/// take the verb, so the release it runs is older than the one that declared
+/// the command. Said with this build's version and where the hosts' releases
+/// are read, so a diagnostic that sent the reader here does not end on a
+/// usage error.
+fn older_stado_sentence(command: &str, target: &str) -> String {
+    format!(
+        "the Stado installed on {target} does not take `{command}`: it exited with the usage status, so the \
+         release it runs is older than this Stado {}, which declares the command; `stado release status` \
+         shows the release each host was asked to run and the one it runs",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
 /// Run one approved command on a canonical registry host.
 ///
 /// The error type is [`ExecRefusal`] rather than [`DeployError`] so the
@@ -125,7 +140,7 @@ pub async fn exec_host(
     // fixed argv IS the command line, and probing a single path on the host
     // would only replace the remote shell's own report of a missing program
     // with a worse one.
-    let account = account_program(approved.argv.first().copied().unwrap_or_default());
+    let account = approved.argv.first().copied().and_then(account_program);
     let candidates = match account {
         Some(account) => account.candidates,
         None => approved.candidates(),
@@ -167,7 +182,7 @@ pub async fn exec_host(
         match extract_resolved_executable(&mut output.stderr, candidates)? {
             Some(path) => Some(path),
             // A failed run may never have reached any candidate.
-            None if !output.ok() => None,
+            None if !output.succeeded() => None,
             None => {
                 return Err(DeployError::unreachable(
                     "host returned no resolved executable marker".into(),
@@ -179,15 +194,25 @@ pub async fn exec_host(
         candidates.first().copied().map(str::to_string)
     };
 
-    let ok = output.ok();
+    let ok = output.succeeded();
     // Include the command and exit status. The last stderr line is context,
     // not a reliable failure classification: programs can log after failing.
+    // An approved Stado verb answered with clap's usage status is the host's
+    // older release, which the exit status alone establishes.
+    let usage = clap::Error::new(clap::error::ErrorKind::InvalidSubcommand).exit_code();
     let error = (!ok).then(|| {
-        exec_failure_sentence(
+        let failure = exec_failure_sentence(
             &approved.display(),
             output.code,
             &host_channel::last_error_line(&output, "ssh failed"),
-        )
+        );
+        if approved.argv.first() == Some(&STADO_CLI) && output.code == usage {
+            return format!(
+                "{}; {failure}",
+                older_stado_sentence(&approved.display(), &target.name)
+            );
+        }
+        failure
     });
     let receipt = HostExecReceipt {
         schema: "stado.host-exec-receipt.v1".into(),
