@@ -57,10 +57,14 @@ ring = "*"
 # host identity for service reports.
 nix = { version = "0.30", features = ["signal", "process", "fs", "dir", "net", "user", "hostname"] }
 aws-config = "1"
-aws-sdk-ec2 = "1"
-aws-sdk-pricing = "*"
-aws-sdk-s3 = "1"
-aws-sdk-sts = "1"
+# Each SDK's default features less `rustls`, which is the SDK's legacy
+# hyper 0.14 client on rustls 0.21 and rustls-webpki 0.101: no rustls-webpki
+# 0.101 release carries the distrust of compromised intermediates, so every
+# AWS call goes through `default-https-client` (hyper 1, rustls 0.23).
+aws-sdk-ec2 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-pricing = { version = "*", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
+aws-sdk-sts = { version = "1", default-features = false, features = ["sigv4a", "default-https-client", "rt-tokio"] }
 cron = "0.15"
 chrono-tz = "0.10"
 tar = "0.4"

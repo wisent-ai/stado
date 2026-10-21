@@ -51,6 +51,7 @@ pub fn augment(command: Command) -> Command {
                 .arg(positional("PRODUCT").help("One product; every catalog product when omitted"))
                 .arg(flag("json", "Print each product's repositories, dependencies and the lines that reach them as JSON")),
         )
+        .subcommand(crate::advisories::command())
         .subcommand(registry::command())
         .subcommand(registry::creation())
         .subcommand(lifecycle::installation(
@@ -140,6 +141,7 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
     let runtime = Runtime::new(matches.get_one::<String>("catalog").map(PathBuf::from))?;
     match action.as_str() {
         "catalog" => crate::catalog::run(arguments, &runtime),
+        "advisories" => crate::advisories::run(arguments, &runtime),
         "dependencies" => crate::dependencies::run(arguments, &runtime),
         "create" => crate::creation::run(arguments, &runtime),
         "registry" => {

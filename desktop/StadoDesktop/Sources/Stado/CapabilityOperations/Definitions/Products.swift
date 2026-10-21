@@ -85,6 +85,23 @@ enum NativeProductOperations {
         .init(id: "dependencies", title: "Read which products each product's code needs, and refuse one with no way to run without them", path: ["product", "dependencies"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product (blank reads every catalog product)"),
         ], mutates: false),
+        // Every committed Cargo.lock of the selected checkouts read against an
+        // OSV advisory database: each affected package version, its advisory,
+        // the fixed versions and whether Cargo reaches a fix without a
+        // manifest change. A finding that stands ends the operation as refused.
+        .init(id: "advisories-list", title: "Read the published advisories that affect what each checkout's Cargo.lock resolves", path: ["product", "advisories", "list"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product (blank reads every checkout in the workspace)"),
+            .init(id: "advisories", label: "Advisory ids or aliases, one per line (blank reads every advisory)", option: "--advisory", multiple: true),
+            .init(id: "database", label: "OSV database origin (blank reads the public OSV database)", option: "--database"),
+        ], mutates: false),
+        // Rewrites the lockfiles of the selected checkouts with cargo update
+        // --precise, names why each other affected package cannot move, and
+        // commits nothing.
+        .init(id: "advisories-apply", title: "Lock each advisory's first compatible fixed version in every checkout's Cargo.lock", path: ["product", "advisories", "apply"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product (blank updates every checkout in the workspace)"),
+            .init(id: "advisories", label: "Advisory ids or aliases, one per line (blank updates for every advisory)", option: "--advisory", multiple: true),
+            .init(id: "database", label: "OSV database origin (blank reads the public OSV database)", option: "--database"),
+        ]),
         // The answer lists each workflow the product's repository declares
         // with its newest run, its conclusion and the failed job and step of
         // a run that did not pass, read from the forge as the CLI reads it,

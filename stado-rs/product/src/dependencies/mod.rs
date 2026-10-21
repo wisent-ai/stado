@@ -67,7 +67,7 @@ fn programs(product: &Value, id: &str) -> Vec<String> {
 }
 
 /// Every repository a product's record names: its owner and its surfaces.
-fn repositories(product: &Value) -> BTreeSet<String> {
+pub(crate) fn repositories(product: &Value) -> BTreeSet<String> {
     let surfaces = product["surfaces"]
         .as_array()
         .into_iter()
