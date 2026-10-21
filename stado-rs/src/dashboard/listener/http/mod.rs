@@ -21,7 +21,7 @@ use super::{
 
 pub(crate) use host_guard::{trusted_request_host, valid_beacon_host};
 pub(crate) use query::{parse_qs, query_value, strict_url_decode};
-pub(crate) use request::{read_request, Request, RequestLimits};
+pub(crate) use request::{read_request, Refusal, Request, RequestLimits};
 pub(crate) use response::{
     dashboard_error_response, empty_response, http_status, parse_byte_range, send_json,
     storage_error_response, Response,
@@ -197,28 +197,26 @@ impl Dashboard {
             let request = match read_request(&mut stream, &mut carry, limits).await {
                 Ok(Some(request)) => request,
                 Ok(None) => return Ok(()),
-                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
-                    let (status, reason) = if error.to_string().contains("accepts at most") {
-                        // RFC 9110 section 15.5.14's reason phrase.
-                        (reqwest::StatusCode::PAYLOAD_TOO_LARGE, "Content Too Large")
-                    } else {
-                        // RFC 9110 section 15.5.1's reason phrase.
-                        (reqwest::StatusCode::BAD_REQUEST, "Bad Request")
+                Err(error) => {
+                    // The refusal carries its own status and reason phrase;
+                    // a read that failed on the socket carries none.
+                    let Some(refusal) = Refusal::of(&error) else {
+                        eprintln!("[dashboard] request read failed: {error}");
+                        return Err(error);
                     };
                     let mut response = Response::new(
-                        http_status(status),
-                        reason,
+                        http_status(refusal.status),
+                        refusal.reason,
                         "text/plain; charset=utf-8",
-                        error.to_string().as_bytes(),
+                        refusal.to_string().as_bytes(),
                     );
-                    eprintln!("[dashboard] refused request: {error}");
+                    eprintln!(
+                        "[dashboard] refused request ({}): {refusal}",
+                        refusal.status
+                    );
                     response.close_connection();
                     stream.write_all(&response.bytes).await?;
                     return stream.shutdown().await;
-                }
-                Err(error) => {
-                    eprintln!("[dashboard] request read failed: {error}");
-                    return Err(error);
                 }
             };
             // The mode gate is the FIRST thing that looks at the request, ahead

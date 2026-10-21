@@ -81,7 +81,9 @@ async fn respond(
 ) -> Result<(), String> {
     let mut carry = Vec::new();
     let read = crate::dashboard::read_request(&mut stream, &mut carry, limits).await;
-    let (head_only, answer) = match read {
+    // A refused request names its own reason phrase; every other answer uses
+    // its status's canonical one.
+    let (head_only, answer, stated_reason) = match read {
         Ok(None) => return Ok(()),
         Ok(Some(request)) => {
             let method = Method::from_bytes(request.method.as_bytes());
@@ -103,20 +105,29 @@ async fn respond(
             (
                 matches!(method, Ok(method) if method == Method::HEAD),
                 answer,
+                None,
             )
         }
-        Err(cause) => (
-            false,
-            Answer {
-                status: StatusCode::BAD_REQUEST,
-                kind: TEXT,
-                body: format!("{cause}\n"),
-            },
-        ),
+        Err(cause) => {
+            // A read that failed on the socket itself has no client left to
+            // answer; it is said with its cause, not answered as a bad request.
+            let Some(refusal) = crate::dashboard::Refusal::of(&cause) else {
+                return Err(format!("the request could not be read: {cause}"));
+            };
+            (
+                false,
+                Answer {
+                    status: refusal.status,
+                    kind: TEXT,
+                    body: format!("{refusal}\n"),
+                },
+                Some(refusal.reason),
+            )
+        }
     };
-    let reason = match answer.status.canonical_reason() {
-        Some(reason) => reason,
-        None => answer.status.as_str(),
+    let reason = match (stated_reason, answer.status.canonical_reason()) {
+        (Some(reason), _) | (None, Some(reason)) => reason,
+        (None, None) => answer.status.as_str(),
     };
     let head = format!(
         "{:?} {} {reason}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: \

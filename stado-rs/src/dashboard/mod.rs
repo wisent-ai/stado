@@ -63,7 +63,7 @@ use crate::queue::StorageError;
 use listener::{constant_time_eq, http_status, send_json, trusted_request_host, Request, Response};
 
 pub use listener::{join_script_source, Dashboard};
-pub(crate) use listener::{read_request, PreparedListener, RequestLimits};
+pub(crate) use listener::{read_request, PreparedListener, Refusal, RequestLimits};
 
 /// Dashboard serve failure.
 #[derive(Debug, thiserror::Error)]

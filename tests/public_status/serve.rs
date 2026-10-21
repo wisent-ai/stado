@@ -10,6 +10,9 @@
 //!   `/` answers 200 naming every declared component, and `/status.json`
 //!   answers exactly the document `show --json` reads;
 //! - a path that is not a page answers 404, a POST answers 405;
+//! - a head past the declared bound answers 431 naming the bound, and a head
+//!   that is not HTTP/1.1 answers 400 (or 501 for a transfer coding) quoting
+//!   what was wrong;
 //! - the page's own first line says where it listens.
 use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
@@ -180,28 +183,23 @@ async fn the_status_page_bounds_request_heads() {
         "GET /status.json HTTP/1.1\r\nX-Fill: {}\r\n\r\n",
         "x".repeat(valid.len())
     );
-    let mut refused = tokio::net::TcpStream::connect(address)
-        .await
-        .expect("connect");
-    refused
-        .write_all(oversized.as_bytes())
-        .await
-        .expect("send oversized head");
-    let mut refused_reply = String::new();
-    refused
-        .read_to_string(&mut refused_reply)
-        .await
-        .expect("read refusal");
+    let refused_reply = exchange(address, oversized.as_bytes()).await;
     assert!(
         refused_reply
             .lines()
             .next()
             .expect("status line")
-            .contains(&StatusCode::BAD_REQUEST.to_string()),
+            .contains(&StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE.to_string()),
+        "{refused_reply}"
+    );
+    // How many bytes the page had read when it stopped depends on how the
+    // socket delivered them; the bound it names does not.
+    assert!(
+        refused_reply.contains("HTTP request head too large"),
         "{refused_reply}"
     );
     assert!(
-        refused_reply.contains("HTTP request head too large"),
+        refused_reply.contains(&format!("the {}-byte head bound", valid.len())),
         "{refused_reply}"
     );
     deployment.report["bounded_head"] = json!({
@@ -210,5 +208,66 @@ async fn the_status_page_bounds_request_heads() {
         "accepted_with_binary_body": body_reply,
         "refused": refused_reply
     });
+    deployment.passed();
+}
+
+/// Send `bytes` on a fresh connection and read the whole answer.
+async fn exchange(address: &str, bytes: &[u8]) -> String {
+    let mut stream = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("connect");
+    stream.write_all(bytes).await.expect("send the request");
+    let mut reply = String::new();
+    stream
+        .read_to_string(&mut reply)
+        .await
+        .expect("read the answer");
+    reply
+}
+
+/// A head that is not HTTP/1.1 is refused with the status that names the
+/// fault and the sentence that quotes it, before the store is read: a short
+/// request line, a header line without a colon and a head that is not UTF-8
+/// are Bad Request, a transfer coding the page does not frame is Not
+/// Implemented.
+#[tokio::test]
+async fn the_status_page_refuses_malformed_heads_by_name() {
+    let mut deployment = Deployment::start("malformed-head");
+    let (_page, origin) = start(&mut deployment, None);
+    let address = origin.strip_prefix("http://").expect("the page origin");
+    let not_utf8 = [b"GET /".as_slice(), &[u8::MAX], b" HTTP/1.1\r\n\r\n"].concat();
+    let cases: Vec<(&str, &[u8], StatusCode, &str)> = vec![
+        (
+            "short request line",
+            b"GET /status.json\r\n\r\n",
+            StatusCode::BAD_REQUEST,
+            "is not <method> <target> HTTP/<version>",
+        ),
+        (
+            "header without a colon",
+            b"GET /status.json HTTP/1.1\r\nno-colon-here\r\n\r\n",
+            StatusCode::BAD_REQUEST,
+            "HTTP header line \"no-colon-here\" has no colon",
+        ),
+        (
+            "head not UTF-8",
+            &not_utf8,
+            StatusCode::BAD_REQUEST,
+            "HTTP request head is not UTF-8",
+        ),
+        (
+            "transfer coding",
+            b"GET /status.json HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n",
+            StatusCode::NOT_IMPLEMENTED,
+            "Transfer-Encoding is unsupported",
+        ),
+    ];
+    for (case, bytes, status, sentence) in cases {
+        let reply = exchange(address, bytes).await;
+        let status_line = reply.lines().next().expect("status line");
+        assert!(status_line.contains(&status.to_string()), "{case}: {reply}");
+        assert!(reply.contains(sentence), "{case}: {reply}");
+        deployment.report["refusals"][case] = json!(reply);
+    }
     deployment.passed();
 }

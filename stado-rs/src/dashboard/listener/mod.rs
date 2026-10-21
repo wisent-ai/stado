@@ -27,7 +27,8 @@ pub(crate) use auth::{constant_time_eq, AuthorityUnavailable};
 pub(crate) use boundary::Boundary;
 pub(crate) use http::{
     dashboard_error_response, empty_response, http_status, parse_qs, query_value, read_request,
-    send_json, storage_error_response, trusted_request_host, Request, RequestLimits, Response,
+    send_json, storage_error_response, trusted_request_host, Refusal, Request, RequestLimits,
+    Response,
 };
 
 /// The exact (method, path) pairs `--enrollment-only` serves.
