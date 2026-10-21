@@ -76,7 +76,16 @@ pub async fn publish_recommendations(
                 summary.schedules.push(resource.resource_id.clone());
             }
         }
-        if storage_candidate(resource, policy, now)
+        let aged = match storage_candidate(resource, policy, now) {
+            Ok(aged) => aged,
+            Err(why) => {
+                summary
+                    .unjudged
+                    .push(format!("{}: {why}", resource.resource_id));
+                false
+            }
+        };
+        if aged
             && publish(
                 store,
                 context.recommendation(

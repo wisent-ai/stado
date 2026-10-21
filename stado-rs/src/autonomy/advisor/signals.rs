@@ -44,17 +44,18 @@ pub(super) fn cross_boundary_dependencies(
 }
 
 /// Every observed peak sits below the policy's `idle.underutilized_below`
-/// ratio, and at least one peak was observed.
+/// ratio, and at least one peak was observed. A policy that states no ratio
+/// names nothing underutilized.
 pub(super) fn underutilized(resource: &ResourceRecord, policy: &AutonomyPolicy) -> bool {
+    let Some(ratio) = policy.idle.underutilized_below else {
+        return false;
+    };
     let samples = [
         utilization(resource, &["cpu_peak", "cpu", "cpu_max"]),
         utilization(resource, &["memory_peak", "memory", "memory_max"]),
         utilization(resource, &["gpu_peak", "gpu", "gpu_max"]),
     ];
-    samples
-        .into_iter()
-        .flatten()
-        .all(|value| value < policy.idle.underutilized_below)
+    samples.into_iter().flatten().all(|value| value < ratio)
         && samples.into_iter().any(|sample| sample.is_some())
 }
 
@@ -64,24 +65,32 @@ pub(super) fn utilization(resource: &ResourceRecord, keys: &[&str]) -> Option<f6
         .filter(|value| value.is_finite() && !value.is_sign_negative())
 }
 
+/// Whether an unattached disk has sat past the policy's `idle.disk_days`.
+/// A disk whose age cannot be told — no creation time, one that is not
+/// RFC 3339, or a day count no duration holds — is the refusal that says
+/// which, so the pass names it instead of leaving it out unseen.
 pub(super) fn storage_candidate(
     resource: &ResourceRecord,
     policy: &AutonomyPolicy,
     now: DateTime<Utc>,
-) -> bool {
+) -> Result<bool, String> {
     if resource.workload.is_some() || !resource.resource_type.disk() {
-        return false;
+        return Ok(false);
     }
-    resource
+    let created = resource
         .created_at
         .as_deref()
-        .and_then(|created| DateTime::parse_from_rfc3339(created).ok())
-        .is_some_and(|created| {
-            let window = i64::try_from(policy.idle.disk_days)
-                .ok()
-                .and_then(chrono::Duration::try_days);
-            window.is_some_and(|window| {
-                now.signed_duration_since(created.with_timezone(&Utc)) >= window
-            })
-        })
+        .ok_or_else(|| "it records no creation time, so its age cannot be told".to_string())?;
+    let created = DateTime::parse_from_rfc3339(created)
+        .map_err(|error| format!("its creation time {created} is not RFC 3339: {error}"))?;
+    let days = i64::try_from(policy.idle.disk_days).map_err(|error| {
+        format!(
+            "the policy's idle.disk_days {} is not a day count: {error}",
+            policy.idle.disk_days
+        )
+    })?;
+    let window = chrono::Duration::try_days(days).ok_or_else(|| {
+        format!("the policy's idle.disk_days {days} is longer than a duration holds")
+    })?;
+    Ok(now.signed_duration_since(created.with_timezone(&Utc)) >= window)
 }

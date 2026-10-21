@@ -19,8 +19,10 @@ pub struct IdlePolicy {
     pub minimum_snapshots: usize,
     pub utilization_window_days: u64,
     /// A resource whose every observed peak, as a ratio of its capacity,
-    /// sits below this is a rightsizing candidate.
-    pub underutilized_below: f64,
+    /// sits below this is a rightsizing candidate. A policy that states no
+    /// ratio names no resource underutilized; the rest of it still runs.
+    #[serde(default)]
+    pub underutilized_below: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -10,6 +10,10 @@ pub struct AdvisorSummary {
     pub storage_lifecycle: Vec<String>,
     pub network: Vec<String>,
     pub commitments: Vec<String>,
+    /// Each resource the pass could not judge, with why: advice it may have
+    /// earned is not published, and saying so keeps it from reading as none.
+    #[serde(default)]
+    pub unjudged: Vec<String>,
 }
 
 impl AdvisorSummary {
