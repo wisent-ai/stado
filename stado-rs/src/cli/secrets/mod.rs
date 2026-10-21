@@ -7,6 +7,7 @@
 pub(in crate::cli::secrets) mod commands;
 pub(in crate::cli::secrets) mod diagnostics;
 pub(in crate::cli::secrets) mod retire;
+pub(in crate::cli::secrets) mod run;
 pub(in crate::cli::secrets) mod store;
 
 pub use crate::cli::secrets::commands::dispatch::dispatch;

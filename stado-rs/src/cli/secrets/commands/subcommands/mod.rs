@@ -114,8 +114,9 @@ pub enum CredentialTokenCommands {
         replace_capabilities: bool,
         #[arg(long)]
         token_item: Option<String>,
-        #[arg(long, requires = "token_item")]
-        token_field: Option<String>,
+        /// The field of --token-item that holds the bearer.
+        #[arg(long, requires = "token_item", default_value = "token")]
+        token_field: String,
         #[arg(long, conflicts_with = "token_item")]
         raw_token: bool,
         /// With --token-item, the item's own value is written here on the

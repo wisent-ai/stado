@@ -33,15 +33,31 @@ pub(crate) fn store() -> Result<Store, CmdError> {
     }
 }
 
+/// The value on stdin without the one line ending a shell or editor leaves
+/// after it (`\n`, or `\r\n`).
 fn read_value_from_stdin() -> Result<String, CmdError> {
     let mut value = String::new();
     std::io::stdin().read_to_string(&mut value)?;
-    let value = value.strip_suffix('\n').unwrap_or(&value);
-    Ok(value.strip_suffix('\r').unwrap_or(value).to_string())
+    let without_newline = match value.strip_suffix('\n') {
+        Some(rest) => rest,
+        None => value.as_str(),
+    };
+    let without_return = match without_newline.strip_suffix('\r') {
+        Some(rest) => rest,
+        None => without_newline,
+    };
+    Ok(without_return.to_string())
 }
 
+/// The kind an item is stored as when neither `--type` nor the payload's own
+/// `kind` names one: a plain secret.
+const PLAIN_SECRET_KIND: &str = "stado-secret";
+
 /// The payload on stdin and the kind it is stored as: the caller's
-/// `--type`, else the payload's own `kind`, else `stado-secret`.
+/// `--type`, else the payload's own `kind`, else a plain secret. A payload
+/// that opens as a JSON object is read as one and refused, with serde's
+/// cause, when it does not parse; anything else is one plain value. Reading
+/// a malformed object as a plain value stored the broken text as the secret.
 fn stdin_payload(item_type: Option<&str>) -> Result<(Value, String), CmdError> {
     let input = read_value_from_stdin()?;
     if input.is_empty() {
@@ -49,7 +65,15 @@ fn stdin_payload(item_type: Option<&str>) -> Result<(Value, String), CmdError> {
             "stdin was empty; pipe the value in (stado credentials put NAME < file)",
         ));
     }
-    let value: Value = serde_json::from_str(&input).unwrap_or_else(|_| json!({"value": input}));
+    let value: Value = if input.trim_start().starts_with('{') {
+        serde_json::from_str(&input).map_err(|error| {
+            CmdError::usage(format!(
+                "stdin opens as a JSON object but is not one ({error}); pipe a whole JSON object or a plain value"
+            ))
+        })?
+    } else {
+        json!({ "value": input })
+    };
     // The kind is the payload's shape, so the payload decides it when it says
     // so. Forcing `stado-secret` on every write is how one item ends up holding
     // a key pair with no schema requiring its public half.
@@ -58,10 +82,11 @@ fn stdin_payload(item_type: Option<&str>) -> Result<(Value, String), CmdError> {
         .and_then(Value::as_str)
         .filter(|kind| !kind.trim().is_empty())
         .map(str::to_string);
-    let item_kind = item_type
-        .map(str::to_string)
-        .or(declared)
-        .unwrap_or_else(|| "stado-secret".to_string());
+    let item_kind = match (item_type, declared) {
+        (Some(stated), _) => stated.to_string(),
+        (None, Some(declared)) => declared,
+        (None, None) => PLAIN_SECRET_KIND.to_string(),
+    };
     Ok((value, item_kind))
 }
 
@@ -128,21 +153,30 @@ pub(crate) async fn rotate(client: &Client, name: &str, field: &str) -> Result<(
     Ok(())
 }
 
+/// One non-empty string field of item `name`, read from `store`; an absent or
+/// empty field is refused naming the item and the field.
+pub(crate) async fn field_value(
+    store: &Store,
+    name: &str,
+    field: &str,
+) -> Result<String, CmdError> {
+    match store {
+        Store::Skarbiec(vault) => vault.read_declared_string(name, field).await,
+        Store::File(_) => crate::credential_store::read_string(name, field).await,
+    }
+    .map_err(CmdError::from)?
+    .filter(|raw| !raw.is_empty())
+    .ok_or_else(|| {
+        CmdError::click(format!(
+            "credential item {name:?} has no non-empty string field {field:?}"
+        ))
+        .stating(FailureCode::NotFound)
+    })
+}
+
 pub(crate) async fn get(store: &Store, name: &str, field: Option<&str>) -> Result<(), CmdError> {
     if let Some(field) = field {
-        let raw = match store {
-            Store::Skarbiec(vault) => vault.read_declared_string(name, field).await,
-            Store::File(_) => crate::credential_store::read_string(name, field).await,
-        }
-        .map_err(CmdError::from)?
-        .filter(|raw| !raw.is_empty())
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "credential item {name:?} has no non-empty string field {field:?}"
-            ))
-            .stating(FailureCode::NotFound)
-        })?;
-        println!("{raw}");
+        println!("{}", field_value(store, name, field).await?);
         return Ok(());
     }
     let value = match store {

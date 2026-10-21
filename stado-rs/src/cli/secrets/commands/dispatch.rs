@@ -94,6 +94,17 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             get(&selected, &name, field.as_deref()).await
         }
         SecretsCommands::Ls { json } => ls(&store()?, json).await,
+        SecretsCommands::Run {
+            env,
+            route,
+            consumer,
+            grant_file,
+            command,
+        } => {
+            let delegated = route.is_some();
+            let selected = delegated_or_selected(route, consumer, grant_file)?;
+            crate::cli::secrets::run::run(&selected, delegated, &env, &command).await
+        }
         SecretsCommands::Rm { name } => rm(&store()?, &name).await,
         SecretsCommands::Item { command } => super::vault_verbs::item(command).await,
         SecretsCommands::Token { command } => match command {
@@ -119,7 +130,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                     ttl_seconds,
                     replace_capabilities,
                     token_item.as_deref(),
-                    token_field.as_deref().unwrap_or("token"),
+                    &token_field,
                     raw_token,
                     token_file_name.as_deref(),
                     store_item.as_deref(),

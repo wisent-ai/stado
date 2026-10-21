@@ -84,6 +84,30 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Start a program with credential fields in its environment only. Each
+    /// --env NAME=ITEM#FIELD (ITEM an item id, or role:ROLE for the one live
+    /// item playing that role) is read from the selected store, or under one
+    /// consumer's own grant with --route, and handed to PROGRAM as NAME;
+    /// nothing is printed or written. Stado then becomes PROGRAM, so its exit
+    /// status, signals and terminal are the program's.
+    Run {
+        /// One variable and the field it takes; repeat for each.
+        #[arg(long = "env", value_name = "NAME=ITEM#FIELD", required = true)]
+        env: Vec<String>,
+        /// Skarbiec route for reads under one consumer's grant. Requires
+        /// --consumer and --grant-file; never uses the store administrator.
+        #[arg(long, requires_all = ["consumer", "grant_file"])]
+        route: Option<String>,
+        /// Identity granted these fields.
+        #[arg(long, requires = "route")]
+        consumer: Option<String>,
+        /// File holding that consumer's grant.
+        #[arg(long, requires = "route")]
+        grant_file: Option<String>,
+        /// The program to start and its arguments, after `--`.
+        #[arg(last = true, required = true, value_name = "PROGRAM")]
+        command: Vec<String>,
+    },
     /// Delete one item from the selected credential store.
     Rm {
         /// Credential item id.
