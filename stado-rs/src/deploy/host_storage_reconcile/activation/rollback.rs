@@ -32,12 +32,23 @@ printf '%s' @PLIST@ | /usr/bin/base64 -D > "$staged"
 printf 'STADO_OBJECT_API_ROUTE\tcaptured-prior\n'
 "#;
 
-pub(in crate::deploy::host_storage_reconcile) fn restore_priority(role: &str) -> u8 {
+/// The order a transaction restores writers in, earliest first: the object
+/// API, which every other role reads the store through; then any role this
+/// order does not name; then the runners, the current runner last.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::deploy::host_storage_reconcile) enum RestoreOrder {
+    ObjectApi,
+    Other,
+    Runner,
+    CurrentRunner,
+}
+
+pub(in crate::deploy::host_storage_reconcile) fn restore_priority(role: &str) -> RestoreOrder {
     match role {
-        "object-api" => 0,
-        "runner" => 3,
-        "current-runner" => 4,
-        _ => 2,
+        "object-api" => RestoreOrder::ObjectApi,
+        "runner" => RestoreOrder::Runner,
+        "current-runner" => RestoreOrder::CurrentRunner,
+        _ => RestoreOrder::Other,
     }
 }
 
@@ -83,14 +94,16 @@ pub(in crate::deploy::host_storage_reconcile) fn object_recovery_script(
     // The unit restored is the one the fence captured writing, under its own
     // label, whichever label the host's Stado process ran under then.
     let unit = object_api_unit(&writer.label, primary, backup, config, port)?;
+    // The script reads an empty backup store as "this store has no backup".
+    let (backup_backend, backup_store) = match backup {
+        Some(store) => ("local", store),
+        None => ("", ""),
+    };
     let body = ROLLBACK_OBJECT_API_SCRIPT
         .replace("@LABEL@", &shlex_quote(&writer.label))
         .replace("@PRIMARY@", &shlex_quote(primary))
-        .replace(
-            "@BACKUP_BACKEND@",
-            &shlex_quote(if backup.is_some() { "local" } else { "" }),
-        )
-        .replace("@BACKUP@", &shlex_quote(backup.unwrap_or("")))
+        .replace("@BACKUP_BACKEND@", &shlex_quote(backup_backend))
+        .replace("@BACKUP@", &shlex_quote(backup_store))
         .replace("@PLIST@", &shlex_quote(&unit))
         .replace("@PORT@", &port.to_string());
     Ok(prepared_script(body))
@@ -111,12 +124,17 @@ fn object_api_unit(
         DeployError(format!("HOME is not set: {error}"))
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let account = nix::unistd::User::from_uid(nix::unistd::getuid())
-        .ok()
-        .flatten()
+    let uid = nix::unistd::getuid();
+    let account = nix::unistd::User::from_uid(uid)
+        .map_err(|error| {
+            DeployError(format!(
+                "the managed account (uid {uid}) cannot be looked up: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config)
+        })?
         .map(|user| user.name)
         .ok_or_else(|| {
-            DeployError("the managed account has no user name".to_string())
+            DeployError(format!("the managed account (uid {uid}) has no user name"))
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let log = format!("{home}/.stado/logs/{label}.log");
@@ -126,7 +144,7 @@ fn object_api_unit(
         ("HOME", home.clone()),
         (
             "PATH",
-            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string(),
+            crate::primitives::tool_path::SEARCH_PATH.to_string(),
         ),
         ("STADO_CONFIG", config.to_string()),
         ("GNUPGHOME", format!("{home}/.gnupg")),
@@ -150,12 +168,14 @@ fn object_api_unit(
     }
     let program = format!("{home}/.stado/bin/stado");
     let port = port.to_string();
+    // The object API answers this host's own loopback only.
+    let loopback = std::net::Ipv4Addr::LOCALHOST.to_string();
     let arguments = [
         program.as_str(),
         "serve",
         "--api",
         "--bind",
-        "127.0.0.1",
+        loopback.as_str(),
         "--port",
         port.as_str(),
     ];
