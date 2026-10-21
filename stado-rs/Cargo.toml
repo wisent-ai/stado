@@ -141,6 +141,9 @@ path = "../tests/service_directory/adapters.rs"
 [[test]]
 name = "service-directory-beside"
 path = "../tests/service_directory/beside.rs"
+[[test]]
+name = "placement-profile"
+path = "../tests/placement/profile.rs"
 # A fixture shared by several journeys is compiled into exactly one test
 # binary with all of them (each group's `main.rs`): compiled into several
 # binaries, it is dead code in every one that uses only part of it.

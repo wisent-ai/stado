@@ -18,6 +18,7 @@
 mod candidates;
 mod commands;
 mod policy;
+mod profile;
 pub(crate) mod standby;
 mod transfer;
 

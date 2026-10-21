@@ -60,9 +60,11 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                 ));
             }
         }
-        if profile.hosts.len() < 2 {
+        // One host is a profile placed where it runs with nowhere declared to
+        // move yet; `placement standby` adds each destination to it.
+        if profile.hosts.is_empty() {
             return Err(format!(
-                "{location}.hosts: must contain at least two destinations"
+                "{location}.hosts: must name the host it is placed on"
             ));
         }
         for (host, host_profile) in &profile.hosts {
@@ -102,10 +104,9 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                 ));
             }
         }
+        // A profile may declare no state: a service that keeps nothing durable
+        // (a site serving its release tree) moves with its units alone.
         let mut state_paths = BTreeSet::new();
-        if profile.state.is_empty() {
-            return Err(format!("{location}.state: must not be empty"));
-        }
         for (index, state) in profile.state.iter().enumerate() {
             validate_state_path(&state.path, &format!("{location}.state[{index}].path"))?;
             if !state_paths.insert(&state.path) {

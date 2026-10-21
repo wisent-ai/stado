@@ -73,6 +73,13 @@ pub enum PlacementCommands {
         #[arg(long)]
         json: bool,
     },
+    /// List, show, declare and remove the placement profiles the registry
+    /// holds: the service groups `standby` prepares a host for and `move`
+    /// relocates.
+    Profile {
+        #[command(subcommand)]
+        command: crate::cli::placement::profile::ProfileCommands,
+    },
 }
 
 pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
@@ -97,5 +104,8 @@ pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
             reason,
             json,
         } => crate::cli::placement::standby::standby(&profile, &host, &reason, json).await,
+        PlacementCommands::Profile { command } => {
+            crate::cli::placement::profile::dispatch(command).await
+        }
     }
 }

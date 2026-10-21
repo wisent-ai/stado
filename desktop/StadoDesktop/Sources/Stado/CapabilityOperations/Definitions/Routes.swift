@@ -71,5 +71,15 @@ enum NativeRouteOperations {
             .init(id: "profile", label: "Placement profile", required: true),
             .init(id: "reason", label: "Why this host must stand by (carried in the receipt; each unit is staged, not run)", option: "--reason", required: true),
         ]),
+        .init(id: "placement-profile-list", title: "List the placement profiles the registry holds", path: ["placement", "profile", "list"], hostPlacement: .none, mutates: false),
+        .init(id: "placement-profile-show", title: "Show one placement profile as the registry holds it", path: ["placement", "profile", "show"], hostPlacement: .none, fields: [
+            .init(id: "name", label: "Placement profile", required: true),
+        ], mutates: false, jsonOutput: false),
+        .init(id: "placement-profile-declare", title: "Declare or replace a placement profile and link its services in the directory", path: ["placement", "profile", "declare"], hostPlacement: .none, fields: [
+            .init(id: "file", label: "Profile JSON file on the selected API host", option: "--file", required: true),
+        ]),
+        .init(id: "placement-profile-remove", title: "Remove a placement profile; its services become fixed routes on their active hosts", path: ["placement", "profile", "remove"], hostPlacement: .none, fields: [
+            .init(id: "name", label: "Placement profile", required: true),
+        ]),
     ]
 }
