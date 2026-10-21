@@ -8,7 +8,7 @@ mod state;
 mod units;
 
 pub(in crate::cli::placement) use execution::{execute_move, release_claim, rollback};
-pub(in crate::cli::placement) use state::cleanup_state_backup;
+pub(in crate::cli::placement) use state::settle_state_backup;
 
 use std::sync::Arc;
 

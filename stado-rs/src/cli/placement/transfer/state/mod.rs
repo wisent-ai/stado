@@ -6,7 +6,10 @@
 //! host, so a store kept under a large volume on one host lands under the
 //! large volume of the other.
 
+mod settle;
 mod tree;
+
+pub(in crate::cli::placement) use settle::settle_state_backup;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -111,7 +114,9 @@ printf 'STADO_PLACEMENT_STATE\tpresent\t%s\n' "$payload"
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
-    let mut fields = line.splitn(3, '\t');
+    // The payload is base64, which never holds a tab, so the marker line is
+    // exactly marker, state and payload.
+    let mut fields = line.split('\t');
     let _marker = fields.next();
     match fields.next() {
         Some("missing") if !state.required => Ok(StateSnapshot {
@@ -125,7 +130,13 @@ printf 'STADO_PLACEMENT_STATE\tpresent\t%s\n' "$payload"
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound)),
         Some("present") => {
-            let payload = fields.next().unwrap_or_default();
+            let payload = fields.next().ok_or_else(|| {
+                CmdError::click(format!(
+                    "{}: state read marked {} present without its payload",
+                    target.name, state.path
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
             let bytes = STANDARD.decode(payload).map_err(|error| {
                 CmdError::click(format!(
                     "{}: invalid state payload for {}: {error}",
@@ -235,34 +246,6 @@ fi
     if marker_line(&output, "STADO_PLACEMENT_RESTORE\tok").is_none() {
         return Err(CmdError::click(format!(
             "{}: state rollback returned no marker for {path}",
-            target.name
-        ))
-        .stating(crate::primitives::failure::FailureCode::InfraDown));
-    }
-    Ok(())
-}
-
-pub(in crate::cli::placement) async fn cleanup_state_backup(
-    target: &ComputeTarget,
-    state: &PlacementState,
-    transaction_id: &str,
-    runner: &Runner,
-) -> Result<(), CmdError> {
-    let path = &state.path;
-    let locate = full_path_lines(&root_payload(target, state)?, path);
-    let transaction = STANDARD.encode(transaction_id.as_bytes());
-    let script = format!(
-        r#"set -eu
-{locate}
-txn=$(printf '%s' '{transaction}' | /usr/bin/base64 "$decode")
-/bin/rm -rf "$full.pre-stado-placement-$txn" "$full.pre-stado-placement-$txn.meta"
-printf 'STADO_PLACEMENT_CLEANUP\tok\n'
-"#
-    );
-    let output = run_host_script(target, &script, runner, "backup cleanup").await?;
-    if marker_line(&output, "STADO_PLACEMENT_CLEANUP\tok").is_none() {
-        return Err(CmdError::click(format!(
-            "{}: backup cleanup returned no marker for {path}",
             target.name
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));

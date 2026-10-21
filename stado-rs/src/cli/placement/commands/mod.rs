@@ -1,6 +1,7 @@
 //! The `stado placement` command surface: the subcommands clap parses, and the
 //! dispatch that hands each one to the operation that answers it.
 
+mod delegate;
 mod eviction;
 mod moves;
 

@@ -5,99 +5,21 @@
 //! The transaction itself is [`relocate`], kept apart from the command so the
 //! claim, the execution and the rollback stay one set of rules.
 
-use std::process::Stdio;
-
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 
+use super::delegate::delegate_to_registry_authority;
 use crate::cli::placement::candidates::{
     declared_profile_hosts, ensure_profile_lifecycle_mutable, parse_registry, profile_host, target,
 };
 use crate::cli::placement::transfer::{
-    cleanup_state_backup, execute_move, production_committer, release_claim, rollback, MoveContext,
+    execute_move, production_committer, release_claim, rollback, settle_state_backup, MoveContext,
     Progress,
 };
 use crate::cli::{registry, CmdError};
 use crate::deploy::production_runner;
 use crate::placement::{self, PlacementProfile, PlacementTransaction};
 use crate::targets::Registry;
-
-async fn delegate_to_registry_authority(
-    document: &Value,
-    registry: &Registry,
-    requested: &[String],
-    to_host: &str,
-    json_output: bool,
-) -> Result<bool, CmdError> {
-    let Some(directory) =
-        crate::service_resolution::directory(document).map_err(CmdError::declaration)?
-    else {
-        return Ok(false);
-    };
-    if local_is_authority(document, registry)
-        .map_err(CmdError::declaration)?
-        .unwrap_or(true)
-    {
-        return Ok(false);
-    }
-    let authority = registry
-        .lookup(&directory.authority.target)
-        .ok_or_else(|| {
-            CmdError::click("registry authority target disappeared")
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
-    let runner = crate::deploy::production_runner();
-    let connection = crate::deploy::host_channel::select_ssh_connection(authority, &runner)
-        .await
-        .map_err(CmdError::from)?;
-    let mut argv = vec![
-        directory.authority.command,
-        "placement".to_string(),
-        "move".to_string(),
-        "--to-host".to_string(),
-        to_host.to_string(),
-    ];
-    if json_output {
-        argv.push("--json".to_string());
-    }
-    argv.extend(requested.iter().cloned());
-    let remote_command = argv
-        .iter()
-        .map(|argument| crate::deploy::shlex_quote(argument))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let mut ssh_argv = crate::deploy::host_channel::ssh_options(connection.destination);
-    ssh_argv.insert(1, "-T".to_string());
-    ssh_argv.push(remote_command);
-    let key = crate::deploy::host_access::ssh_key::materialize(authority.channel_key())
-        .await
-        .map_err(CmdError::from)?;
-    let ssh_argv = crate::deploy::host_access::ssh_key::add_identity(ssh_argv, &key)
-        .map_err(CmdError::from)?;
-    let (program, arguments) = ssh_argv.split_first().ok_or_else(|| {
-        CmdError::click("registry authority SSH channel is empty")
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
-    let status = crate::wait::status_async(
-        tokio::process::Command::new(program)
-            .args(arguments)
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit()),
-    )
-    .await
-    .map_err(|error| {
-        CmdError::click(format!("registry authority SSH failed: {error}"))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-    })?;
-    if !status.success() {
-        return Err(
-            CmdError::click(format!("registry authority placement exited with {status}"))
-                .stating(crate::primitives::failure::FailureCode::InfraDown),
-        );
-    }
-    Ok(true)
-}
 
 /// Which host a profile is placed on. `Err` names the refusal a move would
 /// meet before touching any host.
@@ -120,21 +42,6 @@ pub(crate) fn placed_host(
     }
 }
 
-/// Whether the host this binary runs on is the directory authority, the one
-/// host allowed to commit a placement transaction. `Ok(None)` is a document
-/// with no directory: every host may then run the transaction itself.
-fn local_is_authority(document: &Value, registry: &Registry) -> Result<Option<bool>, String> {
-    let Some(directory) = crate::service_resolution::directory(document)? else {
-        return Ok(None);
-    };
-    let hostname = crate::providers::vast::system_hostname();
-    let local = registry
-        .lookup_self(&hostname)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("placement host {hostname:?} has no registry target identity"))?;
-    Ok(Some(local.name == directory.authority.target))
-}
-
 /// What one relocation left behind.
 struct MoveReceipt {
     status: &'static str,
@@ -143,6 +50,12 @@ struct MoveReceipt {
     from_host: String,
     to_host: String,
     registry_generation: Option<String>,
+    /// Each file or tree the destination held at a state path before the
+    /// move, kept beside the moved state rather than deleted.
+    kept_replaced_state: Vec<String>,
+    /// Each state whose backup could not be settled, with why; its backup
+    /// stays where the transaction put it.
+    unsettled_state: Vec<String>,
 }
 
 /// Move `profile` to `to_host` from where it is placed now, on this host.
@@ -170,6 +83,8 @@ async fn relocate(
             from_host: source_name,
             to_host: to_host.to_string(),
             registry_generation: None,
+            kept_replaced_state: Vec::new(),
+            unsettled_state: Vec::new(),
         });
     }
     let source = target(&parsed_registry, &source_name)?.clone();
@@ -199,8 +114,10 @@ async fn relocate(
     let mut progress = Progress::default();
     match execute_move(&context, &mut progress, &runner, &committer).await {
         Ok(committed_generation) => {
+            let mut kept_replaced_state = Vec::new();
+            let mut unsettled_state = Vec::new();
             for state in &progress.destination_written {
-                if let Err(error) = cleanup_state_backup(
+                match settle_state_backup(
                     &context.destination,
                     state,
                     &context.transaction.id,
@@ -208,7 +125,9 @@ async fn relocate(
                 )
                 .await
                 {
-                    eprintln!("Warning: {error}");
+                    Ok(Some(kept)) => kept_replaced_state.push(kept),
+                    Ok(None) => {}
+                    Err(error) => unsettled_state.push(format!("{}: {error}", state.path)),
                 }
             }
             Ok(MoveReceipt {
@@ -218,6 +137,8 @@ async fn relocate(
                 from_host: context.source.name,
                 to_host: context.destination.name,
                 registry_generation: Some(committed_generation),
+                kept_replaced_state,
+                unsettled_state,
             })
         }
         // The move's own failure is the class the caller acts on; what the
@@ -266,21 +187,33 @@ pub(super) async fn move_services(
         "from_host": receipt.from_host,
         "to_host": receipt.to_host,
         "registry_generation": receipt.registry_generation,
+        "kept_replaced_state": receipt.kept_replaced_state,
+        "unsettled_state": receipt.unsettled_state,
     });
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
-    } else if receipt.status == "already_placed" {
-        println!(
+        return Ok(());
+    }
+    match &receipt.registry_generation {
+        None => println!(
             "{} is already placed on {}",
             receipt.profile, receipt.to_host
-        );
-    } else {
+        ),
+        Some(generation) => println!(
+            "moved {} from {} to {} (registry generation {generation})",
+            receipt.profile, receipt.from_host, receipt.to_host
+        ),
+    }
+    for kept in &receipt.kept_replaced_state {
         println!(
-            "moved {} from {} to {} (registry generation {})",
-            receipt.profile,
-            receipt.from_host,
-            receipt.to_host,
-            receipt.registry_generation.as_deref().unwrap_or_default()
+            "  kept what {} held there before the move: {kept}",
+            receipt.to_host
+        );
+    }
+    for unsettled in &receipt.unsettled_state {
+        eprintln!(
+            "  {}: the backup of {unsettled}; it stays under its .pre-stado-placement- name",
+            receipt.to_host
         );
     }
     Ok(())
