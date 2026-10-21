@@ -18,12 +18,14 @@ use super::LocalBackend;
 impl BlobBackend for LocalBackend {
     async fn upload_text(&self, path: &str, content: &str) -> Result<(), StorageError> {
         let target = self.path(path)?;
-        self.atomic_write(&target, content.as_bytes())
+        self.atomic_write_off_thread(path, target, content.as_bytes().to_vec())
+            .await
     }
 
     async fn upload_bytes(&self, path: &str, content: &[u8]) -> Result<(), StorageError> {
         let target = self.path(path)?;
-        self.atomic_write(&target, content)
+        self.atomic_write_off_thread(path, target, content.to_vec())
+            .await
     }
 
     async fn download_text(&self, path: &str) -> Result<Option<String>, StorageError> {
@@ -64,7 +66,8 @@ impl BlobBackend for LocalBackend {
     }
 
     async fn upload_text_if_absent(&self, path: &str, content: &str) -> Result<bool, StorageError> {
-        self.create_if_absent(path, content.as_bytes())
+        self.create_if_absent(path, content.as_bytes().to_vec())
+            .await
     }
 
     async fn upload_file_if_absent(
@@ -72,8 +75,9 @@ impl BlobBackend for LocalBackend {
         path: &str,
         local_file: &Path,
     ) -> Result<bool, StorageError> {
-        let data = fs::read(local_file)?;
-        self.create_if_absent(path, &data)
+        let source = local_file.to_path_buf();
+        let data = off_thread(path, move || fs::read(&source).map_err(StorageError::from)).await?;
+        self.create_if_absent(path, data).await
     }
 
     async fn download_text_versioned(
@@ -216,7 +220,8 @@ impl BlobBackend for LocalBackend {
             .map(|(k, v)| format!("{}: {}", json_str(k), json_str(v)))
             .collect::<Vec<_>>()
             .join(", ");
-        self.atomic_write(&metadata_path, format!("{{{body}}}").as_bytes())
+        self.atomic_write_off_thread(path, metadata_path, format!("{{{body}}}").into_bytes())
+            .await
     }
 
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {

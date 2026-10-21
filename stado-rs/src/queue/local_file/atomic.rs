@@ -3,15 +3,62 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 use crate::queue::StorageError;
 
-use super::paths::local_io;
+use super::paths::{local_io, off_thread};
 use super::LocalBackend;
+
+/// How a whole blob takes its place: over what is there, or only where
+/// nothing is.
+#[derive(Clone, Copy)]
+enum Placing {
+    Replace,
+    IfAbsent,
+}
+
+/// Write `data` to a sibling temporary file of `target`, fsync it, and put it
+/// in place by rename (`Replace`) or by link (`IfAbsent`, which the kernel
+/// refuses with `EEXIST` when `target` exists), then fsync the directory.
+/// `false` only when `IfAbsent` found `target` already there. The temporary
+/// file is created owner-only by `tempfile`.
+fn publish(target: &Path, data: &[u8], placing: Placing) -> Result<bool, StorageError> {
+    let parent = target.parent().ok_or_else(|| {
+        StorageError::Other(format!("no parent directory for {}", target.display()))
+    })?;
+    let name = target.file_name().ok_or_else(|| {
+        StorageError::Other(format!("{} names no file to publish", target.display()))
+    })?;
+    fs::create_dir_all(parent)
+        .map_err(|error| local_io("create parent directory for", target, error))?;
+    let prefix = format!(".{}.", name.to_string_lossy().trim_start_matches('.'));
+    let mut tmp = NamedTempFile::with_prefix_in(prefix, parent)
+        .map_err(|error| local_io("create temporary file for", target, error))?;
+    tmp.write_all(data)
+        .map_err(|error| local_io("write temporary file for", target, error))?;
+    tmp.as_file()
+        .sync_all()
+        .map_err(|error| local_io("sync temporary file for", target, error))?;
+    match placing {
+        Placing::Replace => {
+            tmp.persist(target)
+                .map_err(|error| local_io("persist", target, error.error))?;
+        }
+        Placing::IfAbsent => match tmp.persist_noclobber(target) {
+            Ok(_) => {}
+            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+            Err(err) => return Err(local_io("persist", target, err.error)),
+        },
+    }
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| local_io("sync parent directory for", target, error))?;
+    Ok(true)
+}
 
 impl LocalBackend {
     /// Publish `path` only if absent, and only whole: the bytes are written to a
@@ -26,61 +73,45 @@ impl LocalBackend {
     /// object would burn that version permanently. Either the object is complete or
     /// it is absent, and absent is republishable.
     ///
-    /// The temporary file is created 0600 by `tempfile`, matching what the previous
-    /// explicit mode requested.
-    pub(super) fn create_if_absent(&self, path: &str, data: &[u8]) -> Result<bool, StorageError> {
-        let _write_guard = self.mutation_guard()?;
+    /// The write fence is taken here; the write and its fsyncs run on the
+    /// runtime's blocking pool holding it, off the thread that awaits them.
+    pub(super) async fn create_if_absent(
+        &self,
+        path: &str,
+        data: Vec<u8>,
+    ) -> Result<bool, StorageError> {
+        let write_guard = self.mutation_guard()?;
         let target = self.path(path)?;
-        let parent = target.parent().ok_or_else(|| {
-            StorageError::Other(format!("no parent directory for {}", target.display()))
-        })?;
-        fs::create_dir_all(parent)
-            .map_err(|error| local_io("create parent directory for", &target, error))?;
-        let name = target.file_name().unwrap_or_default().to_string_lossy();
-        let prefix = format!(".{}.", name.trim_start_matches('.'));
-        let mut tmp = NamedTempFile::with_prefix_in(prefix, parent)
-            .map_err(|error| local_io("create temporary file for", &target, error))?;
-        tmp.write_all(data)
-            .map_err(|error| local_io("write temporary file for", &target, error))?;
-        tmp.as_file()
-            .sync_all()
-            .map_err(|error| local_io("sync temporary file for", &target, error))?;
-        match tmp.persist_noclobber(&target) {
-            Ok(_) => {
-                File::open(parent)
-                    .and_then(|directory| directory.sync_all())
-                    .map_err(|error| local_io("sync parent directory for", &target, error))?;
-                Ok(true)
-            }
-            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-            Err(err) => Err(local_io("persist", &target, err.error)),
-        }
+        off_thread(path, move || {
+            let _write_guard = write_guard;
+            publish(&target, &data, Placing::IfAbsent)
+        })
+        .await
     }
 
     /// Write via tempfile in the target directory + fsync + rename, so a
-    /// concurrent reader never observes a partial blob.
+    /// concurrent reader never observes a partial blob. On the calling
+    /// thread, for a write made under the per-blob lock of the CAS path.
     pub(super) fn atomic_write(&self, target: &Path, data: &[u8]) -> Result<(), StorageError> {
         let _write_guard = self.mutation_guard()?;
-        let parent = target.parent().ok_or_else(|| {
-            StorageError::Other(format!("no parent directory for {}", target.display()))
-        })?;
-        fs::create_dir_all(parent)
-            .map_err(|error| local_io("create parent directory for", target, error))?;
-        let name = target.file_name().unwrap_or_default().to_string_lossy();
-        let prefix = format!(".{}.", name.trim_start_matches('.'));
-        let mut tmp = NamedTempFile::with_prefix_in(prefix, parent)
-            .map_err(|error| local_io("create temporary file for", target, error))?;
-        tmp.write_all(data)
-            .map_err(|error| local_io("write temporary file for", target, error))?;
-        tmp.as_file()
-            .sync_all()
-            .map_err(|error| local_io("sync temporary file for", target, error))?;
-        tmp.persist(target)
-            .map_err(|error| local_io("persist", target, error.error))?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| local_io("sync parent directory for", target, error))?;
-        Ok(())
+        publish(target, data, Placing::Replace).map(|_| ())
+    }
+
+    /// [`Self::atomic_write`] with the write and its fsyncs on the runtime's
+    /// blocking pool, for an async caller: a part upload's fsync on a loaded
+    /// disk took seconds on the thread that serves every object API request.
+    pub(super) async fn atomic_write_off_thread(
+        &self,
+        path: &str,
+        target: PathBuf,
+        data: Vec<u8>,
+    ) -> Result<(), StorageError> {
+        let write_guard = self.mutation_guard()?;
+        off_thread(path, move || {
+            let _write_guard = write_guard;
+            publish(&target, &data, Placing::Replace).map(|_| ())
+        })
+        .await
     }
 
     /// Run `f` under an exclusive flock keyed on the blob path (Python
