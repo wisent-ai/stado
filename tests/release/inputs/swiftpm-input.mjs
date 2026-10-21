@@ -91,7 +91,8 @@ try {
   // An interrupted publication leaves its stage behind; the next one removes
   // stages whose process is gone and keeps those of a live process.
   const stages = join(checkout, '.build', 'release-input');
-  const ended = spawnSync('true');
+  // A process that has already ended names a stage whose process is gone.
+  const ended = spawnSync(process.execPath, ['--version']);
   assert.ok(exitedCleanly(ended), JSON.stringify(ended));
   const abandoned = join(stages, `swiftpm-${ended.pid}-interrupted`);
   const live = join(stages, `swiftpm-${process.pid}-running`);
