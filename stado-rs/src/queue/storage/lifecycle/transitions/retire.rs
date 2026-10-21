@@ -155,36 +155,33 @@ impl JobStorage {
             .await
             {
                 Ok(()) => {}
-                // The run manifest this outcome belongs to is gone, so the
-                // outcome cannot be retained against it. Nothing is dropped
-                // for that: the source stays fenced and the transition
-                // record stays, exactly as refusing did. What changes is the
-                // blast radius. One such run — a platform run manifest reaped
-                // after its build was cancelled — otherwise ends every
-                // coordinator tick with `blob not found`, so no queued job
-                // is dispatched at all and a freshly queued build is still
-                // waiting hours later. One orphan must not stop the
-                // fleet; the same shape was already repaired for job records
-                // this build cannot interpret, a few lines below.
+                // The run manifest this outcome belongs to is gone: its run
+                // was reaped, and with it every outcome the run kept, so
+                // there is nothing left to retain this one against. The move
+                // is finished without it, as a settled generation an older
+                // writer left is above. Leaving the source fenced and the
+                // record in place for a recovery that cannot come kept every
+                // such job fenced for good, and every pass walked each record
+                // again and warned about it again.
                 Err(StorageError::NotFound(missing)) => {
                     tracing::warn!(
                         event = "transition_run_manifest_missing",
                         job = %transition.job_id,
                         transition = %transition.transition_id,
                         missing = %missing,
-                        "the run manifest of a settled job is gone; its transition is left for \
-                         recovery and the rest of this pass continues"
+                        "the run manifest of a settled job is gone, so no run keeps its \
+                         outcome; the move is finished without it"
                     );
-                    return Ok(false);
                 }
                 // The run manifest is there and this build cannot read it:
                 // a submission a newer writer recorded with a field this
                 // build does not know, or an entry that no longer matches
-                // its job. The same answer as a missing manifest: the
-                // source stays fenced, the record stays, recovery by a build
-                // that reads it finishes the move. Ending the pass here ended
-                // the whole host process, and with it the fleet's object API,
-                // every ten seconds for as long as the record existed.
+                // its job. The run still keeps outcomes, so this one is not
+                // dropped: the source stays fenced, the record stays, and a
+                // build that reads the manifest finishes the move. Ending the
+                // pass here ended the whole host process, and with it the
+                // fleet's object API, every ten seconds for as long as the
+                // record existed.
                 Err(StorageError::Other(detail)) => {
                     tracing::warn!(
                         event = "transition_run_manifest_unreadable",
