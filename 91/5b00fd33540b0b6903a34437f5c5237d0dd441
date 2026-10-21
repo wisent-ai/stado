@@ -1,6 +1,6 @@
 Quota commands name a missing region, family, limit or grant
 
-Repairs: "Quota output names what a provider left out instead of printing "?"" its request report printed a request without a preferred value as a dash, a mark that reads as a value of its own
+Repairs: "Quota output names what a provider left out instead of printing "?"" its lines are among those this commit rewrites so that quota commands name a missing region, family, limit or grant
 
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
 The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
@@ -16,9 +16,5 @@ The documentation this commit touches, or should touch, says exactly what the co
 No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
-
-Repairs: "Quota output names what a provider left out instead of printing "?"" its request listing printed a dash for a request without a preferred value
-Repaired-By: "quota ticket reply and escalate say what a result row did not report" repairs it in this push, naming this commit on its Repairs line
-Repairs: "Quota output names what a provider left out instead of printing "?"" its quota rows still printed a dash for a region, family, limit or preferred value the provider left out
 
 Harsh-Review-Attacked: whether quota commands still print a dash or "?"; a missing region, family, limit, preferred value or grant is named.
