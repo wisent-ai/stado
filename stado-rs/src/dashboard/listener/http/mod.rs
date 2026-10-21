@@ -154,8 +154,10 @@ impl Dashboard {
         }
     }
 
-    /// Accept loop on an already-bound listener (tests bind 127.0.0.1:0).
-    /// One task per connection — the ThreadingHTTPServer equivalent.
+    /// Accept loop on an already-bound listener (tests bind a loopback port
+    /// the kernel assigns). Every connection is served on this one task,
+    /// interleaved at its awaits, so a route that blocks the thread holds
+    /// every other connection until it returns.
     async fn serve_on(
         &self,
         listener: TcpListener,
@@ -196,14 +198,16 @@ impl Dashboard {
                 Ok(Some(request)) => request,
                 Ok(None) => return Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
-                    let status = if error.to_string().contains("accepts at most") {
-                        reqwest::StatusCode::PAYLOAD_TOO_LARGE
+                    let (status, reason) = if error.to_string().contains("accepts at most") {
+                        // RFC 9110 section 15.5.14's reason phrase.
+                        (reqwest::StatusCode::PAYLOAD_TOO_LARGE, "Content Too Large")
                     } else {
-                        reqwest::StatusCode::BAD_REQUEST
+                        // RFC 9110 section 15.5.1's reason phrase.
+                        (reqwest::StatusCode::BAD_REQUEST, "Bad Request")
                     };
                     let mut response = Response::new(
                         http_status(status),
-                        status.canonical_reason().unwrap_or_default(),
+                        reason,
                         "text/plain; charset=utf-8",
                         error.to_string().as_bytes(),
                     );
@@ -256,16 +260,23 @@ impl Dashboard {
             // would parse those bytes as its next response, so HEAD ends the
             // connection instead of poisoning it.
             let keep_alive = request.wants_keep_alive() && request.method != "HEAD";
+            // Each request line carries how long its route took, so a slow
+            // request names itself in the log instead of showing only as the
+            // silence of every request queued behind it.
+            let started = std::time::Instant::now();
             let mut response = self.route(&request).await;
             eprintln!(
-                "[dashboard] \"{} {} HTTP/1.1\" {} -",
-                request.method, request.path, response.status
+                "[dashboard] \"{} {} HTTP/1.1\" {} - {} ms",
+                request.method,
+                request.path,
+                response.status,
+                started.elapsed().as_millis()
             );
             if !keep_alive {
                 response.close_connection();
             }
             stream.write_all(&response.bytes).await?;
-            if response.status == 101 {
+            if response.status == http_status(reqwest::StatusCode::SWITCHING_PROTOCOLS) {
                 return crate::dashboard::operator_console::stream::serve(
                     stream,
                     carry,
