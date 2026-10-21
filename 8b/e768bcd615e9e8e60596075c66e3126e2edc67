@@ -1,6 +1,7 @@
 quota ticket reply and escalate say what a result row did not report
 
-Repairs: "Quota output names what a provider left out instead of printing "?"" its ticket tables read each result through a reported helper of their own, a second copy of the shared report field reader, and printed a result without ok as N
+Repairs: "Quota commands name a missing region, family, limit or grant" its ticket tables read a row without ok as N and counted it failed
+Repairs: "Quota output names what a provider left out instead of printing "?"" its lines are among those this commit rewrites so that quota ticket reply and escalate say what a result row did not report
 
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
 The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
@@ -16,10 +17,6 @@ The documentation this commit touches, or should touch, says exactly what the co
 No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
-
-Repairs: "Quota commands name a missing region, family, limit or grant" its ticket tables read a row without ok as N and counted it failed
-Repairs: "Quota output names what a provider left out instead of printing \"?\"" its reported helper and the two copied tables duplicated the shared renderer
-Repairs: "Quota output names what a provider left out instead of printing "?"" its lines in mod.rs are replaced by this change.
 
 Harsh-Review-Attacked: whether the escalation filter changed; the relevant rows are chosen exactly as before and only their printing moved into the shared table.
 Harsh-Review-Attacked: whether the reply table now rewrites dry-run actions it printed raw; it does, naming what would be done instead of the bare word dry_run.
