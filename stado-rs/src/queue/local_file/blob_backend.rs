@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 
 use crate::queue::{json_str, BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 
-use super::paths::remove_missing_ok;
+use super::paths::{off_thread, remove_missing_ok};
 use super::LocalBackend;
 
 #[async_trait]
@@ -36,23 +36,31 @@ impl BlobBackend for LocalBackend {
             .map_err(|err| StorageError::Other(format!("invalid UTF-8 in {path}: {err}")))
     }
 
+    /// An object's bytes, read on the runtime's blocking pool: a release
+    /// archive is gigabytes, and reading it on the thread that serves the
+    /// object API held every other request for as long as the read took.
     async fn download_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError> {
         let target = self.path(path)?;
-        match fs::read(&target) {
+        off_thread(path, move || match fs::read(&target) {
             Ok(data) => Ok(Some(data)),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(err.into()),
-        }
+        })
+        .await
     }
 
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         let source = self.path(path)?;
-        if !source.is_file() {
-            return Ok(false);
-        }
-        // Python `shutil.copyfile` overwrites `dest`.
-        fs::copy(&source, dest)?;
-        Ok(true)
+        let dest = dest.to_path_buf();
+        off_thread(path, move || {
+            if !source.is_file() {
+                return Ok(false);
+            }
+            // Python `shutil.copyfile` overwrites `dest`.
+            fs::copy(&source, &dest)?;
+            Ok(true)
+        })
+        .await
     }
 
     async fn upload_text_if_absent(&self, path: &str, content: &str) -> Result<bool, StorageError> {

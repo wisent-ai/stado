@@ -56,14 +56,23 @@ impl LocalBackend {
         let root = self.root.clone();
         let internal = [self.locks.clone(), self.metadata.clone()];
         let wanted = prefix.to_owned();
-        tokio::task::spawn_blocking(move || names_under(&root, &internal, &wanted))
-            .await
-            .map_err(|error| {
-                StorageError::Other(format!(
-                    "listing the local blobs under {prefix:?} did not finish: {error}"
-                ))
-            })?
+        off_thread(prefix, move || names_under(&root, &internal, &wanted)).await
     }
+}
+
+/// One blocking filesystem step of the local store, about `path`, run on
+/// the runtime's blocking pool so the thread that awaits it keeps serving: a
+/// step that does not finish (it panicked, or the runtime is shutting down)
+/// is refused naming the path.
+pub(super) async fn off_thread<T: Send + 'static>(
+    path: &str,
+    work: impl FnOnce() -> Result<T, StorageError> + Send + 'static,
+) -> Result<T, StorageError> {
+    tokio::task::spawn_blocking(work).await.map_err(|error| {
+        StorageError::Other(format!(
+            "the local storage step on {path:?} did not finish: {error}"
+        ))
+    })?
 }
 
 /// The walk [`LocalBackend::relative_names`] describes, over `root`, leaving
