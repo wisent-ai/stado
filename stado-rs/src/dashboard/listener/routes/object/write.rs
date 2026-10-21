@@ -2,7 +2,8 @@
 //! is read, and the write itself.
 
 use std::collections::BTreeMap;
-use std::io::Write;
+
+use tokio::io::AsyncWriteExt;
 
 use serde_json::json;
 
@@ -25,10 +26,11 @@ impl Dashboard {
                 &json!({"error": "forbidden"}),
             ));
         }
-        let (path, query) = request
-            .path
-            .split_once('?')
-            .unwrap_or((request.path.as_str(), ""));
+        // A request target without a query has an empty one (RFC 3986 §3.4).
+        let (path, query) = match request.path.split_once('?') {
+            Some(split) => split,
+            None => (request.path.as_str(), ""),
+        };
         if path != "/api/object" {
             return Some(empty_response(
                 http_status(reqwest::StatusCode::NOT_FOUND),
@@ -57,10 +59,7 @@ impl Dashboard {
         // Ordinary object traffic is deliberately unaffected, and a release
         // coordinate now REVALIDATES the release boundary without being gated
         // by it -- the split `boundary_plan` exists for.
-        let plan = boundary_plan(
-            request.path.split('?').next().unwrap_or(""),
-            Some((object.namespace(), object.key())),
-        );
+        let plan = boundary_plan(path, Some((object.namespace(), object.key())));
         if !self.satisfy_boundaries(&plan).await {
             return Some(send_json(
                 http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
@@ -117,9 +116,11 @@ impl Dashboard {
         let if_absent = query_value(&values, "if_absent").as_deref() == Some("true");
         let if_version = query_value(&values, "if_version").filter(|value| !value.is_empty());
         let metadata_only = query_value(&values, "metadata_only").as_deref() == Some("true");
-        let selected =
-            usize::from(if_absent) + usize::from(if_version.is_some()) + usize::from(metadata_only);
-        if selected > 1 {
+        // The three write modes each change what is written; asking for two
+        // of them at once names no single write.
+        if let (true, true, _) | (true, _, true) | (_, true, true) =
+            (if_absent, if_version.is_some(), metadata_only)
+        {
             return Ok(send_json(
                 http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": "if_absent, if_version, and metadata_only are mutually exclusive"}),
@@ -188,10 +189,13 @@ impl Dashboard {
                 }),
             ));
         }
-        let content_type = request
-            .header("content-type")
-            .unwrap_or("application/octet-stream")
-            .to_string();
+        // A body sent without a media type is read as one, RFC 9110 §8.3:
+        // "the recipient MAY either assume a media type of
+        // \"application/octet-stream\" … or examine the data".
+        let content_type = match request.header("content-type") {
+            Some(declared) => declared.to_string(),
+            None => OCTET_STREAM.to_string(),
+        };
         let extra = match request.header("x-stado-object-metadata") {
             Some(raw) => match serde_json::from_str(raw) {
                 Ok(value) => value,
@@ -214,8 +218,13 @@ impl Dashboard {
             }
         };
         if if_absent {
-            let mut source = tempfile::NamedTempFile::new()?;
-            source.write_all(&request.body)?;
+            // The body is staged through the async file, whose writes run on
+            // the blocking pool, so a large create-only object does not hold
+            // the object API's one request thread while it lands on disk.
+            let source = tempfile::NamedTempFile::new()?;
+            let mut staging = tokio::fs::File::from_std(source.reopen()?);
+            staging.write_all(&request.body).await?;
+            staging.flush().await?;
             if !self
                 .store
                 .upload_file_if_absent(&path, source.path())
@@ -255,3 +264,6 @@ impl Dashboard {
         ))
     }
 }
+
+/// The media type a body sent without one is read as (RFC 9110 §8.3).
+const OCTET_STREAM: &str = "application/octet-stream";
