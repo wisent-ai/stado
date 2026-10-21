@@ -44,7 +44,11 @@ impl WorkloadLock {
 impl Drop for WorkloadLock {
     fn drop(&mut self) {
         if let Some(file) = self.settle() {
-            let _ = file.unlock();
+            // Closing the file releases the hold too; a refused unlock is
+            // said so the hold's end is not silent.
+            if let Err(error) = file.unlock() {
+                eprintln!("janitor: a workload hold's unlock was refused, and the hold ends when its file closes: {error}");
+            }
         }
     }
 }
