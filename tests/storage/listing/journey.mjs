@@ -100,6 +100,8 @@ try {
   for (const object of sized.objects) {
     assert.equal(object.size, readFileSync(join(store, object.name)).byteLength);
     assert.equal(object.size_error, null);
+    // The local store's listing states every size, so no body is read.
+    assert.equal(object.size_from, 'listing');
   }
   const text = command(['storage', 'ls', 'queue/']).stdout;
   for (const name of expected) assert.ok(text.includes(name), `text output omitted ${name}`);

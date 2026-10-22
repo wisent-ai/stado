@@ -1,4 +1,4 @@
-//! The objects under one explicit prefix, and the opt-in body-size probe.
+//! The objects under one explicit prefix, and their sizes on request.
 
 use crate::cli::storage::*;
 
@@ -20,23 +20,30 @@ pub(in crate::cli::storage) async fn ls_prefix(
     if let Some(limit) = args.limit {
         blobs.truncate(limit);
     }
-    let sizes = if args.size {
-        probe_sizes(backend, &blobs, copy::default_concurrency()?).await
+    // One size per listed object with --size, none without it.
+    let sizes: Vec<Option<SizeProbe>> = if args.size {
+        let probed = probe_sizes(backend, &blobs, copy::default_concurrency()?).await;
+        probed.into_iter().map(Some).collect()
     } else {
-        Vec::new()
+        blobs.iter().map(|_| None).collect()
     };
 
     if args.json {
         let objects: Vec<Value> = blobs
             .iter()
-            .enumerate()
-            .map(|(index, blob)| {
-                let probe = sizes.get(index);
+            .zip(&sizes)
+            .map(|(blob, probe)| {
+                // Without --size no size was asked for, and each is null.
+                let (size, from, error) = match probe {
+                    Some(probe) => (probe.value(), probe.source(), probe.error()),
+                    None => (Value::Null, None, None),
+                };
                 json!({
                     "name": blob.name,
                     "updated": render_optional_stamp(blob.updated),
-                    "size": probe.map_or(Value::Null, SizeProbe::value),
-                    "size_error": probe.and_then(SizeProbe::error),
+                    "size": size,
+                    "size_from": from,
+                    "size_error": error,
                     "metadata": blob.metadata,
                 })
             })
@@ -54,18 +61,21 @@ pub(in crate::cli::storage) async fn ls_prefix(
         return Ok(());
     }
 
-    let mut headers: Vec<&str> = vec!["NAME", "UPDATED"];
+    // The printed table's column headings, in the order its cells follow.
+    let mut headers: Vec<&str> = Vec::new();
+    headers.push("NAME");
+    headers.push("UPDATED");
     if args.size {
         headers.push("SIZE");
     }
     headers.push("METADATA");
     let rows: Vec<Vec<String>> = blobs
         .iter()
-        .enumerate()
-        .map(|(index, blob)| {
+        .zip(&sizes)
+        .map(|(blob, probe)| {
             let mut row = vec![blob.name.clone(), render_stamp(blob.updated)];
-            if args.size {
-                row.push(sizes.get(index).map_or_else(String::new, SizeProbe::cell));
+            if let Some(probe) = probe {
+                row.push(probe.cell());
             }
             row.push(render_metadata(&blob.metadata));
             row
@@ -79,15 +89,11 @@ pub(in crate::cli::storage) async fn ls_prefix(
     Ok(())
 }
 
-/// Body length of each listed object.
-///
-/// Cost note, the same one [`crate::queue::copy`] carries in its module
-/// docs: [`BlobInfo`] has no size field — the backend listing contract
-/// yields name, timestamp and metadata only — so the only route to a byte
-/// count is reading the body. That is why `--size` is opt-in and why it is
-/// bounded only when `--limit` is stated, and the fan-out is the crate's one bulk budget
-/// ([`copy::default_concurrency`], the OS's available parallelism) rather
-/// than a second concurrency style.
+/// Size of each listed object: the one the store's listing states (every
+/// backend's listing carries it), read from the body only for an object the
+/// listing gave none for, which on a live queue is one removed between the
+/// listing and its stat. Reads run at the crate's one bulk budget
+/// ([`copy::default_concurrency`], the OS's available parallelism).
 async fn probe_sizes(
     backend: &Arc<dyn BlobBackend>,
     blobs: &[BlobInfo],
@@ -95,8 +101,11 @@ async fn probe_sizes(
 ) -> Vec<SizeProbe> {
     futures::stream::iter(blobs)
         .map(|blob| async move {
+            if let Some(listed) = blob.size {
+                return SizeProbe::Listed(listed);
+            }
             match backend.download_bytes(&blob.name).await {
-                Ok(Some(bytes)) => SizeProbe::Bytes(bytes.len()),
+                Ok(Some(bytes)) => SizeProbe::Read(bytes.len()),
                 Ok(None) => SizeProbe::Vanished,
                 Err(err) => SizeProbe::Failed(err.to_string()),
             }
@@ -106,10 +115,13 @@ async fn probe_sizes(
         .await
 }
 
-/// Outcome of one `--size` body read. `Vanished` is a real state on a live
+/// Outcome of one object's size. `Vanished` is a real state on a live
 /// queue: the object was listed and then claimed away before the read.
 enum SizeProbe {
-    Bytes(usize),
+    /// The size the store's listing stated.
+    Listed(u64),
+    /// The length of the body, read because the listing stated none.
+    Read(usize),
     Vanished,
     Failed(String),
 }
@@ -117,7 +129,8 @@ enum SizeProbe {
 impl SizeProbe {
     fn cell(&self) -> String {
         match self {
-            Self::Bytes(bytes) => bytes.to_string(),
+            Self::Listed(bytes) => bytes.to_string(),
+            Self::Read(bytes) => bytes.to_string(),
             Self::Vanished => "vanished".to_string(),
             Self::Failed(err) => format!("error: {err}"),
         }
@@ -125,14 +138,24 @@ impl SizeProbe {
 
     fn value(&self) -> Value {
         match self {
-            Self::Bytes(bytes) => json!(bytes),
+            Self::Listed(bytes) => json!(bytes),
+            Self::Read(bytes) => json!(bytes),
             Self::Vanished | Self::Failed(_) => Value::Null,
+        }
+    }
+
+    /// Where the size came from: `listing` or `body`; none without a size.
+    fn source(&self) -> Option<&'static str> {
+        match self {
+            Self::Listed(_) => Some("listing"),
+            Self::Read(_) => Some("body"),
+            Self::Vanished | Self::Failed(_) => None,
         }
     }
 
     fn error(&self) -> Option<String> {
         match self {
-            Self::Bytes(_) => None,
+            Self::Listed(_) | Self::Read(_) => None,
             Self::Vanished => Some("vanished between listing and read".to_string()),
             Self::Failed(err) => Some(err.clone()),
         }

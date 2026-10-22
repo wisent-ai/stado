@@ -58,7 +58,7 @@ enum NativeSpaceOperations {
             hostPlacement: .none, fields: [
                 .init(id: "prefix", label: "Object prefix (blank reads canonical prefix counts)"),
                 .init(id: "limit", label: "Maximum objects (blank lists every object)", option: "--limit"),
-                .init(id: "size", label: "Read object bodies to report their sizes", option: "--size", flag: true),
+                .init(id: "size", label: "Report each object's size, as the store's listing states it", option: "--size", flag: true),
             ], mutates: false),
         .init(id: "copy-store-objects", title: "Copy objects between stores", path: ["storage", "copy"],
             hostPlacement: .none, fields: endpointFields + prefixFields + concurrencyFields, jsonOutput: false),

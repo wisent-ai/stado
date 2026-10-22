@@ -15,8 +15,9 @@ pub struct StorageLsArgs {
     /// Maximum objects listed under an explicit prefix. Omit to list every object.
     #[arg(long)]
     limit: Option<usize>,
-    /// Also report each listed object's body size. Opt-in because it costs
-    /// one download per object; see `probe_sizes`.
+    /// Also report each listed object's size: the one the store's listing
+    /// states, or its body's length for an object the listing stated none
+    /// for; `size_from` says which.
     #[arg(long)]
     size: bool,
     #[arg(long)]
