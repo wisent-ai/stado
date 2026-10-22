@@ -85,6 +85,26 @@ enum NativeProductOperations {
         .init(id: "dependencies", title: "Read which products each product's code needs, and refuse one with no way to run without them", path: ["product", "dependencies"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product (blank reads every catalog product)"),
         ], mutates: false),
+        // The name register: every active repository of the organization with
+        // the product the catalog claims it for, what it is (its GitHub
+        // description, else what the catalog says: the product's description
+        // for its owner repository, the surface kind and product for any
+        // other) and the `from` column naming which source the row read. The
+        // register is Markdown, which `--names` writes in place of `--json`;
+        // a blank organization leaves `--names` to the CLI's own default.
+        .init(id: "catalog-names", title: "Read the name register: what each repository of the organization is, and where that was read", path: ["product", "catalog", "--names"], hostPlacement: .none, fields: [
+            .init(id: "org", label: "GitHub organization (blank reads the CLI's default)"),
+        ], mutates: false, jsonOutput: false),
+        .init(id: "catalog-names-write", title: "Write the name register to a file (~/NAMES.md)", path: ["product", "catalog", "--names"], hostPlacement: .none, fields: [
+            .init(id: "org", label: "GitHub organization (blank reads the CLI's default)"),
+            .init(id: "output", label: "Register file to write", option: "--output", required: true),
+        ], jsonOutput: false),
+        // Refused, naming the file, when it differs from the register the
+        // organization and the catalog give now.
+        .init(id: "catalog-names-check", title: "Check that a name register file is the one the organization and the catalog give now", path: ["product", "catalog", "--names"], hostPlacement: .none, fields: [
+            .init(id: "org", label: "GitHub organization (blank reads the CLI's default)"),
+            .init(id: "check", label: "Register file to check", option: "--check", required: true),
+        ], mutates: false, jsonOutput: false),
         // Every committed Cargo.lock of the selected checkouts read against an
         // OSV advisory database: each affected package version, its advisory,
         // the fixed versions and whether Cargo reaches a fix without a
