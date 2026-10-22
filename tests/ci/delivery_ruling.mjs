@@ -8,12 +8,15 @@
 // one the operator's consent covers (CI/CD's repair), the second one it does
 // not.
 //
-// Oko's own answer (`oko admit install --product P --purpose D`) is the
-// expectation for each purpose:
-// - refused: `stado ci plan set` is refused quoting that refusal and writes no
+// Oko's own answers (`oko admit build|install --product P --purpose D`) are
+// the expectation for each purpose; the purpose is admitted when both are:
+// - refused: `stado ci plan set` is refused quoting the refusal and writes no
 //   plan, and `stado ci run` over a plan already on disk is refused the same
-//   way and writes no state;
-// - allowed: the plan is declared, keeps its purpose, and is cleared again.
+//   way, before anything is built, and writes no state;
+// - allowed: the plan is declared and keeps its purpose, and `stado ci run`
+//   over it reaches the step's install without any build or install being
+//   refused by a ruling (the install it starts inherits both admissions, so
+//   it never asks again without the purpose); the plan is cleared again.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -59,19 +62,31 @@ function spawn(program, args) {
 function journey(purpose) {
   rmSync(environment.STADO_DELIVERY_PLAN, { force: true });
   rmSync(environment.STADO_DELIVERY_STATE, { force: true });
-  const verdict = spawn(okoBinary, ['admit', 'install', '--product', product, '--purpose', purpose]);
-  const allowed = exitedCleanly(verdict);
-  report.answers[purpose] = { allowed, said: (verdict.stderr || verdict.stdout).trim() };
+  const answer = action => {
+    const verdict = spawn(okoBinary, ['admit', action, '--product', product, '--purpose', purpose]);
+    return { allowed: exitedCleanly(verdict), said: (verdict.stderr || verdict.stdout).trim() };
+  };
+  const build = answer('build');
+  const install = answer('install');
+  const allowed = build.allowed && install.allowed;
+  report.answers[purpose] = { build, install, allowed };
   const declare = ['ci', 'plan', 'set', '--purpose', purpose, '--step', step, '--json'];
   if (allowed) {
     const declared = spawn(stadoBinary, declare);
     assert.ok(exitedCleanly(declared), declared.stderr);
     assert.equal(JSON.parse(declared.stdout).purpose, purpose, 'the plan does not keep its purpose');
+    const pass = spawn(stadoBinary, ['ci', 'run']);
+    const said = `${pass.stdout}\n${pass.stderr}`;
+    assert.ok(!said.includes('stado ci run is refused'), `an admitted pass was refused: ${said}`);
+    assert.ok(
+      !said.includes("the operator's rulings do not allow it now"),
+      `a build or install the plan's purpose admits was refused by a ruling: ${said}`,
+    );
     const cleared = spawn(stadoBinary, ['ci', 'plan', 'clear']);
     assert.ok(exitedCleanly(cleared), cleared.stderr);
     return;
   }
-  const ruling = report.answers[purpose].said;
+  const ruling = [build, install].find(answered => !answered.allowed).said;
   assert.ok(ruling, 'Oko refused without saying why');
   const declared = spawn(stadoBinary, declare);
   assert.ok(!exitedCleanly(declared), `a plan the rulings forbid for ${purpose} was declared`);

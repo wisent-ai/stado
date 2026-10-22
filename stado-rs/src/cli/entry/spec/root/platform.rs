@@ -269,10 +269,10 @@ pub(crate) enum CiPlanCommands {
     /// Declare the plan: each `--step PRODUCT:SURFACE:CHECKOUT`, in the
     /// order the routine installs them, the checkout named absolutely, and
     /// the open Oko defect the installs repair. Refused, quoting the ruling,
-    /// while the operator's rulings forbid installing for that purpose.
+    /// while the rulings forbid building or installing for that purpose.
     Set {
-        /// The open Oko defect the routine installs to repair; every install
-        /// asks `oko admit install --product P --purpose DEFECT`.
+        /// The open Oko defect the routine installs to repair; every step asks
+        /// `oko admit build|install --product P --purpose DEFECT`.
         #[arg(long, value_name = "DEFECT")]
         purpose: String,
         #[arg(

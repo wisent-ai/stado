@@ -119,25 +119,25 @@ pub fn declared() -> Result<Plan, CmdError> {
     })
 }
 
-/// Every step's install asked of Oko's admission decision (`oko admit
-/// install --product P --purpose DEFECT`) before anything is planned or run.
-/// The routine installs and builds: the operator forbade both until every
-/// task and defect is closed, and consented to them only to repair CI/CD.
-/// The plan's purpose names the open defect it repairs; a consent he limited
-/// to that purpose admits it while the defect is open, and every other
-/// purpose, or the same one once it closed, meets the withdrawal quoted.
+/// Every step's build and install asked of Oko's admission decision (`oko
+/// admit build|install --product P --purpose DEFECT`) before anything is
+/// planned or run. The routine installs, and each install it starts builds
+/// the product: the operator forbade both until every task and defect is
+/// closed, and consented to them only to repair CI/CD. The plan's purpose
+/// names the open defect it repairs; a consent he limited to that purpose
+/// admits it while the defect is open, and every other purpose, or the same
+/// one once it closed, meets the withdrawal quoted. Each admission is kept in
+/// this process's environment for its action, so the `stado product install`
+/// a step starts inherits both and does not ask again without the purpose.
 /// Stado keeps no copy of the rule; the answer is Oko's.
 pub(crate) async fn admitted(steps: &[Step], purpose: &str, doing: &str) -> Result<(), CmdError> {
+    use crate::cli::release_loop::allowed::{refusal, BUILD, INSTALL};
     let mut refusals = Vec::new();
     for step in steps {
-        if let Err(refused) = crate::cli::release_loop::allowed::refusal(
-            crate::cli::release_loop::allowed::INSTALL,
-            Some(&step.product),
-            &[purpose],
-        )
-        .await
-        {
-            refusals.push(refused);
+        for action in [BUILD, INSTALL] {
+            if let Err(refused) = refusal(action, Some(&step.product), &[purpose]).await {
+                refusals.push(refused);
+            }
         }
     }
     if refusals.is_empty() {
