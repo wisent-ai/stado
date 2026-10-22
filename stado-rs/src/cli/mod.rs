@@ -24,6 +24,7 @@ pub mod capacity;
 pub mod ci;
 pub mod cloudflare;
 pub mod config_cmd;
+pub mod contributions;
 pub mod cost;
 pub mod database;
 pub mod directory;

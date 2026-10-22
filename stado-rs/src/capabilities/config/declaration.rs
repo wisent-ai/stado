@@ -134,6 +134,11 @@ pub const DECLARED_FIELDS: &[DeclaredField] = &[
         "providers::local::agent::reconcile_gpu_power_limit",
     ),
     DeclaredField::read(
+        "contribution_owner",
+        DeclarationSurface::RegistryTarget,
+        "cli::contributions::owner",
+    ),
+    DeclaredField::read(
         "privacy_grants",
         DeclarationSurface::RegistryTarget,
         "cli::host::checks::health::publish::privacy",

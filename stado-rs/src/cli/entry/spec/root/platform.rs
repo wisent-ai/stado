@@ -120,7 +120,6 @@ pub(crate) enum PlatformCommands {
     /// when the queue has work.
     #[command(subcommand)]
     Market(MarketCommands),
-
     /// Inspect and reap live agent VMs across the configured cloud providers.
     #[command(subcommand)]
     Instances(instances::InstancesCommands),
@@ -128,14 +127,15 @@ pub(crate) enum PlatformCommands {
     /// resume and delete.
     #[command(subcommand)]
     Sandbox(sandbox::SandboxCommands),
-
     /// Transactional outage recovery: fence, migrate, verify, and cut over.
     #[command(subcommand)]
     Recovery(recovery::RecoveryCommands),
-
     /// Move queue state between storage backends (billing-outage migration).
     #[command(subcommand)]
     Storage(storage::StorageCommands),
+    /// Report the fleet's job time to Wisent's contribution ledger.
+    #[command(subcommand)]
+    Contributions(contributions::ContributionsCommands),
     /// Read, migrate, and manage application credentials in the selected store.
     #[command(name = "credentials", subcommand)]
     Secrets(secrets::SecretsCommands),

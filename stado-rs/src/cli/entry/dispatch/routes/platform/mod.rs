@@ -100,6 +100,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
         } => bootstrap::run(target, dry_run, local, print_install_script).await,
         PlatformCommands::Recovery(sub) => recovery::dispatch(sub).await,
         PlatformCommands::Storage(sub) => storage::dispatch(sub).await,
+        PlatformCommands::Contributions(sub) => contributions::dispatch(sub).await,
         PlatformCommands::Instances(sub) => instances::dispatch(sub).await,
         PlatformCommands::Sandbox(sub) => sandbox::dispatch(sub).await,
         PlatformCommands::Secrets(sub) => secrets::dispatch(sub).await,
