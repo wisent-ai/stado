@@ -1,0 +1,20 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Repairs: "A commit that declares a module file it does not hold is refused before anything compiles" its module check missed a crate:: path into a module file the tree holds but no declaration reaches, which compiles nowhere either
+
+Harsh-Review-Attacked: whether an unreached module is found without compiling; every crate:: path of a reached module is followed through the declared modules from the files alone, and a segment naming a held file no mod line reaches is refused naming the using file and the path, beside any missing file.
+Harsh-Review-Attacked: whether a path to an item is refused; a segment naming an item, or a module with no file, is left to the build, so only a held unreached file is named.
+Harsh-Review-Attacked: whether the test runs the real product; it commits a crate calling crate::hidden::run with hidden/mod.rs held but undeclared, reads the built quality check refuse it, then declares the module and reads that refusal gone.
