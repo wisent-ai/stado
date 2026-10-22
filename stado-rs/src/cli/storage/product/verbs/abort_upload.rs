@@ -19,11 +19,14 @@ pub struct StorageAbortUploadArgs {
 /// The staged parts of one interrupted upload, and their removal.
 ///
 /// Addressed by the TARGET object, because that is the only name a failed
-/// publisher still has: the parts carry a content digest as their upload id,
-/// which the publisher computed and then lost with the process. Every part
-/// under `<key>.__stado_upload/` belongs to this target by construction, and
-/// nothing else can live under that suffix - `put` is the only writer of it -
-/// so the enumeration is exact rather than a pattern match over the store.
+/// publisher still has: `put` names its parts by a content digest it
+/// computed and then lost with the process, and an S3 client's abandoned
+/// multipart upload by an upload id only that client held. Every part under
+/// `<key>.__stado_upload/` belongs to this target by construction, and
+/// nothing else can live under that suffix - `put` and the S3 endpoint's
+/// multipart uploads are its only writers, and neither lists it as an
+/// object - so the enumeration is exact rather than a pattern match over the
+/// store.
 ///
 /// A published object is never touched here: the prefix cannot address one.
 pub(in crate::cli::storage) async fn abort_upload(

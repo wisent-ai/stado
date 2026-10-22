@@ -6,15 +6,7 @@ macro_rules! define_capabilities {
             $variant:ident => {
                 id: $id:literal,
                 summary: $summary:literal,
-                providers: [
-                    $(
-                        $provider:path => (
-                            $support:ident,
-                            $implementation:literal,
-                            $note:literal
-                        )
-                    ),* $(,)?
-                ]
+                providers: $providers:expr
             }
         ),+ $(,)?
     ) => {
@@ -69,20 +61,38 @@ macro_rules! define_capabilities {
                 ProductCapability {
                     id: CapabilityKind::$variant,
                     summary: $summary,
-                    providers: &[
-                        $(
-                            ProviderCapability {
-                                provider: $provider,
-                                support: CapabilitySupport::$support,
-                                implementation: $implementation,
-                                note: $note,
-                            },
-                        )*
-                    ],
+                    providers: $providers,
                 },
             )+
         ];
     };
 }
 
+/// One capability's provider rows, one line each:
+/// `ProviderId::X => (Support, "implementation", "note")`. A list long
+/// enough to keep in a file of its own is written with this there.
+macro_rules! provider_rows {
+    (
+        $(
+            $provider:path => (
+                $support:ident,
+                $implementation:literal,
+                $note:literal
+            )
+        ),* $(,)?
+    ) => {
+        &[
+            $(
+                ProviderCapability {
+                    provider: $provider,
+                    support: CapabilitySupport::$support,
+                    implementation: $implementation,
+                    note: $note,
+                },
+            )*
+        ]
+    };
+}
+
 pub(super) use define_capabilities;
+pub(super) use provider_rows;

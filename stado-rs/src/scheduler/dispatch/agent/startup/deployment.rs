@@ -16,7 +16,13 @@ use crate::config;
 /// coordinates. Secrets stay in the coordinator map: Azure consumes its raw
 /// grant through protected settings, while other remote agents receive only
 /// the scoped workload grant projection their root startup script materializes.
-pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String> {
+///
+/// A provider the capability catalog does not list as an execution variant
+/// is refused: every agent template reports the canonical kind it runs on,
+/// and a name nobody declared would reach the agent as that kind.
+pub fn deployment_substitutions(
+    provider_name: &str,
+) -> Result<BTreeMap<String, String>, crate::scheduler::scheduler::SchedulerError> {
     let field = |adapter, key| {
         crate::capabilities::config_field(crate::capabilities::RuntimeFacet::Storage, adapter, key)
             .expect("storage binding is missing from the capability catalog")
@@ -42,11 +48,38 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
         crate::capabilities::StorageAdapter::StadoObject.id(),
         "namespace",
     );
+    // Every S3 API store (`s3-compatible` and each named provider) reads the
+    // same `storage.s3_compatible.*` bindings; the account is declared only by
+    // the providers whose endpoint names one, so it is looked up on one.
+    let compatible = crate::capabilities::StorageAdapter::S3Compatible.id();
+    let compatible_endpoint = field(compatible, "endpoint");
+    let compatible_bucket = field(compatible, "bucket");
+    let compatible_region = field(compatible, "region");
+    let compatible_addressing = field(compatible, "addressing");
+    let compatible_role = field(compatible, "credential-role");
+    let compatible_account = field(
+        crate::capabilities::StorageAdapter::S3Vendor(
+            crate::queue::s3::StorageVendor::CloudflareR2,
+        )
+        .id(),
+        "account",
+    );
+    let backup_env = |field: &crate::capabilities::ConfigField| {
+        field
+            .backup_env
+            .expect("an S3 API store binding has no backup environment binding")
+            .to_string()
+    };
     let provider_kind =
         crate::capabilities::variant(crate::capabilities::RuntimeFacet::Execution, provider_name)
             .map(|variant| variant.id)
-            .unwrap_or(provider_name);
-    BTreeMap::from([
+            .ok_or_else(|| {
+                crate::providers::ProviderError::Value(format!(
+                    "provider {provider_name:?} is not an execution variant of the capability \
+                     catalog, so its agents cannot be told which kind of machine they run on"
+                ))
+            })?;
+    Ok(BTreeMap::from([
         ("PROVIDER_KIND".to_string(), provider_kind.to_string()),
         (
             crate::capabilities::STORAGE_BACKEND_CONFIG.env.to_string(),
@@ -81,6 +114,50 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
         (
             stado_namespace.env.to_string(),
             config::wc_stado_storage_namespace().to_string(),
+        ),
+        (
+            compatible_endpoint.env.to_string(),
+            config::wc_s3_compatible_endpoint().to_string(),
+        ),
+        (
+            compatible_bucket.env.to_string(),
+            config::wc_s3_compatible_bucket().to_string(),
+        ),
+        (
+            compatible_region.env.to_string(),
+            config::wc_s3_compatible_region().to_string(),
+        ),
+        (
+            compatible_account.env.to_string(),
+            config::wc_s3_compatible_account().to_string(),
+        ),
+        (
+            compatible_addressing.env.to_string(),
+            config::wc_s3_compatible_addressing().to_string(),
+        ),
+        (
+            compatible_role.env.to_string(),
+            config::wc_s3_compatible_credential_role().to_string(),
+        ),
+        (
+            backup_env(compatible_endpoint),
+            config::wc_backup_s3_compatible_endpoint().to_string(),
+        ),
+        (
+            backup_env(compatible_region),
+            config::wc_backup_s3_compatible_region().to_string(),
+        ),
+        (
+            backup_env(compatible_account),
+            config::wc_backup_s3_compatible_account().to_string(),
+        ),
+        (
+            backup_env(compatible_addressing),
+            config::wc_backup_s3_compatible_addressing().to_string(),
+        ),
+        (
+            backup_env(compatible_role),
+            config::wc_backup_s3_compatible_credential_role().to_string(),
         ),
         (
             crate::capabilities::STORAGE_BACKEND_CONFIG
@@ -162,5 +239,5 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
             "STADO_AGENT_POLL_SECONDS".to_string(),
             config::stado_agent_poll_seconds(),
         ),
-    ])
+    ]))
 }

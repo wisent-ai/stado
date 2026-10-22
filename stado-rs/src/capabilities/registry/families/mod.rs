@@ -4,3 +4,4 @@ pub(super) mod compute;
 pub(super) mod delivery;
 pub(super) mod fleet;
 pub(super) mod platform;
+pub(super) mod storage;

@@ -44,8 +44,25 @@ pub enum StorageCommands {
     /// Release objects are immutable and cannot be deleted.
     Rm(StorageRmArgs),
     /// Print an object's URL: a release object's on the declared public
-    /// origin, bearer-free; any other through the configured API.
+    /// origin, bearer-free; any other through the configured API, or with
+    /// --presign a presigned S3 URL that expires.
     Url(StorageUrlArgs),
+    /// Describe the S3 endpoint one namespace is reached through by any S3
+    /// client (endpoint, bucket, access key id, region, addressing, where the
+    /// secret comes from) after one signed request proves it accepts this
+    /// client's secret.
+    S3Endpoint(StorageS3EndpointArgs),
+    /// Copy one product object to another key of its namespace on the
+    /// server, through the S3 endpoint's CopyObject; its bytes never come to
+    /// this machine, and the target gets the source's metadata.
+    Cp(StorageCopyObjectArgs),
+    /// Copy one product object to another key of its namespace on the
+    /// server, then remove the source; a copy that fails leaves the source.
+    Mv(StorageCopyObjectArgs),
+    /// Create, list, show, update, re-key and delete the buckets a
+    /// self-hosted Stado serves: a namespace on the host and its vault key.
+    #[command(subcommand)]
+    Bucket(BucketCommands),
 }
 
 pub async fn dispatch(command: StorageCommands) -> Result<(), CmdError> {
@@ -63,5 +80,9 @@ pub async fn dispatch(command: StorageCommands) -> Result<(), CmdError> {
         StorageCommands::AbortUpload(args) => abort_upload(&args).await,
         StorageCommands::Rm(args) => rm(&args).await,
         StorageCommands::Url(args) => object_url(&args).await,
+        StorageCommands::S3Endpoint(args) => s3_endpoint(&args).await,
+        StorageCommands::Cp(args) => copy_object(&args, false).await,
+        StorageCommands::Mv(args) => copy_object(&args, true).await,
+        StorageCommands::Bucket(command) => bucket_dispatch(command).await,
     }
 }

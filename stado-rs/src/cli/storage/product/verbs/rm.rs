@@ -14,6 +14,15 @@ pub struct StorageRmArgs {
 pub struct StorageUrlArgs {
     /// stado://<namespace>/<key>.
     uri: String,
+    /// Print a presigned S3 URL admitting this method instead: it needs no
+    /// bearer, so whoever holds it may read (get) or write (put) the object
+    /// until it expires. Requires --expires.
+    #[arg(long, value_enum, requires = "expires")]
+    presign: Option<super::s3::PresignMethod>,
+    /// How many seconds the presigned URL stays valid, from 1 to 604800.
+    /// Requires --presign.
+    #[arg(long, requires = "presign")]
+    expires: Option<u64>,
     #[arg(long)]
     json: bool,
 }
@@ -60,9 +69,25 @@ const RELEASE_ROUTE: &str = "/api/release/object";
 /// deployment can read without a bearer; the configured API origin is where
 /// this machine talks to Stado, which need not forward the route at all.
 /// Every other namespace is read through the configured API
-/// with a bearer.
+/// with a bearer, or, with `--presign`, through the S3 endpoint with a URL
+/// that carries its own expiring signature instead.
 pub(in crate::cli::storage) async fn object_url(args: &StorageUrlArgs) -> Result<(), CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(&args.uri)?;
+    if let (Some(method), Some(expires)) = (args.presign, args.expires) {
+        let uri = object.to_string();
+        let url = super::s3::presigned_url(&object, method, expires)?;
+        if args.json {
+            echo_json(&json!({
+                "uri": uri,
+                "url": url.as_str(),
+                "method": format!("{method:?}").to_ascii_uppercase(),
+                "expires_in_seconds": expires,
+            }))?;
+        } else {
+            println!("{url}");
+        }
+        return Ok(());
+    }
     let (base_url, route) = if object.is_release_archive() {
         let document = crate::cli::registry::fetch_document().await?;
         let origin = crate::public_origin::publishing(&document, RELEASE_ROUTE)

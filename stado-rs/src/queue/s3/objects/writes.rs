@@ -22,12 +22,14 @@ use super::super::{
 
 impl S3Backend {
     /// PUT with `If-None-Match: *`; `false` on 412 (Python
-    /// `_upload_bytes_if_absent`).
+    /// `_upload_bytes_if_absent`). Refused unless the store honours the
+    /// precondition (`probe`).
     pub(super) async fn upload_bytes_if_absent(
         &self,
         path: &str,
         bytes: Vec<u8>,
     ) -> Result<bool, StorageError> {
+        self.require_conditional_writes().await?;
         match crate::wait::sdk(
             self.inner
                 .client
@@ -47,13 +49,15 @@ impl S3Backend {
     }
 
     /// PUT with `If-Match: "<expected_version>"`; 412 is the lost race, and
-    /// the ETag of the accepted write is the next version token.
+    /// the ETag of the accepted write is the next version token. Refused
+    /// unless the store honours the precondition (`probe`).
     pub(super) async fn compare_and_swap_object(
         &self,
         path: &str,
         expected_version: &str,
         content: &str,
     ) -> Result<String, StorageError> {
+        self.require_conditional_writes().await?;
         // Python sends If-Match: f'"{expected_etag}"' — the token is stored
         // unquoted and re-quoted for the wire.
         let output = crate::wait::sdk(
@@ -76,12 +80,15 @@ impl S3Backend {
             }
             Err(err) => return Err(sdk_err("conditional put_object", err)),
         };
-        // Python: response.headers.get("etag", "").strip('"') — possibly "".
-        Ok(output
-            .e_tag()
-            .map(unquote_etag)
-            .unwrap_or_default()
-            .to_string())
+        // The ETag is the next version token; a store that answers none
+        // leaves the next compare-and-swap nothing to name.
+        match output.e_tag().map(unquote_etag) {
+            Some(version) if !version.is_empty() => Ok(version.to_string()),
+            _ => Err(StorageError::Other(format!(
+                "the conditional put_object of {path} was stored, but the store answered no \
+                 ETag, so the object has no version a later compare-and-swap could name"
+            ))),
+        }
     }
 
     /// Merge `kv` into the object's metadata by copying it onto itself with
@@ -103,19 +110,16 @@ impl S3Backend {
         )
         .await
         .map_err(|err| sdk_err("head_object", err))?;
-        let mut metadata: BTreeMap<String, String> = head
-            .metadata()
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default();
+        // An object without user metadata carries no metadata map.
+        let mut metadata = BTreeMap::new();
+        if let Some(held) = head.metadata() {
+            metadata.extend(held.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
         metadata.extend(
             kv.iter()
                 .filter(|(_, v)| !v.is_empty())
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
-        let content_type = head
-            .content_type()
-            .unwrap_or("application/octet-stream")
-            .to_string();
         let mut request = self
             .inner
             .client
@@ -123,8 +127,12 @@ impl S3Backend {
             .bucket(&self.inner.bucket)
             .key(path)
             .copy_source(copy_source(&self.inner.bucket, path))
-            .metadata_directive(MetadataDirective::Replace)
-            .content_type(content_type);
+            .metadata_directive(MetadataDirective::Replace);
+        // The content type the object carries is kept; one it never had is
+        // not invented.
+        if let Some(content_type) = head.content_type() {
+            request = request.content_type(content_type);
+        }
         for (key, value) in &metadata {
             request = request.metadata(key, value);
         }

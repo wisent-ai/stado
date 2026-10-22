@@ -80,22 +80,55 @@ pub(in crate::cli::recovery) fn validate_args(
     Ok(())
 }
 
+/// The first locator `endpoint` lacks for its kind. Every storage adapter is
+/// decided here, so a kind added to the catalog is a compile error until it
+/// says what it needs, and a kind the catalog does not know is refused rather
+/// than passed on to fail later.
 fn validate_endpoint(endpoint: &Endpoint, label: &str) -> Result<(), CmdError> {
-    let missing = match endpoint.adapter() {
-        Some(
-            crate::capabilities::StorageAdapter::Gcs | crate::capabilities::StorageAdapter::S3,
-        ) if endpoint.bucket.is_empty() => Some("bucket"),
-        Some(crate::capabilities::StorageAdapter::AzureBlob) if endpoint.account.is_empty() => {
-            Some("storage account")
-        }
-        Some(crate::capabilities::StorageAdapter::AzureBlob) if endpoint.container.is_empty() => {
-            Some("container")
-        }
-        Some(crate::capabilities::StorageAdapter::Local) if endpoint.path.is_empty() => {
-            Some("path")
-        }
-        _ => None,
+    use crate::capabilities::StorageAdapter;
+    use crate::queue::s3::vendor::Declares;
+
+    let Some(adapter) = endpoint.adapter() else {
+        return Err(CmdError::usage(format!(
+            "{label} endpoint kind {:?} is no storage backend of the capability catalog; \
+             `stado capabilities object-storage` lists them",
+            endpoint.kind
+        )));
     };
+    let bucket = ("bucket", endpoint.bucket.as_str());
+    let account = ("account", endpoint.account.as_str());
+    let region = ("region", endpoint.region.as_str());
+    let url = ("endpoint URL", endpoint.endpoint.as_str());
+    let role = ("credential role", endpoint.credential_role.as_str());
+    let needs: Vec<(&str, &str)> = match adapter {
+        StorageAdapter::Gcs | StorageAdapter::S3 => vec![bucket],
+        StorageAdapter::AzureBlob => vec![
+            ("storage account", endpoint.account.as_str()),
+            ("container", endpoint.container.as_str()),
+        ],
+        StorageAdapter::Local => vec![("path", endpoint.path.as_str())],
+        // Addressed by the process's own object API settings, not by
+        // per-endpoint locators.
+        StorageAdapter::StadoObject => Vec::new(),
+        StorageAdapter::S3Compatible => vec![
+            bucket,
+            url,
+            region,
+            ("addressing", endpoint.addressing.as_str()),
+            role,
+        ],
+        StorageAdapter::S3Vendor(vendor) => match vendor.profile().declares {
+            Declares::Account => vec![bucket, account, role],
+            Declares::Region => vec![bucket, region, role],
+            Declares::AccountAndRegion => vec![bucket, account, region, role],
+            Declares::EndpointAndRegion => vec![bucket, url, region, role],
+            Declares::Nothing => vec![bucket, role],
+        },
+    };
+    let missing = needs
+        .into_iter()
+        .find(|(_, value)| value.trim().is_empty())
+        .map(|(locator, _)| locator);
     if let Some(locator) = missing {
         return Err(CmdError::usage(format!(
             "{label} {} endpoint needs a {locator}",

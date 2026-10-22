@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 
 use crate::queue::StorageError;
 
-use super::{Inner, S3Backend};
+use super::{Conditional, Inner, S3Backend};
 
 impl S3Backend {
     /// Build a backend for `bucket` using the AWS adapter host's IMDSv2
@@ -28,15 +28,26 @@ impl S3Backend {
         let shared = crate::providers::aws::sdk_config(region)
             .await
             .map_err(|err| StorageError::Other(err.to_string()))?;
-        Ok(Self::assemble(aws_sdk_s3::Client::new(&shared), bucket))
+        Ok(Self::assemble(
+            aws_sdk_s3::Client::new(&shared),
+            bucket,
+            Conditional::Documented,
+        ))
     }
 
-    /// Assemble from an explicit client (tests bind a loopback endpoint).
-    fn assemble(client: aws_sdk_s3::Client, bucket: &str) -> Self {
+    /// Assemble from an explicit client: the AWS one above, or the client an
+    /// S3-compatible endpoint is reached through (`compatible`), with why
+    /// its conditional writes are trusted.
+    pub(super) fn assemble(
+        client: aws_sdk_s3::Client,
+        bucket: &str,
+        conditional: Conditional,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 client,
                 bucket: bucket.to_string(),
+                conditional,
             }),
         }
     }

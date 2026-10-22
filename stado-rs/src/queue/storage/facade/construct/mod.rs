@@ -142,12 +142,28 @@ impl JobStorage {
 
         // Python: S3Backend(WC_S3_BUCKET or bucket_name, WC_S3_REGION).
         // The configured bucket wins, while the facade retains its caller's
-        // bucket_name for wire compatibility.
+        // bucket_name for wire compatibility. A store on another S3 API
+        // endpoint is only ever the bucket its own binding declares, in the
+        // region and under the account it names.
         let configured_s3_bucket = config::wc_s3_bucket();
-        let endpoint_bucket = if adapter == StorageAdapter::S3 && !configured_s3_bucket.is_empty() {
-            configured_s3_bucket
+        let (endpoint_bucket, region, account) = if adapter.is_s3_compatible() {
+            (
+                config::wc_s3_compatible_bucket(),
+                config::wc_s3_compatible_region(),
+                config::wc_s3_compatible_account(),
+            )
+        } else if adapter == StorageAdapter::S3 && !configured_s3_bucket.is_empty() {
+            (
+                configured_s3_bucket,
+                config::wc_s3_region(),
+                config::wc_azure_storage_account(),
+            )
         } else {
-            bucket
+            (
+                bucket,
+                config::wc_s3_region(),
+                config::wc_azure_storage_account(),
+            )
         };
         let local_path = (adapter == StorageAdapter::Local)
             .then(|| LocalBackend::resolved_root(config::wc_local_storage_path()))
@@ -157,29 +173,31 @@ impl JobStorage {
         // every locator the backend below is built from, and the object API
         // URL and namespace a `stado` backend reads from the configuration.
         let store = format!(
-            "{} bucket={endpoint_bucket} account={} container={} region={} root={:?} path={} url={} namespace={}",
+            "{} bucket={endpoint_bucket} account={account} container={} region={region} root={:?} path={} url={} namespace={} endpoint={}",
             variant.id,
-            config::wc_azure_storage_account(),
             config::wc_azure_container(),
-            config::wc_s3_region(),
             local_path,
             config::wc_local_storage_path(),
             config::wc_stado_storage_url_configured(),
             config::wc_stado_storage_namespace(),
+            config::wc_s3_compatible_endpoint(),
         );
         let backend = construct_backend(
             adapter,
             BackendLocator {
                 bucket: endpoint_bucket,
-                account: config::wc_azure_storage_account(),
+                account,
                 container: config::wc_azure_container(),
-                region: config::wc_s3_region(),
+                region,
                 // A local store is rooted at its resolved queue root; every
                 // other adapter is handed the configured local path as is.
                 path: match local_path.as_deref() {
                     Some(path) => path,
                     None => config::wc_local_storage_path(),
                 },
+                endpoint: config::wc_s3_compatible_endpoint(),
+                addressing: config::wc_s3_compatible_addressing(),
+                credential_role: config::wc_s3_compatible_credential_role(),
             },
         )
         .await?;

@@ -2,6 +2,7 @@
 //! the keys it reads itself, the declarations a reader honours, and the
 //! adapter-owned keys a runtime variant carries.
 
+pub(super) mod compatible;
 mod control;
 mod declaration;
 mod field;

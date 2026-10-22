@@ -1,28 +1,40 @@
 //! One end of the copy: the locators, the backend constructor built from
 //! them, the operator-readable description and the replica-pairing rule.
+//! What the configuration declares for the primary and the backup is read
+//! into this shape in `configured`.
 
 use std::sync::Arc;
 
 use crate::capabilities::{RuntimeFacet, StorageAdapter};
 use crate::queue::{construct_backend, BackendLocator, BlobBackend, StorageError};
 
+mod configured;
+
 /// One end of the copy: which backend to build and the locators it needs.
 /// Unused fields for the selected `kind` are ignored.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Endpoint {
-    /// Backend selector: "gcs", "azure", "s3" or "local".
+    /// Backend selector: "gcs", "azure", "s3", "s3-compatible", "local" or
+    /// "stado".
     pub kind: String,
-    /// GCS or S3 bucket.
+    /// GCS, S3 or S3-compatible bucket.
     pub bucket: String,
     /// Azure storage account.
     pub account: String,
     /// Azure container.
     pub container: String,
-    /// S3 region; empty defers to the AWS default chain.
+    /// S3 or S3-compatible region; empty defers to the AWS default chain for
+    /// `s3` and is refused for `s3-compatible`.
     pub region: String,
     /// Local backend root directory.
     pub path: String,
+    /// S3-compatible endpoint URL.
+    pub endpoint: String,
+    /// S3-compatible addressing: `path` or `virtual-hosted`.
+    pub addressing: String,
+    /// Credential role whose item holds the S3-compatible key pair.
+    pub credential_role: String,
 }
 
 impl Endpoint {
@@ -64,6 +76,9 @@ impl Endpoint {
                 container: &self.container,
                 region: &self.region,
                 path: &self.path,
+                endpoint: &self.endpoint,
+                addressing: &self.addressing,
+                credential_role: &self.credential_role,
             },
         )
         .await
@@ -77,6 +92,20 @@ impl Endpoint {
                 format!("azure://{}/{}", self.account, self.container)
             }
             Some(StorageAdapter::S3) => format!("s3://{}", self.bucket),
+            Some(StorageAdapter::S3Compatible) => format!(
+                "s3-compatible:{}/{}",
+                self.endpoint.trim_end_matches('/'),
+                self.bucket
+            ),
+            Some(StorageAdapter::S3Vendor(vendor)) => {
+                format!(
+                    "{}:{}/{}/{}",
+                    vendor.id(),
+                    self.account,
+                    self.region,
+                    self.bucket
+                )
+            }
             Some(StorageAdapter::StadoObject) => {
                 format!("stado://{}", crate::config::wc_stado_storage_namespace())
             }
@@ -122,6 +151,9 @@ impl Endpoint {
     /// and every artifact a job publishes lands at `local-backup/artifacts/...`
     /// where no reader looks.
     ///
+    /// A volume that cannot be read is a refusal too, naming the path and the
+    /// cause: a pairing whose disks cannot be told apart cannot be judged safe.
+    ///
     /// [`replicate_configured_backup`]: super::replicate_configured_backup
     pub fn cannot_replicate(&self, other: &Self) -> Option<String> {
         if self.describe() == other.describe() {
@@ -130,14 +162,19 @@ impl Endpoint {
                 self.describe()
             ));
         }
-        if let Some(device) = self.shared_local_volume(other) {
-            return Some(format!(
-                "the backup {} is on the same volume as the primary {} (device {device}): a \
-                 disk failure takes both, and every object the copy writes is a second copy on \
-                 the disk that is filling. Configure a backup on another disk, bucket or host.",
-                other.describe(),
-                self.describe()
-            ));
+        match self.shared_local_volume(other) {
+            Ok(Some(device)) => {
+                return Some(format!(
+                    "the backup {} is on the same volume as the primary {} (device {device}): a \
+                     disk failure takes both, and every object the copy writes is a second copy \
+                     on the disk that is filling. Configure a backup on another disk, bucket or \
+                     host.",
+                    other.describe(),
+                    self.describe()
+                ));
+            }
+            Ok(None) => {}
+            Err(refusal) => return Some(refusal),
         }
         if self.keys_are_namespace_qualified() != other.keys_are_namespace_qualified() {
             return Some(format!(
@@ -155,128 +192,36 @@ impl Endpoint {
     /// The device both local endpoints live on, when they share one. A path
     /// not created yet is judged by its nearest existing ancestor, which is
     /// where its first write would land.
-    fn shared_local_volume(&self, other: &Self) -> Option<u64> {
+    fn shared_local_volume(&self, other: &Self) -> Result<Option<u64>, String> {
         if self.adapter() != Some(StorageAdapter::Local)
             || other.adapter() != Some(StorageAdapter::Local)
         {
-            return None;
+            return Ok(None);
         }
         let primary = local_device(&self.path)?;
-        (local_device(&other.path)? == primary).then_some(primary)
+        let backup = local_device(&other.path)?;
+        Ok((backup == primary).then_some(primary))
     }
 }
 
-/// The device of `path`, or of its nearest existing ancestor.
-fn local_device(path: &str) -> Option<u64> {
+/// The device of `path`, or of its nearest existing ancestor. An ancestor
+/// that exists and cannot be read is refused with its path and cause.
+fn local_device(path: &str) -> Result<u64, String> {
     use std::os::unix::fs::MetadataExt;
     let expanded = crate::config_file::expand_tilde(path);
-    expanded
-        .ancestors()
-        .find_map(|candidate| std::fs::metadata(candidate).ok())
-        .map(|metadata| metadata.dev())
-}
-
-impl Endpoint {
-    /// The value behind one configuration key of this endpoint, for callers that
-    /// check a backend is fully configured before using it.
-    ///
-    /// The first five keys are per-endpoint, because a copy has a source and a
-    /// destination that differ in exactly those. The Stado object store has none of
-    /// them: it is addressed by a URL, a token file and a namespace that are global
-    /// to the process, which is why `describe` above already reads them from config
-    /// rather than from `self`. Answering `None` for them made every required field
-    /// of that backend look unset, so `stado doctor` reported the primary store as
-    /// misconfigured on the same run in which it wrote, read back and deleted a probe
-    /// object through it. A check that contradicts the check below it teaches
-    /// operators to ignore both.
-    pub fn locator_value(&self, key: &str) -> Option<&str> {
-        match key {
-            "bucket" => Some(&self.bucket),
-            "account" => Some(&self.account),
-            "container" => Some(&self.container),
-            "region" => Some(&self.region),
-            "path" => Some(&self.path),
-            "url" => Some(crate::config::wc_stado_storage_url_configured()),
-            "token-file" => Some(crate::config::wc_stado_storage_token_file()),
-            "namespace" => Some(crate::config::wc_stado_storage_namespace()),
-            "ca-file" => Some(crate::config::wc_stado_storage_ca_file()),
-            _ => None,
+    for candidate in expanded.ancestors() {
+        match std::fs::metadata(candidate) {
+            Ok(metadata) => return Ok(metadata.dev()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "the volume of the local store {path} cannot be read at {}: {error}",
+                    candidate.display()
+                ))
+            }
         }
     }
-
-    /// Resolve the active queue store into the explicit endpoint shape used
-    /// by cross-backend operations.
-    pub fn configured_primary() -> Self {
-        Self::from_locators(
-            crate::config::wc_storage_backend(),
-            crate::config::bucket(),
-            crate::config::wc_azure_storage_account(),
-            crate::config::wc_azure_container(),
-            crate::config::wc_s3_region(),
-            crate::config::wc_local_storage_path(),
-        )
-    }
-
-    /// Resolve the independently configured disaster-recovery store.
-    ///
-    /// Empty backend means there is no Stado-managed backup. The returned
-    /// endpoint is never selected by `JobStorage`; callers must explicitly
-    /// copy to it or inspect it.
-    ///
-    /// OUTSTANDING, and recorded here because it is a live gap rather than a
-    /// preference: a host whose primary is the object API has no correct
-    /// disaster-recovery replica, and there is currently no way to configure
-    /// one for it.
-    ///
-    /// Its primary is addressed by bare ecosystem keys. A directory backup is
-    /// addressed by namespace-qualified store paths, so every replication pass
-    /// re-addresses what it copies and the replica grows larger than the
-    /// primary without ever becoming a replica. [`replicate_configured_backup`]
-    /// refuses that pairing outright, which is correct and also leaves the host
-    /// with nothing. Setting the host's `storage.backup.backend` to `stado`
-    /// stops the corruption: the primary and the backup are then the same
-    /// store, so the same-store guard refuses every tick and nothing is
-    /// written.
-    ///
-    /// Two things have to happen and neither is done. A host whose primary is
-    /// the object API needs a backup that speaks the same addressing — a second
-    /// namespace on that API, or a bucket, not a co-located directory. And the
-    /// documented off state above is unreachable: `stado config set` validates
-    /// `storage.backup.backend` against `gcs|azure|s3|local|stado` and rejects
-    /// the empty string this function treats as "no backup", so an operator
-    /// cannot express a decision the code already implements.
-    ///
-    /// [`replicate_configured_backup`]: super::replicate_configured_backup
-    pub fn configured_backup() -> Option<Self> {
-        let kind = crate::config::wc_backup_storage_backend();
-        if kind.is_empty() {
-            return None;
-        }
-        Some(Self::from_locators(
-            kind,
-            crate::config::wc_backup_bucket(),
-            crate::config::wc_backup_azure_storage_account(),
-            crate::config::wc_backup_azure_container(),
-            crate::config::wc_backup_s3_region(),
-            crate::config::wc_backup_local_storage_path(),
-        ))
-    }
-
-    fn from_locators(
-        kind: &str,
-        bucket: &str,
-        account: &str,
-        container: &str,
-        region: &str,
-        path: &str,
-    ) -> Self {
-        Self {
-            kind: kind.to_string(),
-            bucket: bucket.to_string(),
-            account: account.to_string(),
-            container: container.to_string(),
-            region: region.to_string(),
-            path: path.to_string(),
-        }
-    }
+    Err(format!(
+        "the local store {path} has no existing ancestor whose volume could be read"
+    ))
 }

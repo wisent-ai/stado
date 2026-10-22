@@ -64,7 +64,7 @@ pub use azure_blob::AzureBlobBackend;
 pub use contract::{BlobBackend, BlobInfo, ChangeWatch, Listing, StorageError, VersionedText};
 pub use gcs::GcsBackend;
 pub use local_file::LocalBackend;
-pub use s3::S3Backend;
+pub use s3::{S3Backend, S3CompatibleLocator};
 pub use stado_object::StadoObjectBackend;
 pub use storage::{JobStorage, ServerStorage};
 

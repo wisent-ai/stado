@@ -202,11 +202,17 @@ pub(crate) async fn read_request(
     // same as an object PUT.
     let object_compose = method == "POST" && route == "/api/object/compose";
     let registry_import = method == "POST" && route == "/api/registry/import";
+    // An S3 request is the object writer's request through the S3 API: its
+    // body is the object, a part of one, or the document naming the parts or
+    // the keys it acts on, and its signature is checked before any of it is
+    // stored. A PUT through it states its length, as an object PUT does.
+    let s3_request = crate::dashboard::listener::routes::is_s3_route(route);
+    let s3_put = s3_request && method == "PUT";
     let content_length = match content_length_header {
         Some(value) => value
             .parse::<usize>()
             .map_err(|error| malformed(format!("invalid Content-Length {value:?}: {error}")))?,
-        None if object_put || object_compose || registry_import => {
+        None if object_put || object_compose || registry_import || s3_put => {
             return Err(length_required(
                 "mutating object and registry import requests require Content-Length",
             ));
@@ -215,7 +221,7 @@ pub(crate) async fn read_request(
     };
     // An object PUT or compose carries whatever the authenticated writer
     // stores; the object API sets no size of its own on it.
-    let max_body_bytes = if object_put || object_compose {
+    let max_body_bytes = if object_put || object_compose || s3_request {
         None
     } else if method == "POST" && path == "/api/operator/run" {
         Some(limits.operator_console.request_bytes.get())
@@ -235,6 +241,16 @@ pub(crate) async fn read_request(
     let mut body = Vec::with_capacity(content_length);
     body.extend_from_slice(&buf[body_start..body_start + available]);
     let missing = content_length - body.len();
+    // A client that asked to be told before it sends its body (RFC 9110
+    // §10.1.1) waits for this interim answer; S3 clients ask on every large
+    // upload, and without it each such upload stalls until the client gives
+    // up waiting. Refusals of the head have all been answered above.
+    let expects_continue = headers
+        .iter()
+        .any(|(name, value)| name == "expect" && value.eq_ignore_ascii_case("100-continue"));
+    if expects_continue && missing > 0 {
+        tokio::io::AsyncWriteExt::write_all(&mut *stream, b"HTTP/1.1 100 Continue\r\n\r\n").await?;
+    }
     (&mut *stream)
         .take(missing as u64)
         .read_to_end(&mut body)

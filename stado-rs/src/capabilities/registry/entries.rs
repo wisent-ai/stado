@@ -6,10 +6,11 @@ use crate::capabilities::runtime::{
     ComputeAdapter, ExecutionAdapter, RuntimeAdapter, RuntimeFacet, SelectionMode, StorageAdapter,
 };
 
-use super::families::compute::{COMPUTE, EXECUTION, SCHEDULING, STORAGE};
+use super::families::compute::{COMPUTE, EXECUTION, SCHEDULING};
 use super::families::delivery::{DEPENDENCY, DEPLOYMENT, HOST_TARGET};
 use super::families::fleet::{ARTIFACTS, BILLING, INVENTORY, QUOTA};
 use super::families::platform::{ALERTS, AUTHENTICATION, SECRETS};
+use super::families::storage::STORAGE;
 use super::types::{Capability, CapabilityVariant};
 
 pub static REGISTRY: &[Capability] = &[

@@ -79,7 +79,14 @@ pub(in crate::doctor) async fn check_agent_template() -> Check {
             findings.remedy(TEMPLATE_REMEDY);
             continue;
         };
-        let deployment = agent::deployment_substitutions(name);
+        let deployment = match agent::deployment_substitutions(name) {
+            Ok(deployment) => deployment,
+            Err(err) => {
+                findings.note(Status::Fail, format!("{name}: {err}"));
+                findings.remedy(TEMPLATE_REMEDY);
+                continue;
+            }
+        };
         match agent::render_agent_startup_script(name, template, accel, &secrets, &deployment) {
             Ok(script) => findings.note(
                 Status::Pass,

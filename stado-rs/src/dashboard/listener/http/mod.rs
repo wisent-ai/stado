@@ -253,11 +253,14 @@ impl Dashboard {
             // no request can leave a byte behind to be read as the head of the
             // next one; the carried remainder is the next request already.
             //
-            // No route serves HEAD, so a HEAD would be answered with the body a
-            // GET returns. A client that correctly reads no body after a HEAD
-            // would parse those bytes as its next response, so HEAD ends the
-            // connection instead of poisoning it.
-            let keep_alive = request.wants_keep_alive() && request.method != "HEAD";
+            // Only the S3 API answers HEAD, and it answers with a head alone
+            // (`Response::headers_only`). Any other HEAD could be answered by
+            // a route written for GET with a body, which a client that
+            // correctly reads no body after a HEAD would parse as its next
+            // response, so such a HEAD ends the connection instead.
+            let (route, _) = request.target();
+            let keep_alive = request.wants_keep_alive()
+                && (request.method != "HEAD" || super::routes::is_s3_route(route));
             // Each request line carries how long its route took, so a slow
             // request names itself in the log instead of showing only as the
             // silence of every request queued behind it.

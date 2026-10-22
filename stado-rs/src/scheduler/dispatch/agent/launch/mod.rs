@@ -32,7 +32,7 @@ pub async fn dispatch_agent_vms(
             "provider {provider_name:?} has no execution template"
         ))
     })?;
-    let deployment = deployment_substitutions(provider_name);
+    let deployment = deployment_substitutions(provider_name)?;
     dispatch_agent_vms_with_template(
         inputs,
         template,

@@ -49,10 +49,14 @@ use crate::remote::object_store::OBJECT_API_CHUNK_BYTES;
 use super::CmdError;
 use crate::cli::reporting::table::print as print_table;
 
+mod bucket;
 mod command;
 mod inspect;
 mod product;
 mod transfer;
+
+use self::bucket::dispatch as bucket_dispatch;
+pub use self::bucket::BucketCommands;
 
 // One namespace for the components this file was split into. Every module
 // below imports `crate::cli::storage::*`, so a name that used to sit beside
@@ -67,6 +71,8 @@ pub use self::product::store::object::StoragePutArgs;
 pub use self::product::verbs::abort_upload::StorageAbortUploadArgs;
 pub use self::product::verbs::get::{StorageGetArgs, StorageObjectsArgs};
 pub use self::product::verbs::rm::{StorageRmArgs, StorageUrlArgs};
+pub use self::product::verbs::s3::copy::StorageCopyObjectArgs;
+pub use self::product::verbs::s3::StorageS3EndpointArgs;
 pub use self::transfer::archive::StorageArchiveArgs;
 pub use self::transfer::copy::{StorageBackupArgs, StorageCopyArgs};
 pub use self::transfer::verify::StorageVerifyArgs;
@@ -110,6 +116,8 @@ use self::product::store::object::put;
 use self::product::verbs::abort_upload::abort_upload;
 use self::product::verbs::get::{get, objects};
 use self::product::verbs::rm::{object_url, rm};
+use self::product::verbs::s3::copy::copy_object;
+use self::product::verbs::s3::s3_endpoint;
 use self::transfer::archive::archive;
 use self::transfer::copy::{backup, run};
 use self::transfer::verify::diff::diff_prefix;

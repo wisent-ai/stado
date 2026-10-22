@@ -270,4 +270,4 @@ impl Dashboard {
 
 /// The media type a body sent or stored without one is read as (RFC 9110 §8.3,
 /// <https://www.rfc-editor.org/rfc/rfc9110#section-8.3>).
-pub(super) const OCTET_STREAM: &str = "application/octet-stream";
+pub(crate) const OCTET_STREAM: &str = "application/octet-stream";

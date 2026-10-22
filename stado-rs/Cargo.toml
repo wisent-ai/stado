@@ -286,6 +286,14 @@ name = "storage-transport-fault"
 path = "../tests/storage/transport_fault.rs"
 
 [[test]]
+name = "storage-s3-endpoint"
+path = "../tests/storage/s3_endpoint/main.rs"
+
+[[test]]
+name = "storage-buckets"
+path = "../tests/storage/buckets/main.rs"
+
+[[test]]
 name = "quality-release-inputs"
 path = "../tests/quality/release_inputs.rs"
 

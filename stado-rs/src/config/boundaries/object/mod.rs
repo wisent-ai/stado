@@ -21,6 +21,17 @@ pub fn object_api_actions() -> Vec<String> {
     super::declared_actions("object")
 }
 
+/// The Skarbiec item that holds `namespace`'s bearer, by construction: a
+/// declaration naming any other item is refused, and `stado storage bucket`
+/// mints exactly this one.
+pub fn namespace_item(namespace: &str) -> String {
+    if namespace == "wisent-backend" {
+        "wisent-backend-object-client".to_string()
+    } else {
+        format!("{namespace}-object-api")
+    }
+}
+
 fn valid_object_prefix(prefix: &str) -> bool {
     if prefix.is_empty() {
         return true;

@@ -42,6 +42,32 @@ impl Response {
         Self { status, bytes }
     }
 
+    /// A head that declares a `content_length` and carries no body: the
+    /// answer to a `HEAD`, which states the length a `GET` would send
+    /// (RFC 9110 §9.3.2), and a `204` or `304`, which never carry one.
+    pub(crate) fn headers_only(
+        status: u16,
+        reason: &str,
+        content_type: &str,
+        content_length: usize,
+        headers: &[(&str, String)],
+    ) -> Self {
+        let mut head = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {content_length}\r\n"
+        );
+        for (name, value) in headers {
+            head.push_str(name);
+            head.push_str(": ");
+            head.push_str(value);
+            head.push_str("\r\n");
+        }
+        head.push_str("Connection: keep-alive\r\n\r\n");
+        Self {
+            status,
+            bytes: head.into_bytes(),
+        }
+    }
+
     /// Rewrite this already-serialized response to announce a close.
     ///
     /// Responses are built with the reusable form because that is now the

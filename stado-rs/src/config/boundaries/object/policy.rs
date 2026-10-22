@@ -164,11 +164,7 @@ pub(crate) fn parse_object_api_namespaces(
             .get("item")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let expected_item = if namespace == "wisent-backend" {
-            "wisent-backend-object-client".to_string()
-        } else {
-            format!("{namespace}-object-api")
-        };
+        let expected_item = super::namespace_item(namespace);
         if item != expected_item {
             problems.push(format!(
                 "object_api.namespaces.{namespace}.item must be {expected_item:?}, got {item:?}"

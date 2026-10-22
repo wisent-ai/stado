@@ -1,13 +1,12 @@
-//! Compute, storage, execution and scheduling variants.
+//! Compute, execution and scheduling variants.
 
 use crate::capabilities::catalog::ProviderId;
 use crate::capabilities::config::variants::{
-    AWS_COMPUTE_CONFIG, AZURE_COMPUTE_CONFIG, AZURE_STORAGE_CONFIG, BOAT_COMPUTE_CONFIG,
-    GCP_COMPUTE_CONFIG, GCS_CONFIG, LOCAL_STORAGE_CONFIG, S3_CONFIG, STADO_OBJECT_STORAGE_CONFIG,
+    AWS_COMPUTE_CONFIG, AZURE_COMPUTE_CONFIG, BOAT_COMPUTE_CONFIG, GCP_COMPUTE_CONFIG,
 };
 use crate::capabilities::registry::CapabilityVariant;
 use crate::capabilities::runtime::{
-    ComputeAdapter, ExecutionAdapter, GpuCloudVendor, RuntimeAdapter, StorageAdapter,
+    ComputeAdapter, ExecutionAdapter, GpuCloudVendor, RuntimeAdapter,
 };
 
 /// A GPU cloud vendor as a machine-provisioning variant: its id is the
@@ -125,64 +124,6 @@ pub(in crate::capabilities::registry) const COMPUTE: &[CapabilityVariant] = &[
     gpu_cloud_compute(GpuCloudVendor::VastRental),
     gpu_cloud_compute(GpuCloudVendor::VoltagePark),
     gpu_cloud_compute(GpuCloudVendor::Vultr),
-];
-
-pub(in crate::capabilities::registry) const STORAGE: &[CapabilityVariant] = &[
-    CapabilityVariant {
-        id: StorageAdapter::Gcs.id(),
-        aliases: &[],
-        provider: Some(ProviderId::Gcp),
-        implementation: "queue::gcs::GcsBackend",
-        summary: "Shared Google Cloud Storage queue and object store.",
-        configurable: true,
-        constructible: true,
-        adapter: RuntimeAdapter::Storage(StorageAdapter::Gcs),
-        config: GCS_CONFIG,
-    },
-    CapabilityVariant {
-        id: StorageAdapter::AzureBlob.id(),
-        aliases: &[],
-        provider: Some(ProviderId::Azure),
-        implementation: "queue::azure_blob::AzureBlobBackend",
-        summary: "Shared Azure Blob queue and object store.",
-        configurable: true,
-        constructible: true,
-        adapter: RuntimeAdapter::Storage(StorageAdapter::AzureBlob),
-        config: AZURE_STORAGE_CONFIG,
-    },
-    CapabilityVariant {
-        id: StorageAdapter::S3.id(),
-        aliases: &[],
-        provider: Some(ProviderId::Aws),
-        implementation: "queue::s3::S3Backend",
-        summary: "Shared Amazon S3 queue and object store.",
-        configurable: true,
-        constructible: true,
-        adapter: RuntimeAdapter::Storage(StorageAdapter::S3),
-        config: S3_CONFIG,
-    },
-    CapabilityVariant {
-        id: StorageAdapter::Local.id(),
-        aliases: &[],
-        provider: Some(ProviderId::Local),
-        implementation: "queue::local_file::LocalBackend",
-        summary: "Device-local filesystem store for one-host operation.",
-        configurable: true,
-        constructible: true,
-        adapter: RuntimeAdapter::Storage(StorageAdapter::Local),
-        config: LOCAL_STORAGE_CONFIG,
-    },
-    CapabilityVariant {
-        id: StorageAdapter::StadoObject.id(),
-        aliases: &["stado-object"],
-        provider: Some(ProviderId::Stado),
-        implementation: "queue::stado_object::StadoObjectBackend",
-        summary: "Shared provider-neutral queue through the authenticated Stado object API.",
-        configurable: true,
-        constructible: true,
-        adapter: RuntimeAdapter::Storage(StorageAdapter::StadoObject),
-        config: STADO_OBJECT_STORAGE_CONFIG,
-    },
 ];
 
 pub(in crate::capabilities::registry) const EXECUTION: &[CapabilityVariant] = &[

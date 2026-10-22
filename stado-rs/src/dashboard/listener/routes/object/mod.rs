@@ -11,3 +11,4 @@ pub(crate) use query::{
     merged_object_metadata, object_from_query, object_list_from_query,
     public_release_object_from_query,
 };
+pub(crate) use write::OCTET_STREAM;

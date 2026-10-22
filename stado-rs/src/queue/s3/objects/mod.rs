@@ -24,6 +24,7 @@ use super::{
 };
 
 mod listing;
+mod probe;
 mod reads;
 mod writes;
 

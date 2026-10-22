@@ -11,7 +11,8 @@ impl RemoteObjectApi {
     /// `fetch_object` handed an already-namespaced `storage_path()` to a
     /// backend that namespaces again, so every read resolved to
     /// `ecosystem/<ns>/ecosystem/<ns>/...` and answered "absent".
-    fn endpoint_from_env_or_config() -> Result<Option<url::Url>, CmdError> {
+    pub(in crate::cli::storage) fn endpoint_from_env_or_config(
+    ) -> Result<Option<url::Url>, CmdError> {
         if let Some(url) = configured_object_base_url("STADO_API_URL")? {
             return Ok(Some(url));
         }
@@ -36,73 +37,7 @@ impl RemoteObjectApi {
         let Some(base_url) = Self::endpoint_from_env_or_config()? else {
             return Ok(None);
         };
-        let token = match std::env::var("STADO_API_TOKEN") {
-            Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
-            Ok(_) | Err(std::env::VarError::NotPresent) => {
-                let token_file = std::env::var("STADO_API_TOKEN_FILE")
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| crate::config::wc_stado_storage_token_file().to_string());
-                if token_file.trim().is_empty() {
-                    return Err(CmdError::click(
-                        "STADO_API_TOKEN, STADO_API_TOKEN_FILE or storage.stado.token_file \
-                     is required to reach the object API",
-                    )
-                    .stating(crate::primitives::failure::FailureCode::Config));
-                }
-                let path = crate::config_file::expand_tilde(token_file.trim());
-                let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
-                    CmdError::click(format!(
-                        "cannot inspect STADO_API_TOKEN_FILE {}: {error}",
-                        path.display()
-                    ))
-                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-                })?;
-                if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-                    return Err(CmdError::click(format!(
-                        "STADO_API_TOKEN_FILE must be a regular file: {}",
-                        path.display()
-                    ))
-                    .stating(crate::primitives::failure::FailureCode::Config));
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if metadata.permissions().mode() & 0o077 != 0 {
-                        return Err(CmdError::click(format!(
-                            "STADO_API_TOKEN_FILE must be owner-only (chmod 600): {}",
-                            path.display()
-                        ))
-                        .stating(crate::primitives::failure::FailureCode::Config));
-                    }
-                }
-                let value = std::fs::read_to_string(&path).map_err(|error| {
-                    CmdError::click(format!(
-                        "cannot read STADO_API_TOKEN_FILE {}: {error}",
-                        path.display()
-                    ))
-                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-                })?;
-                let token = value.trim();
-                if token.is_empty()
-                    || token
-                        .chars()
-                        .any(|character| matches!(character, '\r' | '\n'))
-                {
-                    return Err(
-                        CmdError::click("STADO_API_TOKEN_FILE is empty or malformed")
-                            .stating(crate::primitives::failure::FailureCode::Config),
-                    );
-                }
-                token.to_string()
-            }
-            Err(std::env::VarError::NotUnicode(_)) => {
-                return Err(CmdError::click(
-                    "STADO_API_TOKEN must be valid Unicode when STADO_API_URL is configured",
-                )
-                .stating(crate::primitives::failure::FailureCode::Config));
-            }
-        };
+        let token = super::bearer::namespace_bearer()?;
         let http = Self::http_client()?;
         Ok(Some(Self {
             http,

@@ -1,10 +1,12 @@
 //! Fleet-wide operational values: queue, capacity and reaper limits.
 
+mod compatible;
 mod dashboard;
 mod model;
 mod release;
 mod storage;
 
+pub use compatible::*;
 pub use dashboard::*;
 pub use model::*;
 pub use release::*;

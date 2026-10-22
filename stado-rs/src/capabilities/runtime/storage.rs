@@ -11,6 +11,11 @@ pub enum StorageAdapter {
     Gcs,
     AzureBlob,
     S3,
+    /// Any endpoint that speaks the S3 API, named by URL.
+    S3Compatible,
+    /// A named S3 API provider: Cloudflare R2, Backblaze B2, Wasabi, MinIO
+    /// and the rest (`queue::s3::vendor`).
+    S3Vendor(crate::queue::s3::StorageVendor),
     StadoObject,
     Local,
 }
@@ -35,7 +40,12 @@ impl StorageAdapter {
     /// How far a coordinate written to this store carries.
     pub const fn reach(self) -> StorageReach {
         match self {
-            Self::Gcs | Self::AzureBlob | Self::S3 | Self::StadoObject => StorageReach::Fleet,
+            Self::Gcs
+            | Self::AzureBlob
+            | Self::S3
+            | Self::S3Compatible
+            | Self::S3Vendor(_)
+            | Self::StadoObject => StorageReach::Fleet,
             Self::Local => StorageReach::Device,
         }
     }
@@ -45,9 +55,25 @@ impl StorageAdapter {
             Self::Gcs => "gcs",
             Self::AzureBlob => ProviderId::Azure.as_str(),
             Self::S3 => "s3",
+            Self::S3Compatible => ProviderId::S3Compatible.as_str(),
+            Self::S3Vendor(vendor) => vendor.id(),
             Self::StadoObject => ProviderId::Stado.as_str(),
             Self::Local => ProviderId::Local.as_str(),
         }
+    }
+
+    /// The named S3 API provider this adapter reaches, if it is one.
+    pub const fn vendor(self) -> Option<crate::queue::s3::StorageVendor> {
+        match self {
+            Self::S3Vendor(vendor) => Some(vendor),
+            _ => None,
+        }
+    }
+
+    /// Whether this store is reached through the S3 API at an endpoint other
+    /// than Amazon's, and so reads the `storage.s3_compatible.*` bindings.
+    pub const fn is_s3_compatible(self) -> bool {
+        matches!(self, Self::S3Compatible | Self::S3Vendor(_))
     }
 
     pub const fn required_backup(self) -> Option<Self> {
@@ -62,6 +88,8 @@ impl StorageAdapter {
             Self::Gcs => ProviderId::Gcp,
             Self::AzureBlob => ProviderId::Azure,
             Self::S3 => ProviderId::Aws,
+            Self::S3Compatible => ProviderId::S3Compatible,
+            Self::S3Vendor(vendor) => vendor.provider(),
             Self::StadoObject => ProviderId::Stado,
             Self::Local => ProviderId::Local,
         }
