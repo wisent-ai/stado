@@ -26,11 +26,16 @@ impl Deployment {
             .unwrap()
             .to_path_buf();
         // A Unix socket path is at most 104 bytes on macOS, so HOME is the
-        // run directory itself under a short name.
-        let root = repository
-            .join(".build/z")
-            .join(&uuid::Uuid::new_v4().simple().to_string()[..6]);
-        fs::create_dir_all(root.join("tmp")).unwrap();
+        // run directory itself under a short name: one 16-bit field of a
+        // random UUID in hex. A directory already holding that name is
+        // refused rather than reused.
+        let parent = repository.join(".build/z");
+        fs::create_dir_all(&parent).unwrap();
+        let root = parent.join(format!("{:x}", uuid::Uuid::new_v4().as_fields().1));
+        if let Err(error) = fs::create_dir(&root) {
+            panic!("{} cannot be this run's own: {error}", root.display());
+        }
+        fs::create_dir(root.join("tmp")).unwrap();
         let mut deployment = Self {
             root,
             report: json!({
@@ -65,20 +70,39 @@ impl Deployment {
 
     /// Run one CLI command and require it to succeed; its stdout.
     pub fn cli(&mut self, args: &[&str]) -> String {
-        let output = self.command().args(args).output().unwrap();
+        let (succeeded, stdout, stderr) = self.run(args, "");
+        assert!(succeeded, "stado {args:?}: {stderr}");
+        stdout
+    }
+
+    /// Run one CLI command with `input` on its stdin, recording it; whether
+    /// it succeeded, its stdout and its stderr.
+    pub fn run(&mut self, args: &[&str], input: &str) -> (bool, String, String) {
+        let mut child = self
+            .command()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         self.report["commands"].as_array_mut().unwrap().push(json!({
             "args": args,
             "exit_status": output.status.code(),
-            "stdout": String::from_utf8_lossy(&output.stdout),
-            "stderr": String::from_utf8_lossy(&output.stderr),
+            "stdout": stdout,
+            "stderr": stderr,
         }));
         self.save();
-        assert!(
-            output.status.success(),
-            "stado {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8_lossy(&output.stdout).into_owned()
+        (output.status.success(), stdout, stderr)
     }
 
     /// Run `stado serve` with `args` and hand back its log lines as they come.
@@ -96,7 +120,7 @@ impl Deployment {
             "stdout": "service.stdout", "stderr": "service.stderr",
         });
         let (sender, lines) = mpsc::channel();
-        let streams: [(Box<dyn std::io::Read + Send>, &str); 2] = [
+        let streams: Vec<(Box<dyn std::io::Read + Send>, &str)> = vec![
             (Box::new(child.stdout.take().unwrap()), "service.stdout"),
             (Box::new(child.stderr.take().unwrap()), "service.stderr"),
         ];
@@ -118,18 +142,34 @@ impl Deployment {
         lines
     }
 
-    /// Every JSON document under `prefix/` of the local store.
+    /// Every JSON document under `prefix/` of the local store; none while the
+    /// prefix does not exist yet. A document the worker is still writing can
+    /// be read part-written: it is left out of this read with its cause
+    /// printed, and a later read finds it whole.
     pub fn documents(&self, prefix: &str) -> Vec<Value> {
-        fs::read_dir(self.store().join(prefix))
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .map(|entry| entry.path())
-                    .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
-                    .filter_map(|path| serde_json::from_slice(&fs::read(path).ok()?).ok())
-                    .collect()
-            })
-            .unwrap_or_default()
+        let directory = self.store().join(prefix);
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(error) => panic!("{} cannot be listed: {error}", directory.display()),
+        };
+        let mut documents = Vec::new();
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if !path.extension().is_some_and(|ext| ext == "json") {
+                continue;
+            }
+            let read = fs::read(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| {
+                    serde_json::from_slice(&bytes).map_err(|error| error.to_string())
+                });
+            match read {
+                Ok(document) => documents.push(document),
+                Err(cause) => eprintln!("{} left out of this read: {cause}", path.display()),
+            }
+        }
+        documents
     }
 
     pub fn pass(&mut self) {
