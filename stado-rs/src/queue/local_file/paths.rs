@@ -56,7 +56,8 @@ impl LocalBackend {
         let root = self.root.clone();
         let internal = [self.locks.clone(), self.metadata.clone()];
         let wanted = prefix.to_owned();
-        off_thread(prefix, move || names_under(&root, &internal, &wanted)).await
+        off_thread(prefix, move || names_under(&root, &internal, &wanted))
+            .await
     }
 }
 
@@ -68,11 +69,13 @@ pub(super) async fn off_thread<T: Send + 'static>(
     path: &str,
     work: impl FnOnce() -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    tokio::task::spawn_blocking(work).await.map_err(|error| {
-        StorageError::Other(format!(
-            "the local storage step on {path:?} did not finish: {error}"
-        ))
-    })?
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| {
+            StorageError::Other(format!(
+                "the local storage step on {path:?} did not finish: {error}"
+            ))
+        })?
 }
 
 /// The walk [`LocalBackend::relative_names`] describes, over `root`, leaving
@@ -182,3 +185,31 @@ pub(super) fn remove_missing_ok(path: &Path) -> Result<(), StorageError> {
         Err(err) => Err(err.into()),
     }
 }
+
+/// Bytes `first` through `last` of the file at `target`, as many of them as
+/// it holds, read from that offset alone; `None` when there is no file.
+pub(super) fn read_range(
+    target: &Path,
+    first: u64,
+    last: u64,
+) -> Result<Option<Vec<u8>>, StorageError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match fs::File::open(target) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let span = last.checked_sub(first).ok_or_else(|| {
+        StorageError::Other(format!(
+            "bytes {first}-{last} of {} is no range: its last byte comes before its first",
+            target.display()
+        ))
+    })?;
+    // A range's first and last bytes are both in it, so it holds one byte
+    // more than its span (a span to the last byte a file can hold reads to
+    // its end): https://www.rfc-editor.org/rfc/rfc9110#section-14.1.2
+    let wanted = span.saturating_add(1);
+    file.seek(SeekFrom::Start(first))?;
+    let mut bytes = Vec::new();
+    file.take(wanted).read_to_end(&mut bytes)?;
+    Ok(Some(bytes))

@@ -165,7 +165,7 @@ impl GcsBackend {
             for item in items(&page) {
                 out.push(BlobInfo {
                     name: text(item, "name")?.to_string(),
-                    updated: item.get("updated").and_then(parse_timestamp),
+                    updated: parse_timestamp(item.get("updated"), text(item, "name")?)?,
                     size: size(item)?,
                     metadata: metadata(item)?,
                 });

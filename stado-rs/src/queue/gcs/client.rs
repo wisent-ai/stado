@@ -67,12 +67,45 @@ impl GcsBackend {
         }
         Ok(crate::wait::request(request).await?)
     }
+
+    /// Execute an authenticated GET of bytes `first` through `last` of the
+    /// media at `url`.
+    pub(super) async fn send_range(
+        &self,
+        url: &str,
+        first: u64,
+        last: u64,
+    ) -> Result<reqwest::Response, StorageError> {
+        let request = self
+            .inner
+            .client
+            .request(Method::GET, url)
+            .header(reqwest::header::AUTHORIZATION, self.token().await?)
+            .header(reqwest::header::RANGE, format!("bytes={first}-{last}"));
+        Ok(crate::wait::request(request).await?)
+    }
 }
 
-/// Parse a GCS RFC3339 timestamp and normalize it to UTC.
-pub(super) fn parse_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
-    let raw = value.as_str()?;
+/// The RFC 3339 time a GCS object resource states in `value`, normalized to
+/// UTC; `None` when the resource states none. A value that is not one is
+/// refused naming `what` it was read for, never read as no time.
+pub(super) fn parse_timestamp(
+    value: Option<&serde_json::Value>,
+    what: &str,
+) -> Result<Option<DateTime<Utc>>, StorageError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let raw = value.as_str().ok_or_else(|| {
+        StorageError::Other(format!(
+            "GCS states the updated time of {what} as {value}, not a string"
+        ))
+    })?;
     DateTime::parse_from_rfc3339(raw)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
+        .map(|at| Some(at.with_timezone(&Utc)))
+        .map_err(|error| {
+            StorageError::Other(format!(
+                "GCS states the updated time of {what} as {raw:?}, not an RFC 3339 time: {error}"
+            ))
+        })
 }

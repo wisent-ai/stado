@@ -1,6 +1,6 @@
 //! The bucket-level reads: ListBuckets (the one namespace the signer holds),
 //! HeadBucket, GetBucketLocation, and ListObjects and ListObjectsV2 over
-//! exactly the prefixes the namespace's policy lets it list.
+//! exactly the prefixes the namespace's policy lets it list ([`scans`]).
 //!
 //! A listing of a prefix no single `list` grant covers, such as the whole
 //! bucket, is the union of every granted prefix under it, so `aws s3 ls`
@@ -8,6 +8,8 @@
 //! multipart parts are not objects and are never listed. A listed entry
 //! carries no ETag: the store's listing names sizes and dates, and reading
 //! every body to version it would make a listing cost the bytes it lists.
+//!
+//! [`scans`]: super::scans
 
 use std::collections::BTreeSet;
 
@@ -20,14 +22,11 @@ use crate::remote::sigv4::uri_encode;
 
 use super::auth::Signer;
 use super::objects::iso_time;
+use super::scans::{granted_scans, page_bound};
 use super::wire::{document, escape, invalid, storage, Query, S3Error, XML};
 
 /// The XML namespace of every S3 API document.
 pub(crate) const S3_NAMESPACE: &str = "http://s3.amazonaws.com/doc/2006-03-01/";
-
-/// How many keys a listing answers when the request names no `max-keys`,
-/// and the most it answers when it names more: the S3 API's own bound.
-const MAX_KEYS: usize = 1000;
 
 pub(super) fn list_buckets(signer: &Signer) -> Response {
     document(
@@ -44,6 +43,8 @@ pub(super) fn head_bucket(signer: &Signer) -> Response {
         http_status(StatusCode::OK),
         "OK",
         XML,
+        // A HEAD answer carries no body:
+        // https://www.rfc-editor.org/rfc/rfc9110#section-9.3.2
         0,
         &[("x-amz-bucket-region", signer.scope.region.clone())],
     )
@@ -95,39 +96,12 @@ fn cursor(query: &Query, version_two: bool) -> Result<String, S3Error> {
 impl Dashboard {
     /// Every object the signer may list under `prefix`, ascending by key.
     async fn s3_listable(&self, signer: &Signer, prefix: &str) -> Result<Vec<Entry>, S3Error> {
-        let scans: Vec<String> = match signer.policy.authorized_list_prefix(prefix, "list") {
-            Some(authorized) => vec![authorized],
-            None => signer
-                .policy
-                .prefix_policies()
-                .iter()
-                .filter(|policy| {
-                    policy.actions().iter().any(|action| action == "list")
-                        && policy.prefix().ends_with('/')
-                        && policy.prefix().starts_with(prefix)
-                })
-                .map(|policy| policy.prefix().to_string())
-                .collect(),
-        };
-        if scans.is_empty() {
-            return Err(S3Error::new(
-                StatusCode::FORBIDDEN,
-                "AccessDenied",
-                format!(
-                    "namespace {}'s grant lets it list no prefix under {prefix:?}; \
-                     object_api.namespaces.{}.prefix_policies declares what it may list",
-                    signer.namespace, signer.namespace
-                ),
-            ));
-        }
         let mut entries = Vec::new();
         let mut seen = BTreeSet::new();
-        for scan in scans {
-            let storage_prefix = ObjectRef::namespace_prefix(&signer.namespace, &scan)
-                .map_err(|error| invalid(error.to_string()))?;
+        for storage_prefix in granted_scans(signer, prefix)? {
             for blob in self
                 .store
-                .list_blobs_with_meta(&storage_prefix)
+                .list_blobs_sized(&storage_prefix)
                 .await
                 .map_err(storage)?
             {
@@ -178,13 +152,7 @@ impl Dashboard {
             Some("url") => true,
             Some(other) => return Err(invalid(format!("encoding-type {other:?} is not url"))),
         };
-        let max_keys = match query.value("max-keys") {
-            None => MAX_KEYS,
-            Some(raw) => raw
-                .parse::<usize>()
-                .map_err(|error| invalid(format!("max-keys {raw:?} is not a count: {error}")))?
-                .min(MAX_KEYS),
-        };
+        let max_keys = page_bound(query, "max-keys")?;
         let cursor = cursor(query, version_two)?;
         let entries = self.s3_listable(signer, prefix).await?;
         let shown = |text: &str| {
@@ -194,9 +162,8 @@ impl Dashboard {
                 escape(text)
             }
         };
-        let mut contents = String::new();
+        let mut contents = Vec::new();
         let mut prefixes = BTreeSet::new();
-        let mut count = 0;
         let mut last = None;
         let mut truncated = false;
         for entry in entries
@@ -213,11 +180,10 @@ impl Dashboard {
                     continue;
                 }
             }
-            if count == max_keys {
+            if contents.len() + prefixes.len() == max_keys {
                 truncated = true;
                 break;
             }
-            count += 1;
             match common {
                 Some(common) => {
                     last = Some(common.clone());
@@ -231,7 +197,7 @@ impl Dashboard {
                         }
                         None => String::new(),
                     };
-                    contents.push_str(&format!(
+                    contents.push(format!(
                         "<Contents><Key>{}</Key>{modified}<Size>{}</Size></Contents>",
                         shown(&entry.key),
                         entry.size
@@ -239,6 +205,7 @@ impl Dashboard {
                 }
             }
         }
+        let count = contents.len() + prefixes.len();
         let common: String = prefixes
             .iter()
             .map(|common| {
@@ -283,6 +250,7 @@ impl Dashboard {
                 head.push_str(&format!("<NextMarker>{}</NextMarker>", shown(&next)));
             }
         }
+        let contents = contents.concat();
         Ok(document(
             StatusCode::OK,
             &format!(

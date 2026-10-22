@@ -66,6 +66,20 @@ pub trait BlobBackend: Send + Sync {
     /// Raw bytes of a blob, or `None` when it does not exist.
     async fn download_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError>;
 
+    /// Bytes `first` through `last` (inclusive) of a blob, or `None` when it
+    /// does not exist, read from the store as that range alone, so a caller
+    /// copying a large blob piece by piece never holds or moves the whole of
+    /// it. A range that ends past the blob answers what the blob holds of
+    /// it; one that starts past it is the store's refusal. Callers state the
+    /// range from the blob's size, and a length other than they asked means
+    /// the blob changed under them.
+    async fn read_range(
+        &self,
+        path: &str,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<u8>>, StorageError>;
+
     /// One `stado://releases/...` object off the public release channel, for
     /// backends that HAVE such a channel. The plain blob routes answer for
     /// the store's configured namespace, so a cross-namespace release URI
@@ -171,6 +185,14 @@ pub trait BlobBackend: Send + Sync {
     /// Name, updated-ts and metadata for every blob under `prefix`, so
     /// consumers can filter on metadata before downloading the full body.
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError>;
+
+    /// Name, updated-ts and size for every blob under `prefix`, for a caller
+    /// that reads no metadata. A backend whose listing already states each
+    /// blob's metadata answers its metadata listing; one that has to ask for
+    /// metadata blob by blob (S3's HEAD) answers from its listing alone.
+    async fn list_blobs_sized(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
+        self.list_blobs_with_meta(prefix).await
+    }
 
     /// A watch that wakes when an object is created, replaced or removed
     /// directly under any of `prefixes`, set before the caller reads, so a

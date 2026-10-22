@@ -55,6 +55,20 @@ impl BlobBackend for AzureBlobBackend {
         }
     }
 
+    async fn read_range(
+        &self,
+        path: &str,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        match self.get_range(path, first, last).await {
+            GetOutcome::Ok(bytes) => Ok(Some(bytes)),
+            GetOutcome::NotFound => Ok(None),
+            GetOutcome::PreconditionFailed => unreachable!("unpinned GET cannot 412"),
+            GetOutcome::Error(err) => Err(err),
+        }
+    }
+
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         let Some(bytes) = self.download_bytes(path).await? else {
             return Ok(false);
@@ -201,7 +215,7 @@ impl BlobBackend for AzureBlobBackend {
         // exactly the window only when there is nothing to skip.
         let page = match limit {
             Some(limit) if start_after.is_empty() => limit.get().min(LIST_MAX_RESULTS),
-            _ => LIST_MAX_RESULTS,
+            Some(_) | None => LIST_MAX_RESULTS,
         };
         // Uncapped listings grow as they go; a window pre-sizes to itself.
         let mut names: Vec<String> = match limit {

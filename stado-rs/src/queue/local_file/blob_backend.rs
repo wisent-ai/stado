@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 
 use crate::queue::{json_str, BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 
-use super::paths::{off_thread, remove_missing_ok};
+use super::paths::{off_thread, read_range, remove_missing_ok};
 use super::LocalBackend;
 
 #[async_trait]
@@ -49,6 +49,17 @@ impl BlobBackend for LocalBackend {
             Err(err) => Err(err.into()),
         })
         .await
+    }
+
+    /// One byte range, read from its offset on the blocking pool.
+    async fn read_range(
+        &self,
+        path: &str,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let target = self.path(path)?;
+        off_thread(path, move || read_range(&target, first, last)).await
     }
 
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {

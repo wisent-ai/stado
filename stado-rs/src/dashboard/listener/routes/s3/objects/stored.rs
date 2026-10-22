@@ -98,6 +98,13 @@ impl Preconditions {
         })
     }
 
+    /// Whether checking these needs the object's ETag: an `if-match` or an
+    /// `if-none-match` is stated. Only then is a copy source read to version
+    /// it before the copy.
+    pub(crate) fn names_etag(&self) -> bool {
+        self.matching.is_some() || self.not_matching.is_some()
+    }
+
     /// Whether the object at `etag`, last modified at `updated`, passes.
     /// A failed `If-None-Match` or `If-Modified-Since` on a read is answered
     /// 304, every other failure 412.

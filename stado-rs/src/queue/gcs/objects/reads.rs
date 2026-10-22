@@ -49,6 +49,24 @@ impl GcsBackend {
         ))
     }
 
+    /// GET bytes `first` through `last` of the object media, or `None` on
+    /// 404.
+    pub(super) async fn get_media_range(
+        &self,
+        path: &str,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let url = media_url(&self.inner.bucket, path);
+        let response = self.send_range(&url, first, last).await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Ok(Some(
+            ensure_success(response).await?.bytes().await?.to_vec(),
+        ))
+    }
+
     pub(super) async fn download_versioned_text(
         &self,
         path: &str,

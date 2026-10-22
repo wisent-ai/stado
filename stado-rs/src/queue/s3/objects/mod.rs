@@ -62,6 +62,15 @@ impl BlobBackend for S3Backend {
         self.get_object_bytes(path).await
     }
 
+    async fn read_range(
+        &self,
+        path: &str,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        self.get_object_range(path, first, last).await
+    }
+
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         let Some(bytes) = self.download_bytes(path).await? else {
             return Ok(false);
@@ -189,5 +198,9 @@ impl BlobBackend for S3Backend {
 
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
         self.list_blobs_meta(prefix).await
+    }
+
+    async fn list_blobs_sized(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
+        self.list_objects_sized(prefix).await
     }
 }

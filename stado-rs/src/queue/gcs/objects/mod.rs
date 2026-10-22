@@ -50,6 +50,15 @@ impl BlobBackend for GcsBackend {
         self.get_media(path, None).await
     }
 
+    async fn read_range(
+        &self,
+        path: &str,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        self.get_media_range(path, first, last).await
+    }
+
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         let Some(bytes) = self.get_media(path, None).await? else {
             return Ok(false);
@@ -135,7 +144,7 @@ impl BlobBackend for GcsBackend {
         let Some(object) = self.get_object(path).await? else {
             return Ok(None);
         };
-        Ok(object.get("updated").and_then(parse_timestamp))
+        parse_timestamp(object.get("updated"), path)
     }
 
     async fn set_metadata(

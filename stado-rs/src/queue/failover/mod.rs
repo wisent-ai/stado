@@ -97,4 +97,20 @@ impl ReadFailoverBackend {
         }
         Ok(Some(content))
     }
+
+    /// A release object the primary is missing, from the mirror, written
+    /// back through the primary's own addressing. A release URI is
+    /// immutable by definition, so the mirror can answer it.
+    async fn mirrored_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        let Some(content) = self.backup.download_release(uri).await? else {
+            return Ok(None);
+        };
+        let path = self
+            .primary
+            .blob_path(&crate::remote::object_store::ObjectRef::parse(uri)?);
+        if let Err(error) = self.primary.upload_bytes(&path, &content).await {
+            Self::report_replica_error("heal", &path, &error);
+        }
+        Ok(Some(content))
+    }
 }

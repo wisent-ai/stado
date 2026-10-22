@@ -1,17 +1,25 @@
 //! Multipart uploads through the S3 API, staged exactly where the object
-//! API's own chunked uploads stage: `<key>.__stado_upload/<upload-id>/
-//! <index>`, with the part number as the eight-digit index and index zero
-//! holding the upload's media type and user metadata. The parts stay
-//! invisible to listings, `stado storage abort-upload` discards an upload
-//! a client abandoned, and completion writes the one object and removes
-//! every part.
+//! API's own chunked uploads stage ([`staged`]): under
+//! `<key>.__stado_upload/<upload-id>/`, the manifest holding the upload's
+//! media type and user metadata beside each part at its eight-digit number,
+//! each part carrying the SHA-256 its ETag is. A part comes from the
+//! request's body (UploadPart) or from an object the signer may read
+//! (UploadPartCopy, [`copied`]). The parts stay invisible to object
+//! listings; ListMultipartUploads and ListParts read them ([`listed`]),
+//! `stado storage abort-upload` discards an upload a client abandoned, and
+//! completion writes the one object and removes every part.
+
+mod copied;
+mod listed;
+mod staged;
+
+use std::collections::BTreeMap;
 
 use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
 
 use crate::dashboard::listener::routes::object::OCTET_STREAM;
 use crate::dashboard::listener::{empty_response, http_status, Dashboard, Request, Response};
-use crate::queue::{Listing, UPLOAD_PART_MARKER};
+use crate::queue::Listing;
 use crate::remote::object_store::ObjectRef;
 use crate::remote::sigv4::hex_sha256;
 
@@ -20,70 +28,14 @@ use super::listing::S3_NAMESPACE;
 use super::objects::{user_metadata, write_metadata};
 use super::wire::{allow, body, document, element, elements, escape, invalid, object, storage};
 use super::wire::{Query, S3Error, XML};
-
-/// The part numbers the S3 API allows: 1 through 10,000.
-const LAST_PART: u32 = 10_000;
-
-/// What CreateMultipartUpload records for CompleteMultipartUpload to land.
-#[derive(Serialize, Deserialize)]
-struct Manifest {
-    content_type: String,
-    metadata: std::collections::BTreeMap<String, String>,
-}
-
-fn upload_prefix(object: &ObjectRef, upload: &str) -> String {
-    format!("{}{UPLOAD_PART_MARKER}{upload}/", object.storage_path())
-}
-
-fn part_path(object: &ObjectRef, upload: &str, index: u32) -> String {
-    format!("{}{index:08}", upload_prefix(object, upload))
-}
-
-fn no_upload(object: &ObjectRef, upload: &str) -> S3Error {
-    S3Error::new(
-        StatusCode::NOT_FOUND,
-        "NoSuchUpload",
-        format!("no multipart upload {upload} of {object} is in progress"),
-    )
-}
-
-fn invalid_part(message: String) -> S3Error {
-    S3Error::new(StatusCode::BAD_REQUEST, "InvalidPart", message)
-}
-
-/// A part number the S3 API allows.
-fn part_number(raw: &str) -> Result<u32, S3Error> {
-    let refused = || invalid(format!("partNumber {raw:?} is not 1 through {LAST_PART}"));
-    let number = raw.trim().parse::<u32>().map_err(|_| refused())?;
-    if (1..=LAST_PART).contains(&number) {
-        Ok(number)
-    } else {
-        Err(refused())
-    }
-}
-
-/// An upload id this endpoint issued: 64 lowercase hex digits.
-fn upload_id(upload: &str) -> Result<&str, S3Error> {
-    if upload.len() == 64
-        && upload
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        Ok(upload)
-    } else {
-        Err(S3Error::new(
-            StatusCode::NOT_FOUND,
-            "NoSuchUpload",
-            format!("{upload:?} is not an upload id this endpoint issued"),
-        ))
-    }
-}
+use staged::{invalid_part, manifest_path, no_upload, part_number, part_path, upload_id};
+use staged::{upload_prefix, Manifest, PART_SHA256};
 
 impl Dashboard {
     async fn s3_manifest(&self, object: &ObjectRef, upload: &str) -> Result<Manifest, S3Error> {
         let bytes = self
             .store
-            .read_bytes(&part_path(object, upload, 0))
+            .read_bytes(&manifest_path(object, upload))
             .await
             .map_err(storage)?
             .ok_or_else(|| no_upload(object, upload))?;
@@ -127,7 +79,7 @@ impl Dashboard {
         })?;
         let _fence = self.storage_write_guard().map_err(storage)?;
         self.store
-            .upload_bytes(&part_path(&object, &upload, 0), &encoded)
+            .upload_bytes(&manifest_path(&object, &upload), &encoded)
             .await
             .map_err(storage)?;
         Ok(document(
@@ -140,7 +92,7 @@ impl Dashboard {
         ))
     }
 
-    /// UploadPart.
+    /// UploadPart: the part's bytes from the request's body.
     pub(super) async fn s3_upload_part(
         &self,
         request: &Request,
@@ -149,6 +101,27 @@ impl Dashboard {
         key: &str,
         upload: &str,
     ) -> Result<Response, S3Error> {
+        let (object, upload, part) = self.s3_part_of(signer, query, key, upload).await?;
+        let data = body(request, signer)?;
+        let etag = self.s3_stage_part(&object, upload, part, &data).await?;
+        Ok(Response::new_with_headers(
+            http_status(StatusCode::OK),
+            "OK",
+            XML,
+            b"",
+            &[("ETag", format!("\"{etag}\""))],
+        ))
+    }
+
+    /// The upload in progress and the part number an UploadPart or
+    /// UploadPartCopy writes, once the signer may `put` the key.
+    async fn s3_part_of<'a>(
+        &self,
+        signer: &Signer,
+        query: &Query,
+        key: &str,
+        upload: &'a str,
+    ) -> Result<(ObjectRef, &'a str, u32), S3Error> {
         allow(signer, key, "put")?;
         let object = object(signer, key)?;
         let upload = upload_id(upload)?;
@@ -157,19 +130,32 @@ impl Dashboard {
             None => return Err(invalid("UploadPart needs partNumber")),
         };
         self.s3_manifest(&object, upload).await?;
-        let data = body(request, signer)?;
+        Ok((object, upload, part))
+    }
+
+    /// Stage `data` as `part` of `upload`, then the SHA-256 its ETag is,
+    /// which ListParts reads without reading the part; answers the ETag.
+    async fn s3_stage_part(
+        &self,
+        object: &ObjectRef,
+        upload: &str,
+        part: u32,
+        data: &[u8],
+    ) -> Result<String, S3Error> {
+        let etag = hex_sha256(data);
+        let path = part_path(object, upload, part);
         let _fence = self.storage_write_guard().map_err(storage)?;
         self.store
-            .upload_bytes(&part_path(&object, upload, part), &data)
+            .upload_bytes(&path, data)
             .await
             .map_err(storage)?;
-        Ok(Response::new_with_headers(
-            http_status(StatusCode::OK),
-            "OK",
-            XML,
-            b"",
-            &[("ETag", format!("\"{}\"", hex_sha256(&data)))],
-        ))
+        let described = BTreeMap::from([(PART_SHA256.to_string(), etag.clone())]);
+        self.store
+            .backend()
+            .set_metadata(&path, &described)
+            .await
+            .map_err(storage)?;
+        Ok(etag)
     }
 
     /// CompleteMultipartUpload: the named parts, in ascending order and each
@@ -192,20 +178,20 @@ impl Dashboard {
             ))
         })?;
         let mut composed = Vec::new();
-        let mut previous = 0;
+        let mut previous: Option<u32> = None;
         for part in elements(text, "Part") {
             let number = match element(part, "PartNumber").map_err(invalid)? {
                 Some(raw) => part_number(&raw)?,
                 None => return Err(invalid_part("a Part names no PartNumber".to_string())),
             };
-            if number <= previous {
+            if let Some(previous) = previous.filter(|previous| number <= *previous) {
                 return Err(S3Error::new(
                     StatusCode::BAD_REQUEST,
                     "InvalidPartOrder",
                     format!("part {number} follows part {previous}; list parts in ascending order"),
                 ));
             }
-            previous = number;
+            previous = Some(number);
             let stated = element(part, "ETag")
                 .map_err(invalid)?
                 .ok_or_else(|| invalid_part(format!("part {number} names no ETag")))?;
@@ -227,7 +213,7 @@ impl Dashboard {
             }
             composed.extend_from_slice(&bytes);
         }
-        if previous == 0 {
+        if previous.is_none() {
             return Err(invalid_part("the request names no part".to_string()));
         }
         let metadata = write_metadata(&object, &manifest.content_type, &manifest.metadata)?;
@@ -265,7 +251,7 @@ impl Dashboard {
         let object = object(signer, key)?;
         let upload = upload_id(upload)?;
         let _fence = self.storage_write_guard().map_err(storage)?;
-        if self.s3_discard_parts(&object, upload).await? == 0 {
+        if self.s3_discard_parts(&object, upload).await?.is_empty() {
             return Err(no_upload(&object, upload));
         }
         Ok(empty_response(
@@ -274,8 +260,12 @@ impl Dashboard {
         ))
     }
 
-    /// Delete every staged part of one upload; how many there were.
-    async fn s3_discard_parts(&self, object: &ObjectRef, upload: &str) -> Result<usize, S3Error> {
+    /// Delete everything staged for one upload; the paths that were there.
+    async fn s3_discard_parts(
+        &self,
+        object: &ObjectRef,
+        upload: &str,
+    ) -> Result<Vec<String>, S3Error> {
         let staged = self
             .store
             .list_paths(&upload_prefix(object, upload), Listing::Every)
@@ -284,6 +274,6 @@ impl Dashboard {
         for path in &staged {
             self.store.delete_blob(path).await.map_err(storage)?;
         }
-        Ok(staged.len())
+        Ok(staged)
     }
 }

@@ -4,8 +4,11 @@
 //! with the namespace as its access key id and the namespace's object API
 //! bearer as its secret, the AWS CLI must put an object (whose bytes then
 //! sit at `<store>/ecosystem/<namespace>/<key>`), list it, read it back
-//! byte for byte, copy it, upload an object of two parts in parts, and
-//! delete all three (after which none is in the store). The refusals: a
+//! byte for byte, copy it, upload an object of two parts in parts, copy
+//! that object on the server in ranged parts (UploadPartCopy), and delete
+//! all four (after which none is in the store); an upload left
+//! unfinished is listed by ListMultipartUploads, its part read back by
+//! ListParts, and aborted ([`multipart`]). The refusals: a
 //! wrong secret is `SignatureDoesNotMatch`, an access key id no namespace
 //! answers to is `InvalidAccessKeyId` without naming the served namespaces,
 //! a bucket other than the signer's namespace is `AccessDenied`, and
@@ -23,6 +26,7 @@
 mod clients;
 mod commands;
 mod deployment;
+mod multipart;
 
 use deployment::Deployment;
 use serde_json::{json, Value};
@@ -107,14 +111,33 @@ fn objects(deployment: &mut Deployment, part: usize) {
     let random = std::iter::repeat_with(|| uuid::Uuid::new_v4().into_bytes());
     let bytes: Vec<u8> = random.flatten().take(part + part).collect();
     fs::write(&large, &bytes).unwrap();
-    let target = format!("s3://{NAMESPACE}/probe/large.bin");
+    let large_key = "probe/large.bin";
+    let target = format!("s3://{NAMESPACE}/{large_key}");
     let mut cp = aws(deployment, part);
     cp.args(["s3", "cp", &large.to_string_lossy(), &target]);
     deployment.must("aws s3 cp (in parts)", cp);
-    let assembled = fs::read(deployment.stored("probe/large.bin")).unwrap();
+    let assembled = fs::read(deployment.stored(large_key)).unwrap();
     assert!(assembled == bytes, "the parts were not assembled in order");
 
-    for key in ["probe/a.txt", "probe/b.txt", "probe/large.bin"] {
+    // Above the multipart threshold the AWS CLI copies on the server in
+    // ranged parts (UploadPartCopy); each part must carry its range's bytes.
+    let copy_key = "probe/large-copy.bin";
+    let copied = format!("s3://{NAMESPACE}/{copy_key}");
+    let mut server_copy = aws(deployment, part);
+    server_copy.args(["s3", "cp", &target, &copied]);
+    deployment.must("aws s3 cp (server-side, in parts)", server_copy);
+    let assembled = fs::read(deployment.stored(copy_key)).unwrap();
+    assert!(
+        assembled == bytes,
+        "the copied parts do not hold the source's bytes in order"
+    );
+
+    let mut written: Vec<&str> = Vec::new();
+    written.push("probe/a.txt");
+    written.push("probe/b.txt");
+    written.push(large_key);
+    written.push(copy_key);
+    for key in written {
         let mut delete = aws(deployment, part);
         delete.args([
             "s3api",
@@ -191,6 +214,7 @@ async fn the_aws_cli_reads_and_writes_a_namespace_through_stados_s3_endpoint() {
     let lifetime = declared("STADO_TEST_PRESIGN_SECONDS").to_string();
     let mut deployment = Deployment::start(NAMESPACE, ITEM);
     objects(&mut deployment, part);
+    multipart::abandoned(&mut deployment, part);
     refusals(&mut deployment, part);
     clients::endpoint(&mut deployment);
     clients::presigned_and_copied(&mut deployment, &lifetime).await;

@@ -17,7 +17,7 @@ pub(in crate::cli::storage) async fn ls_canonical(
     let counted: Vec<(&str, Result<usize, String>)> = futures::stream::iter(CANONICAL_PREFIXES)
         .map(|prefix| async move {
             let outcome = backend
-                .list_blobs_with_meta(prefix)
+                .list_blobs_sized(prefix)
                 .await
                 .map(|blobs| blobs.len())
                 .map_err(|err| err.to_string());
@@ -32,10 +32,9 @@ pub(in crate::cli::storage) async fn ls_canonical(
         .filter(|(_, outcome)| outcome.is_err())
         .map(|(prefix, _)| *prefix)
         .collect();
-    let total: usize = counted
-        .iter()
-        .filter_map(|(_, outcome)| outcome.as_ref().ok())
-        .sum();
+    // The total of the prefixes that answered; each one that did not is
+    // named in `unreachable` above and makes the command fail.
+    let total: usize = counted.iter().flat_map(|(_, outcome)| outcome.iter()).sum();
 
     if as_json {
         let rows: Vec<Value> = counted

@@ -69,23 +69,30 @@ impl BlobBackend for ReadFailoverBackend {
         }
     }
 
+    async fn read_range(
+        &self,
+        path: &str,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        match self.primary.read_range(path, first, last).await {
+            Ok(Some(content)) => Ok(Some(content)),
+            Ok(None) if Self::heals_from_mirror(path) => {
+                self.backup.read_range(path, first, last).await
+            }
+            Ok(None) => Ok(None),
+            Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
+            Err(e) => {
+                let backup = self.backup.read_range(path, first, last).await;
+                Self::failed_over("ranged read", path, e, backup)
+            }
+        }
+    }
+
     async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
         match self.primary.download_release(uri).await {
             Ok(Some(content)) => Ok(Some(content)),
-            // A release URI is immutable by definition, so the mirror can
-            // answer it; the heal writes through the primary's own addressing.
-            Ok(None) => match self.backup.download_release(uri).await? {
-                Some(content) => {
-                    let path = self
-                        .primary
-                        .blob_path(&crate::remote::object_store::ObjectRef::parse(uri)?);
-                    if let Err(error) = self.primary.upload_bytes(&path, &content).await {
-                        Self::report_replica_error("heal", &path, &error);
-                    }
-                    Ok(Some(content))
-                }
-                None => Ok(None),
-            },
+            Ok(None) => self.mirrored_release(uri).await,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(e) => {
                 let backup = self.backup.download_release(uri).await;

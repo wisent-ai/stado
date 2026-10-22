@@ -87,6 +87,26 @@ impl BlobBackend for StadoObjectBackend {
         self.download_bytes_limited(path, None).await
     }
 
+    /// The object API answers a `Range` request with that range alone.
+    async fn read_range(
+        &self,
+        path: &str,
+        first: u64,
+        last: u64,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let request = self
+            .request(Method::GET, self.object_url(path, &[])?)
+            .header(reqwest::header::RANGE, format!("bytes={first}-{last}"));
+        let response = Self::send_through_boundary(request).await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(Self::response_error(response).await);
+        }
+        Ok(Some(Self::whole_body(response, path, None).await?))
+    }
+
     /// One `stado://releases/...` object off the fleet's public release
     /// channel.
     ///

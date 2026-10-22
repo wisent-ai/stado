@@ -112,6 +112,53 @@ impl S3Backend {
         Ok(out)
     }
 
+    /// Every object under `prefix` with the size and timestamp its
+    /// ListObjectsV2 entry states, and no metadata: one request per page,
+    /// not one HEAD per object, for a caller that reads no metadata.
+    pub(super) async fn list_objects_sized(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<BlobInfo>, StorageError> {
+        let mut out = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut request = self
+                .inner
+                .client
+                .list_objects_v2()
+                .bucket(&self.inner.bucket)
+                .prefix(prefix);
+            if let Some(token) = &token {
+                request = request.continuation_token(token);
+            }
+            let page = crate::wait::sdk(request.send())
+                .await
+                .map_err(|err| sdk_err("list_objects_v2", err))?;
+            for object in page.contents() {
+                let name = key(object)?.to_string();
+                let size = match object.size() {
+                    None => None,
+                    Some(length) => Some(u64::try_from(length).map_err(|error| {
+                        StorageError::Other(format!(
+                            "S3 ListObjectsV2 listed {name} with a size {length} that is no byte count: {error}"
+                        ))
+                    })?),
+                };
+                out.push(BlobInfo {
+                    metadata: BTreeMap::new(),
+                    updated: object.last_modified().and_then(to_utc),
+                    size,
+                    name,
+                });
+            }
+            match page.next_continuation_token() {
+                Some(next) => token = Some(next.to_string()),
+                None => break,
+            }
+        }
+        Ok(out)
+    }
+
     /// Every object under `prefix` with the metadata, size and timestamp
     /// recovery reads off it.
     pub(super) async fn list_blobs_meta(

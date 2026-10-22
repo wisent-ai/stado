@@ -166,4 +166,13 @@ impl JobStorage {
     pub async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
         self.backend.list_blobs_with_meta(prefix).await
     }
+
+    /// (name, updated, size) for every blob under prefix, for a caller that
+    /// reads no metadata ([`BlobBackend::list_blobs_sized`]).
+    pub(crate) async fn list_blobs_sized(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<BlobInfo>, StorageError> {
+        self.backend.list_blobs_sized(prefix).await
+    }
 }

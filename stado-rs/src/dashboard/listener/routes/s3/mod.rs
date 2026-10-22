@@ -11,16 +11,18 @@
 //!
 //! Served: ListBuckets, HeadBucket, GetBucketLocation, GetBucketVersioning
 //! (never enabled: objects keep no versions), ListObjects and
-//! ListObjectsV2 ([`listing`]); GetObject, HeadObject, PutObject with
-//! `If-None-Match: *` and `If-Match`, CopyObject, DeleteObject and
-//! DeleteObjects ([`objects`]); CreateMultipartUpload, UploadPart,
-//! CompleteMultipartUpload and AbortMultipartUpload ([`multipart`]). Any
-//! other operation is answered `NotImplemented` naming what was asked.
+//! ListObjectsV2 ([`listing`], over [`scans`]); GetObject, HeadObject,
+//! PutObject with `If-None-Match: *` and `If-Match`, CopyObject,
+//! DeleteObject and DeleteObjects ([`objects`]); CreateMultipartUpload,
+//! UploadPart, UploadPartCopy, CompleteMultipartUpload, AbortMultipartUpload,
+//! ListMultipartUploads and ListParts ([`multipart`]). Any other operation
+//! is answered `NotImplemented` naming what was asked.
 
 mod auth;
 mod listing;
 mod multipart;
 mod objects;
+mod scans;
 mod wire;
 
 use reqwest::StatusCode;
@@ -144,6 +146,10 @@ impl Dashboard {
                 query.only_subresource(Some("versioning"))?;
                 Ok(versioning())
             }
+            "GET" if query.has("uploads") => {
+                query.only_subresource(Some("uploads"))?;
+                self.s3_list_uploads(signer, query).await
+            }
             "GET" => {
                 query.only_subresource(None)?;
                 self.s3_list_objects(signer, query).await
@@ -185,12 +191,21 @@ impl Dashboard {
         }
         let upload = query.value("uploadId");
         match (request.method.as_str(), upload) {
-            ("GET" | "HEAD", Some(_)) => Err(not_implemented(
-                "ListParts is not served: a multipart upload is completed or aborted by its id",
-            )),
+            ("GET", Some(upload)) => {
+                query.only_subresource(None)?;
+                self.s3_list_parts(signer, query, key, upload).await
+            }
+            ("HEAD", Some(_)) => Err(method("HEAD", "a multipart upload")),
             ("GET" | "HEAD", None) => {
                 query.only_subresource(None)?;
                 self.s3_get_object(request, signer, query, key).await
+            }
+            // A part copied from an object carries no body: reading one
+            // would stage an empty part and complete an object without it.
+            ("PUT", Some(upload)) if request.header("x-amz-copy-source").is_some() => {
+                query.only_subresource(None)?;
+                self.s3_upload_part_copy(request, signer, query, key, upload)
+                    .await
             }
             ("PUT", Some(upload)) => {
                 query.only_subresource(None)?;
