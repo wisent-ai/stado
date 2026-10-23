@@ -130,7 +130,7 @@ pub(crate) enum PlatformCommands {
     /// Transactional outage recovery: fence, migrate, verify, and cut over.
     #[command(subcommand)]
     Recovery(recovery::RecoveryCommands),
-    /// Move queue state between storage backends (billing-outage migration).
+    /// Objects on any storage backend, the S3 endpoint, and queue state moved between stores.
     #[command(subcommand)]
     Storage(storage::StorageCommands),
     /// Report the fleet's job time to Wisent's contribution ledger.
