@@ -36,7 +36,8 @@ impl PublishedCoordinate {
         } else {
             crate::release_control::RELEASE_REVISION_NAME
         };
-        self.names.len() == 1 && self.names.contains(claim_name)
+        let mut names = self.names.iter();
+        matches!((names.next(), names.next()), (Some(only), None) if only == claim_name)
     }
 }
 
@@ -56,87 +57,80 @@ pub(crate) async fn published_release_coordinates(
     // object API is configured; the backend's own listing otherwise, so the
     // audit still runs on a host holding its releases locally rather than
     // reporting that it could not look.
-    let keys: Vec<String> = match RemoteObjectApi::configured_for_list("releases", &prefix)? {
-        Some(remote) => remote
-            .list("releases", &prefix)
-            .await?
-            .into_iter()
-            .filter_map(|entry| Some(entry.get("key").and_then(Value::as_str)?.to_string()))
-            .collect(),
+    let mut keys: Vec<String> = Vec::new();
+    match RemoteObjectApi::configured_for_list("releases", &prefix)? {
+        Some(remote) => {
+            for entry in remote.list("releases", &prefix).await? {
+                // An entry without its key cannot be audited, so it is
+                // refused with what the route sent, not left out of the count.
+                let Some(key) = entry.get("key").and_then(Value::as_str) else {
+                    return Err(CmdError::click(format!(
+                        "the object API listed a release object under {prefix} without its key: \
+                         {entry}"
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown));
+                };
+                keys.push(key.to_string());
+            }
+        }
         None => {
             let store = JobStorage::for_object_uris().await?;
             let namespaced =
                 crate::remote::object_store::ObjectRef::namespace_prefix("releases", &prefix)?;
-            store
+            // Names only: the audit reads no size or metadata.
+            for name in store
                 .backend()
-                .list_blobs_with_meta(&namespaced)
+                .list_paths(&namespaced, crate::queue::Listing::Every)
                 .await?
-                .into_iter()
-                .filter_map(|blob| {
-                    crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)
-                        .ok()
-                        .map(|object| object.key().to_string())
-                })
-                .collect()
+            {
+                let object = crate::remote::object_store::ObjectRef::from_storage_path(&name)?;
+                keys.push(object.key().to_string());
+            }
         }
-    };
+    }
     let mut seen: BTreeMap<(String, String), PublishedCoordinate> = BTreeMap::new();
     let mut version_claims: BTreeSet<String> = BTreeSet::new();
     for key in keys {
-        let key = key.as_str();
         // Residue from an interrupted multipart upload is not a published
         // object. `stado storage put` stages parts below this suffix and only
         // promotes the complete object.
         if key.contains(".__stado_upload/") {
             continue;
         }
-        let parts: Vec<&str> = key.split('/').collect();
-        if parts.len() == 2 && parts[0] == product {
-            let entry = seen
-                .entry((parts[1].to_string(), String::new()))
-                .or_insert_with(|| PublishedCoordinate {
-                    version: parts[1].to_string(),
-                    platform: String::new(),
-                    version_scope: true,
-                    has_version_claim: false,
-                    names: BTreeSet::new(),
-                });
-            entry.names.insert("<version-root-object>".to_string());
-            continue;
-        }
-        if parts.len() == 3 && parts[0] == product {
-            if parts[2] == crate::release_control::RELEASE_VERSION_REVISION_NAME {
-                version_claims.insert(parts[1].to_string());
-            } else {
-                let entry = seen
-                    .entry((parts[1].to_string(), String::new()))
-                    .or_insert_with(|| PublishedCoordinate {
-                        version: parts[1].to_string(),
-                        platform: String::new(),
-                        version_scope: true,
-                        has_version_claim: false,
-                        names: BTreeSet::new(),
-                    });
-                entry.names.insert(parts[2].to_string());
+        // The listing is of `<product>/`, so a key outside it is the store
+        // answering another question, refused with the key it gave.
+        let Some(below) = key.strip_prefix(&prefix) else {
+            return Err(CmdError::click(format!(
+                "the release listing of {prefix} answered the key {key}, which is not under it"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
+        };
+        let parts: Vec<&str> = below.split('/').collect();
+        match parts.as_slice() {
+            [version] => {
+                coordinate(&mut seen, version, "")
+                    .names
+                    .insert("<version-root-object>".to_string());
             }
-            continue;
+            [version, name] => {
+                if *name == crate::release_control::RELEASE_VERSION_REVISION_NAME {
+                    version_claims.insert(version.to_string());
+                } else {
+                    coordinate(&mut seen, version, "")
+                        .names
+                        .insert(name.to_string());
+                }
+            }
+            // `<version>/<platform>/<name>`, the name holding any further
+            // segments.
+            [version, platform, name @ ..] => {
+                coordinate(&mut seen, version, platform)
+                    .names
+                    .insert(name.join("/"));
+            }
+            // `split` yields at least one segment.
+            [] => {}
         }
-        // `<product>/<version>/<platform>/<name>`; anything shorter is not a
-        // platform coordinate.
-        if parts.len() < 4 || parts[0] != product {
-            continue;
-        }
-        let name = parts[3..].join("/");
-        let entry = seen
-            .entry((parts[1].to_string(), parts[2].to_string()))
-            .or_insert_with(|| PublishedCoordinate {
-                version: parts[1].to_string(),
-                platform: parts[2].to_string(),
-                version_scope: false,
-                has_version_claim: false,
-                names: BTreeSet::new(),
-            });
-        entry.names.insert(name);
     }
     let versions_with_platforms: BTreeSet<String> = seen
         .values()
@@ -180,4 +174,22 @@ pub(crate) async fn published_release_coordinates(
         }
     });
     Ok(coordinates)
+}
+
+/// The coordinate `(version, platform)` among `seen`, added with no names
+/// when the walk meets it first; an empty platform is the version's own
+/// scope.
+fn coordinate<'a>(
+    seen: &'a mut BTreeMap<(String, String), PublishedCoordinate>,
+    version: &str,
+    platform: &str,
+) -> &'a mut PublishedCoordinate {
+    seen.entry((version.to_string(), platform.to_string()))
+        .or_insert_with(|| PublishedCoordinate {
+            version: version.to_string(),
+            platform: platform.to_string(),
+            version_scope: platform.is_empty(),
+            has_version_claim: false,
+            names: BTreeSet::new(),
+        })
 }
