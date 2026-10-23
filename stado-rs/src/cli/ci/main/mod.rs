@@ -7,7 +7,9 @@
 //! commit after a green one is recorded in Oko as one defect per session
 //! whose repair the commit brought, found in that commit, so Oko attributes
 //! the break to it; a red one after a red one notes on those defects, and
-//! the next green one records itself as their repair.
+//! the next green one records itself as their repair. A write the register
+//! refuses is kept on the commit's record as `unrecorded` and said on
+//! stderr; the verdict stands and the check goes on.
 //!
 //! `stado ci status` and `stado ci delivery` carry the record under the
 //! routine's `main`: each step's last checked and last green commit and every
@@ -93,10 +95,18 @@ async fn check_commit(
         Selection::Installation,
     )
     .await;
+    let mut unrecorded = Vec::new();
     let Err(error) = verdict else {
-        if let Some(red) = earlier_red {
-            let passed = format!("The main check found {key} green again at");
-            oko::repaired(&red.defects, &passed, repository, &revision).await?;
+        let unrepaired = match earlier_red {
+            Some(red) => {
+                let passed = format!("The main check found {key} green again at");
+                let defects = &red.defects;
+                oko::repaired(defects, &passed, repository, &revision, &mut unrecorded).await
+            }
+            None => Vec::new(),
+        };
+        for line in &unrecorded {
+            eprintln!("stado ci run: {key} is green at {revision}, and {line}");
         }
         return Ok(Checked {
             revision,
@@ -104,6 +114,8 @@ async fn check_commit(
             green: true,
             refusals: Vec::new(),
             defects: Vec::new(),
+            unrecorded,
+            unrepaired,
         });
     };
     let mut refused = Refused {
@@ -112,32 +124,60 @@ async fn check_commit(
         refusals: vec![error.to_string()],
         defects: Vec::new(),
         at: Utc::now(),
+        unrecorded: Vec::new(),
     };
-    refused.defects = match earlier_red {
-        Some(red) => {
-            let doing = format!("The main check of {key}");
-            oko::refused_again(&red.defects, &doing, &refused).await?;
-            red.defects.clone()
-        }
-        None => {
-            let since = checked.last_green(&key).map(|green| green.revision.clone());
-            let authors =
-                oko::authors(&step.checkout, repository, since.as_deref(), &revision).await?;
-            let finding = red_commit(repository, &step.product, &refused);
-            oko::record(&step.product, repository, &finding, &refused, &authors).await?
-        }
+    let at = oko::Step {
+        checkout: &step.checkout,
+        product: &step.product,
+        repository,
+        since: checked
+            .last_green(&key)
+            .map(|green| green.revision.as_str()),
     };
+    let before = earlier_red.map(|red| red.defects.as_slice());
+    let doing = format!("The main check of {key}");
+    let finding = || red_commit(repository, &step.product, &refused);
+    refused.defects = oko::settle(&at, &refused, finding, before, &doing, &mut unrecorded).await;
+    for line in &unrecorded {
+        eprintln!("stado ci run: {key} is red at {revision}, and {line}");
+    }
     Ok(Checked {
         revision,
         at: refused.at,
         green: false,
         refusals: refused.refusals,
         defects: refused.defects,
+        unrecorded,
+        unrepaired: Vec::new(),
     })
 }
 
+/// Record again the repairs each green commit of `step` keeps refused; each
+/// keeps those the register refuses again, with its new sentences. The
+/// record is written when any was asked again.
+async fn repair_again(step: &plan::Step, checked: &mut Record) -> Result<(), CmdError> {
+    let key = step.key();
+    let repository = step.repository()?;
+    let passed = format!("The main check found {key} green again at");
+    let mut asked = false;
+    let commits = checked.steps.get_mut(&key).into_iter().flatten();
+    for done in commits.filter(|done| !done.unrepaired.is_empty()) {
+        let mut unrecorded = Vec::new();
+        let (defects, revision) = (&done.unrepaired, &done.revision);
+        let refused = oko::repaired(defects, &passed, repository, revision, &mut unrecorded).await;
+        done.unrepaired = refused;
+        done.unrecorded = unrecorded;
+        asked = true;
+    }
+    match asked {
+        true => record::write(checked),
+        false => Ok(()),
+    }
+}
+
 /// Check every new commit of each step's `main`, recording each as soon as
-/// it is checked; the record and what the check said per step.
+/// it is checked, after recording again the repairs the register refused
+/// before; the record and what the check said per step.
 pub(in crate::cli::ci) async fn check(
     plan: &plan::Plan,
 ) -> Result<(Record, Vec<String>), CmdError> {
@@ -145,6 +185,7 @@ pub(in crate::cli::ci) async fn check(
     let mut said = Vec::new();
     for step in &plan.steps {
         let key = step.key();
+        repair_again(step, &mut checked).await?;
         let tip = main_tip(&step.checkout).await?;
         let last = checked.last_checked(&key).map(|done| done.revision.clone());
         let pending = new_commits(&step.checkout, last.as_deref(), &tip).await?;
@@ -154,11 +195,18 @@ pub(in crate::cli::ci) async fn check(
         }
         for revision in pending {
             let done = check_commit(step, revision, &checked).await?;
-            said.push(format!(
-                "{key}: {} {}",
-                done.revision,
-                if done.green { "green" } else { "red" }
-            ));
+            let verdict = match done.green {
+                true => "green",
+                false => "red",
+            };
+            said.push(match done.unrecorded.is_empty() {
+                true => format!("{key}: {} {verdict}", done.revision),
+                false => format!(
+                    "{key}: {} {verdict}, its register writes refused: {}",
+                    done.revision,
+                    done.unrecorded.join("; ")
+                ),
+            });
             checked.steps.entry(key.clone()).or_default().push(done);
             record::write(&checked)?;
         }
@@ -202,6 +250,29 @@ pub(in crate::cli::ci) fn red(document: &Value) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// Each write the register refused about a step's last checked commit, or
+/// about a commit whose repair records are still to be recorded again, as
+/// one sentence naming the step and the commit.
+pub(in crate::cli::ci) fn unrecorded(document: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (key, step) in document["steps"].as_object().into_iter().flatten() {
+        let last = &step["last_checked"];
+        let commits = step["checked"].as_array().into_iter().flatten();
+        let open = commits.filter(|commit| {
+            let unrepaired = commit["unrepaired"].as_array();
+            unrepaired.is_some_and(|defects| !defects.is_empty())
+                || commit["revision"] == last["revision"]
+        });
+        for commit in open {
+            let refused = commit["unrecorded"].as_array().into_iter().flatten();
+            for line in refused.filter_map(Value::as_str) {
+                lines.push(format!("main of {key} at {}: {line}", commit["revision"]));
+            }
+        }
+    }
+    lines
 }
 
 /// The record's lines in `stado ci status`'s and `stado ci delivery`'s plain

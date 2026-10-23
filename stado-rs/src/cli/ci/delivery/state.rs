@@ -33,6 +33,9 @@ pub struct Refused {
     /// The defects recorded in Oko for the refusal, one per authoring session.
     pub defects: Vec<String>,
     pub at: DateTime<Utc>,
+    /// Each write about this refusal the register refused, with its words.
+    #[serde(default)]
+    pub unrecorded: Vec<String>,
 }
 
 /// The revision a step last installed.
@@ -40,6 +43,14 @@ pub struct Refused {
 pub struct Delivered {
     pub revision: String,
     pub at: DateTime<Utc>,
+    /// Each repair record of the install the register refused, with its
+    /// words; the step is installed whether or not the register took them.
+    #[serde(default)]
+    pub unrecorded: Vec<String>,
+    /// The defects whose repair record by this install the register refused,
+    /// recorded again on every later pass until it takes them.
+    #[serde(default)]
+    pub unrepaired: Vec<String>,
 }
 
 /// A checkout's push of `main` after every step installed.

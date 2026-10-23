@@ -49,6 +49,10 @@ pub async fn delivery(json: bool) -> Result<(), CmdError> {
 /// holds its pass lock, which product operations hold build trees, and this
 /// machine's Stado unit as its init system holds it. `stalled` names every
 /// way the path is down now, each in one sentence; empty when it stands.
+/// `unrecorded` names every write in Oko's register about what the routine
+/// now stands on (each step's last checked commit, the refused step, each
+/// step's last install) that the register refused: the routine went on
+/// without it, so the register lacks what happened until it is recorded.
 pub async fn path() -> Result<Value, CmdError> {
     let routine = status()?;
     let current = state::read()?;
@@ -66,6 +70,19 @@ pub async fn path() -> Result<Value, CmdError> {
         ));
     }
     stalled.extend(crate::cli::ci::main::red(&routine["main"]));
+    let mut unrecorded = crate::cli::ci::main::unrecorded(&routine["main"]);
+    if let Some(refused) = &current.refused {
+        for line in &refused.unrecorded {
+            let (step, revision) = (&refused.step, &refused.revision);
+            unrecorded.push(format!("step {step} refused at {revision}: {line}"));
+        }
+    }
+    for (step, delivered) in &current.delivered {
+        for line in &delivered.unrecorded {
+            let revision = &delivered.revision;
+            unrecorded.push(format!("step {step} installed at {revision}: {line}"));
+        }
+    }
     if let (Some(running), None) = (&current.running, &holder) {
         stalled.push(format!(
             "step {} at {} is recorded as installing since {}, but no pass holds the routine's lock: \
@@ -85,6 +102,7 @@ pub async fn path() -> Result<Value, CmdError> {
         "unit": unit,
         "blocking_defects": current.refused.as_ref().map(|refused| refused.defects.clone()),
         "stalled": stalled,
+        "unrecorded": unrecorded,
     }))
 }
 
@@ -154,6 +172,10 @@ pub fn print_path(document: &Value) {
     }
     if !down {
         println!("  the delivery path stands");
+    }
+    let unrecorded = document["unrecorded"].as_array().into_iter().flatten();
+    for line in unrecorded.filter_map(Value::as_str) {
+        println!("  register write refused: {line}");
     }
 }
 

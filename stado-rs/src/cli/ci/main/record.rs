@@ -30,6 +30,16 @@ pub struct Checked {
     /// The Oko defects recorded for a red commit, one per authoring session.
     #[serde(default)]
     pub defects: Vec<String>,
+    /// Each write about this commit the register refused, with its words: a
+    /// red one's defect, assignment or note, a green one's repair records.
+    /// The verdict stands whether or not the register took them.
+    #[serde(default)]
+    pub unrecorded: Vec<String>,
+    /// For a green commit, the defects whose repair record by it the
+    /// register refused, recorded again on every later pass until it takes
+    /// them.
+    #[serde(default)]
+    pub unrepaired: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

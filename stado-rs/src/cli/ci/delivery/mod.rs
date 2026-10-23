@@ -32,7 +32,7 @@ use crate::cli::ci::main::record::Record;
 use crate::cli::release_loop::process::{run as process, succeeds};
 use crate::cli::CmdError;
 use plan::{Plan, Step};
-use state::{Delivered, Pass, Refused, Running, State};
+use state::{Pass, Refused, Running, State};
 
 /// The branch the routine checks, installs and pushes. A git ref name: the
 /// protocol between the checkout, its origin and the install.
@@ -129,6 +129,10 @@ async fn pass(plan: &Plan, current: &mut State, checked: &Record) -> Result<Outc
             return Ok(Outcome::NoGreen(said));
         };
         let revision = green.revision.clone();
+        let repository = step.repository()?;
+        if let Some(delivered) = current.delivered.get_mut(&key) {
+            oko::again(delivered, &key, repository).await;
+        }
         let since = current
             .delivered
             .get(&key)
@@ -145,9 +149,9 @@ async fn pass(plan: &Plan, current: &mut State, checked: &Record) -> Result<Outc
         state::write(current)?;
         let installed = install(step, &revision).await;
         current.running = None;
-        let repository = step.repository()?;
         let earlier = current.refused.take().filter(|refused| refused.step == key);
         let doing = format!("The delivery routine's install of {key}");
+        let mut unrecorded = Vec::new();
         if let Err(error) = installed {
             let mut refused = Refused {
                 step: key,
@@ -155,40 +159,29 @@ async fn pass(plan: &Plan, current: &mut State, checked: &Record) -> Result<Outc
                 refusals: vec![error.to_string()],
                 defects: Vec::new(),
                 at: Utc::now(),
+                unrecorded: Vec::new(),
             };
-            refused.defects = match earlier {
-                Some(earlier) => {
-                    oko::refused_again(&earlier.defects, &doing, &refused).await?;
-                    earlier.defects
-                }
-                None => {
-                    let authors = oko::authors(
-                        &step.checkout,
-                        repository,
-                        since.as_deref(),
-                        &refused.revision,
-                    )
-                    .await?;
-                    let finding = oko::install_refused(repository, &refused);
-                    oko::record(&step.product, repository, &finding, &refused, &authors).await?
-                }
+            let before = earlier.as_ref().map(|earlier| earlier.defects.as_slice());
+            let at = oko::Step {
+                checkout: &step.checkout,
+                product: &step.product,
+                repository,
+                since: since.as_deref(),
             };
+            let finding = || oko::install_refused(repository, &refused);
+            refused.defects =
+                oko::settle(&at, &refused, finding, before, &doing, &mut unrecorded).await;
+            let (key, revision) = (&refused.step, &refused.revision);
+            for line in &unrecorded {
+                eprintln!("stado ci run: {key} is refused at {revision}, and {line}");
+            }
+            refused.unrecorded = unrecorded;
             current.refused = Some(refused.clone());
             state::write(current)?;
             return Ok(Outcome::Refused(refused));
         }
-        if let Some(earlier) = earlier {
-            let passed = format!("The delivery routine installed {key} from");
-            oko::repaired(&earlier.defects, &passed, repository, &revision).await?;
-        }
-        said.push(format!("{key} installed at {revision}"));
-        current.delivered.insert(
-            key,
-            Delivered {
-                revision,
-                at: Utc::now(),
-            },
-        );
+        let delivered = oko::installed(&key, revision, earlier, repository, &mut said).await;
+        current.delivered.insert(key, delivered);
         state::write(current)?;
     }
     if !plan.push {

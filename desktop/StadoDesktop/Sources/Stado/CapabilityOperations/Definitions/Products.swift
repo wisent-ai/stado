@@ -134,8 +134,10 @@ enum NativeProductOperations {
         // Whether the delivery path stands, and what the main check found on
         // each step's main: every commit checked, green or red with every
         // refusal and its Oko defects, and the last green commit, which is
-        // what the routine installs. A red main is named under `stalled`.
-        .init(id: "ci-delivery", title: "Read the delivery path and the main check of every step: each commit green or red, and the last green one installed", path: ["ci", "delivery"], hostPlacement: .none, mutates: false),
+        // what the routine installs. A red main is named under `stalled`;
+        // each write Oko's register refused (a defect, note or repair record
+        // the routine went on without) under `unrecorded`.
+        .init(id: "ci-delivery", title: "Read the delivery path and the main check of every step: each commit green or red, the last green one installed, and each register write Oko refused", path: ["ci", "delivery"], hostPlacement: .none, mutates: false),
         // The delivery routine checks every new commit of each step's main,
         // installs each step's last green commit, in order, then pushes every
         // checkout when declared; Stado's scheduler runs `ci run`.
