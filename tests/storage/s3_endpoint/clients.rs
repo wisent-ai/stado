@@ -165,3 +165,48 @@ pub(super) fn queue(deployment: &mut Deployment) {
         "the conditional-write proof left objects behind: {left:?}"
     );
 }
+
+/// `stado storage stat` with its queue on the endpoint (the S3 backend, one
+/// HEAD per object): two keys sharing a prefix are put through the AWS CLI
+/// with bodies and metadata of their own; stat of the shorter key answers
+/// its own size and metadata, never the longer one's, and a key that only
+/// prefixes both is absent with no metadata.
+pub(super) fn stat(deployment: &mut Deployment, part: usize) {
+    let mut put = |key: &str, body: &str, kind: &str| {
+        let file = deployment.root.join(format!("stat-{kind}.txt"));
+        fs::write(&file, body).unwrap();
+        let path = file.to_string_lossy().into_owned();
+        let mut command = super::aws(deployment, part);
+        command.args(["s3api", "put-object", "--bucket", NAMESPACE]);
+        command.args(["--key", key, "--body", &path]);
+        command.args(["--metadata", &format!("kind={kind}")]);
+        deployment.must("aws s3api put-object (stat)", command);
+    };
+    let short = "short body\n";
+    put("stat/blob", short, "short");
+    put(
+        "stat/blob-longer",
+        "a longer body than the short one\n",
+        "long",
+    );
+
+    let mut stat = |key: &str| {
+        let mut command = deployment.queue_client("s3-compatible");
+        command.args(["storage", "stat", key, "--json"]);
+        json_of(&deployment.must("stado storage stat (S3 backend)", command))
+    };
+    let named = stat("stat/blob");
+    assert_eq!(named["state"], "present", "{named}");
+    assert_eq!(named["size"], json!(short.len()), "its own size: {named}");
+    assert_eq!(
+        named["metadata"]["kind"], "short",
+        "its own metadata: {named}"
+    );
+    assert_eq!(named["metadata_error"], Value::Null, "{named}");
+    let prefix = stat("stat/bl");
+    assert_eq!(
+        prefix["state"], "absent",
+        "a key that only prefixes objects: {prefix}"
+    );
+    assert_eq!(prefix["metadata"], json!({}), "{prefix}");
+}

@@ -173,6 +173,12 @@ pub trait BlobBackend: Send + Sync {
     /// Last-modified time of a blob, or `None` when absent.
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError>;
 
+    /// One blob's name, last-modified time, size and metadata, asked of the
+    /// store for that blob alone, or `None` when it does not exist. A caller
+    /// that wants one blob's facts never lists the blob's name as a prefix:
+    /// that reads every blob whose name starts with it.
+    async fn stat(&self, path: &str) -> Result<Option<BlobInfo>, StorageError>;
+
     /// Merge string metadata onto an existing blob. No-op when the blob is
     /// absent (local backend semantics; see module docs in `gcs.rs` for the
     /// GCS 404 handling).

@@ -251,18 +251,16 @@ impl BlobBackend for ReadFailoverBackend {
     }
 
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {
-        let exact = |blobs: Vec<BlobInfo>| {
-            blobs
-                .into_iter()
-                .find(|blob| blob.name == path)
-                .and_then(|blob| blob.updated)
-        };
-        match self.primary.list_blobs_with_meta(path).await {
-            Ok(blobs) => Ok(exact(blobs)),
+        Ok(self.stat(path).await?.and_then(|blob| blob.updated))
+    }
+
+    async fn stat(&self, path: &str) -> Result<Option<BlobInfo>, StorageError> {
+        match self.primary.stat(path).await {
+            Ok(blob) => Ok(blob),
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(e) => {
-                let backup = self.backup.list_blobs_with_meta(path).await.map(exact);
-                Self::failed_over("modification read", path, e, backup)
+                let backup = self.backup.stat(path).await;
+                Self::failed_over("stat", path, e, backup)
             }
         }
     }

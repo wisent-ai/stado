@@ -52,11 +52,9 @@ pub(in crate::cli::storage) async fn abort_upload(
             crate::remote::object_store::ObjectRef::namespace_prefix(object.namespace(), &prefix)?;
         let store = JobStorage::for_object_uris().await?;
         let mut values = Vec::new();
-        for blob in store
-            .backend()
-            .list_blobs_with_meta(&storage_prefix)
-            .await?
-        {
+        // Names and sizes only: no part's metadata is read, so a store that
+        // asks for metadata object by object (S3's HEAD) is not asked.
+        for blob in store.backend().list_blobs_sized(&storage_prefix).await? {
             let part = crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)?;
             values.push(json!({
                 "uri": part.to_string(),

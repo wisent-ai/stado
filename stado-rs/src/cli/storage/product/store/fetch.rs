@@ -117,14 +117,14 @@ pub(crate) async fn list_object_uris(
     }
     let store = JobStorage::for_object_uris().await?;
     let mut uris = Vec::new();
-    for blob in store
+    // Names only: neither size nor metadata is read, so the store is asked
+    // for its listing and nothing per object.
+    for name in store
         .backend()
-        .list_blobs_with_meta(&storage_prefix)
+        .list_paths(&storage_prefix, crate::queue::Listing::Every)
         .await?
     {
-        uris.push(
-            crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)?.to_string(),
-        );
+        uris.push(crate::remote::object_store::ObjectRef::from_storage_path(&name)?.to_string());
     }
     uris.sort();
     Ok(uris)

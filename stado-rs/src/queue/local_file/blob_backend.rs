@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 
 use crate::queue::{json_str, BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 
-use super::paths::{off_thread, read_range, remove_missing_ok};
+use super::paths::{off_thread, read_range, read_sidecar, remove_missing_ok};
 use super::LocalBackend;
 
 #[async_trait]
@@ -208,6 +208,25 @@ impl BlobBackend for LocalBackend {
         }
     }
 
+    /// One blob's sidecar metadata, size and modification time, from one
+    /// `stat` of its file, or `None` when no file has that name.
+    async fn stat(&self, path: &str) -> Result<Option<BlobInfo>, StorageError> {
+        let entry = match self.path(path)?.metadata() {
+            Ok(entry) => entry,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        if !entry.is_file() {
+            return Ok(None);
+        }
+        Ok(Some(BlobInfo {
+            metadata: read_sidecar(&self.metadata_path(path))?,
+            updated: Some(DateTime::<Utc>::from(entry.modified()?)),
+            size: Some(entry.len()),
+            name: path.to_string(),
+        }))
+    }
+
     async fn set_metadata(
         &self,
         path: &str,
@@ -262,32 +281,4 @@ impl BlobBackend for LocalBackend {
     ) -> Result<Box<dyn crate::queue::ChangeWatch>, StorageError> {
         self.arm_watch(prefixes)
     }
-}
-
-/// A blob's metadata sidecar; no metadata only when there is no sidecar. One
-/// that cannot be read or does not parse fails the call with its path:
-/// merging over it would rewrite it holding only the new keys, and listing
-/// it would show a blob without the metadata it carries.
-fn read_sidecar(path: &std::path::Path) -> Result<BTreeMap<String, String>, StorageError> {
-    let raw = match fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => {
-            return Err(std::io::Error::new(
-                error.kind(),
-                format!("cannot read blob metadata {}: {error}", path.display()),
-            )
-            .into())
-        }
-    };
-    serde_json::from_str(&raw).map_err(|error| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "blob metadata {} is not a JSON object of strings: {error}",
-                path.display()
-            ),
-        )
-        .into()
-    })
 }

@@ -82,9 +82,25 @@ impl AzureBlobBackend {
             })?;
             metadata.insert(key.to_string(), value.to_string());
         }
+        let size = match response.headers().get("content-length") {
+            None => None,
+            Some(value) => {
+                let text = value.to_str().map_err(|error| {
+                    StorageError::Other(format!(
+                        "HEAD {path} answered a content length that is not text: {error}"
+                    ))
+                })?;
+                Some(text.parse::<u64>().map_err(|error| {
+                    StorageError::Other(format!(
+                        "HEAD {path} answered a content length {text:?} that is no byte count: {error}"
+                    ))
+                })?)
+            }
+        };
         Ok(Some(BlobProps {
             etag,
             last_modified,
+            size,
             metadata,
         }))
     }
@@ -103,5 +119,7 @@ pub(super) enum GetOutcome {
 pub(super) struct BlobProps {
     pub(super) etag: Option<String>,
     pub(super) last_modified: Option<DateTime<Utc>>,
+    /// The blob's length in bytes, from Content-Length.
+    pub(super) size: Option<u64>,
     pub(super) metadata: BTreeMap<String, String>,
 }

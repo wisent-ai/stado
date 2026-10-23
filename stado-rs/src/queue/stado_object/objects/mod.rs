@@ -190,7 +190,7 @@ impl BlobBackend for StadoObjectBackend {
     }
 
     async fn exists(&self, path: &str) -> Result<bool, StorageError> {
-        Ok(self.stat(path).await?.is_some())
+        Ok(self.describe(path).await?.is_some())
     }
 
     async fn list_paths(
@@ -211,10 +211,22 @@ impl BlobBackend for StadoObjectBackend {
     }
 
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {
-        let Some(stat) = self.stat(path).await? else {
+        let Some(stat) = self.describe(path).await? else {
             return Ok(None);
         };
         Self::parse_updated(stat.updated_at)
+    }
+
+    async fn stat(&self, path: &str) -> Result<Option<BlobInfo>, StorageError> {
+        let Some(object) = self.describe(path).await? else {
+            return Ok(None);
+        };
+        Ok(Some(BlobInfo {
+            updated: Self::parse_updated(object.updated_at)?,
+            name: object.key,
+            size: object.size,
+            metadata: object.metadata,
+        }))
     }
 
     async fn set_metadata(

@@ -32,7 +32,9 @@ pub(in crate::cli::storage) async fn probe(backend: &Arc<dyn BlobBackend>, path:
                 detail: Some(format!("no version token: {err}")),
             },
             Ok(None) => Presence::Absent,
-            Err(_) => unanswered_for_error(&err),
+            // The binary read failing as well is the store not answering;
+            // its error is what the store said to a read that needs no text.
+            Err(binary) => unanswered_for_error(&binary),
         },
     }
 }
@@ -61,32 +63,33 @@ pub(in crate::cli::storage) async fn observe(path: &str) -> Result<Observation, 
     // answered 401 for a namespace this token has no grant on. An object the
     // very same store serves cannot be reported unreachable because the path
     // was spelled without a scheme.
-    let parsed = if path.starts_with("stado://") {
-        crate::remote::object_store::ObjectRef::parse(path)
+    let named = if path.starts_with("stado://") {
+        Some(crate::remote::object_store::ObjectRef::parse(path)?)
     } else {
-        Err(crate::queue::StorageError::Other(
-            "a bare path addresses the queue store, not a namespace".to_string(),
-        ))
+        // A bare path addresses the queue store, not a namespace.
+        None
     };
-    let release = match &parsed {
-        Ok(object) if object.is_release_archive() => {
+    let release = match named.as_ref().filter(|object| object.is_release_archive()) {
+        Some(object) => {
             RemoteObjectApi::configured_release_reader()?.map(|remote| (remote, object.to_string()))
         }
-        _ => None,
+        None => None,
     };
 
     // An object outside the queue namespace is not in the queue store and never
     // can be: `StadoObjectBackend` builds `ObjectRef::new(&self.namespace, path)`,
     // so every probe is re-prefixed with the queue namespace. Asking it about
     // `stado://sources/...` reported `absent` for objects that exist.
-    let object_api = match (&parsed, &release) {
-        (Ok(object), None)
-            if RemoteObjectApi::release_authorized(object.namespace(), object.key())
-                || object.namespace() != crate::config::wc_stado_storage_namespace() =>
-        {
+    let foreign = named.as_ref().filter(|object| {
+        release.is_none()
+            && (RemoteObjectApi::release_authorized(object.namespace(), object.key())
+                || object.namespace() != crate::config::wc_stado_storage_namespace())
+    });
+    let object_api = match foreign {
+        Some(object) => {
             RemoteObjectApi::configured_for_object(object)?.map(|remote| (remote, object.clone()))
         }
-        _ => None,
+        None => None,
     };
 
     if let Some((remote, uri)) = release {
@@ -131,20 +134,30 @@ pub(in crate::cli::storage) async fn observe(path: &str) -> Result<Observation, 
     let probe_path = backend_key(backend, path)?;
     let presence = probe(backend, &probe_path).await;
 
-    // Metadata and the timestamp come from the listing, which is a separate
-    // grant from object read: if listing is denied while the read worked,
+    // Metadata and the timestamp come from one stat of the object, which is
+    // a separate request from the read: if it fails while the read worked,
     // say so rather than downgrading a known-present object to unreachable.
+    // A stat that finds nothing after the read found the object means it
+    // was deleted in between, which is said too.
     let (metadata, updated, metadata_error) = match &presence {
-        Presence::Present { .. } => match backend.list_blobs_with_meta(&probe_path).await {
-            Ok(blobs) => match blobs.into_iter().find(|blob| blob.name == probe_path) {
-                Some(blob) => (blob.metadata, blob.updated, None),
-                None => (BTreeMap::new(), None, None),
-            },
+        Presence::Present { .. } => match backend.stat(&probe_path).await {
+            Ok(Some(blob)) => (blob.metadata, blob.updated, None),
+            Ok(None) => (
+                BTreeMap::new(),
+                None,
+                Some(format!(
+                    "{probe_path} was read, and its stat found no such object: it was deleted \
+                     in between"
+                )),
+            ),
             Err(err) => (BTreeMap::new(), None, Some(err.to_string())),
         },
-        // Nothing else is known to be there, so there is no listing
-        // worth asking for and no metadata to carry.
-        _ => (BTreeMap::new(), None, None),
+        // Nothing else is known to be there, so there is no stat worth
+        // asking for and no metadata to carry.
+        Presence::Absent
+        | Presence::Refused(_)
+        | Presence::Unavailable(_)
+        | Presence::Unreachable(_) => (BTreeMap::new(), None, None),
     };
     Ok(Observation {
         presence,
@@ -178,18 +191,38 @@ fn listed(value: &Value, uri: &str) -> Result<Listed, CmdError> {
             "the object API listed {uri} with size {bytes}, beyond this host's address space: {error}"
         ))
     })?;
-    let metadata = match value.get("metadata").and_then(Value::as_object) {
-        Some(fields) => fields
-            .iter()
-            .filter_map(|(name, item)| item.as_str().map(|text| (name.clone(), text.to_string())))
-            .collect(),
-        None => BTreeMap::new(),
+    let mut metadata = BTreeMap::new();
+    if let Some(fields) = value.get("metadata") {
+        let Some(fields) = fields.as_object() else {
+            return Err(CmdError::click(format!(
+                "the object API listed {uri} with metadata that is not an object: {fields}"
+            )));
+        };
+        for (name, item) in fields {
+            let Some(text) = item.as_str() else {
+                return Err(CmdError::click(format!(
+                    "the object API listed {uri} with metadata {name} that is not text: {item}"
+                )));
+            };
+            metadata.insert(name.clone(), text.to_string());
+        }
+    }
+    let updated = match value.get("updated_at") {
+        None | Some(Value::Null) => None,
+        Some(stamp) => {
+            let Some(text) = stamp.as_str() else {
+                return Err(CmdError::click(format!(
+                    "the object API listed {uri} with updated_at that is not text: {stamp}"
+                )));
+            };
+            let parsed = DateTime::parse_from_rfc3339(text).map_err(|error| {
+                CmdError::click(format!(
+                    "the object API listed {uri} with updated_at {text:?} that is no RFC 3339 time: {error}"
+                ))
+            })?;
+            Some(parsed.with_timezone(&Utc))
+        }
     };
-    let updated = value
-        .get("updated_at")
-        .and_then(Value::as_str)
-        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-        .map(|stamp| stamp.with_timezone(&Utc));
     Ok((
         Presence::Present {
             size: Some(size),

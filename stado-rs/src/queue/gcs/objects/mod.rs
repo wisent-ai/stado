@@ -147,6 +147,13 @@ impl BlobBackend for GcsBackend {
         parse_timestamp(object.get("updated"), path)
     }
 
+    async fn stat(&self, path: &str) -> Result<Option<BlobInfo>, StorageError> {
+        let Some(object) = self.get_object(path).await? else {
+            return Ok(None);
+        };
+        listing::blob(&object).map(Some)
+    }
+
     async fn set_metadata(
         &self,
         path: &str,

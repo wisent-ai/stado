@@ -163,12 +163,7 @@ impl GcsBackend {
             let response = self.send(Method::GET, &url, None).await?;
             let page: Value = ensure_success(response).await?.json().await?;
             for item in items(&page) {
-                out.push(BlobInfo {
-                    name: text(item, "name")?.to_string(),
-                    updated: parse_timestamp(item.get("updated"), text(item, "name")?)?,
-                    size: size(item)?,
-                    metadata: metadata(item)?,
-                });
+                out.push(blob(item)?);
             }
             match page.get("nextPageToken").and_then(Value::as_str) {
                 Some(token) => page_token = Some(token.to_string()),
@@ -177,4 +172,16 @@ impl GcsBackend {
         }
         Ok(out)
     }
+}
+
+/// One object resource, listed or read alone, as a blob: its name, update
+/// time, size and metadata.
+pub(super) fn blob(item: &Value) -> Result<BlobInfo, StorageError> {
+    let name = text(item, "name")?;
+    Ok(BlobInfo {
+        name: name.to_string(),
+        updated: parse_timestamp(item.get("updated"), name)?,
+        size: size(item)?,
+        metadata: metadata(item)?,
+    })
 }

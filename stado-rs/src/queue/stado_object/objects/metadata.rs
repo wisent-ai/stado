@@ -13,7 +13,12 @@ use crate::remote::object_store::ObjectRef;
 use super::super::{ObjectDescriptor, StadoObjectBackend};
 
 impl StadoObjectBackend {
-    pub(super) async fn stat(&self, path: &str) -> Result<Option<ObjectDescriptor>, StorageError> {
+    /// The gateway's descriptor of one object (`/api/object/stat`), or
+    /// `None` when it holds none.
+    pub(super) async fn describe(
+        &self,
+        path: &str,
+    ) -> Result<Option<ObjectDescriptor>, StorageError> {
         let object = self.object(path)?;
         let mut url = self.url("/api/object/stat");
         url.query_pairs_mut()

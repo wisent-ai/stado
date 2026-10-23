@@ -211,3 +211,35 @@ pub(super) fn read_range(
     file.take(wanted).read_to_end(&mut bytes)?;
     Ok(Some(bytes))
 }
+
+/// A blob's metadata sidecar; no metadata only when there is no sidecar. One
+/// that cannot be read or does not parse fails the call with its path:
+/// merging over it would rewrite it holding only the new keys, and listing
+/// it would show a blob without the metadata it carries.
+pub(super) fn read_sidecar(
+    path: &Path,
+) -> Result<std::collections::BTreeMap<String, String>, StorageError> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(std::collections::BTreeMap::new())
+        }
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("cannot read blob metadata {}: {error}", path.display()),
+            )
+            .into())
+        }
+    };
+    serde_json::from_str(&raw).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "blob metadata {} is not a JSON object of strings: {error}",
+                path.display()
+            ),
+        )
+        .into()
+    })
+}

@@ -15,7 +15,8 @@
 //! turning versioning on is `NotImplemented` while reading it answers the
 //! empty configuration of a never-versioned bucket. Then
 //! the real `stado` legs run ([`clients`]): `stado storage s3-endpoint`,
-//! presigned URLs, `stado storage cp|mv`, and a queue kept on the endpoint.
+//! presigned URLs, `stado storage cp|mv`, a queue kept on the endpoint, and
+//! `stado storage stat` of one key through that queue's S3 backend.
 //!
 //! Run with `cargo test --test storage-s3-endpoint -- --nocapture` and:
 //! SKARBIEC (the skarbiec binary under test), STADO_TEST_REQUEST_LIMITS (the
@@ -219,6 +220,7 @@ async fn the_aws_cli_reads_and_writes_a_namespace_through_stados_s3_endpoint() {
     clients::endpoint(&mut deployment);
     clients::presigned_and_copied(&mut deployment, &lifetime).await;
     clients::queue(&mut deployment);
+    clients::stat(&mut deployment, part);
     deployment.report["outcome"] = json!("passed");
     deployment.save();
 }

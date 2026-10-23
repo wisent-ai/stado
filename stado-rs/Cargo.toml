@@ -238,6 +238,10 @@ name = "storage-bearer-rotation"
 path = "../tests/storage/bearer_rotation.rs"
 
 [[test]]
+name = "storage-stat"
+path = "../tests/storage/stat/main.rs"
+
+[[test]]
 name = "storage-refusal-closed-port"
 path = "../tests/storage/refusal/closed_port.rs"
 

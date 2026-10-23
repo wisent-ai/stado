@@ -9,8 +9,9 @@ use regex::Regex;
 
 use crate::queue::JobStorage;
 
-static CKPT_URI_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"--checkpoint-gcs-uri\s+(\S+)").expect("static regex compiles"));
+static CKPT_URI_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"--checkpoint-gcs-uri\s+(?P<uri>\S+)").expect("static regex compiles")
+});
 
 /// Extract the in-bucket checkpoint prefix from a training command's
 /// `--checkpoint-gcs-uri gs://<bucket>/<prefix>` flag. Returns the part
@@ -20,7 +21,7 @@ fn ckpt_prefix_from_command(cmd: &str) -> Option<String> {
         return None;
     }
     let caps = CKPT_URI_RE.captures(cmd)?;
-    let uri = caps[1].trim();
+    let uri = caps.name("uri")?.as_str().trim();
     let rest = uri.strip_prefix("gs://")?;
     let (_bucket, prefix) = rest.split_once('/')?;
     if prefix.is_empty() {
@@ -34,7 +35,9 @@ fn ckpt_prefix_from_command(cmd: &str) -> Option<String> {
 /// While a multi-GB checkpoint uploads its shard blobs are continuously
 /// updated, so the newest write keeps moving even while the upload starves
 /// the small lease renewal. A listing the coordinator cannot read is not
-/// proof the job is dead, so it answers true (keep).
+/// proof the job is dead, so it answers true (keep). Only update times are
+/// read, so a store that asks for metadata object by object (S3's HEAD) is
+/// asked for its listing alone.
 pub(super) async fn checkpoint_written_after(
     store: &JobStorage,
     command: &str,
@@ -43,11 +46,11 @@ pub(super) async fn checkpoint_written_after(
     let Some(prefix) = ckpt_prefix_from_command(command) else {
         return false;
     };
-    match store.list_blobs_with_meta(&prefix).await {
+    match store.list_blobs_sized(&prefix).await {
         Ok(infos) => infos
             .into_iter()
             .filter_map(|info| info.updated)
             .any(|updated| updated > since),
-        Err(_) => true,
+        Err(_unreadable_listing_keeps_the_job) => true,
     }
 }

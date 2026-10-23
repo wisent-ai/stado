@@ -242,6 +242,15 @@ impl BlobBackend for AzureBlobBackend {
         Ok(self.head(path).await?.and_then(|props| props.last_modified))
     }
 
+    async fn stat(&self, path: &str) -> Result<Option<BlobInfo>, StorageError> {
+        Ok(self.head(path).await?.map(|props| BlobInfo {
+            name: path.to_string(),
+            updated: props.last_modified,
+            size: props.size,
+            metadata: props.metadata,
+        }))
+    }
+
     async fn set_metadata(
         &self,
         path: &str,

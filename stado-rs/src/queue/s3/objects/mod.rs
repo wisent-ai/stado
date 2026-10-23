@@ -188,6 +188,10 @@ impl BlobBackend for S3Backend {
         }
     }
 
+    async fn stat(&self, path: &str) -> Result<Option<BlobInfo>, StorageError> {
+        self.head_blob(path).await
+    }
+
     async fn set_metadata(
         &self,
         path: &str,
