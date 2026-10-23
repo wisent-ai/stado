@@ -47,6 +47,12 @@ pub(super) async fn vault(command: CredentialVaultCommands) -> Result<(), CmdErr
             apply,
             json,
         } => crate::cli::secrets::retire::retire_copy(&path, &owner, apply, json).await,
+        CredentialVaultCommands::Move {
+            to,
+            owner_uid,
+            apply,
+            json,
+        } => crate::cli::secrets::owner::move_owner(&to, &owner_uid, apply, json).await,
     }
 }
 

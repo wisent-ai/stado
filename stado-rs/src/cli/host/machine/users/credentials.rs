@@ -43,14 +43,32 @@ pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdE
             ))
             .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-    let vault = declared
-        .strip_prefix("$HOME/")
-        .map(|tail| format!("{home}/{tail}"))
-        .unwrap_or_else(|| declared.to_string());
+    // An absolute declaration is the path itself; a `$HOME/` one is read
+    // under the home the host's own shell stated.
+    let vault = match declared.strip_prefix("$HOME/") {
+        Some(tail) => format!("{home}/{tail}"),
+        None => declared.to_string(),
+    };
+    let gnupg_home = gnupg_home(&target, &runner).await?;
+    Ok(CredentialHost {
+        target,
+        home,
+        vault,
+        gnupg_home,
+    })
+}
+
+/// The GnuPG home a host's own environment names: `GNUPGHOME`, else the
+/// account's `~/.gnupg`, as GnuPG itself resolves it there. A host that
+/// holds no vault still holds a keyring, so this needs no vault declaration.
+pub(crate) async fn gnupg_home(
+    target: &ComputeTarget,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
     let environment = crate::deploy::host_channel::run_command(
-        &target,
+        target,
         "printf '%s\n' \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
+        runner,
     )
     .await
     .map_err(CmdError::from)?;
@@ -69,12 +87,7 @@ pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdE
         ))
         .stating(crate::primitives::failure::FailureCode::Config));
     }
-    Ok(CredentialHost {
-        target,
-        home,
-        vault,
-        gnupg_home,
-    })
+    Ok(gnupg_home)
 }
 
 /// Resolve Skarbiec through the host's release agent, using the same observed
@@ -171,18 +184,12 @@ pub(crate) async fn release_managed_skarbiec(
     let artifact_sha256 = field("artifact_sha256")?;
     let manifest_sha256 = field("manifest_sha256")?;
     let path = field("path")?;
-    let digest = |value: &str| {
-        value.len() == 64
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    };
     if state != "active"
         || product != "skarbiec"
         || active_target != resolved.name
         || platform != target.platform
-        || !digest(artifact_sha256)
-        || !digest(manifest_sha256)
+        || !crate::deploy::host_release::is_sha256(artifact_sha256)
+        || !crate::deploy::host_release::is_sha256(manifest_sha256)
     {
         return Err(CmdError::click(format!(
             "{}: Stado release active binary returned an invalid Skarbiec identity",

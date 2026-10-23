@@ -27,6 +27,11 @@ enum NativeCredentialOperations {
         .init(id: "item-restore", title: "Restore a deleted credential item", path: ["credentials", "item", "restore"], fields: [
             .init(id: "item", label: "Item identifier", required: true),
         ]),
+        .init(id: "vault-move", title: "Move the fleet vault and its owner to another host", path: ["credentials", "vault", "move"], hostPlacement: .none, fields: [
+            .init(id: "to", label: "Host that becomes the vault owner", option: "--to", required: true),
+            .init(id: "owner-uid", label: "Owner identity whose secret key that host's keyring holds", option: "--owner-uid", required: true),
+            .init(id: "apply", label: "Move it (blank reads and reports only)", option: "--apply", flag: true),
+        ]),
         .init(id: "signing-profile-ensure", title: "Store code-signing provisioning profiles in a signing item", path: ["credentials", "signing-profile", "ensure"], fields: [
             .init(id: "provider", label: "Profile provider (apple)", option: "--provider", required: true, initial: "apple"),
             .init(id: "item", label: "Signing item (for example tama-desktop-signing)", required: true),

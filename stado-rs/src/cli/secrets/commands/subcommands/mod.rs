@@ -242,6 +242,25 @@ pub enum CredentialVaultCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Move the fleet vault, its owner identity and the Skarbiec service to
+    /// another registered host: register the new owner, rotate the vault to
+    /// it on the host that owns it now, move the placement profile that
+    /// carries Skarbiec, declare the vault on the destination, and prove the
+    /// destination reads every live item. A failed move rotates the vault
+    /// back to its previous owner. Without --apply nothing changes.
+    Move {
+        /// The registered host that becomes the vault owner.
+        #[arg(long)]
+        to: String,
+        /// The owner identity, whose secret half the destination's keyring holds.
+        #[arg(long)]
+        owner_uid: String,
+        /// Move it; without it every reading is made and reported.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
