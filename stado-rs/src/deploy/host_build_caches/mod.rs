@@ -25,7 +25,7 @@ mod report;
 pub use invocation::{remote_command, validate_days, validate_root};
 pub use program::{
     AGE_ENV, APPLY_ENV, CACHEDIR_SIGNATURE, FORCE_ENV, REMOTE_SCRIPT, ROOT_ENV, SCAN_FAILED,
-    STATUS_PREFIX,
+    STATUS_PREFIX, TAGGED_VERDICTS,
 };
 pub use read::{home_scan_for_target, report_declaration_on_host, run_on_host};
 pub use report::{parse_report, BuildCacheDeclaration, BuildCacheReport, CacheEntry};

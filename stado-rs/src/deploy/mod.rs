@@ -96,6 +96,7 @@ pub mod host_recovery;
 pub mod host_release;
 pub mod host_run;
 pub mod host_scan;
+pub mod host_spotlight;
 pub mod host_state;
 pub mod host_storage_reconcile;
 pub mod host_storage_reconcile_host;

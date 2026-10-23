@@ -27,6 +27,19 @@ pub const SCAN_FAILED: &str = "scan-failed";
 /// walk never started, so nothing under the root was seen.
 pub const ROOT_ABSENT: &str = "root-absent";
 
+/// The verdicts `REMOTE_SCRIPT` prints for a directory whose `CACHEDIR.TAG`
+/// carries the standard signature, whatever it judged about removing it:
+/// the lines it prints after the signature check. A verdict added there is
+/// added here, in the same file.
+pub const TAGGED_VERDICTS: &[&str] = &[
+    "too-young",
+    "in-use",
+    "liveness-unavailable",
+    "removed",
+    "remove-failed",
+    "candidate",
+];
+
 /// Two phases. First one `find` pass collects the tag files, so the walk is
 /// never mutated underneath itself — deleting during the walk made `find`
 /// fail and swallowed the report while the deletions still happened. Then

@@ -14,6 +14,7 @@ mod checks;
 mod files;
 mod machine;
 mod secrets;
+pub(crate) mod spotlight;
 
 pub use crate::cli::host::checks::health::health;
 pub use crate::cli::host::checks::health::ports::port_owner;

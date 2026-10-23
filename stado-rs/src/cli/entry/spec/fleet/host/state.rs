@@ -56,6 +56,18 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
+    /// The build caches (directories a CACHEDIR.TAG marks) in TARGET's home
+    /// that Spotlight still indexes; --apply writes the .metadata_never_index
+    /// that keeps Spotlight out of each.
+    Spotlight {
+        target: String,
+        /// Write the marker into every unmarked cache.
+        #[arg(long)]
+        apply: bool,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Check TARGET's ssh reachability AND health-beacon age as one verdict.
     Ping {
         target: String,

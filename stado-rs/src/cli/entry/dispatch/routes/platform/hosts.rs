@@ -76,6 +76,11 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             json,
         })) => host::gpu_power_limit_unset(&target, json).await,
         HostStateCommands::Uptime { target, json } => host::uptime(&target, json).await,
+        HostStateCommands::Spotlight {
+            target,
+            apply,
+            json,
+        } => crate::cli::host::spotlight::spotlight(&target, apply, json).await,
         HostStateCommands::Ping { target, json } => host::ping(&target, json).await,
         HostStateCommands::Gates {
             host: target,
