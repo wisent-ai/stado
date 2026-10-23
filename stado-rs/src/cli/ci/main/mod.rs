@@ -289,5 +289,12 @@ pub(in crate::cli::ci) fn print(document: &Value) {
             "  main of {key}: last checked {} {verdict}; last green {}",
             last["revision"], step["last_green"]["revision"]
         );
+        for commit in step["checked"].as_array().into_iter().flatten() {
+            let unrepaired = commit["unrepaired"].as_array().into_iter().flatten();
+            for defect in unrepaired.filter_map(Value::as_str) {
+                let revision = &commit["revision"];
+                println!("    {revision}'s repair of {defect} is still to be recorded in Oko");
+            }
+        }
     }
 }

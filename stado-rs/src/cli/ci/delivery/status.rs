@@ -211,6 +211,10 @@ pub fn print_status(document: &Value) {
             "  delivered: {step} at {} on {}",
             delivered["revision"], delivered["at"]
         );
+        let unrepaired = delivered["unrepaired"].as_array().into_iter().flatten();
+        for defect in unrepaired.filter_map(Value::as_str) {
+            println!("    its repair of {defect} is still to be recorded in Oko");
+        }
     }
     for (checkout, pushed) in document["pushed"].as_object().into_iter().flatten() {
         match pushed["refusal"].as_str() {
