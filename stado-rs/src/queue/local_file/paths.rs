@@ -56,8 +56,7 @@ impl LocalBackend {
         let root = self.root.clone();
         let internal = [self.locks.clone(), self.metadata.clone()];
         let wanted = prefix.to_owned();
-        off_thread(prefix, move || names_under(&root, &internal, &wanted))
-            .await
+        off_thread(prefix, move || names_under(&root, &internal, &wanted)).await
     }
 }
 
@@ -69,13 +68,11 @@ pub(super) async fn off_thread<T: Send + 'static>(
     path: &str,
     work: impl FnOnce() -> Result<T, StorageError> + Send + 'static,
 ) -> Result<T, StorageError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .map_err(|error| {
-            StorageError::Other(format!(
-                "the local storage step on {path:?} did not finish: {error}"
-            ))
-        })?
+    tokio::task::spawn_blocking(work).await.map_err(|error| {
+        StorageError::Other(format!(
+            "the local storage step on {path:?} did not finish: {error}"
+        ))
+    })?
 }
 
 /// The walk [`LocalBackend::relative_names`] describes, over `root`, leaving
@@ -213,3 +210,4 @@ pub(super) fn read_range(
     let mut bytes = Vec::new();
     file.take(wanted).read_to_end(&mut bytes)?;
     Ok(Some(bytes))
+}

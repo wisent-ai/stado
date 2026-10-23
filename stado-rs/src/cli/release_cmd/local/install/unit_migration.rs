@@ -20,7 +20,7 @@ pub(super) fn admit(
         return Ok(None);
     }
     let label = crate::deploy::service_catalog::host_unit().map_err(CmdError::declaration)?;
-    let native = crate::deploy::service::resident_unit_paths(home, label);
+    let native = crate::deploy::service::resident_unit_paths(home, &label);
     let mut present = false;
     for path in native {
         present |= path.try_exists().map_err(|cause| {

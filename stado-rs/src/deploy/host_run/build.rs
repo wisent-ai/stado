@@ -75,10 +75,12 @@ pub async fn build(
             "if [ -z \"$cargo\" ] && [ -x {candidate} ]; then cargo={candidate}; fi\n"
         ));
     }
-    script.push_str(&format!(
-        "if [ -z \"$cargo\" ]; then printf '%s\\n' 'Cargo is not installed at a Stado-approved path' >&2; exit {}; fi\n",
-        nix::libc::EX_UNAVAILABLE
-    ));
+    // Each refusal below exits with the status of the step that failed (the
+    // Cargo check, mkdir, cp), which `exit` without an argument returns.
+    script.push_str(
+        "if [ -z \"$cargo\" ]; then printf '%s\\n' 'Cargo is not installed at a Stado-approved path' >&2; fi\n\
+         [ -n \"$cargo\" ] || exit\n",
+    );
     script.push_str("export PATH=\"${cargo%/*}:$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin\"\n");
     // The declared compiler cache: installed on the target with its own Cargo
     // when absent or another version, then Cargo's RUSTC_WRAPPER, so a crate
@@ -96,18 +98,14 @@ pub async fn build(
     // fresh multi-gigabyte target inside every run directory.
     script
         .push_str("export CARGO_TARGET_DIR=\"$HOME/.stado/build-cache/host-build/cargo-target\"\n");
-    script.push_str(&format!(
-        "mkdir -p \"$CARGO_TARGET_DIR\" || exit {cantcreat}\n",
-        cantcreat = nix::libc::EX_CANTCREAT
-    ));
+    script.push_str("mkdir -p \"$CARGO_TARGET_DIR\" || exit\n");
     script.push_str(&format!(
         "\"$cargo\" build --locked --release --manifest-path \"$path\" --bin {binary} || exit $?\n\
          # Only the executable enters the run directory, where run attach\n\
          # accepts it and run remove takes it away again.\n\
-         mkdir -p \"${{path%/*}}/target/release\" || exit {cantcreat}\n\
-         cp \"$CARGO_TARGET_DIR/release/\"{binary} \"${{path%/*}}/target/release/\"{binary} || exit {cantcreat}\n",
-        binary = shlex_quote(binary),
-        cantcreat = nix::libc::EX_CANTCREAT
+         mkdir -p \"${{path%/*}}/target/release\" || exit\n\
+         cp \"$CARGO_TARGET_DIR/release/\"{binary} \"${{path%/*}}/target/release/\"{binary} || exit\n",
+        binary = shlex_quote(binary)
     ));
 
     let output = host_channel::run_script(target, &script, runner).await?;

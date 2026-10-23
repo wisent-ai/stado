@@ -19,7 +19,9 @@ impl Dashboard {
     }
 
     pub(crate) async fn get_machine_status(&self, request: &Request, query: &str) -> Response {
-        if request.content_length != 0 || !request.body.is_empty() {
+        // The reader reads exactly the Content-Length it was given, so a
+        // declared body is a non-empty one.
+        if !request.body.is_empty() {
             return invalid_machine_request("machine status does not accept a request body");
         }
         let client = match authenticate_machine_client(self, request, "status").await {
@@ -43,11 +45,9 @@ impl Dashboard {
         };
         let facade = self.machine_facade();
         let result = facade.status(job_id).await;
-        let target_allowed = result
-            .as_ref()
-            .ok()
-            .and_then(machine_result_target)
-            .is_some_and(|target| client.allows_target(target));
+        let target_allowed = result.as_ref().is_ok_and(|found| {
+            machine_result_target(found).is_some_and(|target| client.allows_target(target))
+        });
         if !target_allowed {
             return machine_result_response(Err(MachineError::new("UNAUTHORIZED", "unauthorized")));
         }
@@ -60,16 +60,14 @@ impl Dashboard {
     pub(crate) async fn post_machine_submit(&self, request: &Request) -> Response {
         let content_type = request
             .header("content-type")
-            .unwrap_or("")
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim();
+            .and_then(|value| value.split(';').next())
+            .map(str::trim);
+        // The reader frames the body by the declared Content-Length, so a
+        // request that declares one carries exactly that many bytes.
         if request.path != "/api/machine/submit"
-            || content_type != "application/json"
+            || content_type != Some("application/json")
             || request.header("transfer-encoding").is_some()
             || request.header("content-length").is_none()
-            || request.content_length != request.body.len()
         {
             return invalid_machine_request("invalid JSON request framing");
         }
@@ -143,10 +141,7 @@ impl Dashboard {
     }
 
     pub(crate) async fn post_machine_cancel(&self, request: &Request, query: &str) -> Response {
-        if request.header("transfer-encoding").is_some()
-            || request.content_length != 0
-            || !request.body.is_empty()
-        {
+        if request.header("transfer-encoding").is_some() || !request.body.is_empty() {
             return invalid_machine_request("machine cancel does not accept a request body");
         }
         let client = match authenticate_machine_client(self, request, "cancel").await {
@@ -169,11 +164,9 @@ impl Dashboard {
             Err(response) => return response,
         };
         let status = self.machine_facade().status(job_id).await;
-        let target_allowed = status
-            .as_ref()
-            .ok()
-            .and_then(machine_result_target)
-            .is_some_and(|target| client.allows_target(target));
+        let target_allowed = status.as_ref().is_ok_and(|found| {
+            machine_result_target(found).is_some_and(|target| client.allows_target(target))
+        });
         if !target_allowed {
             return machine_result_response(Err(MachineError::new("UNAUTHORIZED", "unauthorized")));
         }

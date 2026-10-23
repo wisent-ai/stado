@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 
 use crate::deploy::local_install::activation::commands::current_uid;
 use crate::deploy::local_install::{systemd_unit, LocalOs};
+use crate::deploy::service::LAUNCHD_DAEMONS;
 use crate::deploy::{CommandSpec, DeployError, Runner};
 
-use super::{Component, InstallPlan, SYSTEM_DAEMON_DIRECTORY};
+use super::{Component, InstallPlan};
 
 fn retired_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
@@ -31,7 +32,7 @@ pub(super) async fn retire(
     let path = PathBuf::from(&component.native_definition().path);
     let target = retired_path(&path);
     let label = &component.plan.label;
-    let (stop, rename) = match (host.os, path.starts_with(SYSTEM_DAEMON_DIRECTORY)) {
+    let (stop, rename) = match (host.os, path.starts_with(LAUNCHD_DAEMONS)) {
         (LocalOs::Darwin, true) => (
             sudo(&["/bin/launchctl", "bootout", &format!("system/{label}")]),
             Some(sudo(&[
@@ -65,7 +66,7 @@ pub(super) async fn retire(
     match rename {
         Some(rename) => {
             let output = runner(rename).await.map_err(DeployError::unreachable)?;
-            if !output.ok() {
+            if !output.succeeded() {
                 return Err(DeployError::unreachable(format!(
                     "retiring {label}: moving {} was refused: {}",
                     path.display(),
