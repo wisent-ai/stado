@@ -9,8 +9,8 @@
 //! the one that cannot start. So a failure stated as an outage is followed by
 //! the unit's state when its supervisor holds it loaded with no live process
 //! and a nonzero last exit: the supervisor's exit code and run count
-//! ([`LabelState::failing`]) and the last line of the unit's log, read by the
-//! same reader and window `stado service status` uses.
+//! ([`LabelState::failing`]) and the last line of each of the unit's log
+//! streams, read by the reader `stado service status` shows by default.
 
 use crate::deploy::service_label_print::{inspect_label_state, LabelState};
 
@@ -38,27 +38,27 @@ async fn read() -> Result<Option<String>, String> {
     let Some(failing) = state.failing() else {
         return Ok(None);
     };
-    // One line of each stream: the window `stado service status` reads.
-    let window = std::num::NonZeroUsize::MIN.get();
-    let log =
-        match crate::deploy::service::tail_unit_logs(&target, &label, "", Some(window), &runner)
-            .await
-        {
-            Ok(log) => match last_line(&log.error_body).or_else(|| last_line(&log.body)) {
-                Some(line) => format!("its last log line: {line}"),
-                None => format!("its log ({}) holds no line", log.origin),
-            },
-            Err(error) => format!("its log could not be read: {error}"),
-        };
+    // The reader `stado service status` shows by default: the last line of
+    // each stream. Both are said, each by the file it came from, since the
+    // two files carry no common clock to tell which was written last.
+    let log = match crate::deploy::service::last_unit_lines(&target, &label, "", &runner).await {
+        Ok(log) => {
+            let mut said = Vec::new();
+            if !log.body.is_empty() {
+                said.push(format!("{} last said: {}", log.origin, log.body));
+            }
+            if let (Some(origin), false) = (&log.error_origin, log.error_body.is_empty()) {
+                said.push(format!("{origin} last said: {}", log.error_body));
+            }
+            match said.is_empty() {
+                true => format!("its log ({}) holds no line", log.origin),
+                false => said.join("; "),
+            }
+        }
+        Err(error) => format!("its log could not be read: {error}"),
+    };
     Ok(Some(format!(
         "this machine's {failing}; {log} (`stado service unit logs {label} --host {}` reads more)",
         target.name
     )))
-}
-
-fn last_line(body: &str) -> Option<String> {
-    body.lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(str::to_owned)
 }

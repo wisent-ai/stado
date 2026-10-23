@@ -8,12 +8,20 @@
 /// the path and streams its tail, or carries the reason there is nothing to
 /// show. It is never silently omitted — a unit that died answering nothing
 /// on stdout kept its reason in stderr, and "no section" used to be
-/// indistinguishable from "nothing written". With --lines the two tails
-/// share that budget, half each; without it both files are read whole
-/// (`@OUT_READ@`/`@ERR_READ@` are `tail -n N` or `cat`, `@LINES@` is N or
-/// `all`). On Linux the journal already merges the streams, so that branch
-/// stays one section.
-pub(crate) const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
+/// indistinguishable from "nothing written". With --lines each file reads
+/// that many of its last lines; without it both are read whole
+/// (`@OUT_READ@`/`@ERR_READ@` are `tail -n N`, `cat`, or `stado_last_line`,
+/// which reads the file backwards from its end and stops at the first line
+/// holding anything, `@LINES@` is N or `all`). On Linux the journal already
+/// merges the streams, so that branch stays one section: it is read in
+/// `@JOURNAL_ORDER@` (newest first for the last line) and passes through
+/// `@JOURNAL_READ@` on the host (`cat`, or a read that stops at the first
+/// line holding anything), so only what the caller asked for is read and
+/// crosses the connection.
+pub(crate) const LOGS_BODY: &str = "stado_last_line() {
+  /usr/bin/tail -r \"$1\" | /usr/bin/awk 'NF { print; exit }'
+}
+if [ \"$os\" = \"Darwin\" ]; then
   log=''
   err_log=''
   if [ -f \"$unit_path\" ]; then
@@ -38,7 +46,7 @@ pub(crate) const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
 else
   if [ \"$scope\" = \"system\" ]; then
     printf 'STADO_LOG\\tjournalctl -u %s\\n' \"$unit\"
-    stado_root /usr/bin/journalctl -u \"$unit\" -n @LINES@ --no-pager 2>&1
+    stado_root /usr/bin/journalctl -u \"$unit\" @JOURNAL_ORDER@ -n @LINES@ --no-pager 2>&1 | @JOURNAL_READ@
   else
     printf 'STADO_LOG\\tjournalctl --user -u %s\\n' \"$unit\"
     runtime=\"/run/user/$service_uid\"
@@ -46,12 +54,12 @@ else
       /usr/bin/env \
         XDG_RUNTIME_DIR=\"$runtime\" \
         DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
-        /usr/bin/journalctl --user -u \"$unit\" -n @LINES@ --no-pager 2>&1
+        /usr/bin/journalctl --user -u \"$unit\" @JOURNAL_ORDER@ -n @LINES@ --no-pager 2>&1 | @JOURNAL_READ@
     else
       \"$sudo_bin\" -n -u \"$service_user\" /usr/bin/env \
         XDG_RUNTIME_DIR=\"$runtime\" \
         DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
-        /usr/bin/journalctl --user -u \"$unit\" -n @LINES@ --no-pager 2>&1
+        /usr/bin/journalctl --user -u \"$unit\" @JOURNAL_ORDER@ -n @LINES@ --no-pager 2>&1 | @JOURNAL_READ@
     fi
   fi
 fi

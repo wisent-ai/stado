@@ -74,36 +74,25 @@ async fn failure_evidence(
         }
         Err(exc) => evidence.push_note(format!("last exit unreadable: {exc}")),
     }
-    // The default is the last stderr line; --lines requests a larger window.
-    // tail_logs divides its window between stdout and stderr.
-    let requested = match lines {
-        Some(lines) => lines,
-        None => std::num::NonZeroUsize::MIN.get(),
-    };
+    // The default is the last stderr line; --lines requests that many of
+    // each stream.
     match crate::cli::canonical_host(&declared.host).await {
-        Ok(target) => match service::tail_logs(
-            &target,
-            declared,
-            requested.saturating_add(requested),
-            runner,
-        )
-        .await
-        {
-            Ok(log) => {
-                evidence.error_origin = log.error_origin;
-                evidence.error_lines = if lines.is_some() {
-                    log.error_body.lines().map(str::to_string).collect()
-                } else {
-                    log.error_body
-                        .lines()
-                        .last()
-                        .map(str::to_string)
-                        .into_iter()
-                        .collect()
-                };
+        Ok(target) => {
+            let read = match lines {
+                Some(lines) => service::tail_logs(&target, declared, lines, runner).await,
+                None => {
+                    service::last_unit_lines(&target, declared.unit_id(), &declared.path, runner)
+                        .await
+                }
+            };
+            match read {
+                Ok(log) => {
+                    evidence.error_origin = log.error_origin;
+                    evidence.error_lines = log.error_body.lines().map(str::to_string).collect();
+                }
+                Err(exc) => evidence.push_note(format!("stderr unreadable: {exc}")),
             }
-            Err(exc) => evidence.push_note(format!("stderr unreadable: {exc}")),
-        },
+        }
         Err(exc) => evidence.push_note(format!("stderr unreadable: {exc}")),
     }
     evidence
