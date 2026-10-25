@@ -1,3 +1,5 @@
+The ci status journey describes its case without a past duration
+
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
 The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
 No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
@@ -13,4 +15,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Harsh-Review-Attacked: whether the header still says what the journey checks; it names the refusal before anything is sent and the held port it replaces, which is what the journey asserts.
+Repairs: Test ci status refusing a Skarbiec adapter the resolver does not serve — its header narrated how long a past request stood
+
+Harsh-Review-Attacked: whether the header still says what the journey checks; it names the refusal before anything is sent and the held port that refusal stands in for, which is what the cases assert
+Harsh-Review-Attacked: whether the new text still narrates; "rather than standing on a port the resolver holds" contrasts the refused behaviour with the one avoided and names no duration
+Harsh-Review-Attacked: whether it is a reformat or changes the journey; only the header comment changes, no statement of the test is touched
