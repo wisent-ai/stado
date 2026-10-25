@@ -1,3 +1,5 @@
+Link, minted token, edge diagnostics, release doctor and secrets doctor reports say an absent field with the one absence word
+
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
 The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
 No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
@@ -13,11 +15,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Repairs: "Print Apple profiles and minted token storage without empty placeholders" its minted-token printer read the stored item and revision only as text, so a revision Skarbiec answered as a number printed as not reported, and it spelled the absence word itself instead of the reporting module's field renderer
-Repairs: "A host's link block names every datum it could not read and why" it wrote the absence word as its own literal instead of the reporting module's NOT_REPORTED, a copy free to drift from every other report
-Repairs: "release doctor says an unreported blocker list is unreported" it wrote the absence word as its own literal instead of the reporting module's NOT_REPORTED, a copy free to drift from every other report
-Repairs: "Web status, edge diagnostics and deploy refusals name what was not reported" it wrote the absence word as its own literal instead of the reporting module's NOT_REPORTED, a copy free to drift from every other report
-
-Harsh-Review-Attacked: the minted token line printing JSON where it printed text; field answers text bare, a number as its digits and an absent or null field as NOT_REPORTED, so a numeric revision is shown instead of being called absent
-Harsh-Review-Attacked: a changed word on screen; the absence cells print the same text through the one declaration
-Harsh-Review-Attacked: the doctor's empty blocker list; an absent list is still not reported and an empty one still none, as before
+Harsh-Review-Attacked: a printed word that changes; each replaced literal is the exact text of cli::reporting::NOT_REPORTED, so each line prints the same bytes
+Harsh-Review-Attacked: the minted token report's switch to cli::reporting::field; field answers NOT_REPORTED for a missing (null) field exactly as the removed closure did, and prints a stated value that is not text as stated instead of calling it not reported, which the message says
+Harsh-Review-Attacked: a type that no longer fits; &str arms take the &'static str constant and String arms call to_string on it
+Harsh-Review-Attacked: comments it touches; the commit adds no comment, and the release doctor comment beside its change is the earlier commit's, unchanged here
