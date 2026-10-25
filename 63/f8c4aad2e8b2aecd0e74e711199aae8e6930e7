@@ -1,3 +1,5 @@
+The delivery queue's module doc states its purpose instead of its history
+
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
 The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
 No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
@@ -13,7 +15,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Repairs: "A delivery loop takes a commit carrying a recorded repair to its hosts" its module doc told what recorded repairs used to lack instead of what the queue does
+Repairs: A delivery loop takes a commit carrying a recorded repair to its hosts — its module doc told what a recorded repair used to do instead of what the queue is for
 
-Harsh-Review-Attacked: a doc that still narrates; the paragraph now says a recorded repair is owed a release and the queue names which commit owes which, in the present
-Harsh-Review-Attacked: a doc that drifts from the code; the rest of the paragraph, describing the checkout read and nothing_carried, is unchanged and still matches the queue
+Harsh-Review-Attacked: whether the doc now promises more than the queue does; it says a recorded repair is owed a release and the queue says which commit owes which, which the unchanged rest of the doc and the queue's states (nothing_carried and the rest) describe
+Harsh-Review-Attacked: whether the new text still narrates; it is in the present tense and names no occasion or past behaviour
+Harsh-Review-Attacked: whether it is a reformat; the doc's content changes and no code line is touched
