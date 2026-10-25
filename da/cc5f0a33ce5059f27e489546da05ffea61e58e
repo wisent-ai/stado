@@ -15,7 +15,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Repairs: Refuse a listed storage object without a URI instead of printing it blank — its table kept a question mark for a size the listing did not report
+Repairs: "Refuse a listed storage object without a URI instead of printing it blank" its table kept a question mark for a size the listing did not report
 
 Harsh-Review-Attacked: a reported size; as_u64 of the same field prints the same number through to_string
 Harsh-Review-Attacked: a stand-in value; "not reported" is the words the same table already prints for an unreported time, so the row says in words what is absent instead of a symbol nobody defined
