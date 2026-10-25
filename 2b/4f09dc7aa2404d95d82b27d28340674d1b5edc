@@ -15,7 +15,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Repairs: The pre-push check stages only the release inputs a gate declares it reads — its comments narrated an incident and its cost instead of the rule
+Repairs: "The pre-push check stages only the release inputs a gate declares it reads" its comments narrated an incident and its cost instead of the rule
 
 Harsh-Review-Attacked: whether a reason was lost; the module comment keeps why an unread input stays in the store (a gate reading only the source never waits for a resolution it does not use) and the field doc keeps why inputs are declared, not inferred
 Harsh-Review-Attacked: whether the new text still narrates; it names no duration, product or occasion, only what the code does and why
