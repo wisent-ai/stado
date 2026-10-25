@@ -1,3 +1,5 @@
+The standing-session module states why it replaces a session, not how long it once took
+
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
 The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
 No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
@@ -13,4 +15,8 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Harsh-Review-Attacked: whether the comment now claims what the code does not do; the sentences describing the code are unchanged and the incident's account is replaced by the rule it stood for.
+Repairs: A held adapter whose waits stand on the resolver's own SSH session rides a new session to the same host — its module comment retold how long refusing later connections had kept a service from its consumers
+
+Harsh-Review-Attacked: whether the new sentence still narrates; it is conditional ("would keep"), states the cost of the alternative the code rejects and names no time, host or occasion
+Harsh-Review-Attacked: whether it is a reformat; the comment's content changes, its layout does not, and no code line is touched
+Harsh-Review-Attacked: whether the comment now claims what the code does not do; the following paragraph, unchanged, describes the session-age check the code makes, and nothing in the rewrite adds a promise
