@@ -1,3 +1,5 @@
+An email alert Skrzynka reports sent without an id is refused, not delivered as "<no id>"
+
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
 The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
 No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
@@ -13,4 +15,9 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Harsh-Review-Attacked: whether delivered pages still carry Skrzynka's id; a sent row with an id returns that id unchanged, and a sent row without one is refused with the whole row.
+Repairs: Send email alerts through Skrzynka instead of Resend — its sender reported a sent row without an id as delivered under the stand-in text "<no id>"
+
+Harsh-Review-Attacked: a sent row that does carry an id; the new arm reads the same `id` string field the old `field("id")` read and returns it unchanged, so a delivered page keeps Skrzynka's own id
+Harsh-Review-Attacked: an id that is present but not a string; it is refused with the whole row, which is right, because no delivery can be named by a non-string id and the row shows what Skrzynka sent
+Harsh-Review-Attacked: the other statuses; the `_` arm is untouched and still names id, status, error code and message, with `field`'s absence words only inside that refusal text, never as a returned delivery
+Harsh-Review-Attacked: the comment; it states the rule that a delivered page is named by its id and narrates nothing that happened
