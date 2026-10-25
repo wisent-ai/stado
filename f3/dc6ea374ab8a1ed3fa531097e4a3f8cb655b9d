@@ -15,7 +15,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Repairs: A held adapter whose waits stand on the resolver's own SSH session rides a new session to the same host — its module comment retold how long refusing later connections had kept a service from its consumers
+Repairs: "A held adapter whose waits stand on the resolver's own SSH session rides a new session to the same host" its module comment retold how long refusing later connections had kept a service from its consumers
 
 Harsh-Review-Attacked: whether the new sentence still narrates; it is conditional ("would keep"), states the cost of the alternative the code rejects and names no time, host or occasion
 Harsh-Review-Attacked: whether it is a reformat; the comment's content changes, its layout does not, and no code line is touched
