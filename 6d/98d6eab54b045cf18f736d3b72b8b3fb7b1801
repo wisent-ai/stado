@@ -15,7 +15,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Repairs: Count earlier retirements only from an audit trail that reads — its audited_at read dropped the parse error of a value that is not a time
+Repairs: "Count earlier retirements only from an audit trail that reads" its audited_at read dropped the parse error of a value that is not a time
 
 Harsh-Review-Attacked: a readable stamp; parse_from_rfc3339 of the same string yields the same DateTime the old and_then produced, so counting is unchanged
 Harsh-Review-Attacked: a missing or non-string audited_at; it is refused naming the file and the line position, without claiming a value that was never there
