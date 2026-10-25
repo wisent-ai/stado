@@ -15,7 +15,7 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
-Repairs: A held wait names the request line it waits on — its field documentation narrated an incident instead of stating what the field is for
+Repairs: "A held wait names the request line it waits on" its field documentation narrated an incident instead of stating what the field is for
 
 Harsh-Review-Attacked: whether the field lost its meaning; the doc keeps what the line is, when it is absent and what it lets a reader tell apart
 Harsh-Review-Attacked: whether the new text still narrates; "so many waits from one process are told apart" states the purpose and names no count or occasion
