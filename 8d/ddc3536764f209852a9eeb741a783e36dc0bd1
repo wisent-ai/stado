@@ -1,0 +1,113 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Harsh-Review-Attacked: whether the change does what its message says and nothing else; its patch was read against the message, every refusal it adds names its cause, and no line it adds answers a missing value with one nobody stated.
+Repairs: "What an admitted operation runs inherits its admission" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Build trees take a .build for SwiftPM's only beside a Package.swift" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Release: name a required platform without post-build tests before it is built" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A commit that declares a module file it does not hold is refused before anything compiles" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "stado public-status serve is the public status page, apart from the products it reports on" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Deliver the push gate first, then push every checkout and read its CI" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A registry authority that answers nothing over SSH is abandoned after the declared refresh interval" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "An install whose committed manifest its Cargo.lock does not cover names the revision, manifest and dependencies" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A held wait names the request line it waits on" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Require runtime evidence regardless of job priority" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A starting resolver publishes what its first registry read waits on" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "The build-cache census runs on macOS again and never reads the shell's own error as a directory" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "stado ci status refuses naming Skarbiec instead of standing behind its unserved adapter" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A process reads one store's layout marker once at a time, and never again once proven" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A newer installation supersedes a holder past placement instead of waiting on its after-install steps" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Changelog: fleet sizing names a capacity broadcast it leaves out" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Restore cached source node types without following build-created links" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Read billing mail from a named Skrzynka organization" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Changelog: host ping ends when its beacon store does not open" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Quality: a refused gate names each finding, and product cargo runs a gate's operation" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A weles-browser-task plan carries the action's own parameters" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Retire obsolete units before starting unified service" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Read this machine's name from the kernel in one place" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Reuse revision-isolated Cargo installation caches and verified dependencies" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "CI: check every new commit of main and install only the last green one" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Refuse a forward marker that names no address, by its path" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Record the fallback repairs of this release in the changelog" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A refusal is written once while its write stands, not once per request" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "CHANGELOG: release archive size and Jeden placement" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Describe the delivery queue's once-a-pass read of Oko by repository" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Refuse an unreadable socket table instead of reading it as no listener" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Read launchd presence from domain listings in the release handover" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "The janitor keeps a build directory a running build holds" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A restart refuses a unit that settled on other ports than its declared one" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Preserve candidate quarantine until recovery is established" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Changelog: name the backup audit by its command" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Changelog: the reads that now refuse or answer null instead of a default (continued)" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A relayed request whose client is gone no longer holds the adapter" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "CHANGELOG: reports that no longer read a missing list as an all-clear" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A local installation decides which host is this machine from this machine's own registry record" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Every quality gate is told the commit it exported" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "CHANGELOG: fleet pending, service status and declare, fence recheck and reconcile repairs" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A standing service runs every repair step its answering declaration lists, and Skarbiec lists the GnuPG repair first" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "CHANGELOG: third batch of empty-value repairs" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Send email alerts through Skrzynka instead of Resend" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Resolver: a real journey for the relay failure that names its surviving session" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Hold the worker at start while the fleet store does not answer" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "CHANGELOG: second batch of empty-value repairs" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "The Skarbiec crypto repair acts on readiness's own failure verdict" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A dependency a product has by design says so: bound_because" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "CHANGELOG: --source-commit on the canonical checkout's main" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Changelog: readers that invented values, reaper ages, GPU driver, retire-copy" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Describe committed push quality selection in release notes" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A resolver whose registry store does not answer at start serves its last-known-good copy" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "CHANGELOG: name the weles-activity command as the CLI spells it" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Alert channels read their keys through the selected credential store, so a machine without Skarbiec pages through the owner-only file store it selects: the Resend key, the Twilio fields and the alerts item's fields go through credential_store::read_string instead of a Skarbiec client built in the resolver, a key the store does not hold names the Skarbiec retag and grant and the file store's put, the catalog declares Stado's dependency on Skarbiec with that alternative, and a real journey resolves the channel from the file store with Skarbiec absent" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Keep when a queued release was published and recorded, and read the queue's register" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Stop reporting an attached run a signal ended as exit code 1" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Order queued jobs across the model priority range" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A delivery loop takes a commit carrying a recorded repair to its hosts" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "The delivery queue's record step closes the tasks a release finishes, and a failed record is retried" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A remote command to a host whose services stand is refused before it is sent" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Derive queue read batches from measured parallelism" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A request through a held adapter is measured by the interval its resolver publishes" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Record command-tree and maintenance primitive changes" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Refuse a lock wait that would close a wait cycle, and name standing cycles" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A service that stands on another host is recovered from the hosts whose resolvers it holds" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "An installation names what holds its surface, status reports the operation, and cancel ends it through its owner" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "List every stored object unless a limit is requested" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Every open wait is kept in a register, not only said on stderr" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Report a subprocess ended by a signal as such, not as exit code -1" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A resolver serves its store's registry when the authority's first snapshot does not answer" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Changelog entries for repairs committed without one" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Janitor walks build caches without excluding running workloads, and builds wait for a cleanup pass instead of being refused" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "CHANGELOG: Weles run limit, enrollment status and object API origin repairs" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Leave AWS rows without an id out of the inventory and say so" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A held request counts from the accept of its connection" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Gates and space report measure the volumes the janitor's rule measures" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Say why this machine has no Skarbiec address" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A published resolver state counts only while its publisher runs" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A product build holds the janitor's cleanup lock for its whole run" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "CHANGELOG: recent empty-value and disk-cleanup gate repairs" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "The delivery order is the caller's, and the plan names every repair the queue cannot place" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Attribute committed lock mismatches to source configuration" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A held connection names the client holding it" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "workload: the browser-task report carries the run's named outputs" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "stado quality check names the repository to push first when a pinned git dependency commit is not on its remote" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "resolver status says how long the authority took to answer" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Changelog: ensure pids and quarantine byte counts are read as numbers or refused" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A registry write refuses a current registry it cannot read instead of validating against none" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "The pre-push check stages only the release inputs a gate declares it reads" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Attribute incompatible locked dependency versions to committed source" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A published run settles only its own commit; new source under its version names the version it needs" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A recipe's schedule declaration converges onto the schedule standing under its id" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "An Oko that gives no admission verdict is said as that, not as a ruling" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "Refuse a commit whose code names a module no declaration reaches" its lines in CHANGELOG.md are replaced by this change.
+Repairs: "A stopped component gets one delivery pass, then the service restarts" its lines in CHANGELOG.md are replaced by this change.
