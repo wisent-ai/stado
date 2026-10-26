@@ -15,6 +15,11 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "Rollout status and the releases pane say when software counts are missing" its rollout status table spelled the absence word itself beside cli::reporting::NOT_REPORTED
+Repairs: "Transcript harvest answers newest_seen null when a file's time cannot be read" its harvest table spelled the absence word itself beside cli::reporting::NOT_REPORTED
+Repairs: "Name missing fields where fleet reports printed "?" or 0" its seed freshness rows spelled the absence word itself beside cli::reporting::NOT_REPORTED
+Repairs: "Runner, budgets, quota and Apple relay name what was not reported" its runner profile spelled the absence word itself beside cli::reporting::NOT_REPORTED
+
 Harsh-Review-Attacked: a printed word that changes; every replaced literal is the exact text "not reported" that cli::reporting::NOT_REPORTED holds, so each table prints the same bytes
 Harsh-Review-Attacked: a type that no longer fits; arms that answered a &str now answer the &'static str constant and arms that answered a String call to_string on it, as they did on the literal
 Harsh-Review-Attacked: a second copy; the commit removes eight spellings of the absence word in favour of the one declared constant, adding none
