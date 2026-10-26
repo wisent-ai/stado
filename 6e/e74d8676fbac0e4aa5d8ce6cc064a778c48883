@@ -1,0 +1,28 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Repairs: "The Box provider requires a declared box lifetime and release mode" its settings were named BOX_TTL_SECONDS and BOX_RELEASE_MODE for a provider Boat renamed and whose legacy API answers with a Sunset notice, and they were read only from the environment, outside the profile and the capability catalog
+Repairs: "Box: a box's lifecycle is a serde enum (BoxState, with active and serving decided by exhaustive match) and a prompt run's status is a strict serde enum read once, a word outside it refused naming it; dispatch reconcile, the provider and its instance listing match variants, the command's two output streams are a typed pair, and the not-found status and success exit code are named" the states, records and paths it typed are those of the sunset /boxes API, not the sandbox states and response types Boat's OpenAPI document names
+Repairs: "Box payload integers refuse a number they cannot read instead of reading it as 0" its jint_or answered an absent field with the caller's default, a fallback; the counts Boat reports are now required and refused by name when missing
+Repairs: "Providers report a VM's lifecycle as a typed phase beside the provider's own word" its phase mapping had no place for the cancelled state Boat reports for a sandbox it found no machine for
+Repairs: "Box API errors carry Box's answer when it names no message" its refusal named Box and said nothing of why a body that was not a JSON object named no message
+Repairs: "The Box client says why BOX_API_URL is refused and reads its host once" its refusal names BOX_API_URL, a variable no longer read once the setting is boat.api_url with the BOAT_API_URL override
+Repairs: "Say when a box dispatch pass cannot release a provider lease" its message names the retired box provider instead of boat
+Repairs: "A provider lease whose owner fields do not parse says why it is not released" its message names the retired box provider instead of boat
+Harsh-Review-Attacked: a deployment that still names box in providers could keep running silently; the id box is no longer in the catalog, so stado config validate and provider resolution refuse the name instead of resolving it to nothing.
+Harsh-Review-Attacked: the API key could leak through a refused answer; send replaces the exact key in the body before api_error reads it, and safe_text still redacts URL tokens and Authorization values.
+Harsh-Review-Attacked: reading the queue job by job could be slower than the old claimable scan; boat_jobs lists ids once and reads them with the store's measured worker count in flight, the same bound list_jobs uses.
+Harsh-Review-Attacked: a job with a negative lifetime would silently take the deployment's; admission now fails such a job naming the value, and ttl_for only falls back for an unset lifetime.
+Harsh-Review-Attacked: a missing limits field used to read as zero headroom; activeSandboxes and maxActiveSandboxes are now required and refused by name when Boat omits them.
