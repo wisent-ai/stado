@@ -1,0 +1,21 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Harsh-Review-Attacked: whether the verbs build a second Boat client or read the settings a second way; provider() is BoxProvider::from_env, the provider's own constructor, and every verb uses its client and its ttl_seconds.
+Harsh-Review-Attacked: whether an absent --cwd is a fallback; execute_command sends no cwd for an empty one, so the request names none and Boat decides, and a stated empty --cwd is refused as a usage error instead of being sent.
+Harsh-Review-Attacked: whether a failed command could exit zero; exec prints the result and returns an error whenever success is false, naming the exit code, the signal, the limit or the absence of both.
+Harsh-Review-Attacked: whether a non-positive lifetime reaches Boat; create refuses it by name before any request.
+Harsh-Review-Attacked: whether the Desktop operations can reach a command the service refuses; the operator channel's families are the CLI's own clap tree, so sandbox is reachable once it is declared, and the reads run without the review dialog while every write asks for it.
+Harsh-Review-Attacked: whether the journey can pass without Boat; it is blocked without STADO_BIN and STADO_BOAT_TEST_TTL_SECONDS, requires a clean committed tree and the binary built from it, and asserts the written token comes back through read, exec and the fork.
