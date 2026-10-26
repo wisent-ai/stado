@@ -1,6 +1,7 @@
 The port check reads the listener table without stand-ins, and two more comments state their rule
 
 Repairs: "Name missing fields where fleet reports printed "?" or 0" its comments told what the lines used to print instead of the rule they follow
+Repairs: "stado ci delivery reads the Stado unit by its state, not launchd's event log" its seed freshness report read a missing findings list as an empty one and dropped a marker that is not text through filter_map, and the listener state and list it read through unwrap_or and unwrap_or_default as an empty word and an empty table
 
 I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
 The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
