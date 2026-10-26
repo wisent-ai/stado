@@ -16,7 +16,7 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Repairs: "Keep the refusal dedupe working after a thread panics holding its table" its object-evidence cleaner called a free tally(&mut …) function no committed tree declares, so the tree did not compile
-Repairs: "Quota output names what a provider left out instead of printing \"?\"" its quota request rows called a reported helper the quota submit module does not declare, so the tree did not compile
+Repairs: "Quota output names what a provider left out instead of printing "?"" its quota request rows called a reported helper the quota submit module does not declare, so the tree did not compile
 Repairs: "Refuse a stream decision on a field the host did not report" its session reader imported NOT_REPORTED from the stream report module, which does not declare it
 Repairs: "Four unit-directory readers use the one declaration; file retirement says why it failed" its readers named launchd and systemd unit directories declared in a module it never committed, and its two systemd word parsers wrote out by hand the ok() the declared clippy gate asks for
 Repairs: "overview names the job stamps it cannot read" its finished-job vector spelled an unnamed complex tuple type the declared clippy gate refuses
