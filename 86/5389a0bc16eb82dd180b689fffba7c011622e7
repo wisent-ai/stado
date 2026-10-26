@@ -17,6 +17,7 @@ Repairs: "credentials item put: a field the report lacks prints as not reported"
 Repairs: "Holder cell, privacy line and unit-image revisit name an empty answer" its privacy line spelled the absence word itself beside cli::reporting::NOT_REPORTED
 Repairs: "Host health report says a beacon field was not reported" its beacon fields spelled the absence word itself beside cli::reporting::NOT_REPORTED, and read a stated zero as not reported
 Repairs: "A capacity row that does not state what a hold is judged by is refused" its scans line answered a dash before any scan asked
+Repairs: "Host health and beacon age say what is missing instead of "unknown"" its unit state line spelled the absence word itself beside cli::reporting::NOT_REPORTED
 
 Harsh-Review-Attacked: a refused write that used to pass; the release-managed Skarbiec answers created true or false from every set-json path, so only a Skarbiec older than --if-absent is refused, and its answer is printed in the refusal
 Harsh-Review-Attacked: a zero hidden or shown wrongly; a beacon number is a measurement even when zero and is shown, while null, false and empty text, list or object still read as not reported
