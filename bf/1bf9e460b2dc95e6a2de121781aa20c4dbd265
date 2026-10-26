@@ -1,0 +1,19 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Repairs: "Transcript harvest answers newest_seen null when a file's time cannot be read" its time reader dropped the file system's error and sorted an undated file as the oldest in silence
+
+Harsh-Review-Attacked: whether the order flipped; Reverse of Some(time) puts the newest first and none compares below every time, so an undated file sorts after every dated one, and each file is dated once.
+Harsh-Review-Attacked: whether an undated file is still silent; its path and the cause are named on stderr.
