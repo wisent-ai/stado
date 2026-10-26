@@ -1,0 +1,21 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Harsh-Review-Attacked: a deadlock; stderr is drained on a scoped thread for the whole write, stdin is dropped once written so tar sees end of input, and only then is tar waited for, so neither pipe can fill while the other side waits
+Harsh-Review-Attacked: the order of causes; a failed tar is reported first with its status and stderr, since its stopping is what broke the pipe, and the write error is reported only when tar says it succeeded
+Harsh-Review-Attacked: the stderr reader; a read error is refused as such and a panicked reader is named, so tar's words are never replaced by an empty string
+Harsh-Review-Attacked: callers; quality check, local product builds and pinned Cargo sources call the same export and keep its signature and the archive digest it returns
+Harsh-Review-Attacked: the wait registration; tar is still waited for under the process-wait register with its pid and destination, as before
+Harsh-Review-Attacked: the test; no new test, since this session may not build Stado; the failure was observed as a Broken pipe refusal of a push whose revision git archive and tar unpacked by hand
