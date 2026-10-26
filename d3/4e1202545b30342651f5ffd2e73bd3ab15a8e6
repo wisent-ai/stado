@@ -19,6 +19,7 @@ Repairs: "Print Apple profiles and minted token storage without empty placeholde
 Repairs: "A host's link block names every datum it could not read and why" its link block spelled the absence word itself beside cli::reporting::NOT_REPORTED
 Repairs: "release doctor says an unreported blocker list is unreported" its release doctor spelled the absence word itself beside cli::reporting::NOT_REPORTED
 Repairs: "Name missing fields where fleet reports printed "?" or 0" its secrets doctor rows spelled the absence word itself beside cli::reporting::NOT_REPORTED
+Repairs: "Web status, edge diagnostics and deploy refusals name what was not reported" its edge diagnostics spelled the absence word itself beside cli::reporting::NOT_REPORTED
 
 Harsh-Review-Attacked: a printed word that changes; each replaced literal is the exact text of cli::reporting::NOT_REPORTED, so each line prints the same bytes
 Harsh-Review-Attacked: the minted token report's switch to cli::reporting::field; field answers NOT_REPORTED for a missing (null) field exactly as the removed closure did, and prints a stated value that is not text as stated instead of calling it not reported, which the message says
