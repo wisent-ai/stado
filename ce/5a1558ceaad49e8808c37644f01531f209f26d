@@ -1,0 +1,25 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Repairs: "Keep verb dependencies compatible with predecessor installers", "Plan and install declared product prerequisites" and "Reuse revision-isolated Cargo installation caches and verified dependencies" — the defect that installing one product rebuilt each dependency to its head and refused a consumer whose provider the machine does not have, so products that depend on each other could not be installed and none ran without the others.
+Repairs: "A product whose own dependency requires its new verb can be installed" its lines in chain.rs, mod.rs, perform.rs, prerequisites.rs are replaced by this change.
+Repairs: "Reuse revision-isolated Cargo installation caches and verified dependencies" its lines in planning.rs are replaced by this change.
+Repairs: "Plan and install declared product prerequisites" its lines in chain.rs, mod.rs, perform.rs, prerequisites.mjs, prerequisites.rs are replaced by this change.
+
+Harsh-Review-Attacked: reusing an old dependency could leave a consumer without a capability it calls - the consumer's needs are its contract's verbs, checked by the prerequisite decision against the installed provider's own manifest, and an installed provider without the verb is still refused.
+Harsh-Review-Attacked: a broken or tampered dependency could now be reused - reuse still requires a completed receipt, the same recipe and destination, recorded files and a passing ownership and signature verification.
+Harsh-Review-Attacked: skipping an absent provider could hide that the consumer cannot work - the consumer's own call of the verb reports the provider's absence at run time, as Stado's admission already says no Oko is installed.
+Harsh-Review-Attacked: the reuse report could name a revision that was not installed - it now reports the receipt's own source revision instead of the checkout head.
+Harsh-Review-Attacked: the real prerequisite journey could keep asserting the refusal of --without - it now asserts that the plan without the provider, and the plan with --without, name no prerequisite step, beside the unchanged refusal for an installed older provider.
