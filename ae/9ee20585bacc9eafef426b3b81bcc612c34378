@@ -13,6 +13,10 @@ No line and no message of this commit carries private information of ours: no ho
 This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
+Repairs: "stado sandbox shows and limits what a sandbox's agents spend on AI" its ai_access signature was wrapped where rustfmt keeps one line, so the push gate refused the range
+Repairs: "stado sandbox webhook tells an agent factory about lifecycle events without polling" its update_webhook refusal and answer check were kept on lines rustfmt breaks, so the push gate refused the range
+Repairs: "stado sandbox snapshot share hands a prepared disk to another Boat account" its shares and share call chains were kept on lines rustfmt breaks, so the push gate refused the range
+
 Harsh-Review-Attacked: whether any token changed while re-laying the lines; the diff moves only whitespace and line breaks, and each new layout is the one the gate's formatter printed for that site.
 Harsh-Review-Attacked: whether another file of the sandbox series still differs from rustfmt; the gate's report for this tip names only these three sandbox files among the series' paths.
 Harsh-Review-Attacked: whether the commit only reformats; it repairs a refused push by folding the formatting into the series that introduced it, and names each of those commits on a Repairs: line.
