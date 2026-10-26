@@ -16,6 +16,7 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Repairs: "Database: the provider is an enum the CLI, the credential items and destroy share" it dropped the error of a provider word outside the enum with .ok(), so such an item was read as not a Supabase item
+Repairs: "Lay out the service answering recovery and the forge status reader as rustfmt does" its layout of the provider check kept the .ok() that read a provider word outside the enum as not a Supabase item
 
 Harsh-Review-Attacked: the empty maps for an item the vault does not hold; that is the vault's own answer that nothing is recorded, not a value standing in for a failed read, and adopt then writes the item whole from the project
 Harsh-Review-Attacked: a stored member that is not an object; object_member refuses it naming the item, the member and the value, before anything is rewritten, where the old unwrap_or_default dropped it
