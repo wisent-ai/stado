@@ -19,6 +19,11 @@ Repairs: "Rollout status and the releases pane say when software counts are miss
 Repairs: "Transcript harvest answers newest_seen null when a file's time cannot be read" its harvest table spelled the absence word itself beside cli::reporting::NOT_REPORTED
 Repairs: "Name missing fields where fleet reports printed "?" or 0" its seed freshness rows spelled the absence word itself beside cli::reporting::NOT_REPORTED
 Repairs: "Runner, budgets, quota and Apple relay name what was not reported" its runner profile spelled the absence word itself beside cli::reporting::NOT_REPORTED
+Repairs: "Quota commands name a missing region, family, limit or grant" its quota rows spelled the absence word itself beside cli::reporting::NOT_REPORTED
+Repairs: "Quota output names what a provider left out instead of printing "?"" its quota rows and report spelled the absence word itself beside cli::reporting::NOT_REPORTED
+Repairs: "Name unreported values and refuse an unnamed scratch requester" its resource inventory rows spelled the absence word itself beside cli::reporting::NOT_REPORTED
+Repairs: "The storage object listing names an unreported size instead of printing ?" its object listing spelled the absence word itself beside cli::reporting::NOT_REPORTED
+Repairs: "Refuse a listed storage object without a URI instead of printing it blank" its object listing spelled the absence word itself beside cli::reporting::NOT_REPORTED
 
 Harsh-Review-Attacked: a printed word that changes; every replaced literal is the exact text "not reported" that cli::reporting::NOT_REPORTED holds, so each table prints the same bytes
 Harsh-Review-Attacked: a type that no longer fits; arms that answered a &str now answer the &'static str constant and arms that answered a String call to_string on it, as they did on the literal
