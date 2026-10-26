@@ -16,6 +16,9 @@ This commit solves no problem of ours alone: it adds or repairs a general primit
 As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
 
 Repairs: "Bind product locks to verified process identities" its atomic_write dropped the temporary file's removal and read an unexaminable output as absent, and its sha256 read through a buffer of a size nobody stated
+Repairs: "Consolidate file locking on standard File API" its free-space read called statvfs through hand-written unsafe code and compared the call's return with EXIT_SUCCESS, a process exit status, instead of reading the call's own errno answer
+Repairs: "Free space reads the block count at the width each platform gives it" its block count and fragment size were read from the raw statvfs fields the unsafe call filled in
+Repairs: "Product installs refuse a missing tool, an unreadable variable or a dead process's record by name" its nix dependency declared only the signal feature, so the free-space read had no safe statvfs to call
 
 Harsh-Review-Attacked: an output that cannot be examined; only a metadata error other than NotFound is refused, naming the output, and an absent output is written new as before
 Harsh-Review-Attacked: a failed write's temporary file; its removal is now checked, a file already gone is no second failure, and one that stays is added to the write's own error instead of being discarded
