@@ -1,0 +1,30 @@
+The silent-authority journeys stop a real SSH server instead of keeping a listener of their own
+
+Repairs: "A registry authority that answers nothing over SSH is abandoned after the declared refresh interval" its journey stood up a loopback listener that never spoke in place of a real SSH server, proving Stado only against the test's model of a hung host
+Repairs: "Test that resolver status says how long the authority took to answer" its case met the same loopback listener instead of a real SSH server
+Repairs: "A local installation decides which host is this machine from this machine's own registry record" its case met the same loopback listener instead of a real SSH server
+Repairs: "Bound every registry read by the interval this machine's record declares, and converge this machine from its own record" its cases met the same loopback listener instead of a real SSH server
+Repairs: "The silent authority journey splits its fixture from its cases" its fixture and module doc described and served a listener of the test's own as the authority instead of a real SSH server
+Repairs: "Tell the next reader at once when the registry authority already went unanswered" its case met the same loopback listener instead of a real SSH server
+
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Harsh-Review-Attacked: the server could touch the account's real state; authorized_keys forces HOME to the run's directory, the client reads only the run's ~/.ssh, and the server's files live under the run
+Harsh-Review-Attacked: readiness could be a sleep or a retry; the journey reads the server's own log until it prints that it listens on the port, an event, and a server that ends first fails with everything it said
+Harsh-Review-Attacked: a stopped server may refuse instead of hang; SIGSTOP leaves its listening socket open, so the kernel completes connections into the backlog and nothing sends the SSH banner
+Harsh-Review-Attacked: the stopped server could outlive the test; Drop resumes it so the kill can act, ends it and reaps it, saying any failure unless the test already fails
+Harsh-Review-Attacked: the old destination form may have been right; the product's host_and_port reads a port only from [host]:port, and a bare host:port is refused as no IPv6 address
+Harsh-Review-Attacked: connection counting became weaker; each command's own announced wait names the destination it dialed, the product's own record of the connection rather than the test's
