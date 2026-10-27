@@ -21,6 +21,7 @@ use crate::release_pipeline::{BuildRunState, PlatformRunState};
 
 use super::report::refusals::{batch_failure, Refusal};
 
+mod changed;
 mod checkout;
 use checkout::{build_checkout, buildable, describe};
 
@@ -41,6 +42,13 @@ pub struct BuildNewestArgs {
     /// and defect carries its repair, then judges the result.
     #[arg(long)]
     queued: bool,
+    /// Build only the one product, among those selected, whose checkout
+    /// carries the most commits past the newest build of it that passed:
+    /// the fleet's one build of the day, chosen by the change each product
+    /// carries, never by which session asked first. Nothing is built when no
+    /// product carries a commit past its last passed build.
+    #[arg(long)]
+    most_changed: bool,
     /// Read what would be built and why the rest is skipped, without
     /// queueing anything.
     #[arg(long)]
@@ -99,6 +107,24 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
         planned
     } else {
         plan(&root, &args.products).await?
+    };
+    let planned = match args.most_changed {
+        false => planned,
+        true => match changed::most_changed(&root, planned).await? {
+            Some((entry, change)) => {
+                if !args.json {
+                    println!(
+                        "  {} carries the most change: {change} commit(s) past its last passed build",
+                        entry.product
+                    );
+                }
+                vec![entry]
+            }
+            None => {
+                println!("no product carries a commit past its last passed build; nothing to build");
+                return Ok(());
+            }
+        },
     };
     if args.plan {
         if args.json {
