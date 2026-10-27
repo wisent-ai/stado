@@ -203,9 +203,10 @@ pub async fn vault_token_sync(
     })?;
     if !exported.succeeded() {
         return Err(CmdError::click(format!(
-            "{}: token export refused: {}",
+            "{}: credentials token custody {export_operation} refused for {consumer} at {source_token_file} (exit {}); stderr:\n{}",
             source.target.name,
-            host_channel::last_error_line(&exported, "host token export failed")
+            exported.code,
+            exported.stderr.trim()
         ))
         .stating(FailureCode::Refused)
         .machine_readable(json_output));
@@ -239,9 +240,10 @@ pub async fn vault_token_sync(
     drop(exported);
     if !installed.succeeded() {
         return Err(CmdError::click(format!(
-            "{}: token delivery refused: {}",
+            "{}: credentials token custody {delivery_operation} refused for {consumer} at {token_file} (exit {}); stderr:\n{}",
             destination.target.name,
-            host_channel::last_error_line(&installed, "host token delivery failed")
+            installed.code,
+            installed.stderr.trim()
         ))
         .stating(FailureCode::Refused)
         .machine_readable(json_output));
