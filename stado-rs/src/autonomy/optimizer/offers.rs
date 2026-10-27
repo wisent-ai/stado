@@ -46,56 +46,81 @@ pub(super) async fn collect_offers(
         if payload.get("accepting_jobs").and_then(Value::as_bool) != Some(true) {
             continue;
         }
-        let free_vram = payload
-            .get("free_vram_gb")
-            .and_then(Value::as_i64)
-            .unwrap_or_default();
-        let available = payload
+        // An offer carries the free VRAM it was placed on; a host that
+        // reported none is not offered, and the pass says which host and why.
+        let Some(free_vram) = payload.get("free_vram_gb").and_then(Value::as_i64) else {
+            errors.insert(consumer_id, "the host reported no free_vram_gb".to_string());
+            continue;
+        };
+        let region = payload_text(&payload, "region")
+            .map(str::to_string)
+            .or_else(|| default_region(provider));
+        // The machine type the host reported, else the one its accelerator
+        // is sized on; an accelerator neither names is not offered.
+        let machine_of = |accelerator: &str| {
+            payload_text(&payload, "machine_type")
+                .map(str::to_string)
+                .or_else(|| {
+                    sizing_for_accelerator(provider.as_str(), accelerator).map(|(_, machine)| machine)
+                })
+        };
+        let listed = payload
             .get("available_accelerators")
             .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        if available.is_empty() && free_vram > 0 {
-            let accelerator = payload_text(&payload, "gpu_type").unwrap_or("");
+            .filter(|listed| !listed.is_empty());
+        let Some(listed) = listed else {
+            if !free_vram.is_positive() {
+                continue;
+            }
+            let Some(accelerator) = payload_text(&payload, "gpu_type") else {
+                errors.insert(consumer_id, "the host reported free VRAM but no gpu_type".to_string());
+                continue;
+            };
+            let Some(machine_type) = machine_of(accelerator) else {
+                errors.insert(
+                    consumer_id,
+                    format!("the host reported no machine_type and {accelerator} has no sizing"),
+                );
+                continue;
+            };
+            // The offer is the reporting host itself.
+            let this_host = std::iter::once(&consumer_id).count() as i64;
             offers.push(CapacityOffer {
                 target_id: consumer_id,
                 provider,
-                region: payload_text(&payload, "region")
-                    .map(str::to_string)
-                    .or_else(|| default_region(provider)),
+                region,
                 accelerator_type: accelerator.to_string(),
-                machine_type: payload_text(&payload, "machine_type")
-                    .map(str::to_string)
-                    .or_else(|| {
-                        sizing_for_accelerator(provider.as_str(), accelerator)
-                            .map(|(_, machine)| machine)
-                    })
-                    .unwrap_or_default(),
+                machine_type,
                 free_vram_gb: free_vram,
-                available_instances: 1,
+                available_instances: this_host,
                 existing: true,
             });
             continue;
-        }
-        for (accelerator, count) in available {
-            let count = count.as_i64().unwrap_or_default();
-            if count <= 0 {
+        };
+        for (accelerator, count) in listed {
+            let Some(count) = count.as_i64() else {
+                errors.insert(
+                    format!("{consumer_id}:{accelerator}"),
+                    format!("the host's available_accelerators count {count} is not a whole number"),
+                );
+                continue;
+            };
+            if !count.is_positive() {
                 continue;
             }
+            let Some(machine_type) = machine_of(accelerator) else {
+                errors.insert(
+                    format!("{consumer_id}:{accelerator}"),
+                    format!("the host reported no machine_type and {accelerator} has no sizing"),
+                );
+                continue;
+            };
             offers.push(CapacityOffer {
                 target_id: consumer_id.clone(),
                 provider,
-                region: payload_text(&payload, "region")
-                    .map(str::to_string)
-                    .or_else(|| default_region(provider)),
+                region: region.clone(),
                 accelerator_type: accelerator.clone(),
-                machine_type: payload_text(&payload, "machine_type")
-                    .map(str::to_string)
-                    .or_else(|| {
-                        sizing_for_accelerator(provider.as_str(), &accelerator)
-                            .map(|(_, machine)| machine)
-                    })
-                    .unwrap_or_default(),
+                machine_type,
                 free_vram_gb: free_vram,
                 available_instances: count,
                 existing: true,
@@ -113,7 +138,7 @@ pub(super) async fn collect_offers(
         {
             Ok(available) => {
                 for (accelerator, count) in available {
-                    if count <= 0 {
+                    if !count.is_positive() {
                         continue;
                     }
                     let Some((vram, machine)) = sizing_for_accelerator(name, &accelerator) else {

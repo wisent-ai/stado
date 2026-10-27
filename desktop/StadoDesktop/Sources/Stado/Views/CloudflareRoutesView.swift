@@ -87,14 +87,16 @@ struct CloudflareRoutesView: View {
             commandAndAction(routeProblems)
         }
         .task {
-            if draft.host.isEmpty {
-                draft.host = hosts.first ?? ""
+            // A fleet that declares no host leaves the draft empty; the route
+            // problems name the missing host before anything runs.
+            if draft.host.isEmpty, let first = hosts.first {
+                draft.host = first
             }
             await store.refreshCredentials()
         }
         .onChange(of: hosts) { _, values in
-            if draft.host.isEmpty {
-                draft.host = values.first ?? ""
+            if draft.host.isEmpty, let first = values.first {
+                draft.host = first
             }
         }
         .sheet(item: $pendingRoute) { route in

@@ -86,7 +86,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
     )
     .await
     .map_err(click)?;
-    if !active_binary.ok() {
+    if !active_binary.succeeded() {
         return Err(CmdError::click(format!(
             "{host}: installed Stado rejected active release binary: {}",
             host_channel::last_error_line(&active_binary, "release active binary failed")
@@ -133,7 +133,7 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
     )
     .await
     .map_err(click)?;
-    if !readiness.ok() {
+    if !readiness.succeeded() {
         return Err(CmdError::click(format!(
             "{host}: release-control readiness failed at {readiness_url}: {}",
             host_channel::last_error_line(&readiness, "readiness request failed")

@@ -19,12 +19,15 @@ extension MachineEnrollmentStore {
         defer { isReadingMethods = false }
         do {
             let result = try await run(["fleet", "methods", "--json"])
-            guard result.ok,
-                  let list: FleetEnrollmentMethodList = Self.decode(from: result.standardOutput)
-            else {
+            if !result.ok {
                 failure = .methods(result.message)
                 return
             }
+            let list = try Self.document(
+                FleetEnrollmentMethodList.self,
+                of: "stado fleet methods --json",
+                from: result.standardOutput
+            )
             methods = list.methods
         } catch {
             failure = .methods(Self.describe(error))
@@ -36,14 +39,17 @@ extension MachineEnrollmentStore {
     }
 
     /// Whether a method is permitted, read from the catalog rather than
-    /// assumed. A method the control plane never reported is treated as
-    /// unknown, not as allowed.
+    /// assumed. A method the control plane never reported is not permitted:
+    /// there is nothing to run it with.
     func isPermitted(_ flow: MachineEnrollmentFlow) -> Bool {
         switch flow {
         case .methods, .handKey:
             return true
         default:
-            return methods.first { $0.flow == flow }?.isOpen ?? false
+            if let method = methods.first(where: { $0.flow == flow }) {
+                return method.isOpen
+            }
+            return false
         }
     }
 

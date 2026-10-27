@@ -16,6 +16,7 @@ pub(crate) async fn reconcile_published(
     platforms: &[String],
 ) -> Result<(), CmdError> {
     for p in platforms {
+        // A platform the run does not carry has no coordinate to reconcile.
         if !run.platforms.contains_key(p) {
             continue;
         }
@@ -39,7 +40,9 @@ pub(crate) async fn reconcile_published(
                 ))
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
-            let platform = run.platforms.get_mut(p).expect("checked above");
+            let Some(platform) = run.platforms.get_mut(p) else {
+                continue;
+            };
             platform.state = PlatformRunState::Published;
             platform.artifact_sha256 = Some(artifact.artifact_sha256);
             platform.release_manifest_sha256 = Some(artifact.manifest_sha256);
@@ -55,8 +58,11 @@ pub(crate) async fn reconcile_published(
         // an obsolete object origin. The durable qualification job is still
         // the source of truth; republish it instead of treating absent
         // release.json as a committed release.
-        if run.platforms[p].state == PlatformRunState::Published {
-            let platform = run.platforms.get_mut(p).expect("checked above");
+        if let Some(platform) = run
+            .platforms
+            .get_mut(p)
+            .filter(|platform| platform.state == PlatformRunState::Published)
+        {
             platform.state = PlatformRunState::Qualified;
             platform.artifact_sha256 = None;
             platform.release_manifest_sha256 = None;

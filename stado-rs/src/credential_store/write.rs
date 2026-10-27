@@ -223,7 +223,7 @@ pub async fn rotate_field_with(
             let mut document = super::file::file_load(path)?;
             let Some(stored) = document
                 .get_mut(item)
-                .filter(|_| item != TYPE_METADATA)
+                .filter(|_value| item != TYPE_METADATA)
                 .and_then(Value::as_object_mut)
             else {
                 return Err(SkarbiecError::MissingValue(format!(

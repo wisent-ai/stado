@@ -38,7 +38,7 @@ done
 # exit 0, report the profile as installed, and register nothing at all.
 if [ ! -f "$runner_root/.runner" ] || [ "$reconfigure" = 1 ]; then
   if [ ! -f "$runner_root/.runner" ]; then
-    curl --fail --silent --show-error --location --max-time 120 \
+    curl --fail --silent --show-error --location \
       "https://github.com/actions/runner/releases/download/v$version/actions-runner-linux-x64-$version.tar.gz" \
       -o "$archive"
     actual=$(sha256sum "$archive" | cut -d' ' -f1)
@@ -161,14 +161,20 @@ root mkdir -p /opt/wisent/.stado-runner-jobs
 root chmod 1777 /opt/wisent/.stado-runner-jobs
 rm -f "$gate"
 
+# The runner may reach the host's own resolvers, as /etc/resolv.conf names
+# them, and the Stado route to Brama at the host its URL names; nothing else
+# private. Spelling the resolver here allowed an address the host may not use.
+resolvers=$(awk '$1 == "nameserver" && $2 ~ /^[0-9.]+$/ { printf "%s%s", sep, $2; sep = ", " }' /etc/resolv.conf)
+[ -n "$resolvers" ] || { printf '%s\n' 'no IPv4 nameserver in /etc/resolv.conf: the runner could not resolve a name' >&2; exit 1; }
+brama_host=$(printf '%s' __BRAMA_URL__ | sed -E 's#^[a-z]+://([^:/]+).*#\1#')
 rules=$(mktemp "$staging/rules.XXXXXX")
 cat > "$rules" <<RULES
 table inet stado_precheck {
   chain output {
     type filter hook output priority filter; policy accept;
-    meta skuid $uid ip daddr 127.0.0.53 udp dport 53 accept
-    meta skuid $uid ip daddr 127.0.0.53 tcp dport 53 accept
-    meta skuid $uid ip daddr 127.0.0.1 tcp dport __BRAMA_PORT__ accept
+    meta skuid $uid ip daddr { $resolvers } udp dport domain accept
+    meta skuid $uid ip daddr { $resolvers } tcp dport domain accept
+    meta skuid $uid ip daddr $brama_host tcp dport __BRAMA_PORT__ accept
     meta skuid $uid ip daddr { __BLOCKED_IPV4__ } reject
     meta skuid $uid ip6 daddr { __BLOCKED_IPV6__ } reject
   }

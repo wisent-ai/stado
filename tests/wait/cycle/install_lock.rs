@@ -25,8 +25,8 @@ struct Run {
 
 impl Run {
     fn new(case: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("waits-cycle")
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/journeys/waits-cycle")
             .join(format!("{case}-{}", std::process::id()));
         fs::create_dir_all(root.join("home")).expect("create the isolated home");
         Self {
@@ -165,10 +165,13 @@ fn record(lock: &Path, pid: u32) {
 /// or none when the process ended first.
 fn until_waiting(stderr: ChildStderr, lock: &Path) -> Option<String> {
     let place = lock.display().to_string();
-    BufReader::new(stderr)
-        .lines()
-        .map_while(Result::ok)
-        .find(|line| line.starts_with("czekam:") && line.contains(&place))
+    for line in BufReader::new(stderr).lines() {
+        let line = line.expect("the install's standard error is readable");
+        if line.starts_with("czekam:") && line.contains(&place) {
+            return Some(line);
+        }
+    }
+    None
 }
 
 #[test]

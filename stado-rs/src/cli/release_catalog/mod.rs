@@ -15,6 +15,7 @@ mod central;
 mod checkout;
 mod enroll;
 mod publisher;
+mod verbs;
 
 pub(crate) use publisher::mint_bearer as fresh_bearer;
 
@@ -65,50 +66,13 @@ enum CatalogCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Declare one product's release publisher across the fleet: mint its
-    /// item on the vault owner, grant the release client access, declare it on
-    /// every participating host, then reconcile each host's verifier grant.
-    /// `build submit` and `release submit` run this themselves for a product
-    /// this host has not declared, with this host as the client and the vault
-    /// owner read from `skarbiec bond status`; run it by hand only to declare
-    /// further API targets or reloads.
-    DeclarePublisher {
-        /// The product, as its release manifest names it.
-        product: String,
-        /// The registry host whose vault is authoritative.
-        #[arg(long)]
-        owner: String,
-        /// The registry host that runs `release submit`.
-        #[arg(long)]
-        client: String,
-        /// Further hosts that serve the release API; repeat for several.
-        #[arg(long = "target")]
-        targets: Vec<String>,
-        /// HOST=SERVICE: the host Stado process on HOST, whose release API
-        /// caches the publisher table for its lifetime, reconciled after the
-        /// declaration lands on that host; repeat for several hosts. Any
-        /// other unit, a retired one included, is refused.
-        #[arg(long = "reload")]
-        reloads: Vec<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Withdraw a retired product's release publisher declaration from the
-    /// vault owner, this host and every --target, then reconcile each host's
-    /// release verifier. Refuses while the release catalog still holds the
-    /// product. The vault item stays, so a returning product re-declares.
-    WithdrawPublisher {
-        /// The product, as its release manifest named it.
-        product: String,
-        /// Further hosts that serve the release API; repeat for several.
-        #[arg(long = "target")]
-        targets: Vec<String>,
-        #[arg(long)]
-        json: bool,
-    },
+    /// A product's release publisher: `declare` it across the fleet, or
+    /// `withdraw` a retired product's declaration.
+    #[command(subcommand)]
+    Publisher(verbs::PublisherCommands),
     /// Retire a product from the release pipeline: the inverse of `enroll`.
     /// Removes its entry from the release catalog the daily batch builds
-    /// from, then withdraws its release publisher as `withdraw-publisher`
+    /// from, then withdraws its release publisher as `publisher withdraw`
     /// does. A product the catalog does not hold is refused by name.
     /// Published releases stay; a returning product enrolls again.
     Retire {
@@ -124,14 +88,10 @@ enum CatalogCommands {
     /// release manifest and scripts from what its project states, declare its
     /// publisher, register it. Without --apply only the plan is printed.
     Adopt(adopt::AdoptArgs),
-    /// Make one committed revision of another repository, or only the paths of
-    /// it the build reads (--path, repeatable), an immutable build input of the
-    /// product in CHECKOUT: archive it, store it create-only under the
-    /// product's sources, and write `inputs.<name>` of its
-    /// `.wisent-release.json`. The build reads it from WISENT_INPUT_<NAME>_DIR.
-    /// --cargo publishes Cargo.lock's private crates, --git-bundle the commit's
-    /// history, --swiftpm a Swift package's committed resolution.
-    PinInput(publisher::PinInputArgs),
+    /// An immutable build input: `pin` one committed revision of another
+    /// repository (or the paths of it the build reads) for the product.
+    #[command(subcommand)]
+    Input(verbs::InputCommands),
 }
 
 fn product(manifest: &ProductManifest) -> &str {
@@ -238,7 +198,7 @@ async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), C
 /// `catalog retire`: delete the product's catalog entry, so the daily batch
 /// stops building it, then withdraw its publisher. Without this verb a
 /// retired product could only be taken out of the catalog by deleting the
-/// object by hand, and `withdraw-publisher` refused until someone did.
+/// object by hand, and `publisher withdraw` refused until someone did.
 async fn retire(product: &str, targets: &[String], json: bool) -> Result<(), CmdError> {
     crate::cli::host::vault_word("product", product)?;
     let uri = catalog_uri(product);
@@ -273,27 +233,13 @@ pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
         },
         CatalogCommands::Audit { json } => audit::audit(json).await,
         CatalogCommands::Enroll { checkout, json } => enroll_checkout(&checkout, json).await,
-        CatalogCommands::DeclarePublisher {
-            product,
-            owner,
-            client,
-            targets,
-            reloads,
-            json,
-        } => {
-            publisher::declare_publisher(&product, &owner, &client, &targets, &reloads, json).await
-        }
-        CatalogCommands::WithdrawPublisher {
-            product,
-            targets,
-            json,
-        } => publisher::withdraw_publisher(&product, &targets, json).await,
+        CatalogCommands::Publisher(command) => verbs::publisher(command).await,
         CatalogCommands::Retire {
             product,
             targets,
             json,
         } => retire(&product, &targets, json).await,
         CatalogCommands::Adopt(args) => adopt::run(args).await,
-        CatalogCommands::PinInput(args) => publisher::pin_input(args).await,
+        CatalogCommands::Input(command) => verbs::input(command).await,
     }
 }

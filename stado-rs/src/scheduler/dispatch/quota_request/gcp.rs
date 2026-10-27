@@ -112,10 +112,9 @@ pub async fn gcp_request_increase(
     let Some((_, family)) = GCP_ACCEL_TO_GPU_FAMILY.iter().find(|(a, _)| *a == accel) else {
         let mut known: Vec<&str> = GCP_ACCEL_TO_GPU_FAMILY.iter().map(|(_, f)| *f).collect();
         known.sort_unstable();
-        let known: Vec<String> = known.iter().map(|f| format!("'{f}'")).collect();
         return Err(QuotaRequestError::Value(format!(
-            "no GCP gpu_family mapping for accel '{accel}'; known: [{}]",
-            known.join(", ")
+            "no GCP gpu_family mapping for accel '{accel}'; known: {}",
+            crate::models::py_list_repr(&known)
         )));
     };
     Ok(gcp_request_for_family(

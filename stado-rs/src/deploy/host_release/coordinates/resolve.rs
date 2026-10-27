@@ -42,7 +42,7 @@ async fn has_managed_loopback_forward(
         shlex_quote(endpoint)
     );
     let output = host_channel::run_script(target, &script, runner).await?;
-    Ok(output.ok()
+    Ok(output.succeeded()
         && output
             .stdout
             .lines()
@@ -83,7 +83,9 @@ pub async fn resolve_release_request(
     let declared = serde_json::Value::Object(registry.extra.clone());
     let release_api = match crate::public_origin::publishing(&declared, RELEASE_ROUTE) {
         Ok(origin) => origin.origin(),
-        Err(_) if crate::public_origin::declarations(&declared).is_empty() => {
+        // No public origin is declared at all, so there is nothing to
+        // refuse: the configured API origin is the one the fleet reads.
+        Err(_undeclared) if crate::public_origin::declarations(&declared).is_empty() => {
             crate::cli::storage::release_api_origin().map_err(DeployError::from)?
         }
         Err(refusal) => {
@@ -103,13 +105,19 @@ pub async fn resolve_release_request(
         || registry
             .service(OBJECT_API_SERVICE)
             .is_some_and(|object_api| object_api.active_host == target.name);
-    let target_release_api = registry
+    // A target that is itself the object API's active host reads releases
+    // from its own loopback endpoint; every other target reads from the
+    // public release origin resolved above.
+    let own_loopback_object_api = registry
         .service(OBJECT_API_SERVICE)
         .filter(|object_api| object_api.active_host == target.name)
         .and_then(|object_api| object_api.address_for(&target.name))
         .map(|endpoint| endpoint.url.trim_end_matches('/').to_string())
-        .filter(|url| loopback_http_origin(url))
-        .unwrap_or(release_api);
+        .filter(|url| loopback_http_origin(url));
+    let target_release_api = match own_loopback_object_api {
+        Some(loopback) => loopback,
+        None => release_api,
+    };
     let archive_uri = format!(
         "stado://releases/{}/{version}/{platform}/{}",
         product.source.product, identity.archive_name

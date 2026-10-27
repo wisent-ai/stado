@@ -56,7 +56,15 @@ extension ConsoleView {
             fleetStore.configureEndpoint(nil)
             enrollmentStore.configureEndpoint(nil)
             groupStore.configureEndpoint(nil)
-            sourceProblem = "\(endpoint) was rejected: \((error as? LocalizedError)?.errorDescription ?? "the address is not a supported Stado endpoint.")"
+            // The address parser's own sentence; an error that describes
+            // nothing is named by what it is, never by a sentence invented here.
+            let reason: String
+            if let described = (error as? LocalizedError)?.errorDescription {
+                reason = described
+            } else {
+                reason = "\(type(of: error)) gave no description: \(error)"
+            }
+            sourceProblem = "\(endpoint) was rejected: \(reason)"
         }
     }
 
@@ -83,8 +91,13 @@ extension ConsoleView {
         }
     }
 
+    /// The scope the console reads: the selected deployment's name, or the
+    /// local Stado when none is selected.
     var scopeName: String {
-        deploymentStore.selectedDeployment?.name ?? "Local Stado"
+        if let deployment = deploymentStore.selectedDeployment {
+            return deployment.name
+        }
+        return "Local Stado"
     }
 
     var sourceTone: WisentTone {

@@ -83,7 +83,13 @@ pub async fn handoff_standing(
 ) -> Result<Handoff, DeployError> {
     let record = read_record(target, unit, runner).await?;
     let published = read_published(target, &process.declared, runner).await?;
-    let current: Option<u32> = process.pid.trim().parse().ok();
+    // launchd reports a running unit's pid as a number and a stopped unit's
+    // as `-`; a unit without a live pid holds no listener, and the
+    // comparison below finds none.
+    let current: Option<u32> = match process.pid.trim().parse() {
+        Ok(pid) => Some(pid),
+        Err(_not_running_or_not_a_pid) => None,
+    };
     // Only the replacement's own live pid holding the listeners proves an
     // acquisition, whatever the registry's health says. A timestamp alone
     // cannot tell it from the old unit: after a restore the old resolver

@@ -26,9 +26,10 @@ pub async fn remote_test(
     expression: &str,
     runner: &Runner,
 ) -> Result<bool, DeployError> {
-    Ok(run_command(target, &format!("test {expression}"), runner)
-        .await?
-        .ok())
+    // The command's exit status is the test's answer; a transport failure
+    // was raised by `?` above.
+    let answer = run_command(target, &format!("test {expression}"), runner).await?;
+    Ok(answer.succeeded())
 }
 
 /// The remote login user's home directory.
@@ -39,7 +40,7 @@ pub async fn remote_test(
 pub async fn remote_home(target: &ComputeTarget, runner: &Runner) -> Result<String, DeployError> {
     let output = run_command(target, "printf '%s' \"$HOME\"", runner).await?;
     let home = output.stdout.trim();
-    if !output.ok() || home.is_empty() || !home.starts_with('/') {
+    if !output.succeeded() || home.is_empty() || !home.starts_with('/') {
         return Err(DeployError::unreachable(format!(
             "{}: the remote shell did not state its home directory",
             target.name
@@ -48,9 +49,52 @@ pub async fn remote_home(target: &ComputeTarget, runner: &Runner) -> Result<Stri
     Ok(home.to_string())
 }
 
-/// The text of one remote file, or `None` when it is not a readable regular
-/// file — the `[ -f "$path" ] || return 0` guard every retired reporter
-/// opened with, and the read itself one fixed `cat`.
+/// The home directory of `user` on the host, as the host's own user database
+/// answers it (the shell's `~user` expansion), for a user other than the one
+/// the channel logs in as, such as the Mac's GUI user. A name is never turned
+/// into `/Users/<name>` or `/home/<name>` here: a home elsewhere would render
+/// paths that do not exist. A name that is not a plain account name, or one
+/// the host does not know, is refused naming it.
+pub async fn remote_user_home(
+    target: &ComputeTarget,
+    user: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    let plain = !user.is_empty()
+        && user
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    if !plain {
+        return Err(DeployError(format!(
+            "{}: {user:?} is not a plain account name, so its home is not asked for",
+            target.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
+    }
+    // `~name` expands only as a word of its own, so the name is passed as an
+    // argument and expanded by eval; it was checked above to hold no shell
+    // syntax.
+    let output = run_program(
+        target,
+        &["/bin/sh", "-c", "eval \"printf '%s' ~$1\"", "sh", user],
+        runner,
+    )
+    .await?;
+    let home = output.stdout.trim();
+    if !output.succeeded() || !home.starts_with('/') {
+        return Err(DeployError::unreachable(format!(
+            "{}: the host's user database states no home directory for {user} (it answered {home:?})",
+            target.name
+        )));
+    }
+    Ok(home.to_string())
+}
+
+/// The text of one remote file, or `None` when there is no regular file at
+/// the path — the `[ -f "$path" ] || return 0` guard every retired reporter
+/// opened with, and the read itself one fixed `cat`. A file that is there
+/// but could not be read (permissions, a vanished mount) is an error naming
+/// it, never `None`: absent and unreadable call for different repairs.
 pub async fn remote_read_file(
     target: &ComputeTarget,
     path: &str,
@@ -60,7 +104,14 @@ pub async fn remote_read_file(
         return Ok(None);
     }
     let output = run_program(target, &["/bin/cat", path], runner).await?;
-    Ok(output.ok().then_some(output.stdout))
+    if !output.succeeded() {
+        return Err(DeployError::unreachable(format!(
+            "{}: {path} is a regular file but could not be read: {}",
+            target.name,
+            output.stderr.trim()
+        )));
+    }
+    Ok(Some(output.stdout))
 }
 
 /// A version, or nothing, out of whatever text a program printed, anchored on
@@ -76,9 +127,10 @@ pub fn extract_semver(text: &str) -> Option<String> {
     text.split([' ', '\t', '\n', '\r'])
         .filter(|token| !token.is_empty())
         .find_map(|token| {
-            let bare = token
-                .strip_prefix(|head| matches!(head, 'v' | 'V'))
-                .unwrap_or(token);
+            let bare = match token.strip_prefix(|head| matches!(head, 'v' | 'V')) {
+                Some(after_prefix) => after_prefix,
+                None => token,
+            };
             semver_token(bare).then(|| bare.to_string())
         })
 }
@@ -121,15 +173,19 @@ pub async fn remote_program_version(
         return Ok(Some(version));
     }
     let output = run_program(target, &[path, "version"], runner).await?;
+    // skarbiec answers `version` with a JSON object whose `version` member
+    // is the version; any other program's text is read for a version token.
+    // A JSON-looking answer that does not parse, or has no version member,
+    // states no version, which is what `None` says.
     let text = if output.stdout.trim_start().starts_with('{') {
-        serde_json::from_str::<Value>(&output.stdout)
-            .ok()
-            .and_then(|document| match document.get("version") {
-                Some(Value::String(version)) => Some(version.clone()),
-                Some(Value::Number(version)) => Some(version.to_string()),
-                _ => None,
-            })
-            .unwrap_or_default()
+        match serde_json::from_str::<Value>(&output.stdout) {
+            Ok(document) => match document.get("version") {
+                Some(Value::String(version)) => version.clone(),
+                Some(Value::Number(version)) => version.to_string(),
+                _ => return Ok(None),
+            },
+            Err(_not_json) => return Ok(None),
+        }
     } else {
         output.stdout
     };
@@ -156,7 +212,12 @@ pub async fn remote_json_member(
         let Some(object) = document.as_object() else {
             return Ok(None);
         };
-        document = object.get(*key).cloned().unwrap_or(Value::Null);
+        // A member the object lacks is the same answer as a file that does
+        // not state it: the caller reads the next source.
+        document = match object.get(*key) {
+            Some(member) => member.clone(),
+            None => return Ok(None),
+        };
     }
     Ok(match &document {
         Value::String(member) => Some(member.clone()),

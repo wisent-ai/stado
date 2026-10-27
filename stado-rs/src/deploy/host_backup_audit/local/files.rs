@@ -7,8 +7,6 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 /// What reading one path found.
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -92,12 +90,9 @@ impl Identity {
     }
 }
 
-/// The SHA-256 of `path`'s content, streamed through the hasher.
+/// The SHA-256 of `path`'s content, through the crate's one digest reader.
 pub(super) fn sha256(path: &Path) -> std::io::Result<String> {
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
-    Ok(hex::encode(hasher.finalize()))
+    Ok(crate::primitives::digest::sha256_file(path)?.sha256)
 }
 
 /// The state and size of `path` without reading it; `hash` also reads it.

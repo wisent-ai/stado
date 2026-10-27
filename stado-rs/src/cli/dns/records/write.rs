@@ -45,17 +45,25 @@ pub(in crate::cli::dns) fn merge(
         .filter(|record| record.host == host && record.record_type == record_type)
         .cloned()
         .collect();
-    let kept_ttl = ttl
-        .map(str::to_string)
-        .or_else(|| (replaced.len() == 1).then(|| replaced[0].ttl.clone()))
-        .unwrap_or_default();
-    let kept_mx_pref = if replaced.len() == 1 {
-        replaced[0].mx_pref.clone()
-    } else {
-        Default::default()
+    // Only a name and type the zone states exactly once has a TTL and MX
+    // preference to keep; several or none leave the new record stating none.
+    let only = match replaced.as_slice() {
+        [only] => Some(only),
+        _ => None,
     };
-    let unchanged =
-        replaced.len() == 1 && replaced[0].address == address && replaced[0].ttl == kept_ttl;
+    // An empty TTL or MX preference is how setHosts is told the record states
+    // none, so the registrar applies its own default:
+    // https://www.namecheap.com/support/api/methods/domains-dns/set-hosts/
+    let kept_ttl = match (ttl, only) {
+        (Some(ttl), _) => ttl.to_string(),
+        (None, Some(only)) => only.ttl.clone(),
+        (None, None) => String::new(),
+    };
+    let kept_mx_pref = match only {
+        Some(only) => only.mx_pref.clone(),
+        None => Default::default(),
+    };
+    let unchanged = only.is_some_and(|only| only.address == address && only.ttl == kept_ttl);
     let mut merged: Vec<Record> = records
         .iter()
         .filter(|record| !(record.host == host && record.record_type == record_type))
@@ -163,8 +171,7 @@ pub(crate) async fn remove_record(
         .filter(|record| !(record.host == host && record.record_type == record_type))
         .cloned()
         .collect();
-    let removed = before.len() - kept.len();
-    if removed > 0 {
+    if kept.len() < before.len() {
         set_hosts(&registrar, &zone, &kept).await?;
         let after = get_hosts(&registrar, &zone).await?;
         if after
@@ -182,7 +189,7 @@ pub(crate) async fn remove_record(
         "zone": zone.name,
         "name": name,
         "type": record_type,
-        "removed": removed,
+        "removed": before.len() - kept.len(),
         "records_after": kept.len(),
     }))
 }

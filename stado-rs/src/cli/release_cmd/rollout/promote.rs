@@ -35,17 +35,29 @@ pub(in crate::cli::release_cmd) async fn promote(
             crate::cli::release_cmd::unknown_release_product(&control, &args.product)
         })?;
         let mut artifacts = BTreeMap::new();
-        let mut revisions = BTreeSet::new();
+        // Every platform must have been built from one source revision; the
+        // first platform's revision is the one the rest are held to, and a
+        // platform built from another names both.
+        let mut source_revision: Option<(String, String)> = None;
         for platform in platforms(policy) {
             let artifact =
                 verified_artifact(&args.product, &args.version, &platform, &control).await?;
-            revisions.insert(artifact.source_revision.clone());
+            match &source_revision {
+                None => {
+                    source_revision = Some((platform.clone(), artifact.source_revision.clone()))
+                }
+                Some((first_platform, first_revision))
+                    if *first_revision != artifact.source_revision =>
+                {
+                    return Err(CmdError::refused(format!(
+                        "release platforms were not built from one source revision: {first_platform} \
+                         carries {first_revision} and {platform} carries {}",
+                        artifact.source_revision
+                    )));
+                }
+                Some(_same_revision) => {}
+            }
             artifacts.insert(platform, artifact);
-        }
-        if revisions.len() != 1 {
-            return Err(CmdError::refused(
-                "release platforms were not built from one source revision",
-            ));
         }
         let channel = ReleaseChannel::from(args.channel);
         if exact_is_noop {
@@ -78,14 +90,19 @@ pub(in crate::cli::release_cmd) async fn promote(
                 return Ok(());
             }
         }
-        let policy = control
-            .products
-            .get_mut(&args.product)
-            .expect("checked above");
-        let rollout_generation = policy
-            .desired
-            .as_ref()
-            .map_or(1, |desired| desired.rollout_generation.saturating_add(1));
+        let Some(policy) = control.products.get_mut(&args.product) else {
+            return Err(crate::cli::release_cmd::unknown_release_product(&control, &args.product));
+        };
+        // The first rollout of a product is the first draw of its counter;
+        // every later one counts past the release it replaces.
+        let rollout_generation = match policy.desired.as_ref() {
+            Some(desired) => {
+                let mut next = desired.rollout_generation;
+                crate::primitives::tally::Tally::tally(&mut next);
+                next
+            }
+            None => crate::primitives::tally::FIRST_DRAW,
+        };
         policy.previous = policy.desired.take();
         policy.desired = Some(DesiredRelease {
             version: args.version.clone(),
@@ -94,7 +111,7 @@ pub(in crate::cli::release_cmd) async fn promote(
             promoted_at: Utc::now().to_rfc3339(),
             artifacts,
         });
-        control.generation = control.generation.saturating_add(1);
+        crate::primitives::tally::Tally::tally(&mut control.generation);
         let mut updated = document;
         updated[release_control::RELEASE_CONTROL_KEY] = serde_json::to_value(&control)?;
         let stored_generation =

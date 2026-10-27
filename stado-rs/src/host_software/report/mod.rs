@@ -24,8 +24,8 @@ pub struct Report {
     /// retired helper channel left 1393 of them in `$HOME/.stado/bin` on
     /// control-host against 28 programs, and a release pipeline produces
     /// none of them — rowing each as `unmanaged` would bury the twenty-eight
-    /// answers the report exists to give.
-    pub scripts: usize,
+    /// answers the report exists to give. `None` when no count is on file.
+    pub scripts: Option<usize>,
     /// How old the fleet's knowledge of this host's software is.
     /// [`Freshness::Never`] is the state that was invisible.
     pub freshness: Freshness,
@@ -38,7 +38,7 @@ impl Report {
         Self {
             host: host.to_string(),
             rows: Vec::new(),
-            scripts: 0,
+            scripts: None,
             freshness: Freshness::Never,
         }
     }
@@ -86,12 +86,15 @@ impl Report {
         if matches!(self.freshness, Freshness::Never) {
             return "no report".to_string();
         }
+        let scripts = match self.scripts {
+            Some(scripts) => format!("{scripts} script(s)"),
+            None => "scripts not counted".to_string(),
+        };
         format!(
-            "{} program(s), {} release, {} unmanaged, {} script(s)",
+            "{} program(s), {} release, {} unmanaged, {scripts}",
             self.rows.len(),
             self.released(),
             self.unmanaged(),
-            self.scripts
         )
     }
 

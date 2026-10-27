@@ -2,13 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 use crate::queue::copy::Endpoint;
@@ -56,7 +54,7 @@ pub fn write_plan(plan: &Plan, path: &Path) -> Result<String, CmdError> {
     plan.validate()?;
     topological_order(plan)?;
     let bytes = plan.canonical_bytes()?;
-    atomic_write(path, &bytes)?;
+    crate::primitives::document::persist(path, &bytes)?;
     plan.sha256()
 }
 
@@ -138,7 +136,7 @@ type AgeUnit = fn(i64) -> Option<Duration>;
 
 pub fn parse_age(raw: &str) -> Result<Duration, CmdError> {
     let raw = raw.trim();
-    let units: [(char, AgeUnit); 4] = [
+    let units: &[(char, AgeUnit)] = &[
         ('s', Duration::try_seconds),
         ('m', Duration::try_minutes),
         ('h', Duration::try_hours),
@@ -154,7 +152,7 @@ pub fn parse_age(raw: &str) -> Result<Duration, CmdError> {
     };
     let count = digits
         .parse::<i64>()
-        .map_err(|_| CmdError::usage(format!("invalid age {raw:?}")))?;
+        .map_err(|error| CmdError::usage(format!("invalid age {raw:?}: {error}")))?;
     let age = unit(count).ok_or_else(|| CmdError::usage(format!("age {raw:?} is too large")))?;
     if age <= Duration::zero() {
         return Err(CmdError::usage("age must be greater than zero"));
@@ -168,6 +166,15 @@ pub fn condition(field: &str, expected: Value) -> Condition {
         expected,
     }
 }
+
+/// A managed instance group whose `targetSize` is zero keeps no instances
+/// running: <https://cloud.google.com/compute/docs/reference/rest/v1/instanceGroupManagers>.
+pub const NO_INSTANCES: i64 = 0;
+
+/// A reservation whose `specificReservation.inUseCount` is zero holds no
+/// instance: <https://cloud.google.com/compute/docs/reference/rest/v1/reservations>.
+pub const NONE_IN_USE: i64 = 0;
+
 pub fn configuration_fingerprint() -> Result<String, CmdError> {
     let primary = Endpoint::configured_primary();
     let value = json!({
@@ -178,20 +185,6 @@ pub fn configuration_fingerprint() -> Result<String, CmdError> {
         "gcp_region": crate::config::region(),
     });
     Ok(hex::encode(Sha256::digest(serde_json::to_vec(&value)?)))
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CmdError> {
-    let parent = path.parent().ok_or_else(|| {
-        CmdError::click(format!("{} has no parent", path.display()))
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
-    fs::create_dir_all(parent)?;
-    let mut temporary = NamedTempFile::new_in(parent)?;
-    temporary.write_all(bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    fs::File::open(parent)?.sync_all()?;
-    Ok(())
 }
 
 fn timestamp(value: DateTime<Utc>) -> String {

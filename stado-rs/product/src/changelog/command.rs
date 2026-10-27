@@ -13,7 +13,7 @@ pub fn command() -> Command {
             Arg::new("spill")
                 .long("spill")
                 .action(ArgAction::SetTrue)
-                .help("Move the entries written so far into changelog/unreleased-part-N.md, linked under Unreleased, so CHANGELOG.md takes new entries again"),
+                .help("Move the entries written so far into changelog/unreleased/part-N.md, linked under Unreleased, so CHANGELOG.md takes new entries again"),
         )
         .group(ArgGroup::new("move").args(["version", "spill"]).required(true))
         .arg(

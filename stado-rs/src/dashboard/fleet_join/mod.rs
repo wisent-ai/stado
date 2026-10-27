@@ -78,12 +78,21 @@ fn bearer(request: &Request) -> Option<&str> {
 }
 
 /// Token id and secret, owned, when the presented bearer has the right shape.
-/// Shape failures are refusals like any other.
+/// Shape failures are refused like any other credential failure, with the
+/// same answer to the caller; the reason goes to this host's log, where
+/// whoever issued the invite can read it.
 fn presented(request: &Request) -> Option<(String, String)> {
     let raw = bearer(request)?;
-    invite::parse_token(raw)
-        .ok()
-        .map(|(id, secret)| (id.to_string(), secret.to_string()))
+    match invite::parse_token(raw) {
+        Ok((id, secret)) => Some((id.to_string(), secret.to_string())),
+        Err(reason) => {
+            tracing::warn!(
+                reason,
+                "fleet join refused: the presented bearer is not an invite token"
+            );
+            None
+        }
+    }
 }
 
 fn request_path(hostname: &str) -> String {

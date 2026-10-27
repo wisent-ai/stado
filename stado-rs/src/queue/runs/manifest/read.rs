@@ -72,16 +72,33 @@ fn walked_path() -> String {
     format!("{RUN_PREFIX}/retained-jobs-indexed")
 }
 
-/// Every job id one run manifest retains an outcome for.
-fn retained_ids(manifest: &Map<String, Value>) -> Vec<&str> {
-    manifest
-        .get("entries")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|entry| entry.get("outcome").is_some())
-        .filter_map(|entry| entry.get("job_id").and_then(Value::as_str))
-        .collect()
+/// Every job id one run manifest retains an outcome for. A current
+/// (`stado.run-submission.v3`) manifest must list its entries and every
+/// retained entry must name its job; one that does not is refused naming
+/// the run: read as retaining nothing, the walk was marked done with those
+/// jobs unindexed, and every later reader called them never existing. An
+/// older manifest, which this walk only reads, keeps the lenient reading.
+fn retained_ids<'a>(manifest: &'a Map<String, Value>, run_id: &str) -> Result<Vec<&'a str>, StorageError> {
+    let current = manifest.get("schema").and_then(Value::as_str) == Some("stado.run-submission.v3");
+    let Some(entries) = manifest.get("entries").and_then(Value::as_array) else {
+        if current {
+            return Err(StorageError::Other(format!("run {run_id} lists no entries")));
+        }
+        return Ok(Vec::new());
+    };
+    let mut retained = Vec::new();
+    for entry in entries.iter().filter(|entry| entry.get("outcome").is_some()) {
+        match entry.get("job_id").and_then(Value::as_str) {
+            Some(job_id) => retained.push(job_id),
+            None if current => {
+                return Err(StorageError::Other(format!(
+                    "run {run_id} retains an outcome that names no job: {entry}"
+                )))
+            }
+            None => {}
+        }
+    }
+    Ok(retained)
 }
 
 /// The job a reaped run retained for `job_id`, stamped with the terminal
@@ -119,7 +136,7 @@ pub async fn retained_job(
         let Some(manifest) = read_run(store, run_id).await? else {
             continue;
         };
-        for retained in retained_ids(&manifest) {
+        for retained in retained_ids(&manifest, run_id)? {
             crate::queue::runs::index_retained_job(store, retained, run_id).await?;
         }
         if found.is_none() {

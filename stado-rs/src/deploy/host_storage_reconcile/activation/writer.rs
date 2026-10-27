@@ -66,7 +66,7 @@ pub(super) async fn restore_fenced_writer(
                 })?;
                 let recovered =
                     host_channel::run_script(storage_target, &prepared.body, runner).await?;
-                if !recovered.ok() {
+                if !recovered.succeeded() {
                     return Err(DeployError(format!(
                         "{label} did not restore through its prepared configuration: {}",
                         host_channel::last_error_line(&recovered, "remote command failed")

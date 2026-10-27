@@ -44,13 +44,15 @@ struct HostSpaceReport: Decodable, Sendable {
         let headroomBytes: Int64?
         let cleanerScopes: [CleanerScope]
         let covered: [CoveredRoot]
-        let coveredBytes: Int64
+        let coveredBytes: Int64?
         let uncovered: [UncoveredPath]
-        let uncoveredBytes: Int64
+        let uncoveredBytes: Int64?
         /// Of the bytes outside every stage root, what a cleaner takes at the
         /// threshold, and what nothing takes because it is the user's.
-        let cleanerBytes: Int64
-        let unsweptBytes: Int64
+        let cleanerBytes: Int64?
+        let unsweptBytes: Int64?
+        /// Observed rows of an incomplete inventory, not whole-volume totals.
+        let measuredBytes: MeasuredBytes?
         let verdict: String
         let detail: String
         let janitor: Janitor
@@ -63,6 +65,14 @@ struct HostSpaceReport: Decodable, Sendable {
             case uncoveredBytes = "uncovered_bytes"
             case cleanerBytes = "cleaner_bytes"
             case unsweptBytes = "unswept_bytes"
+            case measuredBytes = "measured_bytes"
+        }
+
+        struct MeasuredBytes: Decodable, Sendable {
+            let covered: Int64
+            let uncovered: Int64
+            let cleaner: Int64
+            let unswept: Int64
         }
 
         /// One cleaner's area on this host and what it holds now.
@@ -94,8 +104,14 @@ struct HostSpaceReport: Decodable, Sendable {
 
             var id: String { path }
 
-            /// The cleaner taking it, or `user data` when nothing does.
-            var label: String { mechanism ?? "user data" }
+            /// The cleaner whose scope reaches the path, or `uncovered` —
+            /// the CLI's own word for a path no cleaner reaches.
+            var label: String {
+                if let mechanism {
+                    return mechanism
+                }
+                return "uncovered"
+            }
         }
 
         struct Janitor: Decodable, Sendable {

@@ -19,8 +19,13 @@ pub(super) fn janitor_sentence(
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
     };
-    let outcome = word("outcome").unwrap_or("no outcome reported");
-    let mut sentence = format!("host janitor: {outcome}");
+    // The sentence opens with the janitor's own outcome word; a plan that
+    // carries none says so, since a reader otherwise takes the cleaner
+    // counts below for a pass that ran.
+    let mut sentence = match word("outcome") {
+        Some(outcome) => format!("host janitor: {outcome}"),
+        None => "host janitor: the plan reports no outcome word".to_string(),
+    };
     if let Some(mode) = word("mode") {
         sentence.push_str(&format!(", policy mode {mode}"));
     }

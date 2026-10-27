@@ -39,11 +39,19 @@ impl RemoteObjectApi {
         if !response.status().is_success() {
             return Err(self.response_error(response, bearer).await);
         }
-        let capacity = response
-            .content_length()
-            .and_then(|length| usize::try_from(length).ok())
-            .unwrap_or_default();
-        let mut body = Vec::with_capacity(capacity);
+        // The declared length sizes the buffer once; a response without one
+        // grows as chunks arrive, and one wider than this process addresses
+        // could never be held, so it is refused naming the length.
+        let mut body = match response.content_length() {
+            Some(declared) => Vec::with_capacity(usize::try_from(declared).map_err(|error| {
+                CmdError::click(format!(
+                    "Stado object API {operation} declared a {declared}-byte response, \
+                     more than this process can address: {error}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?),
+            None => Vec::new(),
+        };
         while let Some(chunk) = response.chunk().await.map_err(|error| {
             CmdError::click(format!(
                 "Stado object API {operation} response body connection closed before completion \

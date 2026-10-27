@@ -1,5 +1,5 @@
-//! `stado host exec TARGET -- skarbiec doctor` and `-- skarbiec
-//! recover-daemons` pass the allowlist, and an unapproved Skarbiec spelling
+//! `stado host exec TARGET -- skarbiec doctor` and `-- skarbiec keyring
+//! recover` pass the allowlist, and an unapproved Skarbiec spelling
 //! is refused naming both.
 //!
 //! The real `stado` runs against an isolated local store under the build
@@ -17,7 +17,7 @@ const UNAPPROVED: &str = "'skarbiec status' is not an approved host-exec command
 const REFUSAL: &str = "is not an approved host-exec command";
 const APPROVED_PREFIX: &str = "approved commands: ";
 const DOCTOR: &str = "skarbiec doctor";
-const RECOVER_DAEMONS: &str = "skarbiec recover-daemons";
+const KEYRING_RECOVER: &str = "skarbiec keyring recover";
 
 struct Store {
     root: PathBuf,
@@ -25,7 +25,8 @@ struct Store {
 
 impl Store {
     fn new(case: &str) -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("host-exec-skarbiec");
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/journeys/host-exec-skarbiec");
         std::fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(format!("{case}-{}", std::process::id()));
         for directory in [".locks", ".metadata"] {
@@ -124,6 +125,6 @@ fn skarbiec_doctor_passes_the_allowlist() {
 }
 
 #[test]
-fn skarbiec_recover_daemons_passes_the_allowlist() {
-    admitted(&Store::new("recover-daemons"), RECOVER_DAEMONS);
+fn skarbiec_keyring_recover_passes_the_allowlist() {
+    admitted(&Store::new("keyring-recover"), KEYRING_RECOVER);
 }

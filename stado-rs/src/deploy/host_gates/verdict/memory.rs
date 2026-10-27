@@ -50,8 +50,8 @@ impl MemoryGate {
             return None;
         }
         let mut clauses = vec![match (self.available_gb, self.total_gb) {
-            (Some(free), Some(total)) => format!("available {free} of {total} GiB"),
-            (Some(free), None) => format!("available {free} GiB"),
+            (Some(free), Some(total)) => format!("available {free:.1} of {total:.1} GiB"),
+            (Some(free), None) => format!("available {free:.1} GiB"),
             (None, _) => "availability not observed".to_string(),
         }];
         if let Some(used) = self.swap_used_pct {

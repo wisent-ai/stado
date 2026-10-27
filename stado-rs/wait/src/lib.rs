@@ -7,16 +7,21 @@
 //! Every such wait goes through this crate instead. Before it starts
 //! waiting it writes on stderr what it waits for, where and since when; when
 //! it ends it writes how long it took; when it fails it names the operation
-//! and the cause. Nothing here limits how long a wait may take or repeats
-//! it: the crate only makes the wait visible. One reader (Oko's session
-//! view) reads every program's waits from these lines, and every wait still
-//! open is also a file in the register [`open`], which `stado waits` lists
-//! however the waiting program's stderr was filtered or held back.
+//! and the cause. Nothing here repeats a wait or cuts one short, and no
+//! number in this crate says how long one may take: each wait that ends
+//! with its answer is measured under its operation ([`measured`]), and a
+//! later wait on that operation opens saying when it is due — as long from
+//! its start as the longest one measured — so a wait standing past it can be
+//! told from slow work and settled by name (Oko's wait watch does). One
+//! reader (Oko's session view) reads every program's waits from these
+//! lines, and every wait still open is also a file in the register
+//! [`open`], which `stado waits` lists however the waiting program's stderr
+//! was filtered or held back.
 //!
 //! Three lines, one per event, each a single write ending in a newline:
 //!
 //! ```text
-//! czekam: <co>; gdzie: <gdzie>; rodzaj: <rodzaj>; od: <RFC 3339 UTC>; id: <pid>-<n>
+//! czekam: <co>; gdzie: <gdzie>; rodzaj: <rodzaj>; od: <RFC 3339 UTC>; termin: <RFC 3339 UTC | brak>; pomiar: <pomiar>; id: <pid>-<n>
 //! koniec czekania: <co>; trwalo: <sekundy>s; id: <pid>-<n>
 //! blad czekania: <co>; gdzie: <gdzie>; trwalo: <sekundy>s; przyczyna: <przyczyna>; id: <pid>-<n>
 //! ```
@@ -41,6 +46,8 @@ mod http;
 mod line;
 pub mod open;
 mod process;
+// When a wait is due, measured from the waits on its operation that ended.
+mod measure;
 
 #[cfg(feature = "async")]
 pub use cancel::{Cancellation, CANCELLED};
@@ -48,7 +55,8 @@ pub use cycle::on::{begin_on, blocking_on, blocking_on_lock, until_on};
 pub use cycle::{holds::hold, Resource, ResourceKind};
 #[cfg(feature = "http")]
 pub use http::{refusal, request, request_blocking, sdk, send, send_built};
-pub use process::{child_output, output, status};
+pub use measure::store as measured;
+pub use process::{child_output, output, output_with_input, status};
 #[cfg(feature = "async")]
 pub use process::{child_output_async, output_async, output_cancellable, status_async};
 
@@ -94,34 +102,47 @@ pub struct Waiting {
     place: String,
     kind: Kind,
     since: String,
+    /// What the wait waits on, as its measurement is kept (`measure`), and
+    /// the `termin:` and `pomiar:` fields that measurement gives it.
+    operation: String,
+    due: String,
     started: Instant,
     open: bool,
 }
 
 /// Say that a wait starts, before it starts.
 pub fn begin(kind: Kind, what: impl Display, place: impl Display) -> Waiting {
-    start(kind, what, place, None)
+    start(kind, what, place, None, None)
 }
 
 /// [`begin`], recording first the resource the wait awaits, when it awaits
-/// one, in the wait-for graph.
+/// one, in the wait-for graph. Its operation is `operation` when the caller
+/// reads one from the wait's structure, else its kind and `what`.
 pub(crate) fn start(
     kind: Kind,
     what: impl Display,
     place: impl Display,
     awaits: Option<&cycle::Resource>,
+    operation: Option<String>,
 ) -> Waiting {
     let id = format!(
         "{}-{}",
         std::process::id(),
         STARTED.fetch_add(NonZeroU64::MIN.get(), Ordering::Relaxed) + NonZeroU64::MIN.get()
     );
+    let what = line::field(&what.to_string());
+    let operation = match operation {
+        Some(operation) => operation,
+        None => measure::operation(kind, &what),
+    };
     let waiting = Waiting {
         id,
-        what: line::field(&what.to_string()),
         place: line::field(&place.to_string()),
         kind,
         since: line::now(),
+        due: measure::fields(&operation),
+        operation,
+        what,
         started: Instant::now(),
         open: true,
     };
@@ -143,11 +164,12 @@ impl Waiting {
     /// since when in the same words the server's own log carries.
     pub fn open_line(&self) -> String {
         format!(
-            "czekam: {}; gdzie: {}; rodzaj: {}; od: {}; id: {}",
+            "czekam: {}; gdzie: {}; rodzaj: {}; od: {}{}; id: {}",
             self.what,
             self.place,
             self.kind.word(),
             self.since,
+            self.due,
             self.id
         )
     }
@@ -182,6 +204,7 @@ impl Waiting {
             line::seconds(self.started),
             self.id
         ));
+        measure::completed(&self.operation, self.started.elapsed());
         open::closed(&self.id);
         cycle::forget(&self.id);
     }

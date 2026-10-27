@@ -16,6 +16,9 @@ pub struct Deployment {
     name: &'static str,
     child: Option<Child>,
     logs: Vec<JoinHandle<()>>,
+    /// Variables every later command and service of this deployment runs
+    /// with, beside HOME, PATH, STADO_CONFIG and TMPDIR.
+    environment: Vec<(String, String)>,
 }
 
 impl Deployment {
@@ -40,13 +43,14 @@ impl Deployment {
             root,
             report: json!({
                 "journey": name,
-                "source_revision": std::env::var("STADO_SOURCE_REVISION").unwrap_or_default(),
+                "source_revision": env!("STADO_SOURCE_REVISION"),
                 "commands": [],
                 "outcome": "failed",
             }),
             name,
             child: None,
             logs: Vec::new(),
+            environment: Vec::new(),
         };
         deployment.cli(&["config", "init"]);
         deployment
@@ -56,14 +60,27 @@ impl Deployment {
         self.root.join(".stado").join("local-storage")
     }
 
+    /// Run every later command and service with `key` set to `value`.
+    pub fn set(&mut self, key: &str, value: &str) {
+        self.environment.retain(|(name, _)| name != key);
+        self.environment.push((key.to_string(), value.to_string()));
+        self.report["environment"] = json!(self.environment);
+    }
+
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        self.native(std::path::Path::new(env!("CARGO_BIN_EXE_stado")))
+    }
+
+    /// Run a real native interface with this deployment's isolated environment.
+    pub fn native(&self, executable: &std::path::Path) -> Command {
+        let mut command = Command::new(executable);
         command
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap())
             .env("HOME", &self.root)
             .env("STADO_CONFIG", self.root.join(".stado").join("config.json"))
             .env("TMPDIR", self.root.join("tmp"))
+            .envs(self.environment.iter().map(|(name, value)| (name, value)))
             .stdin(Stdio::null());
         command
     }

@@ -53,10 +53,9 @@ impl Sizing {
                 return Ok(false);
             }
         }
-        let model = model_of(&job.command);
-        if model.is_empty() {
+        let Some(model) = model_of(&job.command) else {
             return Ok(false);
-        }
+        };
         let cur = job.gpu_mem_gb;
         let nxt = match oom_required_gb(error_text).filter(|floor| *floor > cur) {
             Some(measured_floor) => {
@@ -145,10 +144,9 @@ impl Sizing {
                     continue;
                 }
             };
-            let model = model_of(&job.command);
-            if model.is_empty() {
+            let Some(model) = model_of(&job.command) else {
                 continue;
-            }
+            };
             let desired = match observed.get(&model) {
                 Some(peak) => *peak,
                 None => no_stored_size,

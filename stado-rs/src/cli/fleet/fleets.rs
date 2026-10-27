@@ -64,11 +64,15 @@ pub fn parse_fleets(document: &Value) -> Result<Vec<Fleet>, String> {
             if fleets.iter().any(|fleet| fleet.name == name) {
                 return Err(format!("{location}.name: duplicate fleet '{name}'"));
             }
-            let notes = object
-                .get("notes")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
+            // `notes` is the operator's free text and may be absent; a value
+            // of another type is a registry mistake, not empty notes.
+            let notes = match object.get("notes") {
+                None | Some(Value::Null) => String::new(),
+                Some(Value::String(notes)) => notes.clone(),
+                Some(other) => {
+                    return Err(format!("{location}.notes: must be a string, not {other}"))
+                }
+            };
             fleets.push(Fleet {
                 name: name.to_string(),
                 notes,

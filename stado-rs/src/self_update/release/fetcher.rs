@@ -97,7 +97,9 @@ impl HttpReleaseFetcher {
         };
         match crate::public_origin::publishing(&document, RELEASE_ROUTE) {
             Ok(origin) => Ok(origin.origin()),
-            Err(_) if crate::public_origin::declarations(&document).is_empty() => {
+            // No declaration at all leaves the configured `api.url`; a
+            // declaration set that is refused is reported as such.
+            Err(_undeclared) if crate::public_origin::declarations(&document).is_empty() => {
                 Ok(self.api_url.clone())
             }
             Err(refusal) => Err(SelfUpdateError::Fetch(refusal)),

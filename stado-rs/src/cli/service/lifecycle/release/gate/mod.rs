@@ -8,7 +8,8 @@ mod readiness;
 pub(crate) mod run;
 mod source;
 
-use bundle::{current_service_version, service_release_bundle, stage_service_release_archive};
+use bundle::{current_service_version, service_release_bundle};
+pub(crate) use bundle::stage_service_release_archive;
 use readiness::{in_flight_work, wait_for_service_readiness};
 
 /// What one release pass did to the unit.

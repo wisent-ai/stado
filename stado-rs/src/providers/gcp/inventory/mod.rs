@@ -1,4 +1,4 @@
-//! Read-only, fault-isolated GCP incident inventory used by `stado blast-radius`.
+//! Read-only, fault-isolated GCP incident inventory used by `stado impact`.
 //!
 //! Every API is probed independently. A billing or permission failure on one
 //! service is data in the report, not an early return that hides the remaining

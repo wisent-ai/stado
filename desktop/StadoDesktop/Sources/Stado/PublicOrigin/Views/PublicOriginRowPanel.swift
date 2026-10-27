@@ -9,6 +9,12 @@ import WisentDesignSystem
 /// release gate must read the same sentence, so a console that reworded it
 /// would become a second opinion about why a public download failed.
 struct PublicOriginRowPanel: View {
+    /// One labelled value of a measurement panel.
+    fileprivate struct Reading {
+        let label: String
+        let value: String
+    }
+
     let report: PublicOriginReport
     /// The receipt of the last convergence applied to this origin, when one
     /// has been.
@@ -19,8 +25,8 @@ struct PublicOriginRowPanel: View {
 
     var body: some View {
         WisentSectionBox(
-            title: report.name.isEmpty ? "Public edge" : report.name,
-            detail: report.origin.isEmpty ? report.hostname : report.origin,
+            title: report.title,
+            detail: report.subject,
             trailing: report.verdict.word
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
@@ -33,9 +39,7 @@ struct PublicOriginRowPanel: View {
                 if let observation = report.registryObservation {
                     diagnostic("Registry reading", observation)
                 }
-                if let observations = report.observations {
-                    diagnostic("Diagnostic readings", observations)
-                }
+                diagnostic("Diagnostic readings", report.observations)
                 if let receipt {
                     PublicOriginReceiptPanel(receipt: receipt)
                 }
@@ -70,11 +74,11 @@ struct PublicOriginRowPanel: View {
     private var declaration: some View {
         WisentPanel {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-                WisentField(label: "Hostname", value: Self.reported(report.hostname))
-                WisentField(label: "Origin", value: Self.reported(report.origin))
-                WisentField(label: "Target", value: Self.reported(report.target))
-                WisentField(label: "Publication", value: Self.reported(report.publication))
-                WisentField(label: "Upstream", value: Self.reported(report.upstream))
+                WisentField(label: "Hostname", value: Self.declared(report.hostname))
+                WisentField(label: "Origin", value: Self.declared(report.origin))
+                WisentField(label: "Target", value: Self.declared(report.target))
+                WisentField(label: "Publication", value: Self.declared(report.publication))
+                WisentField(label: "Upstream", value: Self.declared(report.upstream))
                 WisentField(label: "Declared paths", value: report.declaredPathsLabel)
             }
         }
@@ -92,10 +96,10 @@ struct PublicOriginRowPanel: View {
                 tone: resolution.state.tone,
                 detail: resolution.detail,
                 fields: [
-                    ("Resolver", resolution.resolver ?? "Not reported"),
-                    (
-                        "Answers",
-                        resolution.answers.isEmpty
+                    Reading(label: "Resolver", value: resolution.resolver),
+                    Reading(
+                        label: "Answers",
+                        value: resolution.answers.isEmpty
                             ? "None returned"
                             : resolution.answers.joined(separator: ", ")
                     ),
@@ -110,47 +114,28 @@ struct PublicOriginRowPanel: View {
                 tone: publication.state.tone,
                 detail: publication.detail,
                 fields: [
-                    (
-                        "Published paths",
-                        publication.publishedPaths.isEmpty
-                            ? "None published"
-                            : publication.publishedPaths.joined(separator: ", ")
-                    ),
-                    (
-                        "Missing paths",
-                        publication.missingPaths.isEmpty
-                            ? "None missing"
-                            : publication.missingPaths.joined(separator: ", ")
-                    ),
-                    ("Funnel enabled", Self.answered(publication.funnelEnabled)),
+                    Reading(label: "Published paths", value: Self.paths(publication.publishedPaths, whenNone: "None published")),
+                    Reading(label: "Missing paths", value: Self.paths(publication.missingPaths, whenNone: "None missing")),
+                    Reading(label: "Funnel enabled", value: Self.answered(publication.funnelEnabled)),
                 ]
             )
         }
-        if let selection = report.edgeSelection {
-            measurement(
-                title: "Edge selection",
-                state: selection.state.title,
-                word: selection.state.word,
-                tone: selection.state.tone,
-                detail: selection.detail,
-                fields: [
-                    ("Endpoint read", selection.endpoint ?? "Not reported"),
-                    ("Origin the edge selects", selection.origin ?? "Not reported"),
-                ]
-            )
-            if let readback = selection.readback {
-                diagnostic("Actual public release request", readback)
-            }
-            if let observation = selection.readbackObservation {
-                diagnostic("Public release request reading", observation)
-            }
-            if let observation = selection.observation {
-                diagnostic("Public edge reading", observation)
-            }
-            if let diagnosis = selection.diagnosis {
-                diagnostic("DNS, TCP, TLS and HTTP evidence", diagnosis)
-            }
-        }
+        let selection = report.edgeSelection
+        measurement(
+            title: "Edge selection",
+            state: selection.state.title,
+            word: selection.state.word,
+            tone: selection.state.tone,
+            detail: selection.detail,
+            fields: [
+                Reading(label: "Endpoint read", value: selection.endpoint),
+                Reading(label: "Origin the edge selects", value: Self.selected(selection.origin)),
+            ]
+        )
+        diagnostic("Actual public release request", selection.readback)
+        diagnostic("Public release request reading", selection.readbackObservation)
+        diagnostic("Public edge reading", selection.observation)
+        diagnostic("DNS, TCP, TLS and HTTP evidence", selection.diagnosis)
     }
 
     private func diagnostic(_ title: String, _ value: StorageReconciliationJSON) -> some View {
@@ -168,7 +153,7 @@ struct PublicOriginRowPanel: View {
         word: String,
         tone: WisentTone,
         detail: String?,
-        fields: [(String, String)]
+        fields: [Reading]
     ) -> some View {
         WisentPanel {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
@@ -183,8 +168,8 @@ struct PublicOriginRowPanel: View {
                         .textSelection(.enabled)
                     Spacer(minLength: .zero)
                 }
-                ForEach(fields, id: \.0) { field in
-                    WisentField(label: field.0, value: field.1)
+                ForEach(fields, id: \.label) { field in
+                    WisentField(label: field.label, value: field.value)
                 }
                 if let detail, !detail.isEmpty {
                     sentence(detail, tone: .neutral)
@@ -202,8 +187,24 @@ struct PublicOriginRowPanel: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private static func reported(_ value: String) -> String {
-        value.isEmpty ? "Not reported" : value
+    /// A declaration field, or that this row carries no declaration: the
+    /// CLI writes `null` for a row nothing declares.
+    private static func declared(_ value: String?) -> String {
+        guard let value else { return "No declaration in this row" }
+        return value
+    }
+
+    /// The edge's selected origin, or that it selected none.
+    private static func selected(_ value: String?) -> String {
+        guard let value else { return "None selected" }
+        return value
+    }
+
+    /// A list of paths, or the reason the list is empty, or that the
+    /// publication carries no such list (a web-edge publication).
+    private static func paths(_ value: [String]?, whenNone: String) -> String {
+        guard let value else { return "Not carried by this publication" }
+        return value.isEmpty ? whenNone : value.joined(separator: ", ")
     }
 
     private static func answered(_ value: Bool?) -> String {

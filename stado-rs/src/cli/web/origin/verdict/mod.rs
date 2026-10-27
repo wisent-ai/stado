@@ -48,19 +48,30 @@ pub(crate) async fn examine(
             publication_of(origin, registry)
         ),
     );
-    let resolution = resolution.unwrap_or_else(|| Resolution {
-        state: ResolutionState::Unavailable,
-        hostname: origin.hostname.clone(),
-        answers: Vec::new(),
-        detail: dns_read.detail.clone().unwrap_or_default(),
-    });
+    // An observation answers a value or its error's words; a reading with
+    // neither is itself named, never written up as an empty cause.
+    let resolution = match (resolution, dns_read.detail.clone()) {
+        (Some(resolution), _) => resolution,
+        (None, detail) => Resolution {
+            state: ResolutionState::Unavailable,
+            hostname: origin.hostname.clone(),
+            answers: Vec::new(),
+            detail: match detail {
+                Some(cause) => cause,
+                None => "the DNS read answered neither a resolution nor a cause".to_string(),
+            },
+        },
+    };
     if resolution.state == ResolutionState::Unavailable && dns_read.complete() {
         dns_read.state = ReadState::Error;
         dns_read.detail = Some(resolution.detail.clone());
     }
-    let publication = match publication {
-        Some(publication) => publication,
-        None => PublicationReading::Unknown(publication_read.detail.clone().unwrap_or_default()),
+    let publication = match (publication, publication_read.detail.clone()) {
+        (Some(publication), _) => publication,
+        (None, Some(cause)) => PublicationReading::Unknown(cause),
+        (None, None) => PublicationReading::Unknown(
+            "the publication read answered neither a table nor a cause".to_string(),
+        ),
     };
     // An origin release clients read directly (every `web-edge` origin, and
     // any origin `api.url` names) has no second edge in front of it to ask

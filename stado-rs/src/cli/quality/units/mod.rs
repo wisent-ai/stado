@@ -103,7 +103,7 @@ pub(crate) async fn check(
             checked.push(format!("{} {}", target.name, file.unit));
         }
     }
-    if let Some(host) = host.filter(|_| checked.is_empty()) {
+    if let Some(host) = host.filter(|_host| checked.is_empty()) {
         return Err(CmdError::refused(format!(
             "{host}: no installed registry-managed unit invoking {program} was read; unit argv compatibility was not established"
         )));

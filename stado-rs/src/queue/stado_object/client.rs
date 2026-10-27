@@ -21,25 +21,28 @@ impl StadoObjectBackend {
     ) -> Result<Self, StorageError> {
         let mut base_url = Url::parse(base_url.trim())
             .map_err(|error| StorageError::Other(format!("invalid Stado storage URL: {error}")))?;
-        let host = base_url.host_str().unwrap_or_default().to_ascii_lowercase();
+        let Some(host) = base_url.host_str().map(str::to_ascii_lowercase) else {
+            return Err(StorageError::Other(format!(
+                "Stado storage URL {base_url} names no host"
+            )));
+        };
+        let Some(port) = base_url.port_or_known_default() else {
+            return Err(StorageError::Other(format!(
+                "Stado storage URL {base_url} names no port and its scheme has none"
+            )));
+        };
         let loopback = crate::primitives::http::origin::is_loopback_host(&base_url);
-        // Tailscale encrypts traffic before it leaves the host. Its fixed CGNAT
-        // and ULA ranges are therefore an authenticated private transport, not
-        // clear-text Internet HTTP. Keep names out of this exception: an IP
-        // literal makes the transport boundary explicit and cannot be rebound
-        // by DNS.
+        // Tailscale encrypts traffic before it leaves the host, so plain HTTP
+        // to a tailnet node is an authenticated private transport. Which
+        // addresses are tailnet nodes is the tailnet's own answer, never an
+        // address range: the shared CGNAT space is a carrier's too. Names stay
+        // out of this exception: an IP literal makes the transport boundary
+        // explicit and cannot be rebound by DNS.
         let tailnet = host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
             .parse::<std::net::IpAddr>()
-            .is_ok_and(|address| match address {
-                std::net::IpAddr::V4(address) => {
-                    let octets = address.octets();
-                    octets[0] == 100 && (64..=127).contains(&octets[1])
-                }
-                std::net::IpAddr::V6(address) => {
-                    let segments = address.segments();
-                    segments[0] == 0xfd7a && segments[1] == 0x115c && segments[2] == 0xa1e0
-                }
-            });
+            .is_ok_and(crate::remote::tailnet::is_node_address);
         if !crate::primitives::http::origin::is_secure_or_local_plain(
             &base_url,
             loopback || tailnet,
@@ -49,10 +52,11 @@ impl StadoObjectBackend {
             || base_url.fragment().is_some()
             || !matches!(base_url.path(), "" | "/")
         {
-            return Err(StorageError::Other(
-                "Stado storage URL must be an HTTPS origin or authenticated HTTP loopback/tailnet IP"
-                    .to_string(),
-            ));
+            return Err(StorageError::Other(format!(
+                "Stado storage URL {base_url} must be an HTTPS origin, or authenticated HTTP to \
+                 loopback or to an address this machine's tailnet lists for one of its nodes \
+                 (tailscale status --json), with no credentials, query, fragment or path"
+            )));
         }
         base_url.set_path("");
         ObjectRef::new(namespace, "configuration-check")?;
@@ -71,10 +75,12 @@ impl StadoObjectBackend {
         }
         #[cfg(unix)]
         {
+            use nix::sys::stat::Mode;
             use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o077 != 0 {
+            let mode = Mode::from_bits_truncate(metadata.permissions().mode() as nix::libc::mode_t);
+            if mode.intersects(Mode::S_IRWXG | Mode::S_IRWXO) {
                 return Err(StorageError::Auth(format!(
-                    "Stado storage token file must be owner-only (chmod 600): {}",
+                    "Stado storage token file must be owner-only (chmod go-rwx): {}",
                     token_path.display()
                 )));
             }
@@ -97,7 +103,7 @@ impl StadoObjectBackend {
                 "Stado storage token file is empty or malformed".to_string(),
             ));
         }
-        let client = Self::shared_client(&host, ca_file)?;
+        let client = Self::shared_client(&host, port, ca_file)?;
         Ok(Self {
             base_url,
             namespace: namespace.to_string(),
@@ -106,7 +112,7 @@ impl StadoObjectBackend {
         })
     }
 
-    /// One pooled client per origin host and CA configuration.
+    /// One client per origin host, port and CA configuration.
     ///
     /// `reqwest::Client` owns the connection pool, and this backend used to
     /// build a fresh one in every constructor. Nothing here constructs once:
@@ -119,22 +125,25 @@ impl StadoObjectBackend {
     /// read that takes minutes, which is the latency that starves the agent
     /// loop.
     ///
-    /// Cloning a `Client` shares its pool, so every backend built in this
-    /// process now reuses connections. The CA and origin host select the
-    /// client's certificate trust and tailnet address pin. Tokens remain
-    /// per-request headers and never belong to the pool key.
-    fn shared_client(host: &str, ca_file: &str) -> Result<Client, StorageError> {
+    /// One client per origin is built once per process and cloned, so its
+    /// TLS configuration, certificate trust and tailnet address pin are read
+    /// once; each request still opens its own connection ([`Self::client`]).
+    /// Tokens remain per-request headers and never belong to the client key.
+    fn shared_client(host: &str, port: u16, ca_file: &str) -> Result<Client, StorageError> {
         static CLIENTS: std::sync::LazyLock<
             std::sync::Mutex<std::collections::HashMap<String, Client>>,
         > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-        let key = format!("{}|{host}", ca_file.trim());
-        let mut clients = CLIENTS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = format!("{}|{host}|{port}", ca_file.trim());
+        let mut clients = match CLIENTS.lock() {
+            Ok(clients) => clients,
+            // A panic elsewhere left the map as it was; every entry in it is
+            // a finished client, so the map is still sound to read.
+            Err(poisoned) => poisoned.into_inner(),
+        };
         if let Some(client) = clients.get(&key) {
             return Ok(client.clone());
         }
-        let client = Self::client(host, ca_file)?;
+        let client = Self::client(host, port, ca_file)?;
         clients.insert(key, client.clone());
         Ok(client)
     }
@@ -153,19 +162,28 @@ impl StadoObjectBackend {
     ///
     /// The certificate is added, never substituted: publicly signed endpoints keep
     /// working, and this cannot become a way to disable verification.
-    fn client(host: &str, ca_file: &str) -> Result<Client, StorageError> {
-        // Shared for its TLS configuration, but no connection is kept idle:
-        // the store is usually reached through a local forward whose upstream
+    fn client(host: &str, port: u16, ca_file: &str) -> Result<Client, StorageError> {
+        // Shared for its TLS configuration, but no connection is reused: the
+        // store is usually reached through a local forward whose upstream
         // channel can end (a store restart, a lost session) while the
         // client's socket to the forward stays open, and a request written to
         // such a pooled socket waited for an answer that never came, stalling
-        // the agent tick. Each request opens its own connection, so it reaches
-        // the store that is serving now or fails with that connection's error.
-        let mut builder = Client::builder().pool_max_idle_per_host(0);
+        // the agent tick. Every request says `Connection: close` (Stado's
+        // reqwest is built without HTTP/2, so every request is HTTP/1.1 and
+        // honours it), so the connection ends with its response and the next
+        // request reaches the store that is serving now or fails with that
+        // connection's error.
+        let mut close = reqwest::header::HeaderMap::new();
+        close.insert(
+            reqwest::header::CONNECTION,
+            reqwest::header::HeaderValue::from_static("close"),
+        );
+        let mut builder = Client::builder().default_headers(close);
         if let Some(address) = crate::remote::tailnet::address_of(host) {
             // Use the same tailnet map as the artifact client. The hostname
-            // remains unchanged for SNI and certificate verification.
-            builder = builder.resolve(host, std::net::SocketAddr::new(address, 0));
+            // remains unchanged for SNI and certificate verification; the
+            // port is the store URL's own.
+            builder = builder.resolve(host, std::net::SocketAddr::new(address, port));
         }
         let ca_file = ca_file.trim();
         if ca_file.is_empty() {

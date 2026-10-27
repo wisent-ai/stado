@@ -197,7 +197,7 @@ pub(super) async fn registry_declarations(
             false,
             Some("gpu_power_policy_unmet"),
             BTreeMap::new(),
-            0,
+            None,
             *total_vram_gb,
             agent_diag.clone(),
         );

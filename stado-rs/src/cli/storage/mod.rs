@@ -51,12 +51,16 @@ use crate::cli::reporting::table::print as print_table;
 
 mod bucket;
 mod command;
+mod fence;
 mod inspect;
 mod product;
 mod transfer;
 
 use self::bucket::dispatch as bucket_dispatch;
 pub use self::bucket::BucketCommands;
+use self::fence::dispatch as fence_dispatch;
+pub use self::fence::FenceCommands;
+pub(crate) use self::fence::OWNER as FENCE_OWNER;
 
 // One namespace for the components this file was split into. Every module
 // below imports `crate::cli::storage::*`, so a name that used to sit beside
@@ -106,7 +110,7 @@ use self::inspect::stat::hint::inferred_namespace_hint;
 use self::inspect::stat::presence::{unanswered_for_error, unanswered_for_status, Presence};
 use self::inspect::{backend_key, backend_prefix};
 use self::product::api::{
-    partial_content_bounds, resumed_content_total, sent, RemoteComposeChunk, RemoteComposeRequest,
+    declared_size, partial_content_bounds, sent, RemoteComposeChunk, RemoteComposeRequest,
     RemoteComposeResponse, RemoteDeleteResponse, RemoteObjectApi, RemoteObjectAuth,
     RemoteObjectListResponse, RemotePutResponse,
 };

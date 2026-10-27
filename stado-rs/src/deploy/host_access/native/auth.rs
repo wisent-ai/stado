@@ -9,15 +9,21 @@ use russh::keys::{self, agent::client::AgentClient, agent::AgentIdentity, Privat
 
 use super::Peer;
 
+/// The resolver's SSH identity: the file `STADO_RESOLVER_SSH_KEY_FILE`
+/// names when the variable is set and not blank, else the provisioned
+/// `~/.stado/resolver-ssh-key` when that file exists; none otherwise. An
+/// unset variable is the ordinary case, not a failure.
 pub(super) fn configured_identity(home: &Path) -> Option<PathBuf> {
-    std::env::var("STADO_RESOLVER_SSH_KEY_FILE")
-        .ok()
-        .filter(|path| !path.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            let path = home.join(".stado/resolver-ssh-key");
-            path.is_file().then_some(path)
-        })
+    let stated = match std::env::var("STADO_RESOLVER_SSH_KEY_FILE") {
+        Ok(path) if !path.trim().is_empty() => Some(PathBuf::from(path)),
+        Ok(_) | Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(raw)) => Some(PathBuf::from(raw)),
+    };
+    if stated.is_some() {
+        return stated;
+    }
+    let provisioned = home.join(".stado/resolver-ssh-key");
+    provisioned.is_file().then_some(provisioned)
 }
 
 async fn file_identity(
@@ -42,7 +48,12 @@ async fn file_identity(
         }
     };
     let certificate = PathBuf::from(format!("{}-cert.pub", path.display()));
-    if certificate.is_file() {
+    // A certificate that cannot be examined is refused with its cause: read
+    // as absent, the key alone was offered and a certificate-only host
+    // refused the login without saying why.
+    if crate::primitives::presence::present(&certificate)
+        .with_context(|| format!("examine SSH certificate {}", certificate.display()))?
+    {
         let certificate = keys::load_openssh_certificate(&certificate)
             .with_context(|| format!("read SSH certificate {}", certificate.display()))?;
         if session

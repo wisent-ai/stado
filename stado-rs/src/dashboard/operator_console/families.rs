@@ -100,3 +100,48 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     *last = Some((args.to_vec(), verdict));
     verdict
 }
+
+/// The refusal for a request whose command words name no command of the
+/// CLI's tree, saying which commands that level does declare; `None` when
+/// every word up to the first option or positional names one. A Desktop
+/// operation written with a path the CLI does not have (`resolver
+/// api-reassign` beside the CLI's `resolver api reassign`) used to reach the
+/// parser, be judged by a model first, and end as a bare usage error; it is
+/// now refused before either, naming what the CLI offers instead.
+pub(super) fn undeclared_path(args: &[String]) -> Option<String> {
+    let mut command: &clap::Command = &TREE;
+    let mut named: Vec<&str> = Vec::new();
+    for arg in args {
+        // Options and the arguments of a command that takes positionals are
+        // the parser's to judge.
+        let takes_positionals = command.get_positionals().next().is_some();
+        if arg.starts_with('-')
+            || !command.has_subcommands()
+            || (takes_positionals && !command.is_subcommand_required_set())
+        {
+            return None;
+        }
+        match command.find_subcommand(arg) {
+            Some(sub) => {
+                named.push(arg.as_str());
+                command = sub;
+            }
+            None => {
+                let offered: Vec<&str> = command
+                    .get_subcommands()
+                    .filter(|sub| !sub.is_hide_set())
+                    .map(clap::Command::get_name)
+                    .collect();
+                let at = match named.as_slice() {
+                    [] => "stado".to_string(),
+                    words => format!("stado {}", words.join(" ")),
+                };
+                return Some(format!(
+                    "{at} has no command {arg:?}; it declares: {}",
+                    offered.join(", ")
+                ));
+            }
+        }
+    }
+    None
+}

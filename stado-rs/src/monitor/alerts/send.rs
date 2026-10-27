@@ -6,7 +6,7 @@
 
 use serde_json::json;
 
-use super::{MostChannel, PubSubChannel, SendgridChannel, SkrzynkaChannel, TelegramChannel};
+use super::{MostChannel, PubSubChannel, SkrzynkaChannel, TelegramChannel};
 
 /// Error on a non-2xx response, including the upstream body.
 async fn ensure_success(response: reqwest::Response) -> Result<(), String> {
@@ -18,52 +18,55 @@ async fn ensure_success(response: reqwest::Response) -> Result<(), String> {
     Err(format!("HTTP {status}: {body}"))
 }
 
+/// The refusal for a channel request that could not be sent, without its URL:
+/// a Slack webhook's path and a Telegram bot's path carry the channel's
+/// secret, and reqwest's own message prints the whole URL.
+fn unsent(channel: &str, error: reqwest::Error) -> String {
+    format!("the {channel} request could not be sent: {}", error.without_url())
+}
+
+/// A Slack incoming webhook. Its URL is the credential, so the wait names the
+/// channel and the webhook host, never the path.
 pub(super) async fn send_slack(
     client: &reqwest::Client,
     url: &str,
     message: &str,
 ) -> Result<(), String> {
-    let response = crate::wait::request(client.post(url).json(&json!({"text": message})))
-        .await
-        .map_err(|e| e.to_string())?;
+    let request = client.post(url).json(&json!({"text": message}));
+    let place = reqwest::Url::parse(url)
+        .map_err(|error| format!("the Slack webhook is not a URL: {error}"))?
+        .origin()
+        .ascii_serialization();
+    let response = crate::wait::until(
+        crate::wait::Kind::Network,
+        "POST to the Slack webhook",
+        place,
+        request.send(),
+    )
+    .await
+    .map_err(|error| unsent("Slack webhook", error))?;
     ensure_success(response).await
 }
 
+/// Telegram's Bot API puts the bot token in the path, so the wait names the
+/// method and the API base, never the URL.
 pub(super) async fn send_telegram(
     client: &reqwest::Client,
     channel: &TelegramChannel,
     message: &str,
 ) -> Result<(), String> {
     let url = format!("{}/bot{}/sendMessage", channel.api_base, channel.token);
-    let response = crate::wait::request(
-        client
-            .post(url)
-            .json(&json!({"chat_id": channel.chat_id, "text": message, "parse_mode": "Markdown"})),
+    let request = client
+        .post(url)
+        .json(&json!({"chat_id": channel.chat_id, "text": message, "parse_mode": "Markdown"}));
+    let response = crate::wait::until(
+        crate::wait::Kind::Network,
+        "POST sendMessage for the Telegram bot",
+        &channel.api_base,
+        request.send(),
     )
     .await
-    .map_err(|e| e.to_string())?;
-    ensure_success(response).await
-}
-
-pub(super) async fn send_email(
-    client: &reqwest::Client,
-    channel: &SendgridChannel,
-    subject: &str,
-    body: &str,
-) -> Result<(), String> {
-    let response = crate::wait::request(
-        client
-            .post(&channel.url)
-            .bearer_auth(&channel.api_key)
-            .json(&json!({
-                "personalizations": [{"to": [{"email": channel.to}]}],
-                "from": {"email": channel.from},
-                "subject": subject,
-                "content": [{"type": "text/plain", "value": body}],
-            })),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| unsent("Telegram sendMessage", error))?;
     ensure_success(response).await
 }
 
@@ -213,7 +216,7 @@ pub(super) async fn send_pubsub(
             .json(&json!({"messages": [{"data": data}]})),
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| unsent("Pub/Sub publish", error))?;
     ensure_success(response).await
 }
 
@@ -245,7 +248,7 @@ pub(super) async fn send_most(
             .form(&form),
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| unsent("Twilio message", error))?;
     ensure_success(response).await
 }
 

@@ -34,7 +34,8 @@ impl AzureBlobBackend {
                 .await?
                 .text()
                 .await?;
-            let (entries, next) = parse_list_blobs(&body);
+            let (entries, next) = parse_list_blobs(&body)
+                .map_err(|cause| StorageError::Other(format!("list {prefix}: {cause}")))?;
             if !consume(entries) {
                 break;
             }

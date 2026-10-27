@@ -82,6 +82,8 @@ async fn install(step: &Step, revision: &str) -> Result<(), CmdError> {
 enum Outcome {
     /// Every step installed; what each step said, and every refused push.
     Delivered(Vec<String>, Vec<String>),
+    /// The recorded refusal still holds: no commit of its step newer than the
+    /// refused one is green.
     Waiting(Refused),
     Refused(Refused),
     /// A step none of whose commits of `main` the main check found green:
@@ -90,10 +92,10 @@ enum Outcome {
 }
 
 /// The index the pass starts at: the refused step once a newer commit than
-/// the refused one is green, the first step otherwise; `Err` with the
-/// refusal while none is.
+/// the refused one is green, the first step otherwise; the recorded refusal
+/// itself while it still holds.
 fn start(plan: &Plan, current: &mut State, checked: &Record) -> Result<usize, Refused> {
-    let Some(refused) = current.refused.clone() else {
+    let Some(refused) = current.refused.as_ref() else {
         return Ok(Default::default());
     };
     let Some(index) = plan
@@ -108,7 +110,7 @@ fn start(plan: &Plan, current: &mut State, checked: &Record) -> Result<usize, Re
     };
     match checked.last_green(&refused.step) {
         Some(green) if green.revision != refused.revision => Ok(index),
-        _ => Err(refused),
+        _ => Err(refused.clone()),
     }
 }
 
@@ -261,6 +263,7 @@ pub async fn run(json: bool) -> Result<(), CmdError> {
         started_at,
         ended_at: Utc::now(),
         said: said.clone(),
+        failed: outcome.as_ref().err().map(ToString::to_string),
     });
     state::write(&current)?;
     let (_, outcome) = outcome?;

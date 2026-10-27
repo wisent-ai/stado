@@ -49,7 +49,7 @@ impl Dashboard {
             Ok(name) => name,
             Err(response) => return response,
         };
-        let store = match service_beacon_store().await {
+        let store = match self.opened_beacon_store().await {
             Ok(store) => store,
             Err(message) => {
                 return service_failure(
@@ -174,16 +174,23 @@ pub(crate) fn service_name(query: &str) -> Result<&str, Response> {
     Ok(name)
 }
 
-async fn service_beacon_store() -> Result<JobStorage, String> {
-    JobStorage::with_bucket(crate::config::bucket())
-        .await
-        .map_err(|error| error.to_string())
+impl Dashboard {
+    /// The beacon store, opened by the first request that needs it and kept
+    /// for every later one; an opening that fails is not kept, so the next
+    /// request tries again and answers with its own cause.
+    async fn opened_beacon_store(&self) -> Result<JobStorage, String> {
+        self.beacon_store
+            .get_or_try_init(|| JobStorage::with_bucket(crate::config::bucket()))
+            .await
+            .cloned()
+            .map_err(|error| format!("the beacon store cannot be opened: {error}"))
+    }
 }
 
 async fn declared_services_matching(name: &str) -> Result<Vec<service::ManagedService>, String> {
     let registry = targets::fetch_registry_remote()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("the fleet registry cannot be fetched: {error}"))?;
     let mut found = Vec::new();
     for target in registry.local_targets() {
         found.extend(

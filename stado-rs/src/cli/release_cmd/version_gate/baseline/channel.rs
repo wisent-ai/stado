@@ -90,55 +90,58 @@ fn get(stado: &Path, uri: &str, destination: &Path) -> Result<(), Refusal> {
     Ok(())
 }
 
-fn hex_of(value: &str, lengths: &[usize]) -> bool {
-    lengths.contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+/// Lowercase-or-uppercase hex of exactly a SHA-256 digest's length, measured
+/// from a digest rather than written here.
+fn sha256_hex(value: &str) -> bool {
+    value.len() == hex::encode(Sha256::digest(b"")).len() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// The fields of the SIGNED manifest the baseline reads. Additive fields are
+/// compatible, so unknown ones are not refused; a missing one, a size of
+/// zero or a field of the wrong kind is refused by the parse naming it.
+#[derive(Deserialize)]
+pub(super) struct Manifest {
+    artifact_bytes: std::num::NonZeroU64,
+    artifact_sha256: String,
+    platform: String,
+    product: String,
+    source_revision: String,
+    version: String,
 }
 
 /// The SIGNED manifest `release.json`, not the tag train's
 /// `release-manifest-<platform>.json`: `/docs/primitives/release` names
-/// `release.json` as the commit marker written last. A required subset of
-/// fields is checked, not an exact set, so an additive field is compatible.
+/// `release.json` as the commit marker written last.
 pub(super) fn manifest(
     stado: &Path,
     version: &str,
     platform: &str,
     root: &Path,
-) -> Result<(Value, String), Refusal> {
+) -> Result<(Manifest, String), Refusal> {
     let uri = format!("{}/release.json", release_base(version, platform));
     let destination = root.join(format!("release-{platform}.json"));
     get(stado, &uri, &destination)?;
-    let value: Value = std::fs::read(&destination)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .ok_or_else(|| format!("release channel returned invalid JSON for {uri}"))?;
-    let required = [
-        "artifact_bytes",
-        "artifact_sha256",
-        "platform",
-        "product",
-        "source_revision",
-        "version",
-    ];
-    if !value.is_object() || required.iter().any(|field| value.get(field).is_none()) {
-        return Err(format!("signed release manifest is missing required fields: {uri}").into());
+    let bytes = std::fs::read(&destination).map_err(|error| {
+        format!("the release manifest {uri} fetched to {} cannot be read: {error}", destination.display())
+    })?;
+    let manifest: Manifest = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("the release manifest {uri} is not a signed release manifest: {error}"))?;
+    if manifest.product != "stado" || manifest.version != version || manifest.platform != platform {
+        return Err(format!(
+            "release manifest identity mismatch: {uri} names {} {} {}",
+            manifest.product, manifest.version, manifest.platform
+        )
+        .into());
     }
-    let text = |field: &str| value[field].as_str().unwrap_or("").to_string();
-    if value["product"] != "stado" || value["version"] != version || value["platform"] != platform {
-        return Err(format!("release manifest identity mismatch: {uri}").into());
+    if !sha256_hex(&manifest.artifact_sha256) {
+        return Err(format!("release manifest digest {:?} is not a SHA-256 digest: {uri}", manifest.artifact_sha256).into());
     }
-    if !hex_of(&text("artifact_sha256"), &[64]) {
-        return Err(format!("release manifest digest is invalid: {uri}").into());
+    // A git object id of either object format: SHA-1, or SHA-256.
+    let revision = &manifest.source_revision;
+    if !crate::binary::provenance::is_commit_id(revision) && !sha256_hex(revision) {
+        return Err(format!("release manifest source revision {revision:?} is not a git object id: {uri}").into());
     }
-    if !value["artifact_bytes"]
-        .as_u64()
-        .is_some_and(|size| size > 0)
-    {
-        return Err(format!("release manifest artifact size is invalid: {uri}").into());
-    }
-    if !hex_of(&text("source_revision"), &[40, 64]) {
-        return Err(format!("release manifest source revision is invalid: {uri}").into());
-    }
-    Ok((value, uri))
+    Ok((manifest, uri))
 }
 
 /// The command surface of one published release, read from its own binary
@@ -156,14 +159,12 @@ pub(super) fn surface_from_release(
     let archive = root.join("release.tar.gz");
     get(stado, &archive_uri, &archive)?;
     let payload = std::fs::read(&archive).map_err(|error| format!("{archive_uri}: {error}"))?;
-    let expected = manifest["artifact_sha256"]
-        .as_str()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if hex::encode(Sha256::digest(&payload)) != expected {
+    if hex::encode(Sha256::digest(&payload)) != manifest.artifact_sha256.to_ascii_lowercase() {
         return Err(format!("release archive differs from its manifest: {archive_uri}").into());
     }
-    if Some(payload.len() as u64) != manifest["artifact_bytes"].as_u64() {
+    let size = u64::try_from(payload.len())
+        .map_err(|error| format!("release archive {archive_uri} is larger than a size can say: {error}"))?;
+    if size != manifest.artifact_bytes.get() {
         return Err(
             format!("release archive is not the size its manifest binds: {archive_uri}").into(),
         );
@@ -176,17 +177,16 @@ pub(super) fn surface_from_release(
         return Err(format!("release archive contains no stado binary: {archive_uri}").into());
     }
     let mut mode = std::fs::metadata(&binary)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("{}: {error}", binary.display()))?
         .permissions();
-    mode.set_mode(mode.mode() | 0o100);
-    std::fs::set_permissions(&binary, mode).map_err(|error| error.to_string())?;
+    mode.set_mode(mode.mode() | u32::from(nix::libc::S_IXUSR));
+    std::fs::set_permissions(&binary, mode).map_err(|error| format!("{}: {error}", binary.display()))?;
     let commands = super::super::surface::of_binary(&binary).map_err(|error| {
         format!("release binary advertised an invalid command surface: {archive_uri}: {error}")
     })?;
-    let revision = manifest["source_revision"].as_str().unwrap_or("");
     Ok(serde_json::json!({
         "version": version,
-        "source": format!("{manifest_uri} published from {revision}"),
+        "source": format!("{manifest_uri} published from {}", manifest.source_revision),
         "surface": commands,
     }))
 }

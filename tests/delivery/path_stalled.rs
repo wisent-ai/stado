@@ -7,7 +7,9 @@
 //! for it: `stalled` names the step, its revision and the refusal, and
 //! `blocking_defects` carries the defect. Then the state holds a step
 //! recorded as installing while no pass holds the routine's lock: `stalled`
-//! says the pass ended without an outcome. The unit read of this machine is
+//! says the pass ended without an outcome. Last the state holds a pass that
+//! could not finish: `stalled` names when it ended and why, since nothing
+//! runs again until another pass is fired. The unit read of this machine is
 //! reported either way, as a state or as its read error, never left out; a
 //! state read on macOS says launchd's event log was not read, since that log
 //! takes minutes on a busy host and Oko waits on this report.
@@ -42,7 +44,8 @@ fn stalled(report: &Value) -> Vec<String> {
 
 #[test]
 fn a_refused_step_and_an_abandoned_install_stall_the_path() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../.build/journeys")
         .join(format!("delivery-path-stalled-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("the run directory is created");
     let state = root.join("delivery-state.json");
@@ -104,6 +107,25 @@ fn a_refused_step_and_an_abandoned_install_stall_the_path() {
             "{report}"
         );
     }
+
+    std::fs::write(
+        &state,
+        json!({
+            "last_pass": {
+                "started_at": "2026-10-14T07:00:00Z", "ended_at": "2026-10-14T07:01:00Z",
+                "said": "the fixture's pass", "failed": "the fixture's plan could not be read"
+            }
+        })
+        .to_string(),
+    )
+    .expect("the state is written");
+    let report = delivery(&state);
+    assert!(
+        stalled(&report).iter().any(|reason| reason
+            .contains("could not finish, and no pass has finished since")
+            && reason.contains("the fixture's plan could not be read")),
+        "a pass that could not finish is a stall: {report}"
+    );
 
     std::fs::remove_dir_all(&root).expect("the run directory is removed");
 }

@@ -17,6 +17,7 @@ use crate::deploy::host_gates::words::{
     QUEUE_PAUSED, SPACE_RECLAIM_LOCK_HELD, SPACE_RECLAIM_STALLED,
 };
 use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
+use crate::providers::local::host_memory::constants::GIB;
 use crate::queue::capacity::Publication;
 use crate::targets::ComputeTarget;
 
@@ -45,6 +46,7 @@ pub fn assemble(
         disk_pressure_unresolved,
         disk_full,
         pressure_source,
+        local_disk_unread,
         cleanup_success_age_seconds,
         janitor,
     } = facts::Facts::read(reading, publication, now, state_observed);
@@ -68,7 +70,10 @@ pub fn assemble(
     if disk_full {
         blockers.push(DISK_PRESSURE_ACTIVE.to_string());
     }
-    if disk_pressure_unresolved {
+    // Unresolved when the agent says so, and when neither its live
+    // publication nor this command's own reading measured the disk: a disk
+    // nobody measured is not a disk with room.
+    if disk_pressure_unresolved || pressure_source.is_none() {
         blockers.push(DISK_PRESSURE_UNRESOLVED.to_string());
     }
     // Explain cleanup immediately after disk pressure. A stalled or held
@@ -98,7 +103,7 @@ pub fn assemble(
     if diag_flag(payload, PINNED_ONLY) == Some(true) || target.pinned_only {
         notes.push(PINNED_ONLY.to_string());
     }
-    if disk_full && local_snapshots.is_some_and(|count| count > 0) {
+    if disk_full && reading.snapshots.supported && !reading.snapshots.names.is_empty() {
         notes.push(LOCAL_SNAPSHOTS_UNRECLAIMABLE.to_string());
     }
     // A janitor that is late on a host that still has its headroom. Not a
@@ -125,16 +130,16 @@ pub fn assemble(
         .iter()
         .filter(|device| device.unmounted_among(&reading.block_devices))
         .map(|device| {
-            format!(
-                "/dev/{} {:.1} GiB {}",
-                device.name,
-                device.size_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
-                if device.fstype.is_empty() {
-                    "no filesystem"
-                } else {
-                    device.fstype.as_str()
-                }
-            )
+            let size = match device.size_bytes {
+                Some(bytes) => format!("{:.1} GiB", bytes as f64 / GIB as f64),
+                None => "size not reported".to_string(),
+            };
+            let filesystem = if device.fstype.is_empty() {
+                "no filesystem"
+            } else {
+                device.fstype.as_str()
+            };
+            format!("/dev/{} {size} {filesystem}", device.name)
         })
         .collect::<Vec<String>>();
     if !unmounted.is_empty() {
@@ -154,9 +159,8 @@ pub fn assemble(
         cleanup_prevented_age_seconds: janitor.prevented_age_seconds,
         free_gb,
         used_percent: volume.map(|volume| volume.used_percent()),
-        headroom_gb: volume.map(|volume| {
-            (volume.headroom_bytes() as f64 / (1024.0 * 1024.0 * 1024.0) * 10.0).round() / 10.0
-        }),
+        // The headroom as measured; the report rounds it where it prints it.
+        headroom_gb: volume.map(|volume| volume.headroom_bytes() as f64 / GIB as f64),
         published_at,
         age_seconds,
         accepting_jobs: payload
@@ -174,15 +178,14 @@ pub fn assemble(
         reservations: payload
             .and_then(|value| value.get("reservations"))
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
+            .cloned(),
         available_cpu_cores: payload
             .and_then(|value| value.get("available_cpu_cores"))
             .and_then(Value::as_i64),
         total_cpu_cores: payload
             .and_then(|value| value.get("total_cpu_cores"))
             .and_then(Value::as_i64),
-        available_accelerators: payload.map(accelerator_availability).unwrap_or_default(),
+        available_accelerators: payload.map(accelerator_availability),
         free_ram_gb: payload
             .and_then(|value| value.get("free_ram_gb"))
             .and_then(Value::as_f64),
@@ -204,6 +207,7 @@ pub fn assemble(
         complete: true,
         observations: Vec::new(),
         pressure_source,
+        local_disk_unread,
         published_diagnostics: payload.and_then(|value| value.get("diag")).cloned(),
     };
     super::memory::apply(&mut gates, payload, publication_current);

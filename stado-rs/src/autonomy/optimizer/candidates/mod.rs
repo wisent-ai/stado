@@ -11,8 +11,6 @@ mod feedback;
 mod scoring;
 mod shapes;
 
-use std::collections::BTreeMap;
-
 use crate::autonomy::cost::PriceBook;
 use crate::models::Job;
 
@@ -29,7 +27,7 @@ pub(super) fn candidates_for_job(
     job: &Job,
     offers: &[CapacityOffer],
     prices: &PriceBook,
-    wall_times: &BTreeMap<(String, String), f64>,
+    wall_times: &crate::scheduler::cost::WallTimes,
     context: &CandidateContext<'_>,
 ) -> Vec<PlacementCandidate> {
     let policy = context.policy;
@@ -60,11 +58,7 @@ pub(super) fn candidates_for_job(
                         preemptible,
                     )
                 })
-                .max_by(|left, right| {
-                    left.hourly_usd
-                        .partial_cmp(&right.hourly_usd)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                .max_by(|left, right| left.hourly_usd.total_cmp(&right.hourly_usd))
                 .or_else(|| {
                     prices.find_hourly(
                         offer.provider,

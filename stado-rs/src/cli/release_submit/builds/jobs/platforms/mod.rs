@@ -68,9 +68,7 @@ pub(crate) async fn enqueue_platforms(
         {
             let job_id = build.platforms[p].job_id.clone();
             if let Some(reason) = super::fallback::release_silent_placement(store, &job_id).await? {
-                let platform = build.platforms.get_mut(p).expect("checked above");
-                platform.state = PlatformRunState::Failed;
-                platform.failure = Some(reason);
+                recorded(build, p, PlatformRunState::Failed, Some(reason))?;
                 save_build(build).await?;
             } else if let Some(job) = read_terminal_job(store, &job_id).await? {
                 if matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED) {
@@ -86,9 +84,7 @@ pub(crate) async fn enqueue_platforms(
                             super::terminal::job_output_tail(store, &job_id).await
                         )
                     };
-                    let platform = build.platforms.get_mut(p).expect("checked above");
-                    platform.state = PlatformRunState::Failed;
-                    platform.failure = Some(failure);
+                    recorded(build, p, PlatformRunState::Failed, Some(failure))?;
                     save_build(build).await?;
                 }
             }
@@ -126,9 +122,7 @@ pub(crate) async fn enqueue_platforms(
                 .is_some_and(|state| matches!(state, job_state::FAILED | job_state::CANCELLED));
             let ran_and_failed = ended.as_deref() == Some(job_state::FAILED);
             if !retry {
-                let platform = build.platforms.get_mut(p).expect("checked above");
-                platform.state = PlatformRunState::Submitted;
-                platform.failure = None;
+                recorded(build, p, PlatformRunState::Submitted, None)?;
                 save_build(build).await?;
             } else if ran_and_failed && !retry_failed {
                 continue;
@@ -177,6 +171,25 @@ pub(crate) async fn enqueue_platforms(
         }
     }
     Ok(enqueue_failure)
+}
+
+/// Set the recorded state of platform `p` on `build`. Each caller found the
+/// platform recorded just before; one that is gone is refused, not recreated.
+fn recorded(
+    build: &mut BuildRun,
+    p: &str,
+    state: PlatformRunState,
+    failure: Option<String>,
+) -> Result<(), CmdError> {
+    let Some(platform) = build.platforms.get_mut(p) else {
+        return Err(CmdError::refused(format!(
+            "build {} no longer records platform {p}, so its state cannot be set",
+            build.build_id
+        )));
+    };
+    platform.state = state;
+    platform.failure = failure;
+    Ok(())
 }
 
 /// The job the build's first submission of `platform` planned, as a platform

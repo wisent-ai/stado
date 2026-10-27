@@ -90,14 +90,22 @@ pub(super) fn irreversible_action(
 }
 
 pub(super) fn locator(finding: &Finding) -> ResourceLocator {
-    let provider = crate::capabilities::provider(&finding.provider)
-        .unwrap_or(crate::capabilities::ProviderId::Stado);
-    let (name, location) = finding
-        .resource
-        .rsplit_once('@')
-        .map_or((finding.resource.as_str(), None), |(name, location)| {
-            (name, Some(location.to_string()))
-        });
+    // Every audit writes a provider name the catalog declares; a finding
+    // naming one it does not is a build defect, and stops here by name
+    // rather than being planned against a provider the audit never meant.
+    let provider = match crate::capabilities::provider(&finding.provider) {
+        Some(provider) => provider,
+        None => panic!(
+            "finding {} names provider {:?}, which the capability catalog does not declare",
+            finding.id, finding.provider
+        ),
+    };
+    // A resource is `<name>@<location>`, or a bare name for a resource with
+    // no location of its own.
+    let (name, location) = match finding.resource.rsplit_once('@') {
+        Some((name, location)) => (name, Some(location.to_string())),
+        None => (finding.resource.as_str(), None),
+    };
     ResourceLocator {
         provider,
         resource_type: finding.resource_type.to_string(),

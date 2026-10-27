@@ -152,14 +152,22 @@ async fn take_over_retired(
 /// repair runs after its own ensure, because a takeover that started while
 /// the repair was under way recorded itself before retiring, and the ensure
 /// may have brought the unit back after that retirement. `None` when no
-/// takeover is recorded.
+/// takeover is recorded; a record that cannot be read is a retirement whose
+/// state is `unknown`, so the repair reports it rather than assuming none.
 pub async fn retire_if_taken_over(
     target: &ComputeTarget,
     unit: &str,
     runner: &Runner,
 ) -> Option<PredecessorRetirement> {
-    taken_over(target, unit, runner).await?;
-    Some(retirement(target, unit, runner).await)
+    match taken_over(target, unit, runner).await {
+        Ok(Some(_)) => Some(retirement(target, unit, runner).await),
+        Ok(None) => None,
+        Err(error) => Some(PredecessorRetirement {
+            unit: unit.to_string(),
+            state: "unknown".to_string(),
+            detail: format!("whether it was taken over is not known: {error}"),
+        }),
+    }
 }
 
 /// [`take_over_retired`] with the production runner, run by an API listener

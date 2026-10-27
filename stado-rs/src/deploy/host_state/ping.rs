@@ -131,9 +131,12 @@ impl BeaconSignal {
 /// whole second of rounding into a record whose whole purpose is when the
 /// silence began.
 pub fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(raw)
-        .ok()
-        .map(|value| value.with_timezone(&Utc))
+    // A stamp in another spelling is no instant; the grader that reads the
+    // answer reports the beacon as unaged, naming the raw text.
+    match DateTime::parse_from_rfc3339(raw) {
+        Ok(value) => Some(value.with_timezone(&Utc)),
+        Err(_not_rfc3339) => None,
+    }
 }
 
 /// Grade a beacon that WAS read: the beacon's own `reported_at` if it
@@ -221,7 +224,7 @@ pub async fn ping_host(
     let target = host_channel::canonical_target(target_name).await?;
     let output = host_channel::run_program(&target, REMOTE_PROGRAM, runner).await?;
 
-    let ssh_verdict = if output.ok() {
+    let ssh_verdict = if output.succeeded() {
         Verdict::Ok
     } else {
         Verdict::Down
@@ -247,13 +250,28 @@ fn build_report(
     beacon: &BeaconSignal,
 ) -> Map<String, Value> {
     let mut report = host_channel::base_report(target);
-    report.insert(
-        "ssh_check".to_string(),
-        json!({
-            "status": ssh_verdict.as_str(),
-            "host": ssh_stdout.trim(),
-        }),
-    );
+    let mut ssh_check = json!({
+        "status": ssh_verdict.as_str(),
+        "host": ssh_stdout.trim(),
+    });
+    // The tailnet's own word on the node's key: an expired key is why an SSH
+    // connection only times out, and a valid one still says when it ends.
+    let key = target
+        .ssh
+        .as_deref()
+        .map(|ssh| match ssh.rsplit_once('@') {
+            Some((_, host)) => host,
+            None => ssh,
+        })
+        .and_then(crate::remote::tailnet::node_key);
+    if let Some(key) = key {
+        ssh_check["tailnet_key"] = json!({
+            "expired": key.expired,
+            "key_expiry": key.expiry,
+            "cause": key.cause(),
+        });
+    }
+    report.insert("ssh_check".to_string(), ssh_check);
     report.insert("beacon".to_string(), beacon.to_value());
     report
 }

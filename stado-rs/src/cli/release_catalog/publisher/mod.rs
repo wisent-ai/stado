@@ -1,4 +1,4 @@
-//! `stado release catalog declare-publisher`: everything a product needs
+//! `stado release catalog publisher declare`: everything a product needs
 //! before `release submit` can publish it, in the order the guards require,
 //! from the typed operations this fleet already has.
 //!
@@ -40,10 +40,6 @@ pub(super) fn covered_by_owner(host: &str, owner: &str) -> serde_json::Value {
     json!({ "step": "verifier", "host": host, "repair": "not needed: reads the vault on the owner", "owner": owner })
 }
 
-/// Bytes of randomness in a minted publisher bearer; the same width the
-/// verifier reconciliation mints (`openssl rand -hex 32`).
-const BEARER_BYTES: usize = 32;
-
 /// The publisher item is the product itself; its scope is `<product>/`.
 /// This matches the strict release publisher configuration contract.
 pub(super) fn publisher_declaration(product: &str) -> (String, Value) {
@@ -54,22 +50,31 @@ pub(super) fn publisher_declaration(product: &str) -> (String, Value) {
 
 /// A fresh bearer: two random UUIDs' bytes, hex encoded, so no shell and no
 /// argument vector ever carries it. `stado credentials token mint
-/// --store-item` writes one into its item the same way.
+/// --store-item` writes one into its item the same way, and it is as wide as
+/// the verifier reconciliation's `openssl rand -hex 32`.
 pub(crate) fn mint_bearer() -> String {
-    let mut bytes = Vec::with_capacity(BEARER_BYTES);
-    while bytes.len() < BEARER_BYTES {
-        bytes.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
-    }
-    bytes.truncate(BEARER_BYTES);
+    let bytes: Vec<u8> = [uuid::Uuid::new_v4(), uuid::Uuid::new_v4()]
+        .iter()
+        .flat_map(|uuid| uuid.as_bytes().iter().copied())
+        .collect();
     hex::encode(bytes)
 }
 
-/// `~/…` for a path under this machine's home, unchanged otherwise.
+/// `~/…` for a path under this machine's home (the one every Stado file is
+/// kept under, [`crate::config_file::home_text`]), unchanged otherwise. A
+/// home that cannot be named is said on stderr and the path printed whole,
+/// since this only shortens what a report prints.
 pub(crate) fn home_relative(path: &str) -> String {
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && path.starts_with(&home) => {
-            format!("~{}", &path[home.len()..])
+    let home = match crate::config_file::home_text() {
+        Ok(home) => home,
+        Err(cause) => {
+            eprintln!("stado: {path} is printed whole: {cause}");
+            return path.to_string();
         }
+    };
+    // `/Users/ab` is not under the home `/Users/a`: only a whole component.
+    match path.strip_prefix(home.as_str()) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
         _ => path.to_string(),
     }
 }
@@ -99,7 +104,7 @@ pub(super) async fn declare_publisher(
     //    verifier, a build staging an input, enrolment's check) asks for that
     //    item by name, and the guard on step 3 refuses a declaration whose
     //    item the owner does not hold. The canonical item envelope Skarbiec's
-    //    `set-json` accepts: schema, kind, the one required field, and the
+    //    `set` accepts: schema, kind, the one required field, and the
     //    context that names the product the bearer publishes.
     let payload = json!({
         "schema": "skarbiec.item.v2",

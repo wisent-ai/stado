@@ -93,7 +93,7 @@ enum NativeSandboxOperations {
                 .init(id: "no-auto-stop", label: "Never stop by itself", option: "--no-auto-stop", flag: true),
             ], jsonOutput: false),
         .init(id: "sandbox-prompt", title: "Hand the sandbox's coding agent a prompt",
-            path: ["sandbox", "prompt"], hostPlacement: .none, fields: [
+            path: ["sandbox", "prompt", "send"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
                 .init(id: "prompt", label: "Prompt", required: true),
                 .init(id: "provider", label: "Agent provider, as Boat names it", option: "--provider", required: true),
@@ -101,7 +101,7 @@ enum NativeSandboxOperations {
                 .init(id: "effort", label: "Reasoning effort (blank: the request names none)", option: "--reasoning-effort"),
             ], jsonOutput: false),
         .init(id: "sandbox-prompt-status", title: "Read a prompt run's status",
-            path: ["sandbox", "prompt-status"], hostPlacement: .none, fields: [
+            path: ["sandbox", "prompt", "status"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
                 .init(id: "prompt-id", label: "Prompt id", required: true),
             ], mutates: false, jsonOutput: false),
@@ -156,17 +156,17 @@ enum NativeSandboxOperations {
                 .init(id: "id", label: "Sandbox id", required: true),
             ], mutates: false, jsonOutput: false),
         .init(id: "sandbox-ai-usage", title: "Read the AI requests a sandbox made through Boat's proxy",
-            path: ["sandbox", "ai-usage"], hostPlacement: .none, fields: [
+            path: ["sandbox", "ai", "usage"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
                 .init(id: "days", label: "Days of history, today included (blank: Boat's own span)", option: "--days"),
             ], mutates: false, jsonOutput: false),
         .init(id: "sandbox-ai-access", title: "Let a sandbox's AI requests through, or refuse them",
-            path: ["sandbox", "ai-access"], hostPlacement: .none, fields: [
+            path: ["sandbox", "ai", "access"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
                 .init(id: "state", label: "AI requests", option: "--state", required: true, choices: ["allowed", "blocked"], initial: "allowed"),
             ], jsonOutput: false),
         .init(id: "sandbox-ssh-key", title: "Allow an OpenSSH public key into a sandbox",
-            path: ["sandbox", "ssh-key"], hostPlacement: .none, fields: [
+            path: ["sandbox", "key", "add"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
                 .init(id: "key-file", label: "Public key file on the machine running Stado", option: "--public-key-file", required: true),
             ], jsonOutput: false),
@@ -177,7 +177,7 @@ enum NativeSandboxOperations {
                 .init(id: "to", label: "New file on the machine running Stado", option: "--to", required: true),
             ], jsonOutput: false),
         .init(id: "sandbox-file-url", title: "Sign a URL that downloads or uploads one sandbox file",
-            path: ["sandbox", "file-url"], hostPlacement: .none, fields: [
+            path: ["sandbox", "file", "link"], hostPlacement: .none, fields: [
                 .init(id: "id", label: "Sandbox id", required: true),
                 .init(id: "path", label: "Path in the sandbox", required: true),
                 .init(id: "method", label: "The URL", option: "--method", required: true, choices: ["download", "upload"], initial: "download"),

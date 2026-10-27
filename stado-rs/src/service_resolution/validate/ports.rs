@@ -13,7 +13,7 @@ use serde_json::Value;
 /// blue-green release target names the stable bind its proxy must own and the
 /// two ports its candidates alternate between, and that host's resolver names
 /// a bind per adapter. Nothing compared them, and they can overlap: a
-/// resolver serving some adapter on `127.0.0.1:<port>` that is also a
+/// resolver serving some adapter on a loopback port that is also a
 /// release's stable bind makes every rollout of that release spawn a
 /// candidate that dies on `Address already in use (os error 48)`, its digest
 /// quarantined, while both declarations read correct on their own.
@@ -59,7 +59,7 @@ pub(super) fn refuse_release_port_collisions(
                 if let Some(claimant) = claimed.get(&port) {
                     return Err(format!(
                         "registry.targets[{target_name}].service_resolver: {claimant} claims \
-                         127.0.0.1:{port}, which registry.release_control.products.{product} \
+                         loopback port {port}, which registry.release_control.products.{product} \
                          declares as its {what} on this host; one loopback port has one owner"
                     ));
                 }
@@ -69,7 +69,13 @@ pub(super) fn refuse_release_port_collisions(
     Ok(())
 }
 
-/// The port of a `host:port` declaration, when it names one.
+/// The port of a `host:port` declaration, when it names one: what follows
+/// the last `:`, read as a port; a bind without `:` or with something else
+/// after it names no port, which the bind's own validation refuses.
 fn socket_port(bind: &str) -> Option<u16> {
-    bind.rsplit(':').next()?.parse().ok()
+    let (_host, port) = bind.rsplit_once(':')?;
+    match port.parse() {
+        Ok(port) => Some(port),
+        Err(_not_a_port) => None,
+    }
 }

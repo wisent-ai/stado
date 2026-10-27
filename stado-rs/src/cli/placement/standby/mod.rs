@@ -36,14 +36,16 @@
 //! A pass that stops early (a tree not yet rolled out) reports where it
 //! stopped; the next pass continues from there.
 
+mod check;
 mod deliver;
+mod ports;
 mod template;
 
 use serde::Serialize;
 
-use crate::cli::{registry, CmdError};
-use crate::placement;
+use crate::cli::CmdError;
 
+pub(crate) use check::check;
 pub use deliver::Delivery;
 
 /// The words a standby pass ends with.
@@ -80,13 +82,35 @@ pub struct UnitReceipt {
     pub path: String,
 }
 
-/// Prepare `host` for `profile`. See the module doc for the steps.
+/// Prepare `host` for `profile`. See the module doc for the steps. With
+/// `check`, only the refusals a pass gives before it delivers anything, and
+/// what it would deliver.
 pub(crate) async fn standby(
     profile_name: &str,
     host: &str,
     reason: &str,
+    check_only: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
+    if check_only {
+        let checked = check(profile_name, host, reason).await?;
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&checked)?);
+            return Ok(());
+        }
+        for service in checked["services"].as_array().into_iter().flatten() {
+            use crate::cli::reporting::field;
+            println!(
+                "{host}\t{}\t{}\t{}\t{}",
+                field(&service["service"]),
+                field(&service["delivery"]),
+                field(&service["product"]),
+                field(&service["release_control"]["product"])
+            );
+        }
+        println!("{profile_name}\t{host}\twould_stand_by (checked; nothing delivered or written)");
+        return Ok(());
+    }
     let report = prepare(profile_name, host, reason).await?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -117,34 +141,8 @@ pub(crate) async fn prepare(
     host: &str,
     reason: &str,
 ) -> Result<StandbyReport, CmdError> {
-    if reason.trim().is_empty() {
-        return Err(CmdError::usage(
-            "--reason must say why this host must stand by for the profile; the receipt carries \
-             it",
-        ));
-    }
-    let (document, _generation) = registry::fetch_versioned_document().await?;
-    let registry = super::candidates::parse_registry(&document)?;
-    let profile = placement::profiles(&document)
-        .map_err(CmdError::declaration)?
-        .into_iter()
-        .find(|profile| profile.name == profile_name)
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "the registry declares no placement profile named {profile_name:?}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::NotFound)
-        })?;
-    super::candidates::ensure_profile_lifecycle_mutable(&profile)?;
-    let target = crate::cli::canonical_host(host).await?;
-    let placed_on = super::placed_host(&registry, &profile).map_err(CmdError::declaration)?;
-    if placed_on == target.name {
-        return Err(CmdError::refused(format!(
-            "{} is placed on {placed_on}; a placed host cannot stand by for its own profile",
-            profile.name
-        )));
-    }
-    let placed = super::candidates::target(&registry, &placed_on)?.clone();
+    let check::Planned { document, profile, target, placed, placed_on, plan } =
+        check::planned(profile_name, host, reason).await?;
     let mut report = StandbyReport {
         profile: profile.name.clone(),
         host: target.name.clone(),
@@ -158,17 +156,42 @@ pub(crate) async fn prepare(
         detail: String::new(),
     };
 
-    let plan = template::plan(&profile, &placed, &target)?;
-
     // Step 2: deliveries. A managed program is delivered here; a release-
     // controlled tree is declared for the host's agent to roll out.
     let mut awaiting = Vec::new();
-    for service in &plan.services {
-        let delivery = deliver::deliver(&document, &placed, &target, service).await?;
+    // Every step below is a wait naming the profile, the host and the step,
+    // so a pass that stands for minutes names what it stands on in `stado
+    // waits` and a later pass's wait on it opens with when it is due. A
+    // managed program is a release delivered over the host's own channel, so
+    // those run at once; a release-controlled tree is a compare-and-swapped
+    // registry commit, so those run one after another and never race each
+    // other's generation. The report keeps the plan's order, and the first
+    // refusal in that order is the answer.
+    let waited = |what: String| format!("placement standby of {} on {}: {what}", profile.name, target.name);
+    let (programs, trees): (Vec<_>, Vec<_>) = plan.services.iter().enumerate().partition(
+        |(_, service)| matches!(service.kind, template::ProgramKind::Managed { .. }),
+    );
+    let mut answers: Vec<Option<Result<deliver::Delivery, CmdError>>> =
+        plan.services.iter().map(|_| None).collect();
+    let shared = (&document, &placed, &target);
+    let delivered = programs.into_iter().map(|(index, service)| {
+        let what = waited(format!("deliver {}", service.logical));
+        let (document, placed, target) = shared;
+        async move { (index, deliver::deliver(document, placed, target, service, what).await) }
+    });
+    for (index, answer) in futures::future::join_all(delivered).await {
+        answers[index] = Some(answer);
+    }
+    for (index, service) in trees {
+        let what = waited(format!("deliver {}", service.logical));
+        answers[index] = Some(deliver::deliver(&document, &placed, &target, service, what).await);
+    }
+    for answer in answers.into_iter().flatten() {
+        let delivery = answer?;
         if delivery.outcome == deliver::words::ROLLOUT_DECLARED
             || delivery.outcome == deliver::words::ROLLOUT_PENDING
         {
-            awaiting.push(service.logical.clone());
+            awaiting.push(delivery.service.clone());
         }
         report.deliveries.push(delivery);
     }
@@ -198,10 +221,16 @@ pub(crate) async fn prepare(
             as_json: true,
         };
         let standby = crate::cli::service::lifecycle::declare::ensure::Standby {
-            listen_port: template::standby_port(&document, logical, &target.name, &placed_on)?,
+            listen_port: ports::standby_port(&document, logical, &target.name, &placed_on)?,
         };
         let staged =
             crate::cli::service::lifecycle::declare::ensure::run::stage_unit(options, standby);
+        let staged = crate::wait::until(
+            crate::wait::Kind::Host,
+            waited(format!("stage unit {logical}")),
+            &target.name,
+            staged,
+        );
         let receipt = match staged.await {
             Ok(receipt) => receipt,
             // A release-controlled tree the agent has not staged yet renders
@@ -242,7 +271,13 @@ pub(crate) async fn prepare(
 
     // Step 4: the host into the profile with the units it now holds, and into
     // the directory, in one compare-and-swapped commit.
-    let generation = template::commit_host(&profile, &placed_on, &target, &report.units).await?;
+    let generation = crate::wait::until(
+        crate::wait::Kind::Host,
+        waited("write the host into the profile and the directory".to_string()),
+        "the registry",
+        template::commit_host(&profile, &placed_on, &target, &report.units),
+    )
+    .await?;
     report.detail = format!(
         "{} may now move to {} (registry generation {generation})",
         profile.name, target.name

@@ -77,6 +77,24 @@ fn verify_document_target(document: Value, local_target: &str) -> Result<Value, 
 /// reads its store; taken for no copy, a vault-dependent store read would
 /// stand in for the authority without a word.
 pub(crate) async fn authority_snapshot() -> Result<Option<VersionedText>, CmdError> {
+    let Some((copy, local_target)) = remote_authority()? else {
+        return Ok(None);
+    };
+    let source = snapshot_source(None, &copy, &local_target).map_err(CmdError::declaration)?;
+    let (document, version, _) = source
+        .fetch(crate::monitor::host_silence::READER_CLI)
+        .await?;
+    Ok(Some(VersionedText {
+        content: document.to_string(),
+        version,
+    }))
+}
+
+/// This host's last-known-good copy and this host's target, when the copy
+/// names a registry authority that is another host; `None` when there is no
+/// copy, the copy declares no service directory, or this host is the
+/// authority, whose readers read its store.
+fn remote_authority() -> Result<Option<(Value, String)>, CmdError> {
     let Some(copy) = kept_last_good_document().map_err(CmdError::declaration)? else {
         return Ok(None);
     };
@@ -89,14 +107,89 @@ pub(crate) async fn authority_snapshot() -> Result<Option<VersionedText>, CmdErr
     if directory.authority.target == local_target {
         return Ok(None);
     }
-    let source = snapshot_source(None, &copy, &local_target).map_err(CmdError::declaration)?;
-    let (document, version, _) = source
+    Ok(Some((copy, local_target)))
+}
+
+/// The registry a reader on this host takes when the authority is another
+/// host: the generation this host's own resolver holds, which it refreshes
+/// from the authority on its declared interval and stops answering past its
+/// declared max-stale; else the authority's snapshot this command already
+/// read less than one refresh interval ago
+/// ([`super::remembered::recalled`]); and the authority's snapshot only when
+/// neither answers, kept for the next read of the same command. A host whose
+/// authority is slow or down still reads its registry at once, one command
+/// stands one authority read however often it reads the registry, and
+/// stderr names which of them answered. On the authority itself `None`
+/// sends the reader to its store, which is what that host's resolver reads,
+/// never to the resolver's own held generation. The checks whether the
+/// authority itself answers (`placement move --authority`, `registry push
+/// --last-known-good`) keep [`authority_snapshot`].
+pub(crate) async fn held_or_authority_snapshot() -> Result<Option<VersionedText>, CmdError> {
+    let Some((copy, _)) = remote_authority()? else {
+        return Ok(None);
+    };
+    match super::held_snapshot().await {
+        Ok(((document, version, generation), read_from)) => {
+            let refreshed = match read_from {
+                Some(authority) => {
+                    format!("which refreshes it from the registry authority {authority}")
+                }
+                None => "which holds it as the registry authority".to_string(),
+            };
+            eprintln!(
+                "stado: registry generation {generation} read from this host's resolver, \
+                 {refreshed}; the authority was not asked"
+            );
+            return Ok(Some(VersionedText {
+                content: document.to_string(),
+                version,
+            }));
+        }
+        Err(refusal) => eprintln!(
+            "stado: this host's resolver holds no registry generation to answer from \
+             ({refusal}); asking the registry authority"
+        ),
+    }
+    let authority = crate::service_resolution::directory(&copy)
+        .map_err(CmdError::declaration)?
+        .map(|directory| directory.authority.target);
+    if let Some(recalled) = authority
+        .as_deref()
+        .and_then(super::remembered::recalled::recall)
+    {
+        return Ok(Some(recalled));
+    }
+    let snapshot = authority_snapshot().await?;
+    if let (Some(authority), Some(snapshot)) = (authority.as_deref(), snapshot.as_ref()) {
+        super::remembered::recalled::keep(authority, snapshot);
+    }
+    Ok(snapshot)
+}
+
+/// The registry document a command resolves services from, given the copy
+/// it read from `store` (`bootstrap`) and this host's target: the generation
+/// this host's resolver holds, else the snapshot kept less than one refresh
+/// interval ago ([`held_or_authority_snapshot`]); the authority, or this
+/// host's own store when it is the authority, only when neither answers.
+/// `resolver resolve` and the database plane each asked the authority again
+/// after the store read had often asked it already, so one command stood two
+/// authority reads.
+pub(crate) async fn directory_document(
+    store: std::sync::Arc<targets::RegistryStore>,
+    bootstrap: &Value,
+    local_target: &str,
+) -> Result<Value, CmdError> {
+    if let Some(snapshot) = held_or_authority_snapshot().await? {
+        return serde_json::from_str(&snapshot.content).map_err(|error| {
+            CmdError::declaration(format!("the registry this host read is not JSON: {error}"))
+        });
+    }
+    let source =
+        snapshot_source(Some(store), bootstrap, local_target).map_err(CmdError::declaration)?;
+    let (document, _, _) = source
         .fetch(crate::monitor::host_silence::READER_CLI)
         .await?;
-    Ok(Some(VersionedText {
-        content: document.to_string(),
-        version,
-    }))
+    Ok(document)
 }
 
 /// One attempt at everything the resolver must read before it can bind.

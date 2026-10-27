@@ -70,9 +70,10 @@ impl Observation {
     /// A row that exists proves somebody looked; only its age is in doubt, and
     /// the safe reading of an unknown age is "old".
     pub(super) fn moment(&self) -> Option<DateTime<Utc>> {
-        DateTime::parse_from_rfc3339(&self.at)
-            .ok()
-            .map(|stamp| stamp.with_timezone(&Utc))
+        match DateTime::parse_from_rfc3339(&self.at) {
+            Ok(stamp) => Some(stamp.with_timezone(&Utc)),
+            Err(_not_rfc3339) => None,
+        }
     }
 }
 

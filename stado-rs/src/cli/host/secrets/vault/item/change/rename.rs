@@ -11,7 +11,7 @@ use crate::cli::host::secrets::vault::vault_word;
 ///
 /// A product has one identity and one item named after itself; the fleet
 /// still holds items named after roles (`<product>-release-publisher`). A copy
-/// would leave two items with one secret, and a `set-json` under the new id
+/// would leave two items with one secret, and a `set` under the new id
 /// would need the plaintext in hand and start the history over, so the item
 /// moves with Skarbiec's own `rename`, on the host whose owner key can write
 /// it. Grants that name the old id do not follow it; the caller reissues them.
@@ -126,7 +126,7 @@ pub(crate) async fn move_vault_item(
     )
     .await
     .map_err(CmdError::from)?;
-    if !renamed.ok() {
+    if !renamed.succeeded() {
         return Err(refused(crate::deploy::host_channel::last_error_line(
             &renamed,
             "remote rename failed",

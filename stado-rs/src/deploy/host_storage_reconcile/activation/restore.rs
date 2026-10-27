@@ -29,7 +29,7 @@ pub(super) async fn restore_unit_snapshot(
     );
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_UNIT_RESTORED\t{}", snapshot.sha256);
-    if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
+    if !output.succeeded() || !output.stdout.lines().any(|line| line == marker) {
         return Err(DeployError::unreachable(format!(
             "exact unit restoration failed for {} on {}: {}",
             writer.label,
@@ -63,7 +63,7 @@ pub(super) fn restored_state_matches(
             || state.process_started_at.is_none()
             || state.process_executable.is_none()
             || state.process_device.is_none()
-            || state.process_inode.is_none_or(|inode| inode == 0)
+            || state.process_inode.is_none_or(|inode| std::num::NonZeroU64::new(inode).is_none())
         {
             return false;
         }
@@ -116,7 +116,7 @@ pub(super) fn restored_state_matches(
             .get("WC_BACKUP_STORAGE_BACKEND")
             .map(String::as_str)
             .filter(|value| !value.is_empty())
-            == backup.map(|_| "local")
+            == backup.map(|_backup| "local")
         && loaded
             .get("WC_BACKUP_LOCAL_STORAGE_PATH")
             .map(String::as_str)

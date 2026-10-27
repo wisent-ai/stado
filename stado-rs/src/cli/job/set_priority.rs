@@ -1,4 +1,4 @@
-//! `stado job set-priority` — reorder a job that has not been claimed yet.
+//! `stado job prioritize` — reorder a job that has not been claimed yet.
 
 use serde_json::json;
 
@@ -8,7 +8,7 @@ use crate::queue::JobStorage;
 
 use super::cmd_error;
 
-/// `stado job set-priority JOB_ID PRIORITY` — atomically update the queued
+/// `stado job prioritize JOB_ID PRIORITY` — atomically update the queued
 /// document, its scheduler metadata and its priority marker.
 pub(super) async fn set_priority(
     job_id: &str,

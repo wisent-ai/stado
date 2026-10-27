@@ -29,7 +29,7 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
     let release_platform = crate::self_update::platform_triple_short()
         .map_err(|error| CmdError::declaration(error.to_string()))?;
     let registry = serde_json::json!({
-        "schema_version": crate::targets::REGISTRY_SCHEMA_VERSION,
+        "schema_version": crate::targets::registry_schema_version(),
         "coordinators": [],
         "targets": [{
             "name": target_name,

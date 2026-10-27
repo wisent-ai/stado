@@ -8,7 +8,7 @@ pub(super) fn observed_startup_seconds(
     feedback: &[super::storage::PlacementFeedback],
     target: &str,
 ) -> Option<f64> {
-    median(
+    crate::primitives::samples::upper_median(
         feedback
             .iter()
             .filter(|entry| entry.target_id == target)
@@ -30,15 +30,4 @@ pub(super) fn observed_failure_probability(
     }
     let failed = samples.iter().filter(|entry| !entry.succeeded).count();
     Some(failed as f64 / samples.len() as f64)
-}
-
-/// The middle value: walking the sorted values from both ends, the first
-/// place the low side reaches the high side.
-fn median(mut values: Vec<f64>) -> Option<f64> {
-    values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
-    values
-        .iter()
-        .zip(values.iter().rev())
-        .find(|(low, high)| low >= high)
-        .map(|(middle, _)| *middle)
 }

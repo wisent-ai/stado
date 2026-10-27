@@ -59,7 +59,7 @@ impl KindDurations {
             return;
         }
         self.booted.insert(vm.to_string(), age);
-        self.boot_seconds = Some(self.boot_seconds.map_or(age, |longest| longest.max(age)));
+        self.boot_seconds = Some(longest(self.boot_seconds, age));
     }
 
     /// `vm` was seen with a completion at `age`: the first such sighting
@@ -69,10 +69,7 @@ impl KindDurations {
             return;
         }
         self.worked.insert(vm.to_string(), age);
-        self.first_work_seconds = Some(
-            self.first_work_seconds
-                .map_or(age, |longest| longest.max(age)),
-        );
+        self.first_work_seconds = Some(longest(self.first_work_seconds, age));
     }
 
     /// Forget the per-VM records of VMs that no longer run; the longest
@@ -80,5 +77,14 @@ impl KindDurations {
     pub(super) fn keep_only(&mut self, running: &HashSet<String>) {
         self.booted.retain(|vm, _| running.contains(vm));
         self.worked.retain(|vm, _| running.contains(vm));
+    }
+}
+
+/// The longer of a duration measured so far and a new measurement; the
+/// first measurement is the longest so far.
+fn longest(so_far: Option<f64>, measured: f64) -> f64 {
+    match so_far {
+        Some(longest) => longest.max(measured),
+        None => measured,
     }
 }

@@ -112,14 +112,12 @@ pub(in crate::cli::resources::engine) async fn verify_locked(
                 action_state.phase,
                 ActionPhase::Restored | ActionPhase::AlreadyRestored
             );
-        let expected_conditions = if use_rollback {
-            action
-                .rollback
-                .as_ref()
-                .map(|rollback| rollback.postconditions.as_slice())
-                .unwrap_or(action.postconditions.as_slice())
-        } else {
-            action.postconditions.as_slice()
+        // A restored action is verified against its rollback's
+        // postconditions; an action restored without a declared rollback,
+        // or one not restored at all, against its own.
+        let expected_conditions = match (use_rollback, action.rollback.as_ref()) {
+            (true, Some(rollback)) => rollback.postconditions.as_slice(),
+            (true, None) | (false, _) => action.postconditions.as_slice(),
         };
         match context.inspect(action).await {
             Ok(observed) => actions.push(VerificationAction {

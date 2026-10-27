@@ -56,32 +56,24 @@ pub(super) fn print_probe_highlights(probe: &crate::providers::gcp::inventory::P
                             )
                         })
                 }) {
+                    use crate::cli::reporting::field;
                     println!(
                         "  active VM: name={}, zone={}, status={}, machine={}, accelerators={}",
-                        instance.get("name").unwrap_or(&serde_json::Value::Null),
-                        instance.get("zone").unwrap_or(&serde_json::Value::Null),
-                        instance.get("status").unwrap_or(&serde_json::Value::Null),
-                        instance
-                            .get("machine_type")
-                            .unwrap_or(&serde_json::Value::Null),
-                        instance
-                            .get("accelerators")
-                            .unwrap_or(&serde_json::Value::Null),
+                        field(&instance["name"]),
+                        field(&instance["zone"]),
+                        field(&instance["status"]),
+                        field(&instance["machine_type"]),
+                        field(&instance["accelerators"]),
                     );
                 }
             }
         }
         "compute_disks" => {
+            use crate::cli::reporting::field;
             println!(
                 "  disk_gb={}, unattached={}",
-                probe
-                    .detail
-                    .get("total_gb")
-                    .unwrap_or(&serde_json::Value::Null),
-                probe
-                    .detail
-                    .get("unattached")
-                    .unwrap_or(&serde_json::Value::Null),
+                field(&probe.detail["total_gb"]),
+                field(&probe.detail["unattached"]),
             );
         }
         "managed_instance_groups" => {

@@ -49,11 +49,17 @@ pub struct ProductCapability {
 }
 
 impl ProductCapability {
+    /// What the catalog declares for `provider`; a provider the capability's
+    /// table does not list does not support it, which is the catalog's
+    /// own meaning of an absent row.
     pub fn support(self, provider: ProviderId) -> CapabilitySupport {
-        self.providers
+        match self
+            .providers
             .iter()
             .find(|entry| entry.provider == provider)
-            .map(|entry| entry.support)
-            .unwrap_or(CapabilitySupport::Unsupported)
+        {
+            Some(entry) => entry.support,
+            None => CapabilitySupport::Unsupported,
+        }
     }
 }

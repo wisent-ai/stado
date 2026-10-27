@@ -80,7 +80,7 @@ pub async fn sync_directory(
         .await
         .map_err(DeployError::unreachable)?;
     drop(key);
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: copying the tree {remote} failed: {}",
             target.name,

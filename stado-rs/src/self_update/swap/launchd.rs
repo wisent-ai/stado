@@ -15,7 +15,7 @@ pub(super) async fn recycle_launchd(
     paths: &[String],
     ours: u32,
     log_fn: &mut dyn FnMut(&str),
-) -> Result<usize, String> {
+) -> Result<Vec<String>, String> {
     // Which units are this machine's is this machine's record: the recycle
     // runs inside an install, and an install is how the services serving the
     // registry authority's snapshot are repaired while that snapshot stands.
@@ -37,11 +37,14 @@ pub(super) async fn recycle_launchd(
         .map_err(|error| {
             format!("{context}: cannot enumerate domain-bound launchd units: {error}")
         })?;
-    let pids: Vec<u32> = units
-        .iter()
-        .filter_map(|unit| unit.pid.parse().ok())
-        .filter(|pid| *pid != ours)
-        .collect();
+    let mut pids: Vec<u32> = Vec::new();
+    for unit in &units {
+        if let Some(pid) = running_pid(context, &unit.label, &unit.pid)? {
+            if pid != ours {
+                pids.push(pid);
+            }
+        }
+    }
     let running_images = crate::deploy::service::running_images(&pids)
         .map_err(|error| format!("{context}: cannot read running image identities: {error}"))?;
     let installed_images: Vec<(String, crate::deploy::service::ImageIdentity)> = paths
@@ -52,9 +55,9 @@ pub(super) async fn recycle_launchd(
                 .map_err(|error| format!("{context}: cannot identify installed {path}: {error}"))
         })
         .collect::<Result<_, _>>()?;
-    let mut restarted = 0usize;
+    let mut restarted = Vec::new();
     for unit in units {
-        let Ok(pid) = unit.pid.parse::<u32>() else {
+        let Some(pid) = running_pid(context, &unit.label, &unit.pid)? else {
             continue;
         };
         if pid == ours {
@@ -138,7 +141,14 @@ pub(super) async fn recycle_launchd(
         }
         let argv = match crate::deploy::service::process_arguments(pid) {
             Ok(argv) => argv,
-            Err(_) if !crate::providers::local::helpers::pid_alive(pid as i32) => continue,
+            Err(error) if !crate::providers::local::helpers::pid_alive(pid as i32) => {
+                log_fn(&format!(
+                    "{context}: {} pid {pid} exited while its arguments were read ({error}); \
+                     launchd starts it again from the installed {program}",
+                    unit.label
+                ));
+                continue;
+            }
             Err(error) => return Err(format!("{context}: {}: {error}", unit.label)),
         };
         if defers_to_release_handshake(&argv) {
@@ -149,38 +159,41 @@ pub(super) async fn recycle_launchd(
             ));
             continue;
         }
-        if unit.loaded_domains.len() != 1 {
+        // launchd may load one label in several domains; only one owner of the
+        // pid is restarted, so a pid several domains report is refused.
+        let [domain] = unit.loaded_domains.as_slice() else {
             return Err(format!(
                 "{context}: {} pid {pid} executes replaced {program}, but launchd reports {} \
                  loaded domains; refusing to guess which job owns the pid",
                 unit.label,
                 unit.loaded_domains.len()
             ));
-        }
+        };
         let service = crate::deploy::service::restart_local_unit(
             target,
             &unit.label,
             &unit.path,
-            Some(&unit.loaded_domains[0]),
+            Some(domain),
         )
         .await
         .map_err(|error| {
             format!(
                 "{context}: {} was executing the replaced {program} and could not be restarted \
                  through its observed owner {}/{} and declared unit {}: {error}",
-                unit.label, unit.loaded_domains[0], unit.label, unit.path
+                unit.label, domain, unit.label, unit.path
             )
         })?;
         let after = crate::deploy::service::loaded_image_units(target, &runner)
             .await
             .map_err(|error| format!("{context}: cannot re-read {service}: {error}"))?;
-        let current_pid = after
+        let current = after
             .iter()
             .find(|current| {
                 current.label == unit.label && current.loaded_domains == unit.loaded_domains
             })
-            .and_then(|current| current.pid.parse::<u32>().ok())
-            .ok_or_else(|| format!("{context}: {service} restarted without a readable pid"))?;
+            .ok_or_else(|| format!("{context}: {service} is no longer loaded after its restart"))?;
+        let current_pid = running_pid(context, &current.label, &current.pid)?
+            .ok_or_else(|| format!("{context}: {service} restarted and launchd holds no pid for it"))?;
         let images = crate::deploy::service::running_images(&[current_pid])
             .map_err(|error| format!("{context}: cannot verify {service}'s new image: {error}"))?;
         if !images
@@ -195,7 +208,18 @@ pub(super) async fn recycle_launchd(
             "{context}: reconciled {service}; pid {pid} was running a different image, \
              and pid {current_pid} now executes the installed inode at {program}"
         ));
-        restarted += 1;
+        restarted.push(service.to_string());
     }
     Ok(restarted)
+}
+
+/// The pid launchd holds for a label: none when the listing leaves it empty,
+/// and a refusal naming the label when it holds something that is not a pid.
+fn running_pid(context: &str, label: &str, pid: &str) -> Result<Option<u32>, String> {
+    if pid.is_empty() {
+        return Ok(None);
+    }
+    pid.parse::<u32>()
+        .map(Some)
+        .map_err(|error| format!("{context}: launchd holds {pid:?} as the pid of {label}: {error}"))
 }

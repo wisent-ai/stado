@@ -45,7 +45,12 @@ fn root_cause(error: &(dyn std::error::Error + 'static)) -> String {
         deepest = source;
     }
     let message = deepest.to_string();
-    let trimmed = message.split(" for url").next().unwrap_or(&message).trim();
+    // The HTTP client appends ` for url (…)` to its deepest cause; the
+    // cause is what precedes it.
+    let trimmed = match message.split_once(" for url") {
+        Some((cause, _url)) => cause.trim(),
+        None => message.trim(),
+    };
     if trimmed.is_empty() {
         return message;
     }

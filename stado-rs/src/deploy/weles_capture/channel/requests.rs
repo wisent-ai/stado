@@ -30,7 +30,11 @@ fn nested_stop(payload: &Value) -> Option<String> {
         Value::String(text) => text
             .lines()
             .rev()
-            .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+            .filter_map(|line| match serde_json::from_str::<Value>(line.trim()) {
+                Ok(report) => Some(report),
+                // Log lines that are not JSON reports carry no stop reason.
+                Err(_not_a_report) => None,
+            })
             .find_map(|report| trajectory_stop(&report)),
         Value::Object(fields) => fields
             .values()
@@ -59,7 +63,7 @@ impl Channel {
 
     /// Whether the call crossed an ssh forward or stayed on this machine's
     /// loopback. The two answers are different claims about what was reached,
-    /// and a report that says only `127.0.0.1` cannot tell them apart — which
+    /// and a report that says only the loopback address cannot tell them apart — which
     /// is how a marker naming a port nothing had ever bound went unnoticed on
     /// this fleet for weeks.
     pub fn transport(&self) -> &'static str {
@@ -111,7 +115,8 @@ impl Channel {
                 "the Weles API answered {route} with {status} and a body that is not JSON: {error}"
             )))
             }
-            Err(_) => Value::Null,
+            // A refusal's plain-text body is quoted by `require_success`.
+            Err(_plain_text_refusal) => Value::Null,
         };
         Ok((status, body, payload))
     }
@@ -125,19 +130,19 @@ impl Channel {
         if status.is_success() && payload.get("ok").and_then(Value::as_bool) == Some(true) {
             return Ok(payload);
         }
-        let detail = trajectory_stop(&payload)
-            .or_else(|| {
-                payload
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| {
-                body.lines()
-                    .rfind(|line| !line.trim().is_empty())
-                    .unwrap_or("no reason given")
-                    .to_string()
-            });
+        // The detail is the trajectory's own stop reason when the answer
+        // carries one, the API's `error` word otherwise, and the body's
+        // last non-blank line for a refusal that is not JSON at all.
+        let detail = match trajectory_stop(&payload) {
+            Some(stop) => stop,
+            None => match payload.get("error").and_then(Value::as_str) {
+                Some(error) => error.to_string(),
+                None => match body.lines().rfind(|line| !line.trim().is_empty()) {
+                    Some(last_line) => last_line.to_string(),
+                    None => "no reason given".to_string(),
+                },
+            },
+        };
         Err(DeployError(format!(
             "the Weles API refused {route} with {status}: {detail}"
         ))

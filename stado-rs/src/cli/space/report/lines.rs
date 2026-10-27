@@ -98,6 +98,17 @@ pub(super) fn print_volumes(report: &Value) {
     }
 }
 
+/// Every row the host printed whose figures were not numbers, each with
+/// why: a dropped row would read as a host that had nothing there.
+pub(super) fn print_unread(report: &Value) {
+    for row in report.get("unread").and_then(Value::as_array).into_iter().flatten() {
+        match row.as_str() {
+            Some(cause) => println!("unread: {cause}"),
+            None => println!("unread: {row}"),
+        }
+    }
+}
+
 /// The memory lines of the human-readable report: what the host has, and
 /// what its paging looks like. Readings only — nothing is measured against
 /// a watermark and nothing reclaims memory.
@@ -140,5 +151,10 @@ pub(super) fn print_memory(reading: &Value) {
                 None => "swapouts not reported".to_string(),
             },
         );
+    }
+    // Every figure above that reads "not reported" has its cause here, in
+    // the host's own words.
+    if let Some(unread) = reading.get("unread").and_then(Value::as_str) {
+        println!("memory not read: {unread}");
     }
 }

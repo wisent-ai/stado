@@ -40,5 +40,9 @@ pub(crate) fn loaded_labels_script(details: LoadedDetails) -> String {
         LoadedDetails::Full => ("full", PATH_POSTURE_SCRIPT),
         LoadedDetails::Images => ("images", ""),
     };
-    format!("details={word}\n{SYSTEMD_UNITS_SCRIPT}{LOADED_UNITS_SCRIPT}{posture}")
+    // The walks name the directories `deploy::service` declares, spelled in
+    // here once for the systemd and launchd reads alike.
+    crate::deploy::service::with_unit_directories(&format!(
+        "details={word}\n{SYSTEMD_UNITS_SCRIPT}{LOADED_UNITS_SCRIPT}{posture}"
+    ))
 }

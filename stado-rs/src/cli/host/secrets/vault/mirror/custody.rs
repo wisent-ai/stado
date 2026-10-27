@@ -9,8 +9,8 @@
 //! then write the bearer to FILE owner-only and atomically unless checking.
 
 use std::fs;
-use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -19,29 +19,26 @@ use sha2::{Digest, Sha256};
 use crate::cli::host::secrets::vault::token::CustodyOperation;
 use crate::cli::CmdError;
 
-/// Skarbiec's fixed-token validation bound, not deployment tuning.
-const TOKEN_LIMIT: usize = 4096;
-const OWNER_ONLY: u32 = 0o600;
-const PRIVATE_BITS: u32 = 0o077;
-
 fn refused(detail: impl std::fmt::Display) -> CmdError {
     CmdError::refused(format!("token custody refused: {detail}"))
 }
 
+/// The one token a bearer file holds, by the rule Skarbiec reads a fixed
+/// token with: no surrounding line ending, nothing empty, no whitespace. The
+/// length is not bounded here either; the bearer is verified against the
+/// grant's hash, which decides whether it is the one minted.
 fn token_bytes(data: &[u8]) -> Result<Vec<u8>, CmdError> {
     let text = std::str::from_utf8(data).map_err(refused)?;
     let token = text.trim_end_matches(['\r', '\n']);
-    if token.is_empty() || token.len() > TOKEN_LIMIT || token.chars().any(char::is_whitespace) {
-        return Err(refused(
-            "token file must contain one bounded non-whitespace token",
-        ));
+    if token.is_empty() || token.chars().any(char::is_whitespace) {
+        return Err(refused("token file must contain one non-whitespace token"));
     }
     Ok(token.as_bytes().to_vec())
 }
 
 fn token_path(value: &str) -> Result<PathBuf, CmdError> {
-    let home = fs::canonicalize(std::env::var("HOME").map_err(|_| refused("HOME is not set"))?)
-        .map_err(refused)?;
+    let home = crate::config_file::home().map_err(refused)?;
+    let home = fs::canonicalize(&home).map_err(refused)?;
     // A bare file name is the name `stado credentials token mint
     // --token-file-name` takes, and mint places it under ~/.stado; reading it
     // anywhere else refused the very name the bearer was minted under.
@@ -61,7 +58,10 @@ fn token_path(value: &str) -> Result<PathBuf, CmdError> {
     let name = expanded
         .file_name()
         .ok_or_else(|| refused("token file names no file"))?;
-    let parent = fs::canonicalize(expanded.parent().unwrap_or(Path::new("/"))).map_err(refused)?;
+    let parent = expanded
+        .parent()
+        .ok_or_else(|| refused(format!("token file {value} names no directory")))?;
+    let parent = fs::canonicalize(parent).map_err(refused)?;
     if !parent.starts_with(&home) {
         return Err(refused(
             "token file must resolve inside the host account's home",
@@ -83,22 +83,16 @@ fn read_token(path: &Path) -> Result<Option<Vec<u8>>, CmdError> {
     };
     let metadata = file.metadata().map_err(refused)?;
     let euid = unsafe { nix::libc::geteuid() };
-    if !metadata.is_file() || metadata.uid() != euid || metadata.mode() & PRIVATE_BITS != 0 {
+    if !metadata.is_file()
+        || metadata.uid() != euid
+        || crate::primitives::file_mode::open_to_others(metadata.mode())
+    {
         return Err(refused(
             "token file must be an owner-controlled regular file",
         ));
     }
     let mut data = Vec::new();
-    let bound = (TOKEN_LIMIT + "\r\n".len() + 1) as u64;
-    std::io::Read::by_ref(&mut file)
-        .take(bound)
-        .read_to_end(&mut data)
-        .map_err(refused)?;
-    if data.len() as u64 >= bound {
-        return Err(refused(
-            "token file exceeds the bounded token and line ending",
-        ));
-    }
+    file.read_to_end(&mut data).map_err(refused)?;
     token_bytes(&data).map(Some)
 }
 
@@ -155,28 +149,13 @@ fn export(vault: &str, consumer: &str, file: &str) -> Result<Value, CmdError> {
         "source_token_file": path.display().to_string()}))
 }
 
+/// Put the bearer at PATH whole and owner-only, through the one way Stado
+/// replaces a file it keeps ([`crate::primitives::document::persist`]): a
+/// fresh file created readable by this account alone, flushed, renamed over
+/// PATH and the directory flushed.
 fn write_atomically(path: &Path, token: &[u8]) -> Result<(), CmdError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| refused("token file has no parent"))?;
-    let staged = parent.join(format!(".stado-token-sync-{}", std::process::id()));
-    let written = (|| -> std::io::Result<()> {
-        let mut output = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(OWNER_ONLY)
-            .open(&staged)?;
-        output.set_permissions(fs::Permissions::from_mode(OWNER_ONLY))?;
-        output.write_all(token)?;
-        output.sync_all()?;
-        fs::rename(&staged, path)
-    })();
-    written.map_err(|error| {
-        refused(crate::primitives::staging::failed_with(
-            error.to_string(),
-            &staged,
-        ))
-    })
+    crate::primitives::document::persist(path, token)
+        .map_err(|error| refused(format!("writing {}: {error}", path.display())))
 }
 
 fn install(

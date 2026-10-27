@@ -31,12 +31,18 @@ pub fn explain_mismatch(conditions: &[Condition], observed: &Value) -> String {
                 _ => actual == Some(&condition.expected),
             };
             (!matches).then(|| {
-                format!(
-                    "{} expected {}, observed {}",
-                    condition.field,
-                    condition.expected,
-                    actual.cloned().unwrap_or(Value::Null)
-                )
+                // A field the observation lacks is said to be absent: printed
+                // as null it read like an observed null value.
+                match actual {
+                    Some(observed) => format!(
+                        "{} expected {}, observed {observed}",
+                        condition.field, condition.expected
+                    ),
+                    None => format!(
+                        "{} expected {}, but the observation has no such field",
+                        condition.field, condition.expected
+                    ),
+                }
             })
         })
         .collect::<Vec<String>>()

@@ -73,7 +73,7 @@ pub(super) async fn evict(service: &str, host: &str, json: bool) -> Result<(), C
     let report = service::reset_service_listener(
         &target,
         &squatter,
-        &format!("http://127.0.0.1:{port}/"),
+        &format!("{}/", crate::primitives::http::origin::loopback_origin(port)),
         &production_runner(),
     )
     .await

@@ -50,7 +50,11 @@ pub(crate) fn annotations(
     // A malformed policy cannot identify an authorised label reliably, so it
     // has no unit clause; `builds_refusing_registry` still reports the parser's
     // exact refusal through the existing `build-refuses-registry` finding.
-    let policy = policy(document).ok().flatten()?;
+    let policy = match policy(document) {
+        Ok(Some(policy)) => policy,
+        Ok(None) => return None,
+        Err(_reported_as_build_refuses_registry) => return None,
+    };
     let declared = declared_units(&policy, target_name);
     if declared.is_empty() {
         return None;

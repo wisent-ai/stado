@@ -141,12 +141,18 @@ pub(super) async fn listener_retired(
     stopped: bool,
     runner: &Runner,
 ) -> Option<String> {
-    match listener_standing(target, running, role, stopped, runner)
-        .await
-        .ok()?
-    {
-        Handoff::Complete => Some(format!("the resolver in {} serves", running.unit_id())),
-        Handoff::Retained(detail) | Handoff::Waiting(detail) => Some(detail),
-        Handoff::Start | Handoff::Restore { .. } | Handoff::Kept(_) => None,
+    match listener_standing(target, running, role, stopped, runner).await {
+        Ok(Handoff::Complete) => Some(format!("the resolver in {} serves", running.unit_id())),
+        Ok(Handoff::Retained(detail) | Handoff::Waiting(detail)) => Some(detail),
+        Ok(Handoff::Start | Handoff::Restore { .. } | Handoff::Kept(_)) => None,
+        // A standing the host did not answer is not a unit to repair; the
+        // reason is said here, since the caller reads `None` as repairable.
+        Err(error) => {
+            eprintln!(
+                "stado: whether {}'s listener was handed over is not known: {error}",
+                role.unit
+            );
+            None
+        }
     }
 }

@@ -21,6 +21,10 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
         )));
     }
     let runner = production_runner();
+    // Whether a catalog product takes over the routes of the withdrawn unit
+    // is judged from its program, whose `$HOME` resolves under the home the
+    // host states.
+    let home = crate::deploy::host_channel::remote_home(&target, &runner).await.map_err(click)?;
     let sudo_password = if UnitDomain::from_path(&found.path).requires_privileged_bootstrap() {
         host_sudo_password(&target).await?
     } else {
@@ -28,7 +32,7 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
     };
     with_service_mutation_lease(&found, || async {
         if found.unit_id().is_empty() && found.path.is_empty() {
-            let (removed, generation) = withdraw_service_declaration(host, unit).await?;
+            let (removed, generation) = withdraw_service_declaration(host, unit, &home).await?;
             return render_mutation("retired", &removed, &generation, None, json);
         }
 
@@ -45,7 +49,7 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let (removed, generation) =
-            withdraw_service_declaration(host, unit)
+            withdraw_service_declaration(host, unit, &home)
                 .await
                 .map_err(|error| {
                     error
@@ -91,6 +95,7 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
     }
     let path = found.path.clone();
     let runner = production_runner();
+    let home = crate::deploy::host_channel::remote_home(&target, &runner).await.map_err(click)?;
     let sudo_password = if UnitDomain::from_path(&path).requires_privileged_bootstrap() {
         host_sudo_password(&target).await?
     } else {
@@ -98,7 +103,7 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
     };
     with_service_mutation_lease(&found, || async {
         if found.unit_id().is_empty() && path.is_empty() {
-            let (removed, generation) = withdraw_service_declaration(host, unit).await?;
+            let (removed, generation) = withdraw_service_declaration(host, unit, &home).await?;
             if json {
                 return print_json(&json!({
                     "target": target.name,
@@ -127,7 +132,7 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
         let (removed, generation) =
-            withdraw_service_declaration(host, unit)
+            withdraw_service_declaration(host, unit, &home)
                 .await
                 .map_err(|error| {
                     error
@@ -177,7 +182,7 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
                 Err(error) => eprintln!("file failed: {error}"),
             }
         }
-        file.map(|_| ())
+        file.map(|_printed_outcome| ())
     })
     .await
 }

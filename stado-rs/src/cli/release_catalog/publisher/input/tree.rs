@@ -85,10 +85,11 @@ fn materialize(
             &checkout,
             &["cat-file", "-e", &format!("{recorded}^{{commit}}")],
         )
-        .map_err(|_| {
+        .map_err(|error| {
             CmdError::usage(format!(
-                "submodule {path} of {} records commit {recorded}, which {} does not hold; \
-                 run `git submodule update --init --recursive` in {}",
+                "submodule {path} of {} records commit {recorded}, which {} could not show \
+                 ({error}); when the submodule is not checked out there, run \
+                 `git submodule update --init --recursive` in {}",
                 repository.display(),
                 checkout.display(),
                 repository.display()

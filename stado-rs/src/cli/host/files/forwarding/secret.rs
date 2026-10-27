@@ -93,7 +93,7 @@ printf '%s\n' "$dir/$name"
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
         .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{target}: secret installation failed: {}",
             crate::deploy::host_channel::last_error_line(&output, "remote secret write failed")

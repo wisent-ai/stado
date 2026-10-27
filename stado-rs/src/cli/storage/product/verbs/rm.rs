@@ -48,7 +48,7 @@ pub(crate) async fn delete_object(uri: &str) -> Result<String, CmdError> {
         // those instead of leaving them unreachable.
         return Err(CmdError::refused(
             "release objects are immutable and cannot be deleted; to discard the staged parts of \
-             an interrupted upload use `stado storage abort-upload <target-uri>`",
+             an interrupted upload use `stado storage abort <target-uri>`",
         ));
     }
     let uri = object.to_string();

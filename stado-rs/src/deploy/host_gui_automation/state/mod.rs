@@ -58,3 +58,13 @@ async fn code_requirement_hex(
     }
     Ok(encoded)
 }
+
+/// A `defaults` key's value as read, or `absent` (the report's word for a key
+/// the host does not set) when the read found none: a key that is not set is
+/// itself the observation, not a value standing in for one.
+fn stated_or(read: Option<String>, absent: &str) -> String {
+    match read {
+        Some(value) if !value.is_empty() => value,
+        _ => absent.to_string(),
+    }
+}

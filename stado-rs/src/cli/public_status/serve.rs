@@ -1,4 +1,4 @@
-//! `stado public-status serve --bind ADDRESS` — the status page itself.
+//! `stado availability serve --bind ADDRESS` — the status page itself.
 //!
 //! Every request reads the published document from the object store again,
 //! so the page says what the last check found, and when the document cannot
@@ -36,7 +36,7 @@ async fn answer(store: &JobStorage, target: &str) -> Answer {
     let read = match document::read(store).await {
         Ok(Some(published)) => Ok(published),
         Ok(None) => Err(format!(
-            "no status is published at {} in the object store: no `stado public-status \
+            "no status is published at {} in the object store: no `stado availability \
              check` has run against it",
             document::BLOB
         )),
@@ -160,7 +160,7 @@ async fn respond(
 /// its cause, as accepting again would fail the same way at once.
 pub(super) async fn serve(bind: &str) -> Result<(), CmdError> {
     let limits = crate::dashboard::RequestLimits::read()
-        .map_err(|error| CmdError::refused(format!("public-status request limits: {error}")))?;
+        .map_err(|error| CmdError::refused(format!("availability request limits: {error}")))?;
     let store = JobStorage::with_bucket(crate::config::bucket()).await?;
     let listener = TcpListener::bind(bind)
         .await
@@ -170,7 +170,7 @@ pub(super) async fn serve(bind: &str) -> Result<(), CmdError> {
             "the address bound for {bind} cannot be read: {error}"
         ))
     })?;
-    println!("stado public-status: the status page listens on {address}");
+    println!("stado availability: the status page listens on {address}");
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(accepted) => accepted,
@@ -180,19 +180,19 @@ pub(super) async fn serve(bind: &str) -> Result<(), CmdError> {
                     std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset
                 ) =>
             {
-                eprintln!("stado public-status: a client gave up before it was accepted: {error}");
+                eprintln!("stado availability: a client gave up before it was accepted: {error}");
                 continue;
             }
             Err(error) => {
                 return Err(CmdError::click(format!(
-                    "stado public-status on {address} cannot accept connections: {error}"
+                    "stado availability on {address} cannot accept connections: {error}"
                 )))
             }
         };
         let store = store.clone();
         tokio::spawn(async move {
             if let Err(error) = respond(store, stream, limits).await {
-                eprintln!("stado public-status: {peer}: {error}");
+                eprintln!("stado availability: {peer}: {error}");
             }
         });
     }

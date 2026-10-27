@@ -14,6 +14,46 @@ use crate::sizing::Sizing;
 use super::fit::candidate_fit;
 use super::start::start_candidate;
 
+/// What one claim scan did, job by job: each list holds the ids of the jobs
+/// that reached that outcome, so a published count is the length of a list
+/// that names its jobs, never a counter nothing explains.
+#[derive(Default)]
+pub(crate) struct Census {
+    pub cpu_rejected: Vec<String>,
+    pub ram_rejected: Vec<String>,
+    pub vram_rejected: Vec<String>,
+    pub eligibility_rejected: Vec<String>,
+    pub eligible: Vec<String>,
+    pub claim_errors: Vec<String>,
+    pub declined: Vec<Value>,
+    pub started: Vec<String>,
+}
+
+impl Census {
+    /// Publish the scan into the diagnostics: the count of each outcome, and
+    /// the declined jobs with their reasons.
+    fn publish(self, queued: &[Job], agent_diag: &mut Map<String, Value>) {
+        let counts = [
+            ("vram_rejected", self.vram_rejected.len()),
+            ("cpu_rejected", self.cpu_rejected.len()),
+            ("ram_rejected", self.ram_rejected.len()),
+            ("eligibility_rejected", self.eligibility_rejected.len()),
+            ("eligible_count", self.eligible.len()),
+            ("claimed_this_loop", self.started.len()),
+            ("claim_errors", self.claim_errors.len()),
+            ("queue_scanned", queued.len()),
+        ];
+        for (key, count) in counts {
+            agent_diag.insert(key.into(), Value::from(count));
+        }
+        agent_diag.insert(CLAIM_DECLINED_KEY.into(), Value::Array(self.declined));
+        agent_diag.insert(
+            "last_claim_attempt_at".into(),
+            Value::from(isoformat_utc(Utc::now())),
+        );
+    }
+}
+
 /// Walk what this tick may claim, start what still fits, and leave the census
 /// of the scan in the diagnostics. Reports how many slots it started.
 #[allow(clippy::too_many_arguments)]
@@ -33,24 +73,8 @@ pub(crate) async fn claim_scan(
     free_vram_gb: &mut i64,
     agent_diag: &mut Map<String, Value>,
     log_fn: &mut dyn FnMut(&str),
-) -> anyhow::Result<i64> {
-    let mut started = 0i64;
-    let mut diag_vram_rejected = 0i64;
-    let mut diag_eligibility_rejected = 0i64;
-    let mut diag_eligible = 0i64;
-    let mut diag_claim_errors = 0i64;
-    let mut diag_cpu_rejected = 0i64;
-    let mut diag_ram_rejected = 0i64;
-    let mut claim_declined = Vec::new();
-    let mut available_cpu_cores = last_cap
-        .as_ref()
-        .map(|capacity| capacity.available_cpu_cores)
-        .unwrap_or_default();
-    // The free RAM this agent itself measured and broadcast with the capacity.
-    let mut available_ram_gb = last_cap
-        .as_ref()
-        .and_then(|capacity| capacity.free_ram_gb)
-        .unwrap_or_default();
+) -> anyhow::Result<usize> {
+    let mut census = Census::default();
     // These keys describe one completed scan. The previous scan was
     // already published before this point; carrying its last error into a
     // later clean scan would turn a historical refusal into current state.
@@ -58,9 +82,30 @@ pub(crate) async fn claim_scan(
         "last_claim_error_job",
         "last_claim_error",
         "last_claim_error_at",
+        "claim_budget_unread",
     ] {
         agent_diag.remove(key);
     }
+    // The CPU and RAM this agent itself measured and broadcast with its
+    // capacity. Before it broadcast one, or when the broadcast states no
+    // measured CPU or no free RAM, there is no budget to claim against: the
+    // scan claims nothing and says why, instead of claiming against an
+    // invented empty budget.
+    let budget = last_cap
+        .as_ref()
+        .and_then(|capacity| Some((capacity.available_cpu_cores?, capacity.free_ram_gb?)));
+    let Some((mut available_cpu_cores, mut available_ram_gb)) = budget else {
+        agent_diag.insert(
+            "claim_budget_unread".into(),
+            Value::from(
+                "this agent has broadcast no capacity stating its free CPU and RAM yet, so \
+                 nothing is claimed",
+            ),
+        );
+        let started = census.started.len();
+        census.publish(queued, agent_diag);
+        return Ok(started);
+    };
     // Per-card budget for this tick, emptiest first. The driver's frees
     // already include every allocation that exists; the subtraction below
     // covers the window in which a job this tick admitted has not allocated
@@ -89,9 +134,7 @@ pub(crate) async fn claim_scan(
             available_ram_gb,
             slots,
             agent_diag,
-            &mut diag_cpu_rejected,
-            &mut diag_ram_rejected,
-            &mut diag_vram_rejected,
+            &mut census,
         )
         .await?
         else {
@@ -115,11 +158,7 @@ pub(crate) async fn claim_scan(
             free_vram_gb,
             slots,
             agent_diag,
-            &mut diag_eligibility_rejected,
-            &mut diag_eligible,
-            &mut diag_claim_errors,
-            &mut claim_declined,
-            &mut started,
+            &mut census,
             log_fn,
         )
         .await?
@@ -127,21 +166,7 @@ pub(crate) async fn claim_scan(
             break;
         }
     }
-    agent_diag.insert("queue_scanned".into(), Value::from(queued.len() as i64));
-    agent_diag.insert("vram_rejected".into(), Value::from(diag_vram_rejected));
-    agent_diag.insert("cpu_rejected".into(), Value::from(diag_cpu_rejected));
-    agent_diag.insert("ram_rejected".into(), Value::from(diag_ram_rejected));
-    agent_diag.insert(
-        "eligibility_rejected".into(),
-        Value::from(diag_eligibility_rejected),
-    );
-    agent_diag.insert("eligible_count".into(), Value::from(diag_eligible));
-    agent_diag.insert(CLAIM_DECLINED_KEY.into(), Value::Array(claim_declined));
-    agent_diag.insert("claimed_this_loop".into(), Value::from(started));
-    agent_diag.insert("claim_errors".into(), Value::from(diag_claim_errors));
-    agent_diag.insert(
-        "last_claim_attempt_at".into(),
-        Value::from(isoformat_utc(Utc::now())),
-    );
+    let started = census.started.len();
+    census.publish(queued, agent_diag);
     Ok(started)
 }

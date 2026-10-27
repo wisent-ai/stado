@@ -65,11 +65,9 @@ fn readiness_from_items(
     ]
     .into_iter()
     .filter(|(key, expected)| value(key) != Some(expected))
-    .map(|(key, expected)| {
-        format!(
-            "{key} is {}, expected {expected}",
-            value(key).unwrap_or("unreported")
-        )
+    .map(|(key, expected)| match value(key) {
+        Some(reported) => format!("{key} is {reported}, expected {expected}"),
+        None => format!("{key} is unreported, expected {expected}"),
     })
     .collect();
     if !mismatches.is_empty() {

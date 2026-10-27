@@ -7,6 +7,6 @@ mod ingress_commands;
 mod key_commands;
 
 pub use dispatch::run;
-pub use fleet_commands::FleetCommands;
+pub use fleet_commands::{FleetCommands, InviteCommands};
 pub use ingress_commands::IngressCommands;
 pub use key_commands::KeyCommands;

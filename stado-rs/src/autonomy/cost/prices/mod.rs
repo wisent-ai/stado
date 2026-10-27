@@ -136,6 +136,13 @@ pub async fn refresh_prices(policy: &AutonomyPolicy) -> PriceBook {
     }
 }
 
+/// The Azure Retail Prices read alone, now: every consumption VM quote in
+/// the configured locations, with the read's own error when it was partial.
+/// The provisioning credit gate prices the machine it is about to start.
+pub(crate) async fn azure_vm_prices() -> PriceSource {
+    azure_prices(Utc::now()).await
+}
+
 fn infer_accelerator(description: &str) -> Option<String> {
     let normalized_description = normalized(description);
     [

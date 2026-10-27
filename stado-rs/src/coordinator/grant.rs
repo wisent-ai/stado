@@ -31,6 +31,11 @@ pub(crate) async fn agent_workload_grant() -> Result<Option<String>, crate::skar
     if !remote_agents {
         return Ok(None);
     }
+    if let Some(cause) = config::agent_skarbiec_url_absent() {
+        return Err(SkarbiecError::Deployment(format!(
+            "WC_AGENT_SKARBIEC_URL names a service this host cannot resolve: {cause}"
+        )));
+    }
     let url = config::agent_skarbiec_url();
     if url.is_empty() {
         return Err(SkarbiecError::Deployment(

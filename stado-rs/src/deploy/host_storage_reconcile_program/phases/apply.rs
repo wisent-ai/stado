@@ -14,12 +14,10 @@ use crate::deploy::host_storage_reconcile_program::fs::{
     regular_identity, validate_complete_inventory,
 };
 use crate::deploy::host_storage_reconcile_program::json::{
-    atomic_json, load_immutable_json, now, object, truthy,
+    atomic_json, flag, load_immutable_json, now, time_recorded,
 };
 
 const SNAPSHOT_ENGINE: &str = "stado.typed-lifecycle-snapshot.v1";
-/// A SHA-256 digest written as lowercase hexadecimal.
-const SHA256_HEX_CHARACTERS: usize = 64;
 
 fn by_path(objects: &[Value]) -> Step<BTreeMap<String, Value>> {
     objects
@@ -28,10 +26,14 @@ fn by_path(objects: &[Value]) -> Step<BTreeMap<String, Value>> {
         .collect()
 }
 
+/// The recorded identity of `item`'s `key` (`body` or `metadata`). An object
+/// the checkpoint does not hold, or a sidecar it does not record, has the
+/// identity regular_identity answers for a file that does not exist: null.
 fn field(item: Option<&Value>, key: &str) -> Value {
-    item.and_then(|item| item.get(key))
-        .cloned()
-        .unwrap_or(Value::Null)
+    match item.and_then(|item| item.get(key)) {
+        Some(identity) => identity.clone(),
+        None => Value::Null,
+    }
 }
 
 /// The recorded decisions are validated and none blocks activation.
@@ -130,7 +132,10 @@ fn apply_object(
     primary_wins: bool,
 ) -> Step<()> {
     let relative = item_path(item)?;
-    let desired = before.filter(|_| primary_wins).unwrap_or(item);
+    let desired = match before {
+        Some(before) if primary_wins => before,
+        _ => item,
+    };
     let destination = join(&context.primary, relative);
     let current = regular_identity(context, &destination)?;
     if current != field(Some(desired), "body") {
@@ -160,7 +165,7 @@ fn apply_object(
         } else if fs::metadata(&destination_meta).is_ok() {
             fs::remove_file(&destination_meta)
                 .map_err(|error| format!("cannot remove {destination_meta}: {error}"))?;
-            fsync_dir(&parent_of(&destination_meta))?;
+            fsync_dir(&parent_of(&destination_meta)?)?;
         }
     }
     if regular_identity(context, &destination)? != field(Some(desired), "body") {
@@ -190,7 +195,7 @@ pub(super) fn apply(context: &Context, mut receipt: Value, evidence: &Evidence) 
     let rechecked = seconds(&fence, "rechecked_at", "durable lifecycle fence")?;
     let checkpointed = seconds(&receipt, "checkpointed_at", "checkpoint receipt")?;
     if FenceStatus::read(&fence, "status")? != FenceStatus::Fenced
-        || !truthy(object(&fence, "queue").get("drained"))
+        || !flag(fence.pointer("/queue/drained"), "queue.drained")?
         || !every_writer(&fence, "stopped")?
         || rechecked < checkpointed
     {
@@ -252,19 +257,17 @@ pub(super) fn activate(context: &Context, mut receipt: Value) -> Step<()> {
     let fence = read_fence(context, "activated lifecycle fence cannot be read")?;
     let active = format!("{}/.stado/bin/stado", context.home);
     let expected = text(&fence, "activation_sha256")
-        .unwrap_or_default()
+        .ok_or("activated lifecycle fence records no activation_sha256")?
         .to_string();
-    let runtime_is_active = expected.len() == SHA256_HEX_CHARACTERS
-        && fs::symlink_metadata(&active).is_ok_and(|info| info.is_file())
+    // The runtime is active when the installed binary's SHA-256 is the digest
+    // the fence recorded for the activation.
+    let runtime_is_active = fs::symlink_metadata(&active).is_ok_and(|info| info.is_file())
         && digest(context, &active)? == expected;
     if text(&fence, "schema") != Some(FENCE_SCHEMA)
         || FenceStatus::read(&fence, "status")? != FenceStatus::Activated
-        || !truthy(object(&fence, "queue").get("resumed"))
-        || !truthy(fence.get("restored_at"))
-        || object(&fence, "write_fence")
-            .get("status")
-            .and_then(Value::as_str)
-            != Some("released")
+        || !flag(fence.pointer("/queue/resumed"), "queue.resumed")?
+        || !time_recorded(fence.get("restored_at"), "restored_at")?
+        || fence.pointer("/write_fence/status").and_then(Value::as_str) != Some("released")
         || !runtime_is_active
     {
         return Err(
@@ -276,7 +279,10 @@ pub(super) fn activate(context: &Context, mut receipt: Value) -> Step<()> {
             "activated fence does not restore every captured native service state".to_string(),
         );
     }
-    let activated_at = fence.get("activated_at").cloned().unwrap_or(Value::Null);
+    let activated_at = fence
+        .get("activated_at")
+        .cloned()
+        .ok_or("activated lifecycle fence records no activated_at")?;
     set(
         &mut receipt,
         "status",

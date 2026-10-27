@@ -54,7 +54,7 @@ pub(crate) async fn preflight_apple_challenge(
         runner,
     )
     .await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: the Apple challenge helper cannot use Accessibility in {user}'s Aqua session: {}",
             target.name,

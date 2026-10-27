@@ -39,7 +39,7 @@ pub(super) async fn probe_channel(
     )
     .await;
     let (ssh_reachable, ssh_error, selected_connection) = match ssh {
-        Ok((output, used)) if output.ok() => {
+        Ok((output, used)) if output.succeeded() => {
             let selected = match used {
                 crate::deploy::host_channel::UsedConnection::Local => "local".to_string(),
                 crate::deploy::host_channel::UsedConnection::Ssh(connection) => {

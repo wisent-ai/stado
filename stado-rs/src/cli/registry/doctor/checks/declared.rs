@@ -44,8 +44,14 @@ pub(super) fn declared_units(
             if legacy_labels.contains(id) {
                 return None;
             }
+            // The row shows the service's name; a declaration that states
+            // only a label or unit is shown by that id.
+            let name = match text("name") {
+                Some(name) => name,
+                None => id,
+            };
             Some(DeclaredUnit {
-                name: text("name").unwrap_or(id).to_string(),
+                name: name.to_string(),
                 id: id.to_string(),
             })
         })
@@ -56,12 +62,16 @@ pub(super) fn declared_units(
 /// although it is not that product's unit: the product whose program the
 /// declaration runs, as the service reconciler judges it before it declines
 /// to repair it. The host Stado process's units are judged role by role on
-/// the host, so they are not reported here. An owner that cannot be read is
-/// the error saying why: read as "no other owner", a retired unit was
-/// reported as missing or inactive, the state it is meant to be in.
+/// the host, so they are not reported here. The program's `$HOME` resolves
+/// under the home of the machine this doctor runs on when `local_host` names
+/// `target`; the doctor reads no other host, so another host's home is not
+/// known and that is the error. An owner that cannot be read is the error
+/// saying why: read as "no other owner", a retired unit was reported as
+/// missing or inactive, the state it is meant to be in.
 pub(super) fn retired_replacement(
     target: &ComputeTarget,
     declared: &DeclaredUnit,
+    local_host: Option<&str>,
 ) -> Result<Option<service_catalog::CatalogService>, String> {
     let services = service::declared_services(target);
     let Some(service) = services
@@ -70,7 +80,18 @@ pub(super) fn retired_replacement(
     else {
         return Ok(None);
     };
-    let Some(owner) = service::declared_owner(target, service)? else {
+    if service.program.is_empty() {
+        return Ok(None);
+    }
+    if local_host != Some(target.name.as_str()) {
+        return Err(format!(
+            "its program resolves under the home {} states, which this doctor does not read \
+             because it runs on another machine and opens no channel to it",
+            target.name
+        ));
+    }
+    let home = crate::config_file::home_dir().to_string_lossy().into_owned();
+    let Some(owner) = service::declared_owner(target, service, &home)? else {
         return Ok(None);
     };
     let host = service_catalog::host_process()?;

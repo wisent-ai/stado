@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use futures::StreamExt;
 
 use crate::models::Job;
+use crate::primitives::tally::Tally;
 use crate::queue::storage::JobStorage;
 use crate::queue::StorageError;
 
@@ -28,10 +29,18 @@ pub(super) async fn collect_oldest_first(
     if scan.window_full(out.len()) || scan.budget_spent(*scanned) {
         return Ok(());
     }
-    let mut ordered: Vec<(chrono::DateTime<chrono::Utc>, String)> = Vec::new();
+    let mut ordered: Vec<(bool, Option<chrono::DateTime<chrono::Utc>>, String)> = Vec::new();
     for blob in store.list_blobs_with_meta(&format!("{prefix}/")).await? {
-        let name = blob.name.rsplit('/').next().unwrap_or("");
-        let job_id = name.strip_suffix(".json").unwrap_or(name);
+        // A queue document is `<prefix>/<job id>.json`; the last `/` segment
+        // is always yielded, and a name without the suffix is skipped below.
+        let name = match blob.name.rsplit('/').next() {
+            Some(name) => name,
+            None => unreachable!("str::rsplit yields at least one segment"),
+        };
+        let job_id = match name.strip_suffix(".json") {
+            Some(job_id) => job_id,
+            None => name,
+        };
         if !blob.name.ends_with(".json") || seen.contains(job_id) {
             continue;
         }
@@ -39,9 +48,9 @@ pub(super) async fn collect_oldest_first(
         // is downloaded rather than assumed unfit. A corrupt integer raises,
         // so misbehaving metadata is reported instead of silently filtering.
         if let Some(mem_str) = blob.metadata.get("gpu_mem_gb") {
-            let mem: i64 = mem_str.parse().map_err(|_| {
+            let mem: i64 = mem_str.parse().map_err(|error| {
                 StorageError::Other(format!(
-                    "corrupt gpu_mem_gb metadata on {}: {mem_str:?}",
+                    "corrupt gpu_mem_gb metadata on {}: {mem_str:?}: {error}",
                     blob.name
                 ))
             })?;
@@ -49,13 +58,12 @@ pub(super) async fn collect_oldest_first(
                 continue;
             }
         }
-        ordered.push((
-            blob.updated.unwrap_or_else(chrono::Utc::now),
-            blob.name.clone(),
-        ));
+        // A blob the backend lists without an update time has no known age;
+        // it is taken after every dated blob, oldest first among those.
+        ordered.push((blob.updated.is_none(), blob.updated, blob.name.clone()));
     }
     ordered.sort();
-    let paths: Vec<String> = ordered.into_iter().map(|(_, name)| name).collect();
+    let paths: Vec<String> = ordered.into_iter().map(|(_, _, name)| name).collect();
     let workers = crate::queue::migrations::bulk_workers()?;
     for paths in paths.chunks(workers) {
         let texts: Vec<Option<String>> = futures::stream::iter(paths)
@@ -67,7 +75,7 @@ pub(super) async fn collect_oldest_first(
             .collect::<Result<Vec<_>, _>>()?;
         for data in texts.into_iter().flatten() {
             let job = Job::from_json(&data)?;
-            *scanned += 1;
+            scanned.tally();
             if scan.accepts(&job) && seen.insert(job.job_id.clone()) {
                 out.push(job);
                 if scan.window_full(out.len()) {

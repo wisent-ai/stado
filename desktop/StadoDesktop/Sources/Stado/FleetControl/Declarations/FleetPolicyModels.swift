@@ -20,18 +20,15 @@ struct FleetPolicy: Decodable, Sendable {
         case publicOrigins = "public_origins"
     }
 
+    /// `GET /api/registry.json` writes its generation as the store's version
+    /// text and both lists in every answer (`public_origins` empty when the
+    /// fleet publishes nothing); a projection that lacks one is a decoding
+    /// error naming the key, not a policy with no generation or no targets.
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        if let number = try? values.decode(Int.self, forKey: .generation) {
-            generation = String(number)
-        } else {
-            generation = try values.decodeIfPresent(String.self, forKey: .generation) ?? "Unavailable"
-        }
-        targets = try values.decodeIfPresent([FleetPolicyTarget].self, forKey: .targets) ?? []
-        publicOrigins = try values.decodeIfPresent(
-            [FleetPublicOrigin].self,
-            forKey: .publicOrigins
-        ) ?? []
+        generation = try values.decode(String.self, forKey: .generation)
+        targets = try values.decode([FleetPolicyTarget].self, forKey: .targets)
+        publicOrigins = try values.decode([FleetPublicOrigin].self, forKey: .publicOrigins)
     }
 }
 
@@ -52,17 +49,24 @@ struct FleetPolicyTarget: Decodable, Identifiable, Sendable {
         case weles
     }
 
-    private enum WelesKeys: String, CodingKey {
-        case recordingsDirectory = "recordings_dir"
-    }
-
+    /// `weles` is projected only when the registry declares a recordings
+    /// directory for the target, and then carries it; a target without the
+    /// block declares none.
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         name = try values.decode(String.self, forKey: .name)
         pinnedOnly = try values.decodeIfPresent(Bool.self, forKey: .pinnedOnly)
         workRoot = try values.decodeIfPresent(String.self, forKey: .workRoot)
-        let weles = try? values.nestedContainer(keyedBy: WelesKeys.self, forKey: .weles)
-        welesRecordingsDirectory = try weles?.decodeIfPresent(String.self, forKey: .recordingsDirectory)
+        welesRecordingsDirectory =
+            try values.decodeIfPresent(WelesBlock.self, forKey: .weles)?.recordingsDirectory
+    }
+
+    private struct WelesBlock: Decodable {
+        let recordingsDirectory: String
+
+        enum CodingKeys: String, CodingKey {
+            case recordingsDirectory = "recordings_dir"
+        }
     }
 }
 

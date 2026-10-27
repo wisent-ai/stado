@@ -1,6 +1,5 @@
 //! Python-parity text, JSON and process-status conversions: canonical
-//! key-sorted JSON, `Popen.returncode`, and the head/tail slices every record
-//! in this module is bounded by.
+//! key-sorted JSON, `Popen.returncode`, and character-based head slices.
 
 use super::*;
 
@@ -45,29 +44,6 @@ pub fn python_returncode(status: std::process::ExitStatus) -> i32 {
             "a finished child either exited or was ended by a signal, and {status} is neither"
         ),
     }
-}
-
-/// Python `(res.stderr or res.stdout or "")[:n]` on captured bytes.
-pub(crate) fn captured_head(stderr: &[u8], stdout: &[u8], n: usize) -> String {
-    let text = if !stderr.is_empty() {
-        String::from_utf8_lossy(stderr).into_owned()
-    } else if !stdout.is_empty() {
-        String::from_utf8_lossy(stdout).into_owned()
-    } else {
-        String::new()
-    };
-    text.chars().take(n).collect()
-}
-
-/// Last `n` chars (Python `s[-n:]`).
-pub(crate) fn tail_chars(s: &str, n: usize) -> String {
-    s.chars()
-        .rev()
-        .take(n)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect()
 }
 
 /// First `n` chars (Python `s[:n]`).

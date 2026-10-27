@@ -85,7 +85,7 @@ pub fn scan_delivered_releases(home: &Path, enforcing: bool, report: &mut Cleanu
             Ok(kept) => kept,
             Err(cause) => {
                 record.scanned_items += versions.len() as i64;
-                skipped.extend(versions.keys().map(|_| "installed_release_unreadable"));
+                skipped.extend(versions.keys().map(|_version| "installed_release_unreadable"));
                 report.add_error(CLEANER, &super::JanitorError::os(&cause));
                 continue;
             }
@@ -100,7 +100,7 @@ pub fn scan_delivered_releases(home: &Path, enforcing: bool, report: &mut Cleanu
             versions
                 .keys()
                 .filter(|version| kept.contains(*version))
-                .map(|_| "installed_or_newest"),
+                .map(|_version| "installed_or_newest"),
         );
         record.eligible_items += candidates.len() as i64;
         let sizes: Vec<(&PathBuf, i64)> = candidates

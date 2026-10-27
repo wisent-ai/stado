@@ -51,7 +51,7 @@ pub(super) fn delivery_request(
     a: &ReleaseArtifactRef,
 ) -> DeliveryRequest {
     DeliveryRequest {
-        schema_version: 1,
+        schema_version: crate::release_pipeline::SCHEMA_VERSION,
         run_id: run.run_id.clone(),
         name: d.name.clone(),
         product: run.product.clone(),

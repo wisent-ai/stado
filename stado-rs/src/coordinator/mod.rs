@@ -39,11 +39,14 @@
 //!
 //! The parts: `grant` resolves the scoped workload grant agent dispatch
 //! projects into startup templates, `passes` holds the tick and the passes it
-//! composes, and `daemon` is the loop that surrounds one tick. `log` and
-//! `nodename` stay here because every part names them.
+//! composes, `delivery` fires a pass of the delivery routine beside each tick
+//! on a host that declares a delivery plan, and `daemon` is the loop that
+//! surrounds one tick. `log` and `nodename` stay here because every part
+//! names them.
 
 mod beside;
 mod daemon;
+mod delivery;
 mod grant;
 mod passes;
 

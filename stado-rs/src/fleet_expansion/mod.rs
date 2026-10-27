@@ -20,6 +20,8 @@ use chrono::Utc;
 use constants::*;
 use std::collections::BTreeSet;
 
+use crate::primitives::tally::Tally;
+
 pub async fn create_plan(
     store: &JobStorage,
     registry: &Registry,
@@ -28,10 +30,10 @@ pub async fn create_plan(
     window_days: Option<i64>,
 ) -> Result<ExpansionReport, CmdError> {
     let budget_cents = validate::money(budget_usd, "budget_usd").map_err(CmdError::usage)?;
-    if horizon_months == 0 {
+    if horizon_months.counts_nothing() {
         return Err(CmdError::usage("horizon_months must be at least one month"));
     }
-    if window_days.is_some_and(|days| days < 1) {
+    if window_days.is_some_and(|days| !days.is_positive()) {
         return Err(CmdError::usage("days must be at least one"));
     }
     let now = Utc::now();
@@ -48,7 +50,7 @@ pub async fn create_plan(
         .map(|option| economics::candidate(option, &keys, budget_usd, horizon_months, now))
         .collect::<Result<Vec<_>, _>>()
         .map_err(CmdError::refused)?;
-    let portfolio = select::select(&candidates, budget_cents);
+    let portfolio = select::select(&candidates, budget_cents, horizon_months);
     let mut warnings = vec![
         "Optimal only among supplied option bundles and declared estimates; not a market-wide purchasing recommendation.".into(),
         "Savings and margin are incremental declared estimates, not measured earnings. Time saved has no cash value unless explicitly evidenced. Avoided cloud spend must reflect usable credits.".into(),

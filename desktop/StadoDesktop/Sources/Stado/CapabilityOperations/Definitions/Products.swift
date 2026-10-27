@@ -36,16 +36,19 @@ enum NativeProductOperations {
             .init(id: "remove-integration", label: "Integration products to remove, one per line", option: "--remove-integration", multiple: true),
             .init(id: "add-dependency", label: "Needs of another product to add or replace, one JSON object per line: {\"product\",\"surface\",\"for_surface\",\"alternative\",\"alternative_source\"} or {…,\"bound_because\"}", option: "--add-dependency", multiple: true),
             .init(id: "remove-dependency", label: "Products this one no longer needs, one per line: every declared need on each is removed", option: "--remove-dependency", multiple: true),
-            .init(id: "add-rival", label: "Rivals to add or replace, one JSON object per line: {\"id\",\"name\",\"url\",\"evidence\"}", option: "--add-rival", multiple: true),
+            .init(id: "add-rival", label: "Rivals to add or replace, one JSON object per line: {\"id\",\"name\",\"url\",\"evidence\"} and optional \"claims\": [{\"capability\",\"statement\",\"source\",\"read_at\",\"source_sha256\",\"verified_by\"?}]", option: "--add-rival", multiple: true),
             .init(id: "remove-rival", label: "Rival ids to remove, one per line", option: "--remove-rival", multiple: true),
-            .init(id: "add-roadmap", label: "Roadmap items to add or replace, one JSON object per line: {\"title\",\"status\",\"outcome\",\"source\"}", option: "--add-roadmap", multiple: true),
-            .init(id: "remove-roadmap", label: "Roadmap item titles to remove, one per line", option: "--remove-roadmap", multiple: true),
+            .init(id: "add-roadmap", label: "Roadmap items to add or replace, one JSON object per line: {\"title\",\"status\",\"outcome\",\"source\"}; status planned, in_progress, delivered, rejected or superseded; an ended item adds \"decision\" (where it was decided) and a superseded one \"superseded_by\" (the title that replaced it)", option: "--add-roadmap", multiple: true),
+            .init(id: "remove-roadmap", label: "Roadmap item titles recorded in error to remove, one per line (record a dropped or replaced idea as rejected or superseded instead)", option: "--remove-roadmap", multiple: true),
             .init(id: "benchmark", label: "Benchmark measuring the rivals, as JSON: {\"app\",\"suites\"}", option: "--benchmark"),
             .init(id: "remove-benchmark", label: "Remove the declared benchmark", option: "--remove-benchmark", flag: true),
         ]),
         .init(id: "registry-rm", title: "Remove a product from the catalog", path: ["product", "registry", "rm"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),
         ], fixedArguments: ["--yes"]),
+        .init(id: "registry-check-claims", title: "Check every rival claim's source again", path: ["product", "registry", "check-claims"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+        ], fixedArguments: ["--json"], mutates: false),
         .init(id: "create", title: "Provision a preview product and its private repositories", path: ["product", "create"], hostPlacement: .none, fields: [
             .init(id: "allow-create", label: "Authorize private repository creation", option: "--allow-create", flag: true),
         ], payload: .file(option: "--request", label: "Creation request JSON", initial: "{\n}\n")),
@@ -105,18 +108,20 @@ enum NativeProductOperations {
             .init(id: "org", label: "GitHub organization (blank reads the CLI's default)"),
             .init(id: "check", label: "Register file to check", option: "--check", required: true),
         ], mutates: false, jsonOutput: false),
-        // Every committed Cargo.lock of the selected checkouts read against an
-        // OSV advisory database: each affected package version, its advisory,
-        // the fixed versions and whether Cargo reaches a fix without a
-        // manifest change. A finding that stands ends the operation as refused.
+        // Every Cargo.lock of the selected checkouts, as their last commit
+        // holds it, read against an OSV advisory database: each affected
+        // package version, its advisory, the fixed versions and whether Cargo
+        // reaches a fix without a manifest change, and each lockfile whose
+        // working file differs from its last commit. A finding that stands
+        // ends the operation as refused.
         .init(id: "advisories-list", title: "Read the published advisories that affect what each checkout's Cargo.lock resolves", path: ["product", "advisories", "list"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product (blank reads every checkout in the workspace)"),
             .init(id: "advisories", label: "Advisory ids or aliases, one per line (blank reads every advisory)", option: "--advisory", multiple: true),
             .init(id: "database", label: "OSV database origin (blank reads the public OSV database)", option: "--database"),
         ], mutates: false),
         // Rewrites the lockfiles of the selected checkouts with cargo update
-        // --precise, names why each other affected package cannot move, and
-        // commits nothing.
+        // --precise, names every other package each update moved and why
+        // each other affected package cannot move, and commits nothing.
         .init(id: "advisories-apply", title: "Lock each advisory's first compatible fixed version in every checkout's Cargo.lock", path: ["product", "advisories", "apply"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product (blank updates every checkout in the workspace)"),
             .init(id: "advisories", label: "Advisory ids or aliases, one per line (blank updates for every advisory)", option: "--advisory", multiple: true),
@@ -156,12 +161,13 @@ enum NativeProductOperations {
         // status page reads them: state, since when and the last failed
         // check with the answer that failed it. `check` asks every component
         // once from the selected host and publishes the result.
-        .init(id: "public-status-show", title: "Read the published state of every component products declare for their public status", path: ["public-status", "show"], hostPlacement: .none, mutates: false),
-        .init(id: "public-status-check", title: "Ask every declared component once and publish its state, since when and the last failure", path: ["public-status", "check"], hostPlacement: .none),
+        .init(id: "public-status-show", title: "Read the published state of every component products declare for their public status", path: ["availability", "show"], hostPlacement: .none, mutates: false),
+        .init(id: "public-status-check", title: "Ask every declared component once and publish its state, since when and the last failure", path: ["availability", "check"], hostPlacement: .none),
         // `--json` belongs to the operation, before the arguments it forwards
         // to the compiler, so it is part of the path here.
         .init(id: "cargo", title: "Run Cargo against canonical checkouts or release inputs", path: ["product", "cargo", "--json"], hostPlacement: .none, fields: [
             .init(id: "manifest", label: "Cargo.toml on the selected Stado API host", option: "--manifest-path", required: true),
+            .init(id: "purpose", label: "Open Oko defects the build serves, one per line (named to Oko's admission before anything compiles)", option: "--purpose", multiple: true),
             .init(id: "operation", label: "Operation: build, check, test, run, metadata, stage, or a Cargo subcommand the tree's compiling quality gates run (clippy)", required: true, initial: "check"),
             .init(id: "forward", label: "Arguments for Cargo, one per line", multiple: true),
         ], jsonOutput: false),
@@ -176,16 +182,18 @@ enum NativeProductOperations {
             .init(id: "root", label: "Repository checkout on the selected Stado API host", option: "--root", required: true),
             .init(id: "line-limit", label: "The repository's file length limit, in lines", option: "--line-limit", required: true),
             .init(id: "version", label: "Release the entries go out in (blank with spill set)", option: "--version"),
-            .init(id: "spill", label: "Spill the entries written so far into changelog/unreleased-part-N.md", option: "--spill", flag: true),
+            .init(id: "spill", label: "Spill current entries into linked unreleased parts", option: "--spill", flag: true),
         ], jsonOutput: false),
         .init(id: "swift", title: "Build or index canonical Swift sources", path: ["product", "swift", "--json"], hostPlacement: .none, fields: [
             .init(id: "package", label: "Canonical package directory", option: "--package-path", required: true),
+            .init(id: "purpose", label: "Open Oko defects the build serves, one per line (named to Oko's admission before anything compiles)", option: "--purpose", multiple: true),
             .init(id: "editor-workspace", label: "Separate editor workspace for index declarations", option: "--editor-workspace"),
             .init(id: "operation", label: "Operation: build, test, run or index", required: true, initial: "build"),
             .init(id: "forward", label: "Arguments for SwiftPM, one per line", multiple: true),
         ], jsonOutput: false),
         .init(id: "swift-restore", title: "Restore locked Swift release dependencies", path: ["product", "swift", "--json"], hostPlacement: .none, fields: [
             .init(id: "package", label: "Release source directory with Package.resolved", option: "--package-path", required: true),
+            .init(id: "purpose", label: "Open Oko defects the restore serves, one per line (named to Oko's admission before anything compiles)", option: "--purpose", multiple: true),
             .init(id: "archive", label: "Portable SwiftPM input archive", option: "--archive", required: true),
         ], fixedArguments: ["restore"], jsonOutput: false),
         .init(id: "editor-status", title: "Inspect live editor instances, parent processes and connection age", path: ["product", "editor", "status"], hostPlacement: .none, fields: [

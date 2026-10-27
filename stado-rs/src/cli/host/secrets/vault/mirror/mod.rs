@@ -40,6 +40,18 @@ pub(crate) async fn owner_item_document(target: &str, item: &str) -> Result<Valu
         .map(|(_, document)| document)
 }
 
+/// Delete one item from TARGET's vault there (restorably, as Skarbiec
+/// deletes), printing nothing: the caller reports it. Answers the name the
+/// target resolved to and Skarbiec's report.
+pub(crate) async fn owner_item_delete(
+    target: &str,
+    item: &str,
+) -> Result<(String, Value), CmdError> {
+    remote_skarbiec_json(target, &["delete".to_string(), item.to_string()])
+        .await
+        .map(|(resolved, report)| (resolved.name, report))
+}
+
 /// The ids of the live items in TARGET's vault, listed there in one call: for
 /// a command run on another host that visits many items and must tell an
 /// absent item from a failed read.

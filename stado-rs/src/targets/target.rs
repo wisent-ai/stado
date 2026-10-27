@@ -77,7 +77,7 @@ pub struct ComputeTarget {
     /// agent's own home (`~/.stado/work`, `~/.stado/build-cache`), which is
     /// what every host is until somebody declares otherwise.
     ///
-    /// Declared with `stado space work-root TARGET --path PATH`, which also
+    /// Declared with `stado space root TARGET --path PATH`, which also
     /// creates the directory on the host owned by the agent's account. It
     /// exists because a host whose home sits on a small root volume refuses
     /// builds for want of room while terabytes sit free on another mount,
@@ -169,7 +169,10 @@ impl ComputeTarget {
     /// The credential-store identity the host channel authenticates with:
     /// the declared key owner, or this target's own name.
     pub fn channel_key(&self) -> &str {
-        self.ssh_key_target.as_deref().unwrap_or(&self.name)
+        match self.ssh_key_target.as_deref() {
+            Some(owner) => owner,
+            None => &self.name,
+        }
     }
     pub fn provider(&self) -> Option<crate::capabilities::ProviderId> {
         crate::capabilities::variant(crate::capabilities::RuntimeFacet::HostTarget, &self.kind)
@@ -191,9 +194,16 @@ impl ComputeTarget {
     /// validation above guarantees the accessor cannot observe zero, a
     /// negative value, or an integer wider than the driver accepts.
     pub fn gpu_power_limit_watts(&self) -> Option<u32> {
-        self.extra
+        let watts = self
+            .extra
             .get("gpu_power_limit_watts")
-            .and_then(Value::as_u64)
-            .and_then(|watts| u32::try_from(watts).ok())
+            .and_then(Value::as_u64)?;
+        // Validation refused anything wider than the driver accepts, so a
+        // value that does not fit is a registry read past its validation
+        // and reads as no cap, which the host's doctor then reports.
+        match u32::try_from(watts) {
+            Ok(watts) => Some(watts),
+            Err(_wider_than_validated) => None,
+        }
     }
 }

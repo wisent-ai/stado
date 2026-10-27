@@ -5,7 +5,7 @@
 use crate::cli::fleet::{doctor, enroll, fleets, ingress, invite, key, needs, ops};
 use crate::cli::{CmdError, CLICK_ERROR_CODE};
 
-use super::{FleetCommands, IngressCommands, KeyCommands};
+use super::{FleetCommands, IngressCommands, InviteCommands, KeyCommands};
 
 /// Run one fleet command.
 ///
@@ -60,15 +60,17 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             )
             .await
         }
-        FleetCommands::Invite {
-            name,
-            expires,
-            uses,
-            offline,
-            json,
-        } => invite::invite(name.as_deref(), &expires, uses, offline, json).await,
-        FleetCommands::Invites { json } => invite::invites(json).await,
-        FleetCommands::RevokeInvite { id, json } => invite::revoke_invite(&id, json).await,
+        FleetCommands::Invite(sub) => match sub {
+            InviteCommands::Create {
+                name,
+                expires,
+                uses,
+                offline,
+                json,
+            } => invite::invite(name.as_deref(), &expires, uses, offline, json).await,
+            InviteCommands::List { json } => invite::invites(json).await,
+            InviteCommands::Revoke { id, json } => invite::revoke_invite(&id, json).await,
+        },
         FleetCommands::Ingress(sub) => match sub {
             IngressCommands::Up { port, named } => ingress::up(port, named).await,
             IngressCommands::Status { json } => ingress::status(json).await,

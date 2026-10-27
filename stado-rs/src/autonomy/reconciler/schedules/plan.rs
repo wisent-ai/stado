@@ -28,7 +28,12 @@ pub(super) fn schedule_plan(
     policy: &AutonomyPolicy,
 ) -> Result<Plan, StorageError> {
     let created = Utc::now();
-    let expires = created + chrono::Duration::seconds(policy.limits.decision_ttl_seconds as i64);
+    let expires = crate::autonomy::time::expires_at(
+        created,
+        policy.limits.decision_ttl_seconds,
+        "limits.decision_ttl_seconds",
+    )
+    .map_err(StorageError::Other)?;
     let operation_id = format!("autonomy-schedule-{}", uuid::Uuid::new_v4());
     let action_id = format!("action-{}", uuid::Uuid::new_v4());
     let finding_id = format!("finding-{}", uuid::Uuid::new_v4());

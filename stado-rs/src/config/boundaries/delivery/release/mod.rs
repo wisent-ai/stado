@@ -2,5 +2,7 @@
 //! Skarbiec identity.
 
 mod publishers;
+mod serving;
 
 pub use publishers::*;
+pub use serving::*;

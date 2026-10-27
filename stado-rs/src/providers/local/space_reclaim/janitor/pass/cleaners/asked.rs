@@ -42,9 +42,7 @@ impl Asked {
 
 /// Add the time spent waiting on the queue store to the report.
 fn charge_wait(report: &mut CleanupReport, wait: Instant) {
-    report.store_wait_ms = report
-        .store_wait_ms
-        .saturating_add(wait.elapsed().as_millis().min(i64::MAX as u128) as i64);
+    report.charge_store_wait(wait);
 }
 
 /// Ask the queue about the candidates on disk now, before any lock is taken.

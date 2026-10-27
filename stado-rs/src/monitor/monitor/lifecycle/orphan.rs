@@ -34,11 +34,12 @@ pub(in crate::monitor::monitor) async fn requeue_dead_local_host_orphan(
     if hg::finalize_if_self_terminating(store, job, &log).await? {
         return Ok(());
     }
+    // requeue logs whether it moved the job; either outcome ends this pass.
     requeue(
         store,
         job,
         "local agent capacity stale & job heartbeat stale (dead local host orphan)",
     )
-    .await
-    .map(|_| ())
+    .await?;
+    Ok(())
 }

@@ -120,7 +120,7 @@ pub(crate) async fn host_signer(
         runner,
     )
     .await?;
-    if !probe.ok() {
+    if !probe.succeeded() {
         return Err(DeployError(format!(
             "{}: {program} cannot sign native code: `stado product signing sign` is not \
              available there ({}); converge Stado on this host first",

@@ -142,10 +142,15 @@ impl Context {
             .find(|row| row.reference == action.resource.reference)
         {
             let inventory_context = self.inventory_context(action).await?;
-            let inventory_orphan = inventory_context.map(|(orphan, _)| orphan).unwrap_or(true);
-            let age_seconds = inventory_context
-                .map(|(_, age_seconds)| age_seconds as f64)
-                .unwrap_or(row.age_seconds);
+            // An inventory age, when known, is the one used; else the row's.
+            let inventory_orphan = match inventory_context {
+                Some((orphan, _)) => orphan,
+                None => true,
+            };
+            let age_seconds = match inventory_context.and_then(|(_, age)| age) {
+                Some(age) => age as f64,
+                None => row.age_seconds,
+            };
             return Ok(json!({
                 "exists": true,
                 "running": true,
@@ -170,10 +175,12 @@ impl Context {
             .is_some_and(|known| known.phase == crate::providers::LifecyclePhase::Stopped);
         let present = exists || stopped;
         let inventory_context = self.inventory_context(action).await?;
-        let inventory_orphan = inventory_context.map(|(orphan, _)| orphan).unwrap_or(false);
-        let age_seconds = inventory_context
-            .map(|(_, age_seconds)| age_seconds)
-            .unwrap_or_default();
+        let inventory_orphan = match inventory_context {
+            Some((orphan, _)) => orphan,
+            None => false,
+        };
+        // Null when the inventory holds no creation time for the resource.
+        let age_seconds = inventory_context.and_then(|(_, age)| age);
         Ok(json!({
             "exists": present,
             "running": exists && !stopped,
@@ -185,7 +192,12 @@ impl Context {
         }))
     }
 
-    async fn inventory_context(&self, action: &Action) -> Result<Option<(bool, u64)>, CmdError> {
+    /// Whether the inventory calls the action's resource an orphan, and its
+    /// age when the row states a creation time that is not in the future.
+    async fn inventory_context(
+        &self,
+        action: &Action,
+    ) -> Result<Option<(bool, Option<u64>)>, CmdError> {
         let Some(resource_id) = action.parameters.get("resource_id").and_then(Value::as_str) else {
             return Ok(None);
         };
@@ -194,32 +206,35 @@ impl Context {
         >(&self.store, "state/autonomy/inventory/latest.json")
         .await?
         else {
-            return Ok(Some((false, 0)));
+            return Ok(Some((false, None)));
         };
         let Some(resource) = snapshot
             .resources
             .iter()
             .find(|resource| resource.resource_id == resource_id)
         else {
-            return Ok(Some((false, 0)));
+            return Ok(Some((false, None)));
         };
         let revision_matches = action
             .parameters
             .get("resource_revision")
             .and_then(Value::as_str)
             .is_some_and(|expected| resource.source_revision.as_deref() == Some(expected));
-        let age_seconds = resource
-            .created_at
-            .as_deref()
-            .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
-            .map(|created| {
-                chrono::Utc::now()
-                    .signed_duration_since(created.with_timezone(&chrono::Utc))
-                    .num_seconds()
-                    .max(0)
-            })
-            .and_then(|seconds| u64::try_from(seconds).ok())
-            .unwrap_or_default();
+        let created = match resource.created_at.as_deref() {
+            None => None,
+            Some(raw) => Some(chrono::DateTime::parse_from_rfc3339(raw).map_err(|error| {
+                CmdError::click(format!(
+                    "the autonomy inventory records {resource_id} as created at {raw:?}, not RFC 3339: {error}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?),
+        };
+        let age_seconds = created.and_then(|created| {
+            let seconds = chrono::Utc::now()
+                .signed_duration_since(created.with_timezone(&chrono::Utc))
+                .num_seconds();
+            (!seconds.is_negative()).then(|| seconds.unsigned_abs())
+        });
         Ok(Some((
             resource.ownership.is_mutable() && resource.workload.is_none() && revision_matches,
             age_seconds,

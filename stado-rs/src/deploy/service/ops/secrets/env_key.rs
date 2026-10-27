@@ -103,7 +103,7 @@ pub async fn set_item_field_on_host(
     let body = r#"set -eu
 export @TOOL_PATH@
 export GNUPGHOME="$HOME/.gnupg"
-"$HOME/.stado/bin/skarbiec" set-json "$STADO_ITEM" --field "$STADO_FIELD" --from-file "$STADO_FROM"
+"$HOME/.stado/bin/skarbiec" set "$STADO_ITEM" --field "$STADO_FIELD" --from-file "$STADO_FROM"
 echo 'STADO_ITEM_SET	ok'"#;
     let body = body
         .replace("{vault_file}", "")

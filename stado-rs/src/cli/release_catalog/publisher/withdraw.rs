@@ -1,5 +1,5 @@
-//! `stado release catalog withdraw-publisher`: the inverse of
-//! `declare-publisher`, for a product the release catalog no longer builds.
+//! `stado release catalog publisher withdraw`: the inverse of
+//! `publisher declare`, for a product the release catalog no longer builds.
 //!
 //! A declaration outlives its product when the product is retired, renamed or
 //! archived; `catalog audit` then refuses on it every run. The withdrawal
@@ -47,19 +47,17 @@ pub(crate) async fn withdraw_publisher(
     let key = format!("release_api.publishers.{product}");
     let mut report = Vec::new();
     let mut failures = Vec::new();
-    let mut withdrawn = 0usize;
     for host in &hosts {
         match remote_stado_output(host, &["config", "unset", &key]).await {
-            Ok(output) => {
-                withdrawn += 1;
-                report.push(json!({ "step": "withdraw", "host": host, "key": key, "result": output.trim() }))
-            }
+            Ok(output) => report.push(
+                json!({ "step": "withdraw", "host": host, "key": key, "result": output.trim() }),
+            ),
             Err(error) => failures.push(format!("{host}: {key} not withdrawn: {error}")),
         }
     }
     // The reconciliation reads the authoritative publisher items from the
     // vault on the machine it runs on, so it runs on the owner for every host,
-    // as `declare-publisher` does for a client that holds no vault. This host,
+    // as `publisher declare` does for a client that holds no vault. This host,
     // when it declares no vault of its own, reads the owner's vault through
     // its route: the owner's own reconciliation covers it, and repairing it
     // would reconcile its retired local copy, whose grant no longer matches
@@ -98,6 +96,11 @@ pub(crate) async fn withdraw_publisher(
         for failure in &failures {
             eprintln!("withdraw refusal: {failure}");
         }
+        // Every host whose withdrawal succeeded has a `withdraw` row.
+        let withdrawn = report
+            .iter()
+            .filter(|row| row.get("step").and_then(serde_json::Value::as_str) == Some("withdraw"))
+            .count();
         println!(
             "{product}: publisher declaration withdrawn from {} of {} host(s): {}",
             withdrawn,

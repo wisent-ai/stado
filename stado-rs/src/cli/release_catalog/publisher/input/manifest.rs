@@ -1,4 +1,4 @@
-//! The product's release manifest as `pin-input` reads and writes it: the
+//! The product's release manifest as `input pin` reads and writes it: the
 //! product it names, and the input entry it gains.
 
 use std::path::{Path, PathBuf};

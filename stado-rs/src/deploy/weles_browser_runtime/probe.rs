@@ -17,7 +17,7 @@ pub async fn requirements(
     runner: &Runner,
 ) -> Result<Vec<Requirement>, DeployError> {
     let fetched = service_file_fetch::fetch_file(target, BROWSERS_JSON, runner).await?;
-    if !fetched.ok() {
+    if !fetched.whole() {
         return Err(DeployError::unreachable(format!(
             "{}: could not read {BROWSERS_JSON}, so what browser runtime this release needs is \
              unknown: {} ({})",
@@ -43,7 +43,7 @@ pub async fn verify(
         .join("\n");
     let script = REMOTE_VERIFY_BODY.replace("@MARKERS_B64@", &STANDARD.encode(payload.as_bytes()));
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: {}",
             target.name,
@@ -80,20 +80,27 @@ pub async fn verify(
             let row = rows.iter().find(|row| {
                 row.get("name").and_then(Value::as_str) == Some(component.name.as_str())
             });
+            // A component the host listed carries its own path and state; one
+            // it did not list is unknown at the path its marker would hold.
+            let (expected_path, state) = match row {
+                Some(row) => (
+                    match row.get("path").and_then(Value::as_str) {
+                        Some(path) => path.to_string(),
+                        None => component.marker(),
+                    },
+                    match row.get("state").and_then(Value::as_str) {
+                        Some(state) => state.to_string(),
+                        None => COMPONENT_UNKNOWN.to_string(),
+                    },
+                ),
+                None => (component.marker(), COMPONENT_UNKNOWN.to_string()),
+            };
             ComponentState {
                 name: component.name.clone(),
                 revision: component.revision.clone(),
                 install_by_default: component.install_by_default,
-                expected_path: row
-                    .and_then(|row| row.get("path"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(&component.marker())
-                    .to_string(),
-                state: row
-                    .and_then(|row| row.get("state"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(COMPONENT_UNKNOWN)
-                    .to_string(),
+                expected_path,
+                state,
             }
         })
         .collect();

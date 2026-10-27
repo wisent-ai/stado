@@ -173,7 +173,7 @@ pub(in crate::cli::web::deploy) async fn install_release(
     let output = host_channel::run_script(target, &script, runner)
         .await
         .map_err(click)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{}: could not install {product} {version}: {}",
             target.name,

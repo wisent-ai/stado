@@ -20,62 +20,31 @@ enum ReleaseLogStreamSelection: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// `stado release logs <product> --target <host> --stream … --lines … --json`.
+/// `stado release logs <product> --target <host> --stream … --lines … --json`,
+/// decoded as the CLI writes it.
 struct ReleaseLogsReport: Decodable, Sendable {
     let product: String
     let target: String
     let version: String
     let streams: [ReleaseLogStream]
-
-    enum CodingKeys: String, CodingKey {
-        case product, target, version, streams
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        product = try values.decodeIfPresent(String.self, forKey: .product) ?? ""
-        target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
-        version = try values.decodeIfPresent(String.self, forKey: .version) ?? ""
-        streams = try values.decodeIfPresent([ReleaseLogStream].self, forKey: .streams) ?? []
-    }
 }
 
 /// One log file on the host: where it is, how big it is, and its tail.
 ///
 /// A stream with no lines is not a blank pane. The file was either never
 /// created or opened and never written to, and those are different findings
-/// about a candidate that died — so `state` is carried and, when the CLI
-/// predates it, derived from the bytes.
+/// about a candidate that died — so `state` is carried as the CLI judged it:
+/// `missing`, `empty` or `read`. Every field is decoded as written; a report
+/// that lacks one is a decoding error naming the key.
 struct ReleaseLogStream: Decodable, Identifiable, Sendable {
     let stream: String
     let path: String
+    /// `null` when the file is missing.
     let bytes: Int?
     let lines: [String]
     let state: String
 
     var id: String { stream }
-
     var isMissing: Bool { state == "missing" }
     var isEmpty: Bool { state == "empty" }
-
-    enum CodingKeys: String, CodingKey {
-        case stream, path, bytes, lines, state
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        stream = try values.decodeIfPresent(String.self, forKey: .stream) ?? ""
-        path = try values.decodeIfPresent(String.self, forKey: .path) ?? ""
-        bytes = try values.decodeIfPresent(Int.self, forKey: .bytes)
-        lines = try values.decodeIfPresent([String].self, forKey: .lines) ?? []
-        if let reported = try values.decodeIfPresent(String.self, forKey: .state) {
-            state = reported
-        } else if bytes == nil {
-            state = "missing"
-        } else if lines.isEmpty {
-            state = "empty"
-        } else {
-            state = "read"
-        }
-    }
 }

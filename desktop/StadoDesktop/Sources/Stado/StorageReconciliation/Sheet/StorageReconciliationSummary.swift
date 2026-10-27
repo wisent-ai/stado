@@ -24,12 +24,17 @@ extension StorageReconciliationSheet {
                 title: "Accepted — completion is not yet known",
                 detail: "The resident operation accepted this transaction. Explicitly select Status and run it to read the durable receipt; Desktop will not resume or advance it automatically."
             )
-        } else if durableStatus != "complete" {
+        } else if let durableStatus, durableStatus != "complete" {
             WisentAlertPanel(
                 tone: .warning,
                 title: "Transaction is not complete",
-                detail: durableStatus.map { "The durable receipt reports \($0)." }
-                    ?? "No durable receipt status is present in this answer."
+                detail: "The durable receipt reports \(durableStatus)."
+            )
+        } else if durableStatus == nil {
+            WisentAlertPanel(
+                tone: .warning,
+                title: "Transaction completion is unknown",
+                detail: "No durable receipt status is present in this answer."
             )
         }
 

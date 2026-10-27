@@ -22,9 +22,12 @@ pub(super) fn files(
     scheme: Option<&str>,
 ) -> Result<Vec<Planned>, CmdError> {
     let project = read(checkout)?;
-    let scheme = scheme
-        .map(str::to_string)
-        .unwrap_or_else(|| project.name.clone());
+    // Xcode names a project's default scheme after the project, so the
+    // project's name is the scheme unless `--scheme` states another.
+    let scheme = match scheme {
+        Some(stated) => stated.to_string(),
+        None => project.name.clone(),
+    };
     let values = [
         ("PRODUCT", product),
         ("PROJECT", project.name.as_str()),
@@ -127,12 +130,15 @@ fn application_bundle(pbxproj: &str) -> Option<String> {
         .min_by_key(String::len)
 }
 
+/// A marketing version Xcode accepts as a release version: `major.minor`
+/// or `major.minor.patch`, every part digits.
 fn plain_version(value: &str) -> bool {
-    let parts: Vec<&str> = value.split('.').collect();
-    (2..=3).contains(&parts.len())
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    let digits = |part: &&str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    match value.split('.').collect::<Vec<&str>>().as_slice() {
+        [major, minor] => [major, minor].into_iter().all(digits),
+        [major, minor, patch] => [major, minor, patch].into_iter().all(digits),
+        _ => false,
+    }
 }
 
 pub(super) fn read(checkout: &Path) -> Result<Project, CmdError> {
@@ -166,7 +172,12 @@ pub(super) fn read(checkout: &Path) -> Result<Project, CmdError> {
     let name = project
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .ok_or_else(|| {
+            CmdError::refused(format!(
+                "{} names no project: an .xcodeproj needs a name before its extension",
+                project.display()
+            ))
+        })?;
     let pbxproj = std::fs::read_to_string(project.join("project.pbxproj"))?;
     let bundle_id = application_bundle(&pbxproj).ok_or_else(|| {
         CmdError::refused(format!(
@@ -178,13 +189,18 @@ pub(super) fn read(checkout: &Path) -> Result<Project, CmdError> {
         .find(|team| !team.is_empty() && !team.contains("$("))
         .ok_or_else(|| CmdError::refused(format!("{name}.xcodeproj states no DEVELOPMENT_TEAM")))?;
     let versions = assigned(&pbxproj, "MARKETING_VERSION");
-    let version = versions.first().cloned().unwrap_or_default();
-    if versions.is_empty() || !versions.iter().all(|value| plain_version(value)) {
+    let [version, ..] = versions.as_slice() else {
+        return Err(CmdError::refused(format!(
+            "{name}.xcodeproj states no MARKETING_VERSION; the release reads its version from it (1.0 or 1.0.0)"
+        )));
+    };
+    if !versions.iter().all(|value| plain_version(value)) {
         return Err(CmdError::refused(format!(
             "{name}.xcodeproj must state MARKETING_VERSION as two or three numbers \
              (1.0 or 1.0.0) for the release to read its version; it states {versions:?}"
         )));
     }
+    let version = version.clone();
     Ok(Project {
         name,
         bundle_id,

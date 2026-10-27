@@ -111,6 +111,13 @@ impl LabelState {
         self.domain.is_some()
     }
 
+    /// Did every requested domain answer, on a supported init system, and
+    /// none of them hold this identity? Only then is the unit known to be
+    /// absent: a refused or failed domain read leaves it unknown.
+    pub fn absent(&self) -> bool {
+        self.unsupported.is_none() && !self.loaded() && self.read_failures.is_empty()
+    }
+
     /// Whether the requested init-system domains were read conclusively.
     ///
     /// `not_loaded` is only ever said when every requested domain answered:
@@ -121,7 +128,7 @@ impl LabelState {
             "unsupported"
         } else if self.loaded() {
             "loaded"
-        } else if self.read_failures.is_empty() {
+        } else if self.absent() {
             "not_loaded"
         } else if self.read_failures.iter().all(LabelReadFailure::refused) {
             READ_REFUSED
@@ -189,11 +196,17 @@ impl LabelState {
             return None;
         }
         let exit = self.last_exit_code.as_deref()?.trim();
-        let code: i64 = exit
-            .split_whitespace()
-            .next()
-            .and_then(|code| code.parse().ok())?;
-        if !(code.is_positive() || code.is_negative()) {
+        // The supervisor prints the status first and may follow it with its
+        // name (`78: EX_CONFIG`); a job that never exited is described in
+        // words. Only a leading status with a digit other than zero is a
+        // failed run, so the status is read digit by digit rather than
+        // parsed as a whole word, which a named status never is.
+        let unsigned = match exit.strip_prefix('-') {
+            Some(magnitude) => magnitude,
+            None => exit,
+        };
+        let status: String = unsigned.chars().take_while(char::is_ascii_digit).collect();
+        if !status.chars().any(|digit| digit != '0') {
             return None;
         }
         Some(match self.runs.as_deref() {
@@ -236,16 +249,10 @@ impl LabelState {
             "unsupported": self.unsupported,
         });
         if self.event_read_status.is_some() {
-            let fields = report
-                .as_object_mut()
-                .expect("the label report is always a JSON object");
-            fields.insert("stdout_path".to_string(), json!(self.stdout_path));
-            fields.insert("stderr_path".to_string(), json!(self.stderr_path));
-            fields.insert("recent_events".to_string(), json!(self.recent_events));
-            fields.insert(
-                "event_read_status".to_string(),
-                json!(self.event_read_status),
-            );
+            report["stdout_path"] = json!(self.stdout_path);
+            report["stderr_path"] = json!(self.stderr_path);
+            report["recent_events"] = json!(self.recent_events);
+            report["event_read_status"] = json!(self.event_read_status);
         }
         report
     }

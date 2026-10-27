@@ -30,8 +30,8 @@ struct EnrollmentEntranceSection: View {
                 }
                 if let busy = store.entranceBusy {
                     EnrollmentNote(title: "Working", detail: busy)
-                } else if let ingress = store.ingress, ingress.published {
-                    standing(ingress)
+                } else if let entrance = store.ingress?.entrance {
+                    standing(entrance)
                 } else if store.ingress != nil {
                     absent
                 } else if store.entranceReadProblem == nil {
@@ -45,19 +45,23 @@ struct EnrollmentEntranceSection: View {
     }
 
     private var trailing: String? {
-        guard let ingress = store.ingress, ingress.published else { return nil }
-        return ingress.temporary ? "temporary" : ingress.mode
+        guard let entrance = store.ingress?.entrance else { return nil }
+        return entrance.temporary ? "temporary" : entrance.mode
     }
 
-    /// How long the entrance has stood, or that the control plane did not say.
-    private func standingText(_ seconds: Int?) -> String {
-        guard let seconds else { return "not reported" }
+    /// How long the entrance has stood, or why the CLI could not say: it
+    /// answers no standing only beside the stored stamp's own refusal in
+    /// `stamp_errors`.
+    private func standingText(_ ingress: FleetIngressEntrance) -> String {
+        guard let seconds = ingress.standingSeconds else {
+            return ingress.stampErrors.joined(separator: "; ")
+        }
         return Duration.seconds(seconds).formatted(
             .units(allowed: [.hours, .minutes], width: .abbreviated))
     }
 
     @ViewBuilder
-    private func standing(_ ingress: FleetIngressStatus) -> some View {
+    private func standing(_ ingress: FleetIngressEntrance) -> some View {
         WisentSignalStrip(signals: [
             WisentSignal(
                 "Answers",
@@ -66,7 +70,7 @@ struct EnrollmentEntranceSection: View {
             ),
             WisentSignal(
                 "Standing",
-                value: standingText(ingress.standingSeconds),
+                value: standingText(ingress),
                 tone: .neutral
             ),
             WisentSignal(

@@ -100,11 +100,15 @@ pub(in crate::cli::web::edge) async fn provision(
             ));
         }
     };
-    let address = allocated
+    // An answer without an IPv4 address fails the parse below and is quoted
+    // as Azure reported it.
+    let address = match allocated
         .pointer("/properties/ipAddress")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    {
+        Some(address) => address.to_string(),
+        None => "(no properties.ipAddress in the answer)".to_string(),
+    };
     if address.parse::<std::net::Ipv4Addr>().is_err() {
         let leftovers = unwind(&client, &created).await;
         return Err(refusal(
@@ -114,11 +118,18 @@ pub(in crate::cli::web::edge) async fn provision(
             &leftovers,
         ));
     }
-    let address_id = allocated
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let address_id = match allocated.get("id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => {
+            let leftovers = unwind(&client, &created).await;
+            return Err(refusal(
+                "the edge's public address was created but Azure's answer names no id to bind \
+                 the NIC to",
+                format!("Azure answered {allocated}"),
+                &leftovers,
+            ));
+        }
+    };
 
     let group = match client
         .put_lro(
@@ -139,11 +150,18 @@ pub(in crate::cli::web::edge) async fn provision(
         }
     };
     created.push((group_path.clone(), format!("security group {group_name}")));
-    let group_id = group
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let group_id = match group.get("id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => {
+            let leftovers = unwind(&client, &created).await;
+            return Err(refusal(
+                "the edge's security group was created but Azure's answer names no id to bind \
+                 the NIC to",
+                format!("Azure answered {group}"),
+                &leftovers,
+            ));
+        }
+    };
 
     let subnet_id = azure::network::subnet_id(
         subscription,
@@ -172,11 +190,17 @@ pub(in crate::cli::web::edge) async fn provision(
         }
     };
     created.push((interface_path.clone(), format!("NIC {interface_name}")));
-    let interface_id = interface
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let interface_id = match interface.get("id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => {
+            let leftovers = unwind(&client, &created).await;
+            return Err(refusal(
+                "the edge's NIC was created but Azure's answer names no id to attach the VM to",
+                format!("Azure answered {interface}"),
+                &leftovers,
+            ));
+        }
+    };
 
     // No managed identity: the edge runs a reverse proxy, not an agent, so it
     // needs no token source for the blob queue and never deletes itself. Not

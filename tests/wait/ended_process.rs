@@ -25,7 +25,8 @@ struct Store {
 
 impl Store {
     fn new(case: &str) -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("wait-ended-process");
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/journeys/wait-ended-process");
         std::fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(format!("{case}-{}", std::process::id()));
         for directory in [".locks", ".metadata"] {
@@ -182,6 +183,42 @@ fn a_wait_whose_process_was_killed_is_ended_by_the_next_reading() {
         "the plain listing names the register it read: {printed}"
     );
     held.unlock().expect("let the registry lock go");
+}
+
+/// A wait whose file was written before the process now holding its pid was
+/// born belongs to a process that ended: its pid was handed on. This test's
+/// own process stands for the younger holder, and a register file under its
+/// pid dated at the epoch for the wait it never opened: the reading lists
+/// that wait as ended and removes its file, although a process holds the pid.
+#[test]
+fn a_wait_whose_pid_went_to_a_younger_process_is_ended() {
+    let store = Store::new("reused-pid");
+    std::fs::create_dir_all(store.waits()).expect("make the isolated register");
+    let pid = std::process::id();
+    let id = format!("{pid}-{pid}");
+    let line = format!("czekam: a wait of a process that ended; gdzie: nowhere; id: {id}");
+    let file = store.waits().join(&id);
+    std::fs::write(&file, format!("{line}\n")).expect("write the stale register file");
+    File::options()
+        .write(true)
+        .open(&file)
+        .expect("open the stale register file")
+        .set_modified(std::time::UNIX_EPOCH)
+        .expect("date the stale register file before this process was born");
+
+    let listing = store.listing();
+    assert!(
+        find(&listing, "open", &id).is_none(),
+        "a wait written before its pid's process was born is listed open: {listing}"
+    );
+    let Some(ended) = find(&listing, "ended", &id) else {
+        panic!("the stale wait is not reported ended: {listing}");
+    };
+    assert_eq!(ended["line"], line.as_str(), "{listing}");
+    assert!(
+        !file.exists(),
+        "the ended wait's file is still in the register"
+    );
 }
 
 #[test]

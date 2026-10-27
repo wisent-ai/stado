@@ -57,7 +57,7 @@ async fn stable_bind_answer(
             format!("cannot read proxy target {}: {error}", proxy_path.display())
         })?)
         .map_err(|error| format!("invalid proxy target {}: {error}", proxy_path.display()))?;
-    let expected_upstream = format!("127.0.0.1:{}", active.port);
+    let expected_upstream = format!("{}:{}", std::net::Ipv4Addr::LOCALHOST, active.port);
     if proxy.generation != generation || proxy.upstream != expected_upstream {
         return Err(format!(
             "stable proxy target is generation {} upstream {}, expected generation {generation} upstream {expected_upstream}",
@@ -98,15 +98,15 @@ pub(crate) async fn ensure_active_proxy(
     // reading `active release lost readiness` for two digests in a row says
     // nothing about whether the candidate answered 503 or refused the
     // connection. Two different repairs, one word.
-    let lost_for = state
+    // How long readiness has been lost: no loss recorded, or one this host's
+    // clock puts in the future, is no time lost yet.
+    let lost_for = match state
         .readiness_lost_at
-        .map(|lost| {
-            chrono::Utc::now()
-                .signed_duration_since(lost)
-                .num_seconds()
-                .max(0) as u64
-        })
-        .unwrap_or_default();
+        .map(|lost| chrono::Utc::now().signed_duration_since(lost).to_std())
+    {
+        Some(Ok(elapsed)) => elapsed.as_secs(),
+        Some(Err(_)) | None => Default::default(),
+    };
     match readiness(active, &serving.readiness_path, strategy, lost_for).await {
         Readiness::Ready => {
             // A refusal that has been answered since must not start the next

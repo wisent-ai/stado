@@ -15,8 +15,10 @@ import WisentDesignSystem
 /// that case: a "command failed" here would hide the finding.
 struct PublicOriginsSection: View {
     @ObservedObject var store: PublicOriginStore
-    /// `public_origins` as the canonical registry declares them.
-    let declarations: [FleetPublicOrigin]
+    /// `public_origins` as the canonical registry declares them; `nil` while
+    /// the registry projection has not been read, which is not an empty
+    /// declaration.
+    let declarations: [FleetPublicOrigin]?
     let generation: String?
 
     @State private var review: PublicOriginReviewRequest?
@@ -39,8 +41,8 @@ struct PublicOriginsSection: View {
             ForEach(store.rows) { report in
                 PublicOriginRowPanel(
                     report: report,
-                    receipt: store.receipt(named: report.name),
-                    isPlanning: store.planningName == report.name,
+                    receipt: receipt(for: report),
+                    isPlanning: isPlanning(report),
                     isConverging: store.mutation.isWorking,
                     review: { Task { await beginReview(of: report) } }
                 )
@@ -57,7 +59,7 @@ struct PublicOriginsSection: View {
                 cancel: { review = nil },
                 confirm: {
                     review = nil
-                    Task { await store.converge(name: pending.report.name) }
+                    Task { await store.converge(name: pending.plan.name) }
                 }
             )
         }
@@ -97,10 +99,16 @@ struct PublicOriginsSection: View {
 
     @ViewBuilder
     private var state: some View {
-        if store.rows.isEmpty, declarations.isEmpty, store.result != nil, store.readFailure == nil {
+        if store.rows.isEmpty, let declarations, declarations.isEmpty, store.result != nil, store.readFailure == nil {
             WisentEmptyPanel(
                 title: "No public origin is declared",
                 detail: "This registry declares no public_origins, so no public edge has an origin to fetch release objects from. Declare one with stado web origin declare before converging anything.",
+                symbol: "globe.badge.chevron.backward"
+            )
+        } else if store.rows.isEmpty, declarations == nil, store.result != nil, store.readFailure == nil {
+            WisentEmptyPanel(
+                title: "The registry projection was not read",
+                detail: "The origin report names no row, and whether this registry declares any public_origins is unknown until GET /api/registry.json answers.",
                 symbol: "globe.badge.chevron.backward"
             )
         } else if store.isReading, store.rows.isEmpty {
@@ -130,8 +138,8 @@ struct PublicOriginsSection: View {
     /// read has actually been attempted, because before that every
     /// declaration is unmeasured and saying so of all of them is noise.
     private var unmeasured: [FleetPublicOrigin] {
-        guard store.result != nil || store.readFailure != nil else { return [] }
-        let measured = Set(store.rows.map(\.name))
+        guard store.result != nil || store.readFailure != nil, let declarations else { return [] }
+        let measured = Set(store.rows.compactMap(\.name))
         return declarations.filter { !measured.contains($0.name) }
     }
 
@@ -223,8 +231,22 @@ struct PublicOriginsSection: View {
         return parts.joined(separator: " · ")
     }
 
+    /// The receipt of the last convergence of this row's declaration; a row
+    /// nothing declares was never converged.
+    private func receipt(for report: PublicOriginReport) -> PublicOriginConvergeReceipt? {
+        guard let name = report.name else { return nil }
+        return store.receipt(named: name)
+    }
+
+    /// Whether the plan being prepared is for this row's declaration.
+    private func isPlanning(_ report: PublicOriginReport) -> Bool {
+        guard let name = report.name, let planning = store.planningName else { return false }
+        return name == planning
+    }
+
     private func beginReview(of report: PublicOriginReport) async {
-        guard let plan = await store.preparePlan(for: report.name) else { return }
+        guard let name = report.convergeableName else { return }
+        guard let plan = await store.preparePlan(for: name) else { return }
         review = PublicOriginReviewRequest(report: report, plan: plan)
     }
 }

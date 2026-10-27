@@ -68,11 +68,15 @@ pub(super) fn print_binaries(report: &Value, section: &dyn Fn(&str) -> Vec<Value
         ],
         &cargo_roots,
     );
-    let cargo_entries = cargo
+    // An inventory with no cargo block, or one listing no entries, has no
+    // cargo binaries; the table is then printed with its headings alone.
+    let cargo_entries: &[Value] = match cargo
         .and_then(|value| value.get("entries"))
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    {
+        Some(entries) => entries.as_slice(),
+        None => &[],
+    };
     crate::cli::reporting::table::print(
         &[
             "CARGO BIN ENTRY",

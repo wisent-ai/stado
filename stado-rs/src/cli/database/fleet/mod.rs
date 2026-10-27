@@ -14,7 +14,7 @@
 //! [`postgres`].
 
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::cli::CmdError;
 
@@ -34,40 +34,20 @@ pub(super) async fn create(
     json_output: bool,
 ) -> Result<(), CmdError> {
     checked(name, engine)?;
+    // A database already declared whose item the owner vault holds is placed:
+    // creating it again (an installation run once more) grants the consumers
+    // it names that the declaration lacks, and places nothing anew, so the
+    // data and the declared consumers stay as they are.
+    if already_placed(name)? {
+        return super::verbs::change_consumers(name, consumers, true, json_output);
+    }
     let declaration = super::verbs::prepare_declaration(
         name,
         engine,
         &["read".to_string(), "write".to_string()],
         consumers,
     )?;
-    let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
-    let host = host.map(str::to_string).unwrap_or(owner);
-    let placed = if host == here {
-        placement(name, engine, port, &here).await?
-    } else {
-        // NAME and ENGINE are checked tokens without spaces, so the command
-        // line splits back into exactly the words it was written from.
-        let mut line = format!("database place {name} --engine {engine} --json");
-        if let Some(port) = port {
-            line.push_str(&format!(" --port {port}"));
-        }
-        let arguments: Vec<&str> = line.split_whitespace().collect();
-        let output = crate::cli::host::remote_stado_output(&host, &arguments)
-            .await
-            .map_err(|error| {
-                let mut wrapped =
-                    CmdError::click(format!("{name} was not placed on {host}: {error}"));
-                wrapped.failure = error.failure;
-                wrapped
-            })?;
-        last_json(&output).ok_or_else(|| {
-            CmdError::click(format!(
-                "{name}: stado database place on {host} printed no placement report: {}",
-                output.trim()
-            ))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?
-    };
+    let (host, placed) = place_on(name, engine, host, port, None).await?;
     let declared = declaration.persist()?;
     let outcome = json!({
         "created": name,
@@ -92,15 +72,88 @@ pub(super) async fn create(
     Ok(())
 }
 
+/// Whether `name` is declared and its credential item `<name>-database` is in
+/// the owner vault; an owner vault that cannot be read is refused with its
+/// cause rather than read as holding nothing.
+fn already_placed(name: &str) -> Result<bool, CmdError> {
+    if !super::declared_databases()?.contains_key(name) {
+        return Ok(false);
+    }
+    let item = format!("{name}-database");
+    crate::credential_store::owner::item_exists(&item).map_err(|error| {
+        CmdError::click(format!("whether {item} is in the owner vault cannot be read: {error}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })
+}
+
+/// Place `name` on `host` (the vault owner when none is named): here through
+/// [`placement`], elsewhere through `stado database place` over the host
+/// channel. `version` is the PostgreSQL major version the server runs; none
+/// is the one Stado's program search finds first. Returns the host and the
+/// placement report.
+pub(in crate::cli::database) async fn place_on(
+    name: &str,
+    engine: &str,
+    host: Option<&str>,
+    port: Option<u16>,
+    version: Option<&str>,
+) -> Result<(String, Value), CmdError> {
+    let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
+    let host = match host {
+        Some(host) => host.to_string(),
+        None => owner,
+    };
+    if host == here {
+        let placed = placement(name, engine, port, version, &here).await?;
+        return Ok((host, placed));
+    }
+    // NAME, ENGINE and VERSION are checked tokens without spaces, so the
+    // command line splits back into exactly the words it was written from.
+    let mut line = format!("database place {name} --engine {engine} --json");
+    if let Some(port) = port {
+        line.push_str(&format!(" --port {port}"));
+    }
+    if let Some(version) = version {
+        line.push_str(&format!(" --version {version}"));
+    }
+    let arguments: Vec<&str> = line.split_whitespace().collect();
+    let output = crate::cli::host::remote_stado_output(&host, &arguments)
+        .await
+        .map_err(|error| {
+            let mut wrapped = CmdError::click(format!("{name} was not placed on {host}: {error}"));
+            wrapped.failure = error.failure;
+            wrapped
+        })?;
+    let placed = last_json(&output).ok_or_else(|| {
+        CmdError::click(format!(
+            "{name}: stado database place on {host} printed no placement report: {}",
+            output.trim()
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    Ok((host, placed))
+}
+
 pub(super) async fn place(
     name: &str,
     engine: &str,
     port: Option<u16>,
+    version: Option<&str>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     checked(name, engine)?;
+    if let Some(version) = version {
+        if version.is_empty()
+            || !version.chars().all(|c| c.is_ascii_digit())
+            || engine != super::DEFAULT_ENGINE
+        {
+            return Err(CmdError::usage(format!(
+                "--version {version:?} names a PostgreSQL major version (digits only) and places postgres only"
+            )));
+        }
+    }
     let here = crate::cli::release_catalog::this_host().await?;
-    let report = placement(name, engine, port, &here).await?;
+    let report = placement(name, engine, port, version, &here).await?;
     // `--json` stays one line: `create` reads the last line of a remote
     // placement's output (`last_json`), after whatever the unit install printed.
     if json_output {
@@ -134,13 +187,15 @@ fn checked(name: &str, engine: &str) -> Result<(), CmdError> {
 }
 
 /// The last line of `output` that is a JSON object: the report `place`
-/// prints after whatever the unit install printed before it.
-fn last_json(output: &str) -> Option<Value> {
-    output
-        .lines()
-        .rev()
-        .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-        .filter(Value::is_object)
+/// prints after whatever the unit install printed before it. Lines that are
+/// not JSON are the install's own words, so they are passed over.
+pub(in crate::cli::database) fn last_json(output: &str) -> Option<Value> {
+    for line in output.lines().rev() {
+        if let Ok(value @ Value::Object(_)) = serde_json::from_str::<Value>(line.trim()) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 /// Place `name` on this host, which the registry calls `here`.
@@ -148,15 +203,13 @@ async fn placement(
     name: &str,
     engine: &str,
     port: Option<u16>,
+    version: Option<&str>,
     here: &str,
 ) -> Result<Value, CmdError> {
-    let home = std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            CmdError::click("HOME is not set; a fleet database lives under it")
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let home = crate::config_file::home().map_err(|cause| {
+        CmdError::click(format!("a fleet database has no directory to live in: {cause}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let directory = home.join(".stado").join("databases").join(name);
     std::fs::create_dir_all(&directory).map_err(|error| {
         CmdError::click(format!("create {}: {error}", directory.display()))
@@ -166,7 +219,7 @@ async fn placement(
     owner.ready()?;
     match engine {
         "sqlite" => place_sqlite(name, here, &directory, &owner).await,
-        _ => postgres::place(name, here, &directory, port, &owner).await,
+        _ => postgres::place(name, here, &directory, port, version, &owner).await,
     }
 }
 
@@ -177,14 +230,21 @@ async fn place_sqlite(
     owner: &owner_vault::Owner,
 ) -> Result<Value, CmdError> {
     let file = directory.join(format!("{name}.sqlite3"));
-    let reused = file.is_file();
+    // A database file that cannot be examined is refused, and a new one is
+    // created only where nothing is: through is_file() and File::create, an
+    // existing database this process could not look at was truncated empty.
+    let reused = crate::primitives::presence::present(&file)?;
     if !reused {
         // An empty file is a valid SQLite database; creating it here makes the
         // path the item names exist before any consumer opens it.
-        std::fs::File::create(&file).map_err(|error| {
-            CmdError::click(format!("create {}: {error}", file.display()))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&file)
+            .map_err(|error| {
+                CmdError::click(format!("create {}: {error}", file.display()))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+            })?;
     }
     let item = format!("{name}-database");
     let path = file.display().to_string();

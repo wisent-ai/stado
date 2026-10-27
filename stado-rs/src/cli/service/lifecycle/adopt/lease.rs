@@ -99,22 +99,25 @@ where
 pub(super) async fn withdraw_service_declaration(
     host: &str,
     unit: &str,
+    home: &str,
 ) -> Result<(ManagedService, String), CmdError> {
     let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
     let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
-    retire_directory_routes(&mut document, host, &removed)?;
+    retire_directory_routes(&mut document, host, home, &removed)?;
     let generation = registry::push_document_if(&document, &expected_generation).await?;
     Ok((removed, generation))
 }
 
 /// A replacement catalog unit takes over the route only if it is declared on
 /// the same host: the product whose program the retired unit ran under
-/// another label. Otherwise, withdraw every route whose active host matches
-/// and whose `managed_service` names the retired service by its declared
-/// name or by its unit id, regardless of the route's own name.
+/// another label, its `$HOME` resolved under `home`, the home the host
+/// states. Otherwise, withdraw every route whose active host matches and
+/// whose `managed_service` names the retired service by its declared name or
+/// by its unit id, regardless of the route's own name.
 fn retire_directory_routes(
     document: &mut Value,
     host: &str,
+    home: &str,
     removed: &ManagedService,
 ) -> Result<(), CmdError> {
     let retired = removed.unit_id();
@@ -150,7 +153,7 @@ fn retire_directory_routes(
                  replacement takes over the retired unit's routes cannot be read"
             ))
         })?;
-    let owner = service::declared_owner(&target, removed).map_err(CmdError::declaration)?;
+    let owner = service::declared_owner(&target, removed, home).map_err(CmdError::declaration)?;
     let replacement = owner
         .map(|entry| crate::deploy::service_catalog::unit_of(&entry).to_string())
         .filter(|unit| {

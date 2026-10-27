@@ -136,17 +136,6 @@ pub(in crate::capabilities::registry) const ALERTS: &[CapabilityVariant] = &[
         config: &[],
     },
     CapabilityVariant {
-        id: ProviderId::Sendgrid.as_str(),
-        aliases: ProviderId::Sendgrid.aliases(),
-        provider: Some(ProviderId::Sendgrid),
-        implementation: "monitor::alerts",
-        summary: "SendGrid email delivery.",
-        configurable: true,
-        constructible: false,
-        adapter: RuntimeAdapter::None,
-        config: &[],
-    },
-    CapabilityVariant {
         id: ProviderId::Skrzynka.as_str(),
         aliases: ProviderId::Skrzynka.aliases(),
         provider: Some(ProviderId::Skrzynka),

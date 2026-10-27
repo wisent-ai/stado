@@ -1,13 +1,13 @@
 //! Box diagnostics watchdog, run as the `stado serve --watchdog` role.
 //!
 //! Collects fault-isolated box diagnostics (systemctl status, journalctl
-//! tails, ps, nvidia-smi, df, free, and a `gcloud storage ls capacity/`
-//! probe), then uploads the JSON payload to
-//! `gs://<bucket>/box_diagnostics/<host>.json` (plus
-//! `box_diagnostics/<host>/latest.json`) every declared
+//! tails, ps, nvidia-smi, df, free, each volume as the disk-full rule reads
+//! it, and the fleet's capacity through `stado capacity list --json`), then
+//! uploads the JSON payload to `box_diagnostics/<host>.json` (plus
+//! `box_diagnostics/<host>/latest.json`) in the declared bucket every
 //! `--watchdog-interval-seconds`, through [`JobStorage`](crate::queue::JobStorage)
-//! so the `WC_STORAGE_BACKEND=local` backend works too. A pass whose upload
-//! fails keeps its payload as `~/.stado/box_diagnostics/<host>.json`.
+//! so every storage backend works. A pass whose upload fails keeps its
+//! payload as `~/.stado/box_diagnostics/<host>.json`.
 
 mod cli;
 mod collect;

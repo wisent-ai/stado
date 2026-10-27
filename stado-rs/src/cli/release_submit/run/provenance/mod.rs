@@ -33,10 +33,6 @@ const TIER: &str = "git-archive:";
 const REMOTE: &str = "origin";
 const PEELED: &str = "^{}";
 
-/// Permission bits of a record added to a snapshot: owner read-write,
-/// everyone else read, as `git archive` writes a regular file.
-const RECORD_MODE: u32 = 0o644;
-
 /// Add every history record a release build needs and cannot compute from
 /// files alone: the verified baseline provenance and the published diff.
 /// A record that does not apply to this commit is not written.
@@ -58,8 +54,9 @@ pub(crate) fn append_records<W: std::io::Write>(
         };
         let mut header = tar::Header::new_gnu();
         header.set_size(record.len() as u64);
-        header.set_mode(RECORD_MODE);
-        header.set_mtime(0);
+        // The epoch and the root owner, so the archive's bytes depend on its
+        // records alone.
+        crate::primitives::archive::stamp(&mut header, crate::primitives::file_mode::shared_read());
         header.set_cksum();
         files.append_data(&mut header, path, &record[..])?;
     }
@@ -170,20 +167,31 @@ fn origin_tag_versions(root: &Path, commit: &str) -> Result<Value, CmdError> {
     use crate::release_pipeline::{declared_version, ProductManifest};
 
     let manifest = committed_file(root, commit, crate::release_pipeline::PRODUCT_MANIFEST)?;
+    // Only a release manifest declares where a version is read from; a
+    // tag of a product with another manifest kind, or an unreadable one,
+    // carries no version and says which.
     let source = match serde_json::from_slice::<ProductManifest>(&manifest) {
-        Ok(ProductManifest::Release(release)) => Some(release.version_source),
-        _ => None,
+        Ok(ProductManifest::Release(release)) => Ok(release.version_source),
+        Ok(_other_manifest_kind) => {
+            Err("the product manifest is not a release manifest".to_string())
+        }
+        Err(error) => Err(format!("the product manifest does not parse: {error}")),
     };
     let commits = origin_tag_commits(root)?;
     let mut tags = serde_json::Map::new();
     for (tag, sha) in commits {
-        let version = source.as_ref().and_then(|source| {
+        let declared = source.as_ref().map_err(Clone::clone).and_then(|source| {
             declared_version(source, |path| {
                 committed_file(root, &sha, path).map_err(|error| error.to_string())
             })
-            .ok()
         });
-        tags.insert(tag, json!({ "commit": sha, "version": version }));
+        let record = match declared {
+            Ok(version) => json!({ "commit": sha, "version": version }),
+            Err(unread) => {
+                json!({ "commit": sha, "version": Value::Null, "version_unread": unread })
+            }
+        };
+        tags.insert(tag, record);
     }
     Ok(Value::Object(tags))
 }

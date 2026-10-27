@@ -66,6 +66,6 @@ pub async fn on_transition(store: &JobStorage, job: &Job, to_prefix: &str) {
         .await
     {
         // Never raise into the agent loop.
-        eprintln!("[tombstone] write failed for {orig}: {exc:?}");
+        eprintln!("[tombstone] write failed for {orig}: {exc}");
     }
 }

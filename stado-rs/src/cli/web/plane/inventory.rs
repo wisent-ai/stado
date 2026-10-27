@@ -1,40 +1,38 @@
 //! `stado web list` and `stado web remove` — reading and withdrawing
 //! declarations.
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use super::{mutate_web, product};
 use crate::cli::web::{deploy, route, schedules, unit_label};
 use crate::cli::CmdError;
 
 pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
-    // An empty plane is not a broken one: the parser refuses an empty map so
-    // that a half-written section cannot pass, and "nothing declared" has to
-    // read as nothing declared, so the section's absence is asked first.
-    if crate::config_file::get("web_api.products").is_none() {
+    // An empty plane is not a broken one: nothing declared, in the override
+    // or the config file, lists nothing, and a declared table that does not
+    // parse is refused with its problems.
+    let declared = crate::config::declared_web_api_products().map_err(|problems| {
+        CmdError::click(problems.join("; "))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    let Some(products) = declared else {
         if json_output {
             println!("[]");
         } else {
             println!("no web products are declared");
         }
         return Ok(());
-    }
-    let products = crate::config::web_api_products().map_err(|problems| {
-        CmdError::click(problems.join("; "))
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
-    let rows: Vec<Value> = products
+    };
+    let rows: Vec<Map<String, Value>> = products
         .iter()
         .map(|(name, product)| {
             // A hostname-only product has no host, port, consumer or unit,
             // and printing empties for them described a unit that does not
             // exist. Each kind carries the fields it actually has.
-            let mut row = json!({
-                "product": name,
-                "hostname": product.hostname(),
-                "edge": product.edge(),
-            });
-            let object = row.as_object_mut().expect("a JSON object was just built");
+            let mut object = Map::new();
+            object.insert("product".into(), json!(name));
+            object.insert("hostname".into(), json!(product.hostname()));
+            object.insert("edge".into(), json!(product.edge()));
             match (product.redirect_to(), product.upstream_service()) {
                 (Some(target), _) => {
                     object.insert("kind".into(), json!("redirect"));
@@ -65,10 +63,10 @@ pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
                     );
                 }
             }
-            row
+            object
         })
         .collect();
-    let rows = with_twins(rows);
+    let rows: Vec<Value> = with_twins(rows).into_iter().map(Value::Object).collect();
     if json_output {
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
@@ -116,18 +114,17 @@ fn twin(hostname: &str) -> Option<String> {
 
 /// Every row whose hostname is in a twin zone, with its twin and whether any
 /// declaration owns that twin.
-fn with_twins(mut rows: Vec<Value>) -> Vec<Value> {
+fn with_twins(mut rows: Vec<Map<String, Value>>) -> Vec<Map<String, Value>> {
     let declared: std::collections::BTreeSet<String> = rows
         .iter()
-        .filter_map(|row| row["hostname"].as_str().map(str::to_string))
+        .filter_map(|row| row.get("hostname").and_then(Value::as_str).map(str::to_string))
         .collect();
     for row in &mut rows {
-        let Some(twin) = row["hostname"].as_str().and_then(twin) else {
+        let Some(twin) = row.get("hostname").and_then(Value::as_str).and_then(twin) else {
             continue;
         };
-        let object = row.as_object_mut().expect("every row is a JSON object");
-        object.insert("twin_declared".into(), json!(declared.contains(&twin)));
-        object.insert("twin".into(), json!(twin));
+        row.insert("twin_declared".into(), json!(declared.contains(&twin)));
+        row.insert("twin".into(), json!(twin));
     }
     rows
 }
@@ -189,11 +186,13 @@ pub(crate) async fn remove(name: &str, json_output: bool) -> Result<(), CmdError
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        println!(
-            "{name}: record {}, unit {}, declaration removed",
-            record["change"].as_str().unwrap_or("unchanged"),
-            unit["change"].as_str().unwrap_or("unchanged"),
-        );
+        // Each receipt is said as it reads: its change, else its state (a
+        // hostname-only product's retire answers `no-unit`), else the receipt.
+        let said = |receipt: &Value| match receipt["change"].as_str().or_else(|| receipt["state"].as_str()) {
+            Some(word) => word.to_string(),
+            None => receipt.to_string(),
+        };
+        println!("{name}: record {}, unit {}, declaration removed", said(&record), said(&unit));
     }
     Ok(())
 }

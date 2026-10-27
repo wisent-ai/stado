@@ -11,6 +11,7 @@ use super::janitor::JanitorHealth;
 use crate::deploy::host_disk;
 use crate::deploy::host_gates::words::DISK_PRESSURE_UNRESOLVED;
 use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
+use crate::providers::local::host_memory::constants::GIB;
 use crate::providers::local::space_reclaim::rule::VolumeReading;
 use crate::queue::capacity::Publication;
 
@@ -28,6 +29,9 @@ pub(super) struct Facts {
     /// its row is live, measured here otherwise.
     pub disk_full: bool,
     pub pressure_source: Option<&'static str>,
+    /// Why this command's own disk reading gave no volume to judge by, when
+    /// it gave none: no `df` row, or a field that is not a block count.
+    pub local_disk_unread: Option<String>,
     pub cleanup_success_age_seconds: Option<i64>,
     pub janitor: JanitorHealth,
 }
@@ -39,19 +43,17 @@ impl Facts {
         now: DateTime<Utc>,
         state_observed: bool,
     ) -> Self {
-        let kib = |value: &str| value.parse::<u64>().ok();
-        let free_kb = reading
-            .usage
-            .as_ref()
-            .and_then(|usage| kib(&usage.available_kb));
-        let free_bytes = free_kb.and_then(|blocks| blocks.checked_mul(1024));
-        let free_gb = free_kb.map(|blocks| host_disk::gib_from_blocks(blocks as f64));
-        let volume = reading.usage.as_ref().and_then(|usage| {
-            Some(VolumeReading {
-                total_bytes: i64::try_from(kib(&usage.blocks_kb)?.checked_mul(1024)?).ok()?,
-                free_bytes: i64::try_from(kib(&usage.available_kb)?.checked_mul(1024)?).ok()?,
-            })
-        });
+        // This command's own df row for the fleet volume, or why it gave none.
+        let local = match reading.usage.as_ref() {
+            Some(usage) => host_disk::volume_of(usage),
+            None => Err("this command's df read listed no row for the fleet volume".to_string()),
+        };
+        let (volume, local_disk_unread) = match local {
+            Ok(volume) => (Some(volume), None),
+            Err(cause) => (None, Some(cause)),
+        };
+        let free_bytes = volume.map(|volume| volume.free_bytes.unsigned_abs());
+        let free_gb = volume.map(|volume| volume.free_bytes as f64 / GIB as f64);
 
         let payload = publication.map(|row| &row.payload);
         let published_at = payload
@@ -83,12 +85,8 @@ impl Facts {
         // How long since a pass last completed, reported beside the verdict;
         // the verdict itself is the janitor's own promise, read in
         // [`JanitorHealth::read`].
-        let cleanup_success_age_seconds = reading
-            .state
-            .last_success_at
-            .as_deref()
-            .and_then(|stamp| DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok())
-            .map(|stamp| (now - stamp.with_timezone(&Utc)).num_seconds());
+        let cleanup_success_age_seconds = super::janitor::parsed(reading.state.last_success_at.as_deref())
+            .map(|stamp| (now - stamp).num_seconds());
         let janitor = JanitorHealth::read(reading, now, state_observed);
 
         Self {
@@ -102,6 +100,7 @@ impl Facts {
             disk_pressure_unresolved,
             disk_full,
             pressure_source,
+            local_disk_unread,
             cleanup_success_age_seconds,
             janitor,
         }

@@ -82,8 +82,14 @@ pub(in crate::deploy::host_inventory) enum ObservedState {
 }
 
 impl ObservedState {
+    /// The state the host script wrote by `word`; `None` for a word it does
+    /// not write, which every reader below treats as not the state asked
+    /// about, never as a read that answered.
     pub(in crate::deploy::host_inventory) fn parse(word: &str) -> Option<Self> {
-        Self::deserialize(serde_json::Value::String(word.to_string())).ok()
+        match Self::deserialize(serde_json::Value::String(word.to_string())) {
+            Ok(state) => Some(state),
+            Err(_not_a_state_the_script_writes) => None,
+        }
     }
 }
 

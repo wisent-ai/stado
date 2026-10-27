@@ -62,10 +62,11 @@ pub async fn resolve_admission(target: &str) -> Result<Admission, DeployError> {
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let loopback = matches!(url.host_str(), Some("127.0.0.1" | "::1" | "localhost"));
+    use crate::primitives::http::origin::{is_loopback_host, WebScheme};
+    let loopback = is_loopback_host(&url);
     let port = url.port_or_known_default();
-    match (url.scheme(), loopback, port) {
-        ("http", true, Some(port)) => Ok(Admission {
+    match (WebScheme::of(&url), loopback, port) {
+        (Some(WebScheme::Http), true, Some(port)) => Ok(Admission {
             target: resolved,
             port,
             declared_url: endpoint.url.clone(),
@@ -101,7 +102,7 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
     if host_channel::target_is_this_host(&admission.target) {
         return Ok(Channel {
             forward: None,
-            base_url: format!("http://127.0.0.1:{}", admission.port),
+            base_url: crate::primitives::http::origin::loopback_origin(admission.port),
             client,
             token,
         });
@@ -124,7 +125,11 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
         "-o".to_string(),
         "ExitOnForwardFailure=yes".to_string(),
         "-L".to_string(),
-        format!("127.0.0.1:{local_port}:127.0.0.1:{}", admission.port),
+        format!(
+            "{}:{}",
+            crate::primitives::http::origin::loopback_address(local_port),
+            crate::primitives::http::origin::loopback_address(admission.port)
+        ),
         destination,
     ]);
     let key =
@@ -148,7 +153,7 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
     drop(key);
     Ok(Channel {
         forward: Some(child),
-        base_url: format!("http://127.0.0.1:{local_port}"),
+        base_url: crate::primitives::http::origin::loopback_origin(local_port),
         client,
         token,
     })

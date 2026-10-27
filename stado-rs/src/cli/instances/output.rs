@@ -49,8 +49,10 @@ pub(super) fn format_age(age_seconds: f64) -> String {
     let Some(total) = Duration::try_seconds(age_seconds as i64) else {
         return UNKNOWN.to_string();
     };
+    // The whole hours are a span the clock holds, since they were read from
+    // one; what is left of the total past them is the minutes.
     let hours = total.num_hours();
-    let rest = total - Duration::try_hours(hours).unwrap_or_else(Duration::zero);
+    let rest = total - Duration::hours(hours);
     format!("{hours}h{}m", rest.num_minutes())
 }
 

@@ -40,12 +40,18 @@ pub fn plan_agents(target: &ComputeTarget) -> Vec<AgentPlan> {
     super::managed_agents()
         .into_iter()
         .map(|(label, declared_elsewhere)| {
-            let plist = declared
+            // The declared service's own path wins over the catalog's
+            // default location; a declaration without a path, or none at
+            // all, leaves the plist where the catalog places it.
+            let declared_path = declared
                 .iter()
                 .find(|service| service.matches(&label))
                 .map(|service| service.path.clone())
-                .filter(|path| !path.is_empty())
-                .unwrap_or(declared_elsewhere);
+                .filter(|path| !path.is_empty());
+            let plist = match declared_path {
+                Some(path) => path,
+                None => declared_elsewhere,
+            };
             AgentPlan {
                 privileged: crate::deploy::service::UnitDomain::from_path(&plist)
                     .requires_privileged_bootstrap(),
@@ -107,10 +113,11 @@ pub fn plan_stable_binds(document: &Value, target: &ComputeTarget) -> Vec<Stable
                 bind: bind.to_string(),
                 plist: plist.to_string(),
                 label: label.to_string(),
-                candidate_ports: policy_target
-                    .candidate_ports
-                    .map(|ports| ports.to_vec())
-                    .unwrap_or_default(),
+                // A replace-strategy policy declares no candidate ports.
+                candidate_ports: match policy_target.candidate_ports {
+                    Some(ports) => ports.to_vec(),
+                    None => Vec::new(),
+                },
             })
         })
         .collect();

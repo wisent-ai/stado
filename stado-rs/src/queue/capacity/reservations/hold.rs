@@ -151,11 +151,21 @@ pub fn hold(lease: ReservationLease, store: JobStorage, period: Duration) -> Hel
         let consumer = beating.reservation().consumer_id.clone();
         let mut period = period;
         let mut last_round = Duration::ZERO;
+        // The first tick is at once; a period the holder's publication
+        // restates differently starts a new schedule from this round.
+        let mut schedule = tokio::time::interval(period);
+        schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
+            schedule.tick().await;
             let started = Instant::now();
             match consumer_period(&beat_store, &consumer).await {
-                Ok(Some(stated)) => period = stated,
-                Ok(None) => {}
+                Ok(Some(stated)) if stated != period => {
+                    period = stated;
+                    schedule =
+                        tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+                    schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                }
+                Ok(_) => {}
                 Err(cause) => tracing::warn!(
                     reservation = %beating.reservation().reservation_id,
                     "the holder's publication period was not read, so this renewal keeps \
@@ -169,7 +179,6 @@ pub fn hold(lease: ReservationLease, store: JobStorage, period: Duration) -> Hel
                 );
             }
             last_round = started.elapsed();
-            tokio::time::sleep(period).await;
         }
     });
     HeldReservation {

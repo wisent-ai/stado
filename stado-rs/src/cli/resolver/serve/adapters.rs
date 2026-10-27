@@ -15,7 +15,10 @@ use crate::service_resolution::{self, ResolverAdapter};
 
 /// The adapter among `adapters` bound at the address this process reads its
 /// registry through (`storage.stado.url`), with the reason it cannot serve
-/// it, when `refuses` says the process reads its registry that way.
+/// it, when `refuses` says the process reads its registry that way. A store
+/// URL that does not parse, or names no explicit port, can be bound by no
+/// adapter, so none is refused here; the store client built on that URL
+/// reports its own parse failure.
 ///
 /// Such a resolver cannot start that route in either order: with the object
 /// API up the bind fails with "address already in use", with it down the
@@ -29,8 +32,12 @@ pub(super) fn self_served_store(
     if !refuses {
         return None;
     }
-    let store_url = crate::config::wc_stado_storage_url();
-    let parsed = url::Url::parse(store_url.trim()).ok()?;
+    let Ok(store_url) = crate::config::wc_stado_storage_url() else {
+        return None;
+    };
+    let Ok(parsed) = url::Url::parse(store_url.trim()) else {
+        return None;
+    };
     let store_authority = format!("{}:{}", parsed.host_str()?, parsed.port()?);
     let adapter = adapters
         .iter()
@@ -87,8 +94,8 @@ pub(super) async fn bind_adapters(
 /// changed; restarting to rebind listeners"), and because the resolver is a
 /// role of `stado serve`, the whole process with it: every forward on the
 /// host closed, mid-stream, on every registry change - a five-minute Weles
-/// sign-in streamed through 127.0.0.1:17690 died with "unexpected EOF during
-/// chunk size line" when a release elsewhere advanced the directory. Only the
+/// sign-in streamed through a loopback adapter died with "unexpected EOF
+/// during chunk size line" when a release elsewhere advanced the directory. Only the
 /// adapters whose declaration changed are rebound now: one that is no longer
 /// declared, or declared differently, has its accept loop stopped (open
 /// connections are their own tasks and finish), and one that is new is bound.
@@ -103,8 +110,14 @@ pub(super) async fn reconcile_adapters(
     let current: Vec<service_resolution::ResolverAdapter> = state
         .adapters
         .read()
-        .map(|held| held.clone())
-        .unwrap_or_default();
+        .map_err(|poisoned| {
+            CmdError::click(format!(
+                "the resolver's record of the adapters it serves was left mid-update by a task \
+                 that panicked ({poisoned}), so which adapters are bound is unknown; restarting \
+                 rebinds every declared adapter"
+            ))
+        })?
+        .clone();
     let kept: Vec<&service_resolution::ResolverAdapter> = current
         .iter()
         .filter(|adapter| next.adapters.contains(adapter))
@@ -114,7 +127,10 @@ pub(super) async fn reconcile_adapters(
     // port, so that one change still restarts the process.
     let store = crate::config::wc_stado_storage_url();
     if let Some(adapter) = current.iter().find(|adapter| {
-        !kept.contains(adapter) && store.trim_end_matches('/') == format!("http://{}", adapter.bind)
+        !kept.contains(adapter)
+            && store
+                .as_deref()
+                .is_ok_and(|store| store.trim_end_matches('/') == format!("http://{}", adapter.bind))
     }) {
         // A declaration change this process cannot apply in place: config,
         // so the restart reads as the registry's doing, not a crash.
@@ -163,7 +179,7 @@ pub(super) async fn reconcile_adapters(
 pub(super) async fn bind_loopback(value: &str) -> Result<TcpListener, CmdError> {
     let address: SocketAddr = value
         .parse()
-        .map_err(|_| CmdError::usage(format!("invalid resolver bind {value:?}")))?;
+        .map_err(|cause| CmdError::usage(format!("invalid resolver bind {value:?}: {cause}")))?;
     if !address.ip().is_loopback() {
         return Err(CmdError::refused(format!(
             "resolver bind {value:?} must be loopback"

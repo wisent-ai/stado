@@ -56,7 +56,7 @@ pub(crate) async fn construct_backend(
             .await?,
         )),
         StorageAdapter::StadoObject => Ok(Arc::new(StadoObjectBackend::new(
-            &crate::config::wc_stado_storage_url(),
+            &crate::config::wc_stado_storage_url().map_err(crate::queue::StorageError::Other)?,
             crate::config::wc_stado_storage_namespace(),
             crate::config::wc_stado_storage_token_file(),
             crate::config::wc_stado_storage_ca_file(),

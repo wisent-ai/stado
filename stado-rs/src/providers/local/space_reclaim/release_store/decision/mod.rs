@@ -7,14 +7,14 @@ use std::collections::BTreeSet;
 /// dotted numbers sorts before every one that is, so it is never counted as
 /// the newest of anything.
 fn version_key(version: &str) -> (bool, Vec<u64>) {
-    let parts: Option<Vec<u64>> = version
-        .split('.')
-        .map(|part| part.parse::<u64>().ok())
-        .collect();
-    match parts {
-        Some(numbers) => (true, numbers),
-        None => (false, Vec::new()),
+    let mut numbers = Vec::new();
+    for part in version.split('.') {
+        match part.parse::<u64>() {
+            Ok(number) => numbers.push(number),
+            Err(_not_a_number) => return (false, Vec::new()),
+        }
     }
+    (true, numbers)
 }
 
 /// Why one version survives a pass, or `None` when nothing needs it.

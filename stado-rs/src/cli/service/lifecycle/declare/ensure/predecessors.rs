@@ -35,9 +35,14 @@ pub(super) async fn host_ready(
     // its credentials at its first start; on a host whose vault does not know
     // those scopes yet it crash-loops on 401s.
     if let Some(scopes) = entry.and_then(|entry| entry.acquisition_scopes.as_deref()) {
+        // The home the host's own shell states, not one derived from its
+        // SSH user, so the scopes file is the one the product reads.
+        let home = crate::deploy::host_channel::remote_home(target, runner)
+            .await
+            .map_err(click)?;
         let installed = crate::deploy::service_catalog::resolve_word(
             scopes,
-            &crate::deploy::service_catalog::home_for(target),
+            &home,
             &target.release_platform,
             &target.name,
         );

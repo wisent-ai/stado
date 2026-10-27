@@ -192,10 +192,11 @@ pub enum SystemdActiveState {
 }
 
 impl SystemdActiveState {
-    /// The state systemd reports by `word`; `None` for a word systemd does
-    /// not write, the one thing serde's refusal of it says.
-    pub fn parse(word: &str) -> Option<Self> {
-        <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string())).ok()
+    /// The state systemd reports by `word`; `Err` names a word systemd does
+    /// not write, with serde's refusal of it.
+    pub fn parse(word: &str) -> Result<Self, String> {
+        <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string()))
+            .map_err(|refusal| format!("systemd does not write ActiveState {word:?}: {refusal}"))
     }
 
     /// Up: active, or active and re-reading its configuration.
@@ -224,8 +225,9 @@ pub enum SystemdManager {
 }
 
 impl SystemdManager {
-    /// The manager named by `word`; `None` for any other word.
-    pub fn parse(word: &str) -> Option<Self> {
-        <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string())).ok()
+    /// The manager named by `word`; `Err` names any other word.
+    pub fn parse(word: &str) -> Result<Self, String> {
+        <Self as serde::Deserialize>::deserialize(serde_json::Value::String(word.to_string()))
+            .map_err(|refusal| format!("{word:?} names no systemd manager: {refusal}"))
     }
 }

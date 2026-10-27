@@ -79,11 +79,11 @@ impl CloudflareClient {
             ))
             .stating(crate::primitives::failure::FailureCode::from_upstream_status(status.as_u16()))
         })?;
-        let success = payload
-            .get("success")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        if status.is_success() && success {
+        // Cloudflare's envelope states `success` on every answer; an answer
+        // without the flag is not the API's envelope and is refused below
+        // with the body's own errors, never read as a success.
+        let succeeded = payload.get("success").and_then(Value::as_bool) == Some(true);
+        if status.is_success() && succeeded {
             return Ok(payload);
         }
         let detail = cloudflare_errors(&payload);

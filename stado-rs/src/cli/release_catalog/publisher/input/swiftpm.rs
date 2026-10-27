@@ -29,14 +29,19 @@ fn sweep_abandoned(scratch: &Path) -> Result<(), CmdError> {
     for entry in std::fs::read_dir(scratch)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(pid) = name
+        // Only `swiftpm-<pid>-…` is a stage of this publisher; anything else
+        // under the scratch directory is somebody else's and is left alone.
+        let Some((pid_text, _rest)) = name
             .strip_prefix(STAGE_PREFIX)
-            .and_then(|rest| rest.split('-').next())
-            .and_then(|pid| pid.parse::<i32>().ok())
+            .and_then(|rest| rest.split_once('-'))
         else {
             continue;
         };
-        if crate::providers::local::helpers::running_slot::pid_alive(pid) {
+        let pid = match pid_text.parse::<i32>() {
+            Ok(pid) => pid,
+            Err(_not_a_process_id) => continue,
+        };
+        if crate::primitives::procutil::pid_alive(pid) {
             continue;
         }
         let path = entry.path();
@@ -66,7 +71,7 @@ const NESTED_SANDBOX_CAUSE: &str = "sandbox_apply: Operation not permitted";
 /// service, whose process is not the sandboxed shell. The sentence names both
 /// of the service's surfaces and what the service needs to read the checkout,
 /// so the next refusal met on that route is already explained here.
-const NESTED_SANDBOX_WAY_OUT: &str = "; this shell is sandboxed and SwiftPM's manifest sandbox cannot nest inside it: run pin-input from a shell outside the sandbox, or have the Stado service run it, which is unsandboxed - Stado Desktop, Releases, \"Publish an immutable build input\", or POST /api/operator/run on the service's API with X-Stado-Action: operator-command, args [\"release\",\"catalog\",\"pin-input\",...] and confirmation RUN_MUTATION; the service's process must be allowed to read the checkout and the source (on macOS, the folder access the system grants it)";
+const NESTED_SANDBOX_WAY_OUT: &str = "; this shell is sandboxed and SwiftPM's manifest sandbox cannot nest inside it: run input pin from a shell outside the sandbox, or have the Stado service run it, which is unsandboxed - Stado Desktop, Releases, \"Publish an immutable build input\", or POST /api/operator/run on the service's API with X-Stado-Action: operator-command, args [\"release\",\"catalog\",\"input\",\"pin\",...] and confirmation RUN_MUTATION; the service's process must be allowed to read the checkout and the source (on macOS, the folder access the system grants it)";
 
 /// Run `swift package resolve` for `package` into `resolved`, as its committed
 /// Package.resolved pins it.

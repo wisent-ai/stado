@@ -94,29 +94,29 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
             &profile,
             &cli_kwargs_json(args, &apt_list, spot, any_provider),
         );
-        gpu_type = get_str(&merged, "gpu_type");
-        vram_gb = get_i64(&merged, "vram_gb");
-        machine_type = get_str(&merged, "machine_type");
-        apt_list = get_str_list(&merged, "apt_packages");
-        pre_command = get_str(&merged, "pre_command");
-        repo = get_str(&merged, "repo");
-        repo_ref = get_str(&merged, "repo_ref");
-        repo_workdir = get_str(&merged, "repo_workdir");
-        repo_extras = get_str(&merged, "repo_extras");
-        output_uri = get_str(&merged, "output_uri");
-        verify_command = get_str(&merged, "verify_command");
-        exclusive = get_bool(&merged, "exclusive");
-        priority = get_i64(&merged, "priority");
-        deadline_at = get_str(&merged, "deadline_at");
-        spot = get_bool(&merged, "preemptible");
-        max_cost_per_hour = get_f64(&merged, "max_cost_per_hour_usd");
-        provider = get_str(&merged, "provider");
-        any_provider = !get_bool(&merged, "pin_to_provider");
-        let description = profile
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        println!("Profile '{}' applied: {description}", args.profile);
+        let merged_field = |cause: String| CmdError::usage(format!("profile '{}': {cause}", args.profile));
+        gpu_type = get_str(&merged, "gpu_type").map_err(merged_field)?;
+        vram_gb = get_i64(&merged, "vram_gb").map_err(merged_field)?;
+        machine_type = get_str(&merged, "machine_type").map_err(merged_field)?;
+        apt_list = get_str_list(&merged, "apt_packages").map_err(merged_field)?;
+        pre_command = get_str(&merged, "pre_command").map_err(merged_field)?;
+        repo = get_str(&merged, "repo").map_err(merged_field)?;
+        repo_ref = get_str(&merged, "repo_ref").map_err(merged_field)?;
+        repo_workdir = get_str(&merged, "repo_workdir").map_err(merged_field)?;
+        repo_extras = get_str(&merged, "repo_extras").map_err(merged_field)?;
+        output_uri = get_str(&merged, "output_uri").map_err(merged_field)?;
+        verify_command = get_str(&merged, "verify_command").map_err(merged_field)?;
+        exclusive = get_bool(&merged, "exclusive").map_err(merged_field)?;
+        priority = get_i64(&merged, "priority").map_err(merged_field)?;
+        deadline_at = get_str(&merged, "deadline_at").map_err(merged_field)?;
+        spot = get_bool(&merged, "preemptible").map_err(merged_field)?;
+        max_cost_per_hour = get_f64(&merged, "max_cost_per_hour_usd").map_err(merged_field)?;
+        provider = get_str(&merged, "provider").map_err(merged_field)?;
+        any_provider = !get_bool(&merged, "pin_to_provider").map_err(merged_field)?;
+        match profile.get("description").and_then(Value::as_str) {
+            Some(description) => println!("Profile '{}' applied: {description}", args.profile),
+            None => println!("Profile '{}' applied", args.profile),
+        }
     }
     let deadline_at = if deadline_at.trim().is_empty() {
         None
@@ -182,36 +182,32 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     };
 
     let jobs = submit_batch(&commands, &options).await?;
-    let n = jobs.len();
-    if n == 1 {
+    if let [job] = jobs.as_slice() {
         // Single job: echo its id so callers (probierz bridge) watch the
         // job itself instead of guessing from the batch id.
-        println!("Job ID: {}", jobs[0].job_id);
+        println!("Job ID: {}", job.job_id);
     }
-    println!("  submitted {}/{} jobs", n, commands.len());
+    println!("  submitted {}/{} jobs", jobs.len(), commands.len());
     let mode = "Stado";
     let mut flags: Vec<String> = Vec::new();
     if options.preemptible {
         flags.push("spot".into());
     }
-    if options.max_cost_per_hour_usd > 0.0 {
-        flags.push(format!("cap=${:.2}/hr", options.max_cost_per_hour_usd));
-    }
+    // The numeric settings are stated as stored; their unset value means what
+    // `stado submit --help` declares for each (no cost cap, the FIFO bucket's
+    // base priority, no declared VRAM).
+    flags.push(format!("max_cost_per_hour_usd={}", options.max_cost_per_hour_usd));
     if options.pin_to_provider {
         flags.push(format!("pinned={}", options.provider));
     }
-    if options.priority != 0 {
-        flags.push(format!("priority={}", options.priority));
-    }
+    flags.push(format!("priority={}", options.priority));
     if let Some(deadline) = &options.deadline_at {
         flags.push(format!("deadline={deadline}"));
     }
     if !options.gpu_type.is_empty() {
         flags.push(format!("gpu={}", options.gpu_type));
     }
-    if options.vram_gb != 0 {
-        flags.push(format!("vram={}G", options.vram_gb));
-    }
+    flags.push(format!("vram_gb={}", options.vram_gb));
     if !options.machine_type.is_empty() {
         flags.push(format!("mt={}", options.machine_type));
     }
@@ -240,19 +236,14 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         commands.len()
     );
     let receipt_options = options.clone();
-    let request_digest = jobs
-        .first()
-        .map(|job| job.submission_request_digest.clone())
-        .ok_or_else(|| {
-            CmdError::click("durable submission returned no jobs")
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
+    let first = jobs.first().ok_or_else(|| {
+        CmdError::click("durable submission returned no jobs")
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let request_digest = first.submission_request_digest.clone();
     let receipt = SubmissionReceipt {
         schema: "stado.submission-receipt.v3".into(),
-        run_id: jobs
-            .first()
-            .map(|job| job.run_id.clone())
-            .unwrap_or_else(|| options.run_id.clone()),
+        run_id: first.run_id.clone(),
         request_digest: request_digest.clone(),
         source_digest: submission_source_digest(&receipt_options),
         input_digest: submission_input_digest(&commands, &receipt_options),

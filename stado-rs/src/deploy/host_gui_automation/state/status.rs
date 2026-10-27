@@ -18,10 +18,8 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
         password,
         runner,
     )
-    .await?
-    .filter(|value| !value.is_empty())
-    .unwrap_or_else(|| "none".to_string());
-    items.push(("autologin".to_string(), autologin));
+    .await?;
+    items.push(("autologin".to_string(), stated_or(autologin, "none")));
     let kcpassword = optional_sudo(
         target,
         &["/bin/test", "-f", "/etc/kcpassword"],
@@ -45,10 +43,8 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
         password,
         runner,
     )
-    .await?
-    .filter(|value| !value.is_empty())
-    .unwrap_or_else(|| "unset".to_string());
-    items.push(("remote-management-all-users".to_string(), ard));
+    .await?;
+    items.push(("remote-management-all-users".to_string(), stated_or(ard, "unset")));
     let vnc = optional_sudo(
         target,
         &[
@@ -60,10 +56,8 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
         password,
         runner,
     )
-    .await?
-    .filter(|value| !value.is_empty())
-    .unwrap_or_else(|| "unset".to_string());
-    items.push(("vnc-legacy".to_string(), vnc));
+    .await?;
+    items.push(("vnc-legacy".to_string(), stated_or(vnc, "unset")));
     let console_read = host_channel::run_program(
         target,
         &["/usr/bin/stat", "-f", "%Su", "/dev/console"],
@@ -71,7 +65,7 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
     )
     .await?;
     let console = console_read
-        .ok()
+        .succeeded()
         .then(|| console_read.stdout.trim().to_string());
     items.push((
         "console".to_string(),
@@ -82,7 +76,8 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
     ));
 
     let user = login_user(target, runner).await?;
-    let database = format!("/Users/{user}/Library/Application Support/com.apple.TCC/TCC.db");
+    let home = host_channel::remote_user_home(target, &user, runner).await?;
+    let database = format!("{home}/Library/Application Support/com.apple.TCC/TCC.db");
     let identity = app_identity(target, CUA_DRIVER_APP, runner).await?;
     if let Some(identity) = &identity {
         items.push(("cua-driver-app".to_string(), "present".to_string()));
@@ -177,7 +172,7 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
     } else {
         "owned by Probierz's process"
     };
-    let socket = format!("/Users/{user}/Library/Caches/cua-driver/probierz.sock");
+    let socket = format!("{home}/Library/Caches/cua-driver/probierz.sock");
     let socket_ready = invoke_as_gui_user(
         target,
         &user,
@@ -186,7 +181,7 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
         runner,
     )
     .await?
-    .ok();
+    .succeeded();
     items.push(("cua-driver-runtime".to_string(), runtime.to_string()));
     items.push((
         "cua-driver-socket".to_string(),
@@ -210,7 +205,7 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
         )
         .await
         {
-            Ok(output) if output.ok() => {
+            Ok(output) if output.succeeded() => {
                 serde_json::from_str::<serde_json::Value>(output.stdout.trim())
                     .map_err(|error| {
                         format!("CuaDriver check_permissions returned invalid JSON: {error}")

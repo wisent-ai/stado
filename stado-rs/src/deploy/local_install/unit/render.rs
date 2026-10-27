@@ -52,11 +52,12 @@ fn plist_document(
         ),
         None => String::new(),
     };
-    let session_xml = session_type
-        .map(|session| {
+    let session_xml = match session_type {
+        Some(session) => {
             format!("    <key>LimitLoadToSessionType</key>\n    <string>{session}</string>\n")
-        })
-        .unwrap_or_default();
+        }
+        None => String::new(),
+    };
     let args_xml: String = exec_args
         .iter()
         .map(|a| format!("        <string>{}</string>\n", xml_text(a)))
@@ -157,14 +158,15 @@ fn xml_text(value: &str) -> Cow<'_, str> {
 
 /// Literal ExecStart argv, retaining empty arguments and argument boundaries.
 pub(crate) fn systemd_command(arguments: &[String]) -> String {
-    let mut command = String::new();
-    for (index, argument) in arguments.iter().enumerate() {
-        if index != 0 {
-            command.push(' ');
-        }
-        append_systemd_word(&mut command, &[argument], true);
-    }
-    command
+    arguments
+        .iter()
+        .map(|argument| {
+            let mut word = String::new();
+            append_systemd_word(&mut word, &[argument], true);
+            word
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Environment values do not undergo ExecStart's dollar expansion.

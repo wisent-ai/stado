@@ -14,7 +14,9 @@
 //! and relay a client through it to a real object API on a real Skarbiec
 //! (`../../host_silence/refusal_in_flight/store.rs`). The test holds no
 //! clock: the resolver must give up the first read by the refresh interval
-//! the registry declares, on its own.
+//! the registry declares, on its own. While the authority stays stopped,
+//! `stado registry pull` with its store behind the object API answers from
+//! the generation this host's resolver holds and says so on stderr.
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -30,8 +32,9 @@ const AUTHORITY: &str = "other-host";
 const ANSWER: &str = "\"vault\"";
 
 /// The authority's SSH server, which sends its protocol greeting to one
-/// connection before it is stopped: a real server, now hung.
-fn hung_authority(deployment: &mut Deployment) -> HungSsh {
+/// connection before it is stopped: a real server, now hung. Every held
+/// journey that needs an authority answering nothing stands this one up.
+pub(crate) fn hung_authority(deployment: &mut Deployment) -> HungSsh {
     let port = deployment.free_port();
     let authority = HungSsh::serve(&deployment.root, port);
     let greeted = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
@@ -119,6 +122,24 @@ fn a_silent_authority_does_not_keep_the_resolver_from_serving_its_store() {
     assert!(
         answer.starts_with("HTTP/1.1 200") && answer.contains(ANSWER),
         "a client is relayed through the adapter to the serving object API: {answer}"
+    );
+
+    // A command on this host whose registry lives behind the object API
+    // reads the generation this host's resolver holds; the authority stays
+    // stopped, and asking it would stand until the refresh interval.
+    let pulled = deployment.through_adapter(&["registry", "pull"]);
+    deployment.record(&["registry", "pull"], &pulled);
+    let pull_said = String::from_utf8_lossy(&pulled.stderr).into_owned();
+    assert!(
+        pulled.status.success()
+            && pull_said.contains("read from this host's resolver")
+            && !pull_said.contains("asking the registry authority"),
+        "registry pull answers from this host's resolver while the authority is silent: {pull_said}"
+    );
+    let held: Value = serde_json::from_slice(&pulled.stdout).unwrap();
+    assert_eq!(
+        held["service_directory"]["authority"]["target"], AUTHORITY,
+        "the registry read is the one the resolver serves: {held}"
     );
     deployment.report["startup"] = json!(said);
     deployment.report["status"] = status;

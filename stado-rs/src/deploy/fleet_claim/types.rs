@@ -73,11 +73,17 @@ pub struct OldestWait {
 /// being worked through, and the number that tells an operator this queue has
 /// not moved at all is the hour count.
 pub fn wait_words(seconds: i64) -> String {
-    let total = u64::try_from(seconds).unwrap_or_default();
-    let hours = total / 3600;
-    let minutes = (total % 3600) / 60;
-    if hours == 0 {
-        return format!("{minutes}m");
+    let Some(wait) = chrono::TimeDelta::try_seconds(seconds) else {
+        return format!("{seconds} seconds");
+    };
+    // A job created after this clock's now is a clock that disagrees, said as
+    // such rather than read as a job that has not waited at all.
+    let ahead = if wait < chrono::TimeDelta::zero() { " ahead of this host's clock" } else { "" };
+    let wait = wait.abs();
+    let hours = wait.num_hours();
+    let minutes = (wait - chrono::TimeDelta::hours(hours)).num_minutes();
+    if chrono::TimeDelta::hours(hours).is_zero() {
+        return format!("{minutes}m{ahead}");
     }
-    format!("{hours}h {minutes}m")
+    format!("{hours}h {minutes}m{ahead}")
 }

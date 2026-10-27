@@ -11,13 +11,20 @@
 //! register ([`listed`]) therefore ends every wait whose process no longer
 //! runs: it reports that wait as ended, with the line it held when its
 //! process died, and removes its file, so the register holds only waits a
-//! running process stands in.
+//! running process stands in. A pid is read against the birth of the
+//! process holding it now ([`birth_seconds`]): a process born after the
+//! wait's file was written is another process that was handed the pid, so
+//! the wait's own process has ended.
 //!
 //! The directory is `$STADO_WAITS_DIR` when set, else `$HOME/.stado/waits`.
 //! A register that cannot be written does not stop the wait: the failure is
 //! said on stderr beside the wait's own line, naming the file and the cause.
 
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+mod birth;
+pub use birth::birth_seconds;
 
 /// The variable that names the register directory in place of the home one.
 pub const DIRECTORY_ENV: &str = "STADO_WAITS_DIR";
@@ -165,13 +172,30 @@ pub fn listed() -> Result<Listing, RegisterError> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(io_failure(format!("reading {}", file.display()), &error)),
         };
+        let written = match std::fs::metadata(&file).and_then(|metadata| metadata.modified()) {
+            Ok(written) => written,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(io_failure(
+                    format!("reading when {} was written", file.display()),
+                    &error,
+                ))
+            }
+        };
         let wait = Open {
             id,
             pid,
             sequence,
             line,
         };
-        if running(pid) {
+        let stands = writer_stands(pid, written).map_err(|cause| RegisterError {
+            cause: format!(
+                "whether the process of wait {} still runs: {cause}",
+                wait.id
+            ),
+            io: None,
+        })?;
+        if stands {
             listing.open.push(wait);
             continue;
         }
@@ -194,6 +218,25 @@ pub fn listed() -> Result<Listing, RegisterError> {
     listing.open.sort_by_key(|wait| (wait.pid, wait.sequence));
     listing.ended.sort_by_key(|wait| (wait.pid, wait.sequence));
     Ok(listing)
+}
+
+/// Whether the process that wrote a record at `written` under `pid` still
+/// runs: a process holds the pid and was born no later than the record. One
+/// born after it was handed the pid when the writer ended, so the writer no
+/// longer runs, whoever owns the pid now.
+pub(crate) fn writer_stands(pid: u32, written: SystemTime) -> Result<bool, String> {
+    if !running(pid) {
+        return Ok(false);
+    }
+    let process = libc::pid_t::try_from(pid).map_err(|error| format!("pid {pid}: {error}"))?;
+    let Some(born) = birth_seconds(process)? else {
+        return Ok(false);
+    };
+    let written = written
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("the record of pid {pid} is dated before the epoch: {error}"))?
+        .as_secs();
+    Ok(born <= written)
 }
 
 /// kill(2)'s null signal, which delivers nothing and only checks the pid:

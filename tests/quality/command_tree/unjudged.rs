@@ -118,9 +118,7 @@ fn unjudged_tree_stands_only_on_an_attestation_that_stands() {
         .parent()
         .expect("Stado checkout")
         .to_path_buf();
-    let home = root
-        .join(".build/quality-command-tree")
-        .join(uuid::Uuid::new_v4().to_string());
+    let home = super::isolated_home(&root);
     let bin = home.join(".stado/bin");
     fs::create_dir_all(&bin).expect("isolated quality run area");
     let tama = installed_tama();

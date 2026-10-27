@@ -10,7 +10,7 @@ pub(in crate::doctor) const AGENT_SKARBIEC_REMEDY: &str =
      which sets agent.skarbiec.url to the credential endpoint the service directory declares \
      for that host; a queue agent whose broker is unreachable can claim no job that declares \
      secret_env. A broker that answers slowly or stops answering mid-request is usually a \
-     wedged GnuPG daemon: run `skarbiec recover-daemons` on that host";
+     wedged GnuPG daemon: run `skarbiec keyring recover` on that host";
 
 /// Whether this host's queue agent can reach the broker it is configured to
 /// read workload secrets through.
@@ -24,6 +24,14 @@ pub(in crate::doctor) const AGENT_SKARBIEC_REMEDY: &str =
 ///
 /// Metadata only: `list_items` returns ids, never values.
 pub(in crate::doctor) async fn check_agent_skarbiec() -> Check {
+    if let Some(cause) = config::agent_skarbiec_url_absent() {
+        return Check::fail(
+            AGENT_SKARBIEC_ID,
+            AGENT_SKARBIEC_TITLE,
+            format!("agent.skarbiec.url names a service this host cannot resolve: {cause}"),
+            AGENT_SKARBIEC_REMEDY,
+        );
+    }
     let url = config::agent_skarbiec_url();
     if url.trim().is_empty() {
         return Check::pass(

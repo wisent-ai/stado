@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::deploy::service::{self, ServiceStatus, UndeclaredUnit, STATE_ACTIVE};
 use crate::deploy::Runner;
+use crate::primitives::tally::Tally;
 use crate::queue::StorageError;
 use crate::targets::ComputeTarget;
 
@@ -98,9 +99,26 @@ pub(super) async fn retire(
     summary: &mut ServiceReconcileSummary,
 ) -> Result<Vec<ServiceReconcileOutcome>, StorageError> {
     let mut outcomes = Vec::new();
-    let host_product = crate::deploy::service_catalog::host_process()
-        .map(|entry| entry.name)
-        .unwrap_or_default();
+    // Every retirement is judged against the host product; a compiled
+    // catalog that declares none is a defect of this build, and the pass
+    // records it as one failed outcome rather than judging against a blank.
+    let host_product = match crate::deploy::service_catalog::host_process() {
+        Ok(entry) => entry.name,
+        Err(error) => {
+            summary.failures.tally();
+            return Ok(vec![ServiceReconcileOutcome {
+                host: "-".to_string(),
+                service: "-".to_string(),
+                unit: "-".to_string(),
+                beacon_state: "not-used".to_string(),
+                endpoint_state: "not-used".to_string(),
+                classification: "repair_failed".to_string(),
+                action: "retire_predecessor".to_string(),
+                changed: false,
+                detail: error,
+            }]);
+        }
+    };
     // Each host's units are read once per pass, however many products it runs.
     let mut hosts: BTreeMap<String, Result<(ComputeTarget, Vec<UndeclaredUnit>), String>> =
         BTreeMap::new();
@@ -142,7 +160,7 @@ pub(super) async fn retire(
         let (target, loaded) = match &hosts[host] {
             Ok(read) => read,
             Err(error) => {
-                summary.failures += 1;
+                summary.failures.tally();
                 outcomes.push(row(
                     entry.name.as_str(),
                     "repair_failed",
@@ -163,7 +181,7 @@ pub(super) async fn retire(
         {
             Ok(found) => found,
             Err(error) => {
-                summary.failures += 1;
+                summary.failures.tally();
                 outcomes.push(row(
                     entry.name.as_str(),
                     "repair_failed",
@@ -202,9 +220,9 @@ pub(super) async fn retire(
                     _ => ("repair_failed", false),
                 };
                 if changed {
-                    summary.changed += 1;
+                    summary.changed.tally();
                 } else if classification == "repair_failed" {
-                    summary.failures += 1;
+                    summary.failures.tally();
                 }
                 outcomes.push(row(
                     &retirement.unit,

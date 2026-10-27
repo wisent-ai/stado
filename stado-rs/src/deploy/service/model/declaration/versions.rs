@@ -84,9 +84,17 @@ pub fn is_service_local_stado_reader(service: &ManagedService) -> bool {
 /// label but executing `stado`), so the program file name is the second
 /// supported witness. An arbitrary tree installed by `service update` is not a
 /// managed-product declaration and gets no invented semver contract.
-fn managed_product_name(delivery_product: &str, program: &str) -> Option<String> {
-    let file_name = program.rsplit('/').next().unwrap_or_default();
-    let products = crate::deploy::products::declared().ok()?;
+fn managed_product_name(
+    products: &[crate::deploy::products::Product],
+    delivery_product: &str,
+    program: &str,
+) -> Option<String> {
+    // The file name is what follows the last `/`, or the whole program when
+    // it is a bare name.
+    let file_name = match program.rsplit_once('/') {
+        Some((_directory, file_name)) => file_name,
+        None => program,
+    };
     products
         .iter()
         .find(|entry| entry.name == delivery_product || entry.name == file_name)
@@ -124,13 +132,17 @@ fn release_control_products(
 }
 
 /// Every compiled managed-product unit on TARGET whose host declares no
-/// `managed_versions` entry.
+/// `managed_versions` entry. A product catalog that cannot be read is the
+/// error it answers with: without the catalog nothing here can tell a
+/// managed unit from an arbitrary tree, and a silent empty list would read
+/// as "every version declared".
 pub fn managed_units_without_declared_version(
     target: &ComputeTarget,
     control: Option<&crate::release_control::ReleaseControl>,
-) -> Vec<UndeclaredServiceVersion> {
+) -> Result<Vec<UndeclaredServiceVersion>, DeployError> {
     let legacy_labels = legacy_launchd_labels(target, control);
     let release_products = release_control_products(target, control);
+    let products = crate::deploy::products::declared()?;
     let mut rows: BTreeMap<String, UndeclaredServiceVersion> = BTreeMap::new();
 
     for service in declared_services(target) {
@@ -143,7 +155,8 @@ pub fn managed_units_without_declared_version(
         if release_products.contains(delivery_product) {
             continue;
         }
-        let Some(product) = managed_product_name(delivery_product, &service.program) else {
+        let Some(product) = managed_product_name(products, delivery_product, &service.program)
+        else {
             continue;
         };
         if target.declared_version(&product).is_some() {
@@ -159,5 +172,5 @@ pub fn managed_units_without_declared_version(
             });
     }
 
-    rows.into_values().collect()
+    Ok(rows.into_values().collect())
 }

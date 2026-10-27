@@ -67,7 +67,9 @@ pub async fn run(filter_id: Option<&str>, json: bool) -> Result<(), CmdError> {
     // among the reaped through the index retention writes. An id no job
     // holds is a refusal naming it. Any other text — a batch id, or a
     // substring of either — filters the listing below.
-    if let Some(prefix) = filter_id.and_then(crate::queue::submit::job_id_prefix) {
+    if let Some((asked, prefix)) =
+        filter_id.and_then(|asked| crate::queue::submit::job_id_prefix(asked).map(|prefix| (asked, prefix)))
+    {
         let rows = if crate::queue::submit::is_canonical_job_id(&prefix) {
             whole_id(&store, &prefix).await?
         } else {
@@ -77,7 +79,7 @@ pub async fn run(filter_id: Option<&str>, json: bool) -> Result<(), CmdError> {
             return Err(CmdError::missing(format!(
                 "no job with id {} in the queue or in any run's retained outcomes; `stado \
                  status` lists the jobs the queue holds",
-                filter_id.expect("a prefix came from the filter")
+                asked
             ))
             .machine_readable(json));
         }

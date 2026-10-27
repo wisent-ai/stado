@@ -18,11 +18,12 @@ use super::Replacement;
 /// The sentence for a declaration that runs a catalog product's program
 /// under a label that is not that product's unit, for every product but the
 /// host Stado process, whose units are judged role by role in
-/// [`taken_over`]. `None` otherwise; when the host, the declaration's owner
-/// or the host process cannot be read, that is said on stderr with its
-/// cause, since the unit is then judged as not replaced.
+/// [`taken_over`]. `None` otherwise; when the host, its stated home, the
+/// declaration's owner or the host process cannot be read, that is said on
+/// stderr with its cause, since the unit is then judged as not replaced.
 pub(in crate::autonomy::service_reconciler) async fn replaced(
     declared: &ManagedService,
+    runner: &Runner,
 ) -> Option<String> {
     let unit = declared.unit_id();
     let unknown = |what: String| {
@@ -38,7 +39,14 @@ pub(in crate::autonomy::service_reconciler) async fn replaced(
             return None;
         }
     };
-    let owner = match service::declared_owner(&target, declared) {
+    let home = match crate::deploy::host_channel::remote_home(&target, runner).await {
+        Ok(home) => home,
+        Err(error) => {
+            unknown(format!("the home of {} cannot be read: {error}", target.name));
+            return None;
+        }
+    };
+    let owner = match service::declared_owner(&target, declared, &home) {
         Ok(Some(owner)) => owner,
         Ok(None) => return None,
         Err(error) => {
@@ -96,11 +104,21 @@ pub(in crate::autonomy::service_reconciler) async fn taken_over(
                 return None;
             }
         };
-        let Some(role) =
-            service::declared_role(&target, entry, active.then_some(running), declared, runner)
-                .await
-        else {
-            continue;
+        let role = match service::declared_role(
+            &target,
+            entry,
+            active.then_some(running),
+            declared,
+            runner,
+        )
+        .await
+        {
+            Ok(Some(role)) => role,
+            Ok(None) => continue,
+            Err(error) => {
+                eprintln!("stado autonomy: whether {unit} was taken over is not known: {error}");
+                return None;
+            }
         };
         if !active
             && !service::listener_role(&role)
@@ -142,12 +160,31 @@ pub(in crate::autonomy::service_reconciler) async fn retake(
             )))
         }
     };
-    let role = service::declared_role(target, &host, None, declared, runner).await?;
+    let role = match service::declared_role(target, &host, None, declared, runner).await {
+        Ok(Some(role)) => role,
+        Ok(None) => return None,
+        Err(error) => {
+            return Some(Err(format!(
+                "whether {} must be retired again is not known: {error}",
+                declared.unit_id()
+            )))
+        }
+    };
     if !crate::deploy::service_catalog::api_role(&role) {
         return None;
     }
     let unit = declared.unit_id();
     let retired = service::retire_if_taken_over(target, unit, runner).await?;
+    // A retirement that failed, or whose takeover record could not be read,
+    // leaves the unit possibly running beside its replacement: both are the
+    // error this answer reports.
+    if retired.state == "unknown" {
+        return Some(Err(format!(
+            "{unit} may have been taken over by {} during this repair and {}",
+            crate::deploy::service_catalog::unit_of(&host),
+            retired.detail
+        )));
+    }
     let detail = format!(
         "{unit} was taken over by {} during this repair; retiring it again: {} ({})",
         crate::deploy::service_catalog::unit_of(&host),

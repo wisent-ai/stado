@@ -12,8 +12,8 @@ use serde_json::{json, Value};
 use super::{join, metadata_name, metadata_path, real_directory, regular_identity};
 use crate::deploy::host_storage_reconcile_program::{json::list, Context, Step};
 
-/// The permission bits `stat.S_IMODE` keeps.
-const MODE_BITS: u32 = 0o7777;
+/// The permission bits `stat.S_IMODE` keeps: every mode bit but the file type.
+const MODE_BITS: u32 = !(nix::libc::S_IFMT as u32);
 
 struct Labels {
     linked_directory: &'static str,
@@ -79,11 +79,14 @@ fn walk(top: &str, labels: &Labels) -> Step<Walk> {
     Ok(found)
 }
 
+/// `path` as it lies under `root`. The walk builds every path it reports by
+/// joining onto the root it walks, so each one starts with that root.
 fn relative(path: &str, root: &str) -> String {
     Path::new(path)
         .strip_prefix(root)
-        .map(|inside| inside.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| path.to_string())
+        .expect("the walk joins every path it reports onto the root it walked")
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub(in crate::deploy::host_storage_reconcile_program) fn object_paths(

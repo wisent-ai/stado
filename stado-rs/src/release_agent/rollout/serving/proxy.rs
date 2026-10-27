@@ -32,7 +32,7 @@ pub(crate) fn write_proxy_target(
         &proxy_state_path(target, product),
         &ProxyState {
             generation,
-            upstream: format!("127.0.0.1:{port}"),
+            upstream: SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)).to_string(),
             updated_at: Utc::now(),
         },
     )
@@ -86,15 +86,21 @@ pub(crate) fn proxy_upstream_port(
             path.display()
         )
     })?;
-    value
+    let upstream = value
         .get("upstream")
         .and_then(serde_json::Value::as_str)
-        .and_then(|upstream| upstream.rsplit(':').next())
-        .and_then(|port| port.parse().ok())
-        .map(Some)
         .ok_or_else(|| {
             format!(
-                "the {product} proxy target {} names no host:port upstream",
+                "the {product} proxy target {} names no upstream: {value}",
+                path.display()
+            )
+        })?;
+    upstream
+        .parse::<SocketAddr>()
+        .map(|address| Some(address.port()))
+        .map_err(|error| {
+            format!(
+                "the {product} proxy target {} names upstream {upstream:?}, which is not host:port: {error}",
                 path.display()
             )
         })
@@ -132,7 +138,7 @@ pub(super) async fn forward(
     loop {
         tokio::select! {
             requested = &mut stopped => {
-                requested.map_err(|_| "release proxy owner dropped its shutdown channel".to_string())?;
+                requested.map_err(|error| format!("release proxy owner dropped its shutdown channel: {error}"))?;
                 drop(listener);
                 connections.shutdown().await;
                 return Ok(());
@@ -149,7 +155,7 @@ pub(super) async fn forward(
                         )
                         .map_err(|error| format!("invalid proxy state: {error}"))?;
                         let upstream: SocketAddr = state.upstream.parse()
-                            .map_err(|_| "proxy upstream is not a socket address".to_string())?;
+                            .map_err(|error| format!("proxy upstream {:?} is not a socket address: {error}", state.upstream))?;
                         if !upstream.ip().is_loopback() {
                             return Err("proxy upstream must be loopback".to_string());
                         }

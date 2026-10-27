@@ -49,14 +49,8 @@ extension StorageReconciliationSheet {
                 .foregroundStyle(WisentDesign.ink)
                 .textSelection(.enabled)
             WisentField(label: "Dashboard", value: invocation.address.displayString)
-            WisentField(
-                label: "HTTP status",
-                value: invocation.httpStatus.map { String($0) } ?? "Unavailable"
-            )
-            WisentField(
-                label: "Product exit",
-                value: invocation.exitCode.map { String($0) } ?? "Unavailable"
-            )
+            WisentField(label: "HTTP status", value: httpStatusLine(invocation))
+            WisentField(label: "Product exit", value: exitLine(invocation))
             if let refusal = invocation.refusal {
                 WisentErrorBanner(title: "Stado refused or interrupted this command", detail: refusal)
             }
@@ -91,6 +85,27 @@ extension StorageReconciliationSheet {
             }
             .padding(WisentDesign.Space.x3)
             .background(WisentDesign.surface)
+        }
+    }
+}
+
+extension StorageReconciliationSheet {
+    /// The dashboard's HTTP status, or that the request never reached it:
+    /// the invocation records a status only once an answer came back.
+    fileprivate func httpStatusLine(_ invocation: StorageReconciliationInvocation) -> String {
+        switch invocation.httpStatus {
+        case .some(let status): return String(status)
+        case .none: return "None: the request never reached the dashboard"
+        }
+    }
+
+    /// The product's exit code, or why there is none: no answer came back,
+    /// or the answer was a dashboard refusal rather than a product result.
+    fileprivate func exitLine(_ invocation: StorageReconciliationInvocation) -> String {
+        switch (invocation.exitCode, invocation.httpStatus) {
+        case (.some(let code), _): return String(code)
+        case (.none, .none): return "None: the request never reached the dashboard"
+        case (.none, .some): return "None: the dashboard answered without running the product"
         }
     }
 }

@@ -86,11 +86,20 @@ pub struct Hit {
     pub compatible_fix: Option<String>,
 }
 
+/// An advisory the database withdrew: it affects no version any more, and
+/// stays only so a selection naming it is answered by name.
+struct Withdrawn {
+    id: String,
+    aliases: Vec<String>,
+    at: String,
+}
+
 /// The crates.io advisories of one database, and for each package name the
 /// advisories that name it.
 pub struct Database {
     pub origin: String,
     records: Vec<Record>,
+    withdrawn: Vec<Withdrawn>,
     by_package: BTreeMap<String, Vec<usize>>,
 }
 
@@ -130,6 +139,7 @@ impl Database {
             format!("{url}: the advisory database {origin} answered with no zip archive")
         })?;
         let mut records = Vec::new();
+        let mut withdrawn = Vec::new();
         for index in 0..archive.len() {
             let mut member = archive
                 .by_index(index)
@@ -142,10 +152,15 @@ impl Database {
             member
                 .read_to_string(&mut text)
                 .with_context(|| format!("{url}: reading {name}"))?;
-            let record: Record = serde_json::from_str(&text)
+            let mut record: Record = serde_json::from_str(&text)
                 .with_context(|| format!("{url}: {name} is not an OSV advisory"))?;
-            if record.withdrawn.is_none() {
-                records.push(record);
+            match record.withdrawn.take() {
+                Some(at) => withdrawn.push(Withdrawn {
+                    id: record.id,
+                    aliases: record.aliases,
+                    at,
+                }),
+                None => records.push(record),
             }
         }
         let mut by_package: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -164,6 +179,7 @@ impl Database {
         Ok(Self {
             origin: origin.to_owned(),
             records,
+            withdrawn,
             by_package,
         })
     }
@@ -173,6 +189,15 @@ impl Database {
         self.records
             .iter()
             .any(|record| record.id == id || record.aliases.iter().any(|alias| alias == id))
+    }
+
+    /// When the database withdrew the advisory with this id or alias: that
+    /// advisory's id and the time it was withdrawn.
+    pub fn withdrawal(&self, id: &str) -> Option<(&str, &str)> {
+        self.withdrawn
+            .iter()
+            .find(|advisory| advisory.id == id || advisory.aliases.iter().any(|alias| alias == id))
+            .map(|advisory| (advisory.id.as_str(), advisory.at.as_str()))
     }
 
     /// Every advisory that affects `name` at `version`, in advisory order.

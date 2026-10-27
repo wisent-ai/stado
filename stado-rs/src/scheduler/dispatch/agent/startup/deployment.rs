@@ -79,6 +79,17 @@ pub fn deployment_substitutions(
                      catalog, so its agents cannot be told which kind of machine they run on"
                 ))
             })?;
+    let unresolved = |env: &str, cause: String| {
+        crate::scheduler::scheduler::SchedulerError::UnresolvedStartupSetting {
+            env: env.to_string(),
+            cause,
+        }
+    };
+    let stado_storage_url =
+        config::wc_stado_storage_url().map_err(|cause| unresolved(stado_url.env, cause))?;
+    if let Some(cause) = config::agent_skarbiec_url_absent() {
+        return Err(unresolved("WC_AGENT_SKARBIEC_URL", cause.to_string()));
+    }
     Ok(BTreeMap::from([
         ("PROVIDER_KIND".to_string(), provider_kind.to_string()),
         (
@@ -106,7 +117,7 @@ pub fn deployment_substitutions(
             local_path.env.to_string(),
             config::wc_local_storage_path().to_string(),
         ),
-        (stado_url.env.to_string(), config::wc_stado_storage_url()),
+        (stado_url.env.to_string(), stado_storage_url),
         (
             stado_token_file.env.to_string(),
             config::wc_stado_storage_token_file().to_string(),

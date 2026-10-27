@@ -5,7 +5,7 @@ use crate::{
 };
 use clap::Args;
 use serde::Serialize;
-use std::{fs, io::Write, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 #[derive(Args)]
 pub struct ReleaseFetchArgs {
@@ -82,33 +82,29 @@ pub(super) async fn fetch(args: &ReleaseFetchArgs) -> Result<(), CmdError> {
                 ))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
-            let mut pending = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+            // Staged, flushed, linked into place only where nothing is, and
+            // the directory flushed, through the one writer Stado keeps its
+            // files with; an archive already at the destination is never
+            // replaced.
+            let placed = crate::primitives::document::persist_if_absent(
+                &args.destination,
+                &bytes,
+                crate::primitives::file_mode::owner_read_write(),
+            )
+            .map_err(|error| {
                 CmdError::click(format!(
-                    "cannot stage verified release beside {}: {error}",
+                    "cannot persist verified release at {}: {error}",
                     args.destination.display()
                 ))
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
             })?;
-            pending.write_all(&bytes).map_err(|error| {
-                CmdError::click(format!("cannot write verified release: {error}"))
-                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-            })?;
-            pending.as_file().sync_all().map_err(|error| {
-                CmdError::click(format!("cannot persist verified release: {error}"))
-                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-            })?;
             drop(bytes);
-            if let Err(error) = pending.persist_noclobber(&args.destination) {
-                return Err(CmdError::refused(format!("cannot publish verified archive at {} without replacing existing data: {error}", args.destination.display())));
+            if !placed {
+                return Err(CmdError::refused(format!(
+                    "cannot publish verified archive at {} without replacing existing data: it appeared while the archive was fetched",
+                    args.destination.display()
+                )));
             }
-            fs::File::open(parent)
-                .and_then(|file| file.sync_all())
-                .map_err(|error| {
-                    CmdError::click(format!(
-                        "cannot persist release destination directory: {error}"
-                    ))
-                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-                })?;
             size
         }
         Err(error) => {

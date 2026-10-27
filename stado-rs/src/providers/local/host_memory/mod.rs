@@ -14,10 +14,10 @@ use serde_json::{Map, Value};
 
 pub use reading::{read_host_memory, MemoryReading};
 
-/// Bytes as GiB with one decimal, the shape every capacity figure is read in.
+/// Bytes as GiB, the unit every capacity figure is read in; a reader that
+/// shows one rounds it where it shows it.
 pub fn gigabytes(bytes: Option<i64>) -> Option<f64> {
-    let gib = (constants::MIB * 1024) as f64;
-    bytes.map(|bytes| (bytes as f64 / gib * 10.0).round() / 10.0)
+    bytes.map(|bytes| bytes as f64 / constants::GIB as f64)
 }
 
 /// The flat memory fields one capacity publication carries: what is

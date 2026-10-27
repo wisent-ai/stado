@@ -142,7 +142,7 @@ impl BoxHttpTransport {
             self.api_key.clone()
         };
         let method = reqwest::Method::from_bytes(method.as_bytes())
-            .map_err(|_| BoxError::value(format!("invalid HTTP method {method:?}")))?;
+            .map_err(|error| BoxError::value(format!("invalid HTTP method {method:?}: {error}")))?;
         let mut request = self
             .client
             .request(method, self.url(path, query))

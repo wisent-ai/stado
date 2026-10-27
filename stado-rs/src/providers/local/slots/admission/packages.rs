@@ -2,21 +2,7 @@
 //! install the system packages a job asks for — plus the install itself.
 
 use super::*;
-
-// ---------------------------------------------------------------------------
-// admission helpers
-// ---------------------------------------------------------------------------
-
-/// Python's `repr(list)` for a string list: `['a', 'b']` (package names
-/// never contain quotes in practice).
-fn py_list_repr(items: &[String]) -> String {
-    let inner = items
-        .iter()
-        .map(|i| format!("'{i}'"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{inner}]")
-}
+use crate::models::py_list_repr;
 
 /// Whether this agent kind may satisfy a job's requested system packages.
 pub fn allows_job_system_packages(kind: &str) -> bool {
@@ -76,11 +62,15 @@ pub async fn install_apt_packages(job: &Job, kind: &str, log_fn: &mut dyn FnMut(
     match res {
         Ok(out) if out.status.success() => true,
         Ok(out) => {
+            // Both streams whole: apt-get names the package it could not
+            // find on one and the lock it could not take on the other, and a
+            // cut at a length nobody stated dropped the line that said which.
             log_fn(&format!(
-                "apt-install FAILED for {}: rc={} err={}",
+                "apt-install FAILED for {}: rc={} stderr={} stdout={}",
                 job.job_id,
                 python_returncode(out.status),
-                captured_head(&out.stderr, &out.stdout, 200)
+                String::from_utf8_lossy(&out.stderr).trim(),
+                String::from_utf8_lossy(&out.stdout).trim()
             ));
             false
         }

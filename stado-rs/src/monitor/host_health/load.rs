@@ -45,17 +45,21 @@ impl HostHealthReport {
 /// (`ValueError` / `FileNotFoundError`) with the Python message text.
 #[derive(Debug, thiserror::Error)]
 pub enum HostHealthError {
-    /// Python `ValueError(f"target {identity!r} is not present in the GCS registry")`.
-    #[error("target {0:?} is not present in the GCS registry")]
+    /// A target the canonical registry does not carry.
+    #[error("target {0:?} is not present in the canonical registry")]
     UnknownTarget(String),
     /// Python `ValueError(f"target {target.name!r} is not a local registry host")`.
     #[error("target {0:?} is not a local registry host")]
     NotLocal(String),
-    /// Python `ValueError("host health beacon is not valid JSON: ...")`.
-    #[error("host health beacon is not valid JSON: gs://{bucket}/{path}")]
-    InvalidJson { bucket: String, path: String },
-    /// Python `ValueError("host health beacon is not an object: ...")`.
-    #[error("host health beacon is not an object: gs://{bucket}/{path}")]
+    /// The beacon object exists and does not parse; the parser says where.
+    #[error("host health beacon is not valid JSON: stado://{bucket}/{path}: {source}")]
+    InvalidJson {
+        bucket: String,
+        path: String,
+        source: serde_json::Error,
+    },
+    /// The beacon object parses and is not a JSON object.
+    #[error("host health beacon is not an object: stado://{bucket}/{path}")]
     NotAnObject { bucket: String, path: String },
     /// Python `FileNotFoundError(f"no host health beacon for {name!r}; checked ...")`.
     #[error("no host health beacon for {name:?}; checked {paths}")]
@@ -91,7 +95,12 @@ pub fn beacon_slugs(target: &ComputeTarget, requested_identity: &str) -> Vec<Str
     let mut slugs: Vec<String> = Vec::new();
     for value in &identities {
         let normalized = targets::normalize_hostname(value);
-        let first_label = normalized.split('.').next().unwrap_or("").to_string();
+        // The leading label is what precedes the first `.`, or the whole
+        // name when it has none.
+        let first_label = match normalized.split_once('.') {
+            Some((label, _domain)) => label.to_string(),
+            None => normalized.clone(),
+        };
         for candidate in [first_label, normalized.clone()] {
             if !candidate.is_empty() && !candidate.contains('/') && !slugs.contains(&candidate) {
                 slugs.push(candidate);
@@ -130,16 +139,24 @@ pub async fn load_host_health(
             continue;
         };
         let updated_at = store.backend().updated_at(&path).await?;
-        let reported_at = serde_json::from_str::<Value>(&versioned.content)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("reported_at")
-                    .and_then(Value::as_str)
-                    .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
-                    .map(|stamp| stamp.with_timezone(&chrono::Utc))
-            });
-        let observed_at = updated_at.or(reported_at);
+        // The object mtime is the time authority; a backend without one is
+        // ordered by the host's own `reported_at`. For ordering only: a body
+        // that is not JSON or a stamp that is not a time orders last here
+        // and is refused by name below once selected.
+        let reported_at = match serde_json::from_str::<Value>(&versioned.content) {
+            Ok(value) => match value.get("reported_at").and_then(Value::as_str) {
+                Some(stamp) => match chrono::DateTime::parse_from_rfc3339(stamp) {
+                    Ok(stamp) => Some(stamp.with_timezone(&chrono::Utc)),
+                    Err(_not_a_time) => None,
+                },
+                None => None,
+            },
+            Err(_not_json) => None,
+        };
+        let observed_at = match updated_at {
+            Some(updated) => Some(updated),
+            None => reported_at,
+        };
         let replace = selected
             .as_ref()
             .is_none_or(|(_, _, _, selected_at)| observed_at > *selected_at);
@@ -160,9 +177,10 @@ pub async fn load_host_health(
         });
     };
     let beacon: Value =
-        serde_json::from_str(&versioned.content).map_err(|_| HostHealthError::InvalidJson {
+        serde_json::from_str(&versioned.content).map_err(|source| HostHealthError::InvalidJson {
             bucket: bucket.clone(),
             path: path.clone(),
+            source,
         })?;
     let Value::Object(beacon) = beacon else {
         return Err(HostHealthError::NotAnObject {
@@ -172,7 +190,7 @@ pub async fn load_host_health(
     };
 
     let object = json!({
-        "uri": format!("gs://{bucket}/{path}"),
+        "uri": format!("stado://{bucket}/{path}"),
         "generation": versioned.version,
         "updated_at": updated_at.map(|ts| ts.to_rfc3339()),
         "created_at": Value::Null,

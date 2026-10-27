@@ -60,7 +60,7 @@ pub enum SpaceCommands {
     /// refuses a path on the root volume, and writes `targets[].work_root`
     /// through the canonical registry's compare-and-swap. The agent uses the
     /// new root once its unit restarts it.
-    WorkRoot {
+    Root {
         target: String,
         /// An absolute directory on the target's selected mounted data volume.
         #[arg(long)]
@@ -83,7 +83,8 @@ pub enum SpaceCommands {
         dry_run: bool,
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        #[arg(long, default_value_t = 0)]
+        /// Relocate at most this many keys; omitted, every key is relocated.
+        #[arg(long, default_value_t)]
         limit: usize,
         #[arg(long)]
         json: bool,
@@ -178,7 +179,7 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
             }
         }
         SpaceCommands::Volume { command } => volume::dispatch(command).await,
-        SpaceCommands::WorkRoot { target, path, json } => {
+        SpaceCommands::Root { target, path, json } => {
             work_root::dispatch(&target, path.as_deref(), json).await
         }
         SpaceCommands::File { command } => match command {

@@ -2,11 +2,9 @@
 //! active Stado config file instead of calling a cloud API.
 
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 
 use serde_json::{json, Value};
-use tempfile::NamedTempFile;
 
 use crate::cli::resources::model::Action;
 use crate::cli::CmdError;
@@ -38,11 +36,14 @@ pub(super) fn inspect_backup_config() -> Result<Value, CmdError> {
 pub(super) fn disable_backup_config(action: &Action) -> Result<Value, CmdError> {
     let state = inspect_backup_config()?;
     if state.get("mutable").and_then(Value::as_bool) != Some(true) {
+        // The inspection names why the configuration cannot be changed; an
+        // inspection that withheld the reason is refused by that.
         return Err(CmdError::refused(
-            state
-                .get("reason")
-                .and_then(Value::as_str)
-                .unwrap_or("backup configuration is not mutable"),
+            match state.get("reason").and_then(Value::as_str) {
+                Some(reason) => reason.to_string(),
+                None => "backup configuration is not mutable, and the inspection named no reason"
+                    .to_string(),
+            },
         ));
     }
     if !conditions_match(&action.preconditions, &state) {
@@ -69,7 +70,9 @@ pub(super) fn disable_backup_config(action: &Action) -> Result<Value, CmdError> 
             CmdError::click("Stado config has no storage object")
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-    let previous = storage.remove("backup").unwrap_or(Value::Null);
+    // A `storage` object without a `backup` block had nothing to disable;
+    // the receipt records that as `null` rather than inventing a block.
+    let previous = storage.remove("backup");
     atomic_json(Path::new(path), &root)?;
     Ok(json!({"previous_backup": previous, "config_path": path}))
 }
@@ -124,17 +127,12 @@ fn backup_env_override() -> bool {
         .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
 }
 
+/// The active config file replaced whole through Stado's one durable writer
+/// ([`crate::primitives::document::persist`]), with the trailing newline a
+/// hand-edited config keeps.
 fn atomic_json(path: &Path, value: &Value) -> Result<(), CmdError> {
-    let parent = path.parent().ok_or_else(|| {
-        CmdError::click(format!("{} has no parent", path.display()))
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
-    let mut temporary = NamedTempFile::new_in(parent)?;
-    temporary.write_all(&bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    fs::File::open(parent)?.sync_all()?;
+    crate::primitives::document::persist(path, &bytes)?;
     Ok(())
 }

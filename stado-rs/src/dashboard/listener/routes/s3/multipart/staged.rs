@@ -43,10 +43,14 @@ pub(super) fn manifest_path(object: &ObjectRef, upload: &str) -> String {
     format!("{}{MANIFEST}", upload_prefix(object, upload))
 }
 
-/// Where part `number` is staged, in the eight-digit form the object API's
-/// chunked uploads use too.
+/// Where part `number` is staged, in the form the object API's chunked
+/// uploads use too.
 pub(super) fn part_path(object: &ObjectRef, upload: &str, number: u32) -> String {
-    format!("{}{number:08}", upload_prefix(object, upload))
+    format!(
+        "{}{}",
+        upload_prefix(object, upload),
+        crate::queue::upload_part_name(number)
+    )
 }
 
 pub(super) fn no_upload(object: &ObjectRef, upload: &str) -> S3Error {

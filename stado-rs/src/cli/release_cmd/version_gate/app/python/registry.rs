@@ -25,11 +25,12 @@ fn decorated(text: &str, decorator: &str) -> Vec<String> {
     let mut carries = false;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix('@') {
-            let name = rest
-                .split(['(', ' ', '#'])
-                .next()
-                .unwrap_or_default()
-                .trim();
+            // The decorator's name ends at its arguments, a space or a
+            // comment; `split` always yields the first piece.
+            let name = match rest.split(['(', ' ', '#']).next() {
+                Some(name) => name.trim(),
+                None => "",
+            };
             carries |= name == decorator;
             continue;
         }

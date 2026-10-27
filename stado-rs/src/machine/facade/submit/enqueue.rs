@@ -81,76 +81,94 @@ impl MachineFacade {
             })?;
 
         // kwargs = normalized request minus client_request_id / command /
-        // source_archive_path (Python dict comprehension).
-        let str_field = |name: &str| request[name].as_str().unwrap_or_default().to_string();
+        // source_archive_path (Python dict comprehension). The validator
+        // shaped every field read here; a field in another shape is a
+        // request that bypassed it, refused by name rather than defaulted.
+        let shaped = |name: &str| {
+            MachineError::new(
+                "INVALID_REQUEST",
+                format!("the stored request's {name} is not in the shape the validator admits"),
+            )
+        };
+        let text = |name: &str| -> Result<String, MachineError> {
+            request[name]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| shaped(name))
+        };
+        let integer = |name: &str| -> Result<i64, MachineError> {
+            request[name].as_i64().ok_or_else(|| shaped(name))
+        };
+        let flag = |name: &str| -> Result<bool, MachineError> {
+            request[name].as_bool().ok_or_else(|| shaped(name))
+        };
+        let secret_env = request["secret_env"]
+            .as_object()
+            .ok_or_else(|| shaped("secret_env"))?
+            .iter()
+            .map(|(env_name, value)| {
+                let spec = value.as_object().ok_or_else(|| shaped("secret_env"))?;
+                let part = |key: &str| {
+                    spec[key]
+                        .as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| shaped(&format!("secret_env.{env_name}.{key}")))
+                };
+                Ok((
+                    env_name.clone(),
+                    JobSecretRef {
+                        role: part("role")?,
+                        field: part("field")?,
+                    },
+                ))
+            })
+            .collect::<Result<_, MachineError>>()?;
         let mut options = SubmitOptions {
             bucket: self.bucket.clone(),
             run_id: run_id.clone(),
-            provider: str_field("provider"),
-            gpu_type: str_field("gpu_type"),
-            pinned_host: str_field("pinned_host"),
-            vram_gb: request["vram_gb"].as_i64().unwrap_or_default(),
+            provider: text("provider")?,
+            gpu_type: text("gpu_type")?,
+            pinned_host: text("pinned_host")?,
+            vram_gb: integer("vram_gb")?,
             max_cost_per_hour_usd: request["max_cost_per_hour_usd"]
                 .as_f64()
-                .unwrap_or_default(),
+                .ok_or_else(|| shaped("max_cost_per_hour_usd"))?,
             // A stored request that still names max_restarts came from the
             // marketplace, which sent it only to keep every restart its own.
             submitter_restarts: request.get("submitter_restarts").and_then(Value::as_bool)
                 == Some(true)
                 || request.get("max_restarts").is_some(),
-            pin_to_provider: request["pin_to_provider"].as_bool().unwrap_or_default(),
-            priority: request["priority"].as_i64().unwrap_or_default(),
-            repo: str_field("repo"),
-            repo_ref: str_field("repo_ref"),
-            repo_workdir: str_field("repo_workdir"),
-            repo_extras: str_field("repo_extras"),
-            pre_command: str_field("pre_command"),
+            pin_to_provider: flag("pin_to_provider")?,
+            priority: integer("priority")?,
+            repo: text("repo")?,
+            repo_ref: text("repo_ref")?,
+            repo_workdir: text("repo_workdir")?,
+            repo_extras: text("repo_extras")?,
+            pre_command: text("pre_command")?,
             apt_packages: request["apt_packages"]
                 .as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|i| i.as_str().map(str::to_string))
-                        .collect()
+                .ok_or_else(|| shaped("apt_packages"))?
+                .iter()
+                .map(|item| {
+                    item.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| shaped("apt_packages"))
                 })
-                .unwrap_or_default(),
-            output_uri: str_field("output_uri"),
-            verify_command: str_field("verify_command"),
-            exclusive: request["exclusive"].as_bool().unwrap_or_default(),
+                .collect::<Result<Vec<String>, MachineError>>()?,
+            output_uri: text("output_uri")?,
+            verify_command: text("verify_command")?,
+            exclusive: flag("exclusive")?,
             terminates_agent: request.get("terminates_agent").and_then(Value::as_bool)
                 == Some(true),
             boot_disk_gb: request.get("boot_disk_gb").and_then(Value::as_i64),
             runtime_seconds_estimate: request
                 .get("runtime_seconds_estimate")
                 .and_then(Value::as_f64),
-            secret_env: request["secret_env"]
-                .as_object()
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|(env_name, value)| {
-                            let spec = value.as_object().expect("validated secret_env object");
-                            (
-                                env_name.clone(),
-                                JobSecretRef {
-                                    role: spec["role"]
-                                        .as_str()
-                                        .expect("validated secret role")
-                                        .to_string(),
-                                    field: spec["field"]
-                                        .as_str()
-                                        .expect("validated secret field")
-                                        .to_string(),
-                                },
-                            )
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+            secret_env,
             resolved_input_artifacts: request["input_objects"]
                 .as_object()
-                .cloned()
-                .unwrap_or_default(),
+                .ok_or_else(|| shaped("input_objects"))?
+                .clone(),
             ..Default::default()
         };
         if !source_uri.is_empty() {
@@ -195,32 +213,51 @@ impl MachineFacade {
                 MachineError::retryable("SUBMIT_FAILED", "durable submission returned no job")
             })?,
             Err(exc) => {
-                if let Ok(Some(versioned)) = self.store.read_text_versioned(record_path).await {
-                    if let Ok(Value::Object(mut released)) =
-                        serde_json::from_str::<Value>(&versioned.content)
+                // The request this facade claimed is released so another can
+                // retry it at once. A record that cannot be read, or is not an
+                // object, leaves it claimed, and that is said beside the
+                // submission's own error instead of dropped.
+                let versioned = match self.store.read_text_versioned(record_path).await {
+                    Ok(Some(versioned)) => versioned,
+                    Ok(None) => return Err(MachineError::retryable("SUBMIT_FAILED", exc.to_string())),
+                    Err(unread) => {
+                        return Err(MachineError::retryable(
+                            "SUBMIT_FAILED",
+                            format!("{exc}; the machine request stays claimed: it cannot be read back: {unread}"),
+                        ))
+                    }
+                };
+                let mut released = match serde_json::from_str::<Value>(&versioned.content) {
+                    Ok(Value::Object(released)) => released,
+                    Ok(other) => {
+                        return Err(MachineError::retryable(
+                            "SUBMIT_FAILED",
+                            format!("{exc}; the machine request stays claimed: its record is not an object: {other}"),
+                        ))
+                    }
+                    Err(unparsed) => {
+                        return Err(MachineError::retryable(
+                            "SUBMIT_FAILED",
+                            format!("{exc}; the machine request stays claimed: its record is not JSON: {unparsed}"),
+                        ))
+                    }
+                };
+                if released.get("owner").and_then(Value::as_str) == Some(owner.as_str()) {
+                    released.insert("state".into(), Value::from("released"));
+                    released.remove("owner");
+                    released.insert("last_error".into(), Value::from(exc.to_string()));
+                    // A request left owned by this facade waits out its claim
+                    // before another can retry it, so a release that did not
+                    // land is part of the error.
+                    if let Err(release) = self
+                        .store
+                        .compare_and_swap_text(record_path, &versioned.version, &canonical_json(&Value::Object(released)))
+                        .await
                     {
-                        if released.get("owner").and_then(Value::as_str) == Some(owner.as_str()) {
-                            released.insert("state".into(), Value::from("released"));
-                            released.remove("owner");
-                            released.insert("last_error".into(), Value::from(exc.to_string()));
-                            // A request left owned by this facade waits out
-                            // its claim before another can retry it, so a
-                            // release that did not land is part of the error.
-                            if let Err(release) = self
-                                .store
-                                .compare_and_swap_text(
-                                    record_path,
-                                    &versioned.version,
-                                    &canonical_json(&Value::Object(released)),
-                                )
-                                .await
-                            {
-                                return Err(MachineError::retryable(
-                                    "SUBMIT_FAILED",
-                                    format!("{exc}; the machine request stays claimed: {release}"),
-                                ));
-                            }
-                        }
+                        return Err(MachineError::retryable(
+                            "SUBMIT_FAILED",
+                            format!("{exc}; the machine request stays claimed: {release}"),
+                        ));
                     }
                 }
                 return Err(MachineError::retryable("SUBMIT_FAILED", exc.to_string()));

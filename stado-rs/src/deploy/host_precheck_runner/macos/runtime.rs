@@ -11,14 +11,14 @@ runner_signatures_valid() {
 resolve_runner_release() {
   version=$(jq -er '.libraries | keys | map(select(startswith("Runner.Listener/"))) | if length == 1 then .[0] | ltrimstr("Runner.Listener/") else error("ambiguous runner version") end' "$runner_root/bin/Runner.Listener.deps.json")
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf '%s\n' 'runner version is malformed' >&2; exit 1; }
-  curl --fail --silent --show-error --location --max-time 60 \
+  curl --fail --silent --show-error --location \
     "https://api.github.com/repos/actions/runner/releases/tags/v$version" -o "$staging/release.json"
   expected=$(jq -er --arg name "actions-runner-osx-arm64-$version.tar.gz" \
     '.assets | map(select(.name == $name)) | if length == 1 then .[0].digest | strings | select(startswith("sha256:")) | ltrimstr("sha256:") else error("runner artifact is ambiguous") end' "$staging/release.json")
   [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' 'release has no SHA-256 digest' >&2; exit 1; }
 }
 fetch_runner_archive() {
-  curl --fail --silent --show-error --location --max-time 120 \
+  curl --fail --silent --show-error --location \
     "https://github.com/actions/runner/releases/download/v$version/actions-runner-osx-arm64-$version.tar.gz" \
     -o "$archive"
   actual=$(shasum -a 256 "$archive" | cut -d' ' -f1)

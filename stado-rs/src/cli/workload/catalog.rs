@@ -12,6 +12,8 @@ use crate::cli::CmdError;
 
 pub const DECLARATION_PATH: &str = "stado-rs/data/work/workloads.json";
 const DECLARATION: &str = include_str!("../../../data/work/workloads.json");
+/// The workload declaration's version this build reads:
+/// <https://stado.wisent.com/docs/capabilities/workload>.
 const SCHEMA_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -142,9 +144,9 @@ static CATALOG: LazyLock<Result<WorkloadCatalog, String>> = LazyLock::new(|| {
                 ))
             }
             Some(reservation)
-                if reservation.cpu_cores < 0
-                    || reservation.ram_gb < 0.0
-                    || reservation.vram_gb < 0 =>
+                if reservation.cpu_cores.is_negative()
+                    || reservation.ram_gb.is_sign_negative()
+                    || reservation.vram_gb.is_negative() =>
             {
                 return Err(format!(
                     "workload kind '{}' declares a negative reservation; fix it in {DECLARATION_PATH}",
@@ -154,7 +156,7 @@ static CATALOG: LazyLock<Result<WorkloadCatalog, String>> = LazyLock::new(|| {
             Some(_) => {}
         }
         match workload.park_after_seconds {
-            Some(0) => {
+            Some(seconds) if crate::primitives::tally::Tally::counts_nothing(&seconds) => {
                 return Err(format!(
                     "workload kind '{}' declares park_after_seconds 0; declare a whole number of seconds above zero in {DECLARATION_PATH}",
                     workload.kind
@@ -232,16 +234,14 @@ pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
                         workload.kind.clone(),
                         workload.product.clone(),
                         mode(workload),
-                        workload
-                            .registry_allowance
-                            .as_deref()
-                            .unwrap_or("none")
-                            .to_string(),
-                        workload
-                            .plan_schema
-                            .as_deref()
-                            .unwrap_or("none")
-                            .to_string(),
+                        match workload.registry_allowance.as_deref() {
+                            Some(allowance) => allowance.to_string(),
+                            None => "none declared".to_string(),
+                        },
+                        match workload.plan_schema.as_deref() {
+                            Some(schema) => schema.to_string(),
+                            None => "none declared".to_string(),
+                        },
                         workload.report.join(", "),
                     ]
                 })

@@ -44,29 +44,36 @@ struct Declared {
     grant: ConsumerGrant,
 }
 
+impl Declared {
+    /// The audience the grant's bearer is minted for. A declaration states
+    /// one when another party verifies the bearer; one that states none is
+    /// verified by the consumer that presents it, which is then its audience.
+    fn audience(&self) -> &str {
+        match &self.grant.audience {
+            Some(audience) => audience,
+            None => &self.grant.consumer,
+        }
+    }
+}
+
 /// Every grant the directory declares for this service, in consumer order.
 async fn declared_grants(
     name: &str,
     only: Option<&str>,
 ) -> Result<(String, Vec<Declared>), CmdError> {
     let registry = host_channel::canonical_registry().await.map_err(click)?;
-    let service = registry.service(name).ok_or_else(|| {
-        let mut names: Vec<&str> = registry
-            .service_directory
-            .as_ref()
-            .map(|directory| {
-                directory
-                    .services
-                    .keys()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        names.sort_unstable();
-        CmdError::refused(format!(
-            "the service directory carries no service {name:?}; services there: {}",
-            names.join(", ")
-        ))
+    let service = registry.service(name).ok_or_else(|| match registry.service_directory.as_ref() {
+        None => CmdError::refused(format!(
+            "the registry declares no service directory, so it carries no service {name:?}"
+        )),
+        Some(directory) => {
+            let mut names: Vec<&str> = directory.services.keys().map(String::as_str).collect();
+            names.sort_unstable();
+            CmdError::refused(format!(
+                "the service directory carries no service {name:?}; services there: {}",
+                names.join(", ")
+            ))
+        }
     })?;
     let mut consumers: Vec<(&String, &ServiceConsumer)> = service.consumers.iter().collect();
     consumers.sort_by(|left, right| left.0.cmp(right.0));
@@ -128,10 +135,7 @@ pub(crate) async fn declared_grant_reconcile(
                 item.grant.consumer.clone(),
                 item.grant.capabilities.join(","),
                 item.grant.token_file.clone(),
-                item.grant
-                    .audience
-                    .clone()
-                    .unwrap_or_else(|| item.grant.consumer.clone()),
+                item.audience().to_string(),
             ]);
         }
         if as_json {
@@ -143,7 +147,7 @@ pub(crate) async fn declared_grant_reconcile(
                         "consumer": item.grant.consumer,
                         "capabilities": item.grant.capabilities,
                         "token_file": item.grant.token_file,
-                        "audience": item.grant.audience.clone().unwrap_or_else(|| item.grant.consumer.clone()),
+                        "audience": item.audience(),
                         "host": host,
                         "applied": false,
                     })
@@ -179,7 +183,7 @@ pub(crate) async fn declared_grant_reconcile(
     // input; the host it names is where the vault is.
     let target = crate::cli::canonical_host(&host).await?;
     let runner = production_runner();
-    let mut cells = Vec::new();
+    let (mut cells, mut rows) = (Vec::new(), Vec::new());
     let mut failures = Vec::new();
     // The class of the first failed grant: a widening keeps the class its own
     // refusal stated, and a mint the host's Skarbiec did not sync was refused
@@ -201,15 +205,20 @@ pub(crate) async fn declared_grant_reconcile(
             let (status, detail) = match widen_stado_reads(&item.grant).await {
                 Ok(detail) => ("widened", detail),
                 Err(error) => {
-                    let detail = error
-                        .message
-                        .clone()
-                        .unwrap_or_else(|| "no detail".to_string());
+                    let detail = error.to_string();
                     failures.push(format!("{}: {detail}", item.grant.consumer));
                     failure_code = failure_code.or(error.failure);
                     ("refused", detail)
                 }
             };
+            rows.push(json!({
+                "authorized": item.authorized,
+                "consumer": item.grant.consumer,
+                "host": host,
+                "sync": status,
+                "detail": detail,
+                "applied": true,
+            }));
             cells.push(vec![
                 item.authorized.clone(),
                 item.grant.consumer.clone(),
@@ -219,11 +228,7 @@ pub(crate) async fn declared_grant_reconcile(
             ]);
             continue;
         }
-        let audience = item
-            .grant
-            .audience
-            .clone()
-            .unwrap_or_else(|| item.grant.consumer.clone());
+        let audience = item.audience().to_string();
         let minted = service::remint_consumer_grant_on_host(
             &target,
             &item.grant.consumer,
@@ -240,6 +245,14 @@ pub(crate) async fn declared_grant_reconcile(
             failures.push(format!("{}: {}", item.grant.consumer, minted.failure()));
             failure_code = failure_code.or(Some(crate::primitives::failure::FailureCode::Refused));
         }
+        let row = json!({
+            "authorized": item.authorized,
+            "consumer": item.grant.consumer,
+            "host": host,
+            "sync": reported_cell(&minted.status),
+            "detail": reported_cell(&minted.detail),
+            "applied": true,
+        });
         cells.push(vec![
             item.authorized.clone(),
             item.grant.consumer.clone(),
@@ -247,14 +260,10 @@ pub(crate) async fn declared_grant_reconcile(
             reported_cell(&minted.status),
             reported_cell(&minted.detail),
         ]);
+        rows.push(row);
     }
     if as_json {
-        print_json(&Value::Array(
-            cells
-                .iter()
-                .map(|row| json!({"authorized": row[0], "consumer": row[1], "host": row[2], "sync": row[3], "detail": row[4], "applied": true}))
-                .collect(),
-        ))?;
+        print_json(&Value::Array(rows))?;
     } else {
         table::print(
             &["AUTHORIZED", "CONSUMER", "HOST", "SYNC", "DETAIL"],

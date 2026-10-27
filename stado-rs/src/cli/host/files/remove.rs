@@ -35,16 +35,11 @@ impl RemoveFileOutcome {
     }
 
     fn failure_sentence(&self) -> String {
-        format!(
-            "{}: {} {}{}",
-            self.target,
-            self.path,
-            self.status,
-            self.detail
-                .as_ref()
-                .map(|detail| format!(" — {detail}"))
-                .unwrap_or_default()
-        )
+        let detail = match &self.detail {
+            Some(detail) => format!(" — {detail}"),
+            None => String::new(),
+        };
+        format!("{}: {} {}{detail}", self.target, self.path, self.status)
     }
 
     /// The removal that did not happen, with its class: the host guard

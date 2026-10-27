@@ -60,12 +60,18 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
     let version = package["version"]
         .as_str()
         .ok_or_else(|| CmdError::refused(format!("{} declares no version", path.display())))?;
-    let shipped: Vec<&str> = package["files"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
+    // Every entry of files is bundled: a list in another shape, or an entry
+    // that is not a path, is refused rather than left out of the release.
+    let files = crate::primitives::presence::listed(&package["files"], "its files")
+        .map_err(|cause| CmdError::refused(format!("{}: {cause}", path.display())))?;
+    let shipped: Vec<&str> = files
+        .iter()
+        .map(|entry| {
+            entry.as_str().ok_or_else(|| {
+                CmdError::refused(format!("{} lists {entry} in files, which is not a path", path.display()))
+            })
+        })
+        .collect::<Result<_, _>>()?;
     if shipped.is_empty() {
         return Err(CmdError::refused(format!(
             "{} declares no files list; the release bundles exactly what the package publishes",

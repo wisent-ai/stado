@@ -38,7 +38,7 @@ async fn probe_connection(
     };
     let result = runner(CommandSpec { argv, stdin: None }).await;
     match result {
-        Ok(output) if output.ok() => SshConnectionProbe {
+        Ok(output) if output.succeeded() => SshConnectionProbe {
             name: connection.name.to_string(),
             destination: connection.destination.to_string(),
             reachable: true,
@@ -141,11 +141,35 @@ pub(in crate::deploy::host_channel) async fn select_connection_with_key<'a>(
     }) {
         return Ok(connection);
     }
-    let held = match REPAIRING.try_with(|_| ()) {
+    // Outside a repair scope the task-local is unset, which is the ordinary
+    // case and not a failure; inside one, the held reading is consulted.
+    let held = match REPAIRING.try_with(|_inside| ()) {
         Ok(()) => None,
-        Err(_) => held_reading(target)?,
+        Err(_outside_repair_scope) => held_reading(target)?,
     };
-    let declared: Vec<SshConnection<'a>> = declared_connections(target).collect();
+    // A path through a node whose Tailscale key expired only times out; when
+    // another path remains it is left out, named with the cause, so the
+    // probe does not spend its whole timeout on it before the working one.
+    let all: Vec<SshConnection<'a>> = declared_connections(target).collect();
+    let (dead, live): (Vec<_>, Vec<_>) = all.iter().copied().partition(|connection| {
+        crate::remote::tailnet::destination_unreachable_because(connection.destination).is_some()
+    });
+    let declared = match live.is_empty() {
+        true => all,
+        false => {
+            for connection in &dead {
+                if let Some(cause) =
+                    crate::remote::tailnet::destination_unreachable_because(connection.destination)
+                {
+                    eprintln!(
+                        "stado: SSH path {} ({}) of {} is left out: the tailnet carries no traffic to it, {cause}",
+                        connection.name, connection.destination, target.name
+                    );
+                }
+            }
+            live
+        }
+    };
     match (&held, declared.as_slice()) {
         (_, []) => {
             return Err(DeployError(format!(

@@ -47,10 +47,19 @@ pub(super) async fn restored_object_route(
             }
             None => storage.get("backup").is_none_or(Value::is_null),
         };
+        // A recorded pid that is not a process id is refused, never read as
+        // no pid: read as none it would match a storage that states none.
+        let recorded_pid = match state.pid.as_deref() {
+            Some(pid) => Some(pid.parse::<u64>().map_err(|error| {
+                DeployError::unreachable(format!(
+                    "the recorded object API pid {pid:?} is not a process id: {error}"
+                ))
+            })?),
+            None => None,
+        };
         if storage.get("backend").and_then(Value::as_str) != Some("local")
             || storage.get("local_path").and_then(Value::as_str) != Some(expected_root)
-            || storage.get("pid").and_then(Value::as_u64)
-                != state.pid.as_deref().and_then(|pid| pid.parse().ok())
+            || storage.get("pid").and_then(Value::as_u64) != recorded_pid
             || storage
                 .pointer("/write_fence/protocol")
                 .and_then(Value::as_str)
@@ -73,7 +82,10 @@ pub(super) async fn restored_object_route(
             .await?
         } else {
             json!({
-                "endpoint": format!("http://127.0.0.1:{port}"),
+                "endpoint": format!(
+                    "http://{}",
+                    std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port))
+                ),
                 "object_authority": if expected_root == roots.primary { "A" } else { "B" },
                 "evidence": "constructed-runtime-without-data-mutation",
             })

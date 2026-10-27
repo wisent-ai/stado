@@ -59,10 +59,19 @@ pub async fn maybe_drain_or_upgrade(
     log_fn: &mut dyn FnMut(&str),
     kind: &str,
 ) -> DriftOutcome {
-    if std::env::var("WC_SKIP_VERSION_CHECK")
-        .map(|v| v.trim() == "1")
-        .unwrap_or(false)
-    {
+    // The check is skipped only by an explicit `1`; unset, blank or any
+    // other word runs it, and a value that is not Unicode is said and runs it.
+    let skipped = match std::env::var("WC_SKIP_VERSION_CHECK") {
+        Ok(value) => value.trim() == "1",
+        Err(std::env::VarError::NotPresent) => false,
+        Err(std::env::VarError::NotUnicode(raw)) => {
+            log_fn(&format!(
+                "WC_SKIP_VERSION_CHECK is not Unicode ({raw:?}); the version check runs"
+            ));
+            false
+        }
+    };
+    if skipped {
         return DriftOutcome::Clean;
     }
     // Active work defers release replacement. Runtime checks are job-scoped

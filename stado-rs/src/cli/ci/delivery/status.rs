@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use super::{plan, state};
 use crate::cli::CmdError;
+use crate::cli::reporting::field;
 
 /// The plan, the step running and how long it has run, the refused step
 /// with every refusal and its defects, what each step last delivered, and
@@ -47,8 +48,10 @@ pub async fn delivery(json: bool) -> Result<(), CmdError> {
 /// Whether the path that delivers repairs stands on this machine, for
 /// `stado ci delivery` and Oko's order of work: the routine's state, who
 /// holds its pass lock, which product operations hold build trees, and this
-/// machine's Stado unit as its init system holds it. `stalled` names every
-/// way the path is down now, each in one sentence; empty when it stands.
+/// machine's Stado unit as its init system holds it — the unit whose
+/// coordinator tick fires a pass on a host that declares a plan, so a failing
+/// unit is a routine nothing fires. `stalled` names every way the path is
+/// down now, each in one sentence; empty when it stands.
 /// `unrecorded` names every write in Oko's register about what the routine
 /// now stands on (each step's last checked commit, the refused step, each
 /// step's last install) that the register refused: the routine went on
@@ -94,6 +97,29 @@ pub async fn path() -> Result<Value, CmdError> {
     }
     if let Some(failing) = unit["failing"].as_str() {
         stalled.push(format!("{label} on this machine is failing: {failing}"));
+    }
+    // The coordinator's tick fires a pass only on a host that declares a
+    // plan, so a host without one, or with one it cannot read, runs no pass.
+    match plan::read() {
+        Ok(Some(_)) => {}
+        Ok(None) => stalled.push(
+            "this host declares no delivery plan (`stado ci plan set`), so the coordinator's tick fires no pass here"
+                .to_owned(),
+        ),
+        Err(error) => stalled.push(format!(
+            "this host's delivery plan cannot be read, so the coordinator's tick fires no pass here: {error}"
+        )),
+    }
+    // A pass that could not finish checked and installed nothing past where
+    // it stopped, and the path stays down until another pass is fired: said
+    // as a stall, never left as the last pass's words alone.
+    if let Some(pass) = &current.last_pass {
+        if let Some(failed) = &pass.failed {
+            stalled.push(format!(
+                "the last pass, ended {}, could not finish, and no pass has finished since: {failed}",
+                pass.ended_at.to_rfc3339()
+            ));
+        }
     }
     Ok(json!({
         "routine": routine,
@@ -145,19 +171,19 @@ pub fn print_path(document: &Value) {
         Some(holder) => println!("  pass lock held by {holder}"),
         None => println!("  pass lock free"),
     }
-    println!("  build trees held by: {}", document["build_holds"]);
+    println!("  build trees held by: {}", field(&document["build_holds"]));
     let unit = &document["unit"];
     match unit["read_error"].as_str() {
-        Some(error) => println!("  unit {}: could not be read: {error}", unit["label"]),
+        Some(error) => println!("  unit {}: could not be read: {error}", field(&unit["label"])),
         None => println!(
             "  unit {}: loaded {} state {} pid {} runs {} last exit code {}; events {}",
-            unit["label"],
-            unit["loaded"],
-            unit["state"],
-            unit["pid"],
-            unit["runs"],
-            unit["last_exit_code"],
-            unit["events"]
+            field(&unit["label"]),
+            field(&unit["loaded"]),
+            field(&unit["state"]),
+            field(&unit["pid"]),
+            field(&unit["runs"]),
+            field(&unit["last_exit_code"]),
+            field(&unit["events"])
         ),
     }
     let stalled = document["stalled"]
@@ -181,35 +207,40 @@ pub fn print_path(document: &Value) {
 
 /// The routine's lines in `stado ci status`'s plain form.
 pub fn print_status(document: &Value) {
+    use crate::cli::reporting::field;
     match document["plan"]["steps"].as_array() {
         None => println!(
             "delivery routine: no plan declared at {}",
-            document["plan_path"]
+            field(&document["plan_path"])
         ),
         Some(steps) => {
             let names: Vec<String> = steps
                 .iter()
-                .map(|step| format!("{}:{}", step["product"], step["surface"]))
+                .map(|step| format!("{}:{}", field(&step["product"]), field(&step["surface"])))
                 .collect();
             println!("delivery routine plan: {}", names.join(" -> "));
         }
     }
-    if let Some(running) = document["running"].as_object() {
+    // Each record is read by key from the document, so a key the record
+    // lacks is said as not reported instead of ending the print.
+    let running = &document["running"];
+    if running.is_object() {
         println!(
             "  running: {} at {} for {}s",
-            running["step"], running["revision"], running["age_seconds"]
+            field(&running["step"]), field(&running["revision"]), field(&running["age_seconds"])
         );
     }
-    if let Some(refused) = document["refused"].as_object() {
+    let refused = &document["refused"];
+    if refused.is_object() {
         println!(
             "  refused: {} at {} on {}, defects {}",
-            refused["step"], refused["revision"], refused["at"], refused["defects"]
+            field(&refused["step"]), field(&refused["revision"]), field(&refused["at"]), field(&refused["defects"])
         );
     }
     for (step, delivered) in document["delivered"].as_object().into_iter().flatten() {
         println!(
             "  delivered: {step} at {} on {}",
-            delivered["revision"], delivered["at"]
+            field(&delivered["revision"]), field(&delivered["at"])
         );
         let unrepaired = delivered["unrepaired"].as_array().into_iter().flatten();
         for defect in unrepaired.filter_map(Value::as_str) {
@@ -217,19 +248,15 @@ pub fn print_status(document: &Value) {
         }
     }
     for (checkout, pushed) in document["pushed"].as_object().into_iter().flatten() {
+        let (revision, at) = (field(&pushed["revision"]), field(&pushed["at"]));
         match pushed["refusal"].as_str() {
-            Some(refusal) => println!(
-                "  push refused: {checkout} at {} on {}: {refusal}",
-                pushed["revision"], pushed["at"]
-            ),
-            None => println!(
-                "  pushed: {checkout} at {} on {}",
-                pushed["revision"], pushed["at"]
-            ),
+            Some(refusal) => println!("  push refused: {checkout} at {revision} on {at}: {refusal}"),
+            None => println!("  pushed: {checkout} at {revision} on {at}"),
         }
     }
-    if let Some(last) = document["last_pass"].as_object() {
-        println!("  last pass {}: {}", last["ended_at"], last["said"]);
+    let last = &document["last_pass"];
+    if last.is_object() {
+        println!("  last pass {}: {}", field(&last["ended_at"]), field(&last["said"]));
     }
     crate::cli::ci::main::print(&document["main"]);
 }

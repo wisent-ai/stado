@@ -53,16 +53,17 @@ pub async fn approve(
         .map_err(CmdError::refused)?
         .to_string();
     // An invited request names the target the invite reserved and minted the
-    // channel key for; only a request without one falls back to the machine's
-    // own hostname.
-    let name = request_target_name(&request)
-        .map(str::to_string)
-        .unwrap_or_else(|| target_name_for(&request_hostname));
-    let kind = request
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or("local")
-        .to_string();
+    // channel key for; only a request without one takes the machine's own
+    // hostname. A request that states no kind came from the local joiner,
+    // which is the one kind that does not state it.
+    let name = match request_target_name(&request) {
+        Some(reserved) => reserved.to_string(),
+        None => target_name_for(&request_hostname),
+    };
+    let kind = match request.get("kind").and_then(Value::as_str) {
+        Some(kind) => kind.to_string(),
+        None => crate::capabilities::ProviderId::Local.as_str().to_string(),
+    };
     let destination = request_destination(&request).map(str::to_string);
     let invite_id = request_invite_id(&request).map(str::to_string);
     let document = fetch_document().await?;

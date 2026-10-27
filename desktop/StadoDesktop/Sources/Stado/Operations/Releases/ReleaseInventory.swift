@@ -25,10 +25,16 @@ struct ReleaseInventory: Decodable, Sendable {
         case runs
     }
 
+    /// `release status --json` writes `targets` and `runs` together, and its
+    /// run-only answer (`--run`, `--version`) writes `runs` alone: that answer
+    /// is about no target, so its target list is the empty one.
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        entries = try values.decodeIfPresent([ReleaseInventoryEntry].self, forKey: .entries) ?? []
-        runs = try values.decodeIfPresent([ReleasePipelineRunRecord].self, forKey: .runs) ?? []
+        switch try values.decodeIfPresent([ReleaseInventoryEntry].self, forKey: .entries) {
+        case .some(let listed): entries = listed
+        case .none: entries = []
+        }
+        runs = try values.decode([ReleasePipelineRunRecord].self, forKey: .runs)
     }
 }
 
@@ -71,22 +77,26 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         case deliveries
     }
 
+    /// Every field is decoded as the run object records it and the listing
+    /// settles it: a run that lacks one is a decoding error naming the key.
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        runID = try values.decodeIfPresent(String.self, forKey: .runID) ?? ""
-        sourceCommit = try values.decodeIfPresent(String.self, forKey: .sourceCommit) ?? ""
-        product = try values.decodeIfPresent(String.self, forKey: .product) ?? ""
-        version = try values.decodeIfPresent(String.self, forKey: .version) ?? ""
-        channel = try values.decodeIfPresent(String.self, forKey: .channel) ?? ""
-        state = try values.decodeIfPresent(String.self, forKey: .state) ?? ""
-        phase = try values.decodeIfPresent(String.self, forKey: .phase) ?? ""
-        updatedAt = try values.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
+        runID = try values.decode(String.self, forKey: .runID)
+        sourceCommit = try values.decode(String.self, forKey: .sourceCommit)
+        product = try values.decode(String.self, forKey: .product)
+        version = try values.decode(String.self, forKey: .version)
+        channel = try values.decode(String.self, forKey: .channel)
+        state = try values.decode(String.self, forKey: .state)
+        phase = try values.decode(String.self, forKey: .phase)
+        updatedAt = try values.decode(String.self, forKey: .updatedAt)
         failure = try values.decodeIfPresent(String.self, forKey: .failure)
-        platforms =
-            try values.decodeIfPresent([String: PlatformLeg].self, forKey: .platforms) ?? [:]
+        platforms = try values.decode([String: PlatformLeg].self, forKey: .platforms)
         deliveries = try values.decode([String: DeliveryLeg].self, forKey: .deliveries)
-        hasFailure = failure != nil || platforms.values.contains { $0.failure != nil }
-            || deliveries.values.contains { $0.failure != nil }
+        // A run has failed when any of its three records carries a failure.
+        let failures = [failure].compactMap { $0 }
+            + platforms.values.compactMap(\.failure)
+            + deliveries.values.compactMap(\.failure)
+        hasFailure = !failures.isEmpty
         diagnosticDetails = Self.diagnostics(
             runID: runID, failure: failure, platforms: platforms, deliveries: deliveries
         )
@@ -138,6 +148,15 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         return sections.isEmpty ? nil : sections.joined(separator: "\n\n")
     }
 
+    /// `compile_progress`, attached by the CLI only to a running leg:
+    /// `compiled` with a `percent` once a previous run gives the denominator,
+    /// or `unreadable` with why the job's log could not be counted.
+    struct CompileProgress: Decodable, Sendable {
+        let compiled: Int?
+        let percent: Int?
+        let unreadable: String?
+    }
+
     struct PlatformLeg: Decodable, Sendable {
         let state: String
         let jobID: String
@@ -145,16 +164,19 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         /// CLI only while the run is in flight.
         let jobState: String?
         let failure: String?
-        /// Crates compiled so far, from the job's streamed log.
-        let compiledCrates: Int?
-        /// An estimate against this platform's previous run — cargo publishes
-        /// no total of its own, so the previous run is the denominator.
-        let compilePercent: Int?
         /// What this platform's build cost, in seconds, from the job's own
         /// `started_at` and `completed_at`. A run that is still building
         /// reports the time it has spent so far. The run object stores no
         /// duration: the job record owns it and the CLI joins the two.
         let buildSeconds: Int?
+        /// The crates compiled so far, while the leg runs.
+        let compileProgress: CompileProgress?
+
+        /// Crates compiled so far, from the job's streamed log.
+        var compiledCrates: Int? { compileProgress?.compiled }
+        /// An estimate against this platform's previous run — cargo publishes
+        /// no total of its own, so the previous run is the denominator.
+        var compilePercent: Int? { compileProgress?.percent }
 
         enum CodingKeys: String, CodingKey {
             case state
@@ -164,29 +186,6 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
             case compileProgress = "compile_progress"
             case buildSeconds = "build_seconds"
         }
-
-        enum ProgressKeys: String, CodingKey {
-            case compiled
-            case percent
-        }
-
-        init(from decoder: Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            state = try values.decodeIfPresent(String.self, forKey: .state) ?? ""
-            jobID = try values.decodeIfPresent(String.self, forKey: .jobID) ?? ""
-            jobState = try values.decodeIfPresent(String.self, forKey: .jobState)
-            failure = try values.decodeIfPresent(String.self, forKey: .failure)
-            buildSeconds = try values.decodeIfPresent(Int.self, forKey: .buildSeconds)
-            if let progress = try? values.nestedContainer(
-                keyedBy: ProgressKeys.self, forKey: .compileProgress
-            ) {
-                compiledCrates = try progress.decodeIfPresent(Int.self, forKey: .compiled)
-                compilePercent = try progress.decodeIfPresent(Int.self, forKey: .percent)
-            } else {
-                compiledCrates = nil
-                compilePercent = nil
-            }
-        }
     }
 
     var updated: Date? {
@@ -195,93 +194,5 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         if let date = formatter.date(from: updatedAt) { return date }
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: updatedAt)
-    }
-}
-
-/// One product target as the inventory lists it: its identity, and the software
-/// report the CLI attached to it.
-struct ReleaseInventoryEntry: Decodable, Sendable {
-    let pair: ReleaseInventoryPair
-    /// Absent only when the CLI predates the software half of the report. It is
-    /// carried as `nil` rather than as a passing verdict, because "this console
-    /// is newer than the CLI" and "the host is accounted for" are different
-    /// facts and only one of them is good news.
-    let software: ReleaseSoftwareReport?
-
-    enum CodingKeys: String, CodingKey {
-        case software
-    }
-
-    init(from decoder: Decoder) throws {
-        pair = try ReleaseInventoryPair(from: decoder)
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        software = try values.decodeIfPresent(ReleaseSoftwareReport.self, forKey: .software)
-    }
-}
-
-/// What a host said it runs, and whether the CLI could account for it.
-///
-/// `state` and `verdict` are two different questions and stay two fields.
-/// `state` is whether anybody looked — `observed`, `unverified`, `never`.
-/// `verdict` is what the look implies — `ok` or `failed`. Folding them would let
-/// this screen paint "nobody has ever asked this host" in the same colour as
-/// "the host answered and it is fine", which is the exact reading that let a
-/// stale skarbiec strip a live subscription's tags for a day.
-struct ReleaseSoftwareReport: Decodable, Sendable {
-    let state: String
-    let verdict: String
-    let failed: Bool
-    /// `just now`, `14m ago`, `stale (3h)`, `never` — the CLI's own phrase.
-    let observed: String
-    /// Nil when the CLI's software block did not carry the count; shown as
-    /// not reported rather than as zero programs.
-    let reported: Int?
-    let release: Int?
-    let unmanaged: Int?
-    let scripts: Int?
-    /// Verbatim, in the CLI's words, in the CLI's order. Never re-worded here.
-    let findings: [String]
-
-    var hasReport: Bool { state != "never" }
-
-    enum CodingKeys: String, CodingKey {
-        case state, verdict, failed, observed, reported, release, unmanaged, scripts, findings
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        state = try values.decodeIfPresent(String.self, forKey: .state) ?? "never"
-        verdict = try values.decodeIfPresent(String.self, forKey: .verdict) ?? "failed"
-        // Defaulted to a failure, deliberately. A payload this console cannot
-        // read is not evidence that the fleet is healthy.
-        failed = try values.decodeIfPresent(Bool.self, forKey: .failed) ?? true
-        observed = try values.decodeIfPresent(String.self, forKey: .observed) ?? "never"
-        reported = try values.decodeIfPresent(Int.self, forKey: .reported)
-        release = try values.decodeIfPresent(Int.self, forKey: .release)
-        unmanaged = try values.decodeIfPresent(Int.self, forKey: .unmanaged)
-        scripts = try values.decodeIfPresent(Int.self, forKey: .scripts)
-        findings = try values.decodeIfPresent([String].self, forKey: .findings) ?? []
-    }
-}
-
-struct ReleaseInventoryPair: Decodable, Identifiable, Hashable, Sendable {
-    let product: String
-    let target: String
-
-    var id: String { "\(product)/\(target)" }
-
-    enum CodingKeys: String, CodingKey {
-        case product, target
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        product = try values.decodeIfPresent(String.self, forKey: .product) ?? ""
-        target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
-    }
-
-    init(product: String, target: String) {
-        self.product = product
-        self.target = target
     }
 }

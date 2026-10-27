@@ -119,7 +119,12 @@ pub(in crate::deploy::host_gui_automation) async fn helper_identity(
     let version = version_output
         .strip_prefix("stado-apple-challenge-capture ")
         .map(str::trim)
-        .unwrap_or_default()
+        .ok_or_else(|| {
+            DeployError::unreachable(format!(
+                "the Apple challenge helper at {path} answered --version with {version_output:?}, \
+                 not stado-apple-challenge-capture <version>"
+            ))
+        })?
         .to_string();
     safe_identity(&version, "Apple challenge helper version")?;
     let requirement = designated_requirement(
@@ -151,16 +156,17 @@ pub(in crate::deploy::host_gui_automation) async fn login_user(
     .stdout
     .trim()
     .to_string();
+    // The console's owner is the GUI user; with no console owner, or a console held by
+    // the system rather than a person, the remote login user is.
     let console = optional(
         target,
         &["/usr/bin/stat", "-f", "%Su", "/dev/console"],
         runner,
     )
-    .await?
-    .unwrap_or_default();
-    let user = match console.as_str() {
-        "" | "root" | "loginwindow" | "_mbsetupuser" => login,
-        _ => console,
+    .await?;
+    let user = match console {
+        Some(owner) if !matches!(owner.as_str(), "" | "root" | "loginwindow" | "_mbsetupuser") => owner,
+        _ => login,
     };
     safe_identity(&user, "GUI user")?;
     if matches!(user.as_str(), "root" | "loginwindow" | "_mbsetupuser") {

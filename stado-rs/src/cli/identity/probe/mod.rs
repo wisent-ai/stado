@@ -8,6 +8,8 @@ mod session;
 // used while this module was one file, so the import keeps that path resolving.
 use crate::cli::service;
 
-pub(super) use accounts::{observe_apple_accounts, observe_user_apple_accounts};
+pub(super) use accounts::{
+    observe_apple_accounts, observe_user_apple_accounts, AccountObservation,
+};
 pub(super) use local::{is_local_target, local_apple_accounts, probes_own_user};
 pub(super) use session::{drivable_session, Drivability};

@@ -32,13 +32,15 @@ pub(super) fn select_rationalization_actions(
         .collect();
     loop {
         let before = selected.len();
-        let dependencies: Vec<String> = plan
-            .actions
-            .iter()
-            .filter(|action| selected.contains(&action.id))
-            .flat_map(|action| action.depends_on.iter().cloned())
-            .collect();
-        selected.extend(dependencies);
+        for action in &plan.actions {
+            if selected.contains(&action.id) {
+                for dependency in &action.depends_on {
+                    if !selected.contains(dependency) {
+                        selected.insert(dependency.clone());
+                    }
+                }
+            }
+        }
         if selected.len() == before {
             break;
         }

@@ -103,18 +103,21 @@ pub(super) async fn read_record(
     // handoff over it and lose them.
     let parsed = match host_channel::marker_fields(line).as_slice() {
         ["STADO_ROLE_HANDOFF", since, state, scopes, artefact, "end"] => {
-            since.trim().parse().ok().map(|since| Record {
-                since,
-                state: (*state).trim().to_string(),
-                scopes: scopes
-                    .split(',')
-                    .filter(|scope| !scope.is_empty())
-                    .map(str::to_string)
-                    .collect(),
-                artefact: (*artefact).trim().to_string(),
-            })
+            match since.trim().parse() {
+                Ok(since) => Some(Record {
+                    since,
+                    state: (*state).trim().to_string(),
+                    scopes: scopes
+                        .split(',')
+                        .filter(|scope| !scope.is_empty())
+                        .map(str::to_string)
+                        .collect(),
+                    artefact: (*artefact).trim().to_string(),
+                }),
+                Err(_since_is_not_an_epoch) => None,
+            }
         }
-        _ => None,
+        _other_shape => None,
     };
     parsed.map(Some).ok_or_else(|| {
         DeployError::unreachable(format!(
@@ -157,20 +160,23 @@ pub(super) const TAKEN_OVER: &str = "taken_over";
 pub(super) const WITHDRAWN: &str = "takeover_withdrawn";
 
 /// The takeover this host's Stado process recorded for API listener unit
-/// `unit`: the pid that retired it and since when. `None` when none was
-/// recorded, or the record cannot be read, so the unit is still repaired.
+/// `unit`: the pid that retired it and since when. `Ok(None)` when none was
+/// recorded; `Err` when the record cannot be read, which a caller must not
+/// take for "none": a record that exists holds the takeover only it knows.
 pub(super) async fn taken_over(
     target: &ComputeTarget,
     unit: &str,
     runner: &Runner,
-) -> Option<String> {
-    let record = read_record(target, unit, runner).await.ok()??;
-    (record.state == TAKEN_OVER).then(|| {
+) -> Result<Option<String>, DeployError> {
+    let Some(record) = read_record(target, unit, runner).await? else {
+        return Ok(None);
+    };
+    Ok((record.state == TAKEN_OVER).then(|| {
         format!(
             "pid {} retired it at API start on the same storage root (epoch {})",
             record.artefact, record.since
         )
-    })
+    }))
 }
 
 async fn run(
@@ -180,7 +186,7 @@ async fn run(
     runner: &Runner,
 ) -> Result<String, DeployError> {
     let output = host_channel::run_script(target, script, runner).await?;
-    if output.ok() {
+    if output.succeeded() {
         Ok(output.stdout)
     } else {
         Err(DeployError::unreachable(host_channel::last_error_line(

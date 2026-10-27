@@ -112,9 +112,25 @@ pub(super) fn render(installed: &Path, staged: &Path, wanted: &Definition) -> Re
         .map_err(|error| format!("{}: {error}", staged.display()))
 }
 
-/// Two definitions are the same when both parse and hold equal values.
-pub(super) fn same(left: &Path, right: &Path) -> bool {
-    matches!((Plist::from_file(left), Plist::from_file(right)), (Ok(a), Ok(b)) if a == b)
+/// Two definitions are the same when both exist and hold equal values; an
+/// absent one differs from any other. One that exists but cannot be read or
+/// parsed is refused with its path and cause: read as "different", it sent
+/// recovery on to rewrite a unit nobody could read.
+pub(super) fn same(left: &Path, right: &Path) -> Result<bool, String> {
+    let (Some(left), Some(right)) = (parsed(left)?, parsed(right)?) else {
+        return Ok(false);
+    };
+    Ok(left == right)
+}
+
+/// A definition as parsed, or none when it does not exist.
+fn parsed(path: &Path) -> Result<Option<Plist>, String> {
+    match std::fs::metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        _ => Plist::from_file(path)
+            .map(Some)
+            .map_err(|error| format!("object API recovery refused: {}: {error}", path.display())),
+    }
 }
 
 /// A definition's environment: an absent one is empty, and one that is not a

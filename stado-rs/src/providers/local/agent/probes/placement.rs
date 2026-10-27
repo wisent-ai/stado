@@ -79,28 +79,18 @@ pub(crate) async fn reconcile_placement_policy(
         },
     };
 
-    let directory = path
-        .parent()
-        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
-    std::fs::create_dir_all(directory)
-        .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
-    let staged = directory.join(format!(".{}.stado-agent", PLACEMENT_POLICY_FILE));
     let bytes = format!(
         "{}\n",
         serde_json::to_string_pretty(&policy).map_err(|error| error.to_string())?
     );
-    std::fs::write(&staged, bytes).map_err(|error| {
-        crate::primitives::staging::failed_with(
-            format!("cannot stage {}: {error}", staged.display()),
-            &staged,
-        )
-    })?;
-    std::fs::rename(&staged, &path).map_err(|error| {
-        crate::primitives::staging::failed_with(
-            format!("cannot install {}: {error}", path.display()),
-            &staged,
-        )
-    })?;
+    // The Weles worker reads this file, so it keeps the mode a shared record
+    // has, written whole and flushed with its directory.
+    crate::primitives::document::persist_with_mode(
+        &path,
+        bytes.as_bytes(),
+        crate::primitives::file_mode::shared_read(),
+    )
+    .map_err(|error| format!("cannot install {}: {error}", path.display()))?;
     Ok((
         format!(
             "{}wrote {} at registry generation {generation}",
@@ -152,9 +142,9 @@ fn placement_policy_path() -> Result<PathBuf, String> {
             return Ok(path);
         }
     }
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| "HOME is unset, so the worker's policy path is unknown".to_string())?;
-    Ok(PathBuf::from(home)
+    let home = crate::config_file::home()
+        .map_err(|cause| format!("the worker's policy path is unknown: {cause}"))?;
+    Ok(home
         .join(".config")
         .join("weles")
         .join(PLACEMENT_POLICY_FILE))

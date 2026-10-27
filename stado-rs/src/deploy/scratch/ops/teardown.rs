@@ -8,6 +8,7 @@ use crate::deploy::scratch::lease::{self, ScratchLease};
 use crate::deploy::scratch::registry_out;
 use crate::deploy::scratch::remote::{self, HostLease};
 use crate::deploy::{host_access::user_delete, host_channel, DeployError, Runner};
+use crate::primitives::tally::Tally;
 use crate::targets::ComputeTarget;
 
 /// The row a just-created lease would have had, for the rollback path.
@@ -31,10 +32,12 @@ pub async fn destroy_row(
     row: &HostLease,
     runner: &Runner,
 ) -> Result<Map<String, Value>, DeployError> {
-    let username = row
-        .lease
-        .as_ref()
-        .map_or_else(|| row.name.clone(), |held| held.username.clone());
+    // A lease that could be read names its account; one that could not is
+    // addressed by the record's name, which is the account by construction.
+    let username = match row.lease.as_ref() {
+        Some(held) => held.username.clone(),
+        None => row.name.clone(),
+    };
     user_delete::validate_deletable(&username, Some(target))?;
     let deleted = user_delete::delete_user(&username, target, false, runner).await;
     let root = registry_out::remove(row.lease.as_ref())?;
@@ -44,10 +47,11 @@ pub async fn destroy_row(
         host_channel::run_program(target, &["/bin/sh", "-c", command.as_str()], runner).await?;
     let state = probe_state(target, &username, &record_path, runner).await?;
     if !state.is_clear() {
-        let said = deleted
-            .error
-            .clone()
-            .unwrap_or_else(|| deleted.status.clone());
+        // The deletion's own error, or its status word when it gave none.
+        let said = match deleted.error.clone() {
+            Some(error) => error,
+            None => deleted.status.clone(),
+        };
         return Err(DeployError::unreachable(format!(
             "scratch '{}' is not gone from '{}': account {}, home {}, record {} \
              (the delete said {said}, the record removal exited {})",
@@ -60,10 +64,8 @@ pub async fn destroy_row(
     report.insert("username".into(), Value::from(username));
     report.insert("account".into(), Value::from(state.account.clone()));
     report.insert("home".into(), Value::from(state.home.clone()));
-    report.insert(
-        "home_path".into(),
-        row.home_path.clone().map_or(Value::Null, Value::from),
-    );
+    // Serde writes an absent home path as `null`.
+    report.insert("home_path".into(), json!(row.home_path));
     report.insert("record".into(), Value::from(state.record.clone()));
     report.insert("destroyed_at".into(), Value::from(lease::now_stamp()));
     report.insert("storage_root".into(), Value::from(root));
@@ -110,7 +112,7 @@ pub async fn reap_rows(
     let mut swept = Swept::default();
     for row in rows {
         if !crate::deploy::scratch::expired_at(row, now) {
-            swept.kept += 1;
+            swept.kept.tally();
             continue;
         }
         if !apply {

@@ -12,8 +12,12 @@ pub fn extract_resolved_executable(
     let mut resolved: Option<String> = None;
     let mut retained = String::with_capacity(stderr.len());
     for segment in stderr.split_inclusive('\n') {
-        let line = segment.strip_suffix('\n').unwrap_or(segment);
-        let line = line.strip_suffix('\r').unwrap_or(line);
+        // `lines` strips the `\n` or `\r\n` terminator the segment carries;
+        // a segment is one line, so the first item is the whole of it.
+        let line = match segment.lines().next() {
+            Some(line) => line,
+            None => "",
+        };
         if let Some(path) = line.strip_prefix(RESOLVED_EXECUTABLE_MARKER) {
             if path.is_empty()
                 || !candidates.contains(&path)

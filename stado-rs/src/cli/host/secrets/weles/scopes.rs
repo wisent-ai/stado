@@ -3,7 +3,7 @@ use crate::targets::ComputeTarget;
 
 use crate::cli::host::secrets::weles::{acquisition_scratch, remove_remote};
 
-/// The registration `stado credentials acquisition-scopes sync --host TARGET` performs on the host,
+/// The registration `stado credentials scopes sync --host TARGET` performs on the host,
 /// natively: the checks and key steps of the retired registration script as
 /// individual remote commands, with every branch taken here. Modeled on
 /// weles's register-weles-acquisition-scopes-host.sh with the two appstore
@@ -154,7 +154,7 @@ pub(super) async fn register_acquisition_scopes(
             let stepped = host_channel::run_program(resolved, &words, runner)
                 .await
                 .map_err(CmdError::from)?;
-            if !stepped.ok() {
+            if !stepped.succeeded() {
                 remove_remote(resolved, &[public_key.as_str(), fresh.as_str()], runner).await;
                 return Err(refused(host_channel::last_error_line(
                     &stepped,
@@ -181,7 +181,7 @@ pub(super) async fn register_acquisition_scopes(
     )
     .await
     .map_err(CmdError::from)?;
-    if !derived.ok() {
+    if !derived.succeeded() {
         let mut litter = vec![public_key.as_str()];
         if let Some(fresh) = &new_private_key {
             litter.push(fresh.as_str());
@@ -215,7 +215,7 @@ pub(super) async fn register_acquisition_scopes(
     let registered = host_channel::run_command(
         resolved,
         &format!(
-            "PATH={} SKARBIEC_VAULT_FILE={} {} token-register-acquisitions {} \
+            "PATH={} SKARBIEC_VAULT_FILE={} {} grant register {} \
          --workload-public-key-file {} --ttl-seconds {lifetime} --replace-capabilities >/dev/null",
             crate::deploy::shlex_quote(&openssl_search_path),
             crate::deploy::shlex_quote(vault),
@@ -227,7 +227,7 @@ pub(super) async fn register_acquisition_scopes(
     )
     .await
     .map_err(CmdError::from)?;
-    if !registered.ok() {
+    if !registered.succeeded() {
         let mut litter = vec![public_key.as_str()];
         if let Some(fresh) = &new_private_key {
             litter.push(fresh.as_str());
@@ -247,7 +247,7 @@ pub(super) async fn register_acquisition_scopes(
         )
         .await
         .map_err(CmdError::from)?;
-        if !moved.ok() {
+        if !moved.succeeded() {
             remove_remote(resolved, &[public_key.as_str(), fresh.as_str()], runner).await;
             return Err(refused(host_channel::last_error_line(
                 &moved,

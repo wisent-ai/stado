@@ -50,8 +50,9 @@ pub fn version_tuple(v: &str) -> Vec<VersionToken> {
         .split('.')
         .map(|token| match token.parse::<i64>() {
             Ok(n) => VersionToken::Num(n),
-            // i64 overflow lands here too; real release versions never do.
-            Err(_) => VersionToken::Str(token.to_string()),
+            // A token that is not a whole number (a pre-release word, or one past
+            // i64, which real release versions never reach) compares as text.
+            Err(_compared_as_text) => VersionToken::Str(token.to_string()),
         })
         .collect()
 }

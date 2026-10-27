@@ -2,6 +2,7 @@
 //! carries.
 
 pub(in crate::cli::host) mod report;
+mod text;
 mod trailers;
 
 /// Read back both halves of the question: what the host runs, and what it can

@@ -13,8 +13,8 @@ pub(in crate::doctor) const ALERTS_TITLE: &str = "Alerts";
 pub(in crate::doctor) const ALERTS_REMEDY: &str =
     "configure at least one non-GCP channel: choose it with `stado alerts preferences set \
      --channel <name>` and give it its \
-     material - slack_webhook, telegram_bot_token + telegram_chat_id, or sendgrid_api_key in \
-     the item that plays the Skarbiec alerts role, or skrzynka with alerts.email_to, \
+     material - slack_webhook or telegram_bot_token + telegram_chat_id in the item that \
+     plays the Skarbiec alerts role, or skrzynka with alerts.email_to, \
      alerts.skrzynka_mailbox and alerts.skrzynka_organization naming a mailbox Skrzynka holds; \
      clear WC_ALERTS_TOPIC on a deployment that has left GCP";
 
@@ -33,9 +33,6 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
     }
     if channels.telegram.is_some() {
         configured.push("telegram");
-    }
-    if channels.sendgrid.is_some() {
-        configured.push("sendgrid");
     }
     if channels.skrzynka.is_some() {
         configured.push("skrzynka");
@@ -58,10 +55,12 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
     // opposite responses. The declaration is the operator's choice in the
     // registry; a choice that cannot be read is its own finding.
     let choice = crate::monitor::alerts::contact::chosen().await;
-    let declared: Vec<&str> = choice
-        .as_ref()
-        .map(|chosen| chosen.iter().map(String::as_str).collect())
-        .unwrap_or_default();
+    // The declared channels when the choice could be read; an unreadable
+    // choice declares none here and is reported by its own cause below.
+    let declared: Vec<&str> = match &choice {
+        Ok(chosen) => chosen.iter().map(String::as_str).collect(),
+        Err(_reported_below) => Vec::new(),
+    };
     let resolved_any = !configured.is_empty();
 
     let skrzynka_problem: Option<(Status, String)> = match &channels.skrzynka {

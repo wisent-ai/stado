@@ -59,4 +59,9 @@ pub enum SchedulerError {
         config_key: &'static str,
         reason: &'static str,
     },
+    /// A startup setting that names a Stado service this host cannot place:
+    /// handed on as empty, the agent would start with no address and say
+    /// only that one is missing.
+    #[error("agent startup setting {env} cannot be resolved on this host: {cause}")]
+    UnresolvedStartupSetting { env: String, cause: String },
 }

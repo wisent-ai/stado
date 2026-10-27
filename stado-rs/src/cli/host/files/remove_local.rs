@@ -13,11 +13,16 @@ use std::path::Path;
 
 use nix::libc;
 
-/// Where a user-owned file may be removed from, relative to HOME.
-const USER_ROOTS: [&str; 3] = ["Library/LaunchAgents", ".stado", ".config/systemd/user"];
+/// Where a user-owned file may be removed from, relative to HOME: the user
+/// unit directories `deploy::service` declares, and Stado's own home.
+const USER_ROOTS: &[&str] = &[USER_LAUNCHD_AGENTS, ".stado", USER_SYSTEMD_UNITS];
+/// What fstatat returns on success
+/// (https://pubs.opengroup.org/onlinepubs/9799919799/functions/fstatat.html).
+const STAT_SUCCEEDED: libc::c_int = 0;
 /// The unit prefix Stado owns in the two privileged locations.
 const UNIT_PREFIX: &str = "com.wisent.";
 
+use crate::deploy::service::{LAUNCHD_DAEMONS, SYSTEMD_UNITS, USER_LAUNCHD_AGENTS, USER_SYSTEMD_UNITS};
 use crate::primitives::removal::RemovalStatus;
 
 fn report(status: RemovalStatus, detail: &str) {
@@ -26,12 +31,19 @@ fn report(status: RemovalStatus, detail: &str) {
 
 fn privileged(parent: &str, name: &str) -> bool {
     name.starts_with(UNIT_PREFIX)
-        && ((parent == "/Library/LaunchDaemons" && name.ends_with(".plist"))
-            || (parent == "/etc/systemd/system" && name.ends_with(".service")))
+        && ((parent == LAUNCHD_DAEMONS && name.ends_with(".plist"))
+            || (parent == SYSTEMD_UNITS && name.ends_with(".service")))
 }
 
-fn c_name(text: &str) -> Option<CString> {
-    CString::new(text.as_bytes()).ok()
+/// A path component as the kernel takes it; one holding a NUL byte is
+/// refused with the position of that byte.
+fn c_name(text: &str) -> std::io::Result<CString> {
+    CString::new(text.as_bytes()).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{text:?} cannot be passed to the kernel: {error}"),
+        )
+    })
 }
 
 /// Walk from `/` to `parent`, one `O_NOFOLLOW` directory at a time.
@@ -43,8 +55,7 @@ fn open_parent(parent: &str) -> Result<libc::c_int, (bool, std::io::Error)> {
         return Err((false, std::io::Error::last_os_error()));
     }
     for component in parent.split('/').filter(|piece| !piece.is_empty()) {
-        let name =
-            c_name(component).ok_or((false, std::io::Error::from_raw_os_error(libc::EINVAL)))?;
+        let name = c_name(component).map_err(|error| (false, error))?;
         let next = unsafe { libc::openat(descriptor, name.as_ptr(), flags) };
         let error = std::io::Error::last_os_error();
         unsafe { libc::close(descriptor) };
@@ -66,7 +77,7 @@ fn stat_at(descriptor: libc::c_int, name: &CString) -> std::io::Result<libc::sta
             libc::AT_SYMLINK_NOFOLLOW,
         )
     };
-    if result == 0 {
+    if result == STAT_SUCCEEDED {
         Ok(unsafe { found.assume_init() })
     } else {
         Err(std::io::Error::last_os_error())
@@ -91,14 +102,11 @@ fn remove(path: &str, home: &str) -> (RemovalStatus, String) {
         .iter()
         .any(|root| path.starts_with(&format!("{home}/{root}/")));
     let target = Path::new(path);
-    let parent = target
-        .parent()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let name = target
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
+        return (RemovalStatus::Refused, "the path names no file".into());
+    };
+    let parent = parent.to_string_lossy().to_string();
+    let name = name.to_string_lossy().to_string();
     let privileged = privileged(&parent, &name);
     if !user_owned && !privileged {
         return (RemovalStatus::Refused, "outside the managed areas".into());
@@ -110,8 +118,9 @@ fn remove(path: &str, home: &str) -> (RemovalStatus, String) {
             "the declared privileged file operation requires the target's sudo authority".into(),
         );
     }
-    let Some(c_file) = c_name(&name).filter(|_| !name.is_empty()) else {
-        return (RemovalStatus::Refused, "the path names no file".into());
+    let c_file = match c_name(&name) {
+        Ok(c_file) => c_file,
+        Err(error) => return (RemovalStatus::Refused, error.to_string()),
     };
     let descriptor = match open_parent(&parent) {
         Ok(descriptor) => descriptor,

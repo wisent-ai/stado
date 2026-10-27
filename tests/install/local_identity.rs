@@ -35,8 +35,8 @@ struct Run {
 
 impl Run {
     fn new(case: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("install-local-identity")
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/journeys/install-local-identity")
             .join(format!("{}-{case}", std::process::id()));
         std::fs::create_dir_all(root.join(".stado/cache")).expect("create the run directory");
         std::fs::create_dir_all(root.join("tmp")).expect("create the run's scratch directory");

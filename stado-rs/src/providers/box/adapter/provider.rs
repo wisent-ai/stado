@@ -178,7 +178,7 @@ impl BoxProvider {
         }
         let result = match self.release_mode {
             ReleaseMode::Delete => self.client.delete_box(box_id).await,
-            ReleaseMode::Stop => self.client.stop_box(box_id, false).await.map(|_| ()),
+            ReleaseMode::Stop => self.client.stop_box(box_id, false).await.map(|_stopped| ()),
         };
         match result {
             Ok(()) => Ok(()),

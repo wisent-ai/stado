@@ -7,17 +7,20 @@
 //! started.
 //!
 //! This is the second half, run by the pass itself after every other
-//! cleaner: under the disk-full rule it deletes every Time Machine local
-//! snapshot of the volume the pass's home lives on (and of no other
-//! volume), so the blocks the other cleaners released become free space.
-//! A home on its own disk image, as every test journey uses, has no
-//! snapshots, so a journey never reaches the machine's own backups. The
-//! report's `local_snapshot_volume` names the volume that was read.
+//! cleaner: under the disk-full rule it deletes the Time Machine local
+//! snapshots of the volume the pass's home lives on, and of no other volume,
+//! so the blocks the other cleaners released become free space. The
+//! deletion names that volume to `tmutil deletelocalsnapshots`; the dated
+//! form of the same command deletes the snapshots of that date on every
+//! mounted disk, so it is never used. A home on its own disk image, as every
+//! test journey uses, has no snapshots, so a journey never reaches the
+//! machine's own backups. The report's `local_snapshot_volume` names the
+//! volume that was read and cleaned.
 //!
 //! `com.apple.os.update-*` snapshots are the operating system's recovery
-//! state, not backups; they are retained and counted, never deleted.
+//! state, not backups; they are counted and left alone, and the volume form
+//! of the command deletes only Time Machine snapshots.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -33,37 +36,10 @@ const TMUTIL: &str = "/usr/bin/tmutil";
 /// The reader of the mount point a path lives on.
 const DF: &str = "/bin/df";
 
-/// What `tmutil listlocalsnapshots /` prefixes every Time Machine snapshot
+/// What `tmutil listlocalsnapshots` prefixes every Time Machine snapshot
 /// with, and the prefix the operating system's own update snapshots carry.
 const SNAPSHOT_PREFIX: &str = "com.apple.TimeMachine.";
 const OS_UPDATE_PREFIX: &str = "com.apple.os.update-";
-/// What the same listing appends to every snapshot name. `tmutil
-/// deletelocalsnapshots` takes the timestamp alone and reads anything else
-/// as a volume, so a name handed over whole is refused with
-/// `<name> is not a valid disk` — six times an hour on this fleet's macs,
-/// with nothing deleted and the host left under its watermark.
-const SNAPSHOT_SUFFIX: &str = ".local";
-/// `YYYY-MM-DD-HHMMSS`, the shape tmutil prints and accepts. A listing row
-/// that does not carry it is counted and left alone rather than handed to
-/// the remover as an argument nobody can predict.
-const STAMP_LENGTH: usize = "0000-00-00-000000".len();
-
-/// The timestamp `tmutil deletelocalsnapshots` takes, read out of one
-/// listing row. `None` for a row whose remainder is not a timestamp.
-fn stamp_of(line: &str) -> Option<&str> {
-    let stamp = line
-        .strip_prefix(SNAPSHOT_PREFIX)?
-        .trim_end_matches(SNAPSHOT_SUFFIX);
-    let shaped = stamp.len() == STAMP_LENGTH
-        && stamp
-            .chars()
-            .enumerate()
-            .all(|(place, letter)| match place {
-                4 | 7 | 10 => letter == '-',
-                _ => letter.is_ascii_digit(),
-            });
-    shaped.then_some(stamp)
-}
 
 /// The mount point of the volume `home` lives on, as `df -P` names it in
 /// its one volume row (the fields after the capacity percentage, which may
@@ -109,6 +85,13 @@ fn volume_of(home: &Path) -> Result<PathBuf, String> {
     Ok(PathBuf::from(mount))
 }
 
+/// File `error` under this cleaner, which touched nothing, and leave the
+/// report with what it read.
+fn refused(report: &mut CleanupReport, record: CleanerReport, error: String) {
+    report.add_error(CLEANER, &super::JanitorError::os(&error));
+    report.local_snapshots = record;
+}
+
 /// Delete every Time Machine local snapshot of the volume `home` lives on,
 /// and of no other volume; the report names that volume.
 ///
@@ -116,25 +99,21 @@ fn volume_of(home: &Path) -> Result<PathBuf, String> {
 /// pass is planning rather than enforcing.
 pub fn delete_all(home: &Path, enforcing: bool, report: &mut CleanupReport) {
     let mut record = CleanerReport::default();
-    let before = free_bytes(home).ok();
     if !cfg!(target_os = "macos") {
-        bump(&mut record.skipped, "host_is_not_macos");
+        record
+            .skipped
+            .insert("host_is_not_macos".to_string(), Default::default());
         report.local_snapshots = record;
         return;
     }
     let volume = match volume_of(home) {
         Ok(volume) => volume,
         Err(error) => {
-            bump(&mut record.skipped, "volume_unreadable");
-            report.add_error(
-                CLEANER,
-                &super::JanitorError::os(&format!(
-                    "the volume of {} could not be read, so no snapshot is touched: {error}",
-                    home.display()
-                )),
+            let error = format!(
+                "the volume of {} could not be read, so no snapshot is touched: {error}",
+                home.display()
             );
-            report.local_snapshots = record;
-            return;
+            return refused(report, record, error);
         }
     };
     report.local_snapshot_volume = Some(volume.display().to_string());
@@ -145,79 +124,75 @@ pub fn delete_all(home: &Path, enforcing: bool, report: &mut CleanupReport) {
             String::from_utf8_lossy(&output.stdout).to_string()
         }
         Ok(output) => {
-            bump(&mut record.skipped, "listing_refused");
-            report.add_error(
-                CLEANER,
-                &super::JanitorError::os(&format!(
-                    "tmutil listlocalsnapshots {} refused: {}",
-                    volume.display(),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                )),
+            let error = format!(
+                "tmutil listlocalsnapshots {} refused, so no snapshot is touched: {}",
+                volume.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
             );
-            report.local_snapshots = record;
-            return;
+            return refused(report, record, error);
         }
         Err(error) => {
-            bump(&mut record.skipped, "tmutil_unavailable");
+            let error = format!("tmutil could not be run, so no snapshot is touched: {error}");
+            return refused(report, record, error);
+        }
+    };
+
+    let rows: Vec<&str> = listed.lines().map(str::trim).collect();
+    let backups: Vec<&str> = rows
+        .iter()
+        .copied()
+        .filter(|row| row.starts_with(SNAPSHOT_PREFIX))
+        .collect();
+    let recovery: Vec<&str> = rows
+        .iter()
+        .copied()
+        .filter(|row| row.starts_with(OS_UPDATE_PREFIX))
+        .collect();
+    let backup_count = backups.len() as i64;
+    record.scanned_items = backup_count + recovery.len() as i64;
+    record.eligible_items = backup_count;
+    if !recovery.is_empty() {
+        record.skipped.insert(
+            "operating_system_recovery_state".to_string(),
+            recovery.len() as i64,
+        );
+    }
+    if !enforcing || backups.is_empty() {
+        report.local_snapshots = record;
+        return;
+    }
+    let before = free_bytes(home);
+    let mut deletion = Command::new(TMUTIL);
+    deletion.arg("deletelocalsnapshots").arg(&volume);
+    match crate::wait::output(&mut deletion) {
+        Ok(output) if output.status.success() => record.deleted_items = backup_count,
+        Ok(output) => {
+            let error = format!(
+                "tmutil deletelocalsnapshots {} refused: {}",
+                volume.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            record
+                .skipped
+                .insert("deletion_refused".to_string(), backup_count);
+            report.add_error(CLEANER, &super::JanitorError::os(&error));
+        }
+        Err(error) => {
+            record
+                .skipped
+                .insert("deletion_failed".to_string(), backup_count);
             report.add_error(
                 CLEANER,
                 &super::JanitorError::os(&format!("tmutil could not be run: {error}")),
             );
-            report.local_snapshots = record;
-            return;
-        }
-    };
-
-    for line in listed
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let Some(stamp) = stamp_of(line) else {
-            if line.starts_with(OS_UPDATE_PREFIX) {
-                record.scanned_items += 1;
-                bump(&mut record.skipped, "operating_system_recovery_state");
-            } else if line.starts_with(SNAPSHOT_PREFIX) {
-                record.scanned_items += 1;
-                bump(&mut record.skipped, "name_carries_no_timestamp");
-            }
-            continue;
-        };
-        record.scanned_items += 1;
-        record.eligible_items += 1;
-        if !enforcing {
-            continue;
-        }
-        match crate::wait::output(Command::new(TMUTIL).args(["deletelocalsnapshots", stamp])) {
-            Ok(output) if output.status.success() => record.deleted_items += 1,
-            Ok(output) => {
-                bump(&mut record.skipped, "deletion_refused");
-                report.add_error(
-                    CLEANER,
-                    &super::JanitorError::os(&format!(
-                        "tmutil deletelocalsnapshots {stamp} refused: {}",
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    )),
-                );
-            }
-            Err(error) => {
-                bump(&mut record.skipped, "deletion_failed");
-                report.add_error(
-                    CLEANER,
-                    &super::JanitorError::os(&format!("tmutil could not be run: {error}")),
-                );
-            }
         }
     }
 
     // macOS publishes no per-snapshot size, so the only honest figure for
     // what this cleaner recovered is the volume's own measurement across it.
-    if let (Some(before), Ok(after)) = (before, free_bytes(home)) {
-        record.actual_free_delta_bytes = after.saturating_sub(before);
+    match (before, free_bytes(home)) {
+        (Ok(before), Ok(after)) => record.actual_free_delta_bytes = after.saturating_sub(before),
+        (Err(error), _) | (_, Err(error)) => report.add_error(CLEANER, &error),
     }
     report.local_snapshots = record;
-}
-
-fn bump(counts: &mut BTreeMap<String, i64>, reason: &str) {
-    *counts.entry(reason.to_string()).or_default() += 1;
 }

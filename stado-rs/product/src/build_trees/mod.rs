@@ -9,12 +9,15 @@
 //! read the folder — and takes only what a build tool or Stado declared
 //! regenerable: a directory carrying a valid `CACHEDIR.TAG`, the run areas
 //! older Stado installs wrote into checkouts ([`find::STADO_RUN_AREAS`]), and
-//! in a desktop product's checkout every SwiftPM `.build` that sits beside a
-//! `Package.swift` — a checkout's own `.build` scratch area with no manifest
-//! beside it is not one. A tree a build is writing now — it
+//! in a desktop product's checkout the build directories SwiftPM's own
+//! configuration links name in every `.build` that sits beside a
+//! `Package.swift` ([`swiftpm`]) — never such a `.build` whole, because the
+//! checkout keeps its own scratch in it too, and nothing of a checkout's own
+//! `.build` with no manifest beside it. A tree a build is writing now — it
 //! holds Stado's run marker, SwiftPM's lock or Cargo's lock — is kept.
 
 mod find;
+mod swiftpm;
 
 use crate::{
     catalog,
@@ -51,7 +54,18 @@ pub fn run(operation: &str, json_output: bool, runtime: &Runtime) -> Result<i32>
     let mut rows = Vec::new();
     let mut errors = Vec::new();
     for checkout in &checkouts {
-        let is_desktop = repository_of(checkout).is_some_and(|name| desktop.contains(&name));
+        // A checkout whose origin cannot be read is not taken for a desktop
+        // product's, and the reason is in the answer's errors.
+        let is_desktop = match repository_of(checkout) {
+            Ok(name) => name.is_some_and(|name| desktop.contains(&name)),
+            Err(error) => {
+                errors.push(format!(
+                    "the origin of {} cannot be read, so it is not treated as a desktop checkout: {error:#}",
+                    checkout.display()
+                ));
+                false
+            }
+        };
         let (trees, unread) = find::trees(checkout, is_desktop)?;
         errors.extend(unread);
         for tree in trees {
@@ -165,12 +179,11 @@ fn checkouts_in(workspace: &Path) -> Result<Vec<PathBuf>> {
     Ok(checkouts)
 }
 
-/// The GitHub repository a checkout's origin names; a checkout without one
-/// is no catalog product's.
-fn repository_of(checkout: &Path) -> Option<String> {
-    source::origin(checkout)
-        .ok()
-        .and_then(|origin| source::repository(&origin))
+/// The GitHub repository a checkout's origin names; a checkout whose origin
+/// names none is no catalog product's. An origin that cannot be read is the
+/// error, said by the caller.
+fn repository_of(checkout: &Path) -> Result<Option<String>> {
+    Ok(source::repository(&source::origin(checkout)?))
 }
 
 /// Every repository the catalog builds a desktop surface from.

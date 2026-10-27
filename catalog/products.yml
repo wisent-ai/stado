@@ -1,8 +1,7 @@
-schema_version: 1
 authority:
   owner: stado
-  rule: One record per product - something sold or used as a product of its own (the
-    operator, 2026-09-02). Repositories, surfaces, services, websites, libraries and
+  rule: One record per product - something sold or used as a product of its own, as the
+    operator decided. Repositories, surfaces, services, websites, libraries and
     infrastructure are attributes of a product; a package is not a product. Every
     record names its family, wisent or standalone, and that too is the operator's call.
 products:
@@ -17,10 +16,10 @@ products:
   integrations:
   - product: preferences
     description: Ster trains steering vectors from the contrastive pair sets Preferences exports as format ster-pairs.
-    source: preferences/src/lib/validate.ts:134-145
+    source: preferences/src/lib/validate.ts
   - product: skryba
     description: Ster trains a LoRA adapter from the writer's own prose Skryba exports — `ExampleSet` deserializes the file `ster tune sft` takes, and `PairSet` deserializes the pairs `ster tune dpo` takes.
-    source: ster/src/tune.rs:304-315
+    source: ster/src/tune.rs
   evidence:
   - wisent-landing-new/src/data/productPortals.ts
   - wisent-ai/ster/README.md
@@ -64,37 +63,37 @@ products:
   - title: Freeze the production contracts
     status: planned
     outcome: Version the capability, operation, session, Brama, Weles, SDK, release, marketplace and worker contracts before parallel implementation.
-    source: jeden/roadmap/roadmap.yaml:69-111
+    source: jeden/roadmap/roadmap.yaml
   - title: Ship one canonical session service
     status: planned
     outcome: Serve TUI, CLI, RPC, ACP, SDK and headless clients through one protocol and one typed session ledger.
-    source: jeden/roadmap/roadmap.yaml:93-107
+    source: jeden/roadmap/roadmap.yaml
   - title: Complete production certification
     status: planned
-    outcome: Pass all 23 behavioral acceptance scopes against one signed release digest.
-    source: jeden/roadmap/roadmap.yaml:115-551
+    outcome: Pass every behavioral acceptance scope against one signed release digest.
+    source: jeden/roadmap/roadmap.yaml
   integrations:
   - product: brama
     description: Jeden sends its model requests through Brama unless JEDEN_MODEL_ENDPOINT names an OpenAI-compatible provider it calls directly.
-    source: jeden/README.md:21-40
+    source: jeden/README.md
   - product: weles
     description: Jeden delegates identity and account operations to Weles.
-    source: jeden/roadmap/roadmap.yaml:87-91
+    source: jeden/roadmap/roadmap.yaml
   - product: stado
     description: Stado selects the execution host and carries Jeden's attached stream.
     source: https://stado.wisent.com/docs
   - product: tama
     description: Tama supplies the coding-agent policy enforced around Jeden sessions.
-    source: jeden/README.md:80-95
+    source: jeden/README.md
   - product: probierz
     description: Probierz records quality evidence for Jeden release gates.
-    source: jeden/README.md:80-95
+    source: jeden/README.md
   - product: most
     description: Jeden uses Most for approved messaging connectors.
-    source: jeden/README.md:80-95
+    source: jeden/README.md
   - product: oko
     description: Oko presents the team and session view over Jeden work.
-    source: jeden/README.md:80-95
+    source: jeden/README.md
   evidence:
   - wisent-landing-new/src/data/productPortals.ts
   - wisent-ai/jeden/README.md
@@ -193,7 +192,7 @@ products:
       - '{host}'
       - --cron
       - '* * * * *'
-      - PATH="$HOME/.stado/bin:$PATH" brama subscription hand-over claude-code --harness omp
+      - PATH="$HOME/.stado/bin:$PATH" brama subscription handover claude-code --harness omp
   - surface: service
     kind: stado-release
     repository: wisent-ai/brama
@@ -231,6 +230,10 @@ products:
       method: POST
       path: /v1/chat/completions
       body: {}
+    state:
+    - path: .stado/var/brama/donated-subscriptions.json
+    - path: .brama
+      tree: true
   dependencies:
   - product: skarbiec
     surface: service
@@ -288,7 +291,7 @@ products:
   integrations:
   - product: brama
     description: Weles uses Brama when an authorized browser workflow needs model reasoning.
-    source: weles/README.md:142-212
+    source: weles/README.md
   - product: skarbiec
     description: Weles receives organization-scoped credentials through Skarbiec boundaries.
     source: https://weles.wisent.com/docs
@@ -332,10 +335,22 @@ products:
     args: []
     directory_service: weles-admission
     env:
-      WELES_API_HOST: 0.0.0.0
+      WELES_API_HOST: $STADO_ALL_INTERFACES
       WELES_API_PORT: $STADO_LISTEN_PORT
     summary: One Weles process per host serving the API and admission, the resident task dispatcher that executes authorized browser workflows, and the keyword-planner routes.
+    answering:
+      method: GET
+      path: /healthz
     acquisition_scopes: $HOME/.stado/services/weles-admission/current/$STADO_PLATFORM/skarbiec-acquisition-scopes.conf
+    state:
+    - path: .weles/keeper
+      tree: true
+    - path: .stado/weles-detached-runs
+      tree: true
+    - path: weles/var/worker.env
+    - path: weles/var/worker-content.env
+    - path: .config/weles/worker.env
+    - path: .stado/weles-model.env
   approved_by: operator
   approved_at: 2026-09-02T19:53:03Z
   approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
@@ -367,7 +382,7 @@ products:
   - product: stado
     surface: cli
     for_surface: service
-    alternative: 'WELES_STANDALONE=1 runs Weles on a machine without Stado: the host is the only Weles host and its placement is not checked, and a host with no Stado binary and no WELES_STANDALONE is refused naming it. Without the Stado model router the agent model is WELES_MODEL at WELES_MODEL_ENDPOINT, any OpenAI-compatible provider. Trajectories that act through wisent-integrations refuse naming STADO_INTEGRATION_API_URL or WELES_STADO_INTEGRATION_TOKEN when unset, and the hosted public task API keeps task artifacts under stado://weles/ through the Stado object API'
+    alternative: 'WELES_STANDALONE set to one runs Weles on a machine without Stado: the host is the only Weles host and its placement is not checked, and a host with no Stado binary and no WELES_STANDALONE is refused naming it. Without the Stado model router the agent model is WELES_MODEL at WELES_MODEL_ENDPOINT, any OpenAI-compatible provider. Trajectories that act through wisent-integrations refuse naming STADO_INTEGRATION_API_URL or WELES_STADO_INTEGRATION_TOKEN when unset, and the hosted public task API keeps task artifacts under stado://weles/ through the Stado object API'
     alternative_source: weles/src/session/placement/service-placement.ts
   - product: spis
     surface: cli
@@ -389,7 +404,7 @@ products:
   integrations:
   - product: weles
     description: Skarbiec uses Weles admission workflows for credential lifecycle operations.
-    source: ARCHITECTURE.md:263-267
+    source: ARCHITECTURE.md
   evidence:
   - wisent-landing-new/src/data/productPortals.ts
   - wisent-ai/skarbiec/README.md
@@ -440,6 +455,11 @@ products:
       repair:
       - crypto
       - audit-lock
+    state:
+    - path: .stado/skarbiec.vault.json
+      required: true
+    - path: .stado/skarbiec.vault.json.acquisitions.json
+    - path: .stado/skarbiec.audit.jsonl
   dependencies:
   - product: stado
     surface: cli
@@ -466,7 +486,7 @@ products:
   - title: Publish the first immutable release
     status: planned
     outcome: Replace unsupported source-only production installation with an immutable public release.
-    source: most/README.md:153-158
+    source: most/README.md
   integrations: []
   evidence:
   - wisent-landing-new/src/data/productPortals.ts
@@ -494,6 +514,17 @@ products:
   approved_by: operator
   approved_at: 2026-09-02T19:53:04Z
   approval_note: Approved as an installable Wisent product with both a CLI and a desktop surface.
+  service:
+    installable: true
+    unit: com.wisent.most
+    program: $HOME/.local/bin/most-server
+    args: []
+    env:
+      MOST_BIND_ADDR: $STADO_LOOPBACK:$STADO_LISTEN_PORT
+    summary: The one Most process per host, serving the /v3 messaging API and /healthz on the loopback port the service directory assigns it; each host states its transport, database and credential settings as MOST_* with stado service env-set.
+    answering:
+      method: GET
+      path: /healthz
   public_status:
   - component: messaging
     title: Messaging
@@ -532,6 +563,10 @@ products:
     status: in_progress
     outcome: List the idle GPU automatically on Vast.ai and withdraw the offer when fleet work returns; the capability ships and awaits its credential.
     source: https://stado.wisent.com/docs/vast
+  - title: Lend idle workers to another Stado fleet
+    status: in_progress
+    outcome: Run a standalone worker against a peer fleet's queue while this fleet has no work, withdraw it by draining when work returns, and account the peer's completed jobs at the offered price.
+    source: https://stado.wisent.com/docs/peer-fleets
   - title: Sell tokens from the fleet's own inference endpoint
     status: planned
     outcome: Publish the OpenAI-compatible deployment behind a public origin with declared prices, throughput and rate limits, so model output is sold per token while yieldable mode keeps the board available to fleet work.
@@ -612,14 +647,14 @@ products:
     - serve
     - --api
     - --bind
-    - 127.0.0.1
+    - $STADO_LOOPBACK
     - --port
     - $STADO_LISTEN_PORT
     - --api-local-store
     - $HOME/.stado/local-storage
     - --health-interval-seconds
-    - '60'
-    summary: The one Stado process per host; serves the object API for registry, queue and release state from the host's local store, publishes the host's health beacon every 60 seconds, while its other roles use the storage the host's config names.
+    - '${declared:health_interval_seconds}'
+    summary: The one Stado process per host; serves the object API for registry, queue and release state from the host's local store, publishes the host's health beacon at the interval the host's registry entry declares as health_interval_seconds, while its other roles use the storage the host's config names.
     directory_service: stado-object-api
     answering:
       method: GET
@@ -655,7 +690,7 @@ products:
     source: https://lem.wisent.com/docs/architecture
   - product: probierz
     description: Probierz records evidence for Lem figure-quality loops.
-    source: lem/README.md:30-46
+    source: lem/README.md
   evidence:
   - wisent-landing-new/src/data/productPortals.ts
   - wisent-ai/lem/README.md
@@ -767,10 +802,10 @@ products:
   integrations:
   - product: brama
     description: Probierz routes model-backed authoring and evaluation through Brama.
-    source: probierz/README.md:1-200
+    source: probierz/README.md
   - product: stado
     description: Probierz uses Stado for remote execution and managed capacity.
-    source: probierz/README.md:1-200
+    source: probierz/README.md
   - product: tama
     description: Tama prevents known violations before Probierz executes real journeys.
     source: https://probierz.wisent.com/docs/pipeline
@@ -808,7 +843,7 @@ products:
     - intake
     - serve
     - --bind
-    - 127.0.0.1:$STADO_LISTEN_PORT
+    - $STADO_LOOPBACK:$STADO_LISTEN_PORT
     summary: The one Probierz process per host, the failure intake that desktop applications post wisent-errors envelopes to; it needs no harness directory.
   dependencies:
   - product: brama
@@ -875,7 +910,7 @@ products:
   - title: Publish the supported binary release
     status: planned
     outcome: Move the current development build onto a public, supported release channel.
-    source: tama-desktop/README.md:1-150
+    source: tama-desktop/README.md
   integrations: []
   evidence:
   - wisent-landing-new/src/data/productPortals.ts
@@ -982,38 +1017,38 @@ products:
   - title: Add the managed organization catalogue
     status: planned
     outcome: Provide organization catalogue, governance distribution and fleet operation without disabling the local federation when no managed grant exists.
-    source: las/README.md:461-470
+    source: las/README.md
   integrations:
   - product: weles
     description: Las exposes approved Weles capabilities through its federated catalogue.
-    source: las/README.md:12-38
+    source: las/README.md
   - product: skarbiec
     description: Las exposes approved Skarbiec capabilities through its federated catalogue.
-    source: las/README.md:12-38
+    source: las/README.md
   - product: tama
     description: Las exposes approved Tama capabilities through its federated catalogue.
-    source: las/README.md:12-38
+    source: las/README.md
   - product: stado
     description: Las exposes approved Stado capabilities through its federated catalogue.
-    source: las/README.md:12-38
+    source: las/README.md
   - product: lem
     description: Las exposes approved Lem capabilities through its federated catalogue.
-    source: las/README.md:12-38
+    source: las/README.md
   - product: echo
     description: Las exposes approved Echo capabilities through its federated catalogue.
-    source: las/README.md:12-38
+    source: las/README.md
   - product: most
     description: Las exposes approved Most capabilities through its federated catalogue.
-    source: las/README.md:12-38
+    source: las/README.md
   - product: probierz
     description: Las exposes approved Probierz capabilities through its federated catalogue.
-    source: las/README.md:12-38
+    source: las/README.md
   - product: byk
     description: Las exposes approved Byk capabilities through its federated catalogue.
-    source: las/README.md:12-38
+    source: las/README.md
   - product: brama
     description: Las exposes approved Brama capabilities through its federated catalogue.
-    source: las/README.md:12-38
+    source: las/README.md
   evidence:
   - wisent-landing-new/src/data/productPortals.ts
   - wisent-ai/las/README.md
@@ -1103,6 +1138,17 @@ products:
     manifest: Cargo.toml
     binaries:
     - skrzynka
+    after_install:
+    - - stado
+      - database
+      - create
+      - skrzynka
+      - --provider
+      - fleet
+      - --engine
+      - postgres
+      - --consumer
+      - skrzynka
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/skrzynka-desktop
@@ -1116,7 +1162,7 @@ products:
     - $HOME/.local/bin/skarbiec
     - serve
     - --bind
-    - 127.0.0.1:$STADO_LISTEN_PORT
+    - $STADO_LOOPBACK:$STADO_LISTEN_PORT
     env:
       PATH: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
       SUPABASE_URL: https://alvaewvbyxpgwdpugnxy.supabase.co
@@ -1129,12 +1175,12 @@ products:
   - product: skarbiec
     surface: cli
     for_surface: service
-    alternative: SKRZYNKA_CREDENTIALS_FILE names an owner-only JSON file of item id to the same skarbiec.item.v2 object Skarbiec stores, which answers the get, list, set-json, retag and version verbs the mailbox resolver uses
+    alternative: SKRZYNKA_CREDENTIALS_FILE names an owner-only JSON file of item id to the same skarbiec.item.v2 object Skarbiec stores, which answers the get, list, set, retag and version verbs the mailbox resolver uses
     alternative_source: skrzynka/src/skarbiec/local/mod.rs
   - product: skarbiec
     surface: cli
     for_surface: cli
-    alternative: SKRZYNKA_CREDENTIALS_FILE names an owner-only JSON file of item id to the same skarbiec.item.v2 object Skarbiec stores, which answers the get, list, set-json, retag and version verbs the mailbox resolver uses
+    alternative: SKRZYNKA_CREDENTIALS_FILE names an owner-only JSON file of item id to the same skarbiec.item.v2 object Skarbiec stores, which answers the get, list, set, retag and version verbs the mailbox resolver uses
     alternative_source: skrzynka/src/skarbiec/local/mod.rs
   - product: skarbiec
     surface: cli
@@ -1216,7 +1262,7 @@ products:
   - product: brama
     surface: service
     for_surface: service
-    alternative: oko model-service set declares an OpenAI-compatible service every model call then asks; without any model service, what each message is, is recorded with oko tasks kind and a task is closed with oko tasks close or Close on Oko Desktop
+    alternative: oko model set declares an OpenAI-compatible service every model call then asks; without any model service, what each message is, is recorded with oko tasks kind and a task is closed with oko tasks close or Close on Oko Desktop
     alternative_source: oko/rust/src/tasks/judge/provider.rs
   - product: stado
     surface: cli
@@ -1257,10 +1303,10 @@ products:
   integrations:
   - product: brama
     description: Singularity routes cognition through Brama.
-    source: ARCHITECTURE.md:335-341
+    source: ARCHITECTURE.md
   - product: las
     description: Singularity obtains approved dynamic skills through Las.
-    source: ARCHITECTURE.md:335-341
+    source: ARCHITECTURE.md
   evidence:
   - wisent-ai/singularity/README.md
   surfaces:
@@ -1392,15 +1438,15 @@ products:
   - title: Add retained provenance and freshness
     status: planned
     outcome: Preserve stable source-span provenance, freshness history and retained document versions.
-    source: kronika/README.md:72-99
+    source: kronika/README.md
   - title: Add managed team documentation
     status: planned
     outcome: Provide multi-repository orchestration, team review, organization search and supported publishing as a managed service.
-    source: kronika/README.md:31-35
+    source: kronika/README.md
   integrations:
   - product: brama
     description: Kronika sends source-bounded documentation requests through Brama.
-    source: kronika/README.md:55-70
+    source: kronika/README.md
   evidence:
   - wisent-ai/kronika/README.md
   surfaces:
@@ -1465,10 +1511,10 @@ products:
   integrations:
   - product: weles
     description: Spis uses Weles for authorized web and onboarding reference capture.
-    source: spis/README.md:38-54
+    source: spis/README.md
   - product: stado
     description: Stado coordinates Spis capture work across managed hosts.
-    source: spis/README.md:38-54
+    source: spis/README.md
   evidence:
   - wisent-ai/spis/README.md
   - wisent-ai/spis-desktop/README.md
@@ -1514,7 +1560,7 @@ products:
   - product: oko
     surface: cli
     for_surface: cli
-    bound_because: the capture plan capture-plans/cli-products.json names it as one of the Wisent product CLIs Spis captures as examples, and the recorded terminal cast tui-examples/references/14-htop/media/product-motion.cast holds the word as captured text; capturing that example needs the CLI, and every other capture runs without it
+    bound_because: the capture plan capture-plans/cli-products.json names it as one of the Wisent product CLIs Spis captures as examples, and the recorded htop terminal cast among tui-examples/references holds the word as captured text; capturing that example needs the CLI, and every other capture runs without it
   - product: weles
     surface: service
     for_surface: cli
@@ -1527,7 +1573,7 @@ products:
     surface: cli
     for_surface: cli
     alternative: 'Spis starts no Preferences program: the match is the robots.txt rule ^/forums/preferences recorded in a saved crawl of Apple''s developer documentation among Spis''s example references'
-    alternative_source: spis/documentation-site-examples/references/19-apple-developer-documentation/crawl/attempt-1-8beb7438d983df23/state.json
+    alternative_source: spis/documentation-site-examples/references
 - id: glina
   name: Glina
   status: active
@@ -1539,16 +1585,16 @@ products:
   integrations:
   - product: skarbiec
     description: Glina acquires generation credentials through Skarbiec.
-    source: glina/README.md:3-32
+    source: glina/README.md
   - product: weles
     description: Glina delegates browser work to Weles.
-    source: glina/README.md:3-32
+    source: glina/README.md
   - product: brama
     description: Glina routes model planning through Brama.
-    source: glina/README.md:3-32
+    source: glina/README.md
   - product: probierz
     description: Probierz records Glina's game-asset quality journeys.
-    source: glina/README.md:93-95
+    source: glina/README.md
   evidence:
   - wisent-ai/glina/README.md
   - wisent-ai/glina-desktop/README.md
@@ -1600,10 +1646,10 @@ products:
   integrations:
   - product: brama
     description: Skryba generates rewrite candidates through Brama.
-    source: skryba/README.md:15-20
+    source: skryba/README.md
   - product: ster
     description: Skryba's `writing-style export` emits the SFT example set `ster tune sft` reads and the contrastive pair set `ster tune dpo` reads; Ster owns the local weights and trains the adapter.
-    source: skryba/src/writing_style.rs:97-123
+    source: skryba/src/writing_style.rs
   evidence:
   - wisent-ai/skryba/README.md
   - wisent-ai/skryba-desktop/README.md
@@ -1645,13 +1691,13 @@ products:
   integrations:
   - product: stado
     description: HandToHuman submits compute work and places residential-egress workers through Stado.
-    source: handtohuman/README.md:78-86
+    source: handtohuman/README.md
   - product: skarbiec
     description: HandToHuman obtains scoped lease credentials from Skarbiec.
-    source: handtohuman/README.md:78-86
+    source: handtohuman/README.md
   - product: weles
     description: HandToHuman uses Weles for authorized residential-egress workflows.
-    source: handtohuman/README.md:78-86
+    source: handtohuman/README.md
   evidence:
   - wisent-ai/handtohuman/README.md
   surfaces:
@@ -1670,7 +1716,7 @@ products:
     - handtohuman
   approved_by: operator
   approved_at: 2026-09-03T01:51:39Z
-  approval_note: 'Operator, 2026-09-02: "handtohuman i preferences nie sa wisentowe." - placing it in a family is treating it as a product.'
+  approval_note: 'Operator: "handtohuman i preferences nie sa wisentowe." - placing it in a family is treating it as a product.'
   dependencies:
   - product: skarbiec
     surface: service
@@ -1750,7 +1796,7 @@ products:
   - product: echo
     surface: service
     for_surface: web
-    alternative: 'Echo is the analytics collector the app reports to: with NEXT_PUBLIC_ECHO_ANALYTICS_COLLECTOR_URL (and the mobile collector URL) unset, every tracked event answers recorded false naming the unset variable and the app runs on, and the admin snapshot cron routes then answer 502 with that answer; the ECHO_ snapshot secrets are only among the secrets those routes accept'
+    alternative: 'Echo is the analytics collector the app reports to: with NEXT_PUBLIC_ECHO_ANALYTICS_COLLECTOR_URL (and the mobile collector URL) unset, every tracked event answers recorded false naming the unset variable and the app runs on, and the admin snapshot cron routes then answer Bad Gateway with that answer; the ECHO_ snapshot secrets are only among the secrets those routes accept'
     alternative_source: wisent-app/src/lib/analytics/echoServer.js
 - id: preferences
   name: Preferences
@@ -1783,7 +1829,7 @@ products:
     - preferences
   approved_by: operator
   approved_at: 2026-09-03T01:51:39Z
-  approval_note: 'Operator, 2026-09-02: "handtohuman i preferences nie sa wisentowe." - placing it in a family is treating it as a product.'
+  approval_note: 'Operator: "handtohuman i preferences nie sa wisentowe." - placing it in a family is treating it as a product.'
   dependencies:
   - product: stado
     surface: cli
@@ -1831,7 +1877,7 @@ products:
     - humanmaxx
   approved_by: operator
   approved_at: '2026-09-03T01:51:40Z'
-  approval_note: 'Operator, 2026-09-02, ordering the split: "mamy produkty wisentowe
+  approval_note: 'Operator, ordering the split: "mamy produkty wisentowe
     i niewisentowe. rozgrupuj je na dwa typy. na przyklad skrzynka to jest wisentowy
     produkt. ale juz humanmaxx powinien byc osobny."'
 - id: peptomaxx
@@ -2012,7 +2058,7 @@ products:
     - turbot-archive
   approved_by: operator
   approved_at: '2026-09-03T01:51:40Z'
-  approval_note: 'Operator, 2026-09-02: "needhim to tez nasz produkt. dodaj go normalnie.
+  approval_note: 'Operator: "needhim to tez nasz produkt. dodaj go normalnie.
     to ze cos nie ma kodu albo repozytorium nie ma znaczenia. tak samo z turbot-web."'
 - id: needsomeone
   name: NeedSomeone
@@ -2022,7 +2068,7 @@ products:
   owner_repository: lbartoszcze/needsomeone-ai-web
   description: 'Someone to talk to, create with, or count on: AI characters, practical
     assistants, shared rooms and generated media in one place. A Next.js web app in
-    lbartoszcze/needsomeone-ai-web, not deployed as of 2026-09-02; its landing repository
+    lbartoszcze/needsomeone-ai-web, not deployed; its landing repository
     is empty.'
   roadmap: []
   integrations: []
@@ -2047,7 +2093,7 @@ products:
   approved_by: operator
   approved_at: '2026-09-02T23:49:12Z'
   approval_note: dodaj jeszcze do produktow needsomeone i needhim. to sa niewisnetowe
-    produkty (2026-09-02)
+    produkty
 - id: needhim
   name: NeedHim
   status: preview
@@ -2080,7 +2126,7 @@ products:
   approved_by: operator
   approved_at: '2026-09-02T23:49:12Z'
   approval_note: dodaj jeszcze do produktow needsomeone i needhim. to sa niewisnetowe
-    produkty (2026-09-02)
+    produkty
 - id: wisent-enterprise
   name: Wisent Enterprise
   status: preview
@@ -2166,13 +2212,13 @@ products:
   integrations:
   - product: stado
     description: Stado places this trainer's label-model training and lake root, and its capability model names the trainer as the reader of both declared registry keys.
-    source: stado/stado-rs/src/capabilities.rs:1421-1437
+    source: stado/stado-rs/src/capabilities.rs
   - product: oko
     description: Oko's local goal lifecycle classifier defers to the lifecycle output schema this repository owns.
-    source: oko/Sources/OkoKit/Goals/LocalGoalLifecycleClassifier.swift:615-619
+    source: oko/Sources/OkoKit/Goals/LocalGoalLifecycleClassifier.swift
   - product: jeden
     description: Jeden vendors the goal lifecycle system prompt this repository owns and requires it byte-identical.
-    source: jeden/rust/goal_lifecycle.rs:21-24
+    source: jeden/rust/goal_lifecycle.rs
   evidence:
   - wisent-ai/transcript-label-trainer/README.md
   surfaces:
@@ -2191,7 +2237,7 @@ products:
     - hf
   approved_by: operator
   approved_at: 2026-09-03T23:30:00Z
-  approval_note: 'Operator, 2026-09-03: "releases: false is not an argument against cataloguing" - the catalogue already carries kind: cargo products built from a checkout, and "it is a product in everything but the record".'
+  approval_note: 'Operator: "releases: false is not an argument against cataloguing" - the catalogue already carries kind: cargo products built from a checkout, and "it is a product in everything but the record".'
   dependencies:
   - product: stado
     surface: cli
@@ -2451,7 +2497,7 @@ products:
   installations: []
   approved_by: operator
   approved_at: 2026-10-07T06:32:02Z
-  approval_note: 'Operator, 2026-10-07, asking for the product: ''do we have a wisent-ai rust crm or not'', ''like salesforce but better'', ''pls build''.'
+  approval_note: 'Operator, asking for the product: ''do we have a wisent-ai rust crm or not'', ''like salesforce but better'', ''pls build''.'
   dependencies:
   - product: stado
     surface: cli
@@ -2463,3 +2509,21 @@ products:
     for_surface: cli
     alternative: KUPIEC_DATABASE_URL names a Postgres, MySQL or existing sqlite:// database that stado-database opens directly, without asking Stado for the fleet database
     alternative_source: kupiec/src/store/mod.rs
+- id: zrodlo
+  name: Zrodlo
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/zrodlo
+  description: 'Full-weight pretraining of GPT2 decoder language models: token corpora, initialization, training with checkpointed AdamW, exact resume and evaluation, writing the Transformers model directory Ster posttrains.'
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/zrodlo/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/zrodlo
+  installations: []
+  approved_by: operator
+  approved_at: 2026-10-24T07:57:08Z
+  approval_note: The operator ordered a new repository named zrodlo holding all model pretraining, as Ster holds posttraining.

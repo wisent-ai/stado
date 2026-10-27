@@ -69,6 +69,11 @@ pub struct Pass {
     pub started_at: DateTime<Utc>,
     pub ended_at: DateTime<Utc>,
     pub said: String,
+    /// Why the pass could not finish, when it could not: no step was checked
+    /// or installed past that point, and nothing runs again until the next
+    /// pass is fired.
+    #[serde(default)]
+    pub failed: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

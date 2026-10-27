@@ -46,17 +46,24 @@ pub use reservations::{Reservation, Reserved};
 
 /// Python `CAPACITY_PREFIX`.
 pub const CAPACITY_PREFIX: &str = "capacity/";
+/// A publication stamp as a time. A stamp that is not an RFC 3339 time is
+/// read as no stamp: a publisher whose promise cannot be read made none, and
+/// its row is judged stale, which is the safe reading of a corrupt one.
+fn stamp(payload: &Value, field: &str) -> Option<DateTime<Utc>> {
+    let text = payload.get(field).and_then(Value::as_str)?;
+    match DateTime::parse_from_rfc3339(text) {
+        Ok(stamp) => Some(stamp.with_timezone(&Utc)),
+        Err(_not_a_time) => None,
+    }
+}
+
 /// When `payload`'s author promised its next publication: its own `next_by`,
 /// or, for a row from before that field, `published_at` (or the object's own
 /// timestamp, `stamp`) plus the `stale_after_seconds` it wrote. `None` when
 /// the row states neither.
 pub fn next_publication_by(payload: &Value, stamp: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
-    if let Some(next) = payload
-        .get("next_by")
-        .and_then(Value::as_str)
-        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-    {
-        return Some(next.with_timezone(&Utc));
+    if let Some(next) = self::stamp(payload, "next_by") {
+        return Some(next);
     }
     let window = payload.get("stale_after_seconds").and_then(Value::as_i64)?;
     Some(stamp? + Duration::seconds(window))
@@ -67,12 +74,10 @@ pub fn published_stamp(
     payload: &Value,
     object_time: Option<DateTime<Utc>>,
 ) -> Option<DateTime<Utc>> {
-    payload
-        .get("published_at")
-        .and_then(Value::as_str)
-        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-        .map(|stamp| stamp.with_timezone(&Utc))
-        .or(object_time)
+    match stamp(payload, "published_at") {
+        Some(published) => Some(published),
+        None => object_time,
+    }
 }
 
 /// Whether `payload` is still within the promise its author made.
@@ -91,7 +96,15 @@ pub fn publication_period(payload: &Value) -> Option<std::time::Duration> {
         (Some(published), Some(next)) => next - published,
         _ => return None,
     };
-    span.to_std().ok().filter(|period| !period.is_zero())
+    // A promise before its publication is no period: nothing is renewed on
+    // a negative or empty span, so such a publisher states no period. A
+    // positive span is its own magnitude, which no conversion can refuse.
+    match span > chrono::TimeDelta::zero() {
+        true => Some(std::time::Duration::from_millis(
+            span.num_milliseconds().unsigned_abs(),
+        )),
+        false => None,
+    }
 }
 
 /// Resources measured by one worker at one point in time. `available_*`
@@ -101,14 +114,38 @@ pub fn publication_period(payload: &Value) -> Option<std::time::Duration> {
 pub struct CapacitySnapshot {
     pub accepting_jobs: bool,
     pub running_jobs: usize,
-    pub total_cpu_cores: i64,
-    pub available_cpu_cores: i64,
+    /// The cores this process may schedule on, or `None` when the operating
+    /// system refused to say; the refusal is published as `admission_detail`.
+    pub total_cpu_cores: Option<i64>,
+    /// The cores free for a job, or `None` when the host's CPU could not be
+    /// measured; never a zero standing in for no measurement.
+    pub available_cpu_cores: Option<i64>,
     pub available_accelerators: BTreeMap<String, i64>,
     pub free_ram_gb: Option<f64>,
     pub total_ram_gb: Option<f64>,
-    pub free_vram_gb: i64,
+    /// The free VRAM measured this pass, or `None` when the pass closed
+    /// admission before reading the cards; never a zero standing in for it.
+    pub free_vram_gb: Option<i64>,
     pub total_vram_gb: i64,
     pub diag: Map<String, Value>,
+}
+
+impl CapacitySnapshot {
+    /// The free cores as a log line shows them: the count, or `unmeasured`.
+    pub fn available_cpu_shown(&self) -> String {
+        match self.available_cpu_cores {
+            Some(cores) => cores.to_string(),
+            None => "unmeasured".to_string(),
+        }
+    }
+
+    /// The free VRAM as a log line shows it: the GiB, or `unmeasured`.
+    pub fn free_vram_shown(&self) -> String {
+        match self.free_vram_gb {
+            Some(free) => free.to_string(),
+            None => "unmeasured".to_string(),
+        }
+    }
 }
 
 /// The reservation side of one publication: which holds are live on the
@@ -120,10 +157,9 @@ pub struct PublishedReservations {
 }
 
 impl PublishedReservations {
-    /// Read this consumer's live reservations from the store. A store that
-    /// cannot be listed publishes no reservations rather than no capacity:
-    /// the error is returned so the caller can log it, and an empty set is
-    /// the fallback it should publish with.
+    /// Read this consumer's live reservations from the store. The caller
+    /// decides what an unreadable store means for the publication; it never
+    /// stands in an empty set for the holds it could not read.
     pub async fn read(
         store: &JobStorage,
         consumer_id: &str,

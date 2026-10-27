@@ -22,20 +22,23 @@ fn brama_service_path(document: &str, key: &str, home: &str) -> Result<String, D
     let raw = document
         .lines()
         .map(str::trim)
-        .map(|line| line.strip_prefix("export ").unwrap_or(line))
+        // An exported assignment reads the same as a bare one.
+        .map(|line| match line.strip_prefix("export ") {
+            Some(assignment) => assignment,
+            None => line,
+        })
         .find_map(|line| line.strip_prefix(&prefix))
         .map(str::trim)
         .ok_or_else(|| {
             DeployError(format!("Brama service environment has no {key}"))
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-    let value = if raw.len() >= 2
-        && ((raw.starts_with('"') && raw.ends_with('"'))
-            || (raw.starts_with('\'') && raw.ends_with('\'')))
-    {
-        &raw[1..raw.len() - 1]
-    } else {
-        raw
+    // One pair of matching quotes around the value is shell quoting, not
+    // part of the path.
+    let quoted = |mark: char| raw.strip_prefix(mark).and_then(|inner| inner.strip_suffix(mark));
+    let value = match quoted('"').or_else(|| quoted('\'')) {
+        Some(inner) => inner,
+        None => raw,
     };
     let expanded = if let Some(rest) = value.strip_prefix("$HOME/") {
         format!("{home}/{rest}")
@@ -84,7 +87,7 @@ pub(crate) async fn brama_skarbiec_context(
         &runner,
     )
     .await?;
-    if !service_paths.ok() {
+    if !service_paths.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: cannot read Brama's Skarbiec path declarations: {}",
             target.name,
@@ -145,7 +148,7 @@ pub(crate) async fn brama_identity_host(
 ///
 /// Only a private loopback HTTP origin can be returned, because that is the
 /// only thing the rendered boundary can express: the runner uid is permitted
-/// exactly `127.0.0.1:<port>` and rejected on every network in
+/// exactly the IPv4 loopback address `Ipv4Addr::LOCALHOST` on `<port>` and rejected on every network in
 /// [`crate::deploy::host_precheck_runner::platform::BLOCKED_IPV4_NETWORKS`] and
 /// [`crate::deploy::host_precheck_runner::platform::BLOCKED_IPV6_NETWORKS`], which includes the tailnet and
 /// the rest of loopback. The route has to terminate on the runner's own box.
@@ -223,7 +226,11 @@ pub(crate) async fn private_brama_route(target_name: &str) -> Result<(String, u1
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     if parsed.scheme() != "http"
-        || !matches!(parsed.host_str(), Some("127.0.0.1" | "localhost"))
+        || !match parsed.host() {
+            Some(url::Host::Ipv4(address)) => address == std::net::Ipv4Addr::LOCALHOST,
+            Some(url::Host::Domain(name)) => name == "localhost",
+            Some(url::Host::Ipv6(_)) | None => false,
+        }
         || parsed.path() != "/"
         || parsed.query().is_some()
         || parsed.fragment().is_some()

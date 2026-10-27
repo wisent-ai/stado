@@ -2,12 +2,12 @@
 //!
 //! Port of `stado/providers/local/disk/staging.py`.
 //!
-//! When `/tmp` is a tmpfs (every byte staged there counts as RAM), the
+//! When `/tmp` is tmpfs or ramfs, staged data consumes memory. The
 //! agent's multi-GB raw-activation jobs accumulate in RAM, drive the
 //! process to OOM territory, and exit `status=1` — losing every in-flight
 //! job to requeue. This module runs at agent startup, detects that
-//! condition, and points TMPDIR at the largest disk-backed mount the agent
-//! user can actually traverse and write, creating a `wisent-staging`
+//! condition, and points TMPDIR at the highest-ranked block-device mount
+//! the agent user can actually traverse and write, creating a `wisent-staging`
 //! subdir there. Children inherit the env, so every job stages on disk for
 //! free. (Python also assigns `tempfile.tempdir`; Rust has no analog — the
 //! env var is what children inherit.)
@@ -32,7 +32,6 @@
 //! it named before.
 
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
 mod identity;
 mod mounts;

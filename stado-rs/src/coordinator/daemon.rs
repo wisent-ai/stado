@@ -36,18 +36,18 @@ async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, CmdErr
                 .stating(FailureCode::NotFound)
             });
     }
-    let active: Vec<&Coordinator> = registry.coordinators.iter().filter(|c| c.active).collect();
-    if active.is_empty() {
+    let mut active = registry.coordinators.iter().filter(|c| c.active);
+    let Some(first) = active.next() else {
         return Err(CmdError::click(
             "no active coordinator in registry. Set active=true on one entry \
              or pass --target NAME explicitly.",
         )
         .stating(FailureCode::Config));
-    }
-    if active.len() > 1 {
-        let names = active
-            .iter()
-            .map(|c| c.name.as_str())
+    };
+    let others: Vec<&str> = active.map(|c| c.name.as_str()).collect();
+    if !others.is_empty() {
+        let names = std::iter::once(first.name.as_str())
+            .chain(others)
             .collect::<Vec<_>>()
             .join(", ");
         return Err(CmdError::click(format!(
@@ -55,7 +55,7 @@ async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, CmdErr
         ))
         .stating(FailureCode::Config));
     }
-    Ok(active[0].clone())
+    Ok(first.clone())
 }
 
 /// A tick that failed: the store keeps its own class; a scheduler or monitor
@@ -78,23 +78,23 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, Cm
              at a runtime=daemon entry instead.",
             coord.name
         ));
-        return Ok(0);
+        return Ok(nix::libc::EXIT_SUCCESS);
     }
 
     let store = JobStorage::new().await.map_err(CmdError::from)?;
     // The cadence is the registry entry's own declaration; nothing here
     // raises or lowers it.
-    let interval = u64::try_from(coord.interval_seconds)
-        .ok()
-        .filter(|seconds| *seconds > 0)
-        .ok_or_else(|| {
-            CmdError::click(format!(
+    let interval = match u64::try_from(coord.interval_seconds).map(std::num::NonZeroU64::new) {
+        Ok(Some(seconds)) => seconds.get(),
+        Ok(None) | Err(_) => {
+            return Err(CmdError::click(format!(
                 "coordinator '{}' declares interval_seconds {}; the tick needs a positive \
                  number of seconds between passes",
                 coord.name, coord.interval_seconds
             ))
-            .stating(FailureCode::Config)
-        })?;
+            .stating(FailureCode::Config))
+        }
+    };
     log(&format!(
         "coordinator '{}' runtime={} interval={interval}s storage={} \
          registry_state_uri_metadata={:?}",
@@ -107,7 +107,12 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, Cm
     let secrets = secrets_from_skarbiec().await.map_err(CmdError::from)?;
     let mut replication = Replication::default();
     let mut shape = ShapeSweep::default();
+    // One tick at once, then one every declared interval, or sooner when an
+    // enabled schedule falls due first.
+    let mut schedule = tokio::time::interval(Duration::from_secs(interval));
+    schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
+        schedule.tick().await;
         if invocation != Invocation::Hosted
             && !config::stado_api_url().is_empty()
             && !config::stado_release_version().is_empty()
@@ -157,7 +162,7 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, Cm
                      launchd/supervisor backs off and stale code stops issuing \
                      cloud-resource mutations."
                 ));
-                return Ok(0);
+                return Ok(nix::libc::EXIT_SUCCESS);
             }
             if let Err(exc) = survival {
                 log(&format!(
@@ -195,7 +200,7 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, Cm
         // awaited here it held the next tick back for minutes, and a
         // schedule due every minute fired eleven minutes late.
         shape.advance();
-        tokio::time::sleep(until_next_tick(&store, interval).await).await;
+        schedule.reset_after(until_next_tick(&store, interval).await);
     }
 }
 
@@ -216,15 +221,33 @@ async fn until_next_tick(store: &JobStorage, interval: u64) -> Duration {
         }
     };
     let now = chrono::Utc::now();
-    let earliest = schedules
-        .iter()
-        .filter(|schedule| schedule.enabled && !schedule.deleted)
-        .filter_map(|schedule| chrono::DateTime::parse_from_rfc3339(&schedule.next_due_at).ok())
-        .map(|due| due.with_timezone(&chrono::Utc))
-        .filter(|due| *due > now)
-        .min();
-    match earliest.and_then(|due| (due - now).to_std().ok()) {
-        Some(wait) if wait < declared => wait,
-        _ => declared,
+    let mut earliest: Option<chrono::DateTime<chrono::Utc>> = None;
+    for schedule in schedules.iter().filter(|schedule| schedule.enabled && !schedule.deleted) {
+        match chrono::DateTime::parse_from_rfc3339(&schedule.next_due_at) {
+            Ok(due) => {
+                let due = due.with_timezone(&chrono::Utc);
+                let sooner = match earliest {
+                    Some(current) => due < current,
+                    None => true,
+                };
+                if due > now && sooner {
+                    earliest = Some(due);
+                }
+            }
+            Err(error) => log(&format!(
+                "schedule {} states next_due_at {:?}, which is not a time, so it does not bring \
+                 the next tick forward: {error}",
+                schedule.schedule_id, schedule.next_due_at
+            )),
+        }
+    }
+    // A due time after `now` is a positive span, which `to_std` always takes.
+    match earliest.map(|due| (due - now).to_std()) {
+        Some(Ok(wait)) if wait < declared => wait,
+        Some(Ok(_)) | None => declared,
+        Some(Err(error)) => {
+            log(&format!("the next schedule's wait could not be read, so the tick waits the declared {interval}s: {error}"));
+            declared
+        }
     }
 }

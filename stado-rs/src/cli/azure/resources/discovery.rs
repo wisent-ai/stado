@@ -69,14 +69,14 @@ fn arm_error(body: &Value) -> String {
 }
 
 fn select_resource<'a>(resources: &'a [Value], preferred_prefix: &str) -> Option<&'a Value> {
+    // A resource without a text name cannot match a name prefix.
     let matching: Vec<&Value> = resources
         .iter()
         .filter(|resource| {
             resource
                 .get("name")
                 .and_then(Value::as_str)
-                .map(|name| name.starts_with(preferred_prefix))
-                .unwrap_or(false)
+                .is_some_and(|name| name.starts_with(preferred_prefix))
         })
         .collect();
     match (matching.as_slice(), resources) {

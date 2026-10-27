@@ -36,7 +36,12 @@ pub(super) async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError
         let repository_name = repository
             .get("repository")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("<unknown repository>");
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "central catalog entry names no repository: {repository}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
         let manifest_value = repository.get("manifest").ok_or_else(|| {
             CmdError::click("central catalog entry is missing manifest")
                 .stating(crate::primitives::failure::FailureCode::Config)

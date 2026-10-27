@@ -2,12 +2,10 @@
 //!
 //! [`gather`] is the pass: it decides the population and overlaps the readings.
 //! [`Reporter`] is what takes one reading, and [`reporter`] holds those
-//! readings. [`hasher`] resolves the host's SHA-256 tool, [`queries`] resolves
-//! the version commands the shipped product catalog declares, and `parse`
-//! decodes a reporter's stdout back into rows.
+//! readings. [`hasher`] resolves the host's SHA-256 tool, and [`queries`]
+//! resolves the version commands the shipped product catalog declares.
 
 mod hasher;
-mod parse;
 mod queries;
 mod reporter;
 
@@ -23,8 +21,6 @@ use super::HostSoftware;
 use hasher::Hasher;
 use queries::{version_queries, VersionQuery};
 use reporter::Classification;
-
-pub use parse::parse;
 
 // ---------------------------------------------------------------------------
 // Reading the host
@@ -157,14 +153,14 @@ pub async fn gather(
     inspections.sort_by_key(|(index, _)| *index);
 
     let mut rows = Vec::new();
-    let mut scripts = 0;
-    for (_, inspection) in inspections {
+    let mut scripts = Vec::new();
+    for (index, inspection) in inspections {
         match inspection? {
             ProgramInspection::Ignored => {}
-            ProgramInspection::Script => scripts += 1,
+            ProgramInspection::Script => scripts.push(index),
             ProgramInspection::Software(row) => rows.push(row),
         }
     }
 
-    Ok((rows, scripts))
+    Ok((rows, scripts.len()))
 }

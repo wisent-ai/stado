@@ -57,7 +57,8 @@ pub(crate) async fn load_capability_measurements(
 ) -> Result<BTreeMap<String, Measurement>, crate::queue::StorageError> {
     let prefix = format!("{CAPABILITIES_PREFIX}/");
     let mut measurements = BTreeMap::new();
-    for blob in store.list_blobs_with_meta(&prefix).await? {
+    // Names and update times only: no measurement's metadata is read.
+    for blob in store.list_blobs_sized(&prefix).await? {
         let Some(target) = blob
             .name
             .strip_prefix(&prefix)
@@ -112,6 +113,22 @@ pub(crate) async fn load_capability_measurements(
                 }
             }
         }
+        // The measurement is dated by its own `measured_at`; a document
+        // without one is dated by when the store last wrote it, and one whose
+        // stamp is no RFC 3339 time is unreadable, naming the stamp.
+        let measured_at = match body.get("measured_at").and_then(Value::as_str) {
+            Some(stamp) => match DateTime::parse_from_rfc3339(stamp) {
+                Ok(stamp) => Some(stamp.with_timezone(&Utc)),
+                Err(error) => {
+                    unreadable.get_or_insert(format!(
+                        "{}: measured_at {stamp:?} is no RFC 3339 time: {error}",
+                        blob.name
+                    ));
+                    None
+                }
+            },
+            None => blob.updated,
+        };
         measurements.insert(
             target.to_string(),
             Measurement {
@@ -120,12 +137,7 @@ pub(crate) async fn load_capability_measurements(
                     .get("schema")
                     .and_then(Value::as_str)
                     .map(str::to_string),
-                measured_at: body
-                    .get("measured_at")
-                    .and_then(Value::as_str)
-                    .and_then(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
-                    .map(|stamp| stamp.with_timezone(&Utc))
-                    .or(blob.updated),
+                measured_at,
                 capabilities,
                 unreadable,
             },

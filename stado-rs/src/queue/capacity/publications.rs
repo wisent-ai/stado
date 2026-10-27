@@ -78,11 +78,13 @@ pub async fn read_publications(
             continue;
         };
         let payload: Value = serde_json::from_str(&raw)?;
-        let consumer_id = payload
-            .get("consumer_id")
-            .and_then(Value::as_str)
-            .unwrap_or(stem)
-            .to_string();
+        // A broadcast names its consumer inside; one written before that
+        // field existed is named by its object stem, which the agent chose
+        // the same way.
+        let consumer_id = match payload.get("consumer_id").and_then(Value::as_str) {
+            Some(consumer_id) => consumer_id.to_string(),
+            None => stem.to_string(),
+        };
         let stamp = published_stamp(&payload, blob.updated);
         rows.insert(consumer_id, Publication { payload, stamp });
     }

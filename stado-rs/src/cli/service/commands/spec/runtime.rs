@@ -18,7 +18,7 @@ pub enum RuntimeCommands {
     },
 
     /// The macOS GitHub runner runtime an adopted service launches.
-    RunnerRuntime {
+    Runtime {
         #[command(subcommand)]
         command: ServiceRunnerRuntimeCommands,
     },
@@ -112,12 +112,12 @@ pub enum RuntimeCommands {
         #[arg(long)]
         version: String,
         /// Optional loopback HTTP endpoint that must answer after restart.
-        #[arg(long, requires = "readiness_timeout_seconds")]
+        #[arg(long, requires = "readiness_window_seconds")]
         readiness_url: Option<String>,
-        /// Seconds the readiness URL has to answer. Required with
-        /// `--readiness-url`; no window is assumed.
+        /// Whole seconds above zero the readiness URL has to answer.
+        /// Required with `--readiness-url`; no window is assumed.
         #[arg(long, requires = "readiness_url")]
-        readiness_timeout_seconds: Option<u64>,
+        readiness_window_seconds: Option<std::num::NonZeroU64>,
         /// Reload a system LaunchDaemon's unit definition before readiness.
         ///
         /// `kickstart` reuses launchd's cached ProgramArguments. Use this when

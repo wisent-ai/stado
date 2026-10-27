@@ -34,6 +34,15 @@ impl Fleet {
     }
 }
 
+/// The registry name a capacity consumer stands for: the local agent
+/// publishes as `local-<name>`, every other consumer under its own name.
+fn local_identity(consumer: &str) -> &str {
+    match consumer.strip_prefix("local-") {
+        Some(name) => name,
+        None => consumer,
+    }
+}
+
 /// Pin one job to a live host of `platform`.
 ///
 /// `scratch` is what the last build of the product being placed wrote to
@@ -69,7 +78,7 @@ pub(crate) async fn builder(
     // needed to know whether a candidate can take the work it would be pinned.
     let mut live_consumers = BTreeMap::new();
     for (consumer, publication) in capacity {
-        let identity = consumer.strip_prefix("local-").unwrap_or(consumer);
+        let identity = local_identity(consumer);
         if let Some(target) = registry.lookup_self(identity).map_err(CmdError::from)? {
             live_consumers
                 .entry(target.name.clone())
@@ -142,8 +151,12 @@ pub(crate) async fn builder(
                 verdict if verdict.eligible() => false,
                 _ => return None,
             };
-            let free = published_free_bytes(publication).unwrap_or_default();
-            let sharing = in_flight.get(&target.name).copied().unwrap_or_default();
+            // A publication that states no volume ranks as stating none:
+            // below every builder that states its free bytes.
+            let free = published_free_bytes(publication);
+            // A target absent from the in-flight table runs no build of
+            // this product; it ranks before every target that runs one.
+            let sharing = in_flight.get(&target.name).copied();
             Some((
                 waiting_for_resources,
                 sharing,
@@ -174,11 +187,10 @@ pub(crate) async fn builder(
             // for seven hours, because the operator machine's queue store was a
             // private loopback resolver and the fleet publishes to a tailnet
             // address, both under namespace `probierz`.
-            let store = crate::config::wc_stado_storage_url();
-            let store = if store.is_empty() {
-                "the configured queue store".to_string()
-            } else {
-                store
+            let store = match crate::config::wc_stado_storage_url() {
+                Ok(store) if !store.is_empty() => store,
+                Ok(_unset) => "the configured queue store".to_string(),
+                Err(cause) => format!("the configured queue store, which cannot be resolved ({cause})"),
             };
             // Every host that was considered and what its own publication said,
             // because "no builder is available" without a reason cost an hour of
@@ -226,7 +238,7 @@ pub(crate) async fn target_consumer(target_name: &str) -> Result<String, CmdErro
         .map_err(CmdError::from)?;
     let mut newest = None;
     for (consumer, publication) in publications {
-        let identity = consumer.strip_prefix("local-").unwrap_or(&consumer);
+        let identity = local_identity(&consumer);
         let matches_target = registry
             .lookup_self(identity)
             .map_err(CmdError::from)?

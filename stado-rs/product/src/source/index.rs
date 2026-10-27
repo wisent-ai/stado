@@ -68,7 +68,9 @@ pub fn candidates(runtime: &Runtime, repository: &str) -> Result<Vec<PathBuf>> {
             failures,
         });
     }
-    let index = cache.as_ref().unwrap();
+    let index = cache
+        .as_ref()
+        .context("the canonical repository index was not built")?;
     let name = Path::new(repository)
         .file_name()
         .and_then(|name| name.to_str())
@@ -76,9 +78,9 @@ pub fn candidates(runtime: &Runtime, repository: &str) -> Result<Vec<PathBuf>> {
     if let Some(failure) = index.failures.get(name) {
         bail!("{failure}");
     }
-    Ok(index
-        .repositories
-        .get(repository)
-        .cloned()
-        .unwrap_or_default())
+    // A repository the workspace holds no checkout of has no candidates.
+    Ok(match index.repositories.get(repository) {
+        Some(found) => found.clone(),
+        None => Vec::new(),
+    })
 }

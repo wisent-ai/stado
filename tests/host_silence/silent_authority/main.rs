@@ -1,7 +1,9 @@
 //! A registry read whose authority accepts the SSH connection and answers
 //! nothing ends on its own, after the refresh interval this host's resolver
 //! declares, refused with the interval and where to ask, and the reader
-//! goes on to its last-known-good copy instead of waiting without end.
+//! goes on to its last-known-good copy instead of waiting without end while
+//! that copy is no older than the declared max-stale, and is refused once
+//! it is.
 //!
 //! The real `stado registry self` runs with an isolated `HOME` under the
 //! test's output directory and a last-known-good registry copy that names
@@ -108,6 +110,12 @@ fn a_reader_declaring_no_resolver_is_bounded_by_the_authority_interval() {
         said.contains(ABANDONED)
             && said.contains(&format!("the {refresh_seconds}s refresh interval")),
         "the read is abandoned at the interval the authority is declared with: {said}"
+    );
+    // The stopped authority wrote no wait line before it stopped, and the
+    // refusal says so rather than leaving its own waits unread.
+    assert!(
+        said.contains("the authority's command had no wait of its own open"),
+        "the refusal names what the authority's own command stood on: {said}"
     );
     assert!(
         said.contains("reading the last-known-good registry copy"),
@@ -217,5 +225,29 @@ fn resolver_status_says_how_long_the_authority_took_to_answer() {
     assert!(
         line.contains(" answered_after=") && line.ends_with('s'),
         "the authority line does not say how long the fetch took: {line}"
+    );
+}
+
+/// A copy older than the max-stale this host's resolver declares is not
+/// read in place of a silent authority: the read is refused with the
+/// copy's age, the bound it passed and the authority's own refusal.
+#[test]
+fn a_copy_past_the_declared_max_stale_does_not_stand_in_for_the_authority() {
+    let mut run = Run::new("aged-copy");
+    run.hung_authority();
+    run.date_copy(&chrono::DateTime::<chrono::Utc>::UNIX_EPOCH.to_rfc3339());
+    let output = run.registry_self("aged-copy");
+    let said = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        !output.status.success(),
+        "a read with no authority and no fresh copy is refused: {said}"
+    );
+    assert!(
+        said.contains(ABANDONED) && said.contains("max-stale this host's resolver declares"),
+        "the copy is refused naming its age and the declared bound: {said}"
+    );
+    assert!(
+        !said.contains("reading the last-known-good registry copy"),
+        "an aged copy is never read in place of the authority: {said}"
     );
 }

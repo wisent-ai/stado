@@ -128,8 +128,18 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
             Some(error) => error,
             None => "the probe recorded no error",
         };
+        // A path to a node whose key the local tailnet states expired only
+        // times out; the expiry is the cause, so it is named beside it.
+        let host = match probe.destination.rsplit_once('@') {
+            Some((_, host)) => host,
+            None => probe.destination.as_str(),
+        };
+        let tailnet = match crate::remote::tailnet::unreachable_because(host) {
+            Some(expired) => format!("; the tailnet carries no traffic to it, {expired}"),
+            None => String::new(),
+        };
         blockers.push(format!(
-            "{} connection path {} did not answer: {cause}",
+            "{} connection path {} did not answer: {cause}{tailnet}",
             probe.name, probe.destination,
         ));
     }

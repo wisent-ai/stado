@@ -1,6 +1,6 @@
 //! The database credential item lives in the fleet's owner vault, whichever
 //! host runs `stado database create`. The owner host writes it into its own
-//! vault; any other host sends the same `set-json` payload to the owner
+//! vault; any other host sends the same `set` payload to the owner
 //! through the host channel (`stado credentials item put --host`), so a
 //! database can be created from the operator's machine without a local vault
 //! copy standing in for the owner's.
@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use crate::cli::CmdError;
 use crate::credential_store::owner;
 
-/// The envelope `skarbiec set-json` validates, as `owner::store_json` sends it.
+/// The envelope `skarbiec set` validates, as `owner::store_json` sends it.
 const ITEM_SCHEMA: &str = "skarbiec.item.v2";
 
 /// Where the owner vault is, relative to this host.
@@ -125,7 +125,10 @@ impl Owner {
     /// The whole item document (`fields`, `context`, …), read where the
     /// owner vault is: a rewrite keeps the fields another writer put on it.
     /// `None` when this host's own vault holds no such item.
-    pub(super) async fn document(&self, item: &str) -> Result<Option<Value>, CmdError> {
+    pub(in crate::cli::database) async fn document(
+        &self,
+        item: &str,
+    ) -> Result<Option<Value>, CmdError> {
         match self {
             Self::Here => owner::read_document(item).map_err(|error| {
                 CmdError::click(format!("{item} could not be read: {error}"))
@@ -145,10 +148,42 @@ impl Owner {
         }
     }
 
+    /// Delete `item` from the owner vault, as `destroy` deletes a database's
+    /// item (restorably, as Skarbiec deletes); an item already absent is
+    /// reported so.
+    pub(in crate::cli::database) async fn delete(
+        &self,
+        item: &str,
+    ) -> Result<&'static str, CmdError> {
+        match self {
+            Self::Here => match owner::item_exists(item) {
+                Ok(false) => Ok("already absent"),
+                Ok(true) => owner::delete_item(item)
+                    .map(|()| "deleted")
+                    .map_err(|error| {
+                        CmdError::click(format!(
+                            "{item} was not deleted from this host's owner vault: {error}"
+                        ))
+                        .stating(error.failure_code())
+                    }),
+                Err(error) => Err(CmdError::click(format!(
+                    "{item} could not be looked up here: {error}"
+                ))
+                .stating(error.failure_code())),
+            },
+            Self::Host(host) => crate::cli::host::owner_item_delete(host, item)
+                .await
+                .map(|_| "deleted")
+                .map_err(|error| {
+                    error.within(format!("{item} was not deleted from {host}'s owner vault"))
+                }),
+        }
+    }
+
     /// The live item ids of a remote owner vault, listed once for a command
     /// that visits many items, so an absent item is reported rather than read
     /// as a failure. `None` here, where each read answers for itself.
-    pub(super) async fn item_ids(
+    pub(in crate::cli::database) async fn item_ids(
         &self,
     ) -> Result<Option<std::collections::BTreeSet<String>>, CmdError> {
         match self {

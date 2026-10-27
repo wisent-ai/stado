@@ -25,7 +25,7 @@
 //! host and written by it into that host's Skarbiec; it never enters this
 //! process, an argument list, or the report. What comes back is the run's
 //! redacted envelope, and afterwards the vault's own verdict on the row, read
-//! through the same `skarbiec totp-seed-state` reader `seed list` uses —
+//! through the same `skarbiec totp seed` reader `seed list` uses —
 //! because a run that answered `ok` is not evidence that a seed landed.
 
 use serde_json::json;
@@ -89,8 +89,11 @@ pub async fn enrol_authenticator_seed(
         // by a push to the account owner's phone, and the trajectory says so
         // rather than pretending it failed for another reason.
         Err(error) => Err(CmdError::refused(format!(
-            "Weles refused to enrol an authenticator for {login_item} on {host}: {error}; the row's seed state is {}",
-            after.as_deref().unwrap_or("unreadable")
+            "Weles refused to enrol an authenticator for {login_item} on {host}: {error}; {}",
+            match after.as_deref() {
+                Some(state) => format!("the row's seed state is {state}"),
+                None => format!("the vault on {host} lists no seed state for {login_item}"),
+            }
         ))),
     }
 }
@@ -105,11 +108,11 @@ async fn seed_state_of(host: &str, login_item: &str) -> Result<Option<String>, C
 }
 
 /// One vault item id, refused rather than forwarded when it could be anything
-/// else: it becomes a parameter of a run on another machine.
+/// else: it becomes a parameter of a run on another machine. How long an id
+/// may be is Skarbiec's to say; its own refusal names its bound.
 fn checked_login_item(login_item: &str) -> Result<&str, CmdError> {
     let trimmed = login_item.trim();
     let shaped = !trimmed.is_empty()
-        && trimmed.len() <= MAX_ITEM_LENGTH
         && trimmed.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '@')
         });
@@ -121,15 +124,9 @@ fn checked_login_item(login_item: &str) -> Result<&str, CmdError> {
     Ok(trimmed)
 }
 
-/// Skarbiec's own item-id bound.
-const MAX_ITEM_LENGTH: usize = 128;
-
 fn report(json_output: bool, document: serde_json::Value) -> Result<(), CmdError> {
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&document).unwrap_or_default()
-        );
+        println!("{}", serde_json::to_string_pretty(&document)?);
         return Ok(());
     }
     for (field, value) in document.as_object().into_iter().flatten() {

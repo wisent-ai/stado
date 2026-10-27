@@ -66,7 +66,7 @@ extension HostsView {
         guard let used = disk.usedPercent else {
             return "\(StadoFormat.decimal(free)) GB"
         }
-        return "\(StadoFormat.decimal(free)) GB · \(String(format: "%.0f", used))% used"
+        return "\(StadoFormat.decimal(free)) GB · \(StadoFormat.wholePercent(used))% used"
     }
 
     func diskTone(_ host: WorkerNode) -> WisentTone {
@@ -98,10 +98,16 @@ extension HostsView {
         case (true, _, _): "Accepting jobs"
         case (false, let reason?, let detail?): "Not accepting jobs: \(reason) (\(detail))"
         case (false, let reason?, nil): "Not accepting jobs: \(reason)"
-        case (false, nil, _): "Busy or gated"
+        case (false, nil, let detail?): "Not accepting jobs: \(detail)"
+        case (false, nil, nil): "Busy or gated"
         case (nil, _, _): "Admission not reported"
         }
-        let running = capacity.runningJobs.map { "\($0.formatted(.number)) running" } ?? "running unknown"
+        let running: String
+        if let count = capacity.runningJobs {
+            running = "\(count.formatted(.number)) running"
+        } else {
+            running = "running count not reported"
+        }
         let cpu: String
         if let available = capacity.availableCPUCores, let total = capacity.totalCPUCores {
             cpu = "\(available.formatted(.number))/\(total.formatted(.number)) CPU cores available"

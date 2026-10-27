@@ -20,12 +20,13 @@ pub fn product_capability(id: &str) -> Option<&'static ProductCapability> {
         .find(|capability| capability.id.as_str() == id)
 }
 
+/// What the catalog declares for `capability` on `provider`; a capability
+/// the catalog does not declare is supported by no provider.
 pub fn capability_support(capability: CapabilityKind, provider: ProviderId) -> CapabilitySupport {
-    CAPABILITIES
-        .iter()
-        .find(|entry| entry.id == capability)
-        .map(|entry| entry.support(provider))
-        .unwrap_or(CapabilitySupport::Unsupported)
+    match CAPABILITIES.iter().find(|entry| entry.id == capability) {
+        Some(entry) => entry.support(provider),
+        None => CapabilitySupport::Unsupported,
+    }
 }
 
 pub fn capabilities_for_provider(

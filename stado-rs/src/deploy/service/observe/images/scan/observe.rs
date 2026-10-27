@@ -51,24 +51,29 @@ pub(crate) async fn observe_unit_image_scan(
         )
     };
     if local_units != Some(target.name.as_str()) {
-        let declared = declared_services(target).len();
-        if declared == 0 {
+        let declared = declared_services(target);
+        if declared.is_empty() {
             return Vec::new();
         }
+        let here = match local_units {
+            Some(here) => here,
+            None => "a host no registry target names",
+        };
         return vec![whole_host(format!(
             "which image a process is executing is readable only on the machine holding that \
-             process, and this command is running on {}; {declared} declared unit(s) on {} are \
+             process, and this command is running on {here}; {} declared unit(s) on {} are \
              unmeasured until `stado registry doctor` runs there",
-            local_units.unwrap_or("a host no registry target names"),
+            declared.len(),
             target.name
         ))];
     }
-    let Some(home) = std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned())
-    else {
-        return vec![whole_host(
-            "this process has no HOME, so the launchd unit directories could not be named"
-                .to_string(),
-        )];
+    let home = match crate::config_file::home() {
+        Ok(home) => home.to_string_lossy().into_owned(),
+        Err(cause) => {
+            return vec![whole_host(format!(
+                "the launchd unit directories could not be named: {cause}"
+            ))];
+        }
     };
     let native_units = match loaded_units(target, &crate::deploy::production_runner()).await {
         Ok(units) => units,
@@ -130,7 +135,9 @@ pub(crate) async fn observe_unit_image_scan(
         let Some(native) = native_by_label.get(label.as_str()) else {
             continue;
         };
-        if native.loaded_domains.len() > 1 {
+        // Two or more domains hold the label: which one's process is the
+        // unit's is not something to guess.
+        if let [_, _, ..] = native.loaded_domains.as_slice() {
             rows.push(unread(
                 format!("{label}'s native owner"),
                 format!(

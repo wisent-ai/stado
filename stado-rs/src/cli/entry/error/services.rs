@@ -35,15 +35,16 @@ impl From<crate::remote::control_plane::ControlPlaneError> for CmdError {
 }
 
 impl From<crate::failure_fixer::FixError> for CmdError {
-    /// The failure fixer's store, state file, filesystem and vault failures
-    /// keep the classes their own conversions state.
+    /// The failure fixer's store, state file and filesystem failures keep the
+    /// classes their own conversions state; a fix session that could not be
+    /// started is refused with its cause.
     fn from(exc: crate::failure_fixer::FixError) -> Self {
         use crate::failure_fixer::FixError;
         match exc {
             FixError::Storage(error) => Self::from(error),
             FixError::Json(error) => Self::from(error),
             FixError::Io(error) => Self::from(error),
-            FixError::Skarbiec(error) => Self::from(error),
+            FixError::Session(cause) => Self::refused(cause),
         }
     }
 }
@@ -132,7 +133,7 @@ impl From<crate::inference::plan::PlanError> for CmdError {
         use crate::inference::plan::PlanError;
         use crate::primitives::failure::FailureCode;
         let code = match &exc {
-            PlanError::NoHome => FailureCode::Config,
+            PlanError::NoHome(_) => FailureCode::Config,
             PlanError::InvalidId(_) => return Self::usage(exc.to_string()),
             PlanError::Encode(_) => FailureCode::Unknown,
             PlanError::Read(_, error) | PlanError::Write(_, error) => io_failure_code(error.kind()),

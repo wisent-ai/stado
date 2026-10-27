@@ -4,16 +4,18 @@
 //!
 //! The real `stado` runs with an isolated `HOME` under the checkout's build
 //! directory and a last-known-good registry copy that names this machine as a
-//! host managing one launchd unit and, as the registry authority, a loopback
-//! listener this test owns that accepts every connection and sends nothing:
-//! a snapshot asked of it would never come. The update installs a real
-//! archive into the isolated `HOME`, repoints the unit file onto `current`,
-//! and the authority must never have been connected to.
-use std::net::{Ipv4Addr, TcpListener};
+//! host managing one launchd unit and, as the registry authority, a real
+//! OpenSSH server serving this run's account (`../host_silence/hung_ssh.rs`),
+//! which logs every connection it accepts. The update installs a real archive
+//! into the isolated `HOME`, repoints the unit file onto `current`, and the
+//! authority's own log shows it was never connected to.
+#[path = "../host_silence/hung_ssh.rs"]
+mod hung_ssh;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+
+use hung_ssh::HungSsh;
 
 use serde_json::{json, Value};
 
@@ -24,14 +26,12 @@ const AUTHORITY_STADO: &str = "/usr/local/bin/stado";
 
 struct Run {
     root: PathBuf,
-    /// Whether the silent authority accepted any connection; it must not,
-    /// because nobody may ask it for a snapshot.
-    asked: Arc<AtomicBool>,
 }
 
 impl Run {
     fn new() -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("service-update-local-record");
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/journeys/service-update-local-record");
         std::fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(std::process::id().to_string());
         for directory in [
@@ -43,10 +43,7 @@ impl Run {
         ] {
             std::fs::create_dir_all(root.join(directory)).expect("create the run directory");
         }
-        Self {
-            root,
-            asked: Default::default(),
-        }
+        Self { root }
     }
 
     /// The real stado with nothing of this account's configuration.
@@ -79,22 +76,10 @@ impl Run {
         }
     }
 
-    /// The authority's SSH destination: a listener that accepts, keeps every
-    /// connection open and never speaks, so a snapshot asked of it would
-    /// stand forever.
-    fn silent_authority(&self) -> String {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, self.free_port()))
-            .expect("bind the loopback port this machine handed out");
-        let address = listener.local_addr().unwrap().to_string();
-        let asked = Arc::clone(&self.asked);
-        std::thread::spawn(move || {
-            let mut open = Vec::new();
-            for stream in listener.incoming().flatten() {
-                asked.store(true, Ordering::SeqCst);
-                open.push(stream);
-            }
-        });
-        address
+    /// The authority: a real SSH server for this run's account on a port this
+    /// machine hands out now. Its log records every connection it accepts.
+    fn authority(&self) -> HungSsh {
+        HungSsh::serve(&self.root, self.free_port())
     }
 
     fn program(&self) -> PathBuf {
@@ -229,7 +214,8 @@ fn hostname() -> String {
 #[test]
 fn an_archive_installs_from_this_machines_record_without_asking_the_authority() {
     let run = Run::new();
-    let authority_ssh = run.silent_authority();
+    let authority = run.authority();
+    let authority_ssh = authority.destination.clone();
     let host = run.write_last_good(&authority_ssh);
     run.write_unit();
     let archive = run.write_archive();
@@ -246,9 +232,11 @@ fn an_archive_installs_from_this_machines_record_without_asking_the_authority() 
         said.contains("without asking the registry authority"),
         "the command says it acts from this machine's record: {said}"
     );
+    let authority_log = std::fs::read_to_string(authority.log())
+        .expect("read the authority's own log");
     assert!(
-        !run.asked.load(Ordering::SeqCst),
-        "the registry authority was never connected to: {said}"
+        !authority_log.contains("Connection from"),
+        "the registry authority was never connected to: {said}\n{authority_log}"
     );
     let report: Value = serde_json::from_str(printed.trim()).expect("the update prints JSON");
     assert_eq!(report["status"], "updated", "{report}");

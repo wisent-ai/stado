@@ -14,20 +14,16 @@ use crate::providers::local::space_reclaim::build_caches::same_object;
 use crate::providers::local::space_reclaim::build_caches::walk::Walk;
 use crate::providers::local::space_reclaim::{euid, ifmt, safefs, JanitorError, IFREG};
 
-/// The standard's file name; the signature lives in its first line.
+/// The standard's file name; the file must begin with the signature
+/// (https://bford.info/cachedir/).
 const TAG_NAME: &str = "CACHEDIR.TAG";
-
-/// Enough bytes to hold the signature line and prove where it ends. The
-/// standard puts the signature at offset 0, so a longer read would only
-/// widen what an attacker's file can say.
-const TAG_READ_BYTES: usize = 64;
 
 /// What `CACHEDIR.TAG` says about the directory holding it.
 pub(super) enum Tag {
-    /// Present, a regular file we own, first line is the signature.
+    /// Present, a regular file we own, beginning with the signature.
     Signed,
-    /// Present but not a valid tag: wrong first line, a symlink, a
-    /// directory, or owned by someone else.
+    /// Present but not a valid tag: it does not begin with the signature,
+    /// or it is a symlink, a directory, or owned by someone else.
     Unsigned,
     /// No tag file at all — an ordinary directory on the way down.
     Absent,
@@ -56,13 +52,10 @@ impl<'a> Walk<'a> {
         if !same_object(&opened, &info) {
             return Ok(Tag::Unsigned);
         }
-        let payload = safefs::read_fd(descriptor.as_raw_fd(), TAG_READ_BYTES)?;
-        let first_line = payload
-            .split(|byte| *byte == b'\n')
-            .next()
-            .unwrap_or_default();
-        let first_line = first_line.strip_suffix(b"\r").unwrap_or(first_line);
-        if first_line == CACHEDIR_SIGNATURE.as_bytes() {
+        // Exactly the signature's length is read: the standard puts it at
+        // offset 0, so a longer read would only widen what a file can say.
+        let payload = safefs::read_fd(descriptor.as_raw_fd(), CACHEDIR_SIGNATURE.len())?;
+        if payload == CACHEDIR_SIGNATURE.as_bytes() {
             Ok(Tag::Signed)
         } else {
             Ok(Tag::Unsigned)

@@ -11,16 +11,6 @@ pub struct TelegramChannel {
     pub api_base: String,
 }
 
-/// SendGrid channel config (`sendgrid_api_key` from Skarbiec plus non-secret
-/// recipient/sender configuration).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SendgridChannel {
-    pub api_key: String,
-    pub to: String,
-    pub from: String,
-    pub url: String,
-}
-
 /// Email through Skrzynka: the mailbox Skrzynka holds under `organization`
 /// sends to `to` with that account's own credentials. Stado holds no mail
 /// credential and speaks to no mail provider.
@@ -62,7 +52,6 @@ pub struct AlertChannels {
     /// Slack webhook URL from `alerts#slack_webhook` in Skarbiec.
     pub slack_webhook: Option<String>,
     pub telegram: Option<TelegramChannel>,
-    pub sendgrid: Option<SendgridChannel>,
     pub skrzynka: Option<SkrzynkaChannel>,
     pub pubsub: Option<PubSubChannel>,
     pub most: Option<MostChannel>,

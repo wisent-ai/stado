@@ -5,12 +5,15 @@
 //! A product compiles in what its committed `Cargo.lock` resolves: a TLS
 //! verifier, a root-certificate bundle, a parser. When an advisory is
 //! published against one of those versions, every product locking it keeps
-//! shipping the flaw until its lock moves. `list` reads every committed
-//! lockfile of the selected checkouts against an OSV advisory database and
-//! names each affected package version, the advisory, the fixed versions and
-//! whether Cargo can reach a fix without a manifest change; `apply` moves
-//! each one that can with `cargo update --precise` and names why each other
-//! one cannot. Neither commits: the changed lockfiles are the checkout's.
+//! shipping the flaw until its lock moves. `list` reads what every lockfile
+//! of the selected checkouts holds in their last commit against an OSV
+//! advisory database and names each affected package version, the advisory,
+//! the fixed versions and whether Cargo can reach a fix without a manifest
+//! change; `apply` moves each one that can with `cargo update --precise`,
+//! names every other package that moved with it, and names why each other
+//! advisory cannot close. Neither commits: the changed lockfiles are the
+//! checkout's, and a lockfile whose working file differs from its last
+//! commit is named as such while its committed findings stand.
 
 mod apply;
 mod osv;
@@ -37,8 +40,9 @@ pub fn command() -> Command {
                 .required(true)
                 .value_parser(["list", "apply"])
                 .help(
-                    "list: report what stands; apply: cargo update --precise each affected \
-                     package to its first caret-compatible fixed version, then report what stands",
+                    "list: report what stands in the committed locks; apply: cargo update \
+                     --precise each affected package to its first caret-compatible fixed \
+                     version, then report what stands in the committed locks",
                 ),
         )
         .arg(Arg::new("positional").value_name("PRODUCT").help(
@@ -88,6 +92,7 @@ fn workspace_checkouts(workspace: &Path) -> Result<Vec<Checkout>> {
                 repository: None,
                 read: true,
                 lockfiles: Vec::new(),
+                uncommitted: Vec::new(),
             });
         }
     }
@@ -126,9 +131,47 @@ fn selected(runtime: &Runtime, product: Option<&String>) -> Result<Vec<Checkout>
             repository: Some(repository),
             read,
             lockfiles: Vec::new(),
+            uncommitted: Vec::new(),
         });
     }
     Ok(checkouts)
+}
+
+/// Why the advisories `wanted` names cannot be read, when one of them is
+/// no advisory the database publishes or one it withdrew.
+fn selection_refusal(database: &osv::Database, wanted: &[String]) -> Option<String> {
+    let mut unknown = Vec::new();
+    let mut withdrawn = Vec::new();
+    for id in wanted.iter().filter(|id| !database.knows(id)) {
+        match database.withdrawal(id) {
+            Some((advisory, at)) if advisory == id => withdrawn.push(format!("{id} at {at}")),
+            Some((advisory, at)) => {
+                withdrawn.push(format!("{id} (an alias of {advisory}) at {at}"))
+            }
+            None => unknown.push(id.as_str()),
+        }
+    }
+    let mut refusals = Vec::new();
+    if !unknown.is_empty() {
+        refusals.push(format!(
+            "the advisory database {} holds no {} advisory {}; name an id or alias it publishes",
+            database.origin,
+            osv::ECOSYSTEM,
+            unknown.join(", ")
+        ));
+    }
+    if !withdrawn.is_empty() {
+        refusals.push(format!(
+            "the advisory database {} withdrew {}: a withdrawn advisory affects no version, so \
+             there is nothing to read or lock for it; drop that --advisory",
+            database.origin,
+            withdrawn.join(", ")
+        ));
+    }
+    match refusals.is_empty() {
+        true => None,
+        false => Some(refusals.join("; ")),
+    }
 }
 
 /// Run `stado product advisories list|apply [PRODUCT] [--advisory ID]...
@@ -150,18 +193,8 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         .collect();
     let mut checkouts = selected(runtime, arguments.get_one::<String>("positional"))?;
     let database = osv::Database::read(database_origin)?;
-    let unknown: Vec<&String> = wanted.iter().filter(|id| !database.knows(id)).collect();
-    if !unknown.is_empty() {
-        bail!(
-            "the advisory database {} holds no {} advisory {}; name an id or alias it publishes",
-            database.origin,
-            osv::ECOSYSTEM,
-            unknown
-                .iter()
-                .map(|id| id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+    if let Some(refusal) = selection_refusal(&database, &wanted) {
+        bail!("{refusal}");
     }
     scan::lockfiles(&mut checkouts)?;
     let findings = scan::findings(&database, &checkouts, &wanted)?;
@@ -169,6 +202,7 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         "list" => (None, findings),
         "apply" => {
             let updates = apply::run(&findings)?;
+            scan::lockfiles(&mut checkouts)?;
             let remaining = scan::findings(&database, &checkouts, &wanted)?;
             (Some(updates), remaining)
         }

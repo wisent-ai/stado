@@ -66,7 +66,7 @@ pub(in crate::cli::web::builds) fn worker() -> Result<Worker, CmdError> {
             )
         }
     };
-    if !source.is_dir() {
+    if !crate::primitives::presence::present(&source)? || !source.is_dir() {
         return Err(CmdError::click(format!(
             "WISENT_SOURCE_DIR names {}, which is not a directory: the release worker did not prepare a checkout there",
             source.display()
@@ -125,7 +125,7 @@ impl Worker {
             )));
         }
         let directory = self.source.join(relative);
-        if !directory.is_dir() {
+        if !crate::primitives::presence::present(&directory)? || !directory.is_dir() {
             return Err(CmdError::usage(format!(
                 "--package names {}, which is not a directory of this checkout",
                 directory.display()

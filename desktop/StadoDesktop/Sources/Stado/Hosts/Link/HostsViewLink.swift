@@ -170,6 +170,8 @@ extension HostsView {
                 value: refusalDescription(link.readerRefusals),
                 tone: link.readerRefusals?.reasons.isEmpty == false ? .warning : .neutral
             )
+            // What the host ran, beside what it is now.
+            HostActivitySection(host: link.host)
         } else if let failure = linkFailure(host) {
             WisentAlertPanel(
                 tone: .warning,

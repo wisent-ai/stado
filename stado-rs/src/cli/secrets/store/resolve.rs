@@ -74,16 +74,23 @@ pub(crate) fn launcher_json(
     )?;
     if !output.status.success() {
         return Err(CmdError::click(format!(
-            "{} {} failed: {}",
+            "{} {} ended with {}: {}",
             binary.display(),
-            arguments.first().copied().unwrap_or("command"),
+            arguments.join(" "),
+            output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    serde_json::from_slice(&output.stdout).map_err(|_| {
-        CmdError::click("Skarbiec returned a malformed local JSON report")
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+    // The parser's position is said, not the answer: `get <item>` answers an
+    // item's secret fields, which no refusal may carry into a log.
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        CmdError::click(format!(
+            "{} {} answered a local report that is not JSON: {error}",
+            binary.display(),
+            arguments.join(" ")
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }
 

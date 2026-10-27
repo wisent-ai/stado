@@ -99,6 +99,10 @@ fn spill(root: &Path, report: &mut Value) -> Result<String> {
         "a section longer than the limit was spilled into {} part(s)",
         parts.len()
     );
+    ensure!(
+        links.lines().all(|line| line.contains("](changelog/unreleased/part-")),
+        "spilled parts are not written into changelog/unreleased/: {links}"
+    );
     for part in &parts {
         ensure!(
             part.lines().count() <= section_lines,

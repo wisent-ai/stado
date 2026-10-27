@@ -152,10 +152,11 @@ pub(super) async fn publication(
 /// `target`.
 ///
 /// Exported for [`super::fleet_claim`], which asks the same question of every
-/// declared host at once and must answer it by exactly this rule.
+/// declared host at once and must answer it by exactly this rule, and for
+/// placement, which reads the schedules pinned to a host by it.
 ///
 /// [`super::fleet_claim`]: crate::deploy::fleet_claim
-pub(in crate::deploy) fn resolves_to(
+pub(crate) fn resolves_to(
     registry: &Registry,
     target: &ComputeTarget,
     consumer_id: &str,

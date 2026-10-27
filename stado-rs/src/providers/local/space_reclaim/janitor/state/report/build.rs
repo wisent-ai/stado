@@ -1,8 +1,10 @@
 //! Building the report: the base record and the timestamps it carries.
 
-use std::time::SystemTime;
+use std::time::Instant;
 
 use serde_json::Value;
+
+use crate::primitives::tally::Tally;
 
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 use crate::providers::local::space_reclaim::janitor::state::report::{
@@ -17,16 +19,19 @@ use crate::providers::local::space_reclaim::{
 use crate::targets;
 
 impl CleanupReport {
-    pub fn base(active_job_count: i64, hostname: &str) -> Self {
+    /// A pass's report before it has measured anything: the writer that
+    /// makes it is stated by the caller, and its duration and store wait are
+    /// absent until measured.
+    pub fn base(active_job_count: i64, hostname: &str, writer: &'static str) -> Self {
         Self {
             hostname: targets::normalize_hostname(hostname),
             target_name: None,
-            writer: "unknown",
+            writer,
             writer_version: crate::binary::build_identity::BUILD_IDENTITY,
             every_seconds: None,
             started_at: utc_now(),
-            duration_ms: 0,
-            store_wait_ms: 0,
+            duration_ms: None,
+            store_wait_ms: None,
             outcome: "volume_unreadable".to_string(),
             free_bytes_before: None,
             free_bytes_after: None,
@@ -50,7 +55,7 @@ impl CleanupReport {
             compiler_cache: CleanerReport::default(),
             lock_busy: false,
             workload_holds: Vec::new(),
-            active_job_count: active_job_count.max(0),
+            active_job_count,
             last_success_at: None,
             scanned: false,
             errors: Vec::new(),
@@ -83,26 +88,26 @@ impl CleanupReport {
 
     /// Python `_skip` for the HF cleaner.
     pub fn skip_hf(&mut self, reason: &str, count: i64) {
-        *self.hf.skipped.entry(reason.to_string()).or_insert(0) += count;
+        *self.hf.skipped.entry(reason.to_string()).or_default() += count;
     }
 
     /// Python `_skip` for the weles cleaner.
     pub fn skip_weles(&mut self, reason: &str, count: i64) {
-        *self.weles.skipped.entry(reason.to_string()).or_insert(0) += count;
+        *self.weles.skipped.entry(reason.to_string()).or_default() += count;
     }
 
     /// `_skip` for the build-cache cleaner (no Python original).
     pub fn skip_builds(&mut self, reason: &str, count: i64) {
-        *self.builds.skipped.entry(reason.to_string()).or_insert(0) += count;
+        *self.builds.skipped.entry(reason.to_string()).or_default() += count;
     }
 
     /// `_skip` for the Chromium clone cleaner (no Python original).
     pub fn skip_clones(&mut self, reason: &str, count: i64) {
-        *self.clones.skipped.entry(reason.to_string()).or_insert(0) += count;
+        *self.clones.skipped.entry(reason.to_string()).or_default() += count;
     }
 
     pub fn skip_workdirs(&mut self, reason: &str, count: i64) {
-        *self.workdirs.skipped.entry(reason.to_string()).or_insert(0) += count;
+        *self.workdirs.skipped.entry(reason.to_string()).or_default() += count;
     }
 
     pub fn skip_job_outputs(&mut self, reason: &str, count: i64) {
@@ -110,17 +115,21 @@ impl CleanupReport {
             .job_outputs
             .skipped
             .entry(reason.to_string())
-            .or_insert(0) += count;
+            .or_default() += count;
     }
 
-    /// The same skip, with the bytes it left behind.
+    /// One kept job output, with the bytes it left behind.
     pub fn keep_job_outputs(&mut self, reason: &str, bytes: i64) {
-        self.skip_job_outputs(reason, 1);
+        self.job_outputs
+            .skipped
+            .entry(reason.to_string())
+            .or_default()
+            .tally();
         *self
             .job_outputs
             .skipped_bytes
             .entry(reason.to_string())
-            .or_insert(0) += bytes;
+            .or_default() += bytes;
     }
 
     pub fn skip_backup_twins(&mut self, reason: &str, count: i64) {
@@ -128,7 +137,7 @@ impl CleanupReport {
             .backup_twins
             .skipped
             .entry(reason.to_string())
-            .or_insert(0) += count;
+            .or_default() += count;
     }
 
     pub fn skip_release_store(&mut self, reason: &str, count: i64) {
@@ -136,7 +145,16 @@ impl CleanupReport {
             .release_store
             .skipped
             .entry(reason.to_string())
-            .or_insert(0) += count;
+            .or_default() += count;
+    }
+
+    /// Add a wait on the queue store to the pass's store wait.
+    pub fn charge_store_wait(&mut self, since: Instant) {
+        let waited = elapsed_ms(since);
+        self.store_wait_ms = Some(match self.store_wait_ms {
+            Some(before) => before.saturating_add(waited),
+            None => waited,
+        });
     }
 
     /// The report as JSON (key order normalized at serialization sites
@@ -218,10 +236,16 @@ pub(crate) fn utc_now() -> String {
     crate::models::isoformat_utc(chrono::Utc::now())
 }
 
-/// Python `time.time()` as f64 seconds.
+/// Python `time.time()` as f64 seconds since the Unix epoch.
 pub(crate) fn epoch_now() -> f64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
+    (chrono::Utc::now() - chrono::DateTime::<chrono::Utc>::UNIX_EPOCH).as_seconds_f64()
+}
+
+/// Whole milliseconds since `since`; a span past what `i64` holds stays at
+/// its largest value rather than wrapping.
+pub(crate) fn elapsed_ms(since: Instant) -> i64 {
+    match i64::try_from(since.elapsed().as_millis()) {
+        Ok(millis) => millis,
+        Err(_past_i64) => i64::MAX,
+    }
 }

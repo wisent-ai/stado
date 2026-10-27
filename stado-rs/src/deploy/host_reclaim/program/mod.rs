@@ -63,16 +63,15 @@ static REMOTE_SCRIPT_TEMPLATE: LazyLock<String> = LazyLock::new(|| {
 /// facts about each product's delivery history, they live in
 /// `data/catalog/products.json`, and a reclamation that carried its own copy would go
 /// stale the next time a delivery path moves. A catalog that will not parse
-/// yields no roots, so the stage sweeps the services root alone rather than
-/// guessing.
-fn superseded_words() -> String {
-    products::declared()
-        .unwrap_or_default()
+/// is the refusal it carries: a sweep that silently skipped the superseded
+/// roots would report a clean host that still holds them.
+fn superseded_words() -> Result<String, crate::deploy::DeployError> {
+    Ok(products::declared()?
         .iter()
         .flat_map(|product| product.superseded_roots.iter())
         .map(|root| format!("\"{root}\""))
         .collect::<Vec<String>>()
-        .join(" ")
+        .join(" "))
 }
 
 /// Every directory this fleet installs launchd or systemd units into, as
@@ -100,7 +99,7 @@ pub fn remote_script(
     live_jobs: Option<&[String]>,
     work_roots: &str,
     build_cache_roots: &str,
-) -> String {
+) -> Result<String, crate::deploy::DeployError> {
     remote_script_with_stado(
         apply,
         stages,
@@ -118,25 +117,32 @@ pub(super) fn remote_script_with_stado(
     work_roots: &str,
     build_cache_roots: &str,
     current_stado: Option<&str>,
-) -> String {
-    let wc_words = current_stado.map_or_else(
-        || {
-            WC_CANDIDATES
-                .iter()
-                .map(|value| format!("\"{value}\""))
-                .collect::<Vec<String>>()
-                .join(" ")
-        },
-        shlex_quote,
-    );
-    let live_words = live_jobs
-        .unwrap_or_default()
-        .iter()
-        .filter(|id| !id.is_empty() && id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-'))
-        .cloned()
-        .collect::<Vec<String>>()
-        .join(" ");
-    REMOTE_SCRIPT_TEMPLATE
+) -> Result<String, crate::deploy::DeployError> {
+    // The janitor is the Stado the caller names; without one, every
+    // installed candidate is tried in order.
+    let wc_words = match current_stado {
+        Some(current) => shlex_quote(current),
+        None => WC_CANDIDATES
+            .iter()
+            .map(|value| format!("\"{value}\""))
+            .collect::<Vec<String>>()
+            .join(" "),
+    };
+    // The keep-list is the live job ids the store named; with no store
+    // reading there is no list, and each workdir earns its deletion locally.
+    let live_words = match live_jobs {
+        Some(ids) => ids
+            .iter()
+            .filter(|id| {
+                !id.is_empty() && id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+            })
+            .cloned()
+            .collect::<Vec<String>>()
+            .join(" "),
+        None => String::new(),
+    };
+    let superseded = superseded_words()?;
+    Ok(REMOTE_SCRIPT_TEMPLATE
         .replace(APPLY_MARK, if apply { "1" } else { "0" })
         .replace(STAGES_MARK, &stages.join(" "))
         .replace(WC_WORDS_MARK, &wc_words)
@@ -158,6 +164,6 @@ pub(super) fn remote_script_with_stado(
         .replace(CLONE_CONTAINER_MARK, chromium_clones::CLONE_CONTAINER)
         .replace(CLONE_ROOT_MARK, chromium_clones::CLONE_ROOT_NAME)
         .replace(CLONE_PREFIX_MARK, chromium_clones::CLONE_ENTRY_PREFIX)
-        .replace(SUPERSEDED_ROOTS_MARK, &superseded_words())
-        .replace(UNIT_DIRECTORIES_MARK, &unit_directory_words())
+        .replace(SUPERSEDED_ROOTS_MARK, &superseded)
+        .replace(UNIT_DIRECTORIES_MARK, &unit_directory_words()))
 }

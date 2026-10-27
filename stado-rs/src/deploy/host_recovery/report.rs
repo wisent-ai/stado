@@ -24,58 +24,54 @@ use crate::targets::ComputeTarget;
 pub fn parse_output(stdout: &str, target: &ComputeTarget) -> Result<Value, DeployError> {
     let mut report = Map::new();
     report.insert("target".to_string(), json!(target.name));
-    report.insert(
-        "ssh".to_string(),
-        target.ssh.as_ref().map_or(Value::Null, |ssh| json!(ssh)),
-    );
+    report.insert("ssh".to_string(), json!(target.ssh));
     report.insert("status".to_string(), json!("failed"));
     report.insert("agents".to_string(), json!(Map::new()));
     report.insert("stable_binds".to_string(), json!(Map::new()));
     for line in stdout.lines() {
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.first() == Some(&"STADO_AGENT") && fields.len() == 3 {
-            report["agents"][fields[1]] = json!(fields[2]);
-        } else if fields.first() == Some(&"STADO_STABLE_BIND") && fields.len() == 4 {
+        match fields.as_slice() {
+            ["STADO_AGENT", label, finding] => {
+                report["agents"][*label] = json!(finding);
+            }
             // Keyed by the bind, not the product: the port is what every
             // consumer's configuration names and what an operator greps for
             // after reading a 503.
-            report["stable_binds"][fields[2]] = json!({"product": fields[1], "verdict": fields[3]});
-        } else if fields.first() == Some(&"STADO_DOMAIN") && fields.len() == 4 {
-            report.insert(
-                "launchd_domain".to_string(),
-                json!({"name": fields[1], "status": fields[2], "reason": fields[3]}),
-            );
-        } else if fields.first() == Some(&"STADO_RECOVER")
-            && fields.get(1) == Some(&"ok")
-            && fields.len() == 6
-        {
-            let before = parse_disk_field(fields[3], "before the pass", fields[2])?;
-            let after = parse_disk_field(fields[4], "after the pass", fields[2])?;
-            report.insert("status".to_string(), json!("ok"));
-            report.insert("host".to_string(), json!(fields[2]));
-            report.insert("disk_free_kb_before".to_string(), json!(before));
-            report.insert("disk_free_kb_after".to_string(), json!(after));
-            report.insert("cleanup_status".to_string(), json!(fields[5]));
-        } else if let ["STADO_CLEANUP", printed] = fields.as_slice() {
-            // An unreadable report keeps what the host printed and why it
-            // did not parse; a bare "invalid_output" told nobody either.
-            let cleanup = match serde_json::from_str::<Value>(printed) {
-                Ok(cleanup) => cleanup,
-                Err(error) => json!({
-                    "outcome": "invalid_output",
-                    "printed": printed,
-                    "error": error.to_string(),
-                }),
-            };
-            report.insert("cleanup".to_string(), cleanup);
-        } else if fields.first() == Some(&"STADO_RECOVER") {
-            report.insert(
-                "remote_error".to_string(),
-                json!(fields[1..]
-                    .iter()
-                    .map(|f| f.to_string())
-                    .collect::<Vec<_>>()),
-            );
+            ["STADO_STABLE_BIND", product, bind, verdict] => {
+                report["stable_binds"][*bind] = json!({"product": product, "verdict": verdict});
+            }
+            ["STADO_DOMAIN", name, status, reason] => {
+                report.insert(
+                    "launchd_domain".to_string(),
+                    json!({"name": name, "status": status, "reason": reason}),
+                );
+            }
+            ["STADO_RECOVER", "ok", host, before, after, cleanup_status] => {
+                let before = parse_disk_field(before, "before the pass", host)?;
+                let after = parse_disk_field(after, "after the pass", host)?;
+                report.insert("status".to_string(), json!("ok"));
+                report.insert("host".to_string(), json!(host));
+                report.insert("disk_free_kb_before".to_string(), json!(before));
+                report.insert("disk_free_kb_after".to_string(), json!(after));
+                report.insert("cleanup_status".to_string(), json!(cleanup_status));
+            }
+            ["STADO_CLEANUP", printed] => {
+                // An unreadable report keeps what the host printed and why it
+                // did not parse; a bare "invalid_output" told nobody either.
+                let cleanup = match serde_json::from_str::<Value>(printed) {
+                    Ok(cleanup) => cleanup,
+                    Err(error) => json!({
+                        "outcome": "invalid_output",
+                        "printed": printed,
+                        "error": error.to_string(),
+                    }),
+                };
+                report.insert("cleanup".to_string(), cleanup);
+            }
+            ["STADO_RECOVER", said @ ..] => {
+                report.insert("remote_error".to_string(), json!(said));
+            }
+            _ => {}
         }
     }
     account_for_agents(&mut report, target);
@@ -111,17 +107,23 @@ pub fn parse_output(stdout: &str, target: &ComputeTarget) -> Result<Value, Deplo
 /// Either list being non-empty takes the status to [`STATUS_BLOCKED`], which
 /// `cli/host.rs::recover` already turns into exit 1.
 fn account_for_agents(report: &mut Map<String, Value>, target: &ComputeTarget) {
-    let domain = report.get("launchd_domain").cloned().unwrap_or_default();
-    let domain_field = |key: &str| -> String {
+    // The launchd domain the pass reported; a pass that printed no domain
+    // line names none, and the blockers say so instead of naming "".
+    let domain = report.get("launchd_domain").cloned();
+    let domain_field = |key: &str| -> Option<String> {
         domain
-            .get(key)
+            .as_ref()
+            .and_then(|domain| domain.get(key))
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
+            .map(str::to_string)
     };
     let domain_name = domain_field("name");
     let domain_status = domain_field("status");
     let domain_reason = domain_field("reason");
+    let domain_shown = match &domain_name {
+        Some(name) => name.clone(),
+        None => "the launchd domain this pass did not report".to_string(),
+    };
     let mut skipped: Vec<Value> = Vec::new();
     let mut blockers: Vec<Value> = Vec::new();
     // Only a pass that reached its last line owes a word for every planned
@@ -179,16 +181,20 @@ fn account_for_agents(report: &mut Map<String, Value>, target: &ComputeTarget) {
                 // luck — it is the domain, and the reason belongs in the
                 // blocker rather than in a note above it that nobody connected
                 // to the unit underneath.
-                let reason = if domain_status == crate::deploy::service::DOMAIN_STATUS_BACKGROUND {
+                let reason = if domain_status.as_deref() == Some(crate::deploy::service::DOMAIN_STATUS_BACKGROUND) {
+                    let why = match &domain_reason {
+                        Some(why) => why.clone(),
+                        None => "the pass gave no reason".to_string(),
+                    };
                     format!(
-                        "{} could not be loaded in {domain_name}, the only domain this login has: \
-                         {domain_reason}. Until somebody is logged in graphically on this host, or \
+                        "{} could not be loaded in {domain_shown}, the only domain this login has: \
+                         {why}. Until somebody is logged in graphically on this host, or \
                          the unit is declared in launchd's system domain, nothing will run it",
                         plan.label
                     )
                 } else if other.starts_with(AGENT_NOT_LOADED) {
                     format!(
-                        "the pass bootstrapped {} in {domain_name} and launchd has no job there, so \
+                        "the pass bootstrapped {} in {domain_shown} and launchd has no job there, so \
                          the unit is not running",
                         plan.label
                     )
@@ -235,9 +241,9 @@ fn parse_disk_field(field: &str, moment: &str, host: &str) -> Result<i64, Deploy
 
 /// Python `int(fields[i])` with the CPython ValueError message.
 fn parse_int_field(field: &str) -> Result<i64, DeployError> {
-    field.parse::<i64>().map_err(|_| {
+    field.parse::<i64>().map_err(|error| {
         DeployError::unreachable(format!(
-            "invalid literal for int() with base 10: {}",
+            "invalid literal for int() with base 10: {} ({error})",
             py_str_repr(field)
         ))
     })

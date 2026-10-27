@@ -24,6 +24,16 @@ pub async fn sync_service_secret(
     run_remote(target, script, runner).await
 }
 
+/// The expected HTTP status as the check script receives it: the number when
+/// the caller states one, else the empty word, which the script reads as
+/// "any success status".
+fn expected_status_word(expected_status: Option<u16>) -> String {
+    match expected_status {
+        Some(status) => shlex_quote(&status.to_string()),
+        None => shlex_quote(""),
+    }
+}
+
 /// Verify that one bearer reaches an authenticated loopback endpoint.
 pub async fn check_service_bearer(
     target: &ComputeTarget,
@@ -40,14 +50,7 @@ pub async fn check_service_bearer(
         .replace("@PROBE_URL_B64@", &STANDARD.encode(probe_url.as_bytes()))
         .replace("@TOKEN_B64@", &STANDARD.encode(token.as_bytes()))
         .replace("@POST_EMPTY@", if post_empty_json { "yes" } else { "no" })
-        .replace(
-            "@EXPECTED_STATUS@",
-            &shlex_quote(
-                &expected_status
-                    .map(|status| status.to_string())
-                    .unwrap_or_default(),
-            ),
-        );
+        .replace("@EXPECTED_STATUS@", &expected_status_word(expected_status));
     let script = remote_script(service.unit_id(), "", &service.path, &body)?;
     run_remote(target, script, runner).await
 }
@@ -101,14 +104,7 @@ pub async fn check_service_item_bearer(
         .replace("@FIELD@", &shlex_quote(field))
         .replace("@TOKEN_B64@", "")
         .replace("@POST_EMPTY@", if post_empty_json { "yes" } else { "no" })
-        .replace(
-            "@EXPECTED_STATUS@",
-            &shlex_quote(
-                &expected_status
-                    .map(|status| status.to_string())
-                    .unwrap_or_default(),
-            ),
-        );
+        .replace("@EXPECTED_STATUS@", &expected_status_word(expected_status));
     let script = remote_script(service.unit_id(), "", &service.path, &body)?;
     run_remote(target, script, runner).await
 }
@@ -141,14 +137,7 @@ pub async fn check_service_env_bearer(
         .replace("@FIELD@", "")
         .replace("@TOKEN_B64@", "")
         .replace("@POST_EMPTY@", if post_empty_json { "yes" } else { "no" })
-        .replace(
-            "@EXPECTED_STATUS@",
-            &shlex_quote(
-                &expected_status
-                    .map(|status| status.to_string())
-                    .unwrap_or_default(),
-            ),
-        );
+        .replace("@EXPECTED_STATUS@", &expected_status_word(expected_status));
     let script = remote_script(service.unit_id(), "", &service.path, &body)?;
     run_remote(target, script, runner).await
 }

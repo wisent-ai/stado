@@ -12,7 +12,7 @@ use super::*;
 /// control-plane unit and writes that as the program, leaving the declared
 /// `coordinator` to be
 /// appended a second time: the unit file came out as
-/// `.../current/darwin-arm/stado coordinator coordinator`, an argv the binary
+/// `.../current/<platform>/stado coordinator coordinator`, an argv the binary
 /// cannot parse. launchd happened to still hold the previous job, so the
 /// coordinator kept dispatching and the mis-render waited for the next time
 /// anything made launchd re-read that plist.
@@ -40,22 +40,29 @@ pub(crate) async fn follow_current(
     let report = service::show_service(target, declared, runner)
         .await
         .map_err(CmdError::from)?;
-    // The summary is `<program> <args...>`, then ` (current -> ...)`.
-    let rendered = report
-        .detail
-        .trim()
-        .split(" (current ->")
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    // The summary is `<program> <args...>`, followed by ` (current -> ...)`
+    // when the unit runs through a `current` link.
+    let detail = report.detail.trim();
+    let rendered = match detail.split_once(" (current ->") {
+        Some((summary, _)) => summary.trim(),
+        None => detail,
+    }
+    .to_string();
     // A declaration that renders the unit states its program on its own. Only
     // a declaration that merely points at a hand-installed plist has none, and
     // then the rendered summary is the only source there is -- read for its
     // path alone rather than for a filename that would carry the arguments
-    // with it.
+    // with it. A summary that names no program either is refused.
     let program = if declared.program.trim().is_empty() {
-        rendered.split_whitespace().next().unwrap_or_default()
+        rendered.split_whitespace().next().ok_or_else(|| {
+            CmdError::click(format!(
+                "{} declares no program and its unit on {} names none, so there is nothing to \
+                 point at current",
+                declared.unit_id(),
+                target.name
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config)
+        })?
     } else {
         declared.program.trim()
     };
@@ -79,7 +86,12 @@ pub(crate) async fn follow_current(
     if !pinned_to_a_version && (declared_argv.is_empty() || declared_argv == rendered) {
         return Ok(false);
     }
-    let wanted = if let Some((root, below)) = super::program_under_current(program, directory) {
+    // The archive installer lays a release out below the target's own
+    // platform directory, the one the catalog's `$STADO_PLATFORM` names.
+    let platform_dir = crate::deploy::service_catalog::platform_directory(&target.release_platform);
+    let wanted = if let Some((root, below)) =
+        super::program_under_current(program, directory, platform_dir)
+    {
         let on_current = format!("{root}current/{below}");
         if on_current == program {
             program.to_string()
@@ -100,7 +112,7 @@ pub(crate) async fn follow_current(
                 ))
                 .stating(crate::primitives::failure::FailureCode::Config)
             })?;
-        format!(".stado/services/{directory}/current/darwin-arm/{executable}")
+        format!(".stado/services/{directory}/current/{platform_dir}/{executable}")
     };
     // The declared arguments that must follow the program, in the
     // declaration's own words and order. Only the tail travels: the program
@@ -109,20 +121,15 @@ pub(crate) async fn follow_current(
     // only way the comparison sees the same absolute path the plist got.
     // Empty program means a declaration that only names a plist, and then
     // there is no declared vector to compare against.
-    let expected_args = if declared.program.trim().is_empty() {
-        String::new()
+    let (compare_argv, expected_args) = if declared.program.trim().is_empty() {
+        ("no", String::new())
     } else {
-        declared.args.join("\n")
+        ("yes", declared.args.join("\n"))
     };
     let script = format!(
-        "set -euo pipefail\nunit_path={}\nwanted={}\ncompare_argv={}\nexpected_args={}\n{REPOINT_BODY}",
+        "set -euo pipefail\nunit_path={}\nwanted={}\ncompare_argv={compare_argv}\nexpected_args={}\n{REPOINT_BODY}",
         crate::deploy::shlex_quote(&declared.path),
         crate::deploy::shlex_quote(&wanted),
-        if declared.program.trim().is_empty() {
-            "0"
-        } else {
-            "1"
-        },
         crate::deploy::shlex_quote(&expected_args),
     );
     let output = host_channel::run_script(target, &script, runner)
@@ -146,10 +153,10 @@ pub(crate) async fn follow_current(
 /// A loaded service can keep running even after its unit file becomes
 /// unusable. Verify the persisted program is executable and its argument
 /// vector exactly matches the declaration; restore the previous file and
-/// return failure if either check fails.
+/// return failure if either check fails. `false; exit` leaves with the
+/// failing status of `false`, inside `||` lists where `set -e` does not act.
 const REPOINT_BODY: &str = r#"
-[ -f "$unit_path" ] || { printf '%s
-' "no unit file at $unit_path" >&2; exit 1; }
+[ -f "$unit_path" ] || { printf '%s\n' "no unit file at $unit_path" >&2; false; exit; }
 case "$unit_path" in
   /Library/*) sudo_prefix="/usr/bin/sudo -n" ;;
   *) sudo_prefix="" ;;
@@ -158,52 +165,61 @@ case "$wanted" in
   /*) ;;
   *) wanted="$HOME/$wanted" ;;
 esac
+plist() { $sudo_prefix /usr/libexec/PlistBuddy -c "$1" "$unit_path"; }
+has_key() { plist "Print :$1" &>/dev/null; }
 backup="$(/usr/bin/mktemp)"
 $sudo_prefix /bin/cat "$unit_path" > "$backup"
 restore_and_fail() {
   $sudo_prefix /bin/cp "$backup" "$unit_path"
   rm -f "$backup"
-  printf '%s
-' "$1" >&2
-  exit 1
+  printf '%s\n' "$1" >&2
+  false
+  exit
 }
-if [ "${compare_argv:-0}" = "1" ]; then
+if [ "$compare_argv" = yes ]; then
   # The whole vector is rewritten from the declaration, not just its first
   # element. Setting element zero alone is what let a duplicated subcommand
   # survive a repoint: the program was corrected in place while the stale
   # extra word sat behind it, and the file stayed unrunnable.
-  $sudo_prefix /usr/libexec/PlistBuddy -c "Delete :ProgramArguments" "$unit_path" >/dev/null 2>&1 || true
-  $sudo_prefix /usr/libexec/PlistBuddy -c "Add :ProgramArguments array" "$unit_path"     || restore_and_fail "could not create ProgramArguments on $unit_path"
-  $sudo_prefix /usr/libexec/PlistBuddy -c "Add :ProgramArguments: string $wanted" "$unit_path"     || restore_and_fail "could not set the program on $unit_path"
-  if [ -n "${expected_args:-}" ]; then
-    printf '%s\n' "$expected_args" | while IFS= read -r word; do
-      [ -n "$word" ] || continue
-      $sudo_prefix /usr/libexec/PlistBuddy -c "Add :ProgramArguments: string $word" "$unit_path" || exit 1
-    done || restore_and_fail "could not set the declared arguments on $unit_path"
+  if has_key ProgramArguments; then
+    plist "Delete :ProgramArguments" || restore_and_fail "could not clear ProgramArguments on $unit_path"
   fi
-  $sudo_prefix /usr/libexec/PlistBuddy -c "Delete :Program" "$unit_path" >/dev/null 2>&1 || true
+  plist "Add :ProgramArguments array" || restore_and_fail "could not create ProgramArguments on $unit_path"
+  plist "Add :ProgramArguments: string $wanted" || restore_and_fail "could not set the program on $unit_path"
+  if [ -n "$expected_args" ]; then
+    while IFS= read -r word; do
+      [ -n "$word" ] || continue
+      plist "Add :ProgramArguments: string $word" || restore_and_fail "could not set the declared argument $word on $unit_path"
+    done <<< "$expected_args"
+  fi
+  if has_key Program; then
+    plist "Delete :Program" || restore_and_fail "could not clear Program on $unit_path"
+  fi
+elif has_key ProgramArguments; then
+  # A launchd job runs the first ProgramArguments entry, which PlistBuddy
+  # addresses by its index (https://keith.github.io/xcode-man-pages/launchd.plist.5.html).
+  plist "Set :ProgramArguments:0 $wanted" || restore_and_fail "could not set the program on $unit_path"
 else
-  $sudo_prefix /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $wanted" "$unit_path"     || $sudo_prefix /usr/libexec/PlistBuddy -c "Set :Program $wanted" "$unit_path"     || restore_and_fail "could not set the program on $unit_path"
+  plist "Set :Program $wanted" || restore_and_fail "could not set the program on $unit_path"
 fi
-rendered="$($sudo_prefix /usr/libexec/PlistBuddy -c 'Print :ProgramArguments' "$unit_path" 2>/dev/null | /usr/bin/sed -e '1d' -e '$d' -e 's/^ *//' | /usr/bin/grep -v '^$')"
-[ -n "$rendered" ] || rendered="$($sudo_prefix /usr/libexec/PlistBuddy -c 'Print :Program' "$unit_path" 2>/dev/null)"
-program="$(printf '%s
-' "$rendered" | /usr/bin/sed -n '1p')"
+if has_key ProgramArguments; then
+  rendered="$(plist 'Print :ProgramArguments' | /usr/bin/grep -v -e '^Array {$' -e '^}$' | /usr/bin/sed -e 's/^ *//' | /usr/bin/grep -v '^$')"
+else
+  rendered="$(plist 'Print :Program')"
+fi
+IFS= read -r program <<< "$rendered"
 [ -f "$program" ] || restore_and_fail "the unit would run $program, which is not a file on this host"
 [ -x "$program" ] || restore_and_fail "the unit would run $program, which is not executable"
-if [ "${compare_argv:-0}" = "1" ]; then
-  if [ -n "${expected_args:-}" ]; then
+if [ "$compare_argv" = yes ]; then
+  if [ -n "$expected_args" ]; then
     expected_argv="$(printf '%s\n%s' "$wanted" "$expected_args")"
   else
     expected_argv="$wanted"
   fi
   if [ "$rendered" != "$expected_argv" ]; then
-    restore_and_fail "the rendered argument vector [$(printf '%s' "$rendered" | /usr/bin/tr '
-' ' ')] does not match the declared one [$(printf '%s' "$expected_argv" | /usr/bin/tr '
-' ' ')]"
+    restore_and_fail "the rendered argument vector [$(printf '%s' "$rendered" | /usr/bin/tr '\n' ' ')] does not match the declared one [$(printf '%s' "$expected_argv" | /usr/bin/tr '\n' ' ')]"
   fi
 fi
 rm -f "$backup"
-printf '%s
-' "$wanted"
+printf '%s\n' "$wanted"
 "#;

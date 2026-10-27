@@ -117,6 +117,16 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
     // The markers are kept before the resolver says `serving`, so a host
     // whose resolver reports serving carries the directory's addresses.
     state.keep_markers().await;
+    // Taken before `serving` is published: a command that reads `serving`
+    // may ask for a read now, and SIGUSR1 with no handler ends the process.
+    let asked = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1()) {
+        Ok(asked) => asked,
+        Err(error) => {
+            let detail = format!("the resolver cannot take requests to read the registry now: {error}");
+            publish(&PublishedState::failed(target, &detail));
+            return Err(CmdError::click(detail));
+        }
+    };
     // Published before the first port is accepted on, so `resolver status`
     // answers `serving` for exactly the window the sockets are open.
     state.publish_serving().await;
@@ -134,7 +144,7 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
     let (changes, mut changed) = tokio::sync::mpsc::unbounded_channel();
     let refresh_state = Arc::clone(&state);
     let refresh_seconds = config.refresh_seconds;
-    tasks.spawn(async move { watch_registry(refresh_state, refresh_seconds, changes).await });
+    tasks.spawn(async move { watch_registry(refresh_state, refresh_seconds, changes, asked).await });
     let renewing_state = Arc::clone(&state);
     tasks.spawn(async move { renew_sessions(renewing_state, refresh_seconds).await });
     let api_state = Arc::clone(&state);
@@ -170,7 +180,7 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
                 // that was never applied would vouch for routes nobody holds.
                 match state.config.write() {
                     Ok(mut held) => *held = next,
-                    Err(_) => {
+                    Err(_poisoned) => {
                         break CmdError::unreachable(
                             "the resolver configuration lock is poisoned by a task that \
                              panicked; the new configuration was not applied",
@@ -203,7 +213,9 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
     Err(exit)
 }
 
-/// Reload the snapshot on the declared interval.
+/// Reload the snapshot on the declared interval, or at once when a command
+/// on this host asks (SIGUSR1, sent by `follow_generation` after a move this
+/// host resolves through), the interval then counted again from that read.
 ///
 /// A failed refresh is published with the upstream's own error, and the next
 /// read is the next declared tick. Adapters keep refusing with `service
@@ -213,42 +225,55 @@ async fn watch_registry(
     state: Arc<ResolverState>,
     refresh_seconds: u64,
     changes: tokio::sync::mpsc::UnboundedSender<service_resolution::ResolverConfig>,
+    mut asked: tokio::signal::unix::Signal,
 ) -> Result<(), String> {
     let refresh = Duration::from_secs(refresh_seconds);
     let mut interval = tokio::time::interval(refresh);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     interval.tick().await;
-    let mut attempt = 0_u32;
+    // The consecutive failed refreshes, none while the last one succeeded.
+    let mut failed: Option<std::num::NonZeroU32> = None;
     loop {
-        interval.tick().await;
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = asked.recv() => interval.reset(),
+        }
         match state.refresh().await {
             Ok(Some(next)) => {
                 changes
                     .send(next)
-                    .map_err(|_| "the resolver stopped taking configuration changes".to_string())?;
+                    .map_err(|_unsent| "the resolver stopped taking configuration changes".to_string())?;
             }
             Ok(None) => {
-                if attempt != 0 {
-                    eprintln!("stado resolver refresh recovered after {attempt} failed attempts");
-                    attempt = 0;
+                if let Some(attempts) = failed.take() {
+                    eprintln!("stado resolver refresh recovered after {attempts} failed attempts");
                 }
                 state.publish_serving().await;
             }
             Err(error) => {
-                attempt = attempt.saturating_add(1);
+                let attempt = match failed {
+                    None => std::num::NonZeroU32::MIN,
+                    Some(attempts) => attempts.saturating_add(std::num::NonZeroU32::MIN.get()),
+                };
+                failed = Some(attempt);
                 eprintln!(
                     "stado resolver refresh failed, attempt {attempt}, next on the declared \
                      {refresh_seconds}s interval: {error}"
                 );
                 // The listeners and the API stay bound through a failed
-                // refresh, and the API still answers the held generation.
-                let mut backing_off =
-                    PublishedState::backing_off(&state.local_target, attempt, &error, refresh)
+                // refresh, and the API still answers the held generation. A
+                // panic that poisoned the configuration lock left the
+                // configuration it held, which still names where the API
+                // answers.
+                let api_bind = match state.config.read() {
+                    Ok(config) => config.api_bind.clone(),
+                    Err(poisoned) => poisoned.into_inner().api_bind.clone(),
+                };
+                let backing_off =
+                    PublishedState::backing_off(&state.local_target, attempt.get(), &error, refresh)
                         .bound(state.published_adapters())
-                        .refreshing(refresh_seconds);
-                if let Ok(config) = state.config.read() {
-                    backing_off = backing_off.answering_at(&config.api_bind);
-                }
+                        .refreshing(refresh_seconds)
+                        .answering_at(&api_bind);
                 publish(&backing_off);
             }
         }

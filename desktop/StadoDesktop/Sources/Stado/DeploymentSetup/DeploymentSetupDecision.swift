@@ -10,6 +10,16 @@ import WisentDesignSystem
 extension DeploymentSetupView {
     // MARK: Costly decision
 
+    /// The organization the deployment is created under: the signed-in
+    /// identity's, named; without a sign-in the dialog says so, since the
+    /// sheet opens only after one and a missing identity is a state to name.
+    var owningOrganization: String {
+        if let identity {
+            return identity.organization.name
+        }
+        return "an organization not signed in (sign in required)"
+    }
+
     /// Creating a cloud deployment bills the operator's own account from the
     /// first step. The dialog names every resource before the first API call,
     /// and the destructive verb is the one that spends money.
@@ -20,7 +30,7 @@ extension DeploymentSetupView {
             lines: decisionLines(target),
             reasonCode: nil,
             listing: decisionListing(target),
-            footnote: "\(identity?.organization.name ?? "The selected organization") owns the deployment. Members may read it; only owners and admins may change it.",
+            footnote: "\(owningOrganization) owns the deployment. Members may read it; only owners and admins may change it.",
             actions: [
                 WisentAction("Do not create it", kind: .primary) { showsCreateDecision = false },
                 WisentAction(
@@ -64,7 +74,7 @@ extension DeploymentSetupView {
             "provider: \(target.provider.rawValue)",
             "account: \(target.externalID)",
             "deployment name: \(trimmedName)",
-            "organization: \(identity?.organization.name ?? "Sign in required")",
+            "organization: \(owningOrganization)",
             "control-plane interval: \(controlPlaneSeconds) s",
         ] + (target.provider == .local
             ? ["queue poll interval: \(pollSeconds) s"]

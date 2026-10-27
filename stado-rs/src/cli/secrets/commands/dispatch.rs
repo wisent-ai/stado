@@ -5,9 +5,7 @@ use crate::cli::CmdError;
 use crate::cli::secrets::commands::subcommands::{
     CredentialAcquisitionScopeCommands, CredentialGrantCommands, CredentialTokenCommands,
 };
-use crate::cli::secrets::commands::surface::{
-    CredentialSigningProfileCommands, CredentialSparkleKeyCommands, SecretsCommands,
-};
+use crate::cli::secrets::commands::surface::SecretsCommands;
 use crate::cli::secrets::diagnostics::doctor::doctor;
 use crate::cli::secrets::diagnostics::harvest::harvest;
 use crate::cli::secrets::diagnostics::unlock::try_unlock;
@@ -30,7 +28,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         }
         // Also answered without a client: a protected key that nothing can
         // unlock is precisely the state where every other verb is unavailable.
-        SecretsCommands::TryUnlock {
+        SecretsCommands::Unlock {
             host,
             keychain_only,
         } => try_unlock(host.as_deref(), keychain_only).await,
@@ -175,7 +173,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 file,
             } => super::host::custody_local(operation, &vault, &consumer, &file),
         },
-        SecretsCommands::AcquisitionScopes { command } => match command {
+        SecretsCommands::Scopes { command } => match command {
             CredentialAcquisitionScopeCommands::Sync {
                 host,
                 source,
@@ -249,32 +247,14 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         },
         SecretsCommands::Backup { command } => super::vault_verbs::backup(command).await,
         SecretsCommands::Seed { command } => super::vault_verbs::seed(command).await,
-        SecretsCommands::SparkleKey {
-            command:
-                CredentialSparkleKeyCommands::Mint {
-                    product,
-                    info_plist,
-                    replace,
-                    json,
-                },
-        } => {
-            crate::cli::secrets::store::items::sparkle::sparkle_key(
-                &product,
-                &info_plist,
-                replace,
-                json,
-            )
-            .await
-        }
-        SecretsCommands::SigningProfile {
-            command: CredentialSigningProfileCommands::Ensure(args),
-        } => super::host::apple_profile(args).await,
+        SecretsCommands::Signing { command } => super::vault_verbs::signing(command).await,
     }
 }
 
-/// The store a delegated `get` or `put` acts on: a Skarbiec client under the
-/// named consumer's own grant when `--route` is given, else the selected store.
-fn delegated_or_selected(
+/// The store a delegated `get`, `put`, `run` or sandbox credential read acts
+/// on: a Skarbiec client under the named consumer's own grant when
+/// `--route` is given, else the selected store.
+pub(in crate::cli::secrets) fn delegated_or_selected(
     route: Option<String>,
     consumer: Option<String>,
     grant_file: Option<String>,

@@ -28,17 +28,11 @@ extension EnrollmentInviteView {
             ),
         ])
 
-        if let checkpoint = record.checkpoint, checkpoint.reason != MachineInviteCheckpoint.ok {
-            EnrollmentCheckpointPanel(checkpoint: checkpoint)
+        if record.checkpoint.reason != MachineInviteCheckpoint.ok {
+            EnrollmentCheckpointPanel(checkpoint: record.checkpoint)
         }
 
-        if record.snippet.isEmpty {
-            WisentAlertPanel(
-                tone: .danger,
-                title: "This invitation has no fragment to show",
-                detail: "The control plane minted it as an offline invitation and did not print the fragment, so there is nothing here to send. Revoke it and mint another; if that repeats, run stado fleet invite --offline in a terminal on the control plane host and read what it prints."
-            )
-        } else {
+        if let snippet = record.snippet {
             WisentSectionBox(
                 title: "The fragment to send to whoever has the machine",
                 detail: "They paste it into a terminal on the machine being added. It creates ~/.ssh, appends the fleet's public key to authorized_keys without duplicating a line that is already there, fixes the modes, tells them where to turn Remote Login on if it is off, and prints the one address they have to send you.",
@@ -46,7 +40,7 @@ extension EnrollmentInviteView {
             ) {
                 VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                     EnrollmentCopyBlock(
-                        text: record.snippet,
+                        text: snippet,
                         caption: "Everything in it is public. The only key inside is the public half of the pair for \(record.targetName); the private half is in the credential store on the control plane host and never leaves it, so somebody reading this fragment on the way learns nothing they can use against this fleet. Send it however you already talk to that person."
                     )
                     Text("It is safe to send twice. Pasting it a second time appends nothing, so a lost message costs a resend rather than a new invitation.")
@@ -55,6 +49,12 @@ extension EnrollmentInviteView {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        } else {
+            WisentAlertPanel(
+                tone: .danger,
+                title: "This invitation's record kept no fragment",
+                detail: "The record of this offline invitation carries no fragment, so there is nothing here to send. Revoke it and mint another; the new one keeps its fragment with its record."
+            )
         }
 
         WisentSectionBox(
@@ -63,7 +63,7 @@ extension EnrollmentInviteView {
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                 TextField(
-                    "kasia@studio-air.local",
+                    "user@example-host.example",
                     text: Binding(
                         get: { store.draft.sshTarget },
                         set: { store.setSSHTarget($0) }
@@ -101,9 +101,9 @@ extension EnrollmentInviteView {
             }
         }
 
-        if othersWaiting > 0 {
+        if !othersWaiting.isEmpty {
             EnrollmentNote(
-                title: "\(othersWaiting) machine\(othersWaiting == 1 ? "" : "s") waiting for a decision",
+                title: "\(othersWaiting.count) machine\(othersPlural) waiting for a decision",
                 detail: "They have nothing to do with this invitation — an offline one is never answered by a machine — but they are waiting on somebody. The Join method lists every request in the store.",
                 actions: [WisentAction("Go to Join") { store.open(.join) }]
             )
@@ -150,11 +150,7 @@ extension EnrollmentInviteView {
                         )
                     }
                     if record.baseIsTemporary {
-                        EnrollmentChecklistRow(
-                            text: record.baseWarning.isEmpty
-                                ? "The line you sent stands on a temporary ingress. Tearing that ingress down, or this machine restarting it, kills the line before its expiry does."
-                                : record.baseWarning
-                        )
+                        EnrollmentChecklistRow(text: record.temporaryBaseSentence)
                     }
                     if !record.publicKey.isEmpty {
                         EnrollmentChecklistRow(
@@ -165,17 +161,23 @@ extension EnrollmentInviteView {
             }
         }
 
-        if othersWaiting > 0 {
+        if !othersWaiting.isEmpty {
             EnrollmentNote(
-                title: "\(othersWaiting) other machine\(othersWaiting == 1 ? "" : "s") waiting for a decision",
+                title: "\(othersWaiting.count) other machine\(othersPlural) waiting for a decision",
                 detail: "They did not answer this invitation. The Join method lists every request in the store, including those.",
                 actions: [WisentAction("Go to Join") { store.open(.join) }]
             )
         }
     }
 
-    private var othersWaiting: Int {
-        guard let record = store.plan.invite else { return 0 }
-        return store.waitingRequests.filter { $0.inviteID != record.id }.count
+    /// The requests waiting on somebody other than this invitation's machine.
+    private var othersWaiting: [FleetPendingRequest] {
+        guard let record = store.plan.invite else { return [] }
+        return store.waitingRequests.filter { $0.inviteID != record.id }
+    }
+
+    /// Singular when exactly one request is waiting.
+    private var othersPlural: String {
+        othersWaiting.dropFirst().isEmpty ? "" : "s"
     }
 }

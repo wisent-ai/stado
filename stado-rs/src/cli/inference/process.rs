@@ -26,7 +26,12 @@ pub async fn blockers(host: &str, json_output: bool) -> Result<(), CmdError> {
     let processes = report
         .get("processes")
         .and_then(Value::as_array)
-        .expect("blocker report carries a process array");
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "the GPU blocker report from {host} carries no process array: {report}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     if processes.is_empty() {
         println!("no GPU compute processes on {host}");
         return Ok(());

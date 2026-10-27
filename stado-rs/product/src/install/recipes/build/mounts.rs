@@ -38,7 +38,13 @@ pub fn validate(
         if !variables.insert(environment_name(key)) {
             bail!("build inputs resolve to the same environment variable: {key}");
         }
-        let mount = directory.join(relative(Path::new(entry["mount"].as_str().unwrap_or(key)))?);
+        // An input mounts under its own name unless it declares a mount path.
+        let declared_mount = match entry.get("mount") {
+            None => key.as_str(),
+            Some(Value::String(path)) => path.as_str(),
+            Some(other) => bail!("build input {key} declares mount {other}, which is not a path"),
+        };
+        let mount = directory.join(relative(Path::new(declared_mount))?);
         if mount.starts_with(&downloads)
             || downloads.starts_with(&mount)
             || mount.starts_with(&receipt)

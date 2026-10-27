@@ -69,21 +69,24 @@ pub struct Registry {
 
 /// Top-level registry keys this build models; everything else round-trips
 /// through [`Registry::extra`].
-const MODELLED_TOP_LEVEL_KEYS: [&str; 4] = [
+const MODELLED_TOP_LEVEL_KEYS: &[&str] = &[
     "targets",
     "coordinators",
     "service_directory",
     "placement_profiles",
 ];
 
-/// Entries with a truthy `name` survive; the rest are skipped (Python
-/// `if isinstance(d, dict) and d.get("name")`).
-fn name_is_truthy(value: &Value) -> bool {
-    value
-        .as_object()
-        .and_then(|map| map.get("name"))
-        .and_then(Value::as_str)
-        .is_some_and(|name| !name.is_empty())
+/// An entry of a registry list must name itself: one with no name, or a name
+/// that is not non-empty text, is refused naming the list and its position.
+/// Python skipped it (`if isinstance(d, dict) and d.get("name")`), so a typo
+/// dropped a host from the fleet without a word.
+fn named_entry<'a>(list: &str, index: usize, value: &'a Value) -> Result<&'a Value, RegistryError> {
+    match value.get("name").and_then(Value::as_str) {
+        Some(name) if !name.is_empty() => Ok(value),
+        _ => Err(RegistryError::InvalidEntry(format!(
+            "{list}[{index}] names no name: {value}"
+        ))),
+    }
 }
 
 /// Target fields no release reads any more. The host's space-reclaim rule
@@ -150,43 +153,57 @@ pub fn canonical_registry_document(document: &Value) -> Cow<'_, Value> {
 }
 
 fn parse_targets(data: &Value) -> Result<Vec<ComputeTarget>, RegistryError> {
-    // Python: raw = data.get("targets") if isinstance(data, dict) else data
-    let raw = match data {
-        Value::Object(map) => map.get("targets").unwrap_or(&Value::Null),
-        other => other,
+    // Python: raw = data.get("targets") if isinstance(data, dict) else data.
+    // A document object declares its targets under `targets`; a document
+    // without that key declares none; a bare list is the targets themselves.
+    // Anything else is refused: read as no targets, a mistyped list emptied
+    // the fleet.
+    let items: &[Value] = match data {
+        Value::Object(map) => match map.get("targets") {
+            None => &[],
+            Some(Value::Array(items)) => items.as_slice(),
+            Some(other) => {
+                return Err(RegistryError::InvalidEntry(format!(
+                    "targets must be a list, not {other}"
+                )))
+            }
+        },
+        Value::Array(items) => items.as_slice(),
+        other => {
+            return Err(RegistryError::InvalidEntry(format!(
+                "a registry is an object or a list of targets, not {other}"
+            )))
+        }
     };
     let mut targets = Vec::new();
-    if let Value::Array(items) = raw {
-        for item in items {
-            if !name_is_truthy(item) {
-                continue;
-            }
-            let mut normalized = item.clone();
-            // Retired fields are accepted only as input to the one-way migration.
-            strip_retired_target_fields(&mut normalized);
-            targets.push(
-                serde_json::from_value(normalized)
-                    .map_err(|exc| RegistryError::InvalidEntry(exc.to_string()))?,
-            );
-        }
+    for (index, item) in items.iter().enumerate() {
+        let mut normalized = named_entry("targets", index, item)?.clone();
+        // Retired fields are accepted only as input to the one-way migration.
+        strip_retired_target_fields(&mut normalized);
+        targets.push(
+            serde_json::from_value(normalized)
+                .map_err(|exc| RegistryError::InvalidEntry(exc.to_string()))?,
+        );
     }
     Ok(targets)
 }
 
 fn parse_coordinators(data: &Value) -> Result<Vec<Coordinator>, RegistryError> {
-    let mut coordinators = Vec::new();
-    if let Value::Object(map) = data {
-        if let Some(Value::Array(items)) = map.get("coordinators") {
-            for item in items {
-                if !name_is_truthy(item) {
-                    continue;
-                }
-                coordinators.push(
-                    serde_json::from_value(item.clone())
-                        .map_err(|exc| RegistryError::InvalidEntry(exc.to_string()))?,
-                );
-            }
+    let items: &[Value] = match data.get("coordinators") {
+        None => &[],
+        Some(Value::Array(items)) => items.as_slice(),
+        Some(other) => {
+            return Err(RegistryError::InvalidEntry(format!(
+                "coordinators must be a list, not {other}"
+            )))
         }
+    };
+    let mut coordinators = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        coordinators.push(
+            serde_json::from_value(named_entry("coordinators", index, item)?.clone())
+                .map_err(|exc| RegistryError::InvalidEntry(exc.to_string()))?,
+        );
     }
     Ok(coordinators)
 }
@@ -254,10 +271,15 @@ pub fn load_registry_from_str(text: &str) -> Result<Registry, RegistryError> {
 }
 
 /// Load a registry from a local JSON file. A missing file yields an empty
-/// registry (Python `load_targets` behavior); malformed JSON is an error.
+/// registry (Python `load_targets` behavior); a file that cannot be examined
+/// or read, and malformed JSON, are errors: read as missing, an unreadable
+/// registry was an empty fleet.
 pub fn load_registry_file(path: &Path) -> Result<Registry, RegistryError> {
-    if !path.is_file() {
-        return Ok(Registry::default());
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_not_file) => return Ok(Registry::default()),
+        Err(exc) if exc.kind() == std::io::ErrorKind::NotFound => return Ok(Registry::default()),
+        Err(exc) => return Err(RegistryError::Io(path.to_path_buf(), exc)),
     }
     let text =
         std::fs::read_to_string(path).map_err(|exc| RegistryError::Io(path.to_path_buf(), exc))?;

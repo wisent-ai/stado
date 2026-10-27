@@ -36,36 +36,33 @@ fn handoff_receipt_path(product: &str, version: &str, host: &str) -> std::path::
         .join(format!("handoff-{host}.json"))
 }
 
+/// Write the handoff receipt whole and durably through the one writer Stado
+/// keeps its files with: over what is there when `replace`, else only where
+/// no receipt is. A receipt already there with the same bytes is the same
+/// handoff and stands; one with other bytes is refused. A private copy read
+/// every failed no-clobber placement as "already there", so a refused link
+/// was answered by reading a file that did not exist.
 fn persist_handoff_receipt(
     path: &std::path::Path,
     report: &Value,
     replace: bool,
 ) -> Result<(), CmdError> {
-    use std::io::Write as _;
-
-    let parent = path.parent().ok_or_else(|| {
-        CmdError::click("handoff receipt path has no parent")
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
-    std::fs::create_dir_all(parent)?;
     let mut bytes = serde_json::to_vec_pretty(report)?;
     bytes.push(b'\n');
-    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
-    staged.write_all(&bytes)?;
-    staged.as_file().sync_all()?;
+    let mode = crate::primitives::file_mode::owner_read_write();
     if replace {
-        staged.persist(path).map_err(|error| error.error)?;
-    } else if let Err(error) = staged.persist_noclobber(path) {
-        let existing = std::fs::read(path)?;
-        if existing != bytes {
-            return Err(CmdError::refused(format!(
-                "handoff receipt {} already exists with different content",
-                path.display()
-            )));
-        }
-        drop(error);
+        crate::primitives::document::persist_with_mode(path, &bytes, mode)?;
+        return Ok(());
     }
-    std::fs::File::open(parent)?.sync_all()?;
+    if crate::primitives::document::persist_if_absent(path, &bytes, mode)? {
+        return Ok(());
+    }
+    if std::fs::read(path)? != bytes {
+        return Err(CmdError::refused(format!(
+            "handoff receipt {} already exists with different content",
+            path.display()
+        )));
+    }
     Ok(())
 }
 
@@ -88,7 +85,7 @@ fn registry_has_intended_handoff(
     service_name: &str,
     product: &str,
     host: &str,
-    legacy_identities: [&str; 3],
+    legacy_identities: &[&str],
 ) -> bool {
     let units_external = document
         .get("placement_profiles")
@@ -125,7 +122,7 @@ fn registry_has_intended_handoff(
                 && target.get("legacy_launchd_plist").is_none()
         });
     let legacy_unreachable = legacy_identities
-        .into_iter()
+        .iter()
         .all(|identity| !identity.is_empty() && !document_contains_string(document, identity));
     units_external && legacy_removed && legacy_unreachable
 }

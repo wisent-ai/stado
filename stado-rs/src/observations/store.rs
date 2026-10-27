@@ -8,11 +8,11 @@ use std::path::PathBuf;
 
 use super::observation::Observation;
 
-/// `~/.stado/observations.json`.
+/// `~/.stado/observations.json` under the home every Stado file is kept
+/// under ([`crate::config_file::home`]).
 fn path() -> io::Result<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
-        io::Error::other("HOME is not set, so there is nowhere to keep observations")
-    })?;
+    let home = crate::config_file::home()
+        .map_err(|cause| io::Error::other(format!("there is nowhere to keep observations: {cause}")))?;
     Ok(home.join(".stado").join("observations.json"))
 }
 
@@ -139,9 +139,6 @@ fn on_file(path: &std::path::Path) -> io::Result<Vec<Observation>> {
 /// file states which hosts answered and which did not, and that is a map of
 /// where to knock.
 pub fn record(observations: &[Observation]) -> io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
     let path = path()?;
     let directory = path
         .parent()
@@ -173,27 +170,15 @@ pub fn record(observations: &[Observation]) -> io::Result<()> {
     let mut body = serde_json::to_vec_pretty(&rows).map_err(io::Error::other)?;
     body.push(b'\n');
 
-    // The pid keeps two concurrent recorders off one another's temporary file.
-    // The renames themselves still race and the last one wins whole, so a
-    // recorder that loaded before the other finished drops those rows until
-    // the next sweep writes them again. That is accepted rather than locked
-    // against: a lock on this path would let a stuck writer block a reader,
-    // and an observation one sweep late renders as an age -- which is exactly
-    // the thing this module exists to make visible instead of hiding.
-    let staging = directory.join(format!(".observations-{}.json.staging", std::process::id()));
-    let mut handle = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&staging)?;
-    handle.write_all(&body)?;
-    handle.sync_all()?;
-    drop(handle);
-    // `mode` above applies only when the open created the file; a temporary
-    // left behind by a killed process would otherwise carry its old bits into
-    // the rename.
-    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o600))?;
-    std::fs::rename(&staging, &path)?;
-    Ok(())
+    // Each recorder writes its own fresh staging file, created readable by
+    // this account only, flushed, renamed over the record and the directory
+    // flushed, so a temporary a killed process left cannot carry its bits into
+    // the rename. The renames themselves still race and the last one wins
+    // whole, so a recorder that loaded before the other finished drops those
+    // rows until the next sweep writes them again. That is accepted rather
+    // than locked against: a lock on this path would let a stuck writer block
+    // a reader, and an observation one sweep late renders as an age -- which
+    // is exactly the thing this module exists to make visible instead of
+    // hiding.
+    crate::primitives::document::persist(&path, &body)
 }

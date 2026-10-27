@@ -183,6 +183,17 @@ pub(super) fn remove_missing_ok(path: &Path) -> Result<(), StorageError> {
     }
 }
 
+/// When the blob at `target` was last modified; `None` when there is none.
+pub(super) fn modified(
+    target: &Path,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, StorageError> {
+    match target.metadata() {
+        Ok(md) => Ok(Some(chrono::DateTime::<chrono::Utc>::from(md.modified()?))),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
 /// Bytes `first` through `last` of the file at `target`, as many of them as
 /// it holds, read from that offset alone; `None` when there is no file.
 pub(super) fn read_range(

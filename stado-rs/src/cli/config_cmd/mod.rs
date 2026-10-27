@@ -1,5 +1,5 @@
 //! `stado config SUB` — configuration lifecycle commands:
-//! show | get | validate | init | migrate-identities | set | unset.
+//! show | get | validate | init | migrate | set | unset.
 //!
 //! One component per group of verbs. `keys` holds the two that change a single
 //! dotted key of the file, `document` holds the three that act on the file as
@@ -19,13 +19,13 @@ use show::{get, show};
 pub fn run(sub: &str, key: Option<&str>, value: Option<&str>, json: bool) -> Result<(), CmdError> {
     match sub {
         "init" => init(),
-        "migrate-identities" => migrate_identities(),
+        "migrate" => migrate_identities(),
         "validate" => validate(),
         "show" => show(json),
         "get" => match key {
             Some(key) => get(key),
             None => Err(CmdError::usage(
-                "config get needs a resolved key, e.g. stado config get agent_skarbiec_url",
+                "config get needs a key: a resolved one (stado config get agent_skarbiec_url) or a dotted key of the config file (stado config get host.scan_load_ceiling)",
             )),
         },
         "set" => match (key, value) {
@@ -43,7 +43,7 @@ pub fn run(sub: &str, key: Option<&str>, value: Option<&str>, json: bool) -> Res
             )),
         },
         other => Err(CmdError::usage(format!(
-            "unknown config subcommand: {other} (show|get|validate|init|migrate-identities|set|unset)"
+            "unknown config subcommand: {other} (show|get|validate|init|migrate|set|unset)"
         ))),
     }
 }

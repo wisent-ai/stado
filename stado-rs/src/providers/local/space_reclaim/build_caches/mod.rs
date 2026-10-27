@@ -126,7 +126,7 @@ pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
     };
     placement::place_cargo_builds(home, report);
     let admitted = if enforcing {
-        crate::deploy::host_scan::admit_relief(SCAN).map(|_| true)
+        crate::deploy::host_scan::admit_relief(SCAN).map(|_relief| true)
     } else {
         crate::deploy::host_scan::admit(SCAN).map(|verdict| {
             if !verdict.admitted() {

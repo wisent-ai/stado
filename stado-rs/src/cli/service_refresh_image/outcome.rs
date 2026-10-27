@@ -88,12 +88,17 @@ pub(super) fn verdict(
         return Ok(());
     }
     let unit = &before.unit;
-    let running = after
-        .and_then(|row| row.running.as_ref())
-        .map_or_else(|| "an unread image".to_string(), ImageIdentity::describe);
-    let declared = after
-        .and_then(|row| row.installed.as_ref())
-        .unwrap_or(installed);
+    // The sentence quotes what the second look found; a look that could not
+    // read the running image says so, and one that could not read the
+    // declared file is judged against the file the restart installed.
+    let running = match after.and_then(|row| row.running.as_ref()) {
+        Some(image) => image.describe(),
+        None => "an unread image".to_string(),
+    };
+    let declared = match after.and_then(|row| row.installed.as_ref()) {
+        Some(image) => image,
+        None => installed,
+    };
     Err(CmdError::unreachable(match outcome {
         RefreshOutcome::OnDeclaredFile => unreachable!("handled above"),
         RefreshOutcome::NotRunning => format!(

@@ -69,13 +69,10 @@ impl ResolverState {
         let (document, store_version, generation) = self.read_registry().await?;
         let serialized = serde_json::to_string(&document)
             .map_err(|error| format!("cannot serialize validated registry snapshot: {error}"))?;
-        // A refused cache does not fail the refresh: the document this
-        // process just read is good and serving it is the job. It does get
-        // recorded, so `publish_serving` carries it to `resolver status`.
-        match targets::store_last_good(&serialized, &store_version) {
-            Ok(()) => *self.last_good_refusal.write().await = None,
-            Err(refusal) => *self.last_good_refusal.write().await = Some(refusal.kind()),
-        }
+        // The copy is recorded only once the generation is judged below: a
+        // copy recorded before the rollback refusal took the old authority's
+        // lower generation, and every one-shot command reading that copy
+        // went back to the authority the role had moved away from.
         let next_source = snapshot_source(self.local_store.clone(), &document, &self.local_target)?;
         let next_config = service_resolution::resolver_config(&document, &self.local_target)?;
         // A lock a panicking writer left poisoned still holds the last
@@ -85,13 +82,41 @@ impl ResolverState {
             Err(poisoned) => *poisoned.into_inner() != next_config,
         };
         let mut current = self.snapshot.write().await;
+        // A generation below the held one is refused, and the refusal names
+        // both sides' store versions and when the held one was loaded, so a
+        // reader can tell a real rollback of the authority from a generation
+        // this host took from a copy the authority never committed. The one
+        // generation the operator accepted (`stado resolver accept`) is
+        // adopted once, and the acceptance is spent.
+        let mut adopted = false;
         if generation < current.directory_generation {
-            return Err(format!(
-                "service directory rollback rejected: generation {generation} < {}",
+            let refusal = format!(
+                "service directory rollback rejected: the authority answered generation {generation} \
+                 (store version {store_version}), below generation {} this resolver loaded at {} \
+                 (store version {}); each directory change committed at the authority advances its \
+                 generation by one, and this host follows again once the authority passes {}, or at \
+                 once after `stado resolver accept --generation {generation}` on this host",
+                current.directory_generation,
+                current.loaded_at_iso,
+                current.store_version,
                 current.directory_generation
-            ));
+            );
+            match crate::cli::resolver::accept::accepted(generation) {
+                Ok(true) => {
+                    crate::cli::resolver::accept::consume()
+                        .map_err(|cause| format!("{refusal}; {cause}"))?;
+                    eprintln!(
+                        "stado resolver adopts directory generation {generation} below {}: the operator accepted it",
+                        current.directory_generation
+                    );
+                    adopted = true;
+                }
+                Ok(false) => return Err(refusal),
+                Err(cause) => return Err(format!("{refusal}; {cause}")),
+            }
         }
-        if generation == current.directory_generation
+        if !adopted
+            && generation == current.directory_generation
             && service_resolution::directory(&document)?
                 != service_resolution::directory(&current.document)?
         {
@@ -99,13 +124,29 @@ impl ResolverState {
                 "service directory changed without advancing generation {generation}"
             ));
         }
-        let advanced = generation > current.directory_generation;
+        // An adopted generation is a change the operator accepted: it is
+        // said as loaded, as an advance is.
+        let advanced = adopted || generation > current.directory_generation;
+        // A refused cache does not fail the refresh: the document this
+        // process just read is good and serving it is the job. It does get
+        // recorded, so `publish_serving` carries it to `resolver status`.
+        // An adopted generation is the operator's acceptance, which the copy
+        // follows as the resolver does.
+        let recorded = if adopted {
+            targets::store_adopted_last_good(&serialized, &store_version)
+        } else {
+            targets::store_last_good(&serialized, &store_version)
+        };
         current.document = document;
         current.store_version = store_version;
         current.directory_generation = generation;
         current.loaded_at = Instant::now();
         current.loaded_at_iso = now_iso();
         drop(current);
+        match recorded {
+            Ok(()) => *self.last_good_refusal.write().await = None,
+            Err(refusal) => *self.last_good_refusal.write().await = Some(refusal.kind()),
+        }
         *self.source.write().await = next_source;
         // Said after the markers are kept, so a reader of this line knows
         // this host's markers already follow that generation.
@@ -145,21 +186,26 @@ impl ResolverState {
             .map(|adapter| format!("http://{}", adapter.bind))
     }
 
-    /// The adapters this process listens on, and those it does not serve.
+    /// The adapters this process listens on, and those it does not serve. A
+    /// lock poisoned by a panic elsewhere is taken over, as every reader here
+    /// does: skipping the write would publish the previous adapters forever.
     pub(super) fn hold(&self, serving: Vec<ResolverAdapter>, unserved: Vec<PublishedAdapter>) {
-        if let Ok(mut held) = self.adapters.write() {
-            *held = serving;
+        match self.adapters.write() {
+            Ok(mut held) => *held = serving,
+            Err(poisoned) => *poisoned.into_inner() = serving,
         }
-        if let Ok(mut held) = self.unserved.write() {
-            *held = unserved;
+        match self.unserved.write() {
+            Ok(mut held) => *held = unserved,
+            Err(poisoned) => *poisoned.into_inner() = unserved,
         }
     }
 
     /// The address of every adapter this process listens on, then every
     /// declared adapter it does not serve with its reason.
     pub(super) fn published_adapters(&self) -> Vec<PublishedAdapter> {
-        let Ok(adapters) = self.adapters.read() else {
-            return Vec::new();
+        let adapters = match self.adapters.read() {
+            Ok(adapters) => adapters,
+            Err(poisoned) => poisoned.into_inner(),
         };
         let mut published: Vec<PublishedAdapter> = adapters
             .iter()
@@ -170,9 +216,11 @@ impl ResolverState {
                 unserved: None,
             })
             .collect();
-        if let Ok(unserved) = self.unserved.read() {
-            published.extend(unserved.iter().cloned());
-        }
+        let unserved = match self.unserved.read() {
+            Ok(unserved) => unserved,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        published.extend(unserved.iter().cloned());
         published
     }
 
@@ -186,6 +234,10 @@ impl ResolverState {
                 (config.refresh_seconds, config.api_bind.clone())
             }
         };
+        let read_from = match &*self.source.read().await {
+            SnapshotSource::Authority { target, .. } => Some(target.clone()),
+            SnapshotSource::Local(_) => None,
+        };
         let current = self.snapshot.read().await;
         publish(
             &PublishedState::serving(
@@ -196,22 +248,24 @@ impl ResolverState {
                 *self.last_good_refusal.read().await,
                 self.published_adapters(),
             )
+            .read_from(read_from)
             .refreshing(refresh_seconds)
             .answering_at(&api_bind),
         );
     }
 
-    /// The registry generation this process holds, as `stado resolver
-    /// snapshot` prints it: from memory, never the store, so the authority
-    /// answers while its store stands. Only the authority answers, and only
-    /// within the declared max-stale; past it the refusal names the age.
+    /// The registry generation this process holds, from memory, never the
+    /// store, so it answers while the store stands, and only within the
+    /// declared max-stale; past it the refusal names the age. `read_from`
+    /// names the authority a copy was refreshed from, and is null on the
+    /// authority itself: a reader on this host takes either, while `stado
+    /// resolver snapshot`, which serves other hosts, answers only the
+    /// authority's own, so no host serves another a copy of a copy.
     pub(super) async fn held_snapshot(&self) -> Result<Value, String> {
-        if let SnapshotSource::Authority { target, .. } = &*self.source.read().await {
-            return Err(format!(
-                "{} is not the registry authority; its resolver holds a copy read from {target}",
-                self.local_target
-            ));
-        }
+        let read_from = match &*self.source.read().await {
+            SnapshotSource::Authority { target, .. } => Some(target.clone()),
+            _ => None,
+        };
         let current = self.snapshot.read().await;
         let age = current.loaded_at.elapsed();
         if age > self.max_stale {
@@ -228,6 +282,7 @@ impl ResolverState {
         Ok(serde_json::json!({
             "store_version": current.store_version,
             "document": current.document,
+            "read_from": read_from,
         }))
     }
 }

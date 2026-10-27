@@ -121,8 +121,12 @@ pub(super) async fn converge_item(
             "context": {}
         }))?;
         let staging = format!("{vault}.stado-{kind}-verifier");
+        // An item another owner controls is reclaimed and removed before the
+        // write; a vault without that item answers both with a refusal, which
+        // is said on stderr rather than discarded, and the write that follows
+        // decides the outcome.
         let set_command = format!(
-            "set -eu; live={}; staging={}; trap '/bin/rm -f \"$staging\"' EXIT HUP INT TERM; /bin/cp -p \"$live\" \"$staging\"; {path} GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} reclaim {} >/dev/null 2>&1 || true; {path} GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} rm {} >/dev/null 2>&1 || true; {path} GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} set-json {} --type token >/dev/null; /bin/chmod 600 \"$staging\"; /bin/mv -f \"$staging\" \"$live\"; trap - EXIT HUP INT TERM",
+            "set -eu; live={}; staging={}; trap '/bin/rm -f \"$staging\"' EXIT HUP INT TERM; /bin/cp -p \"$live\" \"$staging\"; reclaimed=$({path} GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} reclaim {} 2>&1) || printf 'skarbiec reclaim before the verifier write answered: %s\\n' \"$reclaimed\" >&2; removed=$({path} GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} rm {} 2>&1) || printf 'skarbiec rm before the verifier write answered: %s\\n' \"$removed\" >&2; {path} GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} set {} --type token >/dev/null; /bin/chmod 600 \"$staging\"; /bin/mv -f \"$staging\" \"$live\"; trap - EXIT HUP INT TERM",
             crate::deploy::shlex_quote(vault),
             crate::deploy::shlex_quote(&staging),
             crate::deploy::shlex_quote(gnupg_home),

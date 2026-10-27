@@ -5,11 +5,19 @@ use crate::targets::ComputeTarget;
 
 use crate::deploy::local_install::{stado_unit, systemd_unit};
 
+/// A variable the host health beacon cannot run without: its text, or the
+/// refusal saying it is unset or set to text that is not Unicode.
+fn required(variable: &str) -> Result<String, CmdError> {
+    let cause = match crate::primitives::environment::declared(variable) {
+        Ok(Some(value)) => return Ok(value),
+        Ok(None) => format!("{variable} is required"),
+        Err(cause) => cause,
+    };
+    Err(CmdError::click(cause).stating(crate::primitives::failure::FailureCode::Config))
+}
+
 pub(super) fn host_health_api_url() -> Result<url::Url, CmdError> {
-    let raw = std::env::var("STADO_HOST_HEALTH_API_URL").map_err(|_| {
-        CmdError::click("STADO_HOST_HEALTH_API_URL is required")
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
+    let raw = required("STADO_HOST_HEALTH_API_URL")?;
     let url = url::Url::parse(raw.trim()).map_err(|error| {
         CmdError::click(format!("invalid STADO_HOST_HEALTH_API_URL: {error}"))
             .stating(crate::primitives::failure::FailureCode::Config)
@@ -72,7 +80,13 @@ fn host_health_api_token_from_file() -> Result<Option<String>, CmdError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
+        // Any group or other bit shares the token: POSIX names those bits.
+        // A mode keeps none of them exactly when adding every other bit to
+        // it changes nothing.
+        let shared_bits = u32::from(nix::libc::S_IRWXG | nix::libc::S_IRWXO);
+        let mode = metadata.permissions().mode();
+        let owner_only = mode | !shared_bits == !shared_bits;
+        if !owner_only {
             return Err(CmdError::click(format!(
                 "STADO_HOST_HEALTH_API_TOKEN_FILE must be owner-only (chmod 600): {}",
                 path.display()
@@ -104,17 +118,14 @@ pub(super) async fn host_health_api_token() -> Result<String, CmdError> {
     let config = |message: &str| {
         CmdError::click(message).stating(crate::primitives::failure::FailureCode::Config)
     };
-    let url = std::env::var("STADO_HOST_HEALTH_SKARBIEC_URL")
-        .map_err(|_| config("STADO_HOST_HEALTH_SKARBIEC_URL is required"))?;
-    let consumer = std::env::var("STADO_HOST_HEALTH_SKARBIEC_CONSUMER")
-        .map_err(|_| config("STADO_HOST_HEALTH_SKARBIEC_CONSUMER is required"))?;
+    let url = required("STADO_HOST_HEALTH_SKARBIEC_URL")?;
+    let consumer = required("STADO_HOST_HEALTH_SKARBIEC_CONSUMER")?;
     if consumer != "stado-host-health-beacon" {
         return Err(config(
             "STADO_HOST_HEALTH_SKARBIEC_CONSUMER must be stado-host-health-beacon",
         ));
     }
-    let raw = std::env::var("STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE")
-        .map_err(|_| config("STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE is required"))?;
+    let raw = required("STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE")?;
     let token_file = crate::config_file::expand_tilde(raw.trim())
         .to_string_lossy()
         .into_owned();
@@ -133,19 +144,24 @@ pub(super) async fn host_health_api_token() -> Result<String, CmdError> {
     // answering, and the beacon died with it: the host published nothing for
     // twenty-one hours while `stado service list` went on reporting its stale
     // `active` for services that were not running.
+    let role = crate::config::HOST_HEALTH_API_ROLE;
+    let retag = format!(
+        "tag the item that holds it with `stado credentials item retag --host <vault owner> <item> --tags stado:role:{role}`"
+    );
     let token = client
-        .read_string(crate::config::HOST_HEALTH_API_ROLE, "token")
+        .read_string(role, "token")
         .await
         .map_err(CmdError::from)?
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+        .ok_or_else(|| {
+            CmdError::refused(format!(
+                "no Skarbiec item this beacon's grant can read plays role {role} with a token field; {retag}"
+            ))
+        })?;
+    let token = token.trim().to_string();
     if token.is_empty() {
         return Err(CmdError::refused(format!(
-            "no Skarbiec item this beacon's grant can read plays role {role} with a token \
-             field; tag the item that holds it with `stado credentials item retag --host \
-             <vault owner> <item> --tags stado:role:{role}`",
-            role = crate::config::HOST_HEALTH_API_ROLE
+            "the Skarbiec item playing role {role} holds an empty token field, so the beacon has nothing to publish with; \
+             put the token on that item or {retag}"
         )));
     }
     Ok(token)

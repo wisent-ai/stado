@@ -30,10 +30,15 @@ pub fn cause_run(state: &HostReleaseState) -> Option<CauseRun> {
         .into_iter()
         .take_while(|record| record.cause == cause)
         .collect();
+    // The run holds at least the record the cause was read from: its newest
+    // member carries the evidence, its oldest the time the run began.
+    let (Some(newest), Some(oldest)) = (run.first(), run.last()) else {
+        return None;
+    };
     Some(CauseRun {
         cause,
-        evidence: run[0].evidence.clone(),
-        since: run[run.len() - 1].quarantined_at,
+        evidence: newest.evidence.clone(),
+        since: oldest.quarantined_at,
         digests: state
             .quarantined
             .iter()

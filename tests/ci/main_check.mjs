@@ -129,7 +129,10 @@ try {
   }
   assert.equal(step.last_green.revision, removed, 'the last green commit moved past the red one');
   const stalled = JSON.parse(ok(['ci', 'delivery', '--json'])).stalled;
-  assert.ok(stalled.some(line => line.includes(`main of ${key} is red at`)), stalled.join('\n'));
+  // The path says since when main stands red: the check of its first red
+  // commit after the last green one.
+  const since = `main of ${key} is red since ${JSON.stringify(third.at)} at ${JSON.stringify(broken)}`;
+  assert.ok(stalled.some(line => line.includes(since)), stalled.join('\n'));
 
   const repaired = commit('pub fn kept() -> u8 { 7 }\npub fn caller() -> u8 { kept() }\n', 'call what exists');
   run(['ci', 'run']);

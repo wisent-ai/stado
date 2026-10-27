@@ -20,7 +20,7 @@ pub(in crate::doctor) const OWNER_VAULT_REMEDY: &str =
 /// Two vaults claiming one owner is not a curiosity, it is a write going
 /// somewhere no reader looks.
 ///
-/// `skarbiec set-json` writes land in
+/// `skarbiec set` writes land in
 /// `~/.local/share/skarbiec/skarbiec.vault.json` — real, `active` on the host,
 /// and invisible to `stado repair stado --step release-verifier`, which reads
 /// `~/.stado/skarbiec.vault.json`. The fleet's release publication boundary
@@ -31,7 +31,7 @@ pub(in crate::doctor) const OWNER_VAULT_REMEDY: &str =
 /// So this check asks the resolution question and then one more: whether the
 /// answer is also what a bare `skarbiec` on this machine would open. A
 /// declaration fixes every Stado path, and Stado passes it to every `skarbiec`
-/// it invokes itself — but an operator's own `skarbiec set-json` still follows
+/// it invokes itself — but an operator's own `skarbiec set` still follows
 /// Skarbiec's discovery order, and where the two disagree the next write is
 /// invisible again.
 ///
@@ -65,14 +65,10 @@ pub(in crate::doctor) fn check_owner_vault() -> Check {
         .iter()
         .filter_map(|vault| {
             let path = vault.get("path").and_then(Value::as_str)?;
-            (path != resolved).then(|| {
-                format!(
-                    "{path} ({} items)",
-                    vault
-                        .get("items")
-                        .and_then(Value::as_u64)
-                        .unwrap_or_default()
-                )
+            (path != resolved).then(|| match vault.get("items").and_then(Value::as_u64) {
+                Some(items) => format!("{path} ({items} items)"),
+                // An empty-looking rival is the one a person would delete.
+                None => format!("{path} (item count not reported)"),
             })
         })
         .collect();
@@ -85,7 +81,7 @@ pub(in crate::doctor) fn check_owner_vault() -> Check {
         );
     }
     // `candidates_present` lists this machine's vaults in Skarbiec's own
-    // discovery order, so its first entry is what `skarbiec set-json` opens
+    // discovery order, so its first entry is what `skarbiec set` opens
     // with no `SKARBIEC_VAULT_FILE`. Read as a fact about the files, not asked
     // of the binary: a check that shells out to learn where a write would go
     // has already made the write's mistake when the binary is missing.
@@ -99,7 +95,7 @@ pub(in crate::doctor) fn check_owner_vault() -> Check {
             OWNER_VAULT_TITLE,
             format!(
                 "Stado resolves {resolved}, and a bare `skarbiec` on this machine opens \
-                 {cli_default} instead, so any `skarbiec set-json` run without \
+                 {cli_default} instead, so any `skarbiec set` run without \
                  SKARBIEC_VAULT_FILE writes an item Stado never reads. Other candidates: {}",
                 rivals.join(", ")
             ),

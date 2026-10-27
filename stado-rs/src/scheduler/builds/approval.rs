@@ -110,7 +110,7 @@ pub fn record(
         .ok_or_else(|| CmdError::declaration("build approval receipts are not an object"))?;
     if let Some(previous) = receipts.get(&key) {
         if previous["run_id"].as_str() != Some(run_id) {
-            return Err(CmdError::refused(format!("this user message already authorized another {platform} build of {}; a retry needs new consent", entry["target"])));
+            return Err(CmdError::refused(format!("this user message already authorized another {platform} build of {}; a retry needs new consent", crate::cli::reporting::field(&entry["target"]))));
         }
         return Ok(());
     }

@@ -10,25 +10,27 @@ use crate::models::Job;
 
 use super::agents::AgentInfo;
 
-/// Earliest start time (seconds from now) at which new_vram GB
-/// becomes free on an agent with the given total VRAM and active slots
-/// [(finish_offset_seconds, vram_gb), ...]. Python `_earliest_start`.
-fn earliest_start(slots: &[(f64, i64)], new_vram: i64, total_vram: i64) -> f64 {
+/// The seconds from now after which new_vram GB becomes free on an agent
+/// with the given total VRAM and active slots
+/// [(finish_offset_seconds, vram_gb), ...], or `None` when it is free now.
+/// Python `_earliest_start`. The caller has already refused an agent whose
+/// total VRAM is below `new_vram`, so freeing every slot always suffices.
+fn earliest_start(slots: &[(f64, i64)], new_vram: i64, total_vram: i64) -> Option<f64> {
     let used_now: i64 = slots.iter().map(|(_, v)| v).sum();
     let available_now = total_vram - used_now;
     if available_now >= new_vram {
-        return 0.0;
+        return None;
     }
     let mut by_end: Vec<(f64, i64)> = slots.to_vec();
-    by_end.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    by_end.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut freed = available_now;
     for (end_time, vram) in &by_end {
         freed += vram;
         if freed >= new_vram {
-            return *end_time;
+            return Some(*end_time);
         }
     }
-    by_end.last().map(|(end, _)| *end).unwrap_or(0.0)
+    by_end.last().map(|(end, _)| *end)
 }
 
 /// Every GCP gpu_type whose required VRAM tier <= `local_vram_gb`.
@@ -82,8 +84,10 @@ pub(super) fn assign_one(
         {
             continue;
         }
-        let start = earliest_start(&info.active_jobs, vram, info.total_vram_gb);
-        let finish = start + runtime;
+        let finish = match earliest_start(&info.active_jobs, vram, info.total_vram_gb) {
+            Some(start) => start + runtime,
+            None => runtime,
+        };
         if best_finish.is_none_or(|best| finish < best) {
             best_finish = Some(finish);
             best_cid = Some(cid.clone());

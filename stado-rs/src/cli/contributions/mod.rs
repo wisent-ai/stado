@@ -24,6 +24,7 @@ mod ledger;
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
+use crate::cli::reporting::field;
 use crate::cli::CmdError;
 use ledger::{Ledger, LEDGER_ENV};
 
@@ -164,13 +165,13 @@ async fn pending(args: LedgerArgs) -> Result<(), CmdError> {
             };
             format!(
                 "{} {} {}s{state}",
-                event["source_event_id"], event["contributor_id"], event["quantity"]
+                field(&event["source_event_id"]), field(&event["contributor_id"]), field(&event["quantity"])
             )
         })
         .chain(
             unmeasured
                 .iter()
-                .map(|job| format!("{} not reported: {}", job["job"], job["reason"])),
+                .map(|job| format!("{} not reported: {}", field(&job["job"]), field(&job["reason"]))),
         );
     print(
         &json!({"ledger": url, "events": events, "unmeasured": unmeasured}),
@@ -198,7 +199,7 @@ async fn report(args: LedgerArgs) -> Result<(), CmdError> {
         match ledger.record(event).await {
             Ok(answer) => outcomes.push(json!({"job": id, "answer": answer})),
             Err(cause) => {
-                refused.push(format!("{id}: {cause}"));
+                refused.push(format!("{}: {cause}", field(id)));
                 outcomes.push(json!({"job": id, "refused": cause}));
             }
         }
@@ -207,10 +208,10 @@ async fn report(args: LedgerArgs) -> Result<(), CmdError> {
         .iter()
         .map(
             |outcome| match outcome.get("refused").and_then(Value::as_str) {
-                Some(cause) => format!("{} refused: {cause}", outcome["job"]),
+                Some(cause) => format!("{} refused: {cause}", field(&outcome["job"])),
                 None => format!(
                     "{} recorded: {}",
-                    outcome["job"], outcome["answer"]["recorded"]
+                    field(&outcome["job"]), field(&outcome["answer"]["recorded"])
                 ),
             },
         )

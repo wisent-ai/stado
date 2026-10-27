@@ -15,7 +15,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use serde_json::{json, Value};
 
 use super::fs::{real_directory, validate_complete_inventory};
-use super::json::{load_immutable_json, object, read_json, truthy};
+use super::json::{flag, load_immutable_json, read_json};
 use super::{Context, Step};
 
 const FENCE_SCHEMA: &str = "stado.storage-root-fence.v5";
@@ -23,8 +23,10 @@ const OWNER_SCHEMA: &str = "stado.storage-root-owner.v1";
 const WRITE_FENCE_SCHEMA: &str = "stado.storage-root-write-fence.v1";
 const EVIDENCE_SCHEMA: &str = "stado.storage-root-checkpoint-evidence.v1";
 
-const READ_PHASES: [&str; 3] = ["read-fence", "read-owner", "status"];
-const FENCED_PHASES: [&str; 5] = [
+/// The phases that only read, and so need no proof of the transaction lock.
+const READ_PHASES: &[&str] = &["read-fence", "read-owner", "status"];
+/// The phases that run only while the storage write fence is held.
+const FENCED_PHASES: &[&str] = &[
     "preflight",
     "checkpoint",
     "apply",
@@ -97,9 +99,8 @@ fn prove_lock(context: &mut Context) -> Step<()> {
         );
     }
     // SAFETY: `fd` was proved above to be the open transaction lock.
-    if unsafe { nix::libc::flock(fd, nix::libc::LOCK_EX | nix::libc::LOCK_NB) } != 0 {
-        return Err(unavailable(std::io::Error::last_os_error().to_string()));
-    }
+    nix::errno::Errno::result(unsafe { nix::libc::flock(fd, nix::libc::LOCK_EX | nix::libc::LOCK_NB) })
+        .map_err(|error| unavailable(error.to_string()))?;
     context.lock_fd = Some(fd);
     Ok(())
 }
@@ -111,14 +112,15 @@ fn require_storage_write_fence(context: &Context) -> Step<()> {
     let intent_path = format!("{}/storage-root-write-fence.json", context.recovery);
     let lifecycle = read_json(&context.fence_path).map_err(unobserved)?;
     let intent = read_json(&intent_path).map_err(unobserved)?;
-    let effect = object(&lifecycle, "write_fence");
+    let status = lifecycle.pointer("/write_fence/status").and_then(Value::as_str);
+    let recorded_intent = lifecycle.pointer("/write_fence/intent");
     if text(&lifecycle, "schema") != Some(FENCE_SCHEMA)
         || text(&lifecycle, "transaction") != Some(context.tx.as_str())
-        || effect.get("status").and_then(Value::as_str) != Some("acquired")
-        || effect.get("intent") != Some(&intent)
+        || status != Some("acquired")
+        || recorded_intent != Some(&intent)
         || text(&intent, "schema") != Some(WRITE_FENCE_SCHEMA)
         || text(&intent, "transaction") != Some(context.tx.as_str())
-        || !truthy(object(&lifecycle, "queue").get("drained"))
+        || !flag(lifecycle.pointer("/queue/drained"), "queue.drained")?
     {
         return Err(
             "physical inventory requires the recorded drained storage write fence".to_string(),
@@ -132,21 +134,18 @@ fn require_storage_write_fence(context: &Context) -> Step<()> {
     // SAFETY: `file` stays open for the duration of the call.
     let shared =
         unsafe { nix::libc::flock(file.as_raw_fd(), nix::libc::LOCK_SH | nix::libc::LOCK_NB) };
-    if shared == 0 {
-        return Err("storage write-fence intent has no active exclusive hold".to_string());
+    // A shared hold that is granted means nobody holds the exclusive one.
+    match nix::errno::Errno::result(shared) {
+        Ok(_) => Err("storage write-fence intent has no active exclusive hold".to_string()),
+        Err(nix::errno::Errno::EWOULDBLOCK) => Ok(()),
+        Err(error) => Err(unobserved(error.to_string())),
     }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() != Some(nix::libc::EWOULDBLOCK) {
-        return Err(unobserved(error.to_string()));
-    }
-    Ok(())
 }
 
 /// Which root's bytes win a conflict: the root that was primary before.
 fn conflict_winner_from_fence(context: &Context, fence: &Value) -> Step<ConflictWinner> {
-    let roots = object(fence, "roots");
-    let prior = roots.get("prior_primary").and_then(Value::as_str);
-    let root = |key: &str| roots.get(key).and_then(Value::as_str);
+    let prior = fence.pointer("/roots/prior_primary").and_then(Value::as_str);
+    let root = |key: &str| fence.pointer(&format!("/roots/{key}")).and_then(Value::as_str);
     if text(fence, "schema") != Some(FENCE_SCHEMA)
         || text(fence, "transaction") != Some(context.tx.as_str())
         || root("primary") != Some(context.primary.as_str())
@@ -194,12 +193,9 @@ fn load_checkpoint_evidence(context: &Context, receipt: &Value) -> Step<Evidence
     else {
         return Err("checkpoint evidence inventories are invalid".to_string());
     };
-    let files = |physical: &Value| {
-        physical
-            .get("files")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len)
-    };
+    // A physical inventory without its file list counts as no number, so it
+    // cannot match the receipt's count.
+    let files = |physical: &Value| physical.get("files").and_then(Value::as_array).map(Vec::len);
     if receipt.get("backup_objects") != Some(&json!(backup_objects.len()))
         || receipt.get("primary_objects") != Some(&json!(primary_objects.len()))
         || receipt.get("backup_physical_files") != Some(&json!(files(&backup_physical)))

@@ -166,7 +166,7 @@ pub(crate) async fn handoff_release_control(
             service_name,
             product,
             host,
-            [receipt_label, receipt_plist, receipt_program],
+            &[receipt_label, receipt_plist, receipt_program],
         ) {
             let installed_stado = format!("{}/.stado/bin/stado", target_policy.home);
             return finish_committed_handoff(
@@ -181,9 +181,9 @@ pub(crate) async fn handoff_release_control(
         }
         if receipt["status"] != "prepared" && receipt["status"] != "registry_committed" {
             return Err(CmdError::refused(format!(
-                "handoff receipt {} says {:?}, but the registry does not match its intended handoff",
+                "handoff receipt {} says {}, but the registry does not match its intended handoff",
                 receipt_path.display(),
-                receipt["status"]
+                crate::cli::reporting::field(&receipt["status"])
             )));
         }
         // An incomplete commit can disappear after authority recovery. Reuse

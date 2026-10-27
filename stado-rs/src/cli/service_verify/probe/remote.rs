@@ -111,7 +111,12 @@ pub(in crate::cli::service_verify) async fn remote_rows(
                 _ => UNVERIFIED,
             },
             detail: field(row, "detail"),
-            probed: row.get("probed").and_then(Value::as_bool).unwrap_or(true),
+            // A host that reported a row probed it unless it says otherwise;
+            // only the standby check marks a row it could not probe.
+            probed: match row.get("probed").and_then(Value::as_bool) {
+                Some(probed) => probed,
+                None => true,
+            },
         })
         .collect())
 }

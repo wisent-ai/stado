@@ -75,14 +75,7 @@ impl Deployment {
         let source = self.root.join("source");
         fs::write(&source, body).unwrap();
         let source = source.to_string_lossy().into_owned();
-        self.cli(&[
-            "storage",
-            "put",
-            uri,
-            &source,
-            "--content-type",
-            content_type,
-        ]);
+        self.cli(&["storage", "put", uri, &source, "--content-type", content_type]);
     }
 
     fn stat(&mut self, uri: &str) -> Value {
@@ -116,16 +109,10 @@ fn stat_answers_the_named_object_and_not_one_its_name_prefixes() {
 
     let longer = deployment.stat(LONG);
     assert_eq!(longer["size"], json!(long.len()), "{longer}");
-    assert_eq!(
-        longer["metadata"]["content-type"], "application/json",
-        "{longer}"
-    );
+    assert_eq!(longer["metadata"]["content-type"], "application/json", "{longer}");
 
     let prefix = deployment.stat(PREFIX);
-    assert_eq!(
-        prefix["state"], "absent",
-        "a name that only prefixes objects: {prefix}"
-    );
+    assert_eq!(prefix["state"], "absent", "a name that only prefixes objects: {prefix}");
     assert_eq!(prefix["metadata"], json!({}), "{prefix}");
 
     deployment.report["outcome"] = json!("passed");

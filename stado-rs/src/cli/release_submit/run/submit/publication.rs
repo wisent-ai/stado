@@ -47,21 +47,27 @@ pub(in crate::cli::release_submit::run) async fn publish_and_deliver(
         } else {
             // Verification and delivery of already signed bytes need no private
             // signing grant on the machine resuming the release.
-            if signing_material.is_none() {
-                signing_material = Some(match signing(&run.product).await {
+            // Read once per pass, on the first platform that needs it.
+            let material = match signing_material.take() {
+                Some(material) => material,
+                None => match signing(&run.product).await {
                     Ok(material) => material,
                     Err(error) => return Err(persist_failure(run, error).await),
-                });
-            }
-            let (key, private) = signing_material
-                .as_ref()
-                .expect("unpublished platform needs signing");
+                },
+            };
+            let (key, private) = signing_material.insert(material);
             publish(run, m, p, store, key, private).await
         };
         let a = match result {
             Ok(artifact) => artifact,
             Err(error) => {
-                let platform = run.platforms.get_mut(p).unwrap();
+                let Some(platform) = run.platforms.get_mut(p) else {
+                    let missing = CmdError::click(format!(
+                        "release run {} {} holds no platform {p}, which this pass submitted and could not publish: {error}",
+                        run.product, run.version
+                    ));
+                    return Err(persist_failure(run, missing).await);
+                };
                 platform.state = PlatformRunState::Failed;
                 platform.failure = Some(error.to_string());
                 if m.platforms[p].required {

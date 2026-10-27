@@ -137,7 +137,7 @@ pub(super) async fn service_release_bundle(
     })
 }
 
-pub(super) fn stage_service_release_archive(
+pub(crate) fn stage_service_release_archive(
     product: &str,
     version: &str,
     platform: &str,
@@ -167,7 +167,7 @@ pub(super) async fn current_service_version(
     let output = host_channel::run_script(target, &script, runner)
         .await
         .map_err(click)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(host_channel::last_error_line(
             &output,
             "current service version is unreadable",

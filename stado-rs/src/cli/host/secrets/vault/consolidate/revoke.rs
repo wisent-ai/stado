@@ -74,23 +74,48 @@ pub async fn revoke_retired(host: &str, consumer: &str, json_output: bool) -> Re
         .stating(crate::primitives::failure::FailureCode::Refused)
     })?;
     let (_, items) = remote_skarbiec_json(host, &["list".into()]).await?;
-    let held: BTreeSet<&str> = items
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|row| row.get("deleted").and_then(Value::as_bool) != Some(true))
-        .filter_map(|row| row.get("id").and_then(Value::as_str))
-        .collect();
-    let item_of = |capability: &str| -> String {
-        let rest = capability.split_once(':').map_or("", |(_, rest)| rest);
-        rest.rsplit_once('#')
-            .map_or(rest, |(item, _)| item)
-            .to_string()
+    // The items the vault holds decide whether revoking loses access, so a
+    // list in another shape, or a held row without its id, is refused: read
+    // as nothing held, the check found nothing missing and the grant went.
+    let unread = |detail: String| {
+        CmdError::click(format!("{}: skarbiec list {detail}", target.name))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
     };
-    let missing: Vec<&String> = retired
-        .difference(&stado)
-        .filter(|capability| held.contains(item_of(capability).as_str()))
-        .collect();
+    let rows = items
+        .as_array()
+        .ok_or_else(|| unread(format!("answered no list of items: {items}")))?;
+    let mut held: BTreeSet<&str> = BTreeSet::new();
+    for row in rows {
+        if row.get("deleted").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let id = row
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| unread(format!("answered a held item without its id: {row}")))?;
+        held.insert(id);
+    }
+    // A capability is `action:item` or `action:item#field`, as
+    // `capabilities_of` spells them; one without `:` is not a capability.
+    let item_of = |capability: &str| -> Result<String, CmdError> {
+        let (_action, rest) = capability.split_once(':').ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: {consumer} holds a capability without an action: {capability:?}",
+                target.name
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
+        Ok(match rest.rsplit_once('#') {
+            Some((item, _field)) => item.to_string(),
+            None => rest.to_string(),
+        })
+    };
+    let mut missing: Vec<&String> = Vec::new();
+    for capability in retired.difference(&stado) {
+        if held.contains(item_of(capability)?.as_str()) {
+            missing.push(capability);
+        }
+    }
     if !missing.is_empty() {
         return Err(CmdError::refused(format!(
             "{}: stado does not hold {missing:?} that {consumer} can read; run `stado credentials grant consolidate --host {} --from {consumer} --token-file <stado bearer>` first",

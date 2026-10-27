@@ -5,26 +5,16 @@
 //! owns resolving the declared host and carrying one fixed argv over its
 //! authenticated host channel.
 
-use std::collections::HashSet;
+mod sources;
+
 use std::path::Path;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use self::sources::{discovered_root, is_runtime_token, validate_sources};
 use super::oko_automation::OKO;
 use super::{HandlerError, HandlerResult};
-
-/// Oko owns which transcript runtimes exist; Stado only carries the call.
-/// Stado used to keep its own five names here and fail the whole dashboard
-/// response when Oko reported a source it had not heard of — which is what
-/// happens the day Oko learns to read one more. The shape of a runtime
-/// token is what this boundary can honestly check.
-fn is_runtime_token(runtime: &str) -> bool {
-    !runtime.is_empty()
-        && runtime
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,16 +35,30 @@ pub(super) fn supports(action: &str) -> bool {
         || super::oko_automation::supports(action)
 }
 
+/// A registry that could not be read, logged like an upstream failure: the
+/// caller still gets `provider_unavailable`, the log says which read failed.
+fn unavailable<E: std::fmt::Display>(error: E) -> HandlerError {
+    tracing::warn!(cause = %error, "integration host registry read failed");
+    HandlerError::ProviderUnavailable
+}
+
+/// A host the registry does not declare, logged with the registry's own
+/// refusal so a mistyped host id and an unregistered host can be told apart.
+fn unknown_host<E: std::fmt::Display>(host_id: &str, error: E) -> HandlerError {
+    tracing::warn!(host_id, cause = %error, "integration host is not declared");
+    HandlerError::BadRequest
+}
+
 pub(super) async fn target(host_id: &str) -> Result<crate::targets::ComputeTarget, HandlerError> {
     if host_id.is_empty() || host_id.trim() != host_id {
         return Err(HandlerError::BadRequest);
     }
     let registry = crate::deploy::host_channel::canonical_registry()
         .await
-        .map_err(|_| HandlerError::ProviderUnavailable)?;
+        .map_err(unavailable)?;
     crate::deploy::host_channel::resolve_target(&registry, host_id)
         .cloned()
-        .map_err(|_| HandlerError::BadRequest)
+        .map_err(|error| unknown_host(host_id, error))
 }
 
 async fn run_owner(
@@ -65,7 +69,7 @@ async fn run_owner(
     let output = crate::deploy::host_channel::run_program(target, program, &runner)
         .await
         .map_err(HandlerError::upstream)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(HandlerError::upstream(format!(
             "{} exited {:?} on the Oko host: {}",
             program.join(" "),
@@ -82,51 +86,6 @@ async fn run_owner(
     })
 }
 
-fn validate_sources(value: &Value) -> Result<(), HandlerError> {
-    let entries = value.as_array().ok_or(HandlerError::UpstreamFailure)?;
-    let mut runtimes = HashSet::with_capacity(entries.len());
-    for entry in entries {
-        let entry = entry.as_object().ok_or(HandlerError::UpstreamFailure)?;
-        let runtime = entry
-            .get("runtime")
-            .and_then(Value::as_str)
-            .ok_or(HandlerError::UpstreamFailure)?;
-        if !is_runtime_token(runtime)
-            || !runtimes.insert(runtime)
-            || entry.get("available").and_then(Value::as_bool).is_none()
-            || entry.get("mode").and_then(Value::as_str).is_none()
-            || entry.get("selected").and_then(Value::as_bool).is_none()
-            || entry.get("files").and_then(Value::as_u64).is_none()
-            || entry
-                .get("error")
-                .is_some_and(|error| !error.is_null() && !error.is_string())
-        {
-            return Err(HandlerError::UpstreamFailure);
-        }
-        let roots = entry
-            .get("roots")
-            .and_then(Value::as_array)
-            .ok_or(HandlerError::UpstreamFailure)?;
-        if roots.iter().any(|root| {
-            root.as_str()
-                .is_none_or(|root| !Path::new(root).is_absolute() || root.contains('\0'))
-        }) {
-            return Err(HandlerError::UpstreamFailure);
-        }
-        let source_ids = entry
-            .get("sourceIds")
-            .and_then(Value::as_array)
-            .ok_or(HandlerError::UpstreamFailure)?;
-        if source_ids
-            .iter()
-            .any(|source_id| source_id.as_str().is_none_or(str::is_empty))
-        {
-            return Err(HandlerError::UpstreamFailure);
-        }
-    }
-    Ok(())
-}
-
 async fn discover(host_id: &str) -> Result<(crate::targets::ComputeTarget, Value), HandlerError> {
     let target = target(host_id).await?;
     let sources = run_owner(&target, &[OKO, "transcripts", "sources", "--json"]).await?;
@@ -134,32 +93,23 @@ async fn discover(host_id: &str) -> Result<(crate::targets::ComputeTarget, Value
     Ok((target, sources))
 }
 
-fn discovered_root(sources: &Value, runtime: &str, root: &str) -> bool {
-    sources.as_array().is_some_and(|entries| {
-        entries.iter().any(|entry| {
-            entry.get("runtime").and_then(Value::as_str) == Some(runtime)
-                && entry
-                    .get("roots")
-                    .and_then(Value::as_array)
-                    .is_some_and(|roots| {
-                        roots
-                            .iter()
-                            .any(|candidate| candidate.as_str() == Some(root))
-                    })
-        })
-    })
+/// A request body this boundary cannot read, logged with serde's reason so a
+/// caller sending an old field name can be told from one sending no JSON.
+fn unreadable_request<E: std::fmt::Display>(action: &str, error: E) -> HandlerError {
+    tracing::warn!(action, cause = %error, "integration request body unreadable");
+    HandlerError::BadRequest
 }
 
 async fn sources(body: &[u8]) -> HandlerResult {
-    let request: SourcesRequest =
-        serde_json::from_slice(body).map_err(|_| HandlerError::BadRequest)?;
+    let request: SourcesRequest = serde_json::from_slice(body)
+        .map_err(|error| unreadable_request("transcript-sources", error))?;
     let (_, sources) = discover(&request.host_id).await?;
     Ok(json!({"hostId": request.host_id, "sources": sources}))
 }
 
 async fn adopt(body: &[u8]) -> HandlerResult {
-    let request: AdoptRequest =
-        serde_json::from_slice(body).map_err(|_| HandlerError::BadRequest)?;
+    let request: AdoptRequest = serde_json::from_slice(body)
+        .map_err(|error| unreadable_request("transcript-sources-adopt", error))?;
     // The runtime is not checked against a list here: the discovery below
     // is the authority, and it refuses a runtime/root pair this host did
     // not report.
@@ -222,25 +172,58 @@ async fn adopt(body: &[u8]) -> HandlerResult {
         _processed: u64,
         database: String,
     }
-    let Some(adoption) = receipt
-        .get("adoption")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<AdoptionReceipt>(value).ok())
-    else {
-        return Err(HandlerError::UpstreamFailure);
+    // A receipt that lacks the adoption block, or whose block does not fit
+    // the type, is an upstream failure whose cause the log carries.
+    let adoption = match receipt.get("adoption") {
+        Some(block) => {
+            serde_json::from_value::<AdoptionReceipt>(block.clone()).map_err(|error| {
+                HandlerError::upstream(format!(
+                    "oko transcripts adopt: adoption block unreadable: {error}"
+                ))
+            })?
+        }
+        None => {
+            return Err(HandlerError::upstream(
+                "oko transcripts adopt answered no adoption block",
+            ));
+        }
     };
-    let Ok(catalogue) = serde_json::from_value::<CatalogueReceipt>(receipt.clone()) else {
-        return Err(HandlerError::UpstreamFailure);
+    let catalogue =
+        serde_json::from_value::<CatalogueReceipt>(receipt.clone()).map_err(|error| {
+            HandlerError::upstream(format!(
+                "oko transcripts adopt: catalogue receipt unreadable: {error}"
+            ))
+        })?;
+    let disagreement = if adoption.runtime != request.runtime {
+        Some(format!(
+            "runtime {} is not the requested {}",
+            adoption.runtime, request.runtime
+        ))
+    } else if adoption.root != request.root {
+        Some(format!(
+            "root {} is not the requested {}",
+            adoption.root, request.root
+        ))
+    } else if !adoption.selected {
+        Some("the adopted source is not selected".to_string())
+    } else if adoption.status.is_empty() {
+        Some("the adoption status is empty".to_string())
+    } else if adoption.source_id.is_empty() {
+        Some("the source id is empty".to_string())
+    } else if !Path::new(&adoption.data_dir).is_absolute() {
+        Some(format!(
+            "data dir {} is not an absolute path",
+            adoption.data_dir
+        ))
+    } else if catalogue.database.is_empty() {
+        Some("the catalogue names no database".to_string())
+    } else {
+        None
     };
-    if adoption.runtime != request.runtime
-        || adoption.root != request.root
-        || !adoption.selected
-        || adoption.status.is_empty()
-        || adoption.source_id.is_empty()
-        || !Path::new(&adoption.data_dir).is_absolute()
-        || catalogue.database.is_empty()
-    {
-        return Err(HandlerError::UpstreamFailure);
+    if let Some(cause) = disagreement {
+        return Err(HandlerError::upstream(format!(
+            "oko transcripts adopt answered a receipt that does not match the request: {cause}"
+        )));
     }
     Ok(json!({"hostId": request.host_id, "result": receipt}))
 }

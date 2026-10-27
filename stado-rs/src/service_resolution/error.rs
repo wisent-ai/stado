@@ -12,8 +12,14 @@ pub enum ResolveError {
     UnknownService(String),
     /// The service does not admit this consumer.
     Unauthorized { service: String, consumer: String },
-    /// A placement transaction holds the service's profile.
-    Moving { service: String, profile: String },
+    /// A placement transaction holds the service's profile. The transaction
+    /// is carried whole, so the refusal names which move holds the service,
+    /// between which hosts and since when, and `stado placement release`
+    /// can end it when its process ended.
+    Moving {
+        service: String,
+        transaction: crate::placement::PlacementTransaction,
+    },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -25,9 +31,18 @@ impl std::fmt::Display for ResolveError {
                 f,
                 "consumer {consumer:?} is not authorized for service {service:?}"
             ),
-            Self::Moving { service, profile } => write!(
+            Self::Moving {
+                service,
+                transaction,
+            } => write!(
                 f,
-                "service {service:?} is unavailable during placement transaction for {profile:?}"
+                "service {service:?} is unavailable during placement transaction {} for {:?}, moving it from {} to {} since {}; stado placement transactions lists it, and stado placement release {} ends it if its move is no longer running",
+                transaction.id,
+                transaction.profile,
+                transaction.from_host,
+                transaction.to_host,
+                transaction.started_at,
+                transaction.id
             ),
         }
     }

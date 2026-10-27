@@ -25,12 +25,21 @@ pub(crate) struct ServeArgs {
         conflicts_with_all = ["resolver", "release_interval_seconds", "target", "auto"]
     )]
     pub standalone: bool,
-    /// Dispatch unhandled failed jobs inside this process at the declared cadence.
-    #[arg(long)]
+    /// Dispatch unhandled failed jobs inside this process at the declared
+    /// cadence, each as a detached Jeden session.
+    #[arg(long, requires_all = ["failure_fixer_workspace", "failure_fixer_max_steps"])]
     pub failure_fixer_interval_seconds: Option<NonZeroU64>,
     /// Preserve the failure fixer's command substring filter.
     #[arg(long, requires = "failure_fixer_interval_seconds")]
     pub failure_fixer_command_pattern: Option<String>,
+    /// The workspace each fix session works in (a checkout name, or __home__),
+    /// as `stado workload start jeden-session --workspace` takes it.
+    #[arg(long, requires = "failure_fixer_interval_seconds")]
+    pub failure_fixer_workspace: Option<String>,
+    /// The step bound each fix session runs under, as
+    /// `stado workload start --max-steps` takes it; Stado picks none.
+    #[arg(long, requires = "failure_fixer_interval_seconds")]
+    pub failure_fixer_max_steps: Option<u32>,
     /// Run this host's declared service resolver inside the host process.
     #[arg(long)]
     pub resolver: bool,
@@ -114,7 +123,7 @@ pub(crate) struct ServeArgs {
     #[arg(long, value_name = "DIR")]
     pub release_loop_root: Option<std::path::PathBuf>,
     /// Serve the public status page on this `host:port` inside this
-    /// process (`stado public-status serve`): the host apart from the
+    /// process (`stado availability serve`): the host apart from the
     /// products it reports on that answers the status hostname.
     #[arg(long, value_name = "HOST:PORT")]
     pub public_status_bind: Option<String>,
@@ -143,6 +152,9 @@ impl ServeArgs {
         if let Some(price) = self.worker.vast_price_gpu {
             args.push(format!("--vast-price-gpu={price}"));
         }
+        if let Some(price) = self.worker.vast_price_disk {
+            args.push(format!("--vast-price-disk={price}"));
+        }
         if let Some(seconds) = self.worker.vast_max_duration_s {
             args.push(format!("--vast-max-duration-s={seconds}"));
         }
@@ -154,6 +166,12 @@ impl ServeArgs {
         }
         if let Some(pattern) = &self.failure_fixer_command_pattern {
             args.push(format!("--failure-fixer-command-pattern={pattern}"));
+        }
+        if let Some(workspace) = &self.failure_fixer_workspace {
+            args.push(format!("--failure-fixer-workspace={workspace}"));
+        }
+        if let Some(steps) = self.failure_fixer_max_steps {
+            args.push(format!("--failure-fixer-max-steps={steps}"));
         }
         if let Some(interval) = self.release_interval_seconds {
             args.push(format!("--release-interval-seconds={interval}"));

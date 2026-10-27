@@ -177,7 +177,12 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                     ));
                     continue;
                 };
-                let name = image.name().unwrap_or(native);
+                // An image is named by its vendor-registered name; one
+                // registered without a name is known by its id.
+                let name = match image.name() {
+                    Some(name) => name,
+                    None => native,
+                };
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
                     &account,
@@ -246,4 +251,13 @@ fn aws_tags(tags: &[aws_sdk_ec2::types::Tag]) -> BTreeMap<String, String> {
     tags.iter()
         .filter_map(|tag| Some((tag.key()?.to_string(), tag.value()?.to_string())))
         .collect()
+}
+
+/// The name the vendor's console shows: the `Name` tag, or the resource's
+/// id when it carries none.
+fn console_name<'a>(labels: &'a BTreeMap<String, String>, native: &'a str) -> &'a str {
+    match labels.get("Name") {
+        Some(name) => name.as_str(),
+        None => native,
+    }
 }

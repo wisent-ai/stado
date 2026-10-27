@@ -64,14 +64,14 @@ pub async fn run(scope: RunScope) -> Report {
     } else {
         Some(JobStorage::new().await)
     };
-    let store_error = store_result
-        .as_ref()
-        .and_then(|result| result.as_ref().err())
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    let store = store_result
-        .as_ref()
-        .and_then(|result| result.as_ref().ok());
+    // The checks that need the store get it when it opened, and otherwise
+    // the sentence saying why not: a scope that opens no store passes an
+    // empty sentence, which those checks read as "no store was asked for".
+    let (store, store_error): (Option<&JobStorage>, String) = match &store_result {
+        Some(Ok(store)) => (Some(store), String::new()),
+        Some(Err(error)) => (None, error.to_string()),
+        None => (None, String::new()),
+    };
 
     // Concurrent, like the two sections of
     // `monitor::billing::live_snapshot`; the fixed assembly order below is

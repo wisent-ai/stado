@@ -61,7 +61,13 @@ pub(crate) fn human_age(age: TimeDelta) -> String {
             return format!("{amount}{suffix}");
         }
     }
-    format!("{}s", age.num_seconds().max(i64::default()))
+    // A beacon stamped after this machine's now is clock skew, said as such:
+    // read as no age at all, it looked like a beacon that just arrived.
+    let seconds = age.num_seconds();
+    match seconds.is_negative() {
+        true => format!("{}s ahead of this machine's clock", seconds.unsigned_abs()),
+        false => format!("{seconds}s"),
+    }
 }
 
 /// `stado host beacon list [--json]` — every registry host and its last
@@ -95,16 +101,20 @@ pub async fn beacon_age(as_json: bool) -> Result<(), CmdError> {
             } else {
                 BeaconRank::NotExpected
             };
-            BeaconRow {
+            Ok(BeaconRow {
                 name: target.name.clone(),
                 kind: target.kind.clone(),
                 rank,
-                observed: beacon.and_then(Beacon::observed_at),
+                observed: beacon
+                    .map(Beacon::observed_at)
+                    .transpose()
+                    .map_err(CmdError::click)?
+                    .flatten(),
                 reported_at: beacon.and_then(Beacon::reported_at).map(str::to_string),
                 path: beacon.map(|beacon| beacon.path.clone()),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, CmdError>>()?;
     // (rank, observed) ascending: never-reported first, then the oldest
     // beacon, with the not-applicable rows last.
     rows.sort_by_key(|row| (row.rank, row.observed));

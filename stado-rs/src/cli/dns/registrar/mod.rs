@@ -5,12 +5,11 @@
 //! the registrar" and "what did the registrar say", and the counted parse that
 //! turns an answer into records lives beside the records.
 
-use std::sync::LazyLock;
-
 use crate::cli::CmdError;
 
 use super::API;
 
+pub(in crate::cli::dns) mod answer;
 pub(in crate::cli::dns) mod zone;
 
 use self::zone::Zone;
@@ -21,7 +20,7 @@ use self::zone::Zone;
 /// field at a time would leave a consumer that can read `api_user` and not
 /// `api_key`, which fails on the second read of the first command anybody
 /// runs.
-const REGISTRAR_FIELDS: [&str; 4] = ["api_user", "api_key", "username", "client_ip"];
+const REGISTRAR_FIELDS: &[&str] = &["api_user", "api_key", "username", "client_ip"];
 
 /// The registrar credential: four named fields, read one at a time so the
 /// broker never hands over a whole item.
@@ -64,14 +63,18 @@ impl Registrar {
 /// The grant is made where this host's reads land: in its own vault on the
 /// owner, on the owner from anywhere else.
 async fn settle_readable(item: &str) -> Result<(), CmdError> {
-    crate::cli::host::settle_consumer_reads(item, &REGISTRAR_FIELDS)
+    crate::cli::host::settle_consumer_reads(item, REGISTRAR_FIELDS)
         .await
         .map_err(|error| {
             let failure = error.failure;
-            let detail = CmdError::click(format!(
-                "cannot make the registrar credential {item:?} readable: {}",
-                error.message.as_deref().unwrap_or("no detail")
-            ));
+            let detail = CmdError::click(match error.message.as_deref() {
+                Some(message) => {
+                    format!("cannot make the registrar credential {item:?} readable: {message}")
+                }
+                None => format!(
+                    "cannot make the registrar credential {item:?} readable; the grant refusal carried no message"
+                ),
+            });
             CmdError { failure, ..detail }
         })
 }
@@ -94,26 +97,10 @@ async fn field(item: &str, name: &str) -> Result<String, CmdError> {
         })
 }
 
-pub(super) static HOST_ELEMENT: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?s)<host\b[^>]*/?>").expect("static regex compiles"));
-pub(super) static ATTRIBUTE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r#"([A-Za-z]+)="([^"]*)""#).expect("static regex compiles"));
-static ERROR_ELEMENT: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?s)<Error[^>]*>(.*?)</Error>").expect("static regex compiles")
-});
-
-/// XML attribute text, with the five entities an attribute value can carry.
-pub(super) fn unescape(value: &str) -> String {
-    value
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
-}
-
-/// POST one command and return the response body, refusing a non-OK status
-/// with the registrar's own error text.
+/// POST one command and return the response body once Namecheap's answer
+/// document says it answered ([`answer::read`]); a non-OK HTTP status, or
+/// an answer Namecheap marks as refused, is refused with Namecheap's own
+/// error text.
 pub(super) async fn call(parameters: Vec<(String, String)>) -> Result<String, CmdError> {
     let client = reqwest::Client::builder().build().map_err(|error| {
         CmdError::click(format!(
@@ -139,20 +126,6 @@ pub(super) async fn call(parameters: Vec<(String, String)>) -> Result<String, Cm
             ),
         );
     }
-    if !body.contains(r#"Status="OK""#) {
-        let errors: Vec<String> = ERROR_ELEMENT
-            .captures_iter(&body)
-            .map(|capture| unescape(capture[1].trim()))
-            .filter(|text| !text.is_empty())
-            .collect();
-        return Err(CmdError::refused(format!(
-            "Namecheap refused the request: {}",
-            if errors.is_empty() {
-                body.to_string()
-            } else {
-                errors.join("; ")
-            }
-        )));
-    }
+    answer::read::<serde::de::IgnoredAny>(&body)?;
     Ok(body)
 }

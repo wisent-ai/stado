@@ -86,12 +86,16 @@ async fn exchange_with_header(
                 detail: error.without_url().to_string(),
             })?;
     let status = response.status();
+    // A paging header the vendor sent as bytes that are not text names no
+    // next page; the vendor's documented headers are ASCII.
     let paged = header.and_then(|name| {
         response
             .headers()
             .get(name)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string)
+            .and_then(|value| match value.to_str() {
+                Ok(text) => Some(text.to_string()),
+                Err(_not_text) => None,
+            })
     });
     let body = response
         .text()
@@ -189,17 +193,23 @@ pub fn timestamp(value: &Value, pointer: &str) -> Option<chrono::DateTime<chrono
     parse_time(&optional_text(value, pointer)?)
 }
 
-/// An RFC 3339 time, when it is one.
+/// An RFC 3339 time, when it is one; a vendor's timestamp in another
+/// shape is read as none, and the field's reader says what is absent.
 pub fn parse_time(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc3339(raw.trim())
-        .map(|moment| moment.with_timezone(&chrono::Utc))
-        .ok()
+    match chrono::DateTime::parse_from_rfc3339(raw.trim()) {
+        Ok(moment) => Some(moment.with_timezone(&chrono::Utc)),
+        Err(_not_rfc3339) => None,
+    }
 }
 
 /// A member of the JSON body a vendor refused with (`/error/code`), for the
-/// adapters whose vendors name the failure in a documented field.
+/// adapters whose vendors name the failure in a documented field. A refusal
+/// whose body is not JSON names no member; its text is the error's detail.
 pub fn refusal_member(error: &GpuCloudError, pointer: &str) -> Option<String> {
-    let body: Value = serde_json::from_str(error.detail()).ok()?;
+    let body: Value = match serde_json::from_str(error.detail()) {
+        Ok(body) => body,
+        Err(_not_json) => return None,
+    };
     optional_text(&body, pointer)
 }
 

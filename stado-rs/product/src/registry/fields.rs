@@ -60,15 +60,31 @@ fn object(option: &str, value: &str, keys: &[&str]) -> Result<Value> {
     Ok(row)
 }
 
+/// One rival; its `claims` (each {capability, statement, source, read_at,
+/// source_sha256, verified_by?}) are judged by the catalog validation.
 pub fn rival(value: &str) -> Result<Value> {
-    object("--add-rival", value, &["id", "name", "url", "evidence"])
+    object(
+        "--add-rival",
+        value,
+        &["id", "name", "url", "evidence", "claims"],
+    )
 }
 
+/// One roadmap item; `decision` (where a delivered, rejected or superseded
+/// item was decided) and `superseded_by` (the item that replaced it) are
+/// judged by the catalog validation with the rest of the roadmap.
 pub fn roadmap(value: &str) -> Result<Value> {
     object(
         "--add-roadmap",
         value,
-        &["title", "status", "outcome", "source"],
+        &[
+            "title",
+            "status",
+            "outcome",
+            "source",
+            "decision",
+            "superseded_by",
+        ],
     )
 }
 

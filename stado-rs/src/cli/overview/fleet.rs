@@ -29,9 +29,12 @@ fn target_for_consumer<'a>(
     consumer_id: &str,
     kind: &str,
 ) -> Option<&'a str> {
-    let hostname = consumer_id
-        .strip_prefix(&format!("{kind}-"))
-        .unwrap_or(consumer_id);
+    // A consumer is registered as `<kind>-<hostname>` or, by an older
+    // registration, as the bare hostname; both name the same host.
+    let hostname = match consumer_id.strip_prefix(&format!("{kind}-")) {
+        Some(bare) => bare,
+        None => consumer_id,
+    };
     let hostname = targets::normalize_hostname(hostname);
     registry
         .targets
@@ -64,20 +67,22 @@ pub(super) fn fleet_snapshot(
                 "consumer_id": consumer_id,
                 "target": target,
                 "kind": kind,
-                "published_at": payload.get("published_at").cloned().unwrap_or(Value::Null),
-                "stado_version": payload.get("stado_version").cloned().unwrap_or(Value::Null),
-                "accepting_jobs": payload.get("accepting_jobs").cloned().unwrap_or(Value::Null),
-                "running_jobs": payload.get("running_jobs").cloned().unwrap_or(Value::Null),
-                "available_cpu_cores": payload.get("available_cpu_cores").cloned().unwrap_or(Value::Null),
-                "total_cpu_cores": payload.get("total_cpu_cores").cloned().unwrap_or(Value::Null),
+                // A field the row does not carry is null, as `json!` writes an
+                // absent option.
+                "published_at": payload.get("published_at"),
+                "stado_version": payload.get("stado_version"),
+                "accepting_jobs": payload.get("accepting_jobs"),
+                "running_jobs": payload.get("running_jobs"),
+                "available_cpu_cores": payload.get("available_cpu_cores"),
+                "total_cpu_cores": payload.get("total_cpu_cores"),
                 "available_accelerators": payload
                     .get("available_accelerators")
                     .cloned()
                     .unwrap_or_else(|| json!({})),
-                "free_ram_gb": payload.get("free_ram_gb").cloned().unwrap_or(Value::Null),
-                "total_ram_gb": payload.get("total_ram_gb").cloned().unwrap_or(Value::Null),
-                "free_vram_gb": payload.get("free_vram_gb").cloned().unwrap_or(Value::Null),
-                "total_vram_gb": payload.get("total_vram_gb").cloned().unwrap_or(Value::Null),
+                "free_ram_gb": payload.get("free_ram_gb"),
+                "total_ram_gb": payload.get("total_ram_gb"),
+                "free_vram_gb": payload.get("free_vram_gb"),
+                "total_vram_gb": payload.get("total_vram_gb"),
             })
         })
         .collect();

@@ -104,25 +104,39 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                 };
 
                 if parsed.get("outcome").and_then(Value::as_str) == Some("volume_unreadable") {
-                    let detail = parsed
+                    // The janitor names what it could not read under
+                    // `errors`; a plan that states the outcome without one
+                    // is named as such.
+                    let errors: Vec<&str> = parsed
                         .get("errors")
                         .and_then(Value::as_array)
-                        .map(|errors| {
-                            errors
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .collect::<Vec<_>>()
-                                .join("; ")
-                        })
-                        .filter(|detail| !detail.is_empty())
-                        .unwrap_or_else(|| "host janitor could not read its volume".to_string());
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect();
+                    let detail = match errors.is_empty() {
+                        true => {
+                            "host janitor could not read its volume and named no error".to_string()
+                        }
+                        false => errors.join("; "),
+                    };
                     reclamation.janitor_plan = Some(parsed);
                     reclamation
                         .stages
                         .push(unavailable(REGISTRY_CLEANUP_STAGE, &detail));
                     continue;
                 }
-                let plans = cleaner_plans(&parsed);
+                let plans = match cleaner_plans(&parsed) {
+                    Ok(plans) => plans,
+                    Err(cause) => {
+                        reclamation.janitor_plan = Some(parsed);
+                        reclamation.stages.push(unavailable(
+                            REGISTRY_CLEANUP_STAGE,
+                            &format!("host janitor report is not read: {cause}"),
+                        ));
+                        continue;
+                    }
+                };
                 let counted: i64 = plans
                     .iter()
                     .map(|cleaner| {
@@ -133,13 +147,27 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                         }
                     })
                     .sum();
+                // A cleaner's item count is a count; a plan whose counts sum
+                // below zero was not produced by a pass that counted, and
+                // the stage says so instead of reporting no items.
+                let items = match usize::try_from(counted) {
+                    Ok(items) => items,
+                    Err(_negative) => {
+                        reclamation.janitor_plan = Some(parsed);
+                        reclamation.stages.push(unavailable(
+                            REGISTRY_CLEANUP_STAGE,
+                            &format!("host janitor reported {counted} items, which is not a count"),
+                        ));
+                        continue;
+                    }
+                };
                 let detail = janitor_sentence(&parsed, &plans, apply);
                 reclamation.janitor_plan = Some(parsed);
                 reclamation.stages.push(Stage {
                     stage: REGISTRY_CLEANUP_STAGE.to_string(),
                     free_kb_before: blocks(before),
                     free_kb_after: blocks(after),
-                    items: usize::try_from(counted).unwrap_or_default(),
+                    items,
                     paths: Vec::new(),
                     detail: Some(detail),
                     refused: Vec::new(),

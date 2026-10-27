@@ -140,11 +140,19 @@ pub fn locks_report(home: &Path) -> Result<Value> {
                     .started_at
                     .as_ref()
                     .is_some_and(|start| observed.as_ref() == Some(start));
+                // A held lock says who holds it the way a waiter is told: a
+                // record naming a holder that is gone is stale, and then the
+                // process that has the lock open is named.
+                let holder = if free {
+                    Value::Null
+                } else {
+                    Value::from(crate::install::operation::clause(&path))
+                };
                 Ok(json!({"held": !free, "pid": recorded.pid,
                     "recorded_product": recorded.product, "command": recorded.command,
                     "phase": recorded.phase, "acquired_at": recorded.acquired_at,
                     "started_at": recorded.started_at, "observed_start": observed,
-                    "running": running}))
+                    "running": running, "holder": holder}))
             })();
             match inspected {
                 Ok(Value::Object(fields)) => row

@@ -23,16 +23,23 @@ pub(in crate::providers::local::space_reclaim::hf) fn recheck_ref(
     expected: &Identity,
     commit: &str,
 ) -> Result<(), JanitorError> {
-    let parent_fd = safefs::open_path(root_fd, &path_parts[..path_parts.len() - 1])?;
+    let Some((name, parents)) = path_parts.split_last() else {
+        return Err(os_error("cache reference path names no file"));
+    };
+    let parent_fd = safefs::open_path(root_fd, parents)?;
     let result = (|parent_fd: &OwnedFd| {
-        let info =
-            safefs::fstatat_nofollow(parent_fd.as_raw_fd(), &path_parts[path_parts.len() - 1])?;
+        let info = safefs::fstatat_nofollow(parent_fd.as_raw_fd(), name)?;
         if identity(&info) != *expected || ifmt(info.st_mode as u32) != IFREG {
             return Err(os_error("cache reference changed"));
         }
+        // The reference is read to the size the identity check just proved,
+        // so a file grown since cannot be read past what was judged.
+        let size = usize::try_from(info.st_size).map_err(|error| {
+            os_error(&format!("cache reference size {} is not a length: {error}", info.st_size))
+        })?;
         let descriptor = safefs::open_file_at(
             parent_fd.as_raw_fd(),
-            &path_parts[path_parts.len() - 1],
+            name,
             OFlag::O_RDONLY,
             Mode::empty(),
         )?;
@@ -40,11 +47,10 @@ pub(in crate::providers::local::space_reclaim::hf) fn recheck_ref(
             if identity(&safefs::fstat(descriptor.as_raw_fd())?) != *expected {
                 return Err(os_error("cache reference changed"));
             }
-            safefs::read_fd(descriptor.as_raw_fd(), 257)?
+            safefs::read_fd(descriptor.as_raw_fd(), size)?
         };
         drop(descriptor);
-        let matches_commit =
-            payload.len() <= 256 && std::str::from_utf8(&payload).map(str::trim) == Ok(commit);
+        let matches_commit = std::str::from_utf8(&payload).map(str::trim) == Ok(commit);
         if !matches_commit {
             return Err(os_error("cache reference retargeted"));
         }
@@ -67,11 +73,11 @@ pub(in crate::providers::local::space_reclaim::hf) fn recheck_repository_snapsho
         .iter()
         .filter(|item| !item.deleted)
         .collect();
-    let repo = &scan
-        .candidates
-        .first()
-        .map(|c| c.repo.clone())
-        .unwrap_or_default();
+    // A scan with no candidate names no repository to recheck.
+    let Some(first) = scan.candidates.first() else {
+        return Ok(());
+    };
+    let repo = &first.repo;
     let mut snapshots_parts = repo.clone();
     snapshots_parts.push(OsString::from("snapshots"));
     let snapshots_fd = safefs::open_path(root_fd, &snapshots_parts)?;

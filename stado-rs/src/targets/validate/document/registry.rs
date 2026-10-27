@@ -18,13 +18,14 @@ pub(crate) fn validate_registry_body(
     let root = data
         .as_object()
         .ok_or_else(|| verr("registry", "must be an object"))?;
+    let required_version = registry_schema_version();
     let version_ok = root
         .get("schema_version")
-        .is_some_and(|v| !v.is_boolean() && v.as_i64() == Some(REGISTRY_SCHEMA_VERSION));
+        .is_some_and(|v| !v.is_boolean() && v.as_i64() == Some(required_version));
     if !version_ok {
         return Err(verr(
             "registry.schema_version",
-            &format!("must be {REGISTRY_SCHEMA_VERSION}"),
+            &format!("must be {required_version}"),
         ));
     }
 
@@ -62,15 +63,20 @@ pub(crate) fn validate_registry_body(
             ));
         }
 
-        let kind = target.get("kind").and_then(Value::as_str).unwrap_or("");
-        if !valid_kinds.contains(&kind) {
-            return Err(verr(
-                &format!("{location}.kind"),
-                &format!("must be one of {}", py_list_repr(&valid_kinds)),
-            ));
-        }
+        // The kind is one of the declared provider kinds; a target that
+        // declares none, or declares it in another shape, is refused the
+        // same way.
+        let kind = match target.get("kind").and_then(Value::as_str) {
+            Some(kind) if valid_kinds.contains(&kind) => kind,
+            Some(_) | None => {
+                return Err(verr(
+                    &format!("{location}.kind"),
+                    &format!("must be one of {}", py_list_repr(&valid_kinds)),
+                ))
+            }
+        };
         if let Some(value) = target.get("gpu_power_limit_watts") {
-            let watts = value.as_u64().filter(|watts| *watts > 0).ok_or_else(|| {
+            let watts = value.as_u64().and_then(std::num::NonZeroU64::new).map(std::num::NonZeroU64::get).ok_or_else(|| {
                 verr(
                     &format!("{location}.gpu_power_limit_watts"),
                     "must be a positive integer",
@@ -90,19 +96,20 @@ pub(crate) fn validate_registry_body(
             }
         }
         let platform_location = format!("{location}.release_platform");
-        let platform = target
-            .get("release_platform")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !crate::deploy::products::PLATFORMS.contains(&platform) {
-            return Err(verr(
-                &platform_location,
-                &format!(
-                    "must be one of {} and must be confirmed by host inventory",
-                    py_list_repr(crate::deploy::products::PLATFORMS)
-                ),
-            ));
-        }
+        // The platform is one of the shipped names; a target that declares
+        // none, or declares it in another shape, is refused the same way.
+        let platform = match target.get("release_platform").and_then(Value::as_str) {
+            Some(platform) if crate::deploy::products::PLATFORMS.contains(&platform) => platform,
+            Some(_) | None => {
+                return Err(verr(
+                    &platform_location,
+                    &format!(
+                        "must be one of {} and must be confirmed by host inventory",
+                        py_list_repr(crate::deploy::products::PLATFORMS)
+                    ),
+                ))
+            }
+        };
         validate_privacy_grants(&location, target, platform)?;
         if let Some(role) = target.get("role") {
             if !role.as_str().is_some_and(is_target_name) {
@@ -161,6 +168,7 @@ pub(crate) fn validate_registry_body(
                         ));
                     }
                 }
+                super::services::validate_service_record(&service_location, service)?;
             }
         }
 

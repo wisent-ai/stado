@@ -21,14 +21,6 @@ struct MachineEnrollmentFailure: Equatable, Sendable {
         )
     }
 
-    static func missingPublicKey(machine: String) -> Self {
-        Self(
-            title: "The key was minted but its public half was not printed",
-            detail: "Stado reported success without a public key line, so there is nothing to put on \(machine). Run the step again; if it repeats, read the credential item directly with stado fleet key ls.",
-            backendMessage: ""
-        )
-    }
-
     /// Enrollment probes the machine before it writes anything and rolls its
     /// own entry back when the agent install fails, so whatever the command
     /// refused, no half-added machine is left behind. Which refusal it was is
@@ -100,19 +92,31 @@ struct MachineEnrollmentFailure: Equatable, Sendable {
     /// the same two failure modes and the same guarantee about what is left
     /// behind. What it adds is the address: it came from the machine, not from
     /// the operator, so a wrong one is a fact about the reply.
-    static func approval(_ message: String, hostname: String, destination: String?) -> Self {
-        let address = destination?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if address.isEmpty {
+    static func approval(_ message: String, request: FleetPendingRequest) -> Self {
+        if !request.isReachable {
             return Self(
-                title: "\(hostname) was not approved",
+                title: "\(request.hostname) was not approved",
                 detail: "Approval opens a channel to the machine and probes it before it writes anything, and this request carries no address to open one to. A machine that reported itself without a destination has to be enrolled with an address you supply.",
                 backendMessage: message
             )
         }
-        let inner = Self.enrollment(message, machine: hostname, sshTarget: address)
+        let address = request.probedAddress
+        let inner = Self.enrollment(message, machine: request.hostname, sshTarget: address)
         return Self(
             title: inner.title,
-            detail: "\(inner.detail) The address \(address) came from \(hostname) itself when it answered the invitation, so it is what that machine believes it is reachable at.",
+            detail: "\(inner.detail) The address \(address) came from \(request.hostname) itself when it answered the invitation, so it is what that machine believes it is reachable at.",
+            backendMessage: message
+        )
+    }
+
+    /// The draft or plan this app saved earlier could not be read back, or
+    /// could not be written. The screen starts from an empty one and says
+    /// so, with the decoder's or encoder's own reason, instead of silently
+    /// forgetting an invitation that may still be waiting in the fleet.
+    static func savedState(_ message: String, document: String) -> Self {
+        Self(
+            title: "This app's saved \(document) was not kept",
+            detail: "The \(document) is saved on this Mac so an enrollment survives closing the window. It could not be read back or written this time, so the screen shows a fresh one. The fleet is untouched: an invitation already minted is still waiting in the store and is listed by stado fleet pending.",
             backendMessage: message
         )
     }

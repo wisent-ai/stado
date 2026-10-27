@@ -88,16 +88,19 @@ fn declared_agent(target: &ComputeTarget) -> Result<Option<service::ManagedServi
     let one = crate::deploy::local_install::stado_unit()?;
     let host = crate::deploy::service_catalog::host_process().map_err(DeployError::from)?;
     let declared = service::declared_services(target);
-    Ok(declared
-        .iter()
-        .find(|unit| one == unit.unit_id())
-        .or_else(|| {
-            declared.iter().find(|unit| {
-                crate::deploy::service_catalog::host_roles(&host, &service::declared_line(unit))
-                    .contains(&AGENT_ROLE)
-            })
-        })
-        .cloned())
+    if let Some(unit) = declared.iter().find(|unit| one == unit.unit_id()) {
+        return Ok(Some(unit.clone()));
+    }
+    // A declared line this build's serve cannot read is refused by name:
+    // read as running no role, the host would lose its agent blocker.
+    for unit in &declared {
+        let roles = crate::deploy::service_catalog::host_roles(&host, &service::declared_line(unit))
+            .map_err(|cause| DeployError::from(format!("{} on {}: {cause}", unit.unit_id(), target.name)))?;
+        if roles.contains(&AGENT_ROLE) {
+            return Ok(Some(unit.clone()));
+        }
+    }
+    Ok(None)
 }
 
 /// The detail for [`host_gates::AGENT_DECLARED_NOT_LOADED`], or `None` when

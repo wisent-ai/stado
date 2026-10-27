@@ -20,7 +20,7 @@ const REGISTERED: &str = "Registered tunnel connection";
 /// when the listener serves it. A listener that exited closes the socket, and
 /// the request fails with the transport's own error.
 pub async fn await_listener(child: &mut Child, port: u16, log: &Path) -> Result<(), String> {
-    let endpoint = format!("http://127.0.0.1:{port}/join.sh");
+    let endpoint = format!("{}/join.sh", crate::primitives::http::origin::loopback_origin(port));
     let exited = |child: &mut Child| match child.try_wait() {
         Ok(Some(status)) => format!("the listener exited ({status})"),
         Ok(None) => "the listener is still running".to_string(),
@@ -62,19 +62,22 @@ pub fn await_tunnel(child: &mut Child, stderr: ChildStderr, log: &Path) -> Resul
     let mut line = String::new();
     loop {
         line.clear();
-        let read = reader
+        reader
             .read_line(&mut line)
             .map_err(|exc| format!("reading cloudflared's output failed: {exc}"))?;
-        if read == 0 {
+        // `read_line` leaves the line empty only at end of file; every line it
+        // reads carries at least its newline.
+        if line.is_empty() {
             let pid = child.id();
-            let status = crate::wait::blocking(
+            let status = match crate::wait::blocking(
                 crate::wait::Kind::Process,
                 "cloudflared, whose output ended, to exit",
                 format!("pid {pid}"),
                 || child.wait(),
-            )
-            .map(|status| status.to_string())
-            .unwrap_or_else(|exc| format!("state unreadable: {exc}"));
+            ) {
+                Ok(status) => status.to_string(),
+                Err(exc) => format!("state unreadable: {exc}"),
+            };
             return Err(match address {
                 None => format!(
                     "cloudflared exited before printing an address ({status}); its log says: {}",

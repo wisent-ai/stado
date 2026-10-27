@@ -10,15 +10,15 @@ pub(in crate::autonomy::service_reconciler) async fn alert_transitions(
     previous: Option<&ServiceReconcileReport>,
     report: &ServiceReconcileReport,
 ) {
-    let prior: BTreeMap<String, &ServiceReconcileOutcome> = previous
-        .map(|previous| {
-            previous
-                .outcomes
-                .iter()
-                .map(|outcome| (outcome.key(), outcome))
-                .collect()
-        })
-        .unwrap_or_default();
+    // The first run has no prior outcomes, so every refusal it finds is new.
+    let prior: BTreeMap<String, &ServiceReconcileOutcome> = match previous {
+        Some(previous) => previous
+            .outcomes
+            .iter()
+            .map(|outcome| (outcome.key(), outcome))
+            .collect(),
+        None => BTreeMap::new(),
+    };
     for outcome in report
         .outcomes
         .iter()

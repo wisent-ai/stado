@@ -18,7 +18,13 @@ use grant::{
 };
 
 pub(in crate::cli::azure) async fn login(args: LoginArgs) -> Result<(), CmdError> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    // The operating system chooses the redirect port; the port it gave is
+    // read back below and is the one the redirect names.
+    let loopback = std::net::SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        Default::default(),
+    );
+    let listener = TcpListener::bind(loopback).await?;
     let redirect_uri = format!("http://localhost:{}", listener.local_addr()?.port());
     let state = Uuid::new_v4().simple().to_string();
     let (verifier, challenge) = pkce_pair();
@@ -49,6 +55,30 @@ pub(in crate::cli::azure) async fn login(args: LoginArgs) -> Result<(), CmdError
             CmdError::click("Azure token response has no refresh_token")
                 .stating(crate::primitives::failure::FailureCode::Auth)
         })?;
+    let access_token = body
+        .get("access_token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(
+                "Azure token response has no access_token, so the identity it signed in \
+                 cannot be read; nothing was stored",
+            )
+            .stating(crate::primitives::failure::FailureCode::Auth)
+        })?;
+    let claims = jwt_claims(access_token)?;
+    let claim = |name: &str| claims.get(name).and_then(Value::as_str).map(str::to_string);
+    // The tenant Azure signed in decides where every later verb acts; a
+    // token that does not name it is refused rather than reported as the
+    // tenant that was asked for.
+    let Some(tenant_id) = claim("tid") else {
+        return Err(CmdError::click(format!(
+            "the access token Azure issued names no tenant (tid claim), so which tenant \
+             signed in cannot be read; the login asked for tenant {}",
+            args.tenant
+        ))
+        .stating(crate::primitives::failure::FailureCode::Auth));
+    };
     store_operator_item(
         &args.role,
         &args.tenant,
@@ -57,17 +87,14 @@ pub(in crate::cli::azure) async fn login(args: LoginArgs) -> Result<(), CmdError
         &body,
     )
     .await?;
-    let claims = jwt_claims(
-        body.get("access_token")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-    );
     crate::cli::print_answer(
         &json!({
             "authenticated": true,
-            "account": claims.get("preferred_username").and_then(Value::as_str).unwrap_or(&args.account),
-            "tenant_id": claims.get("tid").and_then(Value::as_str).unwrap_or(&args.tenant),
-            "object_id": claims.get("oid").and_then(Value::as_str),
+            "account": claim("preferred_username").or_else(|| claim("upn")),
+            "requested_account": args.account,
+            "tenant_id": tenant_id,
+            "requested_tenant": args.tenant,
+            "object_id": claim("oid"),
             "credential_role": args.role,
             "stored": "Skarbiec"
         }),
@@ -75,20 +102,25 @@ pub(in crate::cli::azure) async fn login(args: LoginArgs) -> Result<(), CmdError
     )
 }
 
-pub(in crate::cli::azure) fn jwt_claims(token: &str) -> Value {
+/// The claims an Azure access token carries, or which part of it could not
+/// be read.
+pub(in crate::cli::azure) fn jwt_claims(token: &str) -> Result<Value, CmdError> {
+    let unreadable = |part: &str| {
+        CmdError::click(format!("the Azure access token's {part} cannot be read"))
+            .stating(crate::primitives::failure::FailureCode::Auth)
+    };
     let Some(payload) = token
         .split_once('.')
         .and_then(|(_, rest)| rest.split('.').next())
     else {
-        return Value::Null;
+        return Err(unreadable("payload: it is not a three-part JWT"));
     };
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload));
-    decoded
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or(Value::Null)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .map_err(|error| unreadable(&format!("payload: it is not base64url ({error})")))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| unreadable(&format!("payload: it is not JSON ({error})")))
 }
 
 pub(in crate::cli::azure) async fn refresh_operator_token(
@@ -153,14 +185,15 @@ async fn token_answer(response: reqwest::Response, exchange: &str) -> Result<Val
     let status = response.status();
     if !status.is_success() {
         let text = crate::primitives::http::refused_body(response).await;
-        let described = serde_json::from_str::<Value>(&text).ok().and_then(|body| {
-            body.get("error_description")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
-        let reason = match described {
-            Some(description) => description,
-            None => text,
+        // The provider's own description when its body is JSON carrying one;
+        // otherwise the whole body in its own words, and why it was not read
+        // as JSON.
+        let reason = match serde_json::from_str::<Value>(&text) {
+            Ok(body) => match body.get("error_description").and_then(Value::as_str) {
+                Some(description) => description.to_string(),
+                None => text,
+            },
+            Err(error) => format!("{text} (the body is not JSON: {error})"),
         };
         return Err(CmdError::click(format!(
             "Azure {exchange} exchange failed with HTTP {status}: {reason}"

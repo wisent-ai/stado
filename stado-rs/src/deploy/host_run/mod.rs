@@ -7,7 +7,7 @@
 //! file of the wrong kind before a compiler or program starts.
 //!
 //! Layout: `validate` holds the lexical refusals applied to caller text,
-//! `build` the release build, `attached` the attached execution and its
+//! `build` the release build or its compile-only check, `attached` the attached execution and its
 //! signal forwarding, `remove` the recursive removal of one run directory.
 //! This module owns the managed-area constants, the timeouts, and the
 //! host-side confinement prelude the build and attached scripts share.

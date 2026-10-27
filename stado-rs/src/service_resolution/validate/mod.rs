@@ -15,14 +15,7 @@ mod routes;
 pub use contract::validate_registry_contract;
 
 pub(super) fn identifier(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let edge = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
-    !bytes.is_empty()
-        && edge(bytes[0])
-        && edge(bytes[bytes.len() - 1])
-        && bytes
-            .iter()
-            .all(|byte| edge(*byte) || matches!(byte, b'.' | b'_' | b'-'))
+    crate::primitives::word::lowercase_identifier(value)
 }
 
 pub(super) fn validate_identifier(value: &str, location: &str) -> Result<(), String> {

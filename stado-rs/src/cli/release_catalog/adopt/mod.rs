@@ -3,7 +3,7 @@
 //!
 //! An application checkout without a `.wisent-release.json` or release
 //! scripts used to reach the pipeline by a manifest copied from another app
-//! by hand, scripts edited by hand, `catalog declare-publisher`, then `catalog
+//! by hand, scripts edited by hand, `catalog publisher declare`, then `catalog
 //! sync`. This command writes the manifest and scripts from templates filled
 //! with what the checkout's own project states, declares the publisher when
 //! the fleet hosts are named, and registers the product, so the next app takes
@@ -52,7 +52,7 @@ pub(super) struct AdoptArgs {
     #[arg(long)]
     scheme: Option<String>,
     /// Registry host whose vault is authoritative; with --client, the
-    /// publisher is declared as `catalog declare-publisher` declares it.
+    /// publisher is declared as `catalog publisher declare` declares it.
     #[arg(long, requires = "client")]
     owner: Option<String>,
     /// Registry host that runs `release submit`.
@@ -234,7 +234,7 @@ pub(super) async fn run(args: AdoptArgs) -> Result<(), CmdError> {
             .await?;
     } else {
         println!("publisher not declared: pass --owner and --client, or run");
-        println!("  stado release catalog declare-publisher {product} --owner HOST --client HOST");
+        println!("  stado release catalog publisher declare {product} --owner HOST --client HOST");
     }
     super::checkout::sync(&checkout, args.json).await?;
     let signing = match args.kind {

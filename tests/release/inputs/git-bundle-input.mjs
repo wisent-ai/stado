@@ -60,7 +60,7 @@ function success(program, args, cwd) {
   return result.stdout;
 }
 const refs = () => success('git', ['for-each-ref', '--format=%(refname) %(objectname)'], source);
-const pin = ['release', 'catalog', 'pin-input', checkout, '--name', 'example-git-bundle', '--source', source, '--revision', revision, '--git-bundle', '--json'];
+const pin = ['release', 'catalog', 'input', 'pin', checkout, '--name', 'example-git-bundle', '--source', source, '--revision', revision, '--git-bundle', '--json'];
 function refusal(name, args, expected) {
   const before = readFileSync(manifestPath);
   const beforeRefs = refs();

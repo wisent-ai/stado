@@ -1,20 +1,25 @@
 //! Parsing one host's answer: the reading types and the marker fold.
 
 use super::*;
-use serde::Deserialize;
+use crate::providers::local::host_memory::constants::{GIB, KIB};
 
+mod device;
 mod fold;
+mod volume;
 
+pub use device::{BlockDevice, DeviceType, Signature};
 pub use fold::{parse_lsblk_pairs, parse_output};
+pub use volume::{volume_of, volume_of_report};
 
-/// `df -Pk` 1024-byte blocks as GiB, one decimal.
+/// `df -Pk` 1024-byte blocks as GiB, as measured; a report rounds it where
+/// it prints it.
 ///
 /// This module owns the unit because it owns the `df` invocation, and both
 /// [`crate::deploy::host_gates`] and [`crate::deploy::host_reclaim`] report
 /// free space in GiB. Three spellings of the same division would eventually
 /// be three different numbers on one host.
 pub fn gib_from_blocks(blocks: f64) -> f64 {
-    (blocks / (1024.0 * 1024.0) * 10.0).round() / 10.0
+    blocks * KIB as f64 / GIB as f64
 }
 
 /// One `df -Pk` row, in the units the host reported (1024-byte blocks for
@@ -27,83 +32,6 @@ pub struct DiskUsage {
     pub available_kb: String,
     pub capacity: String,
     pub mounted_on: String,
-}
-
-/// One block device as the host's `lsblk -b -P` named it: a disk, a
-/// partition or a mapper volume, with the filesystem on it and where it is
-/// mounted, when it is. `mountpoint` empty on a `disk` or `part` with no
-/// children is the fact this record exists for: storage the host has and
-/// the fleet cannot write to.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct BlockDevice {
-    pub name: String,
-    pub size_bytes: i64,
-    pub kind: String,
-    pub fstype: String,
-    pub mountpoint: String,
-    pub uuid: String,
-    pub model: String,
-}
-
-/// The `lsblk` device types this reading decides on; every other type
-/// (`lvm`, `crypt`, `loop`, `rom`, `raid…`) is a layer above a disk or not
-/// storage of its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum DeviceType {
-    Disk,
-    Part,
-    #[serde(other)]
-    Other,
-}
-
-/// The `lsblk` filesystem signatures that are in use without a mountpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-enum Signature {
-    /// An LVM physical volume.
-    #[serde(rename = "LVM2_member")]
-    LvmMember,
-    /// A LUKS container.
-    #[serde(rename = "crypto_LUKS")]
-    Luks,
-    /// Swap space.
-    #[serde(rename = "swap")]
-    Swap,
-    #[serde(other)]
-    Other,
-}
-
-impl BlockDevice {
-    fn device_type(&self) -> DeviceType {
-        DeviceType::deserialize(serde_json::Value::String(self.kind.clone()))
-            .map_or(DeviceType::Other, |kind| kind)
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::deserialize(serde_json::Value::String(self.fstype.clone()))
-            .map_or(Signature::Other, |signature| signature)
-    }
-
-    /// A whole disk or partition holding no mounted filesystem, no partition
-    /// of its own that is listed, and no filesystem that is in use without
-    /// a mountpoint (an LVM physical volume, a LUKS container, swap):
-    /// attached, and unused by anything the kernel mounts.
-    pub fn unmounted_among(&self, all: &[BlockDevice]) -> bool {
-        if self.device_type() == DeviceType::Other
-            || !self.mountpoint.is_empty()
-            || self.size_bytes <= 0
-        {
-            return false;
-        }
-        if self.signature() != Signature::Other {
-            return false;
-        }
-        !all.iter().any(|other| {
-            other.name != self.name
-                && other.name.starts_with(&self.name)
-                && (other.device_type() == DeviceType::Part || !other.mountpoint.is_empty())
-        })
-    }
 }
 
 /// What the host's janitor state file says about the last and next pass.
@@ -280,12 +208,19 @@ pub struct DiskReading {
     /// the host could not be asked, which is not the same as none alive.
     pub live_stado_pids: Option<Vec<u32>>,
     pub memory: MemoryReading,
+    /// Every row the host printed whose figures were not numbers, with why:
+    /// such a row is reported, never dropped or read as zero.
+    pub unread: Vec<String>,
 }
+
+/// A second is a million microseconds:
+/// <https://www.bipm.org/en/measurement-units/si-prefixes>.
+const MICROSECONDS_PER_SECOND: f64 = 1_000_000.0;
 
 /// Epoch seconds as the ISO-8601 spelling the rest of the fleet uses, to the
 /// microsecond the janitor recorded: a promise rounded down to the second
 /// would read as broken up to a second before it is.
 pub(super) fn iso_from_epoch(epoch: f64) -> Option<String> {
-    DateTime::from_timestamp_micros((epoch * 1_000_000.0).round() as i64)
+    DateTime::from_timestamp_micros((epoch * MICROSECONDS_PER_SECOND).round() as i64)
         .map(crate::models::isoformat_utc)
 }

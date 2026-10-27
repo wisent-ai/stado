@@ -199,7 +199,7 @@ pub(crate) async fn enqueue(
         );
     }
     let request = WorkerRequest {
-        schema_version: 1,
+        schema_version: crate::release_pipeline::SCHEMA_VERSION,
         run_id: id.into(),
         product: m.product.clone(),
         version: version.into(),

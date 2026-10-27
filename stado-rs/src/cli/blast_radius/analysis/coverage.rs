@@ -43,23 +43,35 @@ pub(in crate::cli::blast_radius) fn compare_coverage(
         };
     }
 
-    let mut missing: usize = 0;
-    let mut extra: usize = 0;
+    // A reachable listing holds every canonical prefix; one that lacks a
+    // prefix was not listed whole, so no completeness is claimed from it.
+    let mut missing = Vec::new();
+    let mut extra = Vec::new();
     for prefix in CANONICAL_PREFIXES {
-        let primary_names = primary.names.get(*prefix).cloned().unwrap_or_default();
-        let backup_names = backup.names.get(*prefix).cloned().unwrap_or_default();
-        missing = missing.saturating_add(primary_names.difference(&backup_names).count());
-        extra = extra.saturating_add(backup_names.difference(&primary_names).count());
+        let (Some(primary_names), Some(backup_names)) =
+            (primary.names.get(*prefix), backup.names.get(*prefix))
+        else {
+            return CoverageReport {
+                state: "listing_incomplete".to_string(),
+                missing_from_backup: None,
+                extra_only_in_backup: None,
+                explanation: format!(
+                    "the {prefix} prefix was not listed on both stores, so coverage cannot be compared"
+                ),
+            };
+        };
+        missing.extend(primary_names.difference(backup_names));
+        extra.extend(backup_names.difference(primary_names));
     }
-    let state = if missing == 0 {
+    let state = if missing.is_empty() {
         "namespace_covered"
     } else {
         "incomplete"
     };
     CoverageReport {
         state: state.to_string(),
-        missing_from_backup: Some(missing),
-        extra_only_in_backup: Some(extra),
+        missing_from_backup: Some(missing.len()),
+        extra_only_in_backup: Some(extra.len()),
         explanation: "coverage compares canonical object names; content and metadata integrity remain the responsibility of storage copy verify".to_string(),
     }
 }

@@ -6,7 +6,9 @@
 //! stores anything, naming the option. A pass with it runs whole against the
 //! local store; Skrzynka cannot be reached from that home, so the mail sweep
 //! is reported unavailable with the cause — and its query names the
-//! organization the operator gave, which is what the sweep would have read.
+//! organization the operator gave, which is what the sweep would have read;
+//! no notice was read, so none was recorded as a defect, and the pass and its
+//! stored snapshot both carry that empty register.
 //! The window is the caller's (`STADO_TEST_MAIL_DAYS`, refused by name when
 //! missing), as the command's own `--mail-days` assumes none. The commands,
 //! their exit statuses and outputs are kept in the deployment's
@@ -124,6 +126,19 @@ fn the_watch_reads_mail_only_from_the_organization_it_is_given() {
             .as_str()
             .is_some_and(|detail| !detail.is_empty()),
         "the cause is said: {pass}"
+    );
+    // No notice could be read, so none was recorded as a defect; the pass
+    // still says so, and the stored snapshot carries the register the next
+    // pass reads before it records a notice, so a notice is recorded once.
+    assert_eq!(
+        pass["notices_recorded"],
+        json!([]),
+        "an unreadable mailbox records no defect: {pass}"
+    );
+    assert_eq!(
+        pass["snapshot"]["provider_notices_recorded"],
+        json!({}),
+        "the snapshot carries the recorded-notice register: {pass}"
     );
     deployment.report["outcome"] = json!("passed");
     deployment.save();

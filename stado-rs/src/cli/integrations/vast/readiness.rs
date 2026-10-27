@@ -13,14 +13,13 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cli::CmdError;
-use crate::providers::vast::{
-    read_vast_api_key, VastClient, VastCredentialChannel, VastCredentialReading,
-};
+use crate::providers::host_credential::{HostCredentialChannel, HostCredentialReading};
+use crate::providers::vast::{read_vast_api_key, VastClient, VAST_FIELD, VAST_ROLE};
 
 /// The role whose item the bridge reads (the key is read by role, never by
 /// item id), and the field on it.
-const ITEM: &str = "vast";
-const FIELD: &str = "api_key";
+const ITEM: &str = VAST_ROLE;
+const FIELD: &str = VAST_FIELD;
 /// The fleet service whose active host holds the vault this item lives in.
 /// Asking the directory keeps "which vault" a fleet answer rather than a
 /// constant that goes stale the day the vault moves.
@@ -48,7 +47,12 @@ impl Verdict {
     /// The one line a text reader gets, and the sentence a failing exit
     /// carries.
     fn summary(self, report: &Readiness) -> String {
-        let vault = report.vault_host.as_deref().unwrap_or("the fleet vault");
+        // The vault is named by host once one was found; before that the
+        // `vault_error` says why none was, and the sentence names the role.
+        let vault = match report.vault_host.as_deref() {
+            Some(host) => host,
+            None => "the fleet vault",
+        };
         match self {
             Self::Ready => match report.machine_id.as_deref() {
                 Some(id) => format!("ready: Vast.ai accepts {ITEM}/{FIELD} and answers for machine {id}"),
@@ -82,7 +86,7 @@ pub(super) struct Readiness {
     pub verdict: Verdict,
     pub item: &'static str,
     pub field: &'static str,
-    pub channel: VastCredentialChannel,
+    pub channel: HostCredentialChannel,
     pub skarbiec_error: Option<String>,
     pub vault_host: Option<String>,
     pub vault_item_state: Option<crate::cli::host::VaultItemState>,
@@ -127,13 +131,16 @@ pub(super) async fn assess(vault_host: Option<String>, ask_vault: bool) -> Readi
         report.remedy = remedy(&report, &reading);
         return report;
     }
-    if matches!(reading.channel, VastCredentialChannel::None { .. }) {
+    if matches!(reading.channel, HostCredentialChannel::None { .. }) {
         report.verdict = Verdict::NoChannel;
         report.remedy = remedy(&report, &reading);
         return report;
     }
     if ask_vault {
-        read_vault(&mut report, vault_host).await;
+        let vault = read_vault(ITEM, vault_host).await;
+        report.vault_host = vault.host;
+        report.vault_item_state = vault.state;
+        report.vault_error = vault.error;
     } else {
         report.vault_error = Some("skipped by --no-vault-check".to_string());
     }
@@ -165,56 +172,66 @@ async fn probe_vast(report: &mut Readiness, key: String) {
     }
 }
 
-/// Whether the vault that would hold the item declares it. The host comes
-/// from the service directory unless the operator named one.
-async fn read_vault(report: &mut Readiness, vault_host: Option<String>) {
+/// What the vault that would hold a role's item said about it.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct VaultReading {
+    pub host: Option<String>,
+    pub state: Option<crate::cli::host::VaultItemState>,
+    pub error: Option<String>,
+}
+
+/// Whether the vault that would hold the item playing `role` declares it.
+/// The host comes from the service directory unless the operator named one.
+pub(crate) async fn read_vault(role: &str, vault_host: Option<String>) -> VaultReading {
+    let mut reading = VaultReading::default();
     let host = match vault_host {
         Some(host) => Some(host),
         None => match crate::cli::directory::active_host(VAULT_SERVICE).await {
             Ok(Some(host)) => Some(host),
             Ok(None) => {
-                report.vault_error = Some(format!(
+                reading.error = Some(format!(
                     "the registry declares no active host for {VAULT_SERVICE}; \
                      name one with --vault-host"
                 ));
                 None
             }
             Err(error) => {
-                report.vault_error =
-                    Some(format!("the service directory could not be read: {error}"));
+                reading.error = Some(format!("the service directory could not be read: {error}"));
                 None
             }
         },
     };
     let Some(host) = host else {
-        return;
+        return reading;
     };
-    report.vault_host = Some(host.clone());
-    let holder = match crate::cli::host::vault_role_item(&host, ITEM).await {
+    reading.host = Some(host.clone());
+    let holder = match crate::cli::host::vault_role_item(&host, role).await {
         Ok(holder) => holder,
         Err(error) => {
-            report.vault_error = Some(error.to_string());
-            return;
+            reading.error = Some(error.to_string());
+            return reading;
         }
     };
     let Some(holder) = holder else {
-        report.vault_item_state = Some(crate::cli::host::VaultItemState::Absent);
-        return;
+        reading.state = Some(crate::cli::host::VaultItemState::Absent);
+        return reading;
     };
     match crate::cli::host::vault_item_state(&host, &holder).await {
-        Ok(state) => report.vault_item_state = Some(state),
-        Err(error) => report.vault_error = Some(error.to_string()),
+        Ok(state) => reading.state = Some(state),
+        Err(error) => reading.error = Some(error.to_string()),
     }
+    reading
 }
 
 /// The exact commands that close the gap this verdict names.
-fn remedy(report: &Readiness, reading: &VastCredentialReading) -> Vec<String> {
-    let vault = report.vault_host.as_deref().unwrap_or("<vault-host>");
-    let consumer = match &reading.channel {
-        VastCredentialChannel::ControlPlane { consumer, .. } => consumer.clone(),
-        VastCredentialChannel::AgentGrant { consumer, .. } => consumer.clone(),
-        VastCredentialChannel::None { .. } => "<consumer>".to_string(),
+fn remedy(report: &Readiness, reading: &HostCredentialReading) -> Vec<String> {
+    // The commands name the vault host when one was found; otherwise the
+    // operator fills the placeholder from `--vault-host`.
+    let vault = match report.vault_host.as_deref() {
+        Some(host) => host,
+        None => "<vault-host>",
     };
+    let consumer = reading.channel.consumer();
     let grant = format!(
         "stado credentials grant add --host {vault} --role {ITEM} --field {FIELD} \
          --token-file <file> {consumer}"
@@ -259,40 +276,15 @@ pub(super) async fn report(
     if json {
         crate::cli::print_answer(&serde_json::to_value(&report)?, true)?;
     } else {
-        print_text(&report, &summary);
+        super::readiness_text::print_text(&report, &summary);
     }
     if report.earning_possible() {
         return Ok(());
     }
     if json {
-        return Err(CmdError::silent(1));
+        // The document already said everything; the exit is the one every
+        // failed command uses.
+        return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
     }
     Err(CmdError::click(summary).stating(crate::primitives::failure::FailureCode::Config))
-}
-
-fn print_text(report: &Readiness, summary: &str) {
-    println!("{summary}");
-    println!("item:     {}/{}", report.item, report.field);
-    println!("channel:  {}", report.channel.describe());
-    if let Some(error) = &report.skarbiec_error {
-        println!("skarbiec: {error}");
-    }
-    if let Some(host) = &report.vault_host {
-        match &report.vault_item_state {
-            Some(state) => println!("vault:    {host} says {state}"),
-            None => println!("vault:    {host} said nothing about the item"),
-        }
-    }
-    if let Some(error) = &report.vault_error {
-        println!("vault:    {error}");
-    }
-    if let Some(machine) = &report.machine_id {
-        println!("machine:  {machine}");
-    }
-    if let Some(price) = report.listed_gpu_cost {
-        println!("listed:   ${price}/h");
-    }
-    for line in &report.remedy {
-        println!("next:     {line}");
-    }
 }

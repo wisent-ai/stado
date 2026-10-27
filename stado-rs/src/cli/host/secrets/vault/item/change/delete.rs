@@ -19,19 +19,19 @@ pub async fn delete_vault_item(
 ) -> Result<(), CmdError> {
     vault_word("vault item", item)?;
     let (resolved, report) =
-        remote_skarbiec_json(target, &["delete".into(), item.to_string()]).await?;
+        crate::cli::host::secrets::vault::mirror::owner_item_delete(target, item).await?;
     if json_output {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
+                "target": resolved,
                 "item": item,
                 "status": "deleted",
                 "skarbiec": report,
             }))?
         );
     } else {
-        println!("{}: deleted {item}", resolved.name);
+        println!("{resolved}: deleted {item}");
     }
     Ok(())
 }

@@ -128,7 +128,11 @@ pub async fn pull(
     with_generation: bool,
     generation_only: bool,
     path: Option<&str>,
+    last_known_good: bool,
 ) -> Result<(), CmdError> {
+    if last_known_good {
+        return pull_last_known_good(path);
+    }
     let store = RegistryStore::open().await?;
     let blob = store
         .read_versioned()
@@ -159,5 +163,31 @@ pub async fn pull(
         return Ok(());
     }
     println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
+/// `pull --last-known-good [--path P]`: this host's last-known-good copy as
+/// it is on disk, the document every reader here falls back to and the one
+/// that names the registry authority this host asks. Read without asking the
+/// authority or the store, so it answers while both are down; no copy is
+/// refused as not found, naming where it was looked for.
+fn pull_last_known_good(path: Option<&str>) -> Result<(), CmdError> {
+    let document = crate::cli::resolver::kept_last_good_document()
+        .map_err(CmdError::declaration)?
+        .ok_or_else(|| {
+            let at = match crate::targets::registry_last_good_path() {
+                Some(at) => at.display().to_string(),
+                None => "(no cache directory)".to_string(),
+            };
+            CmdError::click(format!("this host keeps no last-known-good registry copy at {at}"))
+                .stating(crate::primitives::failure::FailureCode::NotFound)
+        })?;
+    match path {
+        Some(path) => match select(&document, path)? {
+            Value::String(text) => println!("{text}"),
+            part => println!("{}", serde_json::to_string_pretty(part)?),
+        },
+        None => println!("{}", serde_json::to_string_pretty(&document)?),
+    }
     Ok(())
 }

@@ -16,6 +16,7 @@ pub mod disk;
 pub mod disk_staging;
 pub mod helpers;
 pub mod host_memory;
+pub mod host_routines;
 pub mod probe;
 pub mod slots;
 pub mod space_reclaim;
@@ -38,16 +39,6 @@ pub struct Slot {
     pub pid: Option<i32>,
     /// Measured peak GPU memory (GiB) observed over previous ticks.
     pub peak_vram_gb: i64,
-}
-
-impl Slot {
-    pub fn new(job: Job, pid: Option<i32>) -> Self {
-        Slot {
-            job,
-            pid,
-            peak_vram_gb: 0,
-        }
-    }
 }
 
 /// Signal provider-neutral termination by ending the agent process.

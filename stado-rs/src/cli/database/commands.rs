@@ -124,27 +124,49 @@ pub(crate) enum DatabaseCommands {
         /// Port to listen on (postgres; required: Stado assumes none).
         #[arg(long)]
         port: Option<u16>,
+        /// PostgreSQL major version the server runs (postgres): `initdb` and
+        /// `postgres` of the Homebrew keg `postgresql@<version>`, or the first
+        /// ones Stado finds when they state it; without it, the first found.
+        #[arg(long)]
+        version: Option<String>,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Copy declared Postgres databases whole into this machine's storage:
+    /// `~/.stado/database-backups/<name>/<UTC time>/`, an archive and a
+    /// manifest with every table's row count, read back before it is kept.
+    Backup(super::BackupArgs),
+    /// The backups this machine keeps, newest first, from their manifests.
+    Backups(super::BackupsArgs),
+    /// Move a declared Postgres database another provider hosts (Supabase,
+    /// an external server) onto a fleet host: backup, place, restore, count
+    /// every table again, and only then point its item at the fleet server.
+    Migrate(super::MigrateArgs),
+    /// Serve the hosted provider's REST API in front of a fleet Postgres
+    /// database, with keys its consumers read from the database's item.
+    Rest {
+        #[command(subcommand)]
+        command: super::rest::RestCommands,
+    },
+    /// What a provider bills for the databases it hosts, read from its API:
+    /// per project add-ons, prices, the month's total and gateway traffic.
+    Cost {
+        /// Provider whose bill is read: supabase.
+        #[arg(long, value_enum)]
+        provider: super::DatabaseProvider,
         /// Emit machine-readable output.
         #[arg(long)]
         json: bool,
     },
     /// Bring a declared database's credential item in line with its hosted
-    /// Supabase project.
-    ///
-    /// Rewrites `<name>-database` from the management API: coordinates,
-    /// pooler with its transaction-mode `pooler_url` and session-mode
-    /// `session_url`, the revealed API keys (legacy `anon_key` and
-    /// `service_role_key`, every named key as `publishable_key_<name>` or
-    /// `secret_key_<name>`) and an active custom hostname as `custom_url`.
-    /// Fields another owner put on the item stay, and the password is kept
-    /// from the item, read from --password-file, or, with --rotate-password,
-    /// replaced: a new one is set on the project through the management API
-    /// and written on the item, for a project whose password no item holds.
-    /// Without NAME, every declared database whose item records a Supabase
-    /// `project_ref` is adopted again, so a rotated key lands. Items are read
-    /// and written in the owner vault, from any host: off the owner through
-    /// the host channel. --check writes nothing and exits non-zero when an
-    /// item differs.
+    /// Supabase project: coordinates, pooler (`pooler_url`, `session_url`),
+    /// the revealed API keys and an active custom hostname, rewritten from
+    /// the management API; fields another owner put on the item stay. The
+    /// password is kept, read from --password-file, or replaced with
+    /// --rotate-password. Without NAME every Supabase-backed database is
+    /// adopted again. Runs from any host, through the owner's own Skarbiec.
+    /// --check writes nothing and exits non-zero when an item differs.
     Adopt {
         /// Declared database to adopt; every Supabase-backed one when omitted.
         name: Option<String>,
@@ -193,7 +215,8 @@ pub(crate) enum DatabaseCommands {
     },
     /// Destroy a database Stado created: the inverse of `create`.
     ///
-    /// A fleet database: removes the managed unit `<name>-database` that
+    /// A fleet database: removes the REST unit `<name>-rest` when one is
+    /// placed beside it, then the managed unit `<name>-database` that
     /// serves a postgres database on its host; its data directory
     /// `~/.stado/databases/<name>/` is left in place and named. A Supabase
     /// database: deletes the hosted project with every row it holds, and only

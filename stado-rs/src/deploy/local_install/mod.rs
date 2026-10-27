@@ -180,7 +180,10 @@ pub async fn install_local(
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
     let os = LocalOs::detect()?;
-    let home = crate::config_file::expand_tilde("~");
+    let home = crate::config_file::home().map_err(|cause| {
+        DeployError(format!("{name} has nowhere to be installed: {cause}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let daemon = if daemon_domain && os == LocalOs::Darwin {
         Some(account_of(&home)?)
     } else {

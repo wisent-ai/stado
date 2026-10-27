@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 use super::socket::{ControlSocketError, Prepared};
-use super::{Action, OwnedProxy, OwnedTransaction, Request, Response, SCHEMA};
+use super::{Action, OwnedProxy, OwnedTransaction, Request, Response, PROTOCOL, SUPERUSER_UID};
 use crate::release_agent::rollout::serving::proxy::{forward, ProxyState};
 
 mod workers;
@@ -77,7 +77,7 @@ async fn respond(mut stream: UnixStream, owner: &Owner) -> Result<(), String> {
         Err(error) => (None, None, Some(error)),
     };
     let response = Response {
-        schema_version: SCHEMA,
+        protocol: PROTOCOL.to_string(),
         pid: std::process::id() as i32,
         proxy,
         transaction,
@@ -95,7 +95,7 @@ async fn read_and_apply(stream: &mut UnixStream, owner: &Owner) -> Result<Reply,
     let peer = stream
         .peer_cred()
         .map_err(|error| format!("cannot read native proxy caller credentials: {error}"))?;
-    if peer.uid() != owner.uid && peer.uid() != 0 {
+    if peer.uid() != owner.uid && peer.uid() != SUPERUSER_UID {
         return Err(format!(
             "proxy control refuses uid {}; owner uid is {}",
             peer.uid(),
@@ -110,10 +110,10 @@ async fn read_and_apply(stream: &mut UnixStream, owner: &Owner) -> Result<Reply,
         .map_err(|error| format!("cannot read proxy control request: {error}"))?;
     let request: Request = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid proxy control request: {error}"))?;
-    if request.schema_version != SCHEMA {
+    if request.protocol != PROTOCOL {
         return Err(format!(
-            "unsupported proxy control schema {}",
-            request.schema_version
+            "the request speaks proxy control protocol {}, and this host process speaks {PROTOCOL}",
+            request.protocol
         ));
     }
     match request.action {
@@ -182,7 +182,7 @@ async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, Stri
             return Err("a transaction request reached the proxy table".to_string())
         }
     };
-    if !state.is_absolute() || !bind.ip().is_loopback() || bind.port() == 0 {
+    if !state.is_absolute() || !bind.ip().is_loopback() || std::num::NonZeroU16::new(bind.port()).is_none() {
         return Err(
             "proxy control requires an absolute state path and nonzero loopback bind".to_string(),
         );
@@ -260,11 +260,12 @@ async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, Stri
                     Ok(Err(error)) => error,
                     Ok(Ok(())) => return,
                     Err(payload) => {
-                        let message = payload
-                            .downcast_ref::<String>()
-                            .map(String::as_str)
-                            .or_else(|| payload.downcast_ref::<&str>().copied())
-                            .unwrap_or("non-text panic payload");
+                        // A panic raised with a message carries text; any other payload is said to be one.
+                        let message = match (payload.downcast_ref::<String>(), payload.downcast_ref::<&str>()) {
+                            (Some(text), _) => text.clone(),
+                            (None, Some(text)) => (*text).to_string(),
+                            (None, None) => format!("a payload of no text type ({:?})", (*payload).type_id()),
+                        };
                         format!("forwarding loop panicked: {message}")
                     }
                 };

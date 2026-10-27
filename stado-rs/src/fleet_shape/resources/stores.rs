@@ -5,6 +5,7 @@
 use serde_json::Value;
 
 use super::super::{Finding, Sweep, HEALTH_CHECK, REPLICA_CHECK};
+use crate::primitives::tally::Tally;
 use crate::queue::copy::Endpoint;
 
 /// A replica that can never hold what the primary writes.
@@ -23,7 +24,7 @@ use crate::queue::copy::Endpoint;
 /// `stado host config show` does, one call per host.
 pub(in crate::fleet_shape) fn replica_addressing(result: &mut Sweep) {
     let primary = Endpoint::configured_primary();
-    result.measured += 1;
+    result.measured.tally();
     // Which of the three states this control plane is in is recorded either
     // way. A check whose quiet result and whose "there was nothing to check"
     // result look identical is the shape this module exists to refuse: on the
@@ -40,20 +41,18 @@ pub(in crate::fleet_shape) fn replica_addressing(result: &mut Sweep) {
     // Two readers, two answers, one declaration: components that believe the
     // replica exists write 48 GiB into it while the diagnostics say there is
     // nothing there and pass.
-    let declared_in_file = crate::config_file::load_config_file()
-        .ok()
-        .and_then(|file| file.get("storage").cloned())
-        .and_then(|storage| storage.get("backup").cloned())
-        .and_then(|backup| {
-            backup
-                .get("backend")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .filter(|backend| !backend.trim().is_empty());
+    let declared_in_file = match crate::config_file::load_config_file() {
+        Ok(file) => Ok(file
+            .get("storage")
+            .and_then(|storage| storage.pointer("/backup/backend"))
+            .and_then(Value::as_str)
+            .filter(|backend| !backend.trim().is_empty())
+            .map(str::to_string)),
+        Err(error) => Err(error.to_string()),
+    };
     let Some(backup) = Endpoint::configured_backup() else {
         match declared_in_file {
-            Some(backend) => result.record(Finding {
+            Ok(Some(backend)) => result.record(Finding {
                 check: REPLICA_CHECK,
                 subject: format!("{}: storage.backup.backend", primary.describe()),
                 declared: format!("the config file declares a {backend} replica"),
@@ -64,9 +63,21 @@ pub(in crate::fleet_shape) fn replica_addressing(result: &mut Sweep) {
                           the resolver is the half to fix"
                     .to_string(),
             }),
-            None => result
+            Ok(None) => result
                 .notes
                 .push(format!("{}: no replica declared", primary.describe())),
+            // A config file this process cannot read leaves the comparison
+            // unmade, which is a finding of its own, not a quiet pass.
+            Err(unreadable) => result.record(Finding {
+                check: REPLICA_CHECK,
+                subject: format!("{}: storage.backup.backend", primary.describe()),
+                declared: "the config file declares whether a replica exists".to_string(),
+                observed: format!(
+                    "the config file cannot be read, so the declaration cannot be compared \
+                     with the resolver's answer: {unreadable}"
+                ),
+                command: "stado config validate names what the file refuses".to_string(),
+            }),
         }
         return;
     };
@@ -95,7 +106,13 @@ pub(in crate::fleet_shape) fn replica_addressing(result: &mut Sweep) {
 /// own boundaries are closed is not evidence of service: authorized routes
 /// behind it can still return 503.
 pub async fn health_disagreement() -> Option<Finding> {
-    let url = crate::config::wc_stado_storage_url();
+    let url = match crate::config::wc_stado_storage_url() {
+        Ok(url) => url,
+        Err(cause) => {
+            let configured = crate::config::wc_stado_storage_url_configured().to_string();
+            return Some(unreadable_health(configured, cause));
+        }
+    };
     if url.is_empty() {
         return None;
     }
@@ -115,22 +132,18 @@ pub async fn health_disagreement() -> Option<Finding> {
         Ok(body) => body,
         Err(cause) => return Some(unreadable_health(endpoint, cause)),
     };
-    let ok = body.get("ok").and_then(Value::as_bool).unwrap_or_default();
-    let degraded = body
-        .get("degraded")
-        .and_then(Value::as_bool)
-        .unwrap_or_default();
-    let closed: Vec<String> = body
-        .get("boundaries")
-        .and_then(Value::as_object)
-        .map(|boundaries| {
-            boundaries
-                .iter()
-                .filter(|(_, open)| open.as_bool() == Some(false))
-                .map(|(name, _)| name.clone())
-                .collect()
-        })
-        .unwrap_or_default();
+    // The flags are booleans in the health document; one absent or in
+    // another shape is not the flag being set.
+    let ok = matches!(body.get("ok"), Some(Value::Bool(true)));
+    let degraded = matches!(body.get("degraded"), Some(Value::Bool(true)));
+    let closed: Vec<String> = match body.get("boundaries").and_then(Value::as_object) {
+        Some(boundaries) => boundaries
+            .iter()
+            .filter(|(_, open)| matches!(open, Value::Bool(false)))
+            .map(|(name, _)| name.clone())
+            .collect(),
+        None => Vec::new(),
+    };
     if !ok || !degraded || closed.is_empty() {
         return None;
     }
@@ -147,7 +160,10 @@ pub async fn health_disagreement() -> Option<Finding> {
         command: format!(
             "stado service logs {} --host <host> names why the boundary is closed; a \
              credential answer is not fixed by restarting the process",
-            crate::deploy::service_catalog::host_unit().unwrap_or_else(|error| error)
+            match crate::deploy::service_catalog::host_unit() {
+                Ok(unit) => unit,
+                Err(error) => format!("<the host unit: {error}>"),
+            }
         ),
     })
 }

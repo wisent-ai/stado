@@ -12,4 +12,4 @@ pub(crate) use payload::body;
 pub(crate) use request::{
     allow, invalid, method, not_implemented, object, path_decode, storage, Query,
 };
-pub(crate) use xml::{document, element, elements, escape, S3Error, XML};
+pub(crate) use xml::{document, escape, read, CompleteDocument, DeleteDocument, S3Error, XML};

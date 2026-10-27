@@ -21,6 +21,13 @@ pub enum AutonomyMode {
     EnforceOwned,
 }
 
+/// The mode as the policy document and `autonomy set` spell it.
+impl std::fmt::Display for AutonomyMode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::primitives::word::write(self, formatter)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionRisk {

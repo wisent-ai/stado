@@ -114,7 +114,9 @@ fn gcp_phase(kind: ResourceKind, status: &str) -> LifecyclePhase {
     match <ResourceStatus as serde::Deserialize>::deserialize(Value::String(status.to_string())) {
         Ok(ResourceStatus::Failed | ResourceStatus::Deleting) => LifecyclePhase::Ended,
         Ok(_) => LifecyclePhase::Running,
-        Err(_) => LifecyclePhase::Unknown,
+        // A status word outside the declared set is kept verbatim in
+        // `state` and the phase says nobody stated it.
+        Err(_undeclared_status) => LifecyclePhase::Unknown,
     }
 }
 
@@ -130,7 +132,12 @@ fn gcp_resource(
             "a row names no resource (no name, id or self link) and is not recorded: {item}"
         ));
     };
-    let native = value_text(item, &["self_link", "selfLink", "id"]).unwrap_or_else(|| name.clone());
+    // A row is identified by its self link, or its id; a row with neither
+    // is known by its name, the only handle it offers.
+    let native = match value_text(item, &["self_link", "selfLink", "id"]) {
+        Some(native) => native,
+        None => name.clone(),
+    };
     let mut resource =
         ResourceRecord::new(ProviderId::Gcp, project, kind, native, name, observed_at);
     resource.zone = value_text(item, &["zone"]);
@@ -158,8 +165,10 @@ fn gcp_resource(
         );
     }
     collect_resource_references(item, &mut resource.dependencies);
-    resource.source_revision =
-        value_text(item, &["fingerprint", "etag"]).or_else(|| canonical_revision(item));
+    resource.source_revision = Some(match value_text(item, &["fingerprint", "etag"]) {
+        Some(stamp) => stamp,
+        None => canonical_revision(item),
+    });
     resource.evidence = json!({"probe": probe, "item": item});
     resource.apply_identity_labels();
     Ok(resource)

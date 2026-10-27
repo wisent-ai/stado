@@ -92,7 +92,7 @@ pub fn object_auth_verdict(
                         "; the vault's key database is held ({}): its own Skarbiec releases \
                          the lock after its read gives up, and `stado repair skarbiec --step \
                          crypto --target <vault host> --apply` (or `stado host exec <vault \
-                         host> -- skarbiec recover-daemons`) releases it now",
+                         host> -- skarbiec keyring recover`) releases it now",
                         held_locks.join("; ")
                     )
                 };

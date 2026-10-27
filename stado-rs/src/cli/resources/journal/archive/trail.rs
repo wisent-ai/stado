@@ -2,13 +2,8 @@
 //! the artifacts a phase publishes beside them, and the local mirror every
 //! archived document is duplicated into by a durable, atomic write.
 
-use std::fs;
-use std::io::Write;
-use std::path::Path;
-
 use serde::Serialize;
 use serde_json::Value;
-use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 use crate::cli::resources::journal::clock::{compact_now, now};
@@ -73,21 +68,6 @@ impl Journal {
         validate_operation_id(operation_id)?;
         validate_artifact_name(name)?;
         let path = self.local_root.join(operation_id).join(name);
-        atomic_write(&path, bytes)
+        Ok(crate::primitives::document::persist(&path, bytes)?)
     }
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CmdError> {
-    let parent = path.parent().ok_or_else(|| {
-        CmdError::click(format!("{} has no parent", path.display()))
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
-    fs::create_dir_all(parent)?;
-
-    let mut temporary = NamedTempFile::new_in(parent)?;
-    temporary.write_all(bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    fs::File::open(parent)?.sync_all()?;
-    Ok(())
 }

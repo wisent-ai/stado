@@ -86,12 +86,6 @@ fn refused_until(path: &Path) -> std::io::Result<Option<f64>> {
     Ok(None)
 }
 
-/// Python `_pid_live`: kill(pid, 0). EPERM counts as dead, matching
-/// Python's broad `except OSError`.
-pub fn pid_live(pid: i32) -> bool {
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
-}
-
 /// Python `_active_flush`: live pid in the lock file -> true; stale lock
 /// is removed. A lock that cannot be read or holds no pid is an error naming
 /// it: read as no flush running, a second flush was started on the same
@@ -114,7 +108,9 @@ pub fn active_flush(lock_path: &Path) -> std::io::Result<bool> {
             text.trim()
         ))
     })?;
-    if pid_live(pid) {
+    // One answer for whether a pid is a process: EPERM is somebody else's live
+    // process and this process's own exited child is reaped (primitives::procutil).
+    if crate::primitives::procutil::pid_alive(pid) {
         return Ok(true);
     }
     std::fs::remove_file(lock_path)?;
@@ -130,30 +126,48 @@ pub(crate) fn pick_or_rotate(
 ) -> std::io::Result<Option<PathBuf>> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     for entry in std::fs::read_dir(flush_root)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            candidates.push(path);
+        // A rotated directory whose type cannot be read is an error, not a
+        // directory skipped: skipping it never flushed what it holds.
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            candidates.push(entry.path());
         }
     }
     candidates.sort();
     if let Some(first) = candidates.into_iter().next() {
         return Ok(Some(first));
     }
-    // A staging directory that cannot be listed is not an empty one: reading
-    // it as empty left staged data unflushed with nothing said.
-    let non_empty = staging.is_dir()
-        && std::fs::read_dir(staging)
-            .map_err(|error| {
-                std::io::Error::new(
-                    error.kind(),
-                    format!(
-                        "cannot list the staging directory {}: {error}",
-                        staging.display()
-                    ),
-                )
-            })?
-            .next()
-            .is_some();
+    // A staging directory that cannot be read is not a missing or empty one:
+    // reading it as either left staged data unflushed with nothing said. Only
+    // a staging path that does not exist means there is nothing to flush.
+    match std::fs::metadata(staging) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            return Err(std::io::Error::other(format!(
+                "the staging path {} is not a directory",
+                staging.display()
+            )))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("cannot read the staging directory {}: {error}", staging.display()),
+            ))
+        }
+    }
+    let non_empty = std::fs::read_dir(staging)
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!(
+                    "cannot list the staging directory {}: {error}",
+                    staging.display()
+                ),
+            )
+        })?
+        .next()
+        .is_some();
     if !non_empty {
         return Ok(None);
     }
@@ -207,8 +221,14 @@ fn spawn_fleet_flush_with_token(
     let staging = fleet_staging;
     let name = staging
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .ok_or_else(|| {
+            std::io::Error::other(format!(
+                "fleet staging {} names no directory, so its flush and log roots have no name",
+                staging.display()
+            ))
+        })?
+        .to_string_lossy()
+        .into_owned();
     let flush_root = staging.with_file_name(format!("{name}.async_flushes"));
     let log_root = staging.with_file_name(format!("{name}.flush_logs"));
     std::fs::create_dir_all(&flush_root)?;
@@ -231,8 +251,14 @@ fn spawn_fleet_flush_with_token(
 
     let log_name = flush_dir
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .ok_or_else(|| {
+            std::io::Error::other(format!(
+                "flush directory {} has no name to name its log after",
+                flush_dir.display()
+            ))
+        })?
+        .to_string_lossy()
+        .into_owned();
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

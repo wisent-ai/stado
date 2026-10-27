@@ -20,21 +20,28 @@ extension MachineEnrollmentStore {
         }
         do {
             let result = try await run(["fleet", "pending", "--json"])
-            guard result.ok, let list: FleetPendingList = Self.decode(from: result.standardOutput) else {
+            if !result.ok {
                 if announce {
                     failure = .transport(result.message)
                     outcome = .failed(result.message)
                 }
                 return
             }
+            let list = try Self.document(
+                FleetPendingList.self,
+                of: "stado fleet pending --json",
+                from: result.standardOutput
+            )
             plan.pending = list.pending
             plan.pendingReadAt = Date()
             persistPlan()
             if announce {
+                // Singular when the list holds exactly one request.
+                let plural = waitingRequests.dropFirst().isEmpty ? "" : "s"
                 outcome = .succeeded(
                     waitingRequests.isEmpty
                         ? "No machine is waiting for a decision."
-                        : "\(waitingRequests.count) machine\(waitingRequests.count == 1 ? "" : "s") waiting for a decision."
+                        : "\(waitingRequests.count) machine\(plural) waiting for a decision."
                 )
             }
         } catch {
@@ -62,7 +69,7 @@ extension MachineEnrollmentStore {
     func approve(_ request: FleetPendingRequest) async {
         guard !isRunning else { return }
         failure = nil
-        let probed = request.destination.flatMap { $0.isEmpty ? nil : $0 } ?? request.hostname
+        let probed = request.probedAddress
         outcome = .working("Asking \(probed) for its hostname and platform, then writing the entry only if it answers.")
         do {
             let result = try await run(["fleet", "approve", request.hostname])
@@ -74,7 +81,7 @@ extension MachineEnrollmentStore {
             )
             persistPlan()
             guard result.ok else {
-                failure = .approval(result.message, hostname: request.hostname, destination: request.destination)
+                failure = .approval(result.message, request: request)
                 outcome = .failed(result.message)
                 return
             }

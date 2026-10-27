@@ -145,13 +145,13 @@ pub struct ExpansionReport {
     pub warnings: Vec<String>,
 }
 
+/// A need is keyed by its kind and its scope: one target, else one platform,
+/// else the whole fleet when it names neither.
 pub fn need_key(need: &Need) -> String {
-    format!(
-        "{}:{}",
-        need.need.as_str(),
-        need.target
-            .as_deref()
-            .or(need.platform.as_deref())
-            .unwrap_or("fleet")
-    )
+    let scope = match (need.target.as_deref(), need.platform.as_deref()) {
+        (Some(target), _) => target,
+        (None, Some(platform)) => platform,
+        (None, None) => "fleet",
+    };
+    format!("{}:{scope}", need.need.as_str())
 }

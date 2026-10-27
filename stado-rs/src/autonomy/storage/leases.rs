@@ -2,7 +2,7 @@
 //! released by compare-and-swap so two coordinators never place the same
 //! subject twice.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -32,12 +32,18 @@ impl PlacementLease {
     /// cannot see it).
     pub fn active_at(&self, now: DateTime<Utc>) -> bool {
         if self.expires_at.is_empty() {
-            return self.holder_process.pid != 0
+            // A lease written before holder processes were recorded carries
+            // the default owner, which names no process to hold it.
+            let recorded = self.holder_process != crate::queue::leases::ProcessOwner::default();
+            return recorded
                 && self.holder_process.state() != crate::queue::leases::OwnerState::Gone;
         }
-        DateTime::parse_from_rfc3339(&self.expires_at)
-            .map(|stamp| stamp.with_timezone(&Utc) > now)
-            .unwrap_or(false)
+        match DateTime::parse_from_rfc3339(&self.expires_at) {
+            Ok(stamp) => stamp.with_timezone(&Utc) > now,
+            // An expiry that is not a timestamp holds nothing: the lease is
+            // taken over, and the taker writes a readable one.
+            Err(_not_rfc3339) => false,
+        }
     }
 }
 
@@ -47,9 +53,9 @@ fn expiry(ttl_seconds: Option<u64>, now: DateTime<Utc>) -> Result<String, Storag
     let Some(ttl_seconds) = ttl_seconds else {
         return Ok(String::new());
     };
-    let ttl_seconds = i64::try_from(ttl_seconds)
-        .map_err(|_| StorageError::Other("placement lease TTL exceeds i64".to_string()))?;
-    Ok((now + Duration::seconds(ttl_seconds)).to_rfc3339())
+    crate::autonomy::time::expires_at(now, ttl_seconds, "placement lease TTL")
+        .map(|expiry| expiry.to_rfc3339())
+        .map_err(StorageError::Other)
 }
 
 /// `ttl_seconds` None: held by this process until released, and taken over

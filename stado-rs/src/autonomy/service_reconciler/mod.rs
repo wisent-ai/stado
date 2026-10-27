@@ -24,4 +24,6 @@ pub use run::reconcile;
 
 pub(crate) const LATEST_REPORT: &str = "state/autonomy/services/latest.json";
 const REPORT_PREFIX: &str = "state/autonomy/services/runs";
+/// The reconciliation report's version:
+/// <https://stado.wisent.com/docs/operations/missing-services>.
 const SCHEMA_VERSION: u16 = 1;

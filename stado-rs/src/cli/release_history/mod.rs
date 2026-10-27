@@ -16,6 +16,7 @@
 //! single-parent commits are replayed onto the upstream without it.
 
 mod plan;
+mod reference;
 mod replay;
 
 use std::collections::BTreeSet;
@@ -154,16 +155,9 @@ fn rewrite(git: &Git, args: &ReleaseHistoryArgs, area: &Path) -> Result<Value, C
         Some(notes_ref) => carry_notes(git, notes_ref, &made)?,
         None => (Vec::new(), Vec::new()),
     };
-    // Compare-and-swap: a commit made on the branch since the rewrite began
-    // refuses the move instead of being lost.
-    git.one(&[
-        "update-ref",
-        "-m",
-        "stado release history",
-        &format!("refs/heads/{branch}"),
-        &new_head,
-        &head,
-    ])?;
+    // A Tama-owned dispatcher admits the exact move before Git takes the
+    // branch lock. Without that integration, ordinary Git retains its hooks.
+    reference::move_branch(git, &format!("refs/heads/{branch}"), &new_head, &head)?;
     Ok(json!({
         "branch": branch,
         "from": head,

@@ -45,12 +45,12 @@ pub(super) fn finalize(mut action: Action, observed: Value) -> Result<Option<Act
                     CmdError::click("managed group has no target size")
                         .stating(crate::primitives::failure::FailureCode::InfraDown)
                 })?;
-            if target == 0 {
+            if target == planner::NO_INSTANCES {
                 return Ok(None);
             }
-            action.parameters["target_size"] = json!(i64::default());
+            action.parameters["target_size"] = json!(planner::NO_INSTANCES);
             action.preconditions = vec![planner::condition("target_size", json!(target))];
-            action.postconditions = vec![planner::condition("target_size", json!(i64::default()))];
+            action.postconditions = vec![planner::condition("target_size", json!(planner::NO_INSTANCES))];
             action.rollback = Some(Rollback {
                 kind: ActionKind::ResizeManagedInstanceGroup,
                 parameters: json!({"target_size": target, "scope": action.parameters["scope"]}),

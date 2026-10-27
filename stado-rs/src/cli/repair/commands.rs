@@ -239,7 +239,7 @@ async fn run(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdErr
                 field("status"),
                 field("proof")
             );
-            println!("  {}", step["observation"]);
+            println!("  {}", crate::cli::reporting::field(&step["observation"]));
         }
     }
     if let Some(detail) = refusal {

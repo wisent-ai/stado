@@ -33,19 +33,21 @@ enum NativeReleaseSourceOperations {
             .init(id: "root", label: "Repository on the selected Stado API host", option: "--root", required: true),
             .init(id: "revision", label: "Exact committed revision to check", option: "--revision", required: true),
             .init(id: "if-declared", label: "Report a committed declaration with no gates instead of refusing", option: "--if-declared", flag: true),
+            .init(id: "purpose", label: "Open defect the check serves, named to Oko's admission before lint and test gates", option: "--purpose"),
         ], mutates: false),
         // The one-off commands a model reads in a revision's built CLI, as a
         // list rather than a refusal: `remaining` is what is left to fold
         // into a general primitive.
-        .init(id: "quality-command-tree", title: "List the one-off commands of a revision's built CLI", path: ["quality", "command-tree"], hostPlacement: .none, fields: [
+        .init(id: "quality-command-tree", title: "List the one-off commands of a revision's built CLI", path: ["quality", "tree"], hostPlacement: .none, fields: [
             .init(id: "root", label: "Repository on the selected Stado API host", option: "--root", required: true),
             .init(id: "revision", label: "Exact committed revision (blank reads the revision an install builds)", option: "--revision"),
+            .init(id: "purpose", label: "Open defect the reading serves, named to Oko's admission before the CLI is built", option: "--purpose"),
         ], fixedArguments: ["--json"], mutates: false),
         .init(id: "storage-archive", title: "Pack a directory as a release archive", path: ["storage", "archive"], hostPlacement: .none, fields: [
             .init(id: "source", label: "Source directory on the selected Stado API host", required: true),
             .init(id: "output", label: "New archive path on that host, outside the source directory", required: true),
         ]),
-        .init(id: "catalog-pin-input", title: "Publish an immutable build input", path: ["release", "catalog", "pin-input"], hostPlacement: .none, fields: [
+        .init(id: "catalog-pin-input", title: "Publish an immutable build input", path: ["release", "catalog", "input", "pin"], hostPlacement: .none, fields: [
             .init(id: "checkout", label: "Product checkout on the selected Stado API host", required: true),
             .init(id: "name", label: "Input name (private-cargo-sources for Cargo)", option: "--name", required: true),
             .init(id: "source", label: "Source repository on that host", option: "--source", required: true),
@@ -76,11 +78,17 @@ enum NativeReleaseSourceOperations {
         .init(id: "policy-apply", title: "Apply a reviewed rollout policy (keeps the active release)", path: ["release", "policy", "apply"], hostPlacement: .none, fields: [
             .init(id: "file", label: "Policy JSON {product, policy} on the selected Stado API host", option: "--file", required: true),
         ]),
-        .init(id: "policy-remove-target", title: "Stop releasing a product to one host", path: ["release", "policy", "remove-target"], hostPlacement: .none, fields: [
+        .init(id: "policy-remove-target", title: "Stop releasing a product to one host", path: ["release", "policy", "target", "remove"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),
             .init(id: "target", label: "Registry target", option: "--target", required: true),
         ]),
         .init(id: "policy-remove", title: "Stop rolling a product out by release control", path: ["release", "policy", "remove"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+        ]),
+        .init(id: "policy-portable-root-check", title: "Check what a product's install root would read under each target's own home, writing nothing", path: ["release", "policy", "root", "repair"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
+        ], fixedArguments: ["--check"], mutates: false),
+        .init(id: "policy-portable-root", title: "Write a product's install root under each target's own home ({home})", path: ["release", "policy", "root", "repair"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),
         ]),
         .init(id: "catalog-adopt-plan", title: "Inspect an iOS checkout before adding it to releases", path: ["release", "catalog", "adopt"], hostPlacement: .none, fields: [
@@ -169,6 +177,12 @@ enum NativeReleaseSourceOperations {
             .init(id: "source", label: "Git repository path on the selected Stado API host", option: "--source", required: true),
             .init(id: "commit", label: "Full Git commit (blank requires a clean HEAD)", option: "--commit"),
             .init(id: "version", label: "Version declared by that source", option: "--version", required: true),
+        ]),
+        // A delivered managed run has one release-build operation. Source
+        // checking remains the product Cargo operation.
+        .init(id: "host-run-build", title: "Build one binary of a delivered run tree on the selected host", path: ["host", "run", "build"], hostPlacement: .positional, fields: [
+            .init(id: "manifest-path", label: "Absolute Cargo.toml path below the account's ~/.stado/work/runs", option: "--manifest-path", required: true),
+            .init(id: "bin", label: "Declared Cargo binary target", option: "--bin", required: true),
         ]),
         .init(id: "build-status", title: "Read a build and what each platform's job did", path: ["build", "status"], hostPlacement: .none, fields: [
             .init(id: "build", label: "Build ID from build submit or build list", required: true),

@@ -145,8 +145,10 @@ pub fn wc_s3_region() -> &'static str {
 /// reads its registry before its own resolver has published anything, so
 /// the address it kept was empty for the life of the process, its worker
 /// ended "invalid Stado storage URL: relative URL without a base", and the
-/// unit restarted into the same race.
-pub fn wc_stado_storage_url() -> String {
+/// unit restarted into the same race. A configured service that neither a
+/// listening resolver nor the registry copy places is refused with that
+/// cause instead of answered as an empty URL.
+pub fn wc_stado_storage_url() -> Result<String, String> {
     crate::service_resolution::local_address(&WC_STADO_STORAGE_URL_CONFIGURED)
 }
 

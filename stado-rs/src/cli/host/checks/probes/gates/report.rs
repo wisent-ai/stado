@@ -79,6 +79,11 @@ pub(super) fn print_report(gates: &HostGates) {
     // know the agent is not talking.
     println!("memory evidence: {}", observed(gates.memory.source));
     println!("pressure evidence: {}", observed(gates.pressure_source));
+    // Why this command could not measure the disk itself, beside the
+    // evidence it did or did not have: the thing to repair on the host.
+    if let Some(cause) = gates.local_disk_unread.as_deref() {
+        println!("local disk reading: {cause}");
+    }
     // Both stores on one line, ahead of the capacity line the first one
     // explains: an agent bound to a device-local store publishes capacity into
     // a store nothing here reads, and an operator who cannot see the two
@@ -108,7 +113,8 @@ pub(super) fn print_report(gates: &HostGates) {
                     format!("not accepting jobs: {reason} ({detail})")
                 }
                 (Some(false), Some(reason), None) => format!("not accepting jobs: {reason}"),
-                (Some(false), None, _) => "busy or gated".to_string(),
+                (Some(false), None, Some(detail)) => format!("not accepting jobs: {detail}"),
+                (Some(false), None, None) => "busy or gated".to_string(),
                 (None, _, _) => "admission unstated".to_string(),
             };
             let cpu = format!(
@@ -139,8 +145,12 @@ pub(super) fn print_report(gates: &HostGates) {
                  published {age} ({published})",
                 reported(gates.running_jobs),
             );
-            if !gates.available_accelerators.is_empty() {
-                match serde_json::to_string(&gates.available_accelerators) {
+            if let Some(accelerators) = gates
+                .available_accelerators
+                .as_ref()
+                .filter(|accelerators| !accelerators.is_empty())
+            {
+                match serde_json::to_string(accelerators) {
                     Ok(accelerators) => println!("accelerators: {accelerators}"),
                     Err(error) => println!("accelerators: cannot be written out: {error}"),
                 }
@@ -164,16 +174,21 @@ pub(super) fn print_report(gates: &HostGates) {
                     number("ram_gb"),
                     number("vram_gb")
                 );
-                for reservation in &gates.reservations {
-                    println!(
-                        "          {} ({}) held by {} since {}: {} core(s), {} GiB",
-                        field(&reservation["kind"]),
-                        field(&reservation["product"]),
-                        field(&reservation["holder"]),
-                        field(&reservation["acquired_at"]),
-                        field(&reservation["cpu_cores"]),
-                        field(&reservation["ram_gb"])
-                    );
+                match &gates.reservations {
+                    Some(reservations) => {
+                        for reservation in reservations {
+                            println!(
+                                "          {} ({}) held by {} since {}: {} core(s), {} GiB",
+                                field(&reservation["kind"]),
+                                field(&reservation["product"]),
+                                field(&reservation["holder"]),
+                                field(&reservation["acquired_at"]),
+                                field(&reservation["cpu_cores"]),
+                                field(&reservation["ram_gb"])
+                            );
+                        }
+                    }
+                    None => println!("          the host could not read its reservations"),
                 }
             }
         }

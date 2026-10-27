@@ -1,12 +1,10 @@
 //! Whole-or-absent publication: create-if-absent, tempfile/fsync/rename
 //! writes, and the per-blob advisory lock the CAS path runs under.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use tempfile::NamedTempFile;
 
 use crate::queue::StorageError;
 
@@ -21,43 +19,26 @@ enum Placing {
     IfAbsent,
 }
 
-/// Write `data` to a sibling temporary file of `target`, fsync it, and put it
-/// in place by rename (`Replace`) or by link (`IfAbsent`, which the kernel
-/// refuses with `EEXIST` when `target` exists), then fsync the directory.
-/// `false` only when `IfAbsent` found `target` already there. The temporary
-/// file is created owner-only by `tempfile`.
+/// [`publish`] over whatever `target` holds, for a step already running on
+/// the blocking pool under the write fence.
+pub(super) fn publish_replacing(target: &Path, data: &[u8]) -> Result<(), StorageError> {
+    publish(target, data, Placing::Replace).map(|_| ())
+}
+
+/// Put `data` at `target` whole and durably through the one writer Stado
+/// keeps its files with (`primitives::document`): staged beside it, flushed,
+/// placed by rename (`Replace`) or by a link the kernel refuses when `target`
+/// exists (`IfAbsent`), and the directory flushed. `false` only when
+/// `IfAbsent` found `target` already there. Owner-only, as the queue's
+/// records always were.
 fn publish(target: &Path, data: &[u8], placing: Placing) -> Result<bool, StorageError> {
-    let parent = target.parent().ok_or_else(|| {
-        StorageError::Other(format!("no parent directory for {}", target.display()))
-    })?;
-    let name = target.file_name().ok_or_else(|| {
-        StorageError::Other(format!("{} names no file to publish", target.display()))
-    })?;
-    fs::create_dir_all(parent)
-        .map_err(|error| local_io("create parent directory for", target, error))?;
-    let prefix = format!(".{}.", name.to_string_lossy().trim_start_matches('.'));
-    let mut tmp = NamedTempFile::with_prefix_in(prefix, parent)
-        .map_err(|error| local_io("create temporary file for", target, error))?;
-    tmp.write_all(data)
-        .map_err(|error| local_io("write temporary file for", target, error))?;
-    tmp.as_file()
-        .sync_all()
-        .map_err(|error| local_io("sync temporary file for", target, error))?;
+    let mode = crate::primitives::file_mode::owner_read_write();
     match placing {
-        Placing::Replace => {
-            tmp.persist(target)
-                .map_err(|error| local_io("persist", target, error.error))?;
-        }
-        Placing::IfAbsent => match tmp.persist_noclobber(target) {
-            Ok(_) => {}
-            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
-            Err(err) => return Err(local_io("persist", target, err.error)),
-        },
+        Placing::Replace => crate::primitives::document::persist_with_mode(target, data, mode)
+            .map(|()| true),
+        Placing::IfAbsent => crate::primitives::document::persist_if_absent(target, data, mode),
     }
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| local_io("sync parent directory for", target, error))?;
-    Ok(true)
+    .map_err(|error| local_io("persist", target, error))
 }
 
 impl LocalBackend {
@@ -90,17 +71,11 @@ impl LocalBackend {
     }
 
     /// Write via tempfile in the target directory + fsync + rename, so a
-    /// concurrent reader never observes a partial blob. On the calling
-    /// thread, for a write made under the per-blob lock of the CAS path.
-    pub(super) fn atomic_write(&self, target: &Path, data: &[u8]) -> Result<(), StorageError> {
-        let _write_guard = self.mutation_guard()?;
-        publish(target, data, Placing::Replace).map(|_| ())
-    }
-
-    /// [`Self::atomic_write`] with the write and its fsyncs on the runtime's
-    /// blocking pool, for an async caller: a part upload's fsync on a loaded
-    /// disk took seconds on the thread that serves every object API request.
-    pub(super) async fn atomic_write_off_thread(
+    /// concurrent reader never observes a partial blob. The write fence is
+    /// taken here; the write and its fsyncs run on the runtime's blocking
+    /// pool holding it: a part upload's fsync on a loaded disk took seconds on
+    /// the thread that serves every object API request.
+    pub(super) async fn atomic_write(
         &self,
         path: &str,
         target: PathBuf,
@@ -109,38 +84,103 @@ impl LocalBackend {
         let write_guard = self.mutation_guard()?;
         off_thread(path, move || {
             let _write_guard = write_guard;
-            publish(&target, &data, Placing::Replace).map(|_| ())
+            publish_replacing(&target, &data)
         })
         .await
     }
 
-    /// Run `f` under an exclusive flock keyed on the blob path (Python
-    /// `fcntl.flock(LOCK_EX)` on `.locks/<sha256(path)>`).
-    pub(super) fn with_lock<T>(
+    /// Replace `path` with `content` when it still holds the version
+    /// `expected`, under the blob's exclusive lock, answering the new
+    /// version. The fence is taken on the calling thread; waiting for the
+    /// lock, reading, comparing and writing run on the blocking pool, so a
+    /// writer holding the lock never holds the thread that serves requests.
+    pub(super) async fn swap_if_version(
         &self,
         path: &str,
-        f: impl FnOnce() -> Result<T, StorageError>,
-    ) -> Result<T, StorageError> {
-        let lock_path = self
-            .locks
-            .join(hex::encode(Sha256::digest(path.as_bytes())));
-        // Python opens the lock file "a+b" (read + append).
-        let file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(&lock_path)
-            .map_err(|error| local_io("open lock", &lock_path, error))?;
-        crate::wait::blocking(
-            crate::wait::Kind::Lock,
-            format!("exclusive lock on the local store's {path}"),
-            lock_path.display(),
-            || file.lock(),
-        )?;
-        let result = f();
-        // Closing the descriptor releases the lock; there is no separate
-        // unlock call whose failure could be dropped.
-        drop(file);
-        result
+        expected: String,
+        content: Vec<u8>,
+    ) -> Result<String, StorageError> {
+        let write_guard = self.mutation_guard()?;
+        let target = self.path(path)?;
+        let lock = self.lock_path(path);
+        let name = path.to_owned();
+        off_thread(path, move || {
+            let _write_guard = write_guard;
+            locked(&lock, &name, || {
+                if !target.is_file() {
+                    // Python raises FileNotFoundError here.
+                    return Err(StorageError::NotFound(name.clone()));
+                }
+                let current = fs::read(&target)?;
+                if Self::version(&current) != expected {
+                    return Err(StorageError::StorageConflict(format!(
+                        "local storage version changed for {name}"
+                    )));
+                }
+                publish_replacing(&target, &content)?;
+                Ok(Self::version(&content))
+            })
+        })
+        .await
     }
+
+    /// `path`'s text and its version, read under the blob's exclusive lock
+    /// so no swap lands between the two; `None` when there is no such blob.
+    /// Waiting for the lock and the read run on the blocking pool.
+    pub(super) async fn read_versioned(
+        &self,
+        path: &str,
+    ) -> Result<Option<(String, String)>, StorageError> {
+        let target = self.path(path)?;
+        let lock = self.lock_path(path);
+        let name = path.to_owned();
+        off_thread(path, move || {
+            locked(&lock, &name, || {
+                if !target.is_file() {
+                    return Ok(None);
+                }
+                let data = fs::read(&target)?;
+                let version = Self::version(&data);
+                let content = String::from_utf8(data).map_err(|err| {
+                    StorageError::Other(format!("invalid UTF-8 in {name}: {err}"))
+                })?;
+                Ok(Some((content, version)))
+            })
+        })
+        .await
+    }
+
+    /// The lock file of one blob (Python `fcntl.flock(LOCK_EX)` on
+    /// `.locks/<sha256(path)>`).
+    fn lock_path(&self, path: &str) -> PathBuf {
+        self.locks
+            .join(hex::encode(Sha256::digest(path.as_bytes())))
+    }
+}
+
+/// Run `f` holding the exclusive flock at `lock_path`, which guards the blob
+/// `path`; the wait for it is announced. Called on the blocking pool.
+fn locked<T>(
+    lock_path: &Path,
+    path: &str,
+    f: impl FnOnce() -> Result<T, StorageError>,
+) -> Result<T, StorageError> {
+    // Python opens the lock file "a+b" (read + append).
+    let file = OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(lock_path)
+        .map_err(|error| local_io("open lock", lock_path, error))?;
+    crate::wait::blocking(
+        crate::wait::Kind::Lock,
+        format!("exclusive lock on the local store's {path}"),
+        lock_path.display(),
+        || file.lock(),
+    )?;
+    let result = f();
+    // Closing the descriptor releases the lock; there is no separate unlock
+    // call whose failure could be dropped.
+    drop(file);
+    result
 }

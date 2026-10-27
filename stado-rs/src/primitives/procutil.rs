@@ -1,4 +1,4 @@
-//! Synchronous subprocess capture.
+//! Synchronous subprocess capture, and whether a pid is a process.
 //!
 //! Shared by the watchdog (per-diagnostic commands) and the MCP server (CLI
 //! dispatch). Reproduces the slice of Python
@@ -6,6 +6,53 @@
 //! on: captured stdout/stderr and the exit code. The child runs to completion.
 
 use std::process::Command;
+
+use nix::errno::Errno;
+use nix::sys::signal::kill;
+use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
+use nix::unistd::Pid;
+
+/// Whether `pid` is a process on this host now.
+///
+/// The one answer every caller gets. Separate copies disagreed: one read a
+/// process owned by another account (`EPERM`) as gone, one read pid `0` or a
+/// negative pid — which `kill` takes as a process group, so it answers for a
+/// whole group — as alive, and only one reaped its own exited child, which
+/// `kill(pid, 0)` alone reads as alive until it is reaped. Here a pid at or
+/// below zero names no single process and is not one; this process's own
+/// child is asked with a non-blocking `waitpid`, which reaps it when it has
+/// exited; any other pid is asked with `kill(pid, 0)`, where `EPERM` means a
+/// process that belongs to somebody else.
+pub(crate) fn pid_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    let process = Pid::from_raw(pid);
+    match waitpid(process, Some(WaitPidFlag::WNOHANG)) {
+        Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => false,
+        // Running, stopped or continued: a process either way.
+        Ok(_) => true,
+        // Not this process's child: the kernel answers for any pid.
+        Err(Errno::ECHILD) => kernel_answers(process),
+        Err(Errno::EINTR) => pid_alive(pid),
+        Err(errno) => {
+            eprintln!(
+                "stado: waitpid({pid}) refused with {errno}, so whether it is a process is asked \
+                 with kill(pid, 0)"
+            );
+            kernel_answers(process)
+        }
+    }
+}
+
+/// `kill(pid, 0)`: delivered, or refused only because the process belongs to
+/// somebody else.
+fn kernel_answers(process: Pid) -> bool {
+    match kill(process, None) {
+        Ok(()) => true,
+        Err(errno) => errno == Errno::EPERM,
+    }
+}
 
 /// Outcome of [`run_capture`]: the child exited on its own.
 #[derive(Debug, Clone, PartialEq, Eq)]

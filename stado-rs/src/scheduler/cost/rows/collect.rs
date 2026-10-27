@@ -3,7 +3,7 @@
 //! wall time, priced from the live quotes the coordinator keeps.
 
 use crate::queue::{JobStorage, StorageError};
-use crate::scheduler::cost::measure::attribution::{model_from_command, target_kind};
+use crate::scheduler::cost::measure::attribution::target_kind;
 use crate::scheduler::cost::measure::timing::wall_seconds;
 
 use super::row::CostRow;
@@ -20,8 +20,19 @@ pub async fn collect_completed(store: &JobStorage) -> Result<Vec<CostRow>, Stora
     let mut rows = Vec::new();
     for state in [crate::queue::runs::COMPLETED, crate::queue::runs::FAILED] {
         for job in store.list_jobs(state).await? {
-            let Some(wall) = wall_seconds(&job) else {
-                continue;
+            // A job with no start or finish has no wall time to price; one
+            // whose times cannot be read is left out and said, like a target
+            // nobody prices below, so a total is never short without a word.
+            let wall = match wall_seconds(&job) {
+                Ok(Some(wall)) => wall,
+                Ok(None) => continue,
+                Err(reason) => {
+                    tracing::warn!(
+                        "job {} has no wall time to price, so it is left out of cost: {reason}",
+                        job.job_id
+                    );
+                    continue;
+                }
             };
             let target = target_kind(&job);
             // A target that names no provider Stado prices leaves the job
@@ -72,7 +83,7 @@ pub async fn collect_completed(store: &JobStorage) -> Result<Vec<CostRow>, Stora
                 rate_usd_hr: rate,
                 cost_usd: cost,
                 target_kind: target,
-                model: model_from_command(&job.command),
+                model: crate::sizing::model_of(&job.command),
             });
         }
     }

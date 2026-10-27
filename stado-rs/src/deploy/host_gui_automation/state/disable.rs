@@ -9,7 +9,7 @@ pub(in crate::deploy::host_gui_automation) async fn disable_inner(
     require_target(target)?;
     let user = login_user(target, runner).await?;
     let uid = gui_user_id(target, &user, runner).await?;
-    let home = format!("/Users/{user}");
+    let home = host_channel::remote_user_home(target, &user, runner).await?;
     let command_home = host_channel::remote_home(target, runner).await?;
 
     if optional_sudo(

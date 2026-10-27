@@ -1,4 +1,4 @@
-//! `stado public-status check` asks every component the catalog declares and
+//! `stado availability check` asks every component the catalog declares and
 //! publishes what each answered; `show` reads it back.
 //!
 //! Against the real endpoints the compiled catalog declares (`public_status`
@@ -41,14 +41,14 @@ fn first_look(row: &Value, checked_at: &str) {
 fn every_declared_component_is_checked_published_and_read_back() {
     let mut deployment = Deployment::start("check");
 
-    let unpublished = deployment.run(&["public-status", "show", "--json"]);
+    let unpublished = deployment.run(&["availability", "show", "--json"]);
     assert!(!unpublished.status.success(), "{unpublished:?}");
     assert!(
         String::from_utf8_lossy(&unpublished.stderr).contains("no status is published"),
         "{unpublished:?}"
     );
 
-    let first = deployment.json(&["public-status", "check", "--json"]);
+    let first = deployment.json(&["availability", "check", "--json"]);
     let checked_at = first["checked_at"]
         .as_str()
         .expect("the check is dated")
@@ -57,7 +57,7 @@ fn every_declared_component_is_checked_published_and_read_back() {
         first_look(row(&first, &product, &component), &checked_at);
     }
 
-    let second = deployment.json(&["public-status", "check", "--json"]);
+    let second = deployment.json(&["availability", "check", "--json"]);
     for (product, component, _) in declared() {
         let before = row(&first, &product, &component);
         let after = row(&second, &product, &component);
@@ -71,10 +71,10 @@ fn every_declared_component_is_checked_published_and_read_back() {
         }
     }
 
-    let shown = deployment.json(&["public-status", "show", "--json"]);
+    let shown = deployment.json(&["availability", "show", "--json"]);
     assert_eq!(shown, second);
 
-    let plain = deployment.run(&["public-status", "show"]);
+    let plain = deployment.run(&["availability", "show"]);
     assert!(plain.status.success(), "{plain:?}");
     let plain = String::from_utf8_lossy(&plain.stdout).into_owned();
     for (product, component, _) in declared() {

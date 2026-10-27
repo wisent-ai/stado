@@ -1,6 +1,6 @@
 //! Reading a product's CLI command tree and having a model judge it, shared
 //! by the quality check, which refuses a tree with one-off commands, and by
-//! `stado quality command-tree`, which lists them.
+//! `stado quality tree`, which lists them.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -76,7 +76,7 @@ pub(super) fn audit(
         Reading::Answered(issues) => issues,
         Reading::Unanswered(cause) => return Ok(Audit::Unjudged(cause)),
     };
-    let mut refused = Vec::new();
+    let mut refused = hyphenated(&command_tree);
     for issue in issues {
         if !command_tree.contains_key(&issue.command)
             || issue.primitive.trim().is_empty()
@@ -95,7 +95,28 @@ pub(super) fn audit(
     Ok(Audit::Judged(refused))
 }
 
-/// `stado quality command-tree`: every command of `revision`'s CLI the
+/// Every command of `tree` whose own name is several words joined by hyphens.
+/// A command is named noun then verb, one word each (`token expiry` is the
+/// group `token` with its verb, never the command `token-expiry`), so such a
+/// name is refused from the tree's structure alone, without a model; the
+/// binary's own name is the product's and is not judged.
+fn hyphenated(tree: &BTreeMap<String, String>) -> Vec<String> {
+    tree.keys()
+        .filter_map(|command| {
+            let mut words = command.split_whitespace();
+            words.next()?;
+            let own = words.last()?;
+            own.contains('-').then(|| {
+                format!(
+                    "command `{command}` names `{own}` as one hyphenated word: name it noun then verb, one word each (`{}`)",
+                    own.replace('-', " ")
+                )
+            })
+        })
+        .collect()
+}
+
+/// `stado quality tree`: every command of `revision`'s CLI the
 /// model refuses, as the answer rather than a refusal, so what is left to
 /// fold into a general primitive can be read at any revision. With
 /// [`Report::Stderr`] stdout carries one document `{"product", "revision",

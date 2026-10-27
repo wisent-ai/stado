@@ -113,28 +113,31 @@ async fn restore(
     previous_coordinate: Option<&[u8]>,
     resident_host: Option<&str>,
 ) -> Result<(), CmdError> {
-    let staged = directory.join(format!("{name}.rollback-incoming"));
-    std::fs::copy(predecessor, &staged)
-        .and_then(|_| std::fs::rename(&staged, destination))
-        .map_err(|error| {
-            CmdError::unreachable(format!(
-                "cannot restore {} from {}: {error}",
-                destination.display(),
-                predecessor.display()
-            ))
-        })?;
+    // Put back whole and durably, so a host that loses power during the
+    // rollback starts the predecessor, not a missing or partial binary.
+    crate::primitives::document::persist_copy(
+        destination,
+        predecessor,
+        crate::primitives::file_mode::program(),
+    )
+    .map_err(|error| {
+        CmdError::unreachable(format!(
+            "cannot restore {} from {}: {error}",
+            destination.display(),
+            predecessor.display()
+        ))
+    })?;
     if had_coordinate {
         let destination = directory.join("stado.release-version");
         if let Some(bytes) = previous_coordinate {
-            let stage = directory.join("stado.release-version.rollback-incoming");
-            std::fs::write(&stage, bytes)
-                .and_then(|_| std::fs::rename(&stage, &destination))
-                .map_err(|error| {
-                    CmdError::unreachable(format!(
-                        "cannot restore {}: {error}",
-                        destination.display()
-                    ))
-                })?;
+            crate::primitives::document::persist_with_mode(
+                &destination,
+                bytes,
+                crate::primitives::file_mode::shared_read(),
+            )
+            .map_err(|error| {
+                CmdError::unreachable(format!("cannot restore {}: {error}", destination.display()))
+            })?;
         } else {
             std::fs::remove_file(&destination).map_err(|error| {
                 CmdError::unreachable(format!(
@@ -143,6 +146,15 @@ async fn restore(
                 ))
             })?;
         }
+    }
+    // The unit was migrated to the incoming release's command line; the
+    // predecessor renders it again from its own catalog before it restarts,
+    // or it would restart on an option only the incoming release has.
+    if resident_host.is_some() {
+        let home = crate::config_file::home().map_err(|cause| {
+            CmdError::unreachable(format!("the unit of {name} cannot be rendered again: {cause}"))
+        })?;
+        super::unit_migration::restore(destination, name, &home)?;
     }
     let mut log = |message: &str| println!("{VERB}: {message}");
     crate::self_update::recycle_replaced_units(VERB, directory, &[name.to_string()], &mut log)

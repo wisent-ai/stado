@@ -24,15 +24,17 @@ pub fn build_env(kind: &str) -> Vec<(String, String)> {
         skarbiec_token_file.to_string(),
     ));
     if kind == "host" {
-        env.push((
-            "WC_AGENT_SKARBIEC_URL".to_string(),
-            if agent_url.is_empty() {
-                crate::config::skarbiec_url()
-            } else {
-                agent_url
-            }
-            .to_string(),
-        ));
+        // A named agent service this host cannot resolve now is installed as
+        // configured, so the unit resolves it when it reads it; read as empty
+        // it was replaced by the shared Skarbiec URL.
+        let installed = if crate::config::agent_skarbiec_url_absent().is_some() {
+            crate::config::agent_skarbiec_url_configured()
+        } else if agent_url.is_empty() {
+            crate::config::skarbiec_url()
+        } else {
+            agent_url
+        };
+        env.push(("WC_AGENT_SKARBIEC_URL".to_string(), installed.to_string()));
         env.push((
             "WC_AGENT_SKARBIEC_CONSUMER".to_string(),
             crate::config::agent_skarbiec_consumer().to_string(),
@@ -67,10 +69,19 @@ pub fn build_env(kind: &str) -> Vec<(String, String)> {
 }
 
 /// [`build_env`] with the provider-neutral process inputs used by installed
-/// services. Backend routing comes only from `STADO_CONFIG`.
-pub fn install_env(_home: &Path, kind: &str, _hf_token: &str) -> Vec<(String, String)> {
+/// services. Backend routing comes only from `STADO_CONFIG`; a config that
+/// cannot be read refuses the install, since a unit installed without it ran
+/// on built-in routing instead of this machine's declaration.
+pub fn install_env(
+    _home: &Path,
+    kind: &str,
+    _hf_token: &str,
+) -> Result<Vec<(String, String)>, crate::deploy::DeployError> {
     let mut env = build_env(kind);
-    if let Ok(Some(path)) = crate::config_file::config_path() {
+    let config = crate::config_file::config_path().map_err(|error| {
+        crate::deploy::DeployError(format!("the Stado config this unit is to run with cannot be read: {error}"))
+    })?;
+    if let Some(path) = config {
         env.push((
             "STADO_CONFIG".to_string(),
             path.to_string_lossy().into_owned(),
@@ -80,5 +91,5 @@ pub fn install_env(_home: &Path, kind: &str, _hf_token: &str) -> Vec<(String, St
     if !deployment_id.is_empty() {
         env.push(("STADO_DEPLOYMENT_ID".to_string(), deployment_id));
     }
-    env
+    Ok(env)
 }

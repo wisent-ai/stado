@@ -53,13 +53,33 @@ pub(super) fn stage(
         Some(directory) if worker => PathBuf::from(directory),
         _ => output.join("cargo-target"),
     };
-    let mut arguments = vec![
-        "--release".to_owned(),
+    // The source is checked before the release build: a compile error is
+    // found in a fraction of a release build's time, and no release build is
+    // started on a source that does not compile. Both read the same targets.
+    let mut selection = vec![
         "--target-dir".to_owned(),
         target.to_string_lossy().into_owned(),
     ];
-    arguments.extend(forwarded.iter().cloned());
-    let mut report = execute_revision(runtime, manifest, revision, "build", &arguments)?.report;
+    selection.extend(forwarded.iter().cloned());
+    let check = execute_revision(runtime, manifest, revision, "check", &selection)?;
+    let mut report = if check.code != libc::EXIT_SUCCESS {
+        let cause = match check.report["error"].as_str() {
+            Some(error) => error.to_owned(),
+            None => format!(
+                "cargo check exited {} and its report records no error: {}",
+                check.code, check.report
+            ),
+        };
+        let mut report = check.report;
+        report["error"] = json!(format!(
+            "cargo check failed, so the release build was not started: {cause}"
+        ));
+        report
+    } else {
+        let mut arguments = vec!["--release".to_owned()];
+        arguments.extend(selection);
+        execute_revision(runtime, manifest, revision, "build", &arguments)?.report
+    };
     let succeeded = report.get("error").is_none();
     let mut placed = Vec::new();
     if succeeded {

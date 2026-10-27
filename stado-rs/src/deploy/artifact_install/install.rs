@@ -40,11 +40,12 @@ pub async fn install_artifact(
     // its entitlements router and its config beside the binary, and installing
     // only the tarball would leave `current` pointing at a tarball.
     let archive = manifest.labels.get("archive").map(String::as_str);
-    let subdir = manifest
-        .labels
-        .get("extract_subdir")
-        .map(String::as_str)
-        .unwrap_or_default();
+    // `extract_subdir` names the directory inside the archive the program
+    // lives in; an archive without the label unpacks at its root.
+    let subdir = match manifest.labels.get("extract_subdir") {
+        Some(subdir) => subdir.as_str(),
+        None => "",
+    };
     if subdir.contains("..") || subdir.starts_with('/') {
         return Err(DeployError(format!(
             "artifact {} declares an unusable extract_subdir {subdir:?}",
@@ -71,7 +72,7 @@ pub async fn install_artifact(
         .replace("@URI@", &shlex_quote(&location.uri))
         .replace("@SHA256@", &location.sha256);
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: could not install artifact {}: {}",
             target.name,

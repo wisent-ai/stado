@@ -17,7 +17,7 @@ struct BuildTreesSection: View {
 
     var body: some View {
         Section("Rebuildable trees in the API host's checkouts") {
-            Text("Directories carrying CACHEDIR.TAG (Cargo targets among them), the install runs older Stado versions wrote into checkouts and desktop products' .build directories, in every checkout of the API host's workspace. The Stado API reads them only where macOS lets its process read the folder that holds them; a tree a build holds now is kept.")
+            Text("Directories carrying CACHEDIR.TAG (Cargo targets among them), the install runs older Stado versions wrote into checkouts and desktop products' .build directories, in every checkout of the API host's workspace. Of a desktop .build only the build directories SwiftPM's own links name are removed, because a checkout keeps its own scratch inside it. The Stado API reads them only where macOS lets its process read the folder that holds them; a tree a build holds now is kept.")
                 .font(WisentTypeScale.caption())
             if let address = fleetStore.address {
                 Text(address.displayString).textSelection(.enabled)
@@ -61,7 +61,7 @@ struct BuildTreesSection: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             if let endpoint {
-                Text("The reclaimable trees listed for \(endpoint) are deleted; the next build of each checkout makes them again. Sources, evidence and every directory without a tag stay.")
+                Text("The reclaimable trees listed for \(endpoint) are reclaimed and the next build of each checkout makes them again. A desktop package's .build is never deleted whole: only the build directories SwiftPM's configuration links name are removed, so the checkout's own scratch and the dependency clones inside it stay; every other tree is deleted. Sources, evidence and every directory without a tag stay.")
             }
         }
     }

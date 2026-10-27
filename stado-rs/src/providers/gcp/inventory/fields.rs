@@ -52,13 +52,26 @@ pub(super) fn tail_of(value: Option<&Value>) -> Value {
     }
 }
 
+/// The last `/` segment of a provider path; `rsplit` always yields one.
 pub(super) fn tail(value: impl AsRef<str>) -> String {
-    let value = value.as_ref();
-    value.rsplit('/').next().unwrap_or(value).to_string()
+    match value.as_ref().rsplit('/').next() {
+        Some(last) => last.to_string(),
+        None => unreachable!("str::rsplit yields at least one segment"),
+    }
 }
 
+/// A count the GCP API writes either as a JSON number or, for its int64
+/// fields, as a decimal string; `None` for any other shape, which the
+/// readers sum over and so cannot carry.
 pub(super) fn number_u64(value: &Value) -> Option<u64> {
-    value.as_u64().or_else(|| value.as_str()?.parse().ok())
+    match value {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => match text.parse::<u64>() {
+            Ok(count) => Some(count),
+            Err(_not_a_decimal) => None,
+        },
+        _other_shape => None,
+    }
 }
 
 pub(super) fn encode(value: &str) -> String {

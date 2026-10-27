@@ -18,34 +18,34 @@ enum NativeSandboxAccountOperations {
                 .init(id: "environment", label: "Environment id", required: true),
             ], jsonOutput: false),
         .init(id: "sandbox-environment-set-var", title: "Set an environment variable",
-            path: ["sandbox", "environment", "set-var"], hostPlacement: .none, fields: [
+            path: ["sandbox", "environment", "var", "set"], hostPlacement: .none, fields: [
                 .init(id: "environment", label: "Environment id", required: true),
                 .init(id: "key", label: "Variable name", required: true),
             ], payload: .standardInput(label: "The variable's value, one line", initial: ""), jsonOutput: false),
         .init(id: "sandbox-environment-rm-var", title: "Remove an environment variable",
-            path: ["sandbox", "environment", "rm-var"], hostPlacement: .none, fields: [
+            path: ["sandbox", "environment", "var", "remove"], hostPlacement: .none, fields: [
                 .init(id: "environment", label: "Environment id", required: true),
                 .init(id: "key", label: "Variable name", required: true),
             ], jsonOutput: false),
         .init(id: "sandbox-environment-set-file", title: "Set an environment secret file",
-            path: ["sandbox", "environment", "set-file"], hostPlacement: .none, fields: [
+            path: ["sandbox", "environment", "file", "set"], hostPlacement: .none, fields: [
                 .init(id: "environment", label: "Environment id", required: true),
                 .init(id: "path", label: "Path in every new sandbox", required: true),
                 .init(id: "from", label: "File on the machine running Stado", option: "--from", required: true),
             ], jsonOutput: false),
         .init(id: "sandbox-environment-rm-file", title: "Remove an environment secret file",
-            path: ["sandbox", "environment", "rm-file"], hostPlacement: .none, fields: [
+            path: ["sandbox", "environment", "file", "remove"], hostPlacement: .none, fields: [
                 .init(id: "environment", label: "Environment id", required: true),
                 .init(id: "path", label: "Path in every new sandbox", required: true),
             ], jsonOutput: false),
         .init(id: "sandbox-environment-repos", title: "List the GitHub repositories Boat can clone",
-            path: ["sandbox", "environment", "repos"], hostPlacement: .none, fields: [
+            path: ["sandbox", "environment", "repo", "list"], hostPlacement: .none, fields: [
                 .init(id: "query", label: "Text the name contains (blank: every repository)", option: "--query"),
                 .init(id: "sync", label: "Read the repositories from GitHub again first", option: "--sync", flag: true),
                 .init(id: "cursor", label: "Cursor of the previous page (blank: first page)", option: "--cursor"),
             ], mutates: false, jsonOutput: false),
         .init(id: "sandbox-environment-add-repo", title: "Clone a GitHub repository into every new sandbox",
-            path: ["sandbox", "environment", "add-repo"], hostPlacement: .none, fields: [
+            path: ["sandbox", "environment", "repo", "add"], hostPlacement: .none, fields: [
                 .init(id: "environment", label: "Environment id", required: true),
                 .init(id: "repository", label: "Repository id from Boat's repository list", required: true),
                 .init(id: "branch", label: "Branch (blank: the request names none)", option: "--base-branch"),

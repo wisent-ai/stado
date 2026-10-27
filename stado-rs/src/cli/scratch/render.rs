@@ -15,43 +15,43 @@ pub(super) fn print_json(value: &Value) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// A text member of the report, or the member named as not reported, so a
+/// blank never stands where the host's answer should be.
 pub(super) fn text(report: &Map<String, Value>, key: &str) -> String {
-    report
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+    match report.get(key).and_then(Value::as_str) {
+        Some(value) => value.to_string(),
+        None => format!("({key} not reported)"),
+    }
 }
 
+/// A count the report carries, or `none` when it carries no such count.
 pub(super) fn count(report: &Map<String, Value>, key: &str) -> String {
-    report
-        .get(key)
-        .and_then(Value::as_u64)
-        .map_or_else(|| "none".to_string(), |value| value.to_string())
+    match report.get(key).and_then(Value::as_u64) {
+        Some(value) => value.to_string(),
+        None => "none".to_string(),
+    }
 }
 
 pub(super) fn names(report: &Map<String, Value>, key: &str) -> Vec<String> {
-    report
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| entry.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+    // A report without the list names nothing under it.
+    match report.get(key).and_then(Value::as_array) {
+        Some(entries) => entries
+            .iter()
+            .filter_map(|entry| entry.as_str().map(str::to_string))
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 pub(super) fn objects<'a>(
     report: &'a Map<String, Value>,
     key: &str,
 ) -> Vec<&'a Map<String, Value>> {
-    report
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|entries| entries.iter().filter_map(Value::as_object).collect())
-        .unwrap_or_default()
+    // A report without the list has none of its rows.
+    match report.get(key).and_then(Value::as_array) {
+        Some(entries) => entries.iter().filter_map(Value::as_object).collect(),
+        None => Vec::new(),
+    }
 }
 
 pub(super) fn field(row: &Map<String, Value>, key: &str) -> String {
@@ -63,8 +63,10 @@ pub(super) fn field(row: &Map<String, Value>, key: &str) -> String {
     }
 }
 
+/// A flag is set only when the row states it as `true`; absent, null or in
+/// another shape, it is not set.
 pub(super) fn flag(row: &Map<String, Value>, key: &str) -> bool {
-    row.get(key).and_then(Value::as_bool).unwrap_or_default()
+    matches!(row.get(key), Some(Value::Bool(true)))
 }
 
 /// How long one lease has left, in the operator's words rather than seconds:
@@ -81,10 +83,11 @@ pub(super) fn remaining(row: &Map<String, Value>) -> String {
     }
 }
 
-/// One spelling of a span, the registry's own.
+/// One spelling of a span, the registry's own. A span wider than the clock
+/// can hold is said as such, not shown as a span nobody computed.
 fn age(seconds: i64) -> String {
-    chrono::TimeDelta::try_seconds(seconds).map_or_else(
-        || "an unreadable span".to_string(),
-        crate::cli::registry::human_age,
-    )
+    match chrono::TimeDelta::try_seconds(seconds) {
+        Some(span) => crate::cli::registry::human_age(span),
+        None => format!("a span of {seconds} seconds, wider than the clock holds"),
+    }
 }

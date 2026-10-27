@@ -32,23 +32,33 @@ async fn absolute(
         StateRoot::Home => host_channel::remote_home(target, runner)
             .await
             .map_err(CmdError::from)?,
-        StateRoot::Work => {
-            root_payload(target, state)?;
-            target.work_root.clone().unwrap_or_default()
-        }
+        // A host that declares no work root cannot hold a work-rooted state.
+        StateRoot::Work => match &target.work_root {
+            Some(work_root) => work_root.clone(),
+            None => return Err(super::no_work_root(target, state)),
+        },
     };
     Ok(format!("{}/{}", root.trim_end_matches('/'), state.path))
 }
 
-/// Where this machine keeps a tree between the source and the destination:
-/// under its own declared work root, or `~/.stado/placement`, one directory
-/// per transaction and state.
-fn staging(transaction_id: &str, state: &PlacementState) -> PathBuf {
-    let base = crate::providers::local::work_base::declared()
-        .map(|root| root.join("placement"))
-        .unwrap_or_else(|| crate::config_file::expand_tilde("~/.stado/placement"));
-    base.join(transaction_id)
-        .join(state.path.replace('/', "%2F"))
+/// The directory this machine keeps trees in between the source and the
+/// destination: under its own declared work root, or `~/.stado/placement`
+/// under the home every Stado file is kept under. A home neither HOME nor
+/// the user database names is the refusal, where this process used to stop.
+pub(super) fn staging_base() -> Result<PathBuf, CmdError> {
+    Ok(match crate::providers::local::work_base::declared() {
+        Some(root) => root.join("placement"),
+        None => crate::config_file::home()
+            .map_err(CmdError::declaration)?
+            .join(".stado")
+            .join("placement"),
+    })
+}
+
+/// Where this machine keeps one tree: one directory per transaction and
+/// state under [`staging_base`].
+fn staging(transaction_id: &str, state: &PlacementState) -> Result<PathBuf, CmdError> {
+    Ok(staging_base()?.join(transaction_id).join(state.path.replace('/', "%2F")))
 }
 
 /// Whether the source holds the tree, refusing a path that is not a
@@ -92,7 +102,7 @@ pub(super) async fn read_tree(
             tree: None,
         });
     }
-    let local = staging(transaction_id, state);
+    let local = staging(transaction_id, state)?;
     let remote = absolute(target, state, runner).await?;
     sync_directory(target, &remote, &local, Direction::Pull, runner)
         .await

@@ -15,6 +15,13 @@ use std::num::NonZeroUsize;
 /// The level-three heading that groups entries of one kind.
 const GROUP: &str = "### ";
 
+/// Grouping headings alone are an outline; prose and entry lines are content.
+pub fn has_entries(entries: &str) -> bool {
+    entries
+        .lines()
+        .any(|line| !line.trim().is_empty() && !line.starts_with(GROUP))
+}
+
 /// One release's entries from `sources`, oldest first, grouped by heading.
 /// Lines above a source's first heading stay above every heading.
 pub fn merge(sources: &[&str]) -> String {

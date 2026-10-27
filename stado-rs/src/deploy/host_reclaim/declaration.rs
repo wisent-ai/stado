@@ -15,6 +15,8 @@ use crate::deploy::DeployError;
 /// The one document declaring every selectable reclamation stage.
 pub const DECLARATION_PATH: &str = "stado-rs/data/fleet/space.json";
 const DECLARATION: &str = include_str!("../../../data/fleet/space.json");
+/// The space declaration's version this build reads:
+/// <https://stado.wisent.com/docs/capabilities/space>.
 const DECLARATION_SCHEMA_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -104,8 +104,13 @@ pub fn service<'a>(
     })
 }
 
+/// The host a route command acts on: the one `--target` names, else the
+/// service's declared active host.
 pub fn selected_target<'a>(service: &ServiceView<'a>, target: Option<&'a str>) -> &'a str {
-    target.unwrap_or(service.active_host)
+    match target {
+        Some(named) => named,
+        None => service.active_host,
+    }
 }
 
 pub fn endpoint<'a>(service: &'a ServiceView<'a>, target: &str) -> Result<&'a str, CmdError> {

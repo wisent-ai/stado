@@ -5,10 +5,16 @@
 use serde_json::Value;
 
 use super::mail::MailProbe;
+use super::notices::Recorded;
 use crate::cli::reporting::{field, table};
 use crate::monitor::billing::{self, HealthEvaluation};
 
-pub(super) fn print_watch(document: &Value, evaluation: &HealthEvaluation, mail: &MailProbe) {
+pub(super) fn print_watch(
+    document: &Value,
+    evaluation: &HealthEvaluation,
+    mail: &MailProbe,
+    recorded: &[Recorded],
+) {
     println!(
         "[{}] providers={} degraded={} firing={} new={} mail={}",
         field(&document["reported_at"]),
@@ -87,6 +93,7 @@ pub(super) fn print_watch(document: &Value, evaluation: &HealthEvaluation, mail:
     }
 
     print_mail(evaluation, mail);
+    print_recorded(recorded);
 }
 
 fn print_mail(evaluation: &HealthEvaluation, mail: &MailProbe) {
@@ -117,4 +124,29 @@ fn print_mail(evaluation: &HealthEvaluation, mail: &MailProbe) {
         })
         .collect();
     table::print(&["DATE", "FROM", "SUBJECT", "AMOUNTS", "OPEN"], &rows);
+}
+
+/// The notices this pass recorded with Oko: every one that asks for action
+/// stands as a defect of its provider, or the line says why it does not yet.
+fn print_recorded(recorded: &[Recorded]) {
+    if recorded.is_empty() {
+        println!("provider notices: none new to record as defects");
+        return;
+    }
+    let rows: Vec<Vec<String>> = recorded
+        .iter()
+        .map(|notice| {
+            let (state, answer) = match &notice.outcome {
+                Ok(defect) => ("RECORDED", defect.clone()),
+                Err(refused) => ("NOT RECORDED", refused.clone()),
+            };
+            vec![
+                notice.message_id.clone(),
+                notice.subject.clone(),
+                state.to_string(),
+                answer,
+            ]
+        })
+        .collect();
+    table::print(&["MESSAGE", "SUBJECT", "DEFECT", "ANSWER"], &rows);
 }

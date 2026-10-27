@@ -18,31 +18,47 @@ extension MachineEnrollmentStore {
         guard isConfigured else { return }
         do {
             let result = try await run(["fleet", "ingress", "status", "--json"])
-            guard result.ok else {
+            if !result.ok {
                 entranceReadProblem = "stado fleet ingress status refused: \(result.message)"
                 return
             }
-            guard let status: FleetIngressStatus = Self.decode(from: result.standardOutput) else {
-                entranceReadProblem = "stado fleet ingress status --json printed a document this build cannot read."
+            ingress = try Self.document(
+                FleetIngressStatus.self,
+                of: "stado fleet ingress status --json",
+                from: result.standardOutput
+            )
+            entranceReadProblem = nil
+            if enrollmentURLConfigured != nil {
                 return
             }
-            ingress = status
-            entranceReadProblem = nil
-            guard enrollmentURLConfigured == nil else { return }
             let config = try await run(["config", "show", "--json"])
-            guard config.ok else {
+            if !config.ok {
                 entranceReadProblem = "stado config show refused: \(config.message)"
                 return
             }
-            guard let document = try JSONSerialization.jsonObject(with: Data(config.standardOutput.utf8)) as? [String: Any],
-                  let resolved = document["resolved"] as? [String: Any] else {
-                entranceReadProblem = "stado config show printed no resolved configuration."
-                return
-            }
-            let configured = (resolved["enrollment_url"] as? String) ?? ""
-            enrollmentURLConfigured = !configured.isEmpty
+            let shown = try Self.document(
+                ShownConfiguration.self,
+                of: "stado config show --json",
+                from: config.standardOutput
+            )
+            enrollmentURLConfigured = !shown.resolved.enrollmentURL.isEmpty
         } catch {
             entranceReadProblem = Self.describe(error)
+        }
+    }
+
+    /// The part of `stado config show --json` the entrance reads: the
+    /// resolved enrollment origin, which the CLI writes as an empty string
+    /// when no separate enrollment origin is configured.
+    private struct ShownConfiguration: Decodable {
+        let resolved: Resolved
+
+        struct Resolved: Decodable {
+            let enrollmentURL: String
+
+            private enum CodingKeys: String, CodingKey {
+                case enrollmentURL = "enrollment_url"
+            }
         }
     }
 

@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::deploy::service::{self, ServiceStatus};
 use crate::deploy::service_catalog::CatalogService;
+use crate::primitives::tally::Tally;
 use crate::queue::StorageError;
+use crate::deploy::Runner;
 use crate::targets::ComputeTarget;
 
 use super::gate::MutationGate;
@@ -40,26 +42,31 @@ type Missing = (
 
 /// `(host, catalog service)` → the old units declared there, for every host
 /// that declares units running a catalog service's program under another
-/// label but not that service. A host whose registry entry cannot be read is
-/// skipped; the predecessor step reports it. A unit whose owner cannot be
-/// read is returned with the cause: skipped, a replacement it needed was
-/// never planned and nothing said so.
-async fn missing(statuses: &[ServiceStatus]) -> Missing {
-    let mut targets: BTreeMap<String, Option<ComputeTarget>> = BTreeMap::new();
+/// label but not that service. A host whose registry entry or stated home
+/// cannot be read reports every unit it declares as unreadable with that
+/// cause. A unit whose owner cannot be read is returned with the cause:
+/// skipped, a replacement it needed was never planned and nothing said so.
+async fn missing(statuses: &[ServiceStatus], runner: &Runner) -> Missing {
+    let mut targets: BTreeMap<String, Result<(ComputeTarget, String), String>> = BTreeMap::new();
     let mut wanted: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut unreadable = Vec::new();
     for status in statuses {
         let host = &status.service.host;
         if !targets.contains_key(host) {
-            let target = crate::deploy::host_channel::canonical_target(host)
-                .await
-                .ok();
-            targets.insert(host.clone(), target);
+            targets.insert(host.clone(), stated_host(host, runner).await);
         }
-        let Some(target) = &targets[host] else {
-            continue;
+        let (target, home) = match &targets[host] {
+            Ok(stated) => stated,
+            Err(error) => {
+                unreadable.push((
+                    host.clone(),
+                    status.service.unit_id().to_string(),
+                    error.clone(),
+                ));
+                continue;
+            }
         };
-        let entry = match service::declared_owner(target, &status.service) {
+        let entry = match service::declared_owner(target, &status.service, home) {
             Ok(Some(entry)) => entry,
             Ok(None) => continue,
             Err(error) => {
@@ -78,6 +85,18 @@ async fn missing(statuses: &[ServiceStatus]) -> Missing {
         }
     }
     (wanted, unreadable)
+}
+
+/// `host`'s registry target and the home its own shell states, or the
+/// sentence saying which of the two cannot be read.
+async fn stated_host(host: &str, runner: &Runner) -> Result<(ComputeTarget, String), String> {
+    let target = crate::deploy::host_channel::canonical_target(host)
+        .await
+        .map_err(|error| format!("the host cannot be resolved in the registry: {error}"))?;
+    let home = crate::deploy::host_channel::remote_home(&target, runner)
+        .await
+        .map_err(|error| format!("the home the host states cannot be read: {error}"))?;
+    Ok((target, home))
 }
 
 /// One row of this step.
@@ -109,20 +128,21 @@ fn row(
 pub(super) async fn ensure_replacements(
     statuses: &[ServiceStatus],
     policy: &AutonomyPolicy,
+    runner: &Runner,
     gate: &mut MutationGate<'_>,
     summary: &mut ServiceReconcileSummary,
 ) -> Result<Vec<ServiceReconcileOutcome>, StorageError> {
     let catalog = match crate::deploy::service_catalog::all() {
         Ok(catalog) => catalog,
         Err(error) => {
-            summary.failures += 1;
+            summary.failures.tally();
             return Ok(vec![row("-", "-", "-", "repair_failed", false, error)]);
         }
     };
     let mut outcomes = Vec::new();
-    let (wanted, unreadable) = missing(statuses).await;
+    let (wanted, unreadable) = missing(statuses, runner).await;
     for (host, unit, error) in unreadable {
-        summary.failures += 1;
+        summary.failures.tally();
         outcomes.push(row(
             &host,
             "-",
@@ -133,16 +153,21 @@ pub(super) async fn ensure_replacements(
         ));
     }
     for ((host, name), old) in wanted {
-        let unit = catalog
+        // The catalog names the unit its product runs as; a product declared
+        // without one is addressed by its name.
+        let unit = match catalog
             .iter()
             .find(|entry| entry.name == name)
             .and_then(|entry| entry.unit.clone())
-            .unwrap_or_else(|| name.clone());
+        {
+            Some(unit) => unit,
+            None => name.clone(),
+        };
         let reason = format!(
             "{host} runs {} without {unit}, the one {name} process that replaces them",
             old.join(", ")
         );
-        summary.planned += 1;
+        summary.planned.tally();
         if policy.mode == AutonomyMode::Report || policy.emergency_paused {
             outcomes.push(row(
                 &host,
@@ -157,7 +182,7 @@ pub(super) async fn ensure_replacements(
         let (subject, lease) = match gate.admit(&host, &unit).await? {
             Ok(admitted) => admitted,
             Err(refusal) => {
-                summary.blocked += 1;
+                summary.blocked.tally();
                 outcomes.push(row(
                     &host,
                     &name,
@@ -185,7 +210,7 @@ pub(super) async fn ensure_replacements(
         .map_err(|error| error.to_string());
         match gate.release(&subject, &lease, ensured).await {
             Ok(receipt) => {
-                summary.changed += 1;
+                summary.changed.tally();
                 gate.record(None).await?;
                 outcomes.push(row(
                     &host,
@@ -197,7 +222,7 @@ pub(super) async fn ensure_replacements(
                 ));
             }
             Err(error) => {
-                summary.failures += 1;
+                summary.failures.tally();
                 gate.record(Some(&error)).await?;
                 outcomes.push(row(
                     &host,

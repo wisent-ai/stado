@@ -10,7 +10,7 @@ use crate::targets::ComputeTarget;
 /// answers 200 or stops being the process that was started.
 ///
 /// It has to run there. The declared port is loopback — the launcher binds
-/// `127.0.0.1` deliberately, because the public entrance is the edge and not
+/// the loopback interface deliberately, because the public entrance is the edge and not
 /// the unit — so a probe from the operator's laptop reaches nothing, and a
 /// probe from the tailnet address would be answering a different question.
 ///
@@ -99,7 +99,7 @@ pub(in crate::cli::web::deploy) async fn wait_until_ready(
     let output = host_channel::run_script(target, &script, runner)
         .await
         .map_err(click)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{}: the readiness probe could not be run: {}",
             target.name,
@@ -115,24 +115,23 @@ pub(in crate::cli::web::deploy) async fn wait_until_ready(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
-    let verdict = fields
-        .first()
-        .copied()
-        .filter(|verdict| !verdict.is_empty())
-        .ok_or_else(|| {
-            CmdError::click(format!(
+    // The verdict, then its detail; a marker without a verdict never
+    // established anything, and one without a detail says so.
+    let (verdict, detail) = match fields.as_slice() {
+        [verdict, detail, ..] if !verdict.is_empty() && !detail.is_empty() => {
+            (verdict.to_string(), detail.to_string())
+        }
+        [verdict, ..] if !verdict.is_empty() => {
+            (verdict.to_string(), "the probe reported no detail".to_string())
+        }
+        _ => {
+            return Err(CmdError::click(format!(
                 "{}: the readiness probe printed its marker with no verdict, so whether {url} \
                  answers was never established",
                 target.name
             ))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?
-        .to_string();
-    let detail = fields
-        .get(1)
-        .copied()
-        .filter(|detail| !detail.is_empty())
-        .unwrap_or("the probe reported no detail")
-        .to_string();
+            .stating(crate::primitives::failure::FailureCode::InfraDown))
+        }
+    };
     Ok((verdict, detail))
 }

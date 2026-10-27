@@ -3,6 +3,7 @@
 
 use super::super::{Finding, ORPHAN_CHECK};
 use crate::deploy::service;
+use crate::primitives::tally::Tally;
 use crate::targets::ComputeTarget;
 
 /// A job launchd holds has a unit file somebody can read.
@@ -28,7 +29,7 @@ pub(in crate::fleet_shape) fn loaded_without_unit_file(
         if unit.loaded_domains.is_empty() || !unit.declaring_paths.is_empty() {
             continue;
         }
-        *measured += 1;
+        measured.tally();
         let program = if unit.running_program.is_empty() {
             unit.program.as_str()
         } else {

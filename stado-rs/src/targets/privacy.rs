@@ -14,7 +14,7 @@ use crate::targets::*;
 pub const PRIVACY_GRANTS_KEY: &str = "privacy_grants";
 
 /// The protected folders, by declaration key and the folder's name in a home.
-pub const PRIVACY_FOLDERS: [(&str, &str); 3] = [
+pub const PRIVACY_FOLDERS: &[(&str, &str)] = &[
     ("documents", "Documents"),
     ("desktop", "Desktop"),
     ("downloads", "Downloads"),
@@ -65,14 +65,20 @@ impl PrivacyGrant {
 }
 
 impl ComputeTarget {
-    /// The grants this target declares, in declaration order. The registry
-    /// was validated when it was loaded, so a present key has this shape.
-    pub fn privacy_grants(&self) -> Vec<PrivacyGrant> {
-        self.extra
-            .get(PRIVACY_GRANTS_KEY)
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default()
+    /// The grants this target declares, in declaration order; none when the
+    /// target declares no `privacy_grants`. The registry was validated when
+    /// it was loaded, so a present key has this shape; one that does not is
+    /// a registry read past its validation and is refused naming the target.
+    pub fn privacy_grants(&self) -> Result<Vec<PrivacyGrant>, RegistryValidationError> {
+        let Some(value) = self.extra.get(PRIVACY_GRANTS_KEY) else {
+            return Ok(Vec::new());
+        };
+        serde_json::from_value(value.clone()).map_err(|error| {
+            RegistryValidationError(format!(
+                "targets[{}].{PRIVACY_GRANTS_KEY} is not a list of grants: {error}",
+                self.name
+            ))
+        })
     }
 }
 

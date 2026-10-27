@@ -1,4 +1,4 @@
-//! The probe set: every GCP surface `stado blast-radius` asks about, and the
+//! The probe set: every GCP surface `stado impact` asks about, and the
 //! exact URL it asks on.
 
 use std::collections::BTreeSet;

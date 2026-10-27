@@ -19,14 +19,14 @@ async fn probe_identity_field(
         .map_err(|exc| {
             CmdError::unreachable(format!("ssh to {destination} could not be started: {exc}"))
         })?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(
             CmdError::click(format!("cannot verify {destination}: {}", output.detail()))
                 .stating(FailureCode::InfraDown),
         );
     }
     let value = output.stdout.trim();
-    if value.is_empty() || value.lines().count() != 1 {
+    if value.is_empty() || value.contains('\n') {
         return Err(CmdError::refused(format!(
             "{destination} returned an invalid {command} value"
         )));

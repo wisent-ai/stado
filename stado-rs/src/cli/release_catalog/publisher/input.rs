@@ -190,9 +190,9 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
         (bundle_archive.path(), digest)
     } else {
         for path in paths {
-            git(source, &["cat-file", "-e", &format!("{commit}:{path}")]).map_err(|_| {
+            git(source, &["cat-file", "-e", &format!("{commit}:{path}")]).map_err(|error| {
                 CmdError::usage(format!(
-                    "--path {path:?} does not exist at {commit} of {}",
+                    "--path {path:?} could not be found at {commit} of {}: {error}",
                     source.display()
                 ))
             })?;

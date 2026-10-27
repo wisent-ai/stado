@@ -11,18 +11,27 @@ pub(crate) mod unit;
 pub(crate) mod update;
 
 use gate::run::release;
-use install::archive::{install_from_archive, ROLLBACK_BODY};
+pub(crate) use install::archive::install_from_archive;
+use install::archive::ROLLBACK_BODY;
 use install::current::follow_current;
 use install::{archive_members, install_from_artifact, refuse_archive_without_program};
 use update::update;
+
+/// The loopback endpoint a released unit must answer after its restart and
+/// the whole seconds it has to answer: declared together or not at all, so a
+/// release without readiness carries no window nobody stated.
+#[derive(Clone, Copy)]
+pub(crate) struct ServiceReadiness<'a> {
+    pub(crate) url: &'a str,
+    pub(crate) window_seconds: std::num::NonZeroU64,
+}
 
 pub(crate) struct ServiceReleaseOptions<'a> {
     pub(crate) name: &'a str,
     pub(crate) host: &'a str,
     pub(crate) product: &'a str,
     pub(crate) version: &'a str,
-    pub(crate) readiness_url: Option<&'a str>,
-    pub(crate) readiness_timeout_seconds: u64,
+    pub(crate) readiness: Option<ServiceReadiness<'a>>,
     pub(crate) reload_unit: bool,
     pub(crate) require_release_version: bool,
     pub(crate) supersede_unit: Option<&'a str>,
@@ -40,15 +49,24 @@ pub(crate) async fn release_pipeline_product(
     product: &str,
     version: &str,
     readiness_url: &str,
-    readiness_timeout_seconds: u64,
+    readiness_window_seconds: u64,
 ) -> Result<gate::ReleaseOutcome, CmdError> {
+    let window_seconds =
+        std::num::NonZeroU64::new(readiness_window_seconds).ok_or_else(|| {
+            CmdError::declaration(format!(
+                "release control declares a readiness window of {readiness_window_seconds}s \
+                 for {product}; a replace release needs at least one second"
+            ))
+        })?;
     release(ServiceReleaseOptions {
         name,
         host,
         product,
         version,
-        readiness_url: Some(readiness_url),
-        readiness_timeout_seconds,
+        readiness: Some(ServiceReadiness {
+            url: readiness_url,
+            window_seconds,
+        }),
         reload_unit: false,
         require_release_version: true,
         supersede_unit: None,

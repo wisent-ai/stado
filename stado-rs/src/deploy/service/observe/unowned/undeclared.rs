@@ -153,7 +153,7 @@ impl UndeclaredUnit {
     pub fn fleet_affiliated(&self) -> bool {
         !self.declaring_paths.is_empty()
             || (!self.running_program.is_empty()
-                && product_guess(&self.running_program) != UNKNOWN_PRODUCT)
+                && !product_guess(&self.running_program).starts_with(UNKNOWN_PRODUCT))
     }
 
     /// The sentence a report should use about this row, once the registry has

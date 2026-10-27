@@ -1,6 +1,6 @@
 //! How long the grants of a registered acquisition catalog live.
 //!
-//! Skarbiec states no lifetime of its own: `token-register-acquisitions`
+//! Skarbiec states no lifetime of its own: `grant register`
 //! requires `--ttl-seconds`, the grants' lifetime in whole seconds, and the
 //! 30 days it used to assume are gone. Registration is repeated on every
 //! `service ensure`, so a lifetime taken from anywhere but the operator would
@@ -62,7 +62,7 @@ pub(super) async fn registration_lifetime(
     )
     .await
     .map_err(|error| error.to_string())?;
-    if !listed.ok() {
+    if !listed.succeeded() {
         return Err(host_channel::last_error_line(
             &listed,
             "skarbiec grant list failed",
@@ -88,8 +88,8 @@ pub(super) async fn registration_lifetime(
         .ok_or_else(|| {
             format!(
                 "no grant of this catalog is current in {vault}, so there is no lifetime on record \
-                 to keep, and Skarbiec requires one: state it with `stado credentials \
-                 acquisition-scopes sync --host {} <catalog> --ttl-seconds <seconds>`",
+                 to keep, and Skarbiec requires one: state it with `stado credentials scopes \
+                 sync --host {} <catalog> --ttl-seconds <seconds>`",
                 resolved.name
             )
         })

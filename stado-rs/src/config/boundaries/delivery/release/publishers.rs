@@ -33,7 +33,12 @@ impl ReleasePublisher {
     pub fn authorized_list_prefix(&self, requested: &str) -> Option<String> {
         let requested = requested.trim_start_matches('/');
         let path = requested.trim_end_matches('/');
-        let root = self.prefix.strip_suffix('/').unwrap_or(&self.prefix);
+        // The prefix is declared with its trailing `/`; the root is the
+        // coordinate without it.
+        let root = match self.prefix.strip_suffix('/') {
+            Some(root) => root,
+            None => self.prefix.as_str(),
+        };
         if path == root {
             Some(self.prefix.clone())
         } else if path.starts_with(&self.prefix) {
@@ -104,26 +109,31 @@ fn parse_declared_release_publishers(
             &format!("release_api.publishers.{product}"),
             &mut problems,
         );
-        let item = entry
-            .get("item")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        // Both members are required text with one admissible value each; a
+        // member absent or in another shape is refused the same way as a
+        // wrong value, quoting what was found.
+        let item = match entry.get("item").and_then(Value::as_str) {
+            Some(item) => item,
+            None => "",
+        };
         let expected_item = product.as_str();
         if item != expected_item {
             problems.push(format!(
                 "release_api.publishers.{product}.item must be the product's own name \
-                 {expected_item:?}, got {item:?}"
+                 {expected_item:?}, got {:?}",
+                entry.get("item")
             ));
             entry_valid = false;
         }
-        let prefix = entry
-            .get("prefix")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let prefix = match entry.get("prefix").and_then(Value::as_str) {
+            Some(prefix) => prefix,
+            None => "",
+        };
         let expected_prefix = format!("{product}/");
         if prefix != expected_prefix {
             problems.push(format!(
-                "release_api.publishers.{product}.prefix must be {expected_prefix:?}, got {prefix:?}"
+                "release_api.publishers.{product}.prefix must be {expected_prefix:?}, got {:?}",
+                entry.get("prefix")
             ));
             entry_valid = false;
         }
@@ -158,19 +168,28 @@ fn parse_declared_release_publishers(
 
 static RELEASE_API_PUBLISHERS: LazyLock<Result<BTreeMap<String, ReleasePublisher>, Vec<String>>> =
     LazyLock::new(|| {
-        let configured = match std::env::var("WC_RELEASE_API_PUBLISHERS")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    return Err(vec![format!(
-                        "WC_RELEASE_API_PUBLISHERS must be a JSON object: {error}"
-                    )])
+        // The environment declaration wins over the configuration file;
+        // unset or blank, the file's `release_api.publishers` is read. A
+        // value that is not Unicode cannot be JSON and is refused as such.
+        let configured = match std::env::var("WC_RELEASE_API_PUBLISHERS") {
+            Ok(encoded) if !encoded.trim().is_empty() => {
+                match serde_json::from_str::<Value>(&encoded) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        return Err(vec![format!(
+                            "WC_RELEASE_API_PUBLISHERS must be a JSON object: {error}"
+                        )])
+                    }
                 }
-            },
-            None => crate::config_file::get("release_api.publishers"),
+            }
+            Ok(_) | Err(std::env::VarError::NotPresent) => {
+                crate::config_file::get("release_api.publishers")
+            }
+            Err(std::env::VarError::NotUnicode(raw)) => {
+                return Err(vec![format!(
+                    "WC_RELEASE_API_PUBLISHERS must be a JSON object, and is not Unicode: {raw:?}"
+                )])
+            }
         };
         parse_declared_release_publishers(configured.as_ref())
     });
@@ -225,43 +244,4 @@ fn derived_publisher(key: &str) -> Option<ReleasePublisher> {
 /// Whether this host's configuration declares `product`'s release publisher.
 pub fn release_publisher_declared(product: &str) -> bool {
     matches!(&*RELEASE_API_PUBLISHERS, Ok(publishers) if publishers.contains_key(product))
-}
-
-/// The serving API's publisher for `key`. A product declared after this
-/// process loaded its configuration is looked up again in the file as it is
-/// on disk now, so `ensure_publisher`'s declaration takes effect on the
-/// serving hosts without restarting them; the declared table is still the
-/// only authority, and a key no declaration names is still refused.
-pub fn release_publisher_for_key(key: &str) -> Option<ReleasePublisher> {
-    let find = |publishers: &BTreeMap<String, ReleasePublisher>| {
-        publishers
-            .values()
-            .find(|publisher| publisher.allows_key(key))
-            .cloned()
-    };
-    find(release_api_publishers().ok()?).or_else(|| find(&fresh_release_publishers()?))
-}
-
-pub fn release_publisher_for_list(prefix: &str) -> Option<(ReleasePublisher, String)> {
-    let find = |publishers: &BTreeMap<String, ReleasePublisher>| {
-        publishers.values().find_map(|publisher| {
-            publisher
-                .authorized_list_prefix(prefix)
-                .map(|authorized| (publisher.clone(), authorized))
-        })
-    };
-    find(release_api_publishers().ok()?).or_else(|| find(&fresh_release_publishers()?))
-}
-
-/// The publisher table in the config file as it is now, when the table is
-/// read from the file at all (`WC_RELEASE_API_PUBLISHERS` pins it for the
-/// process's lifetime) and is complete.
-fn fresh_release_publishers() -> Option<BTreeMap<String, ReleasePublisher>> {
-    let pinned = std::env::var("WC_RELEASE_API_PUBLISHERS")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty());
-    if pinned {
-        return None;
-    }
-    parse_release_publishers(crate::config_file::get_fresh("release_api.publishers").as_ref()).ok()
 }

@@ -7,16 +7,22 @@ use std::collections::BTreeSet;
 pub(crate) fn money(value: f64, field: &str) -> Result<i64, String> {
     // Whole cents are what the plan stores, so the one bound is the one the
     // record imposes: an amount whose cents an i64 holds.
-    if !value.is_finite() || value < 0.0 || value * CENTS_PER_USD > i64::MAX as f64 {
+    if !value.is_finite() || value.is_sign_negative() || value * CENTS_PER_USD > i64::MAX as f64 {
         return Err(format!(
             "{field} must be a finite, non-negative amount whose cents fit a 64-bit integer"
         ));
     }
-    let cents = value * CENTS_PER_USD;
-    if (cents - cents.round()).abs() > CENT_PRECISION_TOLERANCE {
-        return Err(format!("{field} must have at most two decimal places"));
+    // The shortest decimal that reads back as `value` is the amount as it was
+    // written; more decimals than cents carry is refused, not rounded.
+    let written = value.to_string();
+    if let Some((_, decimals)) = written.split_once('.') {
+        if decimals.len() > CENT_DECIMALS {
+            return Err(format!(
+                "{field} is {written}, which has more than {CENT_DECIMALS} decimal places"
+            ));
+        }
     }
-    Ok(cents.round() as i64)
+    Ok(super::economics::cents(value))
 }
 
 pub(crate) fn timestamp(raw: &str, field: &str) -> Result<DateTime<Utc>, String> {

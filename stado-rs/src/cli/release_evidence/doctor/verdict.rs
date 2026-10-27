@@ -94,19 +94,24 @@ pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
     if stable_bind_held {
         blockers.push(BLOCKER_STABLE_BIND_HELD.to_string());
     }
+    let summary = cause_summary(&facts.quarantined);
+    let mut unreadable = summary["unreadable_causes"].as_array().into_iter().flatten().peekable();
+    let diagnostics_unreadable = unreadable.peek().is_some();
+    for cause in unreadable {
+        blockers.push(format!("quarantine evidence unreadable: {cause}"));
+    }
     blockers.sort();
     blockers.dedup();
     let converged =
         facts.observed_version.is_some() && facts.observed_version == facts.desired_version;
     let verdict =
-        if desired_quarantined || facts.disk_pressure_unresolved || held || stable_bind_held {
+        if desired_quarantined || facts.disk_pressure_unresolved || held || stable_bind_held || diagnostics_unreadable {
             VERDICT_BLOCKED
         } else if facts.in_flight || !converged {
             VERDICT_ROLLING
         } else {
             VERDICT_SETTLED
         };
-    let summary = cause_summary(&facts.quarantined);
     // Recommend repairs only for current blockers. Historical quarantine
     // remedies remain in the per-cause table, not the active work list.
     let mut remedies = Vec::new();
@@ -126,7 +131,7 @@ pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
     if let Some(remedy) = facts
         .run
         .as_ref()
-        .filter(|_| held)
+        .filter(|_run| held)
         .and_then(|run| run.cause.remedy())
     {
         remedies.push(remedy.to_string());

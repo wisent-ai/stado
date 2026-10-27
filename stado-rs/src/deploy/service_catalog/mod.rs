@@ -18,9 +18,11 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+mod declared;
 mod ownership;
+mod placeholders;
 
-pub use ownership::*;
+pub use self::{declared::*, ownership::*, placeholders::*};
 
 /// One preconfigured Wisent service. Its product name and stable init-system
 /// identity address the same program, arguments, and required environment.
@@ -65,6 +67,9 @@ pub struct CatalogService {
     /// within it stands, and its declared recovery runs.
     #[serde(default)]
     pub answering: Option<AnsweringProbe>,
+    /// The stores under the account's home that move with the service.
+    #[serde(default)]
+    pub state: Vec<CatalogState>,
 }
 
 impl CatalogService {
@@ -77,26 +82,6 @@ impl CatalogService {
             None => &self.name,
         }
     }
-}
-
-/// How a service is asked whether it answers, and what to do when it does
-/// not: the method and path of a request on its own API, the body to send,
-/// and the repair steps of its repair declaration to run before the restart.
-#[derive(Debug, Clone, Deserialize, serde::Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct AnsweringProbe {
-    pub method: String,
-    pub path: String,
-    #[serde(default)]
-    pub body: Option<serde_json::Value>,
-    /// Steps of this service's repair declaration
-    /// (`stado-rs/data/catalog/repair-catalog.json`), run in this order
-    /// before the restart. One service stands for more than one cause, and
-    /// each step reads its own cause and refuses when that cause is absent,
-    /// so every step that could clear the standing is declared; a restart
-    /// alone ends the process but leaves a wedged daemon it depends on.
-    #[serde(default)]
-    pub repair: Vec<String>,
 }
 
 /// One unit whose work is a role of the host Stado process, derived on its
@@ -117,13 +102,15 @@ pub struct RoleUnit {
     pub readiness: Option<String>,
 }
 
-/// Every shipped entry, in the catalog's order.
+/// Every shipped entry, in the catalog's order, with the addresses its
+/// placeholders name resolved: they are the same on every host.
 pub fn all() -> Result<Vec<CatalogService>, String> {
     let services = stado_product::catalog::embedded()
         .and_then(|catalog| stado_product::catalog::services(&catalog))
         .map_err(|error| format!("the compiled product catalog is invalid: {error:#}"))?;
-    serde_json::from_value::<Vec<CatalogService>>(services["services"].clone())
-        .map_err(|error| format!("a catalog service declaration is malformed: {error}"))
+    let entries = serde_json::from_value::<Vec<CatalogService>>(services["services"].clone())
+        .map_err(|error| format!("a catalog service declaration is malformed: {error}"))?;
+    Ok(entries.into_iter().map(with_addresses).collect())
 }
 
 /// One entry by its product name or stable init-system identity.
@@ -177,7 +164,7 @@ pub fn runs_host_process(label: &str, program: &str) -> Result<bool, String> {
         return Ok(true);
     }
     let host = host_process()?;
-    Ok(host_roles(&host, program).contains(&"--api"))
+    Ok(host_roles(&host, program).map_err(|cause| format!("{label}: {cause}"))?.contains(&"--api"))
 }
 
 /// The sentence every refusal to deploy or repair a unit that runs a
@@ -227,23 +214,28 @@ pub fn second_process_sentence(label: &str, program: &str, product: &CatalogServ
     )
 }
 
-/// One placeholder expansion, applied to the program and every argument:
-/// `$HOME` for the approved account's home, `$STADO_PLATFORM` for the
-/// registry `release_platform`, `$STADO_HOST` for the target's registry
-/// name. Expanding anywhere but against the resolved target would bake this
-/// machine's shape into another host's unit, so every caller states the
-/// target's platform; there is no expansion without one.
-pub fn resolve_word(word: &str, home: &str, release_platform: &str, host: &str) -> String {
-    // The brama artifact layout shortens the platform triple to `darwin-arm`;
-    // that is the directory the release actually publishes, not a mistake.
-    let short = match release_platform {
+/// The directory a release tree keeps one platform's files in: the release
+/// layout shortens the platform triple (`darwin-arm64` to `darwin-arm`); that
+/// is the directory the release actually publishes, not a mistake.
+pub fn platform_directory(release_platform: &str) -> &str {
+    match release_platform {
         "darwin-arm64" => "darwin-arm",
         "linux-amd64" => "linux-amd",
         other => other,
-    };
-    word.replace("$HOME", home)
-        .replace("$STADO_PLATFORM", short)
-        .replace("$STADO_HOST", host)
+    }
+}
+
+/// One placeholder expansion, applied to the program and every argument:
+/// `$HOME` for the approved account's home, `$STADO_PLATFORM` for the
+/// registry `release_platform`, `$STADO_HOST` for the target's registry name,
+/// and the addresses [`resolve_address`] names. Expanding anywhere but against
+/// the resolved target would bake this machine's shape into another host's
+/// unit, so every caller states the target's platform; there is no expansion
+/// without one.
+pub fn resolve_word(word: &str, home: &str, release_platform: &str, host: &str) -> String {
+    let short = platform_directory(release_platform);
+    let word = word.replace("$HOME", home).replace("$STADO_PLATFORM", short);
+    resolve_address(&word.replace("$STADO_HOST", host))
 }
 
 /// [`resolve_word`] over a whole catalog entry, with `$STADO_LISTEN_PORT`
@@ -273,23 +265,4 @@ pub fn resolve_entry(
             .map(|(name, value)| (name.clone(), resolve(value)))
             .collect(),
     )
-}
-
-/// The approved account's home on a target, derived from the preferred
-/// connection declaration's `user@host` user. A target with no explicit
-/// remote user is this machine, whose home the process already knows.
-pub fn home_for(target: &crate::targets::ComputeTarget) -> String {
-    let user = target
-        .ssh_connections()
-        .next()
-        .and_then(|(_, destination)| destination.split_once('@').map(|(user, _)| user))
-        .filter(|user| !user.is_empty());
-    match user {
-        None => crate::config_file::home_dir()
-            .to_string_lossy()
-            .into_owned(),
-        Some("root") => "/root".to_string(),
-        Some(user) if target.release_platform.starts_with("linux") => format!("/home/{user}"),
-        Some(user) => format!("/Users/{user}"),
-    }
 }

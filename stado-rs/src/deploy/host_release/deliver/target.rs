@@ -60,14 +60,17 @@ async fn release_target_inner(
 ) -> Result<Value, DeployError> {
     let plan = plan(target, request, self_store)?;
 
-    let units = declared_units(target, plan.product)?;
+    // Which declared units run the product is judged from their programs,
+    // whose `$HOME` resolves under the home the host states.
+    let home = host_channel::remote_home(target, runner).await?;
+    let units = declared_units(target, plan.product, &home)?;
     let mut report = base_release_report(target, &plan, &units);
     let mut steps: Vec<Value> = Vec::new();
 
     // Phase one: read the host. Read-only, and the only phase a dry run runs.
     let probe = host_channel::run_script(target, &probe_script(&plan), runner).await?;
     let probe_markers = markers(&probe.stdout);
-    if !probe.ok() || marker(&probe_markers, "step") != "probe" {
+    if !probe.succeeded() || marker(&probe_markers, "step") != "probe" {
         steps.push(step_entry(
             "probe",
             host_channel::FAILED_STATUS,
@@ -216,8 +219,8 @@ async fn release_target_inner(
         runner,
     )
     .await;
-    if !failures.is_empty() {
-        let exit_code = failures[0].0;
+    let first_failure = failures.first().map(|(code, _)| *code);
+    if let Some(exit_code) = first_failure {
         let detail = failures
             .into_iter()
             .map(|(_, detail)| detail)
@@ -242,7 +245,7 @@ async fn release_target_inner(
         report.insert("activated".to_string(), json!(true));
         return Ok(fail(
             &mut report,
-            1,
+            nix::libc::EXIT_FAILURE,
             format!(
                 "the release is active and the units restarted, but {} declared stable bind(s) are \
                  not listening: {}. The release agent publishes these ports; read its log with \
@@ -254,7 +257,7 @@ async fn release_target_inner(
             ),
         ));
     }
-    report.insert("exit_code".to_string(), json!(0));
+    report.insert("exit_code".to_string(), json!(nix::libc::EXIT_SUCCESS));
     report.insert("status".to_string(), json!(RELEASED_STATUS));
     Ok(Value::Object(report))
 }

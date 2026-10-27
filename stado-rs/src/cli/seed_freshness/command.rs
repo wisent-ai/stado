@@ -30,7 +30,7 @@ pub async fn authenticator_seed_freshness(
     let vault_path = credential_host.vault;
     let gnupg_home = credential_host.gnupg_home;
 
-    let mut arguments = vec![String::from("totp-seed-state")];
+    let mut arguments = vec![String::from("totp"), String::from("seed")];
     if let Some(item) = login_item {
         arguments.push(item.to_string());
     }
@@ -88,7 +88,7 @@ pub async fn authenticator_seed_freshness(
     )
     .await
     .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{}: the sign-in evidence read did not complete: {}",
             resolved.name,

@@ -61,8 +61,14 @@ pub(super) async fn retire(
         ),
     };
     // An unloaded job answers bootout with an error; the file move below is
-    // what keeps it from returning, so only that step decides success.
-    let _ = runner(stop).await.map_err(DeployError::unreachable)?;
+    // what keeps it from returning, so only that step decides success. The
+    // refusal is still said: a job that is loaded and would not stop keeps
+    // running until the next boot.
+    let stop_line = stop.argv.join(" ");
+    let stopped = runner(stop).await.map_err(DeployError::unreachable)?;
+    if !stopped.succeeded() {
+        eprintln!("[note] retiring {label}: {stop_line}: {}", stopped.detail().trim());
+    }
     match rename {
         Some(rename) => {
             let output = runner(rename).await.map_err(DeployError::unreachable)?;

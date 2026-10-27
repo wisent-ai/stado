@@ -22,11 +22,13 @@ pub const RELEASE_DELIVERY_JOB_COMMAND: &str =
 pub const PRODUCT_RELEASE_DELIVERY_JOB_COMMAND: &str =
     "exec $HOME/.stado/bin/stado release delivery worker --request delivery-request.json";
 /// Release qualification and delivery unblock declared fleet versions, so
-/// routine batch work must not leave them at the zero-priority FIFO tail.
+/// routine batch work must not leave them at the zero-priority FIFO tail:
+/// <https://stado.wisent.com/docs/jobs#priority>.
 pub const RELEASE_JOB_PRIORITY: i64 = 90_000_000;
 /// A detached agent session is work a person asked for and is waiting on, so
 /// it must not sit behind a batch someone queued overnight; it must also
-/// never outrank a release, which unblocks the fleet's declared versions.
+/// never outrank a release, which unblocks the fleet's declared versions:
+/// <https://stado.wisent.com/docs/jobs#priority>.
 pub const DETACHED_SESSION_JOB_PRIORITY: i64 = 50_000_000;
 
 // ---------------------------------------------------------------------------
@@ -36,7 +38,9 @@ pub const DETACHED_SESSION_JOB_PRIORITY: i64 = 50_000_000;
 /// Capacity reservations: the hold a placed workload (a Jeden session, a
 /// browser task) keeps on a host while it runs, subtracted from the host's
 /// broadcast. Its holder renews it on the host's own publication period and
-/// promises that plus its last round (`queue::capacity::reservations`).
+/// promises that plus its last round (`queue::capacity::reservations`). The
+/// record's version: <https://stado.wisent.com/docs/primitives/reservation>.
 pub const RESERVATION_SCHEMA_VERSION: u64 = 1;
-/// `stado fleet needs`: the report's schema version.
+/// `stado fleet needs`: the report's schema version:
+/// <https://stado.wisent.com/docs/capabilities/fleet-needs>.
 pub const NEEDS_SCHEMA_VERSION: u64 = 1;

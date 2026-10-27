@@ -104,20 +104,26 @@ impl AzureBlobBackend {
     }
 }
 
-/// Read a response header as an owned string.
+/// A response header as an owned string: `None` when the response does not
+/// carry it, and also when it carries it as bytes that are not visible
+/// ASCII, which no Azure header this client reads (ETag, Last-Modified,
+/// Content-Length) is written as; the callers refuse a header they need
+/// and do not get, by its name.
 pub(super) fn header_str(response: &reqwest::Response, name: &str) -> Option<String> {
-    response
-        .headers()
-        .get(name)?
-        .to_str()
-        .ok()
-        .map(str::to_string)
+    let value = response.headers().get(name)?;
+    match value.to_str() {
+        Ok(text) => Some(text.to_string()),
+        Err(_not_visible_ascii) => None,
+    }
 }
 
 /// Parse an RFC1123 HTTP date ("Fri, 02 Jan 2026 03:04:05 GMT") — the
-/// format of Last-Modified / Creation-Time in headers and list XML.
+/// format of Last-Modified / Creation-Time in headers and list XML. `None`
+/// for a stamp in another shape, which the readers carry as no time rather
+/// than a time Azure did not write.
 pub(super) fn parse_http_date(raw: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc2822(raw)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
+    match DateTime::parse_from_rfc2822(raw) {
+        Ok(stamp) => Some(stamp.with_timezone(&Utc)),
+        Err(_not_an_http_date) => None,
+    }
 }

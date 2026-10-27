@@ -24,27 +24,34 @@ pub(crate) fn prelude_with(
     observed_domain: Option<&str>,
 ) -> Result<String, DeployError> {
     validate_unit_id(unit)?;
-    Ok(REMOTE_PRELUDE
-        .replace("@DOMAIN_RESOLVER@", DOMAIN_RESOLVER)
-        .replace(
-            "@OBSERVED_DOMAIN@",
-            &observed_domain.map_or_else(String::new, |domain| {
-                format!(
-                    "  domain={}\n  domain_status={}\n  domain_reason='the exact loaded owner was observed before this lifecycle action'\n",
-                    shlex_quote(domain),
-                    if domain.starts_with("gui/") {
-                        DOMAIN_STATUS_GRAPHICAL
-                    } else {
-                        DOMAIN_STATUS_BACKGROUND
-                    },
-                )
-            }),
-        )
-        .replace("@UNIT_STATE@", UNIT_STATE)
+    // A domain observed before the action is pinned into the prelude so the
+    // script acts on that exact owner; with none observed the resolver
+    // decides on the host.
+    let observed = match observed_domain {
+        Some(domain) => format!(
+            "  domain={}\n  domain_status={}\n  domain_reason='the exact loaded owner was observed before this lifecycle action'\n",
+            shlex_quote(domain),
+            if domain.starts_with("gui/") {
+                DOMAIN_STATUS_GRAPHICAL
+            } else {
+                DOMAIN_STATUS_BACKGROUND
+            },
+        ),
+        None => String::new(),
+    };
+    // The declared unit directories are spelled in before any caller text is,
+    // so a unit name or path can never be read as a placeholder.
+    let fixed = with_unit_directories(
+        &REMOTE_PRELUDE
+            .replace("@DOMAIN_RESOLVER@", DOMAIN_RESOLVER)
+            .replace("@UNIT_STATE@", UNIT_STATE)
+            .replace("@NO_DOMAIN@", no_domain),
+    );
+    Ok(fixed
+        .replace("@OBSERVED_DOMAIN@", &observed)
         .replace("@UNIT@", &shlex_quote(unit))
         .replace("@LINUX_UNIT@", &shlex_quote(linux_unit))
-        .replace("@PATH@", &quote_unit_path(path)?)
-        .replace("@NO_DOMAIN@", no_domain))
+        .replace("@PATH@", &quote_unit_path(path)?))
 }
 
 pub(crate) fn remote_prelude(

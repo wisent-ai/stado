@@ -51,24 +51,39 @@ pub(super) fn version_of(tag: &str) -> Option<String> {
     ))
 }
 
-fn slots(tag: &str) -> Vec<u64> {
-    VERSION_TAG
-        .captures(tag)
-        .map(|found| {
-            found["core"]
-                .split('.')
-                .map(|slot| slot.parse().unwrap_or_default())
-                .collect()
-        })
-        .unwrap_or_default()
+/// The numeric slots of a version tag, for ordering. The pattern admits
+/// only digit runs between dots, so every slot is a number; a run longer
+/// than the slot type holds is ordered by its digits as text, after the
+/// numbers below it, since a version that large has no peer to confuse it
+/// with.
+fn slots(tag: &str) -> Option<Vec<Slot>> {
+    let found = VERSION_TAG.captures(tag)?;
+    Some(
+        found["core"]
+            .split('.')
+            .map(|slot| match slot.parse::<u64>() {
+                Ok(number) => Slot::Number(number),
+                Err(_beyond_u64) => Slot::Digits(slot.to_string()),
+            })
+            .collect(),
+    )
 }
 
-/// The newest version tag among `names`.
+/// One slot of a version, ordered numbers first and digit runs beyond the
+/// number type after them, by their text.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Slot {
+    Number(u64),
+    Digits(String),
+}
+
+/// The newest version tag among `names`: those the pattern reads, ordered
+/// by their slots.
 pub(super) fn newest<'a>(names: impl Iterator<Item = &'a str>) -> Option<String> {
     names
-        .filter(|name| VERSION_TAG.is_match(name))
-        .max_by(|left, right| slots(left).cmp(&slots(right)))
-        .map(str::to_string)
+        .filter_map(|name| slots(name).map(|slots| (slots, name)))
+        .max_by(|(left, _), (right, _)| left.cmp(right))
+        .map(|(_, name)| name.to_string())
 }
 
 /// Tag names and the commit each names, as `origin` serves them.
@@ -103,11 +118,12 @@ pub(super) fn build(root: &Path, sources: &AppSources) -> Read<Value> {
     }
     let tags = remote_tags(root)?;
     if let Some(tag) = newest(tags.iter().map(|(name, _)| name.as_str())) {
-        let remote = &tags
-            .iter()
-            .find(|(name, _)| *name == tag)
-            .expect("listed")
-            .1;
+        let Some((_, remote)) = tags.iter().find(|(name, _)| *name == tag) else {
+            return Err(format!("tag {tag} was chosen from {REMOTE}'s listing but is not in it; refusing to measure against it"));
+        };
+        let Some(version) = version_of(&tag) else {
+            return Err(format!("tag {tag} was read as a version tag but names no version; refusing to measure against it"));
+        };
         let local = git(root, &["rev-parse", "--verify", &format!("refs/tags/{tag}^{{commit}}")])
             .map_err(|error| format!("{REMOTE} serves tag {tag} but this clone cannot resolve it ({error}); fetch tags and history, then ask again"))?;
         if &local != remote {
@@ -115,7 +131,7 @@ pub(super) fn build(root: &Path, sources: &AppSources) -> Read<Value> {
         }
         let load = |relative: &str| run(root, &["show", &format!("{tag}:{relative}")]);
         return Ok(json!({
-            "version": version_of(&tag).expect("a version tag names a version"),
+            "version": version,
             "source": format!("git-archive:{tag} the newest version tag at {REMOTE}, at the commit {REMOTE} serves; the surface is read from its blobs"),
             "surface": surface::of(&load, sources)?,
         }));
@@ -124,7 +140,7 @@ pub(super) fn build(root: &Path, sources: &AppSources) -> Read<Value> {
     let load = surface::tree(root);
     Ok(json!({
         "version": surface::declared_version(&load, sources)?,
-        "source": format!("head:{sha} {REMOTE} serves no version tag, so nothing has been released and the version is the one {} declares", sources.version_source()),
+        "source": format!("head:{sha} {REMOTE} serves no version tag, so nothing has been released and the version is the one {} declares", sources.version_source()?),
         "surface": surface::of(&load, sources)?,
     }))
 }

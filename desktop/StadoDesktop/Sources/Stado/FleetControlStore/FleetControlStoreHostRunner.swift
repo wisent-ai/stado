@@ -12,9 +12,13 @@ extension FleetControlStore {
         repository: String?
     ) -> [String] {
         var arguments = ["runner", action, host, "--profile", profile]
-        let scope = repository?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !scope.isEmpty {
-            arguments.append(contentsOf: ["--repository", scope])
+        // A scope is sent only when the operator named one; an empty field
+        // is no scope, and the CLI then reads the profile's own.
+        if let repository {
+            let scope = repository.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !scope.isEmpty {
+                arguments.append(contentsOf: ["--repository", scope])
+            }
         }
         arguments.append("--json")
         return arguments
@@ -123,7 +127,7 @@ extension FleetControlStore {
     func configureRunnerModelReview(host: String, repository: String) async {
         await runRunnerAccount(
             arguments: [
-                "runner", "model-review", host,
+                "runner", "review", host,
                 "--repository", repository.trimmingCharacters(in: .whitespacesAndNewlines), "--json",
             ],
             host: host,

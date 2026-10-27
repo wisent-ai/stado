@@ -86,7 +86,7 @@ pub async fn vault_item_show(
     )
     .await
     .map_err(CmdError::from)?;
-    if !reducer.ok() {
+    if !reducer.succeeded() {
         return Err(CmdError::refused(format!(
             "{host}: {item} exists, but its fields cannot be summarised there: {host_stado} has \
              no 'credentials item summarize'; install a stado release that carries it on \
@@ -109,7 +109,7 @@ pub async fn vault_item_show(
     )
     .await
     .map_err(CmdError::from)?;
-    if !summary_text.ok() {
+    if !summary_text.succeeded() {
         // The last line of a remote failure is often the least informative one
         // - a decryption failure ends in a backtrace note - so the refusal
         // carries every non-empty line the host wrote.

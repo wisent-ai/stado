@@ -42,7 +42,7 @@ pub(in crate::config_file::validation) fn retired_identities(
     for path in RETIRED_SECTIONS.iter().chain(RETIRED_KEYS) {
         if get_in(root, path).is_some() {
             problems.push(format!(
-                "{path} is retired; `stado config migrate-identities` removes it (declare \
+                "{path} is retired; `stado config migrate` removes it (declare \
                  workload roles with `stado release catalog enroll`, which writes \
                  agent.skarbiec.roles)"
             ));

@@ -29,7 +29,7 @@ pub use errors::{BoxApiError, BoxError};
 /// Named out of tree by the `client::commands`, `client::files`,
 /// `client::lifecycle` and `client::prompts` field readers and by
 /// `http::api_error`.
-pub(crate) use payload::{first_truthy_str, jbool, jstr};
+pub(crate) use payload::{first_stated, jbool, jint, jstr};
 /// `parse_box_info` is named out of tree by `client::lifecycle`,
 /// `required_dict` by `http::parse_json` and `client::prompts`, `safe_text`
 /// by `http::transport_error`, and `safe_text_limited` carries its

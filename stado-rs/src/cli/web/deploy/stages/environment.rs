@@ -105,7 +105,7 @@ fn database_credential_item(database: &str, consumer: &str) -> Result<String, Cm
 pub(in crate::cli::web::deploy) fn secret_deliveries(
     declared: &WebApiProduct,
 ) -> Result<Vec<(String, String, String)>, CmdError> {
-    let mut deliveries = Vec::with_capacity(declared.secrets().len() + 1);
+    let mut deliveries = Vec::new();
     for (variable, reference) in declared.secrets() {
         let (item, field) = crate::config::parse_secret_reference(reference).ok_or_else(|| {
             CmdError::click(format!(
@@ -158,7 +158,7 @@ pub(in crate::cli::web::deploy) async fn ensure_bearer(
     let output = host_channel::run_script(target, &script, runner)
         .await
         .map_err(click)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{}: could not prepare the unit's bearer file: {}",
             target.name,

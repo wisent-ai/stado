@@ -13,8 +13,21 @@ indirect enum StorageReconciliationJSON: Codable, Sendable {
     case boolean(Bool)
     case null
 
+    /// The JSON value as written: each shape is tried in turn, and only a value of another
+    /// shape (a type mismatch, or a number that does not fit the integer type, which
+    /// JSONDecoder reports as corrupted for that type) moves on to the next; the last shape's
+    /// failure is thrown naming the value's path.
     init(from decoder: Decoder) throws {
-        if let container = try? decoder.container(keyedBy: JSONKey.self) {
+        func shaped<T>(_ read: () throws -> T) throws -> T? {
+            do {
+                return try read()
+            } catch DecodingError.typeMismatch {
+                return nil
+            } catch DecodingError.dataCorrupted {
+                return nil
+            }
+        }
+        if let container = try shaped({ try decoder.container(keyedBy: JSONKey.self) }) {
             var result: [String: StorageReconciliationJSON] = [:]
             for key in container.allKeys {
                 result[key.stringValue] = try container.decode(StorageReconciliationJSON.self, forKey: key)
@@ -22,7 +35,7 @@ indirect enum StorageReconciliationJSON: Codable, Sendable {
             self = .object(result)
             return
         }
-        if var container = try? decoder.unkeyedContainer() {
+        if var container = try shaped({ try decoder.unkeyedContainer() }) {
             var result: [StorageReconciliationJSON] = []
             while !container.isAtEnd {
                 result.append(try container.decode(StorageReconciliationJSON.self))
@@ -33,13 +46,13 @@ indirect enum StorageReconciliationJSON: Codable, Sendable {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             self = .null
-        } else if let value = try? container.decode(Bool.self) {
+        } else if let value = try shaped({ try container.decode(Bool.self) }) {
             self = .boolean(value)
-        } else if let value = try? container.decode(Int64.self) {
+        } else if let value = try shaped({ try container.decode(Int64.self) }) {
             self = .integer(value)
-        } else if let value = try? container.decode(UInt64.self) {
+        } else if let value = try shaped({ try container.decode(UInt64.self) }) {
             self = .unsigned(value)
-        } else if let value = try? container.decode(Double.self) {
+        } else if let value = try shaped({ try container.decode(Double.self) }) {
             self = .number(value)
         } else {
             self = .string(try container.decode(String.self))
@@ -126,11 +139,16 @@ indirect enum StorageReconciliationJSON: Codable, Sendable {
         encoded(options: [.sortedKeys, .withoutEscapingSlashes])
     }
 
+    /// The value as JSON text; a value JSONEncoder refuses (a number JSON cannot write)
+    /// is shown with the encoder's own reason in its place.
     private func encoded(options: JSONEncoder.OutputFormatting) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = options
-        guard let data = try? encoder.encode(self) else { return "<unrenderable JSON>" }
-        return String(decoding: data, as: UTF8.self)
+        do {
+            return String(decoding: try encoder.encode(self), as: UTF8.self)
+        } catch {
+            return "unrenderable JSON: \(error)"
+        }
     }
 }
 

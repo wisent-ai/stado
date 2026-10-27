@@ -53,8 +53,14 @@ stage_enabled() {
 free_kb() { /bin/df -Pk "$HOME" 2>/dev/null | /usr/bin/awk 'NR==2 {print $4}'; }
 
 # Every live process's argv, taken ONCE. Asking `ps` per candidate through a
-# pipeline matches the grep's own argv and reports every path as held.
-snapshot=$(/bin/ps -Ao args= 2>/dev/null || true)
+# pipeline matches the grep's own argv and reports every path as held. A
+# table that cannot be read is not an empty one: ownership is then unknown
+# for every path, and `process_absent` answers so.
+if snapshot=$(/bin/ps -Ao args= 2>&1); then
+  snapshot_read=yes
+else
+  snapshot_read=no
+fi
 
 held() {
   case "$snapshot" in
@@ -68,6 +74,7 @@ held() {
 # name files inside it; `lsof_holds` proves whether any process still has the
 # tree as cwd or holds a file below it. Unknown is never absent.
 process_absent() {
+  if [ "$snapshot_read" != yes ]; then return 2; fi
   if held "$1"; then return 1; fi
   lsof_holds "$1"
   case $? in
@@ -117,6 +124,35 @@ settled() {
 
 mtime_seconds() {
   /usr/bin/stat -f %m "$1" 2>/dev/null || /usr/bin/stat -c %Y "$1" 2>/dev/null
+}
+
+# The newest of the given entries that PREDICATE accepts, by modification
+# time, left in $newest. Every keep-the-newest stage chooses with this one
+# function. An accepted entry whose age cannot be read leaves the newest
+# unknown: the stage is refused naming that entry and the operating system's
+# answer, and the caller takes nothing, because leaving the entry out would
+# shield an older one instead.
+newest_by_age() {
+  newest_stage="$1"
+  newest_predicate="$2"
+  shift 2
+  newest=""
+  newest_age=""
+  for newest_candidate in "$@"; do
+    "$newest_predicate" "$newest_candidate" || continue
+    if [ "$(/usr/bin/uname -s)" = Darwin ]; then
+      newest_read=$(/usr/bin/stat -f %m -- "$newest_candidate" 2>&1)
+    else
+      newest_read=$(/usr/bin/stat -c %Y -- "$newest_candidate" 2>&1)
+    fi || {
+      printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$newest_stage" "$newest_candidate" "its age cannot be read ($(printf '%s' "$newest_read" | /usr/bin/tr '\t\n' '  ')), so the newest entry is unknown and none is taken"
+      return 1
+    }
+    if [ -z "$newest" ] || [ "$newest_read" -gt "$newest_age" ]; then
+      newest="$newest_candidate"
+      newest_age="$newest_read"
+    fi
+  done
 }
 
 local_evidence() {
@@ -203,6 +239,10 @@ unit_named() {
 # proven. In dry-run mode the path is reported without being touched, so a
 # preview names exactly what an apply would take.
 reclaim() {
+  if [ "$snapshot_read" != yes ]; then
+    printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" "the process table could not be read ($(printf '%s' "$snapshot" | /usr/bin/tr '\t\n' '  ')); retained"
+    return 1
+  fi
   if held "$1"; then return 1; fi
   unit_named "$1"
   case $? in
@@ -214,7 +254,10 @@ reclaim() {
       ;;
   esac
   if [ "$apply" = 1 ]; then
-    /bin/rm -rf -- "$1" 2>/dev/null || return 1
+    if ! removal=$(/bin/rm -rf -- "$1" 2>&1); then
+      printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" "removal failed: $(printf '%s' "$removal" | /usr/bin/tr '\t\n' '  ')"
+      return 1
+    fi
   fi
   printf 'STADO_RECLAIM_ITEM\t%s\t%s\n' "$2" "$1"
   return 0

@@ -27,6 +27,7 @@ use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::cli::service_verify::{Finding, StandbyRecheck};
 use crate::deploy::service::{self, ManagedService};
 use crate::deploy::Runner;
+use crate::primitives::tally::Tally;
 use crate::queue::StorageError;
 
 use super::super::gate::MutationGate;
@@ -86,10 +87,10 @@ async fn stop_one(
     }
     let target = crate::deploy::host_channel::canonical_target(&finding.host)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("host {} of standby service {unit} cannot be reached: {error}", finding.host))?;
     let report = service::stop_service(&target, declared, runner)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("standby service {unit} on {} cannot be stopped: {error}", target.name))?;
     if !report.postcondition_held() {
         return Err(format!("standby service {unit}: {}", report.failure()));
     }
@@ -122,7 +123,7 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
         Ok(registry) => registry,
         Err(error) => {
             for finding in serving {
-                summary.blocked += 1;
+                summary.blocked.tally();
                 let detail = format!("registry authority did not answer, not stopped: {error}");
                 outcomes.push(row(finding, "", "stop_unjudged", false, detail));
             }
@@ -132,7 +133,7 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
     let plan_only = policy.mode == AutonomyMode::Report || policy.emergency_paused;
     for finding in serving {
         let Some(unit) = registry.service_unit(&finding.service, &finding.host) else {
-            summary.failures += 1;
+            summary.failures.tally();
             let detail = format!(
                 "{}; the registry names no unit for {} on {}, so nothing was stopped",
                 finding.detail, finding.service, finding.host
@@ -150,7 +151,7 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
                     .find(|found| found.unit_id() == unit)
             });
         let Some(declared) = declared else {
-            summary.failures += 1;
+            summary.failures.tally();
             let detail = format!(
                 "{}; {} declares no managed service {unit}, so nothing was stopped",
                 finding.detail, finding.host
@@ -158,7 +159,7 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
             outcomes.push(row(finding, unit, "repair_failed", false, detail));
             continue;
         };
-        summary.planned += 1;
+        summary.planned.tally();
         if plan_only {
             let detail = format!("{}; stop not executed in this mode", finding.detail);
             outcomes.push(row(finding, unit, "planned", false, detail));
@@ -167,7 +168,7 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
         let (subject, lease) = match gate.admit(&finding.host, unit).await? {
             Ok(admitted) => admitted,
             Err(refusal) => {
-                summary.blocked += 1;
+                summary.blocked.tally();
                 outcomes.push(row(
                     finding,
                     unit,
@@ -181,7 +182,7 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
         let result = stop_one(finding, &declared, runner).await;
         match gate.release(&subject, &lease, result).await {
             Ok(Stop::Stopped(detail)) => {
-                summary.changed += 1;
+                summary.changed.tally();
                 gate.record(None).await?;
                 outcomes.push(row(finding, unit, "stopped", true, detail));
             }
@@ -191,11 +192,11 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
                 outcomes.push(row(finding, unit, "resolved", false, detail));
             }
             Ok(Stop::Unjudged(detail)) => {
-                summary.blocked += 1;
+                summary.blocked.tally();
                 outcomes.push(row(finding, unit, "stop_unjudged", false, detail));
             }
             Err(error) => {
-                summary.failures += 1;
+                summary.failures.tally();
                 gate.record(Some(&error)).await?;
                 outcomes.push(row(finding, unit, "repair_failed", false, error));
             }

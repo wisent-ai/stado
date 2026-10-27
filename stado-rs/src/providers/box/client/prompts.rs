@@ -48,20 +48,20 @@ impl BoxClient {
             )
             .await?;
         let run = prompt_run(&value, "the prompt")?;
-        let prompt_id = super::super::types::first_truthy_str(
+        let prompt_id = super::super::types::first_stated(
             &[value.get("promptId"), run.get("promptId")],
             "",
         );
-        if prompt_id.is_empty() || jstr(run.get("promptId")) != prompt_id {
+        let run_id = jstr(run.get("promptId"), "promptId", "prompt run")?;
+        if prompt_id.is_empty() || run_id != prompt_id {
             return Err(BoxError::transport(format!(
                 "Boat answered the prompt with prompt id {:?} beside promptRun id {:?}",
-                prompt_id,
-                jstr(run.get("promptId"))
+                prompt_id, run_id
             )));
         }
         // A submission Boat answers without a status is queued: that is the
         // state the `prompt.queued` answer names.
-        let status = jstr(run.get("status"));
+        let status = jstr(run.get("status"), "status", "prompt run")?;
         let status = if status.is_empty() {
             PromptStatus::Queued
         } else {
@@ -70,7 +70,7 @@ impl BoxClient {
         Ok(BoxPromptRun {
             prompt_id,
             status,
-            done: jbool(run.get("done")),
+            done: jbool(run.get("done"), "done", "prompt run")?,
             raw: run,
         })
     }
@@ -92,17 +92,17 @@ impl BoxClient {
             )
             .await?;
         let run = prompt_run(&value, "the prompt status")?;
-        let returned_id = jstr(run.get("promptId"));
+        let returned_id = jstr(run.get("promptId"), "promptId", "prompt run")?;
         if returned_id != prompt_id {
             return Err(BoxError::transport(format!(
                 "Boat answered the status of prompt {prompt_id:?} with prompt {returned_id:?}"
             )));
         }
-        let status = PromptStatus::read(&jstr(run.get("status")))?;
+        let status = PromptStatus::read(&jstr(run.get("status"), "status", "prompt run")?)?;
         Ok(BoxPromptRun {
             prompt_id: prompt_id.to_string(),
             status,
-            done: jbool(run.get("done")),
+            done: jbool(run.get("done"), "done", "prompt run")?,
             raw: run,
         })
     }

@@ -23,17 +23,11 @@ impl RemoveRunDirectoryOutcome {
     }
 
     pub fn failure_sentence(&self) -> String {
-        format!(
-            "{}: {} {}{}",
-            self.target,
-            self.path,
-            self.status,
-            self.detail
-                .as_ref()
-                .filter(|detail| !detail.is_empty())
-                .map(|detail| format!(" — {detail}"))
-                .unwrap_or_default()
-        )
+        let base = format!("{}: {} {}", self.target, self.path, self.status);
+        match self.detail.as_deref() {
+            Some(detail) => format!("{base} — {detail}"),
+            None => base,
+        }
     }
 }
 
@@ -74,16 +68,12 @@ if [ -e "$path" ] || [ -L "$path" ]; then report failed 'rm returned and the run
     let (status, detail) = output
         .stdout
         .lines()
-        .find_map(|line| {
-            let fields = host_channel::marker_fields(line);
-            (fields.first() == Some(&"STADO_REMOVE_RUN_DIRECTORY") && fields.len() >= 3).then(
-                || {
-                    (
-                        fields[1].to_string(),
-                        (!fields[2].is_empty()).then(|| fields[2].to_string()),
-                    )
-                },
-            )
+        .find_map(|line| match host_channel::marker_fields(line).as_slice() {
+            ["STADO_REMOVE_RUN_DIRECTORY", status, detail, ..] => Some((
+                (*status).to_string(),
+                (!detail.is_empty()).then(|| (*detail).to_string()),
+            )),
+            _ => None,
         })
         .ok_or_else(|| {
             DeployError::unreachable(format!(

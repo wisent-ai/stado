@@ -54,7 +54,12 @@ pub(in crate::cli::storage) fn backend_prefix(
 ) -> Result<String, CmdError> {
     match prefix.strip_prefix("stado://") {
         Some(rest) => {
-            let (namespace, key) = rest.split_once('/').unwrap_or((rest, ""));
+            // A prefix may name a whole namespace, in which case it carries
+            // no key at all.
+            let (namespace, key) = match rest.split_once('/') {
+                Some(split) => split,
+                None => (rest, ""),
+            };
             if RemoteObjectApi::release_authorized(namespace, key) {
                 return Err(CmdError::usage(
                     "release-governed stado:// prefixes must be listed with `stado storage objects \

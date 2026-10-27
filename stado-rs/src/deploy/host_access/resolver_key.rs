@@ -5,7 +5,7 @@
 //! authority can go days without a snapshot while nothing reports why.
 //!
 //! A resolver on the authority host itself reads the canonical store directly.
-//! Every other host cannot: [`crate::cli::resolver::snapshot_source`] returns
+//! Every other host cannot: the resolver's snapshot source answers
 //! `SnapshotSource::Authority` for it, and the only transport that answers is
 //! `ssh <authority ssh> stado resolver snapshot`, opened with the resolver's own
 //! key (`$HOME/.stado/resolver-ssh-key`, or `STADO_RESOLVER_SSH_KEY_FILE`). If
@@ -138,7 +138,7 @@ async fn resolver_public_key(
     target: &crate::targets::ComputeTarget,
 ) -> Result<(String, bool), DeployError> {
     let output = host_channel::run_script(target, MINT_PROGRAM, &production_runner()).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(refused(
             &output,
             "the resolver key could not be established on the target",
@@ -200,7 +200,7 @@ pub async fn authorize(
         host_channel::UsedConnection::Local => ("local", "local process"),
         host_channel::UsedConnection::Ssh(path) => (path.name, path.destination),
     };
-    if !authorized.ok() {
+    if !authorized.succeeded() {
         return Err(refused(
             &authorized,
             "the authority host refused the authorized_keys append",
@@ -223,7 +223,7 @@ pub async fn authorize(
         "connection_path": connection_path,
         "key_file": RESOLVER_KEY_FILE,
         "key_state": if minted { "minted" } else { "present" },
-        "key_type": public_key.split_whitespace().next().unwrap_or_default(),
+        "key_type": public_key.split_whitespace().next(),
         "authorized_keys": state,
     }))
 }

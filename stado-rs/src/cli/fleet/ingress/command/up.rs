@@ -54,10 +54,12 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, CmdError> {
     let listener_log = directory.join("listener.log");
     let tunnel_log = directory.join("tunnel.log");
     let socket = reserve_port(port)?;
-    let port = socket
+    // The address the socket is actually bound to, not one spelled here: the
+    // listener, the tunnel and the lines printed all name what was bound.
+    let bound = socket
         .local_addr()
-        .map_err(|exc| CmdError::from(exc).within("the bound loopback socket has no address"))?
-        .port();
+        .map_err(|exc| CmdError::from(exc).within("the bound loopback socket has no address"))?;
+    let port = bound.port();
 
     let started_at = Utc::now();
     let mut listener = spawn_detached(
@@ -73,7 +75,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, CmdError> {
     )?;
     let listener_pgid = listener.id() as i32;
     println!(
-        "listener: stado serve --api --enrollment-only on 127.0.0.1:{port} (pgid {listener_pgid})"
+        "listener: stado serve --api --enrollment-only on {bound} (pgid {listener_pgid})"
     );
 
     if let Err(detail) = await_listener(&mut listener, port, &listener_log).await {
@@ -97,9 +99,9 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, CmdError> {
             "tunnel".to_string(),
             "--no-autoupdate".to_string(),
             "--url".to_string(),
-            format!("http://127.0.0.1:{port}"),
+            format!("http://{bound}"),
             "--http-host-header".to_string(),
-            format!("127.0.0.1:{port}"),
+            bound.to_string(),
         ],
         &tunnel_log,
     ) {
@@ -111,7 +113,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, CmdError> {
     };
     let tunnel_pgid = tunnel.id() as i32;
     println!(
-        "tunnel:   {} tunnel --url http://127.0.0.1:{port} (pgid {tunnel_pgid})",
+        "tunnel:   {} tunnel --url http://{bound} (pgid {tunnel_pgid})",
         cloudflared.display()
     );
 
@@ -127,17 +129,22 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, CmdError> {
 
     // The host is taken from the URL rather than parsed out of the log line a
     // second time: whatever is verified must be exactly what gets published.
-    // An address with no host is not something to verify or publish.
-    let Some(host) = url::Url::parse(&base_url)
-        .ok()
-        .and_then(|parsed| parsed.host_str().map(str::to_string))
-    else {
-        terminate_child(&mut tunnel, "cloudflared");
-        terminate_child(&mut listener, "--enrollment-only");
-        return Err(stage_failed(
-            "tunnel",
-            format!("cloudflared printed {base_url}, which names no host"),
-        ));
+    // An address that is not a URL, or names no host, is not something to
+    // verify or publish.
+    let named_host = match url::Url::parse(&base_url) {
+        Ok(parsed) => parsed
+            .host_str()
+            .map(str::to_string)
+            .ok_or_else(|| format!("cloudflared printed {base_url}, which names no host")),
+        Err(error) => Err(format!("cloudflared printed {base_url}, which is not a URL: {error}")),
+    };
+    let host = match named_host {
+        Ok(host) => host,
+        Err(detail) => {
+            terminate_child(&mut tunnel, "cloudflared");
+            terminate_child(&mut listener, "--enrollment-only");
+            return Err(stage_failed("tunnel", detail));
+        }
     };
     println!("asking Cloudflare's resolver, not this machine's, whether {host} is published...");
     if let Err(detail) = await_public_dns(&host).await {
@@ -205,7 +212,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, CmdError> {
     );
     println!("  every one-liner already handed out under the old one.");
     println!();
-    println!("mint an invitation now: stado fleet invite --name <target-name>");
+    println!("mint an invitation now: stado fleet invite create --name <target-name> --expires <duration>");
     println!("take the entrance down when you are done: stado fleet ingress down");
     Ok(true)
 }

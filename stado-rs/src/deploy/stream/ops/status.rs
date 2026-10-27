@@ -73,23 +73,32 @@ fi
 }
 
 /// How many devices Sunshine has paired, from its state file as the host
-/// sent it: `0` without a file, `unreadable` when it cannot be decoded.
+/// sent it (base64 of the JSON file, or `absent`). A file that cannot be
+/// decoded or parsed is reported `unreadable: <why>`, so a reader tells a
+/// host with no pairings from one whose state cannot be read.
 fn paired_clients(state: Option<&Value>) -> Value {
     use base64::Engine as _;
     let Some(encoded) = state.and_then(Value::as_str) else {
-        return Value::from("unreadable");
+        return Value::from("unreadable: the host sent no state field");
     };
     if encoded == "absent" {
-        return Value::from("0");
+        return Value::from(Vec::<Value>::new().len().to_string());
     }
-    base64::engine::general_purpose::STANDARD
-        .decode(encoded.trim())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .map(|document| {
-            let root = document.get("root").unwrap_or(&document);
-            let count = root["devices"].as_array().map_or(0, Vec::len);
-            Value::from(count.to_string())
-        })
-        .unwrap_or_else(|| Value::from("unreadable"))
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(encoded.trim()) {
+        Ok(bytes) => bytes,
+        Err(error) => return Value::from(format!("unreadable: the state is not base64: {error}")),
+    };
+    let document = match serde_json::from_slice::<Value>(&bytes) {
+        Ok(document) => document,
+        Err(error) => return Value::from(format!("unreadable: the state is not JSON: {error}")),
+    };
+    // Sunshine nests its state under `root`; an older file is the root.
+    let root = match document.get("root") {
+        Some(root) => root,
+        None => &document,
+    };
+    match root["devices"].as_array() {
+        Some(devices) => Value::from(devices.len().to_string()),
+        None => Value::from("unreadable: the state lists no devices array"),
+    }
 }

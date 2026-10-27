@@ -38,9 +38,12 @@ pub async fn observe_beacon_age_at(
             // A host that has never published has no last-heard-from
             // instant, so the gap starts now: claiming it started at the
             // epoch would report an outage nobody lived through.
-            let started_at = newest_beacon_at.unwrap_or(now);
+            let started_at = match newest_beacon_at {
+                Some(beacon_at) => beacon_at,
+                None => now,
+            };
             let record = open_record(host, started_at, observer, first_reader_error);
-            let path = silence_object_path(host, started_at);
+            let path = silence_object_path(host, started_at)?;
             let body = serde_json::to_string_pretty(&record)?;
             if store.create_text_if_absent(&path, &body).await? {
                 return Ok(Some(record));
@@ -72,8 +75,13 @@ pub async fn observe_beacon_age_at(
     };
     // The gap ended when the host published again, not when somebody got
     // around to looking: `ended_at` is the fresher beacon's own instant, so
-    // `duration_seconds` is the outage and not the polling interval.
-    let ended_at = newest_beacon_at.unwrap_or(now);
+    // `duration_seconds` is the outage and not the polling interval. A
+    // host judged no longer silent without a beacon instant (its deadline
+    // was withdrawn) ends the gap at this observation.
+    let ended_at = match newest_beacon_at {
+        Some(beacon_at) => beacon_at,
+        None => now,
+    };
     merge_observation(&mut record, observer, first_reader_error);
     if !close_record(&mut record, ended_at) {
         return Ok(None);

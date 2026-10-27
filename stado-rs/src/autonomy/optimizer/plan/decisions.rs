@@ -26,13 +26,14 @@ pub(super) async fn persist_predicted_savings(
     let Some(selected_cost) = selected.expected_total_cost_usd else {
         return Ok(());
     };
-    let Some(baseline) = candidates
-        .iter()
-        .find(|candidate| candidate.eligible && candidate.expected_total_cost_usd.is_some())
-    else {
+    // The first eligible candidate that priced itself; its cost is the one
+    // the find just required.
+    let Some((baseline, baseline_cost)) = candidates.iter().find_map(|candidate| {
+        let cost = candidate.expected_total_cost_usd?;
+        candidate.eligible.then_some((candidate, cost))
+    }) else {
         return Ok(());
     };
-    let baseline_cost = baseline.expected_total_cost_usd.unwrap_or_default();
     if baseline.target_id == selected.target_id || baseline_cost <= selected_cost {
         return Ok(());
     }
@@ -107,7 +108,12 @@ pub(super) async fn persist_unplaced_decision(
     inventory_snapshot_id: &str,
 ) -> Result<(), StorageError> {
     let now = Utc::now();
-    let expires = now + chrono::Duration::seconds(policy.limits.decision_ttl_seconds as i64);
+    let expires = crate::autonomy::time::expires_at(
+        now,
+        policy.limits.decision_ttl_seconds,
+        "limits.decision_ttl_seconds",
+    )
+    .map_err(StorageError::Other)?;
     let decision = DecisionRecord {
         decision_id: uuid::Uuid::new_v4().to_string(),
         kind: DecisionKind::Placement,
@@ -140,8 +146,8 @@ pub(super) fn placement_constraints(job: &Job, policy: &AutonomyPolicy) -> Vec<S
     if !job.gpu_type.is_empty() {
         constraints.push(format!("gpu_type = {}", job.gpu_type));
     }
-    if job.max_cost_per_hour_usd > 0.0 {
-        constraints.push(format!("hourly_usd <= {:.6}", job.max_cost_per_hour_usd));
+    if let Some(cap) = job.hourly_cap_usd() {
+        constraints.push(format!("hourly_usd <= {cap:.6}"));
     }
     if job.pin_to_provider {
         constraints.push(format!("provider = {}", job.provider));
@@ -160,11 +166,17 @@ pub(super) fn explain_selection(
         .iter()
         .filter(|candidate| !candidate.eligible)
         .count();
+    // Only a priced candidate is selected; one without a total is said as
+    // such rather than as costing nothing.
+    let total = match selected.expected_total_cost_usd {
+        Some(total) => format!("${total:.6}"),
+        None => "an unpriced total".to_string(),
+    };
     format!(
-        "Selected {} on {} at expected total ${:.6}; {} candidate(s) rejected by constraints",
+        "Selected {} on {} at expected total {}; {} candidate(s) rejected by constraints",
         selected.target_id,
         selected.provider.as_str(),
-        selected.expected_total_cost_usd.unwrap_or_default(),
+        total,
         rejected
     )
 }

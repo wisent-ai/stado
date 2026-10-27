@@ -208,6 +208,38 @@ impl Journey {
     }
 }
 
+/// The product records every command it runs against the Stado build running
+/// it, and refuses to run one before that build is declared; this journey is
+/// a build of the product crate at the revision it binds its evidence to.
+fn register_build(repository: &Path) -> Result<()> {
+    let revision = match std::env::var("WISENT_SOURCE_COMMIT") {
+        Ok(commit) => commit,
+        Err(std::env::VarError::NotPresent) => {
+            let output = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(repository)
+                .output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "git rev-parse HEAD in {} failed: {}",
+                repository.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            String::from_utf8(output.stdout)?.trim().to_owned()
+        }
+        Err(error) => anyhow::bail!("WISENT_SOURCE_COMMIT is set but cannot be read: {error}"),
+    };
+    // The build identity lives for the process, as the product's own does.
+    static REVISION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    stado_product::register_build(stado_product::Build {
+        version: env!("CARGO_PKG_VERSION"),
+        source_revision: REVISION.get_or_init(|| revision).as_str(),
+        signing_role: stado_product::SIGNING_ROLE,
+        product: env!("CARGO_PKG_NAME"),
+    });
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -221,6 +253,7 @@ fn main() -> Result<()> {
     std::env::var("RUSTUP_HOME").context("RUSTUP_HOME is required")?;
     std::env::set_var("HOME", root.join("home"));
     std::env::set_var("WISENT_OUTPUT_DIR", root.join("commands"));
+    register_build(&repository)?;
     let mut journey = Journey {
         root: root.clone(),
         report: json!({"result": "failed", "commands": []}),

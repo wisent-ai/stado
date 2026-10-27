@@ -115,7 +115,9 @@ pub struct VolumeMount {
     pub device: String,
     pub fstype: String,
     pub uuid: String,
-    pub size_bytes: i64,
+    /// The device's size as lsblk printed it; absent when that was not a
+    /// byte count, which the mount output then says.
+    pub size_bytes: Option<i64>,
     /// The fstab line in force for this UUID, and whether this run wrote it.
     pub fstab_line: String,
     pub fstab_written: bool,
@@ -173,8 +175,8 @@ pub fn validate_mount_point(path: &str) -> Result<(), String> {
         ));
     }
     if matches!(
-        components[0],
-        "boot" | "dev" | "etc" | "proc" | "run" | "sys" | "usr" | "bin" | "sbin" | "lib" | "var"
+        components.first().copied(),
+        Some("boot" | "dev" | "etc" | "proc" | "run" | "sys" | "usr" | "bin" | "sbin" | "lib" | "var")
     ) {
         return Err(format!(
             "--mount-point {path:?} is under a system tree; mount a data disk under /mnt, /srv, /data or /home"
@@ -192,7 +194,15 @@ pub fn parse_output(stdout: &str) -> VolumeMount {
                 mount.device = (*node).to_string();
                 mount.fstype = (*fstype).to_string();
                 mount.uuid = (*uuid).to_string();
-                mount.size_bytes = size.parse().unwrap_or_default();
+                mount.size_bytes = match size.parse::<i64>() {
+                    Ok(bytes) => Some(bytes),
+                    Err(error) => {
+                        mount.mount_output.push(format!(
+                            "lsblk printed the size {size:?}, which is not a byte count: {error}"
+                        ));
+                        None
+                    }
+                };
             }
             ["STADO_VOLUME_FSTAB", written, line] => {
                 mount.fstab_written = *written == "1";
@@ -234,7 +244,7 @@ pub async fn mount_volume(
         .replace("@FSTAB_TAG@", FSTAB_TAG);
     let output = host_channel::run_script(&target, &program, runner).await?;
     let mut mount = parse_output(&output.stdout);
-    if mount.error.is_none() && output.code != 0 {
+    if mount.error.is_none() && !output.succeeded() {
         mount.error = Some(format!(
             "the host program exited {} without a finding; stdout: {}",
             output.code,

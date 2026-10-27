@@ -3,7 +3,7 @@ use crate::deploy::service::*;
 const USER_LAUNCHAGENT_SCRIPT: &str = r#"set -u
 label=@LABEL@
 action=@ACTION@
-path="$HOME/Library/LaunchAgents/$label.plist"
+path="$HOME/@USER_LAUNCHD_AGENTS@/$label.plist"
 uid=$(/usr/bin/id -u)
 gui="gui/$uid"
 user="user/$uid"
@@ -118,11 +118,12 @@ async fn user_launchagent_action(
     validate_unit_id(label)?;
     let action_word = serde_json::to_value(action)
         .map_err(|error| DeployError(format!("LaunchAgent action: {error}")))?;
-    let script = USER_LAUNCHAGENT_SCRIPT
+    // Directories before the label, so a label is never read as a placeholder.
+    let script = with_unit_directories(USER_LAUNCHAGENT_SCRIPT)
         .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))
         .replace("@ACTION@", &action_word.to_string());
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the LaunchAgent action did not complete",

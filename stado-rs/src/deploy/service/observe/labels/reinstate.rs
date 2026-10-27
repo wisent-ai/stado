@@ -19,17 +19,17 @@ uid=$(/usr/bin/id -u)
 case "$(/usr/bin/uname -s)" in
   Darwin)
     launch=/bin/launchctl
-    if [ -f "/Library/LaunchDaemons/$label.plist" ]; then
+    if [ -f "@LAUNCHD_DAEMONS@/$label.plist" ]; then
       domain=system
-      path="/Library/LaunchDaemons/$label.plist"
+      path="@LAUNCHD_DAEMONS@/$label.plist"
       run() { /usr/bin/sudo -n "$launch" "$@"; }
-    elif [ -f "$HOME/Library/LaunchAgents/$label.plist" ]; then
+    elif [ -f "$HOME/@USER_LAUNCHD_AGENTS@/$label.plist" ]; then
       domain="user/$uid"
       if "$launch" print "gui/$uid" >/dev/null 2>&1; then domain="gui/$uid"; fi
-      path="$HOME/Library/LaunchAgents/$label.plist"
+      path="$HOME/@USER_LAUNCHD_AGENTS@/$label.plist"
       run() { "$launch" "$@"; }
     else
-      report absent "no unit file for $label in /Library/LaunchDaemons or $HOME/Library/LaunchAgents"
+      report absent "no unit file for $label in @LAUNCHD_DAEMONS@ or $HOME/@USER_LAUNCHD_AGENTS@"
       exit 0
     fi
     if run print "$domain/$label" >/dev/null 2>&1; then
@@ -165,7 +165,7 @@ pub async fn reinstate_units(
     if units.is_empty() {
         return Vec::new();
     }
-    let mut said = Vec::with_capacity(units.len() + 1);
+    let mut said = Vec::new();
     if let Some(replacement_label) = replacement_label {
         said.push(
             match bootout_label(target, replacement_label, BootoutScope::Any, runner).await {
@@ -211,9 +211,11 @@ pub async fn load_label(
     runner: &Runner,
 ) -> Result<(String, String), DeployError> {
     validate_unit_id(label)?;
-    let script = LOAD_SCRIPT.replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?));
+    // Directories before the label, so a label is never read as a placeholder.
+    let script = with_unit_directories(LOAD_SCRIPT)
+        .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?));
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the unit load did not complete",

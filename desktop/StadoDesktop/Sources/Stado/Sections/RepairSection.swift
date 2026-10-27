@@ -5,9 +5,19 @@ import WisentDesignSystem
 private struct RepairReview: Identifiable {
     let service: RepairService
     let host: String
+    /// One declared step, or `nil` for every declared step in order.
     let step: String?
     let source: Int
-    var id: String { "\(host)|\(service.name)|\(step ?? "all")|\(source)" }
+
+    /// What the review applies, in words.
+    var scope: String {
+        switch step {
+        case .some(let step): return "step \(step)"
+        case .none: return "the declared steps in order"
+        }
+    }
+
+    var id: String { "\(host)|\(service.name)|\(scope)|\(source)" }
 }
 
 struct RepairSection: View {
@@ -51,7 +61,7 @@ struct RepairSection: View {
         .alert(item: $pendingApply) { review in
             Alert(
                 title: Text("Apply \(review.service.name) repair on \(review.host)?"),
-                message: Text("Stado will apply \(review.step.map { "step \($0)" } ?? "the declared steps in order") and read each declared proof afterwards."),
+                message: Text("Stado will apply \(review.scope) and read each declared proof afterwards."),
                 primaryButton: .destructive(Text("Apply")) {
                     Task {
                         await store.run(service: review.service.name, host: review.host, step: review.step,

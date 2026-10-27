@@ -97,9 +97,6 @@ pub async fn consolidate(
                 CmdError::click(format!("{}: {consumer} has a malformed item", target.name))
                     .stating(crate::primitives::failure::FailureCode::InfraDown)
             })?;
-            if matches!(action, "acquire" | "lifecycle") {
-                return Err(CmdError::refused(format!("{}: {consumer} has {action}:{item}; Skarbiec forbids merging this grant with field reads", target.name)));
-            }
             let capability = match entry.get("field").and_then(Value::as_str) {
                 Some(field) => format!("{action}:{item}#{field}"),
                 None => format!("{action}:{item}"),
@@ -128,13 +125,27 @@ pub async fn consolidate(
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
+    // A capability without its item or action would ask Skarbiec about empty
+    // words and read its answer as the bearer's verdict.
+    let named = |key: &str| {
+        first
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                CmdError::refused(format!(
+                    "{}: stado's first capability names no {key}, so its bearer cannot be verified: {first}; no grant was changed",
+                    target.name
+                ))
+            })
+    };
     let mut probe = vec![
         "grant".into(),
         "verify".into(),
         "stado".into(),
-        first["item"].as_str().unwrap_or_default().into(),
+        named("item")?.into(),
         "--action".into(),
-        first["action"].as_str().unwrap_or_default().into(),
+        named("action")?.into(),
         "--token-file".into(),
         token_file.into(),
     ];
@@ -150,10 +161,11 @@ pub async fn consolidate(
     }
     // Keep the shortest source lifetime so consolidation cannot revive or
     // extend a retired consumer's authority: the merged grant lives until
-    // revoked only when every source does, and otherwise ends a second before
-    // the earliest source, the second this call itself may take.
+    // revoked only when every source does, and otherwise ends with the
+    // earliest source, measured from the clock read just before the issue.
+    let issue_time = crate::cli::entry::error::epoch_seconds()?;
     let Some(lifetime) =
-        crate::credential_store::grant::GrantLifetime::left(earliest_expiry, now.saturating_add(1))
+        crate::credential_store::grant::GrantLifetime::left(earliest_expiry, issue_time)
     else {
         return Err(CmdError::refused(format!(
             "{}: a source grant expires before consolidation can finish; no grant was changed",
@@ -180,12 +192,18 @@ pub async fn consolidate(
         audience,
         "--replace-capabilities".into(),
     ]);
-    remote_skarbiec_json(host, &issue).await?;
+    // Which actions may share one grant with field reads is Skarbiec's rule:
+    // its refusal names the capability, and nothing has been changed yet.
+    remote_skarbiec_json(host, &issue).await.map_err(|error| {
+        error.within(format!(
+            "{}: Skarbiec did not issue the merged grant; no grant was changed",
+            target.name
+        ))
+    })?;
     let (_, final_listing) = remote_skarbiec_json(host, &["grant".into(), "list".into()]).await?;
-    let recorded = final_listing
+    let issued = final_listing
         .as_array()
         .and_then(|rows| rows.iter().find(|row| row["consumer"] == "stado"))
-        .and_then(|grant| grant["capabilities"].as_array())
         .ok_or_else(|| {
             CmdError::click(format!(
                 "{}: issued Stado grant was not readable",
@@ -193,17 +211,46 @@ pub async fn consolidate(
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
-    let actual: BTreeSet<String> = recorded
-        .iter()
-        .map(|entry| {
-            let action = entry["action"].as_str().unwrap_or_default();
-            let item = entry["item"].as_str().unwrap_or_default();
-            match entry["field"].as_str() {
-                Some(field) => format!("{action}:{item}#{field}"),
-                None => format!("{action}:{item}"),
-            }
-        })
-        .collect();
+    // Skarbiec counts the lifetime from the moment it issues, after this
+    // call's own round trip, so the issued expiry is read back and compared
+    // with the earliest source's instead of being assumed.
+    if let Some(issued_expiry) = issued["expires_at"].as_u64() {
+        if issued_expiry > earliest_expiry {
+            return Err(CmdError::click(format!(
+                "{}: the issued Stado grant expires at {issued_expiry}, after the earliest source grant at {earliest_expiry}; \
+                 the merged grant outlives a retired consumer's authority and must be re-issued",
+                target.name
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
+        }
+    }
+    let recorded = issued["capabilities"].as_array().ok_or_else(|| {
+        CmdError::click(format!(
+            "{}: issued Stado grant carries no capability array",
+            target.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let unreadable = |what: &str, entry: &Value| {
+        CmdError::click(format!(
+            "{}: an entry of the issued Stado grant names no {what}: {entry}",
+            target.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    };
+    let mut actual: BTreeSet<String> = BTreeSet::new();
+    for entry in recorded.iter() {
+        let action = entry["action"]
+            .as_str()
+            .ok_or_else(|| unreadable("action", entry))?;
+        let item = entry["item"]
+            .as_str()
+            .ok_or_else(|| unreadable("item", entry))?;
+        actual.insert(match entry["field"].as_str() {
+            Some(field) => format!("{action}:{item}#{field}"),
+            None => format!("{action}:{item}"),
+        });
+    }
     if actual != capabilities {
         return Err(CmdError::click(format!("{}: issued Stado grant differs from the requested capabilities: actual={actual:?}, requested={capabilities:?}", target.name)).stating(crate::primitives::failure::FailureCode::InfraDown));
     }

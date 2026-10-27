@@ -90,6 +90,39 @@ pub(super) struct Started {
     pub(super) heartbeat_task: HeartbeatTask,
 }
 
+/// [`start`], tried again every `poll` while the fleet store does not answer.
+///
+/// Binding the store at start reads the fleet's storage layout from the
+/// object API. A store that does not answer is the same condition a tick
+/// skips (`tick_phase!`), not a fault of this agent: ending the agent on it
+/// ended the host's one Stado process with the resolver and every service
+/// forward of the host, and launchd started it again into the same
+/// unanswered store, a restart loop that took every adapter down for as long
+/// as the store stood. Any other error ends the agent visibly.
+pub(super) async fn start_when_store_answers(
+    kind: &str,
+    gpu_type: &str,
+    total_vram_gb: i64,
+    poll: Duration,
+    log_fn: &mut dyn FnMut(&str),
+) -> anyhow::Result<Started> {
+    let mut retry = tokio::time::interval_at(tokio::time::Instant::now() + poll, poll);
+    retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        match start(kind, gpu_type, total_vram_gb, poll, log_fn).await {
+            Ok(started) => return Ok(started),
+            Err(error) if super::phase::store_unavailable(&error) => {
+                log_fn(&format!(
+                    "the agent did not start: the fleet store did not answer ({error:#}); the \
+                     next poll tries again"
+                ));
+                retry.tick().await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// Announce a `kind` agent on `gpu_type` with `total_vram_gb`, set up its
 /// staging, bind the store, and start the janitor and the capacity heartbeat
 /// polling every `poll`.
@@ -100,10 +133,13 @@ pub(super) async fn start(
     poll: Duration,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<Started> {
+    let cpu_cores = match helpers::total_cpu_cores() {
+        Ok(cores) => cores.to_string(),
+        Err(cause) => format!("unread ({cause})"),
+    };
     log_fn(&format!(
         "Agent started. kind={kind} GPU={gpu_type} vram_gb={total_vram_gb} \
-         cpu_cores={} capacity=live-resources",
-        helpers::total_cpu_cores()
+         cpu_cores={cpu_cores} capacity=live-resources"
     ));
     crate::providers::local::disk_staging::setup_agent_staging(log_fn).await;
     let hostname = crate::config::worker_name();
@@ -255,15 +291,9 @@ pub(super) async fn advance_slots(
     // Publication must happen at the heartbeat interval whatever the
     // janitor is doing, so nothing on this line may ever wait for it.
     janitor_reports.set_active_jobs(slots.len() as i64);
-    if let Some(cleanup_report) = janitor_reports.latest() {
-        agent_diag.insert("space_reclaim".into(), cleanup_report);
-    } else {
-        // No pass has completed yet. Say so rather than leaving the key
-        // absent, which reads identically to a wedged janitor.
-        agent_diag.insert(
-            "space_reclaim".into(),
-            serde_json::json!({"outcome": "no_pass_completed_yet"}),
-        );
-    }
+    // The last completed pass, or what is known instead of one: no pass has
+    // completed yet, or a pass panicked; never an absent key, which reads
+    // identically to a wedged janitor.
+    agent_diag.insert("space_reclaim".into(), janitor_reports.latest());
     Ok(vast_active)
 }

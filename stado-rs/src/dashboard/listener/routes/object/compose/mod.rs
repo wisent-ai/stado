@@ -150,9 +150,16 @@ impl Dashboard {
                     )
                 }
             };
+            // A chunk index beyond the part name's range cannot be a staged
+            // part the uploader wrote, so the comparison below refuses it.
+            let part_name = match u32::try_from(index) {
+                Ok(part_index) => crate::queue::upload_part_name(part_index),
+                Err(_beyond_part_range) => index.to_string(),
+            };
             let expected_key = format!(
-                "{}.__stado_upload/{}/{index:08}",
+                "{}{}{}/{part_name}",
                 object.key(),
+                crate::queue::UPLOAD_PART_MARKER,
                 payload.upload_id
             );
             if chunk_object.to_string() != chunk.uri

@@ -91,13 +91,13 @@ pub async fn vault_token_mint(
         arguments.push(String::from("--replace-capabilities"));
     }
     // --store-item creates the item on the owner only when it is absent
-    // (`set-json --if-absent`, one vault generation, so of two concurrent runs
+    // (`set --if-absent`, one vault generation, so of two concurrent runs
     // only one writes) and then registers whatever value the item holds. A
     // failed, repeated or concurrent run therefore never leaves a registered
     // bearer that no item holds, nor overwrites a bearer already registered.
     let mut stored = None;
     if let Some(item) = store_item {
-        // The canonical item envelope Skarbiec's `set-json` accepts, the same
+        // The canonical item envelope Skarbiec's `set` accepts, the same
         // one the release publisher writes for its own bearer.
         let payload = json!({
             "schema": "skarbiec.item.v2",

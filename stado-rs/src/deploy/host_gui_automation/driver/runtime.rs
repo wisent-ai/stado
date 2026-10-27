@@ -15,7 +15,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_runtime(
     require_target(target)?;
     let user = login_user(target, runner).await?;
     let uid = gui_user_id(target, &user, runner).await?;
-    let home = format!("/Users/{user}");
+    let home = host_channel::remote_user_home(target, &user, runner).await?;
     let socket = format!("{home}/Library/Caches/cua-driver/probierz.sock");
     for label in [CUA_DRIVER_RUNTIME_LABEL, LEGACY_CUA_DRIVER_RUNTIME_LABEL] {
         let qualified = format!("gui/{uid}/{label}");
@@ -27,7 +27,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_runtime(
             runner,
         )
         .await?
-        .ok()
+        .succeeded()
         {
             run_as_gui_user(
                 target,
@@ -51,10 +51,11 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_runtime(
         )
         .await?;
     }
+    // `test -S` answers by its exit status: success means the socket exists.
     let socket_ready =
         invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], None, runner)
             .await?
-            .ok();
+            .succeeded();
     items.push((
         "cua-driver-runtime".to_string(),
         if socket_ready {

@@ -55,7 +55,7 @@ pub(super) async fn store_operator_item(
     // a session with a refresh token, tenant and scope is refused by the schema.
     crate::credential_store::write::write_role_item_with(role, "stado-secret", &value, &json!({}))
         .await
-        .map(|_| ())
+        .map(|_written_item| ())
         .map_err(|error| {
             CmdError::click(format!("cannot store Azure operator credential: {error}"))
                 .stating(error.failure_code())

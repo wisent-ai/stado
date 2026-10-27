@@ -18,10 +18,12 @@
 pub mod command;
 mod sections;
 pub mod spill;
+mod writer;
 
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 use std::{
+    collections::BTreeMap,
     fs,
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -36,8 +38,10 @@ const PART_MARK: &str = "-part-";
 /// Parts are counted the way readers count them: the first one is part one,
 /// and each later part takes the number after the last.
 const FIRST_PART: usize = NonZeroUsize::MIN.get();
-/// The name spilled parts of the release being prepared carry before
-/// [`PART_MARK`], e.g. `changelog/unreleased-part-1.md`.
+/// The folder spilled parts of the release being prepared live in, each
+/// named for its number after [`PART_MARK`], e.g.
+/// `changelog/unreleased/part-1.md`: a folder of their own, so a spill never
+/// adds a file to the crowded range folder.
 const SPILLED: &str = "unreleased";
 const RELEASED: &str = "## Released";
 const UNRELEASED: &str = "## Unreleased";
@@ -66,15 +70,20 @@ fn linked_name(line: &str) -> Option<&str> {
 }
 
 /// The number and file name of the spilled part `line` links, as in
-/// `- [Unreleased (part N)](changelog/unreleased-part-N.md)`; `None` for any
-/// other line. A spilled-part name whose number does not read is refused, so
-/// a mistyped link is never taken for an entry and released as text.
+/// `- [Unreleased (part N)](changelog/unreleased/part-N.md)`, or the older
+/// `changelog/unreleased-part-N.md` a spill wrote before parts had their own
+/// folder; `None` for any other line. A spilled-part name whose number does
+/// not read is refused, so a mistyped link is never taken for an entry and
+/// released as text.
 fn spilled_part(line: &str) -> Result<Option<(usize, &str)>> {
     let Some(name) = line.strip_prefix("- [").and_then(linked_name) else {
         return Ok(None);
     };
+    let nested = format!("{SPILLED}/{}", PART_MARK.trim_start_matches('-'));
+    let flat = format!("{SPILLED}{PART_MARK}");
     let Some(number) = name
-        .strip_prefix(&format!("{SPILLED}{PART_MARK}"))
+        .strip_prefix(&nested)
+        .or_else(|| name.strip_prefix(&flat))
         .and_then(|rest| rest.strip_suffix(".md"))
     else {
         return Ok(None);
@@ -83,6 +92,19 @@ fn spilled_part(line: &str) -> Result<Option<(usize, &str)>> {
         format!("{RANGE_DIRECTORY}/{name} is linked under {UNRELEASED} as a spilled part, but `{number}` is not a part number")
     })?;
     Ok(Some((number, name)))
+}
+
+fn record_part<'a>(
+    seen: &mut BTreeMap<usize, &'a str>,
+    number: usize,
+    name: &'a str,
+) -> Result<()> {
+    if let Some(previous) = seen.insert(number, name) {
+        bail!(
+            "unreleased part number {number} is linked more than once: {previous} and {name}"
+        );
+    }
+    Ok(())
 }
 
 /// The entries under `## Unreleased`, spilled-part links included, or `None`
@@ -100,13 +122,13 @@ pub fn unreleased_entries(text: &str) -> Option<String> {
 /// spilled parts the version bump should have moved. `None` when it holds
 /// none, or when the file keeps no range files.
 pub fn submission_refusal(text: &str, commit: &str, version: &str) -> Option<String> {
-    let entries = unreleased_entries(text).filter(|entries| !entries.is_empty())?;
+    let entries = unreleased_entries(text).filter(|entries| sections::has_entries(entries))?;
     let listed = entries
         .lines()
         .filter(|line| line.starts_with("- "))
         .count();
     Some(format!(
-        "{CHANGELOG} at {commit} still holds {listed} Unreleased entries or spilled parts for {version}; run \
+        "{CHANGELOG} at {commit} still holds Unreleased content ({listed} top-level bullet entries or spilled-part links) for {version}; run \
          'stado product changelog --version {version} --line-limit <the repository's file length limit>' \
          in the version-bump commit and submit that commit"
     ))
@@ -133,11 +155,13 @@ fn gathered(directory: &Path, section: &str) -> Result<(String, Vec<PathBuf>)> {
     let marker = format!("\n{UNRELEASED}\n");
     let mut parts: Vec<(usize, PathBuf, String)> = Vec::new();
     let mut direct = Vec::new();
+    let mut seen = BTreeMap::new();
     for line in section.lines() {
         let Some((number, name)) = spilled_part(line)? else {
             direct.push(line);
             continue;
         };
+        record_part(&mut seen, number, name)?;
         let file = directory.join(name);
         let text = fs::read_to_string(&file).with_context(|| {
             format!(
@@ -175,6 +199,7 @@ fn range_body(title: &str, version: &str, entries: &str) -> String {
 pub fn run(root: &Path, version: &str, line_limit: usize) -> Result<i32> {
     crate::common::slug(&version.replace('.', "-"))
         .with_context(|| format!("--version {version} is not a release version"))?;
+    let _writer = writer::take(root)?;
     let path = root.join(CHANGELOG);
     let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let Some(section) = unreleased_entries(&text) else {
@@ -190,7 +215,12 @@ pub fn run(root: &Path, version: &str, line_limit: usize) -> Result<i32> {
         .filter(|line| line.starts_with("- "))
         .count();
     if entries.is_empty() {
-        crate::common::emit(&json!({"changelog": path, "moved": moved, "version": version}))?;
+        if !spilled.is_empty() {
+            writer::finish(&path, &text, writer::HistoryChange::Preserve, &spilled)?;
+        }
+        crate::common::emit(&json!({
+            "changelog": path, "moved": moved, "version": version, "gathered_parts": spilled
+        }))?;
         return Ok(libc::EXIT_SUCCESS);
     }
     let section = format!("## {version}\n\n{entries}\n");
@@ -249,16 +279,11 @@ pub fn run(root: &Path, version: &str, line_limit: usize) -> Result<i32> {
             }
         }
     };
-    let unreleased_at = text
-        .find(&format!("\n{UNRELEASED}\n"))
-        .context("the Unreleased section vanished while it was read")?;
-    let head = text[..unreleased_at].replace(&link_before, &link_after);
-    let rewritten = format!("{head}\n{UNRELEASED}\n");
-    crate::common::atomic_write(&path, rewritten.as_bytes())?;
-    for file in &spilled {
-        fs::remove_file(file)
-            .with_context(|| format!("removing the gathered spilled part {}", file.display()))?;
-    }
+    let change = writer::HistoryChange::Replace {
+        before: &link_before,
+        after: &link_after,
+    };
+    writer::finish(&path, &text, change, &spilled)?;
     crate::common::emit(&json!({
         "changelog": path,
         "moved": moved,

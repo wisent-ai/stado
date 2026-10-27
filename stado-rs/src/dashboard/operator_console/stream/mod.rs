@@ -80,10 +80,11 @@ pub(crate) async fn upgrade(request: &Request) -> Response {
             )
         }
         Err(error) => {
+            tracing::warn!(cause = %error.cause(), "workload attach permission could not be decided");
             return send_json(
                 STATUS_UNAVAILABLE,
                 &json!({"ok": false, "error": error.to_string()}),
-            )
+            );
         }
     }
     if request.version != "HTTP/1.1" || !request.body.is_empty() {
@@ -122,7 +123,7 @@ pub(crate) async fn upgrade(request: &Request) -> Response {
 
 async fn setup(socket: &mut Socket, limits: Limits) -> Result<Option<RunRequest>, String> {
     while let Some(message) = socket.next().await {
-        match message.map_err(|error| error.to_string())? {
+        match message.map_err(|error| format!("the attachment request cannot be read from the socket: {error}"))? {
             Message::Text(text) => {
                 let request: AttachmentRequest = serde_json::from_str(&text)
                     .map_err(|error| format!("invalid attachment request: {error}"))?;
@@ -130,7 +131,10 @@ async fn setup(socket: &mut Socket, limits: Limits) -> Result<Option<RunRequest>
             }
             Message::Close(_) => return Ok(None),
             Message::Ping(_) | Message::Pong(_) => {
-                socket.flush().await.map_err(|error| error.to_string())?
+                socket
+                    .flush()
+                    .await
+                    .map_err(|error| format!("the answer to a ping cannot be sent: {error}"))?
             }
             _ => return Err("the first workload frame must be a JSON attachment request".into()),
         }
@@ -138,12 +142,18 @@ async fn setup(socket: &mut Socket, limits: Limits) -> Result<Option<RunRequest>
     Ok(None)
 }
 
+/// Tell the operator's browser why its attachment ended. A browser that is
+/// already gone cannot be told, so that is said on stderr with the error it
+/// would have read, instead of being dropped.
 pub(super) async fn error(socket: &mut Socket, detail: &str) {
-    let _ = socket
+    let sent = socket
         .send(Message::text(
             json!({"type": "error", "message": detail}).to_string(),
         ))
         .await;
+    if let Err(cause) = sent {
+        eprintln!("stado operator console: the attachment error ({detail}) could not be sent: {cause}");
+    }
 }
 
 pub(crate) async fn serve(
@@ -165,6 +175,8 @@ pub(crate) async fn serve(
         Ok(None) => return Ok(()),
         Err(detail) => error(&mut socket, &detail).await,
     }
-    let _ = socket.close(None).await;
+    if let Err(cause) = socket.close(None).await {
+        eprintln!("stado operator console: the attachment socket did not close cleanly: {cause}");
+    }
     Ok(())
 }

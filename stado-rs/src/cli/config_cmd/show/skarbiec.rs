@@ -28,6 +28,9 @@ pub(super) fn insert(resolved: &mut Map<String, Value>) {
         "agent_skarbiec_url".into(),
         Value::from(config::agent_skarbiec_url()),
     );
+    if let Some(why) = config::agent_skarbiec_url_absent() {
+        resolved.insert("agent_skarbiec_url_absent".into(), Value::from(why));
+    }
     resolved.insert(
         "agent_skarbiec_consumer".into(),
         Value::from(config::agent_skarbiec_consumer()),

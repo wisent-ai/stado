@@ -59,8 +59,55 @@ impl Drop for OwnedProcessGroup {
     }
 }
 
+/// Whether a command's output only comes back in its [`CommandOutput`], or
+/// is also passed to this process's own stdout and stderr as it arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Relay {
+    /// Captured only: the caller prints what it chooses after the exit.
+    Captured,
+    /// Captured and written through as each chunk arrives, so a long remote
+    /// command is seen working instead of standing silent until it ends.
+    Passed,
+}
+
+/// Read `reader` to its end into `captured`, writing each chunk through to
+/// `sink` as it arrives when there is one. The chunk is whatever the pipe
+/// holds when read; nothing waits for a line or a size to fill.
+async fn drain<R, W>(reader: R, captured: &mut Vec<u8>, mut sink: Option<W>) -> std::io::Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let mut reader = tokio::io::BufReader::new(reader);
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        captured.extend_from_slice(chunk);
+        if let Some(sink) = sink.as_mut() {
+            sink.write_all(chunk).await?;
+            sink.flush().await?;
+        }
+        let read = chunk.len();
+        reader.consume(read);
+    }
+}
+
 pub(super) async fn run_process(spec: CommandSpec) -> Result<CommandOutput, String> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    run_process_with(spec, Relay::Captured).await
+}
+
+/// [`run_process`] whose output is also written through to this process's
+/// stdout and stderr as it arrives (`stado host exec`).
+pub(super) async fn run_process_relayed(spec: CommandSpec) -> Result<CommandOutput, String> {
+    run_process_with(spec, Relay::Passed).await
+}
+
+async fn run_process_with(spec: CommandSpec, relay: Relay) -> Result<CommandOutput, String> {
+    use tokio::io::AsyncWriteExt;
 
     let (program, args) = spec.argv.split_first().ok_or("empty command argv")?;
     let what = spec.argv.join(" ");
@@ -90,32 +137,35 @@ pub(super) async fn run_process(spec: CommandSpec) -> Result<CommandOutput, Stri
     let mut stderr = child.stderr.take().ok_or("child stderr was not piped")?;
 
     // Feed stdin and drain both output pipes concurrently, then reap the direct
-    // child. The command runs until it exits; its exit code and output are the
-    // answer, and nothing ends it early.
-    let communication = async {
-        let mut stdout_bytes = Vec::new();
-        let mut stderr_bytes = Vec::new();
-        let write_stdin = async move {
-            if let (Some(mut pipe), Some(payload)) = (stdin_pipe, stdin_payload) {
-                if let Err(error) = pipe.write_all(payload.as_bytes()).await {
-                    if error.kind() != std::io::ErrorKind::BrokenPipe {
-                        return Err(error);
-                    }
-                }
-            }
-            Ok(())
-        };
-        let read_stdout = stdout.read_to_end(&mut stdout_bytes);
-        let read_stderr = stderr.read_to_end(&mut stderr_bytes);
-        tokio::try_join!(write_stdin, read_stdout, read_stderr)?;
-        let status = child.wait().await?;
-        Ok::<_, std::io::Error>((status, stdout_bytes, stderr_bytes))
-    };
+    // child, all inside the one announced wait. The command runs until it
+    // exits; its exit code and output are the answer, and nothing ends it early.
     let completed = crate::wait::until(
         crate::wait::Kind::Process,
         &what,
         "the caller's directory",
-        communication,
+        async {
+            let mut stdout_bytes = Vec::new();
+            let mut stderr_bytes = Vec::new();
+            let write_stdin = async move {
+                if let (Some(mut pipe), Some(payload)) = (stdin_pipe, stdin_payload) {
+                    if let Err(error) = pipe.write_all(payload.as_bytes()).await {
+                        if error.kind() != std::io::ErrorKind::BrokenPipe {
+                            return Err(error);
+                        }
+                    }
+                }
+                Ok(())
+            };
+            let (stdout_sink, stderr_sink) = match relay {
+                Relay::Captured => (None, None),
+                Relay::Passed => (Some(tokio::io::stdout()), Some(tokio::io::stderr())),
+            };
+            let read_stdout = drain(&mut stdout, &mut stdout_bytes, stdout_sink);
+            let read_stderr = drain(&mut stderr, &mut stderr_bytes, stderr_sink);
+            tokio::try_join!(write_stdin, read_stdout, read_stderr)?;
+            let status = child.wait().await?;
+            Ok::<_, std::io::Error>((status, stdout_bytes, stderr_bytes))
+        },
     )
     .await
     .map_err(|error| error.to_string())?;

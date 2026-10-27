@@ -38,7 +38,7 @@ pub(crate) async fn run_remote_checked(
 pub(crate) fn report_from(output: CommandOutput) -> RemoteReport {
     let mut report = parse_markers(&output.stdout);
     report.exit_code = output.code;
-    if report.status.is_empty() && !output.ok() {
+    if report.status.is_empty() && !output.succeeded() {
         // ssh itself failed (unreachable host, refused key), so there are
         // no markers to read: surface the transport's own last word, the
         // way every other command on this channel does.

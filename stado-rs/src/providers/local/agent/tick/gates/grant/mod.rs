@@ -27,7 +27,6 @@ mod vault;
 
 pub(crate) use declared::{keep_declared, sentences as declared_sentences};
 
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -136,11 +135,18 @@ async fn renew_own(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOutcome {
         );
         return RenewOutcome::Failed;
     }
-    if !Path::new(token_file).is_file() {
-        log_fn(&format!(
-            "agent grant: the token file {token_file} is not a regular file on this host"
-        ));
-        return RenewOutcome::Failed;
+    match std::fs::metadata(token_file) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_not_file) => {
+            log_fn(&format!(
+                "agent grant: the token file {token_file} is not a regular file on this host"
+            ));
+            return RenewOutcome::Failed;
+        }
+        Err(error) => {
+            log_fn(&format!("agent grant: the token file {token_file} cannot be examined: {error}"));
+            return RenewOutcome::Failed;
+        }
     }
     let at = match now() {
         Ok(at) => at,
@@ -208,10 +214,10 @@ async fn renew_own(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOutcome {
     };
     let capabilities = if issued.is_empty() {
         match launcher_json(&launcher, &vault, &["list"])
-            .map_err(|error| error.to_string())
+            .map_err(|error| format!("the vault's item list cannot be read: {error}"))
             .and_then(|listing| {
                 serde_json::from_value::<Vec<crate::skarbiec::ItemInfo>>(listing)
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| format!("the vault's item list is not a list of items: {error}"))
             })
             .and_then(|items| {
                 crate::skarbiec::roles::read_capabilities(

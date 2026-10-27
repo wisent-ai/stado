@@ -50,20 +50,24 @@ pub fn unreachable_product_environments(
         else {
             continue;
         };
-        // Use the same home expansion as the delivery path that owns the values.
-        let home = policy
-            .targets
-            .get(&target.name)
-            .map(|policy_target| policy_target.home.clone())
-            .unwrap_or_else(|| crate::deploy::service_catalog::home_for(target));
+        // The home the delivery path expands `{home}` against: the policy
+        // target's declared home when the policy names this host, else this
+        // machine's own when the host is the one running this pass. Any other
+        // host's home is not read here, so its values stay templates.
+        let home: Option<String> = match policy.targets.get(&target.name) {
+            Some(policy_target) => Some(policy_target.home.clone()),
+            None if readable_here => {
+                Some(crate::config_file::home_dir().to_string_lossy().into_owned())
+            }
+            None => None,
+        };
         let declared: Vec<(String, String)> = policy
             .environment
             .iter()
             .map(|(name, value)| {
-                let value = if home.is_empty() {
-                    value.clone()
-                } else {
-                    value.replace("{home}", &home)
+                let value = match home.as_deref().filter(|home| !home.is_empty()) {
+                    Some(home) => value.replace("{home}", home),
+                    None => value.clone(),
                 };
                 (name.clone(), value)
             })
@@ -90,9 +94,12 @@ pub fn unreachable_product_environments(
             }
         };
         if !policy.targets.contains_key(&target.name) {
-            let pinned_in_service = declared
-                .iter()
-                .all(|(name, value)| service.env.get(name) == Some(value));
+            let pinned_in_service = declared.iter().all(|(name, value)| {
+                service
+                    .env
+                    .get(name)
+                    .is_some_and(|pinned| instance_of(value, pinned))
+            });
             if pinned_in_service {
                 let observed = reading();
                 let agrees = observed.file().is_some_and(|unit| {
@@ -121,4 +128,21 @@ pub fn unreachable_product_environments(
         }
     }
     rows
+}
+
+/// Whether `pinned` is `template` with every `{home}` replaced by one and the
+/// same home: the comparison for a host whose home this pass does not read.
+/// A template without the placeholder is compared as it is.
+fn instance_of(template: &str, pinned: &str) -> bool {
+    let Some((prefix, _)) = template.split_once("{home}") else {
+        return template == pinned;
+    };
+    let Some(after) = pinned.strip_prefix(prefix) else {
+        return false;
+    };
+    after
+        .char_indices()
+        .map(|(at, _)| at)
+        .chain(std::iter::once(after.len()))
+        .any(|end| template.replace("{home}", &after[..end]) == pinned)
 }

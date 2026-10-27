@@ -142,7 +142,9 @@ pub async fn privacy(target: &str, json: bool, open: bool) -> Result<(), CmdErro
     if let Some(sentence) = notice {
         eprintln!("{sentence}");
     }
-    let grants = crate::cli::resolved_host(&registry, target)?.privacy_grants();
+    let grants = crate::cli::resolved_host(&registry, target)?
+        .privacy_grants()
+        .map_err(|error| CmdError::declaration(error.to_string()))?;
     let store = crate::cli::host::checks::health::beacon_store().await?;
     let report = crate::monitor::host_health::load_host_health(&store, target)
         .await

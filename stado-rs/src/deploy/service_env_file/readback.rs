@@ -128,7 +128,7 @@ pub async fn read_env_file(
 ) -> Result<EnvFileReport, DeployError> {
     let script = remote_env_file_script(request);
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: {}",
             target.name,

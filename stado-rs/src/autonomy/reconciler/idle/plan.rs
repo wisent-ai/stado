@@ -25,7 +25,12 @@ pub fn build_plan(
     configuration_fingerprint: &str,
 ) -> Result<Plan, StorageError> {
     let created = Utc::now();
-    let expires = created + chrono::Duration::seconds(policy.limits.decision_ttl_seconds as i64);
+    let expires = crate::autonomy::time::expires_at(
+        created,
+        policy.limits.decision_ttl_seconds,
+        "limits.decision_ttl_seconds",
+    )
+    .map_err(StorageError::Other)?;
     let operation_id = format!("autonomy-{}", uuid::Uuid::new_v4());
     let mut findings = Vec::new();
     let mut actions = Vec::new();
@@ -40,8 +45,30 @@ pub fn build_plan(
             projects.insert(source.account.clone());
         }
         for resource in &source.resources {
-            let Some(age_seconds) = resource_age_seconds(resource, created) else {
-                continue;
+            // A resource whose age cannot be read cannot be judged idle; the
+            // plan carries that as an unsupported finding, so the gap shows
+            // beside the judged resources instead of vanishing from the plan.
+            let age_seconds = match resource_age_seconds(resource, created) {
+                Ok(age_seconds) => age_seconds,
+                Err(unread) => {
+                    findings.push(Finding {
+                        id: format!("finding-{}", uuid::Uuid::new_v4()),
+                        severity: "low".to_string(),
+                        confidence: "high".to_string(),
+                        recommendation: "repair the resource's recorded created_at before it can \
+                                         be judged idle"
+                            .to_string(),
+                        reason: unread,
+                        evidence: json!({
+                            "resource_id": resource.resource_id,
+                            "created_at": resource.created_at,
+                            "source_revision": resource.source_revision,
+                        }),
+                        disposition: FindingDisposition::Unsupported,
+                        resource: locator(resource),
+                    });
+                    continue;
+                }
             };
             let Some(classification) = classify(resource, age_seconds, policy) else {
                 continue;
@@ -78,8 +105,7 @@ pub fn build_plan(
                 },
                 resource: locator.clone(),
             };
-            let can_act = classification.action.is_some()
-                && policy.mode != AutonomyMode::Report
+            let may_act = policy.mode != AutonomyMode::Report
                 && matches!(resource.ownership, Ownership::Owned | Ownership::Adopted)
                 && authorization.allowed
                 && actions.len() < policy.limits.max_actions_per_tick
@@ -87,13 +113,10 @@ pub fn build_plan(
                     .get(&resource.provider)
                     .is_none_or(|done| done.len() < policy.limits.max_actions_per_provider);
             findings.push(finding);
-            if !can_act {
+            let Some(kind) = classification.action.filter(|_kind| may_act) else {
                 continue;
-            }
+            };
             let action_id = format!("action-{}", uuid::Uuid::new_v4());
-            let kind = classification
-                .action
-                .expect("action-bearing classification checked above");
             let (reversibility, postconditions, rollback) = match kind {
                 ActionKind::StopInstance => (
                     Reversibility::Reversible,

@@ -74,10 +74,11 @@ pub(super) async fn prune_stale_markers(
     // Oldest index positions first, so the pruning walks the same order the
     // claim walk pays for and the head of the index clears first.
     stale.sort();
-    let mut removed = 0usize;
+    // Every stale marker is deleted or the pass fails, so the count removed
+    // is the list's length.
+    let removed = stale.len();
     for path in stale {
         store.delete_blob(path).await?;
-        removed += 1;
     }
     Ok(removed)
 }

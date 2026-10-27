@@ -19,7 +19,7 @@ impl JobStorage {
         // A transition still pending on this job is finished before the
         // document is rewritten, so the rewrite never lands under a fence
         // another writer is about to retire — and an operator's own
-        // `job set-priority` becomes a way to finish a transition the agent
+        // `job prioritize` becomes a way to finish a transition the agent
         // cannot. A lost swap means another writer changed the document:
         // read it again and decide on what it now holds.
         self.recover_job_transition(job_id).await?;
@@ -78,7 +78,7 @@ impl JobStorage {
         // new key is written BEFORE the superseded one is dropped. A priority
         // change re-keys the marker, and clean-then-write leaves the job with
         // NO marker if anything interrupts between the two steps — a
-        // transient 5xx, or an operator's Ctrl-C on `job priority` — which
+        // transient 5xx, or an operator's Ctrl-C on `job prioritize` — which
         // strands a queued job outside the index permanently. Write-then-
         // clean fails into a harmless duplicate under the old key instead.
         // `keep` stops the cleanup scan, which matches on job_id, from

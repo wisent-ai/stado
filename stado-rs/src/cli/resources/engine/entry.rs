@@ -124,7 +124,10 @@ pub async fn verify(args: &VerifyArgs) -> Result<(), CmdError> {
     let result = verify_locked(&journal, &plan, &state, &owner, args).await;
     let release = journal.release(&plan.operation_id, &owner).await;
     match (result, release) {
-        (Err(error), _) => Err(error),
+        (Err(error), Err(release)) => Err(error.also(format!(
+            "releasing resource operation {} failed: {release}", plan.operation_id
+        ))),
+        (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(())) => Ok(()),
     }
@@ -148,7 +151,10 @@ pub async fn restore(args: &RestoreArgs) -> Result<(), CmdError> {
     let result = restore_locked(&journal, &plan, &state, &owner, args.json).await;
     let release = journal.release(&plan.operation_id, &owner).await;
     match (result, release) {
-        (Err(error), _) => Err(error),
+        (Err(error), Err(release)) => Err(error.also(format!(
+            "releasing resource operation {} failed: {release}", plan.operation_id
+        ))),
+        (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(())) => Ok(()),
     }
@@ -174,7 +180,10 @@ async fn execute(
     .await;
     let release = journal.release(&plan.operation_id, &owner).await;
     match (result, release) {
-        (Err(error), _) => Err(error),
+        (Err(error), Err(release)) => Err(error.also(format!(
+            "releasing resource operation {} failed: {release}", plan.operation_id
+        ))),
+        (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(())) => Ok(()),
     }

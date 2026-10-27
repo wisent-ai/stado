@@ -28,7 +28,7 @@ pub(crate) enum CoordinatorMode {
 pub(crate) struct ResidentCoordinator {
     store: JobStorage,
     secrets: BTreeMap<String, String>,
-    sleep_seconds: u64,
+    period: Duration,
     with_billing: bool,
     log: fn(&str),
 }
@@ -41,14 +41,21 @@ impl ResidentCoordinator {
     ) -> Result<Self, ControlPlaneError> {
         // The interval the operator declared is the tick period, used as
         // given; only a period that cannot be one is refused.
-        let interval = u64::try_from(interval)
-            .ok()
-            .filter(|seconds| *seconds > 0)
-            .ok_or_else(|| {
-                ControlPlaneError::Config(format!(
-                    "control-plane interval {interval} is not a positive number of seconds"
-                ))
-            })?;
+        let period = match u64::try_from(interval) {
+            Ok(seconds) => std::num::NonZeroU64::new(seconds),
+            Err(negative) => {
+                return Err(ControlPlaneError::Config(format!(
+                    "control-plane interval {interval} is not a positive number of seconds: \
+                     {negative}"
+                )))
+            }
+        };
+        let Some(period) = period else {
+            return Err(ControlPlaneError::Config(format!(
+                "control-plane interval {interval} is not a positive number of seconds"
+            )));
+        };
+        let period = Duration::from_secs(period.get());
         let (secrets, with_billing, log): (_, _, fn(&str)) = match mode {
             CoordinatorMode::Local => {
                 if crate::capabilities::storage_adapter(store.backend_name())
@@ -68,7 +75,7 @@ impl ResidentCoordinator {
         Ok(Self {
             store,
             secrets,
-            sleep_seconds: interval,
+            period,
             with_billing,
             log,
         })
@@ -78,7 +85,7 @@ impl ResidentCoordinator {
         coordinator_loop(
             self.store,
             self.secrets,
-            self.sleep_seconds,
+            self.period,
             self.with_billing,
             self.log,
         )
@@ -94,18 +101,23 @@ fn cloud_log(msg: &str) {
     eprintln!("[control-plane cloud] {msg}");
 }
 
-/// The coordinator tick: schedule, log, replicate the configured backup,
-/// then wait out the declared period. Failures are logged and the loop
-/// continues, so the API the same process serves stays available for
-/// diagnosis. Providers are re-resolved every iteration.
+/// The coordinator tick: schedule, log, replicate the configured backup, once
+/// per declared period. A tick that outlasts the period starts the next one at
+/// once and skips the ticks it missed, instead of waiting the whole period
+/// after every tick so each slow tick pushed every later one back. Failures
+/// are logged and the loop continues, so the API the same process serves
+/// stays available for diagnosis. Providers are re-resolved every iteration.
 async fn coordinator_loop(
     store: JobStorage,
     secrets: BTreeMap<String, String>,
-    sleep_seconds: u64,
+    period: Duration,
     with_billing: bool,
     log: fn(&str),
 ) {
+    let mut schedule = tokio::time::interval(period);
+    schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        schedule.tick().await;
         let providers = resolve_providers();
         match run_tick(&store, &secrets, &providers, with_billing, &|msg: &str| {
             log(msg)
@@ -124,6 +136,5 @@ async fn coordinator_loop(
             Ok(None) => {}
             Err(exc) => log(&format!("disaster-recovery replication failed: {exc}")),
         }
-        tokio::time::sleep(Duration::from_secs(sleep_seconds)).await;
     }
 }

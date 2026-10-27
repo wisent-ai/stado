@@ -20,38 +20,23 @@ pub(crate) mod server;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::process::Command;
 
 use crate::held_deployment::{Deployment, CONSUMER, TARGET};
 
 const ELSEWHERE: &str = "elsewhere-api";
 const ELSEWHERE_HOST: &str = "other-host";
-const ANSWER: &str = "carried by a new session";
 
-/// A service that answers every request with `ANSWER` and closes, at an
-/// address this machine handed out.
-fn answering_service(deployment: &mut Deployment) -> SocketAddr {
-    let listener = TcpListener::bind(deployment.free_bind()).unwrap();
-    let address = listener.local_addr().unwrap();
-    std::thread::spawn(move || {
-        for accepted in listener.incoming() {
-            let Ok(mut stream) = accepted else { return };
-            let request = BufReader::new(stream.try_clone().unwrap());
-            for line in request.lines() {
-                match line {
-                    Ok(line) if !line.is_empty() => continue,
-                    _ => break,
-                }
-            }
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{ANSWER}",
-                ANSWER.len()
-            );
-        }
-    });
-    address
+/// The status line `address` answers `request` with, read straight from it
+/// rather than through the resolver.
+fn direct_status(address: &str, request: &[u8]) -> String {
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream.write_all(request).unwrap();
+    stream.flush().unwrap();
+    let mut status = String::new();
+    BufReader::new(stream).read_line(&mut status).unwrap();
+    status
 }
 
 #[test]
@@ -71,7 +56,10 @@ fn a_route_held_on_the_resolvers_session_is_carried_by_a_new_session() {
     let host_key = server::key_pair(&deployment.root.join("ssh-host-key"));
     fs::create_dir_all(deployment.root.join(".stado")).unwrap();
     server::key_pair(&deployment.root.join(".stado").join("resolver-ssh-key"));
-    let service = answering_service(&mut deployment);
+    // The service behind the route: a real object API on a real Skarbiec,
+    // held for the whole journey.
+    let service_store = crate::store::Store::serve(deployment.root.join("carried-service.token"));
+    let service: SocketAddr = service_store.address.parse().unwrap();
     let ssh_bind = deployment.free_bind();
     server::serve(
         &ssh_bind,
@@ -129,19 +117,22 @@ fn a_route_held_on_the_resolvers_session_is_carried_by_a_new_session() {
     );
     deployment.report["renewal"] = json!(said);
 
-    // A later client on the same adapter rides the new session and is answered.
+    // A later client on the same adapter rides the new session and is
+    // answered by the service itself: the status line it gets is the one the
+    // object API answers the same request with when asked directly.
+    let request = b"GET /carried HTTP/1.1\r\nHost: elsewhere-api\r\nConnection: close\r\n\r\n";
     let mut carried = TcpStream::connect(&adapter_bind).unwrap();
-    carried
-        .write_all(b"GET /carried HTTP/1.1\r\nHost: elsewhere-api\r\n\r\n")
-        .unwrap();
+    carried.write_all(request).unwrap();
     carried.flush().unwrap();
     let mut answer = String::new();
     carried.read_to_string(&mut answer).unwrap();
+    let direct = direct_status(&service_store.address, request);
     assert!(
-        answer.starts_with("HTTP/1.1 200") && answer.ends_with(ANSWER),
-        "the later client is answered over the new session: {answer}"
+        answer.lines().next() == Some(direct.trim_end()),
+        "the later client is answered over the new session as the service answers directly ({direct:?}): {answer}"
     );
     deployment.report["carried_answer"] = json!(answer);
+    deployment.report["direct_status"] = json!(direct);
 
     // Nothing answers the held request on the standing session: it is refused
     // with the reason instead of holding its client without end.

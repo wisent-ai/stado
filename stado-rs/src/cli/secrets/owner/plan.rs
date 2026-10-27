@@ -11,7 +11,7 @@ use crate::deploy::Runner;
 use crate::placement::{PlacementProfile, StateRoot};
 
 /// The logical service whose vault moves.
-pub(super) const SERVICE: &str = "skarbiec";
+pub(crate) const SERVICE: &str = "skarbiec";
 
 /// One recipient as the vault registers it.
 pub(super) struct Recipient {
@@ -36,18 +36,25 @@ pub(super) struct Plan {
 }
 
 impl Plan {
+    /// Every fact the move depends on, from one registry read: the profile,
+    /// the directory's owner host, both hosts' entries and their Skarbiec
+    /// releases. Each further read of the registry is a round trip to its
+    /// authority, so it is read here and handed down.
     pub(super) async fn read(to: &str, owner_uid: &str, runner: &Runner) -> Result<Self, CmdError> {
         let (document, _) = crate::cli::registry::fetch_versioned_document().await?;
+        let registry =
+            crate::targets::load_registry_from_value(&document).map_err(CmdError::from)?;
         let profile = vault_profile(&document)?;
-        let source_name = crate::cli::directory::active_host(SERVICE)
-            .await?
+        let source_name = crate::cli::directory::active_host_in(&document, SERVICE)?
             .ok_or_else(|| {
                 CmdError::declaration(format!(
                     "the service directory names no active host for {SERVICE}, so no host owns a vault to move"
                 ))
             })?;
-        let destination_name = crate::cli::canonical_host(to).await?.name;
-        if destination_name == source_name {
+        let source_target = crate::cli::resolved_host(&registry, &source_name)?.clone();
+        let destination_target = crate::cli::resolved_host(&registry, to)?.clone();
+        let destination_name = destination_target.name.clone();
+        if destination_name == source_target.name {
             return Err(CmdError::refused(format!(
                 "{destination_name} already holds the fleet vault"
             )));
@@ -58,19 +65,15 @@ impl Plan {
                 profile.name, profile.name
             )));
         }
-        let source = VaultHost::owner(&source_name, runner).await?;
+        let source = VaultHost::owner(source_target, &document, runner).await?;
         let relative = vault_state(&profile, &source)?;
-        let destination = VaultHost::destination(&destination_name, &relative, runner).await?;
+        let destination =
+            VaultHost::destination(destination_target, &relative, &document, runner).await?;
         let recipients = source
-            .skarbiec(&["users"], None, runner)
+            .skarbiec(&["recipient", "list"], None, runner)
             .await
             .map_err(CmdError::refused)?;
         let previous = owner_of(&recipients)?;
-        if previous.uid == owner_uid {
-            return Err(CmdError::refused(format!(
-                "{owner_uid} already owns the vault on {source_name}"
-            )));
-        }
         let registered = recipient(&recipients, owner_uid)?;
         let missing_secret = destination
             .gpg(&["--list-secret-keys", "--", owner_uid], None, runner)
@@ -94,6 +97,16 @@ impl Plan {
         })
     }
 
+    /// What makes a missing owner key on the destination: the applied move
+    /// runs Skarbiec's `owner key mint` there, which makes exactly that key
+    /// with the parameters `init` uses and nothing else.
+    pub(super) fn mint_hint(&self) -> String {
+        format!(
+            "--apply makes it on {} with `skarbiec owner key mint {}`",
+            self.destination.target.name, self.owner_uid
+        )
+    }
+
     pub(super) fn report(&self) -> Value {
         json!({
             "profile": self.profile.name,
@@ -103,13 +116,54 @@ impl Plan {
             "vault": self.relative,
             "previous_owner": self.previous.uid,
             "owner_uid": self.owner_uid,
+            "rotation_required": self.previous.uid != self.owner_uid,
             "owner_registered": self.registered.is_some(),
             "destination_secret_key": match &self.missing_secret {
                 None => Value::from("present"),
-                Some(cause) => Value::from(format!("absent: {cause}")),
+                Some(cause) => Value::from(format!("absent: {cause}; {}", self.mint_hint())),
             },
             "live_items": self.live.len(),
         })
+    }
+
+    /// Check the exact files placement will require before changing the owner.
+    /// The placement transaction checks them again to catch intervening changes.
+    pub(super) async fn check_destination(&self, runner: &Runner) -> Result<(), CmdError> {
+        let host = &self.destination.target;
+        let declared = self.profile.hosts.get(&host.name).ok_or_else(|| {
+            CmdError::declaration(format!(
+                "{} has no placement host {}",
+                self.profile.name, host.name
+            ))
+        })?;
+        for service in &self.profile.services {
+            let unit = declared.units.get(service).ok_or_else(|| {
+                CmdError::declaration(format!(
+                    "{} declares no destination unit for {service}",
+                    self.profile.name
+                ))
+            })?;
+            let crate::placement::PlacementLifecycle::Managed(managed) = &unit.lifecycle else {
+                return Err(CmdError::refused(format!(
+                    "{}: {service} is release-controlled, not a managed unit this vault move can relocate",
+                    host.name
+                )));
+            };
+            let exists = crate::deploy::host_channel::remote_test(
+                host,
+                &format!("-f {}", crate::deploy::shlex_quote(&managed.path)),
+                runner,
+            )
+            .await
+            .map_err(CmdError::from)?;
+            if !exists {
+                return Err(CmdError::missing(format!(
+                    "{}: destination unit file is missing: {}; the vault owner was not changed; prepare it with stado placement standby {} --host {} --reason REASON",
+                    host.name, managed.path, self.profile.name, host.name
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -168,7 +222,9 @@ fn vault_state(profile: &PlacementProfile, source: &VaultHost) -> Result<String,
 /// The recipient the vault registers as its owner.
 fn owner_of(recipients: &Value) -> Result<Recipient, CmdError> {
     let registered = recipients.as_object().ok_or_else(|| {
-        CmdError::declaration(format!("skarbiec users answered no map: {recipients}"))
+        CmdError::declaration(format!(
+            "skarbiec recipient list answered no map: {recipients}"
+        ))
     })?;
     let mut owners: Vec<&String> = registered
         .iter()

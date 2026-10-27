@@ -15,7 +15,9 @@ pub mod azure;
 pub mod r#box;
 pub mod gcp;
 pub mod gpu_cloud;
+pub mod host_credential;
 pub mod local;
+pub mod peer;
 pub mod vast;
 
 use std::collections::BTreeMap;
@@ -132,6 +134,18 @@ pub trait Provider: Send + Sync {
             preemptible,
         )
         .await
+    }
+
+    /// One per-tick pass over this provider's Stado-owned workload-agent
+    /// instances whose grant is not yet delivered: put the protected
+    /// agent-grant extension on each instance that has finished provisioning,
+    /// remove the extension once it has succeeded and tag the instance
+    /// delivered, and delete an instance whose extension failed. Only a
+    /// provider with a protected delivery channel creates such instances
+    /// (Azure, through [`Provider::create_agent_instance`]); every other
+    /// provider has none pending, so the default does nothing.
+    async fn deliver_pending_agent_grants(&self, _agent_grant: &str) -> Result<(), ProviderError> {
+        Ok(())
     }
 
     /// Delete instance by ref. NotFound is an idempotent success.

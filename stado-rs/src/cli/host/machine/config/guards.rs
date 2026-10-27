@@ -4,6 +4,14 @@ use crate::cli::CmdError;
 
 use crate::cli::host::secrets::vault::item::read_vault_phase;
 
+/// The Skarbiec item a verifier-map declaration names: `None` when it names
+/// none, and the parse error when the declaration is not JSON at all.
+fn declared_item(value: &str) -> Result<Option<String>, String> {
+    let declared: Value = serde_json::from_str(value)
+        .map_err(|error| format!("the declaration is not JSON: {error}"))?;
+    Ok(declared.get("item").and_then(Value::as_str).map(str::to_string))
+}
+
 /// Refuse a publisher declaration whose Skarbiec item the host does not hold.
 ///
 /// `release_api.publishers.<product>` names an item the host's release verifier
@@ -36,20 +44,18 @@ pub(super) async fn refuse_unminted_publisher(
     if product.is_empty() || product.contains('.') {
         return Ok(());
     }
-    let Some(item) = serde_json::from_str::<Value>(value)
-        .ok()
-        .and_then(|declared| {
-            declared
-                .get("item")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
+    // A publisher declaration the verifier cannot even parse closes the same
+    // boundary an unminted item does, so it is refused here too.
+    let Some(item) = declared_item(value).map_err(|cause| CmdError::refused(format!("{key}: {cause}")))?
     else {
         return Ok(());
     };
-    let vault_host = crate::cli::directory::active_host("skarbiec")
-        .await?
-        .unwrap_or_else(|| target.to_string());
+    // The vault the host's verifier reads: the registry's Skarbiec host, or
+    // the declaring host itself on a fleet that declares none.
+    let vault_host = match crate::cli::directory::active_host("skarbiec").await? {
+        Some(host) => host,
+        None => target.to_string(),
+    };
     let resolved = crate::cli::canonical_host(&vault_host).await?;
     let runner = crate::deploy::production_runner();
     let environment = crate::deploy::host_channel::run_command(
@@ -59,7 +65,7 @@ pub(super) async fn refuse_unminted_publisher(
     )
     .await
     .map_err(CmdError::from)?;
-    if !environment.ok() {
+    if !environment.succeeded() {
         return Err(CmdError::click(format!(
             "{}: the vault path could not be read, so it cannot be said whether {item} exists: {}",
             resolved.name,
@@ -87,7 +93,7 @@ pub(super) async fn refuse_unminted_publisher(
          {product:?} on {target} would close that host's whole release publication boundary: its \
          release verifier compares the declared publisher set against its grant's item set, and \
          one unmintable name makes them unequal for every product, answering 401 or 503 to every \
-         release-catalog read on the fleet. `stado release catalog declare-publisher {product} \
+         release-catalog read on the fleet. `stado release catalog publisher declare {product} \
          --owner {owner} --client <the submitting host>` mints the item named {item:?} on \
          {owner} (or renames the one item already playing role {item} to that name) before it \
          writes this declaration.",
@@ -109,24 +115,27 @@ pub(super) fn warn_unbacked_object_namespace(target: &str, key: &str, value: &st
     if namespace.is_empty() || namespace.contains('.') {
         return;
     }
-    let item = serde_json::from_str::<Value>(value)
-        .ok()
-        .and_then(|declared| {
-            declared
-                .get("item")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
-    let Some(item) = item else {
-        return;
+    let item = match declared_item(value) {
+        Ok(Some(item)) => item,
+        Ok(None) => return,
+        Err(cause) => {
+            eprintln!("warning: {key} on {target}: {cause}");
+            return;
+        }
     };
-    let covered = crate::config::object_api_namespaces()
-        .map(|namespaces| {
-            crate::config::object_verifier_items(namespaces)
-                .iter()
-                .any(|held| held == &item)
-        })
-        .unwrap_or(false);
+    let covered = match crate::config::object_api_namespaces() {
+        Ok(namespaces) => crate::config::object_verifier_items(namespaces)
+            .iter()
+            .any(|held| held == &item),
+        Err(refusals) => {
+            eprintln!(
+                "warning: this machine's object_api.namespaces cannot be read, so whether \
+                 {target}'s object verifier grant covers {item:?} is unknown: {}",
+                refusals.join("; ")
+            );
+            return;
+        }
+    };
     if covered {
         eprintln!(
             "note: {target}'s object verifier grant must cover {item:?} for namespace \
@@ -159,7 +168,7 @@ pub(super) fn warn_unbacked_object_namespace(target: &str, key: &str, value: &st
 ///
 /// Only the remedy differs per map, so only the remedy is looked up here.
 pub(super) fn warn_unbacked_verifier_item(target: &str, key: &str, value: &str) {
-    let maps: [(&str, &str); 3] = [
+    let maps: &[(&str, &str)] = &[
         (
             "release_api.publishers.",
             "stado repair stado --step release-verifier --target {target} --apply",
@@ -180,16 +189,13 @@ pub(super) fn warn_unbacked_verifier_item(target: &str, key: &str, value: &str) 
     }) else {
         return;
     };
-    let Some(item) = serde_json::from_str::<Value>(value)
-        .ok()
-        .and_then(|declared| {
-            declared
-                .get("item")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-    else {
-        return;
+    let item = match declared_item(value) {
+        Ok(Some(item)) => item,
+        Ok(None) => return,
+        Err(cause) => {
+            eprintln!("warning: {key} on {target}: {cause}");
+            return;
+        }
     };
     let remedy = remedy.replace("{target}", target).replace("{name}", name);
     eprintln!(

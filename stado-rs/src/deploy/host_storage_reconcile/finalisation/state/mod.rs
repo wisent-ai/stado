@@ -11,13 +11,11 @@ pub(in crate::deploy::host_storage_reconcile) use resident::*;
 pub(in crate::deploy::host_storage_reconcile) fn transaction_directory(
     transaction: &str,
 ) -> Result<PathBuf, DeployError> {
-    let home = std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .ok_or_else(|| {
-            DeployError("resident transaction worker has no HOME".to_string())
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
-    Ok(PathBuf::from(home)
+    let home = crate::config_file::home().map_err(|cause| {
+        DeployError(format!("resident transaction worker has no home: {cause}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    Ok(home
         .join(".stado/recovery/storage-root-reconcile")
         .join(transaction))
 }
@@ -73,18 +71,7 @@ fn read_regular_file(path: &Path, label: &str) -> Result<Vec<u8>, DeployError> {
 pub(in crate::deploy::host_storage_reconcile) fn sha256_file(
     path: &Path,
 ) -> Result<String, DeployError> {
-    let mut file = std::fs::File::open(path)
-        .map_err(DeployError::io(format!("cannot open {}", path.display())))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(DeployError::io(format!("cannot hash {}", path.display())))?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hex::encode(hasher.finalize()))
+    crate::primitives::digest::sha256_file(path)
+        .map(|digest| digest.sha256)
+        .map_err(DeployError::io("cannot hash the file".to_string()))
 }

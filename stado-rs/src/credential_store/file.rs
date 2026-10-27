@@ -1,7 +1,5 @@
 //! Owner and mode checks plus reads for the local file credential backend.
 
-#[cfg(unix)]
-use std::io::Write;
 use std::path::Path;
 #[cfg(unix)]
 use std::sync::LazyLock;
@@ -164,71 +162,18 @@ pub(super) fn file_load(path: &Path) -> Result<Value, SkarbiecError> {
     }
 }
 
+/// Keep the credential store document owner-only, whole and flushed with its
+/// directory ([`crate::primitives::document::persist`]): its rename was never
+/// flushed, so a store written just before a power loss could come back as
+/// the old one.
 #[cfg(unix)]
 pub(super) fn file_store(path: &Path, doc: &Value) -> Result<(), SkarbiecError> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let parent = path.parent().ok_or_else(|| {
+    let body = serde_json::to_string_pretty(doc)
+        .map_err(|source| SkarbiecError::Deployment(source.to_string()))?;
+    crate::primitives::document::persist(path, format!("{body}\n").as_bytes()).map_err(|source| {
         SkarbiecError::Deployment(format!(
-            "credential store path {} has no parent",
+            "cannot replace credential store {}: {source}",
             path.display()
-        ))
-    })?;
-    std::fs::create_dir_all(parent).map_err(|source| {
-        SkarbiecError::Deployment(format!(
-            "cannot create credential store directory {}: {source}",
-            parent.display()
-        ))
-    })?;
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| {
-            SkarbiecError::Deployment(format!(
-                "credential store path {} names no file in UTF-8 to stage beside",
-                path.display()
-            ))
-        })?;
-    let temporary = parent.join(format!(
-        ".stado-credentials-{}-{name}.tmp",
-        std::process::id()
-    ));
-    let owner_mode = crate::primitives::file_mode::owner_read_write();
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(owner_mode)
-        .open(&temporary)
-        .map_err(|source| {
-            SkarbiecError::Deployment(format!(
-                "cannot create temporary credential store {}: {source}",
-                temporary.display()
-            ))
-        })?;
-    let body = serde_json::to_string_pretty(doc).map_err(|source| {
-        SkarbiecError::Deployment(crate::primitives::staging::failed_with(
-            source.to_string(),
-            &temporary,
-        ))
-    })?;
-    file.write_all(format!("{body}\n").as_bytes())
-        .and_then(|_| file.sync_all())
-        .map_err(|source| {
-            SkarbiecError::Deployment(crate::primitives::staging::failed_with(
-                format!(
-                    "cannot write temporary credential store {}: {source}",
-                    temporary.display()
-                ),
-                &temporary,
-            ))
-        })?;
-    std::fs::rename(&temporary, path).map_err(|source| {
-        SkarbiecError::Deployment(crate::primitives::staging::failed_with(
-            format!(
-                "cannot replace credential store {}: {source}",
-                path.display()
-            ),
-            &temporary,
         ))
     })
 }

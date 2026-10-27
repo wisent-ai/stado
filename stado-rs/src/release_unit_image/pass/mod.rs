@@ -83,12 +83,16 @@ pub(crate) async fn revisit_once(
         .map_err(|error| format!("cannot resolve this machine in the registry: {error}"))?
         .map(|target| target.name.clone());
     if this_machine.as_deref() != Some(target_name) {
+        let resolved = match this_machine.as_deref() {
+            Some(name) => name,
+            None => "no registry target",
+        };
         return Err(format!(
             "registry.{REVISIT_POLICY_KEY} authorises units on {target_name} and this machine \
              ({hostname}) \
              resolves to {}; which image a process is executing is readable only on the machine \
              holding that process, so nothing was read and nothing was restarted",
-            this_machine.as_deref().unwrap_or("no registry target")
+            resolved
         ));
     }
     // One lock over observe -> record -> kickstart -> settle -> record.

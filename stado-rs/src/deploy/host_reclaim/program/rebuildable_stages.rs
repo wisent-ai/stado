@@ -59,37 +59,24 @@ clones=""
 case "$container" in
   @CONTAINER_PREFIX@*) clones="$(/usr/bin/dirname "${container%/}")/@CLONE_CONTAINER@/@CLONE_ROOT@" ;;
 esac
+clone_entry() { [ -d "$1" ] && [ ! -L "$1" ]; }
 if [ -n "$clones" ] && [ -d "$clones" ]; then
   # The newest clone, kept whatever else holds: macOS makes one per launch and
   # says nothing about which process owns which, so the live browser is most
   # likely the owner of the most recent one. Taken from the SAME glob the
   # candidate loop below uses -- a directory nobody launched, sitting in the
   # root with the freshest mtime, would otherwise shield itself and leave the
-  # live browser's clone the newest thing eligible.
-  newest=""
-  listing=$(/bin/ls -td -- "$clones"/@CLONE_PREFIX@*/ 2>/dev/null || true)
-  saved_ifs=$IFS
-  set -f
-  IFS='
-'
-  for candidate in $listing; do
-    candidate=${candidate%/}
-    if [ -L "$candidate" ]; then continue; fi
-    newest="$candidate"
-    break
-  done
-  IFS=$saved_ifs
-  set +f
-  # Only entries the OS itself named. A clone root is a directory this stage
-  # did not create and does not own, so the entry name is what says an entry is
-  # a clone rather than something that merely lives there.
-  for clone in "$clones"/@CLONE_PREFIX@*; do
-    [ -d "$clone" ] || continue
-    if [ -L "$clone" ]; then continue; fi
-    [ "$clone" = "$newest" ] && continue
-    settled "$clone" chromium_clones || continue
-    reclaim "$clone" chromium_clones
-  done
+  # live browser's clone the newest thing eligible. Only entries the OS itself
+  # named count: a clone root is a directory this stage did not create and
+  # does not own, so the entry name is what says an entry is a clone.
+  if newest_by_age chromium_clones clone_entry "$clones"/@CLONE_PREFIX@*; then
+    for clone in "$clones"/@CLONE_PREFIX@*; do
+      clone_entry "$clone" || continue
+      [ "$clone" = "$newest" ] && continue
+      settled "$clone" chromium_clones || continue
+      reclaim "$clone" chromium_clones
+    done
+  fi
 fi
 printf 'STADO_RECLAIM_STAGE\tchromium_clones\t%s\t%s\n' "$before" "$(free_kb)"
 fi

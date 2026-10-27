@@ -44,7 +44,7 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
     let declared = crate::config::skarbiec_vault_file();
     if !declared.trim().is_empty() {
         let path = PathBuf::from(declared.trim());
-        if !path.is_file() {
+        if !discovery::file_at(&path)? {
             return Err(SkarbiecError::Deployment(format!(
                 "the declared owner vault {} is not a file on this machine; \
                  correct secrets.skarbiec.vault_file, or clear it to discover one",
@@ -59,7 +59,10 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
         .map(|tail| PathBuf::from(format!("{}{tail}", home.as_str())))
         .collect::<Vec<_>>();
     let mut present: Vec<(PathBuf, String, usize)> = Vec::new();
-    for path in candidates.iter().filter(|path| path.is_file()) {
+    for path in &candidates {
+        if !discovery::file_at(path)? {
+            continue;
+        }
         if let Some((owner, items)) = vault_identity(path)? {
             present.push((path.clone(), owner, items));
         }
@@ -122,8 +125,10 @@ pub fn candidates_present() -> Result<Vec<Value>, SkarbiecError> {
     for path in VAULT_CANDIDATE_TAILS
         .iter()
         .map(|tail| PathBuf::from(format!("{home}{tail}")))
-        .filter(|path| path.is_file())
     {
+        if !discovery::file_at(&path)? {
+            continue;
+        }
         if let Some((owner, items)) = vault_identity(&path)? {
             present.push(json!({
                 "path": path.display().to_string(),
@@ -147,29 +152,41 @@ fn vault_identity(path: &std::path::Path) -> Result<Option<(String, usize)>, Ska
             path.display()
         ))
     })?;
-    Ok(vault_identity_of(&text))
+    vault_identity_of(&text).map_err(|cause| {
+        SkarbiecError::Deployment(format!(
+            "the vault candidate {} is not a vault document: {cause}; no owner vault is chosen \
+             while one candidate cannot be read",
+            path.display()
+        ))
+    })
 }
 
-fn vault_identity_of(text: &str) -> Option<(String, usize)> {
-    let document: serde_json::Value = serde_json::from_str(text)
-        .ok()
-        .filter(serde_json::Value::is_object)?;
-    let owner = document
-        .get("owner")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| {
-            document
-                .get("management")
-                .and_then(|management| management.get("controller"))
-                .and_then(serde_json::Value::as_str)
-        })?
-        .to_string();
-    let items = document
-        .get("items")
-        .and_then(serde_json::Value::as_object)
-        .map(serde_json::Map::len)
-        .unwrap_or_default();
-    Some((owner, items))
+/// The owner a vault document names and how many items it holds; `None`
+/// for a document that names no owner (a vault not yet claimed). A text
+/// that is not a JSON object is the error it answers with.
+fn vault_identity_of(text: &str) -> Result<Option<(String, usize)>, String> {
+    let document: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| format!("not JSON: {error}"))?;
+    if !document.is_object() {
+        return Err("JSON, but not an object".to_string());
+    }
+    let owner = match document.get("owner").and_then(serde_json::Value::as_str) {
+        Some(owner) => owner,
+        None => match document
+            .get("management")
+            .and_then(|management| management.get("controller"))
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(controller) => controller,
+            None => return Ok(None),
+        },
+    };
+    // A vault with no items block holds none.
+    let items = match document.get("items").and_then(serde_json::Value::as_object) {
+        Some(items) => items.len(),
+        None => serde_json::Map::new().len(),
+    };
+    Ok(Some((owner.to_string(), items)))
 }
 
 /// Every item id of one vault file and its revision; `None` when an item

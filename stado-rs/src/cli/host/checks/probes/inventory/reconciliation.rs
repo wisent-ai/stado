@@ -17,12 +17,16 @@ pub(super) fn print_reconciliation(report: &Value, vaults: &[Value], sidecars: &
         counted("unreadable"),
         counted("unknown"),
     );
+    // A list the summary did not write names nobody, and its line is then
+    // not printed; the counts above already say how many there were.
     let name_list = |key: &str| -> Vec<String> {
-        summary
+        match summary
             .and_then(|value| value.get(key))
             .and_then(Value::as_array)
-            .map(|names| names.iter().map(|name| cell(Some(name))).collect())
-            .unwrap_or_default()
+        {
+            Some(names) => names.iter().map(|name| cell(Some(name))).collect(),
+            None => Vec::new(),
+        }
     };
     let stale = name_list("stale_markers");
     if !stale.is_empty() {

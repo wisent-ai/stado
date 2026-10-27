@@ -17,9 +17,16 @@
 
 mod candidates;
 mod commands;
+mod history;
+/// Keep one placement change in this machine's placement history.
+pub(crate) use history::record as record_placement;
 mod policy;
 mod profile;
+/// The catalog stores a placement profile lacks, and the words that list them.
+pub(crate) use profile::stores::{lacking as profile_lacking_stores, listed as listed_stores};
+mod release;
 pub(crate) mod standby;
+mod transactions;
 mod transfer;
 
 pub(crate) use commands::placed_host;

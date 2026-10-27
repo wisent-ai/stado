@@ -74,10 +74,21 @@ pub(super) fn retained_archive_path(
 ///
 /// A rename cannot cross filesystems. Copying and then removing the source
 /// retains the same archive when the job tree and release directory live
-/// on different volumes.
+/// on different volumes. Any other rename failure is the answer itself:
+/// read as "different volumes", it was replaced by the copy's error, which
+/// named a different operation than the one that failed.
 pub(super) fn retain_archive(archive: &Path, destination: &Path) -> Result<(), CmdError> {
-    if std::fs::rename(archive, destination).is_ok() {
-        return Ok(());
+    match std::fs::rename(archive, destination) {
+        Ok(()) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {}
+        Err(error) => {
+            return Err(CmdError::click(format!(
+                "cannot move delivered Stado archive {} to {}: {error}",
+                archive.display(),
+                destination.display()
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind())))
+        }
     }
     std::fs::copy(archive, destination).map_err(|error| {
         CmdError::click(format!(

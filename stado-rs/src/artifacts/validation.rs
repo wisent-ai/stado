@@ -40,17 +40,13 @@ fn split_uri(uri: &str) -> SplitUri {
                 .map(|(key, _)| key.into_owned())
                 .collect(),
         },
-        Err(_) => {
-            // Not an absolute URI. Python would still report a scheme when
-            // the text before ':' looks like one (`[A-Za-z][A-Za-z0-9+.-]*`),
-            // e.g. `s3:bucket` parses fine in WHATWG too, so the only URIs
-            // landing here have no usable scheme.
-            SplitUri {
-                scheme: String::new(),
-                has_credentials: false,
-                query_keys: Vec::new(),
-            }
-        }
+        // Not an absolute URI, so it has no scheme, no credentials and no
+        // query; the validator below refuses it by name on the empty scheme.
+        Err(_not_an_absolute_uri) => SplitUri {
+            scheme: String::new(),
+            has_credentials: false,
+            query_keys: Vec::new(),
+        },
     }
 }
 

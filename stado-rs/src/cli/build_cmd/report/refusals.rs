@@ -23,7 +23,10 @@ impl Refusal<'_> {
     /// The stated code; an error that arrived as prose and stated none is
     /// `unknown`, never a reading of its wording.
     fn code(&self) -> FailureCode {
-        self.code.unwrap_or(FailureCode::Unknown)
+        match &self.code {
+            Some(stated) => stated.clone(),
+            None => FailureCode::Unknown,
+        }
     }
 }
 
@@ -36,11 +39,12 @@ pub(crate) fn batch_failure(refusals: &[Refusal<'_>]) -> CmdError {
         .map(|(refusal, code)| format!("{} ({})", refusal.product, code.as_str()))
         .collect::<Vec<_>>()
         .join(", ");
-    let stated = codes
-        .iter()
-        .find(|code| code.retryable())
-        .cloned()
-        .unwrap_or(FailureCode::Refused);
+    // The batch is retried when any product's cause is; otherwise it is
+    // refused, each product's own cause being on its line above.
+    let stated = match codes.iter().find(|code| code.retryable()) {
+        Some(retryable) => retryable.clone(),
+        None => FailureCode::Refused,
+    };
     CmdError::click(format!(
         "build newest: {} product(s) failed or refused, each cause printed above: {listed}",
         refusals.len()

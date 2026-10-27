@@ -51,10 +51,13 @@ pub(super) fn retire_file_local_document(
         ));
     }
 
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .ok_or_else(|| retire_refused("HOME is not an absolute path"))?;
+    let home = crate::config_file::home().map_err(retire_refused)?;
+    if !home.is_absolute() {
+        return Err(retire_refused(format!(
+            "the home {} is not an absolute path",
+            home.display()
+        )));
+    }
     let source = PathBuf::from(path);
     let approved = [
         (OsStr::new(".stado"), home.join(".stado/bin")),
@@ -127,7 +130,10 @@ pub(super) fn retire_file_local_document(
         ));
     }
     let size = source_metadata.len();
-    let mode = format!("{:04o}", source_metadata.mode() & 0o7777);
+    let mode = format!(
+        "{:04o}",
+        source_metadata.mode() & crate::primitives::file_mode::permission_bits()
+    );
     let sha256 = hash_open_file(&mut source_file)?;
     if let Some(binding) = binding {
         if size != binding.expected_size {
@@ -146,15 +152,16 @@ pub(super) fn retire_file_local_document(
             ));
         }
     }
-    let transaction = binding
-        .map(|binding| binding.transaction.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "{}-{}",
-                chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
-                uuid::Uuid::new_v4().simple()
-            )
-        });
+    // A reviewed receipt carries the transaction its dry run named; a dry
+    // run, or a retirement without one, starts its own.
+    let transaction = match binding {
+        Some(binding) => binding.transaction.clone(),
+        None => format!(
+            "{}-{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+            uuid::Uuid::new_v4().simple()
+        ),
+    };
 
     let destination_parts = [
         OsStr::new(".stado"),
@@ -181,11 +188,10 @@ pub(super) fn retire_file_local_document(
                         retire_refused(format!("cannot inspect backup ancestor: {error}"))
                     })?
                     .dev();
+                // The descriptor stays open while the vector holds the
+                // directory, so it is read before the directory moves there.
+                destination_parent_fd = directory.as_raw_fd();
                 destination_directories.push(directory);
-                destination_parent_fd = destination_directories
-                    .last()
-                    .expect("just pushed destination directory")
-                    .as_raw_fd();
             }
             None => missing_ancestor = true,
         }

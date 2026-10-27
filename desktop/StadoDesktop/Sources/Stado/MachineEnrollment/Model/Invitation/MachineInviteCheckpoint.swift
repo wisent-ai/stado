@@ -57,20 +57,7 @@ struct MachineInviteCheckpoint: Codable, Equatable, Sendable {
         }
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case url, probed, reachable, reason, detail
-    }
-
-    /// Read leniently for the same reason the method list is: a control plane
-    /// that trimmed one of these fields still answered, and refusing the whole
-    /// invitation over a missing sentence would leave the operator with a
-    /// minted key and no screen.
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        url = try values.decodeIfPresent(String.self, forKey: .url) ?? ""
-        probed = try values.decodeIfPresent(Bool.self, forKey: .probed) ?? false
-        reachable = try values.decodeIfPresent(Bool.self, forKey: .reachable) ?? false
-        reason = try values.decodeIfPresent(String.self, forKey: .reason) ?? ""
-        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
-    }
+    /// Every field is decoded as the control plane writes it; a checkpoint
+    /// that lacks one is reported by key through the store's document
+    /// reader rather than shown as an unprobed, unreachable control point.
 }

@@ -66,9 +66,10 @@ pub fn freshness_in(records: &[Observation], fact: &str) -> Freshness {
 /// in the fleet or as gibberish, and neither tells an operator about the skew.
 pub(crate) fn age(row: &Observation) -> Option<Duration> {
     let moment = row.moment()?;
-    Utc::now()
-        .signed_duration_since(moment)
-        .to_std()
-        .ok()
-        .or(Some(Duration::ZERO))
+    // `to_std` refuses a negative duration: that is the skewed stamp, read
+    // as no age at all.
+    Some(match Utc::now().signed_duration_since(moment).to_std() {
+        Ok(age) => age,
+        Err(_stamp_is_in_the_future) => Duration::ZERO,
+    })
 }

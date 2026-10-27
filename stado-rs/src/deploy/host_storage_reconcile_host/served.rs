@@ -13,8 +13,9 @@ use super::home;
 
 const LIFECYCLE_PREFIX: &str = "ecosystem/probierz/";
 
+/// The host's own object API, on its loopback interface.
 fn origin(port: u16) -> String {
-    format!("http://127.0.0.1:{port}")
+    crate::primitives::http::origin::loopback_origin(port)
 }
 
 /// Percent-encode everything but the unreserved characters, as a URI query
@@ -66,23 +67,27 @@ fn identities(payload: &Value, name: &str) -> Result<BTreeMap<String, Value>, St
             .and_then(Value::as_str)
             .ok_or_else(|| format!("served-store {name} inventory entry names no path: {item}"))?;
         if let Some(key) = path.strip_prefix(LIFECYCLE_PREFIX) {
-            result.insert(
-                key.to_string(),
-                item.get("body").cloned().unwrap_or(Value::Null),
-            );
+            // An entry without its body is refused like one without its path:
+            // read as null, two unread bodies compared equal.
+            let body = item
+                .get("body")
+                .cloned()
+                .ok_or_else(|| format!("served-store {name} inventory entry {path} carries no body: {item}"))?;
+            result.insert(key.to_string(), body);
         }
     }
     Ok(result)
 }
 
-fn physical_identity(payload: &Value, name: &str, path: &str) -> Value {
+/// The physical root's own record of `path`, `None` when that root lists no
+/// such file (it is reported as `null`, which is what absent means there).
+fn physical_identity(payload: &Value, name: &str, path: &str) -> Option<Value> {
     payload[name]["files"]
         .as_array()
         .into_iter()
         .flatten()
         .find(|item| item.get("path").and_then(Value::as_str) == Some(path))
         .and_then(|item| item.get("body").cloned())
-        .unwrap_or(Value::Null)
 }
 
 fn served_matches(
@@ -163,19 +168,16 @@ pub(super) async fn served_store(port: u16) -> Result<(), String> {
     for key in &keys {
         let uri = format!("stado://probierz/{key}");
         let url = format!("{base}/api/object?uri={}", encode_component(&uri));
-        let mut response = get(url)
+        let response = get(url)
             .await
             .and_then(reqwest::Response::error_for_status)
             .map_err(failed)?;
-        let mut digest = Sha256::new();
-        let mut size: u64 = 0;
-        while let Some(chunk) = response.chunk().await.map_err(failed)? {
-            digest.update(&chunk);
-            size += chunk.len() as u64;
-        }
+        // The lifecycle objects this compares are the probe's own small
+        // records, read whole and digested as the inventories were.
+        let body = response.bytes().await.map_err(failed)?;
         served.insert(
             key.clone(),
-            json!({"sha256": hex::encode(digest.finalize()), "bytes": size}),
+            json!({"sha256": hex::encode(Sha256::digest(&body)), "bytes": body.len()}),
         );
     }
     let matches_primary = served_matches(&keys, &served, &primary);

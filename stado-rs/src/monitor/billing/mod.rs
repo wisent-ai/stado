@@ -62,6 +62,7 @@
 //! here, so `crate::monitor::billing::<item>` resolves exactly as before.
 
 mod azure;
+pub(crate) use azure::balance_section as azure_balance_section;
 mod format;
 mod gcp;
 mod health;
@@ -96,10 +97,24 @@ pub const BLOB: &str = "billing_health/credits.json";
 /// service-principal credential is resolved independently from Azure Key
 /// Vault.
 pub async fn live_snapshot(store: &JobStorage) -> Value {
-    let variants = crate::capabilities::get(crate::capabilities::RuntimeFacet::Billing.as_str())
-        .map(|capability| capability.variants)
-        .unwrap_or_default();
     let enabled = config::billing_providers();
+    // The billing facet is compiled into the capability catalog; a build
+    // without it is a defect, said on every enabled provider's section of
+    // the document rather than ending the daemon's tick.
+    let Some(facet) = crate::capabilities::get(crate::capabilities::RuntimeFacet::Billing.as_str())
+    else {
+        let cause = format!(
+            "this build's capability catalog declares no {} facet, so no billing source can be queried",
+            crate::capabilities::RuntimeFacet::Billing.as_str()
+        );
+        // The enabled providers are this process's static configuration, so
+        // their names outlive the document.
+        let unread = enabled
+            .iter()
+            .map(|provider| (provider.as_str(), error_section(cause.clone())));
+        return billing_document_from_sections(unread);
+    };
+    let variants = facet.variants;
     let sections = futures::future::join_all(
         variants
             .iter()
@@ -156,13 +171,20 @@ pub async fn persist_snapshot(store: &JobStorage, document: &Value) -> Result<()
 }
 
 /// The last published snapshot, or `None` when the blob has never been
-/// written. Unparseable JSON also reads as `None`: a corrupt record must
-/// never stop the next tick from publishing a good one.
+/// written. A blob that does not parse is an error naming the blob and the
+/// parse failure: the publishing callers log it and publish this tick's
+/// snapshot without history, so a corrupt record never stops the next good
+/// one, and `billing watch` refuses with it, since no transition can be told
+/// from a record it cannot read.
 pub async fn load_snapshot(store: &JobStorage) -> Result<Option<Value>, StorageError> {
-    Ok(store
-        .download_text(BLOB)
-        .await?
-        .and_then(|text| serde_json::from_str(&text).ok()))
+    match store.download_text(BLOB).await? {
+        None => Ok(None),
+        Some(text) => serde_json::from_str(&text).map(Some).map_err(|error| {
+            StorageError::Other(format!(
+                "billing snapshot {BLOB} does not parse as JSON: {error}"
+            ))
+        }),
+    }
 }
 
 /// Assemble and upload billing_health/credits.json. Each source is isolated:

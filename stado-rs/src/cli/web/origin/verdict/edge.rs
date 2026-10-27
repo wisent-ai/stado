@@ -232,9 +232,12 @@ async fn gateway_readback(client: &reqwest::Client) -> Value {
             })
         }
     };
-    let payload = serde_json::from_str::<Value>(&body).ok();
+    // The authoritative answer is a JSON `absent` for the exact probe URI;
+    // a body that is not JSON cannot be that answer and travels as text in
+    // `response`, where its shape is reported.
+    let parsed = serde_json::from_str::<Value>(&body);
     let answered = status_code == reqwest::StatusCode::NOT_FOUND
-        && payload.as_ref().is_some_and(|payload| {
+        && parsed.as_ref().is_ok_and(|payload| {
             payload["state"].as_str() == Some("absent")
                 && payload["uri"].as_str() == Some(uri.as_str())
         });
@@ -254,9 +257,11 @@ async fn gateway_readback(client: &reqwest::Client) -> Value {
         "method": "GET", "url": url, "uri": uri, "status": status,
         "ms": started.elapsed().as_millis(), "detail": detail,
     });
-    result["response"] = match payload {
-        Some(payload) => payload,
-        None => Value::String(body),
+    // The response travels whole: as the document it parsed to, or as the
+    // text it was when it is not JSON.
+    result["response"] = match parsed {
+        Ok(payload) => payload,
+        Err(_not_json) => Value::String(body),
     };
     result
 }

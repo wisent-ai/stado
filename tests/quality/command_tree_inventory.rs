@@ -1,4 +1,4 @@
-//! `stado quality command-tree` lists the one-off commands of a committed
+//! `stado quality tree` lists the one-off commands of a committed
 //! revision's built CLI instead of refusing it.
 //!
 //! The real `stado` reads Stado's own checkout at HEAD with an isolated home
@@ -49,7 +49,7 @@ fn inventory(root: &Path, home: &Path, path: &str, revision: &str) -> Output {
         .env("PATH", path)
         .args([
             "quality",
-            "command-tree",
+            "tree",
             "--root",
             root.to_str().expect("repository path"),
             "--revision",
@@ -57,12 +57,12 @@ fn inventory(root: &Path, home: &Path, path: &str, revision: &str) -> Output {
             "--json",
         ])
         .output()
-        .expect("run the real command-tree inventory")
+        .expect("run the real quality tree inventory")
 }
 
 fn row(revision: &str, path: &str, output: &Output) -> Value {
     json!({
-        "argv": ["stado", "quality", "command-tree", "--revision", revision, "--json"],
+        "argv": ["stado", "quality", "tree", "--revision", revision, "--json"],
         "path": path,
         "exit_status": output.status.code(),
         "stdout": String::from_utf8_lossy(&output.stdout),

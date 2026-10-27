@@ -4,14 +4,12 @@ import Foundation
 /// choice is the fleet's (`operator_contact` in the registry), so no host is
 /// placed on the command line.
 enum NativeOperatorContactOperations {
-    static let channels = ["slack", "telegram", "sendgrid", "skrzynka", "most", "gcp-pubsub"]
-
     static let all: [NativeCapabilityOperation] = [
         .init(id: "preferences-show", title: "Read how the operator is asked", path: ["alerts", "preferences", "show"],
               hostPlacement: .none, fixedArguments: ["--json"], mutates: false),
         .init(id: "preferences-set", title: "Choose how the operator is asked (first preferred first)",
               path: ["alerts", "preferences", "set"], hostPlacement: .none, fields: [
-                  .init(id: "channel", label: "Channels, one per line, first preferred first (\(channels.joined(separator: ", ")))",
+                  .init(id: "channel", label: "Channels, one per line, first preferred first (a channel Stado does not page through is refused with the list it does)",
                         option: "--channel", required: true, multiple: true),
               ], jsonOutput: false),
         .init(id: "channels", title: "Read where each chosen channel delivers", path: ["alerts", "channels"],

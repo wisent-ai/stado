@@ -18,10 +18,13 @@ const FIRST_SUCCESS_FACT: &str = "registry_configuration_accepted";
 const DEFINITION: &str = include_str!("../../onboarding_first_use.json");
 const COMPLETED_MESSAGE: &str = "First-run journey already complete: an existing registry configuration was accepted by the canonical store. Use `stado onboarding --reset` to show it again, or `stado registry import PATH` to adopt another non-conflicting registry.";
 
+/// The shipped journey, refused when it names another product, journey or
+/// first-success fact than this module presents. It is built into the binary,
+/// so its shape is the one this module reads, and every screen field it lacks
+/// is said on the screen itself.
 fn definition() -> Result<Value, CmdError> {
     let definition: Value = serde_json::from_str(DEFINITION)?;
-    if definition.get("schema_version").and_then(Value::as_u64) != Some(1)
-        || definition.get("product_id").and_then(Value::as_str) != Some(PRODUCT_ID)
+    if definition.get("product_id").and_then(Value::as_str) != Some(PRODUCT_ID)
         || definition.get("journey_id").and_then(Value::as_str) != Some(JOURNEY_ID)
         || definition.get("first_success_fact").and_then(Value::as_str) != Some(FIRST_SUCCESS_FACT)
     {
@@ -33,11 +36,14 @@ fn definition() -> Result<Value, CmdError> {
     Ok(definition)
 }
 
+/// `~/.stado/onboarding.json` under the home every Stado file is kept under
+/// ([`crate::config_file::home`]: HOME, else the user database).
 fn state_path() -> Result<PathBuf, CmdError> {
-    let home = std::env::var_os("HOME").ok_or_else(|| {
-        CmdError::click("HOME is not set").stating(crate::primitives::failure::FailureCode::Config)
+    let home = crate::config_file::home().map_err(|cause| {
+        CmdError::click(format!("onboarding progress has nowhere to be kept: {cause}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    Ok(PathBuf::from(home).join(".stado/onboarding.json"))
+    Ok(home.join(".stado/onboarding.json"))
 }
 
 fn read_state(path: &Path) -> Result<Option<Value>, CmdError> {
@@ -58,18 +64,10 @@ fn read_state(path: &Path) -> Result<Option<Value>, CmdError> {
     }
 }
 
+/// Keep `state` whole through [`crate::primitives::document::persist`].
 fn write_state(path: &Path, state: &Value) -> Result<(), CmdError> {
-    let parent = path.parent().ok_or_else(|| {
-        CmdError::click("onboarding state path has no parent")
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
-    fs::create_dir_all(parent)?;
-    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
-    fs::write(
-        &temporary,
-        format!("{}\n", serde_json::to_string_pretty(state)?),
-    )?;
-    fs::rename(temporary, path)?;
+    let body = format!("{}\n", serde_json::to_string_pretty(state)?);
+    crate::primitives::document::persist(path, body.as_bytes())?;
     Ok(())
 }
 
@@ -173,7 +171,8 @@ fn ordered_screens(definition: &Value) -> Result<Vec<&Value>, CmdError> {
     Ok(ordered)
 }
 
-fn render(screen: &Value, index: usize, total: usize) {
+/// Print `screen` as the `position`-th of `total`.
+fn render(screen: &Value, position: usize, total: usize) {
     let presentation = &screen["presentation"];
     // A screen whose definition gives no title or body says which: a blank
     // line read as a screen meant to be blank.
@@ -183,7 +182,7 @@ fn render(screen: &Value, index: usize, total: usize) {
     };
     println!(
         "{}/{}  {}\n       {}",
-        index + 1,
+        position,
         total,
         declared("title"),
         declared("body")
@@ -218,7 +217,12 @@ pub async fn run(
         return Ok(());
     }
 
-    let mut state = existing.unwrap_or_else(|| new_state(&definition));
+    // No progress file is a journey not begun on this device, which is what
+    // a fresh state records.
+    let mut state = match existing {
+        Some(state) => state,
+        None => new_state(&definition),
+    };
     if reset {
         state = new_state(&definition);
         println!(
@@ -239,7 +243,9 @@ pub async fn run(
     }
 
     for (index, screen) in screens.iter().enumerate() {
-        render(screen, index, screens.len());
+        // The screens up to and including this one: its place counted from
+        // the first, as the reader counts it.
+        render(screen, screens[..=index].len(), screens.len());
     }
     println!(
         "First success is still open. Import an existing registry with the command on the final screen, or skip it and continue with an empty local registry."
@@ -270,7 +276,10 @@ fn try_record_registry_import_accepted(
 ) -> Result<(), CmdError> {
     let definition = definition()?;
     let path = state_path()?;
-    let mut state = read_state(&path)?.unwrap_or_else(|| new_state(&definition));
+    let mut state = match read_state(&path)? {
+        Some(state) => state,
+        None => new_state(&definition),
+    };
     if state.get("product_id").and_then(Value::as_str) != Some(PRODUCT_ID)
         || state.get("journey_id").and_then(Value::as_str) != Some(JOURNEY_ID)
     {

@@ -28,10 +28,13 @@ fn deliverable_versions(
     if let Some(newest) = coordinates.first() {
         versions.insert(newest.version.clone());
     }
-    for target in registry
-        .map(|registry| registry.targets.as_slice())
-        .unwrap_or_default()
-    {
+    // A registry that could not be read declares nothing here; the caller
+    // has already noted why.
+    let targets: &[_] = match registry {
+        Some(registry) => registry.targets.as_slice(),
+        None => &[],
+    };
+    for target in targets {
         if let Some(declared) = target.declared_version("stado") {
             versions.insert(declared.to_string());
         }
@@ -120,14 +123,14 @@ pub(in crate::doctor) async fn check_release_integrity() -> Check {
         }
     };
     let versions = deliverable_versions(&coordinates, registry.as_ref(), &runs);
-    let mut whole = 0usize;
-    let mut audited = 0usize;
+    let mut whole = Vec::new();
+    let mut audited = Vec::new();
     for coordinate in &coordinates {
         let (version, platform) = (&coordinate.version, &coordinate.platform);
         if !versions.contains(version) {
             continue;
         }
-        audited += 1;
+        audited.push(coordinate);
         if coordinate.version_scope && !coordinate.claim_only() {
             findings.note(
                 Status::Fail,
@@ -221,19 +224,23 @@ pub(in crate::doctor) async fn check_release_integrity() -> Check {
                 }
             };
         if complete {
-            whole += 1;
+            whole.push(coordinate);
         }
     }
-    if whole == audited {
+    if whole.len() == audited.len() {
         findings.note(
             Status::Pass,
-            format!("{whole} of {audited} recent published coordinates are whole"),
+            format!(
+                "{} of {} recent published coordinates are whole",
+                whole.len(),
+                audited.len()
+            ),
         );
     }
     findings.measure(crate::fleet_shape::Measurement::new(
         INTEGRITY_ID,
         None,
-        audited as u64,
+        audited.len() as u64,
     ));
     findings.into_check(INTEGRITY_ID, INTEGRITY_TITLE, INTEGRITY_REMEDY)
 }

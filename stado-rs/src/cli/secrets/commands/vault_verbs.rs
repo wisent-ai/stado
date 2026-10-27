@@ -5,7 +5,10 @@
 use crate::cli::secrets::commands::subcommands::{
     CredentialBackupCommands, CredentialItemCommands, CredentialVaultCommands,
 };
-use crate::cli::secrets::commands::surface::CredentialSeedCommands;
+use crate::cli::secrets::commands::surface::{
+    CredentialSeedCommands, CredentialSigningCommands, CredentialSigningProfileCommands,
+    CredentialSparkleKeyCommands,
+};
 use crate::cli::secrets::diagnostics::doctor::vault_authority;
 use crate::cli::secrets::store::inventory::{inspect_host_vault, inspect_vault};
 use crate::cli::CmdError;
@@ -136,5 +139,32 @@ pub(super) async fn seed(command: CredentialSeedCommands) -> Result<(), CmdError
             login_item,
             json,
         } => crate::cli::seed_enrol::enrol_authenticator_seed(&host, &login_item, json).await,
+    }
+}
+
+/// The signing material a product ships with: its desktop update key and its
+/// code-signing provisioning profiles.
+pub(super) async fn signing(command: CredentialSigningCommands) -> Result<(), CmdError> {
+    match command {
+        CredentialSigningCommands::Key {
+            command:
+                CredentialSparkleKeyCommands::Mint {
+                    product,
+                    info_plist,
+                    replace,
+                    json,
+                },
+        } => {
+            crate::cli::secrets::store::items::sparkle::sparkle_key(
+                &product,
+                &info_plist,
+                replace,
+                json,
+            )
+            .await
+        }
+        CredentialSigningCommands::Profile {
+            command: CredentialSigningProfileCommands::Ensure(args),
+        } => super::host::apple_profile(args).await,
     }
 }

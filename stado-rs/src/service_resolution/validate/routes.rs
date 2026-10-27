@@ -3,7 +3,7 @@
 //! resolver configuration have to look like.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 
 use serde_json::Value;
 
@@ -209,10 +209,13 @@ pub(super) fn validate_endpoint(endpoint: &ServiceEndpoint, location: &str) -> R
     if url.path() != "/" && !url.path().is_empty() {
         return Err(format!("{location}.url: must be an origin without a path"));
     }
-    let loopback = url
-        .host_str()
-        .and_then(|host| host.parse::<IpAddr>().ok())
-        .is_some_and(|address| address.is_loopback());
+    // Only an IP literal can be loopback; a host name says nothing about where
+    // it resolves, so it is refused like any other non-loopback host.
+    let loopback = match url.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        Some(url::Host::Domain(_)) | None => false,
+    };
     if !loopback || url.port_or_known_default().is_none() {
         return Err(format!(
             "{location}.url: must use host-relative loopback with a known port"
@@ -222,12 +225,13 @@ pub(super) fn validate_endpoint(endpoint: &ServiceEndpoint, location: &str) -> R
         // An absolute, single-segment-or-deeper path with no trailing slash,
         // so composing it onto the origin is textual and unambiguous. A
         // consumer must never have to decide whether to strip a slash.
+        // "/" alone is caught by the trailing-slash rule, and an empty path by
+        // the leading-slash rule.
         if !base_path.starts_with('/')
             || base_path.ends_with('/')
             || base_path.contains("//")
             || base_path.contains('?')
             || base_path.contains('#')
-            || base_path.len() < 2
         {
             return Err(format!(
                 "{location}.base_path: must be an absolute path with no trailing slash"
@@ -248,7 +252,7 @@ pub(super) fn validate_resolver_config(
     let location = format!("registry.targets[{target_name}].service_resolver");
     let config: ResolverConfig =
         serde_json::from_value(value.clone()).map_err(|error| format!("{location}: {error}"))?;
-    if config.refresh_seconds == 0 {
+    if std::time::Duration::from_secs(config.refresh_seconds).is_zero() {
         return Err(format!("{location}.refresh_seconds: must be positive"));
     }
     if config.max_stale_seconds < config.refresh_seconds {
@@ -259,7 +263,7 @@ pub(super) fn validate_resolver_config(
     let api: std::net::SocketAddr = config
         .api_bind
         .parse()
-        .map_err(|_| format!("{location}.api_bind: must be an IP socket address"))?;
+        .map_err(|error| format!("{location}.api_bind: must be an IP socket address: {error}"))?;
     if !api.ip().is_loopback() {
         return Err(format!("{location}.api_bind: must be loopback"));
     }

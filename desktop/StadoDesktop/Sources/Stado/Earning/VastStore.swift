@@ -71,7 +71,6 @@ struct VastReadiness: Decodable, Equatable, Sendable {
 
     /// One line, matching the command's own summary for each verdict.
     var headline: String {
-        let vault = vaultHost ?? "the fleet vault"
         switch verdict {
         case "ready":
             guard let machineId else {
@@ -79,7 +78,10 @@ struct VastReadiness: Decodable, Equatable, Sendable {
             }
             return "Ready: Vast.ai accepts \(item)/\(field) and answers for machine \(machineId)."
         case "vast_refused":
-            return "Not earning: the key resolved and Vast.ai refused it (\(vastError ?? "no reason given"))."
+            guard let vastError else {
+                return "Not earning: the key resolved and Vast.ai refused it; the reply names no reason."
+            }
+            return "Not earning: the key resolved and Vast.ai refused it (\(vastError))."
         case "item_absent":
             return "Not provisioned: the vault on \(vault) declares no \(item) item."
         case "not_authorized":
@@ -89,6 +91,13 @@ struct VastReadiness: Decodable, Equatable, Sendable {
         default:
             return "Unknown: \(item)/\(field) did not resolve and the vault could not be read."
         }
+    }
+
+    /// The vault host the reply named, or that it named none: a host
+    /// written here would read as the one the command asked.
+    private var vault: String {
+        guard let vaultHost else { return "(a vault host not named in the reply)" }
+        return vaultHost
     }
 }
 
@@ -144,7 +153,6 @@ final class VastStore: ObservableObject {
     @Published private(set) var lastUpdated: Date?
 
     private let cli: StadoCLI
-    private var generation = 0
 
     init(cli: StadoCLI = StadoCLI()) {
         self.cli = cli
@@ -162,11 +170,13 @@ final class VastStore: ObservableObject {
         ["market", "monitor", "--provider", "vast", "--json"]
     }
 
-    nonisolated static func previewArguments(idleWindowSeconds: Int, priceGPU: Double) -> [String] {
+    nonisolated static func previewArguments(
+        idleWindowSeconds: Int, priceGPU: Double, priceDisk: Double
+    ) -> [String] {
         [
-            "market", "auto-list", "--provider", "vast", "--dry-run", "--once",
+            "market", "follow", "--provider", "vast", "--dry-run", "--once",
             "--idle-window-s", String(idleWindowSeconds),
-            "--price-gpu", String(priceGPU),
+            "--price-gpu", String(priceGPU), "--price-disk", String(priceDisk),
             "--max-duration-s", String(EarningConstants.maxRentalSeconds),
         ]
     }
@@ -184,47 +194,41 @@ final class VastStore: ObservableObject {
 
     func refresh(vaultHost: String? = nil) async {
         guard !isRefreshing else { return }
-        let requested = generation
         isRefreshing = true
-        defer { if requested == generation { isRefreshing = false } }
+        defer { isRefreshing = false }
         do {
             let result = try await cli.jsonResult(
                 VastReadiness.self,
                 arguments: Self.readinessArguments(vaultHost: vaultHost)
             )
-            guard requested == generation else { return }
             readiness = result.value
             problem = nil
         } catch {
-            guard requested == generation else { return }
             problem = error.localizedDescription
         }
-        await readSnapshot(requested: requested)
-        guard requested == generation else { return }
+        await readSnapshot()
         lastUpdated = Date()
     }
 
-    private func readSnapshot(requested: Int) async {
+    private func readSnapshot() async {
         do {
             snapshot = try await cli.json(VastSnapshot.self, arguments: Self.monitorArguments())
-            guard requested == generation else { return }
             snapshotProblem = nil
         } catch {
-            guard requested == generation else { return }
             snapshotProblem = error.localizedDescription
         }
     }
 
     /// One bounded evaluation of the bridge: what it would decide right now,
     /// without calling Vast.ai and without a credential.
-    func previewDecision(idleWindowSeconds: Int, priceGPU: Double) async {
+    func previewDecision(idleWindowSeconds: Int, priceGPU: Double, priceDisk: Double) async {
         guard !isWorking else { return }
         isWorking = true
         defer { isWorking = false }
         do {
             preview = try await cli.text(
                 arguments: Self.previewArguments(
-                    idleWindowSeconds: idleWindowSeconds, priceGPU: priceGPU
+                    idleWindowSeconds: idleWindowSeconds, priceGPU: priceGPU, priceDisk: priceDisk
                 )
             )
         } catch {

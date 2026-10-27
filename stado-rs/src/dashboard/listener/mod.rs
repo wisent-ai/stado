@@ -14,7 +14,7 @@ mod routes;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
 use crate::dashboard::fleet_join;
 use crate::queue::{JobStorage, StorageError};
@@ -101,6 +101,12 @@ pub struct Dashboard {
     /// Serve only [`ENROLLMENT_ROUTES`]; every other request is refused
     /// before authorization, before the store and before the vault.
     pub(crate) enrollment_only: bool,
+    /// The client store service status reads beacons from, opened on the
+    /// first such request and kept: opened per request, every relayed
+    /// `stado service status` built and validated a whole storage facade
+    /// (backend, layout, mirror pairing) on the thread that serves every
+    /// other request, and logged the mirror refusal each time.
+    pub(crate) beacon_store: Arc<OnceCell<JobStorage>>,
 }
 
 impl Dashboard {
@@ -113,6 +119,7 @@ impl Dashboard {
             vault: Arc::new(RwLock::new(VaultConsultations::default())),
             store,
             enrollment_only: false,
+            beacon_store: Arc::new(OnceCell::new()),
         }
     }
 

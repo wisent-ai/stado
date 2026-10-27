@@ -23,16 +23,6 @@ pub(crate) struct Execution {
     pub(crate) code: i32,
 }
 
-/// Run `operation` against the manifest's checkout as it stands.
-pub(crate) fn execute(
-    runtime: &Runtime,
-    requested: &Path,
-    operation: &str,
-    arguments: &[String],
-) -> Result<Execution> {
-    execute_revision(runtime, requested, None, operation, arguments)
-}
-
 /// Run `operation` against the manifest's checkout, or, with `revision`,
 /// against that committed revision of it exported into the checkout's build
 /// area. `operation` is admitted here, once the tree is known: one of the

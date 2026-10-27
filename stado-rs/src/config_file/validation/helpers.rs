@@ -5,7 +5,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::config_file::readers::{binding_in, py_truthy};
+use crate::config_file::readers::{binding_in, stated};
 
 pub(super) fn unresolved_placeholders(value: &Value, path: &str, problems: &mut Vec<String>) {
     match value {
@@ -75,9 +75,9 @@ pub(super) fn validate_variant_config(
         if !required {
             continue;
         }
-        let configured = binding_in(root, path).is_some_and(py_truthy);
+        let configured = binding_in(root, path).is_some_and(stated);
         let alternate = binding_in(root, (!backup).then_some(field.alternate_path).flatten())
-            .is_some_and(py_truthy);
+            .is_some_and(stated);
         if !configured && !alternate {
             problems.push(format!(
                 "{}.backend={} needs {}",

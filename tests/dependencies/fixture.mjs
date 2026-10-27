@@ -22,12 +22,6 @@ const stado = process.env.STADO_BIN;
 assert.ok(stado, "STADO_BIN is required: the Stado executable under test");
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
-// The schema version the repository's own catalog declares.
-const schema = Number(
-	/^schema_version:\s*(?<version>\S+)/m.exec(
-		readFileSync(join(root, "catalog/products.yml"), "utf8"),
-	).groups.version,
-);
 
 export async function journey(name, scope, testFile, body) {
 	mkdirSync(join(root, ".build"), { recursive: true });
@@ -104,7 +98,6 @@ export async function journey(name, scope, testFile, body) {
 		writeFileSync(
 			catalogPath,
 			JSON.stringify({
-				schema_version: schema,
 				authority: { owner: "stado", rule: "test catalog" },
 				...declares,
 				products: [

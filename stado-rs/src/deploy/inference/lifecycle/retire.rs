@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::deploy::inference::support::{report, safe_runtime, unit_name};
+use crate::deploy::inference::support::{cache_dir_word, report, safe_runtime, unit_name};
 use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::inference::schema::Deployment;
 use crate::targets::ComputeTarget;
@@ -17,12 +17,7 @@ pub async fn retire(
     let unit = shlex_quote(&unit_name(&deployment.name));
     let name = shlex_quote(&deployment.name);
     let image = shlex_quote(&deployment.engine.image);
-    let cache_dir = deployment
-        .resources
-        .cache_dir
-        .as_deref()
-        .map(shlex_quote)
-        .unwrap_or_else(|| "\"$root/cache\"".to_string());
+    let cache_dir = cache_dir_word(deployment);
     let purge = if purge_cache {
         format!(
             "docker run --rm --entrypoint /bin/sh -v \"$cache_dir:/stado-cache\" {image} -c 'rm -rf /stado-cache/* /stado-cache/.[!.]* /stado-cache/..?*'; rmdir \"$cache_dir\" 2>/dev/null || true"

@@ -55,38 +55,39 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
     let mut failed: Vec<&String> = Vec::new();
     // Rollout targets the fleet registry does not declare; each is a failure.
     let mut undeclared: Vec<&String> = Vec::new();
-    for (product, policy) in &control.products {
-        if args
-            .product
-            .as_deref()
-            .is_some_and(|selected| selected != product)
-        {
-            continue;
-        }
+    let selected = |product: &str| args.product.as_deref().is_none_or(|chosen| chosen == product);
+    let pairs: Vec<(String, String)> = control
+        .products
+        .iter()
+        .filter(|(product, _)| selected(product))
+        .flat_map(|(product, policy)| policy.targets.keys().map(|target| (product.clone(), target.clone())))
+        .collect();
+    let mut states = reads::release_states(&pairs).await?;
+    for (product, policy) in control.products.iter().filter(|(product, _)| selected(product)) {
         for target in policy.targets.keys() {
-            let observed: Value = match reads::release_state(product, target).await? {
+            let state = states.remove(&(product.clone(), target.clone())).ok_or_else(|| {
+                CmdError::click(format!("the release state of {product} on {target} was not read"))
+            })??;
+            let observed: Value = match state {
                 Some(bytes) => serde_json::from_slice(&bytes)?,
                 None => Value::Null,
             };
             let software = crate::host_software::load_in(&records, target);
             // A rollout target the registry does not declare has no managed
-            // versions to judge against; read as an empty declaration, its
-            // software was judged as if the fleet declared nothing for it.
+            // versions to judge against. Its software block is the host's own
+            // report, as every target's is, with the one finding that nothing
+            // could be judged folded in: one block shape for every reader.
             let Some(entry) = registry.targets.iter().find(|entry| &entry.name == target) else {
                 undeclared.push(target);
+                let mut block = software.json();
+                crate::host_software::Finding::undeclared(product, target).merge_into(&mut block);
                 reports.push(json!({
                     "product": product,
                     "target": target,
                     "desired": policy.desired,
                     "previous": policy.previous,
                     "observed": observed,
-                    "software": {
-                        "verdict": "failed",
-                        "findings": [format!(
-                            "the rollout of {product} names target {target}, which the fleet \
-                             registry does not declare, so what it should run cannot be judged"
-                        )],
-                    },
+                    "software": block,
                 }));
                 continue;
             };
@@ -212,7 +213,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
 /// A limit this platform cannot count to is refused rather than cut down.
 fn run_window(args: &ReleaseStatusArgs) -> Result<usize, CmdError> {
     match args.limit {
-        Some(limit) => usize::try_from(limit).map_err(|error| {
+        Some(limit) => usize::try_from(limit.get()).map_err(|error| {
             CmdError::usage(format!("--limit {limit} cannot be counted here: {error}"))
         }),
         None => Ok(usize::MAX),

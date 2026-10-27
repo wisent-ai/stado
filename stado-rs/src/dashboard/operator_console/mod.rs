@@ -29,18 +29,20 @@ pub(crate) struct Limits {
 }
 const MUTATION_CONFIRMATION: &str = "RUN_MUTATION";
 const INPUT_PLACEHOLDER: &str = "$INPUT";
-static INPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+/// Staged input files are numbered from the shared counter's first draw,
+/// so no two in one process share a name.
+static INPUT_SEQUENCE: AtomicU64 = AtomicU64::new(crate::primitives::tally::FIRST_DRAW);
 
 /// The statuses this route answers with, one name per condition.
 ///
 /// A bare `400` beside a message says only that something is a client error;
 /// the name says which of the three refusals a reader is looking at, and the
 /// three are answered from four different places in this file.
-const STATUS_OK: u16 = 200;
-const STATUS_BAD_REQUEST: u16 = 400;
-const STATUS_UNAUTHORIZED: u16 = 401;
-const STATUS_FORBIDDEN: u16 = 403;
-const STATUS_UNAVAILABLE: u16 = 503;
+const STATUS_OK: u16 = reqwest::StatusCode::OK.as_u16();
+const STATUS_BAD_REQUEST: u16 = reqwest::StatusCode::BAD_REQUEST.as_u16();
+const STATUS_UNAUTHORIZED: u16 = reqwest::StatusCode::UNAUTHORIZED.as_u16();
+const STATUS_FORBIDDEN: u16 = reqwest::StatusCode::FORBIDDEN.as_u16();
+const STATUS_UNAVAILABLE: u16 = reqwest::StatusCode::SERVICE_UNAVAILABLE.as_u16();
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +110,9 @@ fn validate(request: &RunRequest, limits: Limits) -> Result<(), ConsoleError> {
             "command family {family:?} is not available in the Desktop API"
         )));
     }
+    if let Some(refusal) = families::undeclared_path(&request.args) {
+        return Err(ConsoleError::bad_request(refusal));
+    }
     for (name, value) in [
         ("input", request.input.as_ref()),
         ("stdin", request.stdin.as_ref()),
@@ -142,20 +147,23 @@ pub(super) async fn handle(request: &Request) -> Response {
             &json!({"ok": false, "error": "forbidden"}),
         );
     }
-    let content_type = request
+    // The framing the API accepts: a JSON media type (parameters after `;`
+    // aside), no chunking, and a declared length equal to the body read. A
+    // request without a content type, or whose length is not a number, is
+    // not framed as JSON and is refused as such.
+    let json_media_type = request
         .header("content-type")
-        .unwrap_or("")
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim();
-    let content_length = request
+        .map(|value| match value.split_once(';') {
+            Some((media_type, _parameters)) => media_type.trim(),
+            None => value.trim(),
+        })
+        .is_some_and(|media_type| media_type == "application/json");
+    let declared_length = request
         .header("content-length")
-        .and_then(|value| value.parse::<usize>().ok());
-    if content_type != "application/json"
-        || request.header("transfer-encoding").is_some()
-        || content_length != Some(request.body.len())
-    {
+        .map(|value| value.trim().parse::<usize>());
+    let length_matches =
+        matches!(declared_length, Some(Ok(length)) if length == request.body.len());
+    if !json_media_type || request.header("transfer-encoding").is_some() || !length_matches {
         return send_json(
             STATUS_BAD_REQUEST,
             &json!({"ok": false, "error": "invalid JSON request framing"}),
@@ -170,10 +178,11 @@ pub(super) async fn handle(request: &Request) -> Response {
             )
         }
         Err(error) => {
+            tracing::warn!(cause = %error.cause(), "operator console permission could not be decided");
             return send_json(
                 STATUS_UNAVAILABLE,
                 &json!({"ok": false, "error": error.to_string()}),
-            )
+            );
         }
     }
     match execute::run(&request.body, request.console_limits).await {

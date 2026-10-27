@@ -16,7 +16,7 @@ use crate::remote::object_store::ObjectRef;
 
 use super::super::auth::Signer;
 use super::super::wire::{
-    allow, body, document, element, elements, escape, invalid, not_implemented, object, storage,
+    allow, body, document, escape, invalid, not_implemented, object, read, storage, DeleteDocument,
     S3Error, XML,
 };
 use super::stored::user_metadata;
@@ -179,15 +179,14 @@ impl Dashboard {
         let data = body(request, signer)?;
         let document_text = std::str::from_utf8(&data)
             .map_err(|error| invalid(format!("the Delete document is not UTF-8: {error}")))?;
-        let quiet = element(document_text, "Quiet")
-            .map_err(invalid)?
-            .is_some_and(|value| value == "true");
+        let asked: DeleteDocument = read(document_text, "Delete").map_err(invalid)?;
+        let quiet = asked.quiet;
         let mut deleted = String::new();
         let mut failed = String::new();
         let _fence = self.storage_write_guard().map_err(storage)?;
-        for entry in elements(document_text, "Object") {
-            let key = element(entry, "Key")
-                .map_err(invalid)?
+        for entry in asked.objects {
+            let key = entry
+                .key
                 .ok_or_else(|| invalid("an Object of the Delete document names no Key"))?;
             let outcome = match allow(signer, &key, "delete").and_then(|()| object(signer, &key)) {
                 Ok(object) => self

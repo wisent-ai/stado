@@ -24,12 +24,11 @@ pub(in crate::cli::web) use directives::{mount, redirect, route};
 /// terminated by Cloudflare, and writing it here would order a second
 /// certificate for a name this host never answers on.
 pub(in crate::cli::web) async fn stado_routes() -> Result<Vec<(String, Vec<String>)>, CmdError> {
-    let products = match config::web_api_products() {
-        Ok(products) => products,
-        // An empty plane is not a broken one; the parser refuses an empty map
-        // so a half-written section cannot pass, and "nothing declared" has to
-        // read as nothing declared.
-        Err(_) if crate::config_file::get("web_api.products").is_none() => return Ok(Vec::new()),
+    // An empty plane is not a broken one: nothing declared has no route to
+    // serve, and a declared table that does not parse is refused.
+    let products = match config::declared_web_api_products() {
+        Ok(Some(products)) => products,
+        Ok(None) => return Ok(Vec::new()),
         Err(problems) => return Err(CmdError::declaration(problems.join("; "))),
     };
     // One site block per hostname, and a hostname can now carry more than one
@@ -103,9 +102,9 @@ pub(in crate::cli::web) async fn stado_routes() -> Result<Vec<(String, Vec<Strin
 /// the fleet keeps them.
 ///
 /// A loopback endpoint means loopback on the active host, which is exactly
-/// what the edge must forward to over the tailnet — Brama answers
-/// `127.0.0.1:18081` on the mini and nothing outside that machine can reach
-/// it, which is why a public hostname needed the edge in the first place.
+/// what the edge must forward to over the tailnet: a service that listens on
+/// its host's loopback only cannot be reached from any other machine, which
+/// is why a public hostname needed the edge in the first place.
 async fn upstream_route(hostname: &str, service: &str) -> Result<(String, String), CmdError> {
     let (document, _) = crate::cli::registry::fetch_versioned_document().await?;
     let directory = crate::service_resolution::directory(&document).map_err(CmdError::declaration)?

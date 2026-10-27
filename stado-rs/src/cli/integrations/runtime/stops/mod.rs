@@ -28,11 +28,9 @@ use crate::cli::CmdError;
 use crate::primitives::failure::FailureCode;
 
 fn path() -> Result<PathBuf, String> {
-    std::env::var_os("HOME")
-        .map(|home| stado_product::serve_stops::path(&PathBuf::from(home)))
-        .ok_or_else(|| {
-            "HOME is not set, so stado serve's stops have no file to be kept in".to_string()
-        })
+    crate::config_file::home()
+        .map(|home| stado_product::serve_stops::path(&home))
+        .map_err(|cause| format!("stado serve's stops have no file to be kept in: {cause}"))
 }
 
 /// The stops of this build kept on this host so far.

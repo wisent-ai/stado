@@ -6,7 +6,7 @@ use crate::cli::service::lifecycle::release::gate::run::release;
 use crate::cli::service::lifecycle::release::gate::ReleaseOutcome;
 use crate::cli::service::lifecycle::release::unit::{restart, stop};
 use crate::cli::service::lifecycle::release::update::update;
-use crate::cli::service::lifecycle::release::ServiceReleaseOptions;
+use crate::cli::service::lifecycle::release::{ServiceReadiness, ServiceReleaseOptions};
 use crate::cli::service::reports::view::show;
 use crate::cli::service::runtime::files::fetch::{file_fetch, FileFetchOptions};
 use crate::cli::service::runtime::files::sync::{file_sync, FileSyncOptions};
@@ -53,7 +53,7 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
             product,
             version,
             readiness_url,
-            readiness_timeout_seconds,
+            readiness_window_seconds,
             reload_unit,
             require_release_version,
             supersede_unit,
@@ -64,10 +64,14 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
                 host: &host,
                 product: &product,
                 version: &version,
-                readiness_url: readiness_url.as_deref(),
-                // clap pairs the window with --readiness-url; without a URL
-                // no readiness is probed and the window is never read.
-                readiness_timeout_seconds: readiness_timeout_seconds.unwrap_or_default(),
+                // clap requires each of the pair with the other, so both are
+                // given or neither is.
+                readiness: readiness_url.as_deref().zip(readiness_window_seconds).map(
+                    |(url, window_seconds)| ServiceReadiness {
+                        url,
+                        window_seconds,
+                    },
+                ),
                 reload_unit,
                 require_release_version,
                 supersede_unit: supersede_unit.as_deref(),
@@ -86,7 +90,7 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
             })
         }
         RuntimeCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
-        RuntimeCommands::RunnerRuntime {
+        RuntimeCommands::Runtime {
             command: ServiceRunnerRuntimeCommands::Repair { name, host, json },
         } => {
             let services = declared_matching(&name, Some(&host)).await?;
@@ -154,17 +158,18 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
                     crate::deploy::service_answering::register::path(&home).display()
                 );
             } else {
+                use crate::cli::reporting::field;
                 for recovery in &recoveries {
                     let repair = match &recovery.repair {
                         serde_json::Value::Array(reports) if !reports.is_empty() => reports
                             .iter()
-                            .map(|report| format!("{} {}", report["name"], report["status"]))
+                            .map(|report| format!("{} {}", field(&report["name"]), field(&report["status"])))
                             .collect::<Vec<_>>()
                             .join(", "),
                         serde_json::Value::Array(_) | serde_json::Value::Null => {
                             String::from("not declared")
                         }
-                        report => format!("{} {}", report["name"], report["status"]),
+                        report => format!("{} {}", field(&report["name"]), field(&report["status"])),
                     };
                     let acted = match &recovery.observed_by {
                         Some(observer) => {

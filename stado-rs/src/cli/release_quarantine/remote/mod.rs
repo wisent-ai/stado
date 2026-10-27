@@ -34,7 +34,7 @@ async fn read_remote(
     let output = host_channel::run_script(host, &script, &runner)
         .await
         .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{}: cannot read {path}: {}",
             host.name,
@@ -46,29 +46,21 @@ async fn read_remote(
     let mut encoded: Option<&str> = None;
     for line in output.stdout.lines() {
         let fields = host_channel::marker_fields(line);
-        match fields.first().copied() {
-            Some("STADO_QUARANTINE_ABSENT") => return Ok(None),
-            Some("STADO_QUARANTINE_BYTES") => {
-                let unreadable = |detail: String| {
-                    CmdError::click(format!("{}: {path}: {detail}", host.name))
-                        .stating(crate::primitives::failure::FailureCode::InfraDown)
-                };
-                let field = fields
-                    .get(1)
-                    .ok_or_else(|| unreadable("its byte count line has no value".to_string()))?;
-                bytes = host_channel::marker_number(field, "byte count").map_err(unreadable)?;
+        let unreadable = |detail: &str| {
+            CmdError::click(format!("{}: {path}: {detail}", host.name))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        };
+        match fields.as_slice() {
+            ["STADO_QUARANTINE_ABSENT", ..] => return Ok(None),
+            ["STADO_QUARANTINE_BYTES", field, ..] => {
+                bytes = host_channel::marker_number(field, "byte count")
+                    .map_err(|detail| unreadable(&detail))?;
             }
-            Some("STADO_QUARANTINE_BASE64") => {
-                // An empty file prints an empty field; a line without the
-                // field at all is not an answer about the content.
-                encoded = Some(*fields.get(1).ok_or_else(|| {
-                    CmdError::click(format!(
-                        "{}: {path}: its content line has no value",
-                        host.name
-                    ))
-                    .stating(crate::primitives::failure::FailureCode::InfraDown)
-                })?);
-            }
+            ["STADO_QUARANTINE_BYTES"] => return Err(unreadable("its byte count line has no value")),
+            // An empty file prints an empty field; a line without the field
+            // at all is not an answer about the content.
+            ["STADO_QUARANTINE_BASE64", field, ..] => encoded = Some(*field),
+            ["STADO_QUARANTINE_BASE64"] => return Err(unreadable("its content line has no value")),
             _ => {}
         }
     }

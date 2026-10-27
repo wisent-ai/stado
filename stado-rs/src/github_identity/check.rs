@@ -11,20 +11,20 @@ use serde_json::{json, Value};
 use super::{declared, read, resolve, DECLARATION_PATH};
 use crate::cli::CmdError;
 
-fn header(response: &reqwest::Response, name: &str) -> String {
+/// A response header as GitHub sent it; none when GitHub sent no such header. A value
+/// that is not visible ASCII is shown with its bytes read as UTF-8.
+fn header(response: &reqwest::Response, name: &str) -> Option<String> {
     response
         .headers()
         .get(name)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_string()
+        .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
 }
 
-fn named(value: &str, absent: &str) -> String {
-    if value.is_empty() {
-        absent.to_string()
-    } else {
-        value.to_string()
+/// `value` for a person to read, or `absent` when GitHub stated none.
+fn named(value: Option<&str>, absent: &str) -> String {
+    match value {
+        Some(value) if !value.is_empty() => value.to_string(),
+        _ => absent.to_string(),
     }
 }
 
@@ -41,19 +41,18 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
     let resolved = resolve().await.map_err(classed)?;
     let credential = read(&resolved).await.map_err(classed)?;
     let organization = crate::deploy::host_precheck_runner::GITHUB_ORGANIZATION;
-    let endpoint = format!(
-        "https://api.github.com{}",
-        identity
-            .reality_check
-            .replace("{organization}", organization)
-            .replace(
-                "{repository}",
-                identity
-                    .reality_check_repository
-                    .as_deref()
-                    .unwrap_or_default()
-            )
-    );
+    let mut path = identity.reality_check.replace("{organization}", organization);
+    if path.contains("{repository}") {
+        let repository = identity.reality_check_repository.as_deref().ok_or_else(|| {
+            click(format!(
+                "{DECLARATION_PATH}: reality_check {} names {{repository}}, but no reality_check_repository is declared",
+                identity.reality_check
+            ))
+            .stating(FailureCode::Config)
+        })?;
+        path = path.replace("{repository}", repository);
+    }
+    let endpoint = format!("https://api.github.com{path}");
     let response = crate::wait::request(
         reqwest::Client::new()
             .get(&endpoint)
@@ -80,14 +79,12 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
         unread
     })?;
     let answered = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
-    let message = serde_json::from_str::<Value>(&answered)
-        .ok()
-        .and_then(|body| {
-            body.get("message")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_default();
+    // GitHub states why it refused in the body's `message`; a body that is not JSON
+    // is itself what GitHub said.
+    let message: Option<String> = match serde_json::from_str::<Value>(&answered) {
+        Ok(body) => body.get("message").and_then(Value::as_str).map(str::to_string),
+        Err(not_json) => Some(format!("a body that is not JSON ({not_json}): {answered}")),
+    };
     let document = json!({
         "accepted": status.is_success(),
         "accepted_permissions": accepted,
@@ -115,14 +112,14 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
         println!("check       {endpoint}");
         println!("status      {}", status.as_u16());
         println!("requires    {}", identity.required_permission);
-        println!("grants      {}", named(&granted, "-"));
+        println!("grants      {}", named(granted.as_deref(), "-"));
     }
     if status.is_success() {
         return Ok(());
     }
     Err(click(format!(
         "the credential the declared GitHub route {:?} names, {}.{}, is not allowed on \
-         {endpoint}: GitHub answered HTTP {} — {message}. That identity grants {}, and the \
+         {endpoint}: GitHub answered HTTP {} — {}. That identity grants {}, and the \
          endpoint answers {}. Point {:?} at the intended credential with `skarbiec route \
          declare --resource {} --item <item> --field <field> --reason <text>`; the route is \
          declared in {DECLARATION_PATH}",
@@ -130,8 +127,9 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
         resolved.item,
         resolved.field,
         status.as_u16(),
-        named(&granted, "no listed permission"),
-        named(&accepted, "an unstated permission"),
+        named(message.as_deref(), "with no message"),
+        named(granted.as_deref(), "no listed permission"),
+        named(accepted.as_deref(), "an unstated permission"),
         resolved.route,
         resolved.route,
     ))

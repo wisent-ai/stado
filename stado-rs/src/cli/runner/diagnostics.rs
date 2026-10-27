@@ -45,21 +45,30 @@ pub(super) async fn render(target: &str, profile: &str, json: bool) -> Result<()
     line("stderr", report.get("standard_error"));
     line("log", report.get("log"));
     line("read", report.get("read"));
-    for section in ["runtime", "memory"] {
-        if let Some(observation) = report.get(section) {
-            println!("\n{section}:");
-            print_json(observation);
-        }
+    // The report's nested observations (its runtime and memory readings) are
+    // its object fields, each printed under its own name.
+    for (section, observation) in report.as_object().into_iter().flatten().filter(|(_, value)| value.is_object()) {
+        println!("\n{section}:");
+        print_json(observation);
     }
     if let Some(error) = report.get("stderr").and_then(Value::as_str) {
         if !error.is_empty() {
             eprintln!("\nhost read errors:\n{error}");
         }
     }
-    let tail = report
-        .get("tail")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    // A report without its tail is not an empty log: the host answered
+    // something this build does not read, and that is said.
+    let tail = match report.get("tail") {
+        Some(Value::String(tail)) => tail.as_str(),
+        Some(other) => {
+            println!("\nthe diagnostic report's tail is not text: {other}");
+            return Ok(());
+        }
+        None => {
+            println!("\nthe diagnostic report carries no tail field, so no log content can be shown");
+            return Ok(());
+        }
+    };
     if tail.is_empty() {
         if report.get("read").and_then(Value::as_str) == Some("partial") {
             println!("\nthe diagnostic read was incomplete; no log content was returned");

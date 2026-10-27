@@ -1,7 +1,6 @@
 //! Nonblocking kernel ownership and protection of already-retired lock inodes.
 
 use std::fs::{File, OpenOptions};
-use std::io;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
@@ -42,20 +41,7 @@ pub(crate) fn acquire_lock_state(
     }
 }
 
-/// Is a pid still a process on this host?
-///
-/// `kill(pid, 0)` answers exactly that and nothing else: `ESRCH` means gone,
-/// `EPERM` means alive and owned by somebody else. This observes process
-/// existence; it neither measures progress nor releases a kernel lock.
-pub(crate) fn pid_alive(pid: i32) -> bool {
-    if pid <= 0 {
-        return false;
-    }
-    match unsafe { nix::libc::kill(pid, 0) } {
-        0 => true,
-        _ => io::Error::last_os_error().raw_os_error() == Some(nix::libc::EPERM),
-    }
-}
+pub(crate) use crate::primitives::procutil::pid_alive;
 
 fn open_existing_lock_at(path: &Path) -> Result<File, JanitorError> {
     let file = OpenOptions::new()

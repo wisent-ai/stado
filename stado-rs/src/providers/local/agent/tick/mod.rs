@@ -19,33 +19,12 @@ use serde_json::{Map, Value};
 use crate::providers::local::helpers;
 use crate::providers::local::self_terminate;
 use crate::providers::local::slots::ActiveSlot;
+use crate::primitives::tally::Tally;
 use crate::queue::capacity::CapacitySnapshot;
 
 use reconcile::{GpuPowerLimitState, PlacementPolicyState};
 
 use super::{agent_log, claim, Step};
-
-/// Whether `error` is the fleet store not answering: a 5xx from the object
-/// API or a transport failure reaching it. Such a tick did not run; it is not
-/// an error in the agent.
-fn store_unavailable(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        if let Some(storage) = cause.downcast_ref::<crate::queue::StorageError>() {
-            return match storage {
-                crate::queue::StorageError::Stado { status, .. }
-                | crate::queue::StorageError::Gcs { status, .. } => *status >= 500,
-                crate::queue::StorageError::Held(_) => true,
-                crate::queue::StorageError::Http(http) => {
-                    http.is_connect() || http.is_timeout() || http.is_request()
-                }
-                _ => false,
-            };
-        }
-        cause
-            .downcast_ref::<reqwest::Error>()
-            .is_some_and(|http| http.is_connect() || http.is_timeout() || http.is_request())
-    })
-}
 
 /// Main agent loop. Polls queue, runs jobs when Vast.ai is idle.
 /// Python `run_agent`.
@@ -78,20 +57,12 @@ pub async fn run_agent(
             anyhow::anyhow!("the accelerator this host has cannot be read: {cause}")
         })?;
     }
+    // A host without accelerator memory reports none; nothing here rounds it
+    // up to a capacity it does not have.
     let mut total_vram_gb = helpers::detect_local_vram_gb()
         .await
-        .map_err(|cause| anyhow::anyhow!("this host's VRAM cannot be read: {cause}"))?
-        .max(1);
+        .map_err(|cause| anyhow::anyhow!("this host's VRAM cannot be read: {cause}"))?;
     let initial_gpu = gpu_type.clone();
-    // Binding the store at start reads the fleet's storage layout from the
-    // object API. A store that does not answer is the same condition a tick
-    // skips (`tick_phase!`), not a fault of this agent: ending the agent on
-    // it ended the host's one Stado process with the resolver and every
-    // service forward of the host, and launchd started it again into the
-    // same unanswered store, a restart loop that took every adapter down
-    // for as long as the store stood. The start is tried again at the
-    // declared poll until the store answers; any other error ends the agent
-    // visibly, as before.
     let prepare::Started {
         hostname,
         consumer_id,
@@ -104,19 +75,7 @@ pub async fn run_agent(
         janitor: _janitor,
         heartbeat,
         heartbeat_task: _heartbeat,
-    } = loop {
-        match prepare::start(kind, &gpu_type, total_vram_gb, poll, log_fn).await {
-            Ok(started) => break started,
-            Err(error) if store_unavailable(&error) => {
-                log_fn(&format!(
-                    "the agent did not start: the fleet store did not answer ({error:#}); the \
-                     next poll tries again"
-                ));
-                tokio::time::sleep(poll).await;
-            }
-            Err(error) => return Err(error),
-        }
-    };
+    } = prepare::start_when_store_answers(kind, &gpu_type, total_vram_gb, poll, log_fn).await?;
     reap::release_left_behind(&store, &hostname, log_fn).await;
     let mut slots: Vec<ActiveSlot> = Vec::new();
     let mut agent_diag: Map<String, Value> = Map::new();
@@ -128,12 +87,12 @@ pub async fn run_agent(
     // The free bytes the disk-full rule keeps: a fifth of the fleet's volume,
     // re-read every tick in `policy::disk_policy`.
     let mut disk_low_bytes: Option<i64> = None;
-    let mut pace = false;
+    // One tick at once, then one every `poll`; a tick that started a job is
+    // followed at once by the next.
+    let mut schedule = tokio::time::interval(poll);
+    schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        if pace {
-            tokio::time::sleep(poll).await;
-        }
-        pace = true;
+        schedule.tick().await;
         let vast_active = tick_phase!(
             heartbeat,
             prepare::advance_slots(
@@ -294,8 +253,8 @@ pub async fn run_agent(
             log_fn
         );
 
-        if started > 0 {
-            pace = false;
+        if !started.counts_nothing() {
+            schedule.reset_immediately();
             continue;
         }
 

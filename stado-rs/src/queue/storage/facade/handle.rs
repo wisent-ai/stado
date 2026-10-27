@@ -34,20 +34,23 @@ impl JobStorage {
 
     /// Where the last bounded claimable-scan stopped in the priority index.
     ///
-    /// A poisoned lock is not worth failing a queue poll over: the cursor is a
-    /// fairness hint, so losing it costs one scan that starts at the head.
+    /// The cursor is one string behind a mutex; a thread that panicked while
+    /// holding it left the string whole, so a poisoned lock is read through
+    /// rather than failing a queue poll or restarting the scan at the head.
     pub(crate) fn scan_cursor(&self) -> String {
-        self.scan_cursor
-            .lock()
-            .map(|cursor| cursor.clone())
-            .unwrap_or_default()
+        match self.scan_cursor.lock() {
+            Ok(cursor) => cursor.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     /// Record where the next bounded claimable-scan should resume.
     pub(crate) fn set_scan_cursor(&self, cursor: String) {
-        if let Ok(mut slot) = self.scan_cursor.lock() {
-            *slot = cursor;
-        }
+        let mut slot = match self.scan_cursor.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = cursor;
     }
 
     /// The local root supplied when this facade constructed its backend.

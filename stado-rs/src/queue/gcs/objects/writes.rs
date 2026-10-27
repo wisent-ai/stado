@@ -78,15 +78,28 @@ impl GcsBackend {
         let Some(object) = self.get_object(path).await? else {
             return Ok(());
         };
-        let mut merged: BTreeMap<String, String> = object
+        // GCS object metadata is a table of strings; an object without one
+        // has no metadata to keep, and a member in another shape is refused
+        // rather than dropped from the merge, which would delete it.
+        let mut merged: BTreeMap<String, String> = BTreeMap::new();
+        if let Some(existing) = object
             .get("metadata")
-            .and_then(|m| m.as_object())
-            .map(|m| {
-                m.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect()
-            })
-            .unwrap_or_default();
+            .and_then(serde_json::Value::as_object)
+        {
+            for (key, value) in existing {
+                match value.as_str() {
+                    Some(text) => {
+                        merged.insert(key.clone(), text.to_string());
+                    }
+                    None => {
+                        return Err(StorageError::StorageConflict(format!(
+                            "{path}: GCS metadata member {key} is not a string ({value}); \
+                             the merge would drop it"
+                        )))
+                    }
+                }
+            }
+        }
         merged.extend(kv.iter().map(|(k, v)| (k.clone(), v.clone())));
         let body = serde_json::json!({ "metadata": merged });
         let url = object_url(&self.inner.bucket, path);

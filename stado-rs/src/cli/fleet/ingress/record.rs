@@ -71,39 +71,58 @@ pub fn parse_ingress(document: &Value) -> Result<Ingress, String> {
     let hint = document
         .get("pid_hint")
         .ok_or_else(|| "ingress object has no 'pid_hint'".to_string())?;
+    // A process group at or below init's pid is never one `up` started:
+    // signalling group 1, or every group, would hit the whole machine.
+    // <https://man7.org/linux/man-pages/man2/kill.2.html>
     let pgid = |key: &str| -> Result<i32, String> {
-        hint.get(key)
+        let stated = hint
+            .get(key)
             .and_then(Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok())
-            .filter(|value| *value > 1)
-            .ok_or_else(|| format!("ingress pid_hint has no usable '{key}'"))
+            .ok_or_else(|| format!("ingress pid_hint has no integer '{key}'"))?;
+        let group = i32::try_from(stated)
+            .map_err(|error| format!("ingress pid_hint '{key}' {stated} is not a process group id: {error}"))?;
+        if group <= INIT_PID {
+            return Err(format!(
+                "ingress pid_hint '{key}' {group} names init or every process, never a group `up` started"
+            ));
+        }
+        Ok(group)
     };
-    let hint_text = |key: &str| -> String {
+    // The machine is what keeps `down` from signalling another host's pids
+    // here, and the logs are where `status` points: an object without them
+    // is refused like one without its pgids.
+    let hint_text = |key: &str| -> Result<String, String> {
         hint.get(key)
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| format!("ingress pid_hint has no '{key}'"))
     };
+    let listener_port = document
+        .get("listener_port")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "ingress object has no integer 'listener_port'".to_string())?;
     Ok(Ingress {
         base_url: text("base_url")?,
         mode: text("mode")?,
         host: text("host")?,
         started_at: text("started_at")?,
         verified_at: text("verified_at")?,
-        listener_port: document
-            .get("listener_port")
-            .and_then(Value::as_u64)
-            .and_then(|value| u16::try_from(value).ok())
-            .ok_or_else(|| "ingress object has no usable 'listener_port'".to_string())?,
+        listener_port: u16::try_from(listener_port).map_err(|error| {
+            format!("ingress listener_port {listener_port} is not a port: {error}")
+        })?,
         pid_hint: PidHint {
-            machine: hint_text("machine"),
+            machine: hint_text("machine")?,
             listener_pgid: pgid("listener_pgid")?,
             tunnel_pgid: pgid("tunnel_pgid")?,
-            listener_log: hint_text("listener_log"),
-            tunnel_log: hint_text("tunnel_log"),
+            listener_log: hint_text("listener_log")?,
+            tunnel_log: hint_text("tunnel_log")?,
         },
     })
 }
+
+/// The pid of init. <https://man7.org/linux/man-pages/man2/kill.2.html>
+const INIT_PID: i32 = 1;
 
 /// The entrance this store currently publishes, if any. An object that cannot
 /// be parsed is reported as a parse error rather than as "nothing published":

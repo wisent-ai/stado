@@ -13,10 +13,10 @@ use serde_json::Value;
 /// address what the catalog runs, and no port is written here.
 fn declared_option(option: &str) -> Result<String, String> {
     let host = crate::deploy::service_catalog::host_process()?;
-    host.args
-        .iter()
-        .position(|arg| arg == option)
-        .and_then(|index| host.args.get(index + 1))
+    let mut arguments = host.args.iter();
+    arguments
+        .find(|argument| *argument == option)
+        .and_then(|_option| arguments.next())
         .cloned()
         .ok_or_else(|| format!("the catalog's host Stado process declares no {option}"))
 }
@@ -31,18 +31,18 @@ pub(super) fn object_api_bind() -> Result<String, String> {
     declared_option("--bind")
 }
 
-/// `~` and `~/…` against HOME, then made absolute and lexically normalised.
+/// `~`, `~/…` and any other relative path against `home`, then lexically
+/// normalised. The recovery runs under launchd, whose working directory is
+/// no place the operator chose, so a relative store, token or state path
+/// means the one under the home the unit runs as; read against the working
+/// directory it named a different place in each caller.
 pub(super) fn absolute(value: &str, home: &Path) -> PathBuf {
-    let expanded = match value.strip_prefix("~/") {
-        Some(rest) => home.join(rest),
-        None if value == "~" => home.to_path_buf(),
-        None => PathBuf::from(value),
+    let relative = match value.strip_prefix("~/") {
+        Some(rest) => rest,
+        None if value == "~" => "",
+        None => value,
     };
-    let expanded = if expanded.is_absolute() {
-        expanded
-    } else {
-        std::env::current_dir().unwrap_or_default().join(expanded)
-    };
+    let expanded = home.join(relative);
     let mut out = PathBuf::from("/");
     for component in expanded.components() {
         match component {
@@ -57,8 +57,9 @@ pub(super) fn absolute(value: &str, home: &Path) -> PathBuf {
 }
 
 /// [`absolute`] with every symbolic link in the existing prefix resolved,
-/// as `realpath` does for a path whose tail may not exist yet.
-pub(super) fn real(value: &str, home: &Path) -> PathBuf {
+/// as `realpath` does for a path whose tail may not exist yet. A prefix that
+/// exists and still cannot be resolved is the refusal, naming it.
+pub(super) fn real(value: &str, home: &Path) -> Result<PathBuf, String> {
     let path = absolute(value, home);
     let mut prefix = path.clone();
     let mut tail = Vec::new();
@@ -74,38 +75,54 @@ pub(super) fn real(value: &str, home: &Path) -> PathBuf {
             _ => break,
         }
     }
-    let mut resolved = std::fs::canonicalize(&prefix).unwrap_or(prefix);
+    let mut resolved = std::fs::canonicalize(&prefix).map_err(|error| {
+        format!(
+            "object API recovery refused: {} cannot be resolved: {error}",
+            prefix.display()
+        )
+    })?;
     for name in tail.iter().rev() {
         resolved.push(name);
     }
-    resolved
+    Ok(resolved)
 }
 
-/// The home directory; an unset HOME is refused, since read as the empty path
-/// it would put the stores, the token files and the unit's HOME under `/`.
+/// The home every Stado file is kept under ([`crate::config_file::home`]:
+/// HOME, else the user database); with neither the recovery refuses, since
+/// read as the empty path it would put the stores, the token files and the
+/// unit's HOME under `/`.
 pub(super) fn home() -> Result<PathBuf, String> {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .map_err(|error| format!("object API recovery refused: HOME cannot be read: {error}"))
+    crate::config_file::home().map_err(|cause| format!("object API recovery refused: {cause}"))
 }
 
-fn env(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|value| !value.is_empty())
+/// The environment's value for `name` when it sets one; an empty one sets
+/// nothing, and one that is not UTF-8 is refused naming the variable.
+fn env(name: &str) -> Result<Option<String>, String> {
+    match std::env::var(name) {
+        Ok(value) if !value.is_empty() => Ok(Some(value)),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(value)) => Err(format!(
+            "object API recovery refused: {name} is not UTF-8 ({value:?})"
+        )),
+    }
 }
 
-pub(super) fn text<'a>(document: &'a Value, pointer: &str) -> &'a str {
+/// The text the document holds at `pointer`, `None` when it holds none or
+/// an empty one: both mean the setting is left to the next source.
+pub(super) fn text<'a>(document: &'a Value, pointer: &str) -> Option<&'a str> {
     document
         .pointer(pointer)
         .and_then(Value::as_str)
-        .unwrap_or("")
+        .filter(|value| !value.is_empty())
 }
 
-/// The host config, or `None` when there is none; a file that exists but
-/// cannot be read, or is not JSON, is a refusal naming the file and cause.
-fn config(path: &Path) -> Result<Option<Value>, String> {
+/// The host config, or `Null` when there is none (every setting is then the
+/// environment's or the managed one); a file that exists but cannot be read,
+/// or is not JSON, is a refusal naming the file and cause.
+fn config(path: &Path) -> Result<Value, String> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
         Err(error) => {
             return Err(format!(
                 "object API recovery refused: {}: {error}",
@@ -114,44 +131,68 @@ fn config(path: &Path) -> Result<Option<Value>, String> {
         }
     };
     serde_json::from_slice(&bytes)
-        .map(Some)
         .map_err(|error| format!("object API recovery refused: {}: {error}", path.display()))
+}
+
+/// The first of: the environment's `variable`, the config's `pointer`, and
+/// the managed path under the home, each resolved as `realpath` would.
+fn store(
+    variable: &str,
+    document: &Value,
+    pointer: &str,
+    managed: &str,
+    home: &Path,
+) -> Result<String, String> {
+    let declared = match env(variable)? {
+        Some(value) => value,
+        None => match text(document, pointer) {
+            Some(value) => value.to_string(),
+            None => home.join(managed).display().to_string(),
+        },
+    };
+    Ok(real(&declared, home)?.display().to_string())
 }
 
 /// `STORE\tBACKUP_STORE\tOBJECT_URL\tNAMESPACE\tTOKEN_FILE\tLABEL\tRETIRED`:
 /// the environment wins for the stores, then the config, then the managed
-/// defaults. `LABEL` is the host Stado unit the compiled catalog declares, the
-/// one launchd label recovery installs and restarts; `RETIRED` the
-/// comma-separated labels whose role was its API listener, whose loaded route
-/// recovery reads before that unit takes over from them.
+/// paths. `LABEL` is the host Stado unit the compiled catalog declares (its
+/// name when it declares no unit), the one launchd label recovery installs
+/// and restarts; `RETIRED` the comma-separated labels whose role was its API
+/// listener, whose loaded route recovery reads before that unit takes over.
 pub(super) async fn paths(config_path: &Path) -> Result<String, String> {
     let home = home()?;
-    let document = config(config_path)?.unwrap_or(Value::Null);
-    let configured = |pointer: &str| {
-        let value = text(&document, pointer);
-        (!value.is_empty()).then(|| real(value, &home).display().to_string())
+    let document = config(config_path)?;
+    let store_path = store(
+        "WC_LOCAL_STORAGE_PATH",
+        &document,
+        "/storage/local/path",
+        ".stado/local-storage",
+        &home,
+    )?;
+    let backup_path = store(
+        "WC_BACKUP_LOCAL_STORAGE_PATH",
+        &document,
+        "/storage/backup/local/path",
+        ".stado/local-backup",
+        &home,
+    )?;
+    let object_url = match text(&document, "/storage/stado/url") {
+        Some(url) => url.to_string(),
+        None => format!("http://{}:{}", object_api_bind()?, object_api_port()?),
     };
-    let store = env("WC_LOCAL_STORAGE_PATH")
-        .or_else(|| configured("/storage/local/path"))
-        .unwrap_or_else(|| home.join(".stado/local-storage").display().to_string());
-    let backup = env("WC_BACKUP_LOCAL_STORAGE_PATH")
-        .or_else(|| configured("/storage/backup/local/path"))
-        .unwrap_or_else(|| home.join(".stado/local-backup").display().to_string());
-    let or = |pointer: &str, default: String| {
-        let value = text(&document, pointer);
-        if value.is_empty() {
-            default
-        } else {
-            value.to_string()
-        }
+    let namespace = match text(&document, "/storage/stado/namespace") {
+        Some(namespace) => namespace.to_string(),
+        None => crate::config::QUEUE_OBJECT_NAMESPACE.to_string(),
     };
     let token = match text(&document, "/storage/stado/token_file") {
-        "" => home.join(".stado/queue-object-api-token"),
-        value => absolute(value, &home),
+        Some(value) => absolute(value, &home),
+        None => home.join(".stado/queue-object-api-token"),
     };
     let host = crate::deploy::service_catalog::host_process()?;
-    let label = host.unit.clone().unwrap_or_else(|| host.name.clone());
-    let object_url = format!("http://{}:{}", object_api_bind()?, object_api_port()?);
+    let label = match &host.unit {
+        Some(unit) => unit.clone(),
+        None => host.name.clone(),
+    };
     // The units on this host that serve the API under another label, found
     // from what they run.
     let target = crate::deploy::service::local_target().map_err(|error| error.to_string())?;
@@ -161,13 +202,10 @@ pub(super) async fn paths(config_path: &Path) -> Result<String, String> {
             .map_err(|error| format!("this host's units could not be read: {error}"))?
             .join(",");
     Ok([
-        real(&store, &home).display().to_string(),
-        real(&backup, &home).display().to_string(),
-        or("/storage/stado/url", object_url),
-        or(
-            "/storage/stado/namespace",
-            crate::config::QUEUE_OBJECT_NAMESPACE.to_string(),
-        ),
+        store_path,
+        backup_path,
+        object_url,
+        namespace,
         token.display().to_string(),
         label,
         retired,
@@ -175,30 +213,34 @@ pub(super) async fn paths(config_path: &Path) -> Result<String, String> {
     .join("\t"))
 }
 
-fn truthy(value: &Value) -> bool {
+/// Whether a recorded `last_error` says something went wrong: anything but
+/// `null`, `false`, an empty string, list or object, or a zero.
+fn names_an_error(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
+        Value::Number(number) => number.as_f64().is_some_and(|n| n.is_normal()),
         Value::String(text) => !text.is_empty(),
         Value::Array(items) => !items.is_empty(),
         Value::Object(fields) => !fields.is_empty(),
     }
 }
 
-/// The running server's own operator state says its object boundary is
-/// ready and carries no error.
-pub(super) fn boundary_ready(state: &Path) -> bool {
-    let Some(document) = std::fs::read(state)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-    else {
-        return false;
+/// Whether the running server's own operator state says its object boundary
+/// is ready and carries no error. A server that has not written its state
+/// yet is not ready; a state that cannot be read or is not JSON is the
+/// refusal, naming the file.
+pub(super) fn boundary_ready(state: &Path) -> Result<bool, String> {
+    let bytes = match std::fs::read(state) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("{}: {error}", state.display())),
     };
-    let boundary = document
-        .pointer("/boundaries/object")
-        .cloned()
-        .unwrap_or(Value::Null);
-    boundary.get("ready") == Some(&Value::Bool(true))
-        && !boundary.get("last_error").is_some_and(truthy)
+    let document: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("{} is not JSON: {error}", state.display()))?;
+    let Some(boundary) = document.pointer("/boundaries/object") else {
+        return Ok(false);
+    };
+    Ok(boundary.get("ready") == Some(&Value::Bool(true))
+        && !boundary.get("last_error").is_some_and(names_an_error))
 }

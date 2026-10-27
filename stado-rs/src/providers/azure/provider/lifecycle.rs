@@ -12,7 +12,7 @@ use super::super::arm::{vm_path, COMPUTE_API_VERSION};
 use super::super::builders::{nic_skip_error, vm_body, vm_skip_error};
 use super::super::network;
 use super::super::power::{lifecycle, vm_is_alive};
-use super::{log, py_bool, AzureProvider};
+use super::{log, AzureProvider};
 
 #[path = "fleet.rs"]
 mod fleet;
@@ -80,6 +80,7 @@ impl Provider for AzureProvider {
         startup_script: &str,
         preemptible: bool,
     ) -> Result<Option<String>, ProviderError> {
+        super::super::credit::admit(&format!("creating Azure VM {name}"), machine_type).await?;
         let state = self.state().await?;
         let client = &state.client;
         let rg = config::azure_resource_group();
@@ -133,9 +134,8 @@ impl Provider for AzureProvider {
             {
                 Ok(_) => {
                     log(&format!(
-                        "Created {} preemptible={}",
+                        "Created {} preemptible={preemptible}",
                         Self::reference(name, location),
-                        py_bool(preemptible)
                     ));
                     return Ok(Some(Self::reference(name, location)));
                 }
@@ -199,8 +199,29 @@ impl Provider for AzureProvider {
     }
 
     async fn start_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
-        let state = self.state().await?;
         let name = Self::parse_ref(instance_ref)?;
+        let operation = format!("starting Azure VM {name}");
+        // The size the stopped machine has is read (a free GET) to price it;
+        // the operator's floor is read by the admission that follows.
+        let state = self.state().await?;
+        let vm = state
+            .client
+            .get_vm(config::azure_resource_group(), name)
+            .await?
+            .ok_or_else(|| {
+                ProviderError::Value(format!(
+                    "{operation} is refused: no VM {name} exists to price"
+                ))
+            })?;
+        let size = vm
+            .pointer("/properties/hardwareProfile/vmSize")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ProviderError::Value(format!(
+                    "{operation} is refused: VM {name} names no hardwareProfile.vmSize to price"
+                ))
+            })?;
+        super::super::credit::admit(&operation, size).await?;
         let path = format!(
             "{}/start?api-version={COMPUTE_API_VERSION}",
             vm_path(

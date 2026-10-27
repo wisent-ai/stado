@@ -118,42 +118,10 @@ pub enum FleetCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Mint an invite: something the machine's owner runs, no access needed.
-    Invite {
-        /// Registry target name to reserve; derived from the invite id when
-        /// omitted.
-        #[arg(long)]
-        name: Option<String>,
-        /// How long the invite stays usable: a number plus s, m, h or d.
-        /// Required: Stado assumes no lifetime for an invitation.
-        #[arg(long)]
-        expires: String,
-        /// How many machines may redeem the invite.
-        #[arg(long, default_value_t = 1)]
-        uses: u64,
-        /// Skip the control-point probe and issue the pasteable offline
-        /// fragment, which needs no HTTP route at all. Without the flag an
-        /// unreachable control point selects this mode anyway, and says why.
-        #[arg(long)]
-        offline: bool,
-        /// Emit the machine-readable document instead of the report.
-        #[arg(long)]
-        json: bool,
-    },
-    /// List minted invites with the state each is actually in.
-    Invites {
-        /// Emit the machine-readable document instead of the table.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Retire an invite so it can no longer be redeemed.
-    RevokeInvite {
-        /// Invite id as printed by `invite` and `invites`.
-        id: String,
-        /// Emit the machine-readable document instead of the sentences.
-        #[arg(long)]
-        json: bool,
-    },
+    /// Invitations a machine's owner redeems with no access needed: `create`
+    /// one, `list` them with their state, `revoke` one before it is used.
+    #[command(subcommand)]
+    Invite(InviteCommands),
     /// Stand up, inspect or tear down the public entrance the one-line invite
     /// mode needs — a narrow enrollment listener behind a Cloudflare quick
     /// tunnel, with no Cloudflare account, token or DNS record involved.
@@ -206,4 +174,45 @@ pub enum FleetCommands {
     /// SSH host keys in the globally selected credential store.
     #[command(subcommand)]
     Key(KeyCommands),
+}
+
+/// `stado fleet invite`: invitations to join the fleet.
+#[derive(Subcommand)]
+pub enum InviteCommands {
+    /// Mint an invite: something the machine's owner runs, no access needed.
+    Create {
+        /// Registry target name to reserve; derived from the invite id when
+        /// omitted.
+        #[arg(long)]
+        name: Option<String>,
+        /// How long the invite stays usable: a number plus s, m, h or d.
+        /// Required: Stado assumes no lifetime for an invitation.
+        #[arg(long)]
+        expires: String,
+        /// How many machines may redeem the invite; one when omitted.
+        #[arg(long, default_value_t = crate::primitives::tally::FIRST_DRAW)]
+        uses: u64,
+        /// Skip the control-point probe and issue the pasteable offline
+        /// fragment, which needs no HTTP route at all. Without the flag an
+        /// unreachable control point selects this mode anyway, and says why.
+        #[arg(long)]
+        offline: bool,
+        /// Emit the machine-readable document instead of the report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List minted invites with the state each is actually in.
+    List {
+        /// Emit the machine-readable document instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Retire an invite so it can no longer be redeemed.
+    Revoke {
+        /// Invite id as printed by `invite create` and `invite list`.
+        id: String,
+        /// Emit the machine-readable document instead of the sentences.
+        #[arg(long)]
+        json: bool,
+    },
 }

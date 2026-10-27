@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use stado::deploy::service::{classify_image, installed_image, ImageIdentity, ImageState};
 
 fn scratch(name: &str) -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("service-images-launcher")
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../.build/journeys/service-images-launcher")
         .join(format!("{name}-{}", std::process::id()));
     fs::create_dir_all(&root).expect("scratch directory");
     root

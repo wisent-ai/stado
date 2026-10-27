@@ -11,11 +11,6 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 use super::AutonomyPolicy;
 
-/// Positive and representable as `i64` seconds.
-fn positive_seconds(value: u64) -> bool {
-    NonZeroU64::new(value).is_some() && i64::try_from(value).is_ok()
-}
-
 impl AutonomyPolicy {
     pub fn validate(&self) -> Result<(), String> {
         if self.policy_version.trim().is_empty() {
@@ -27,19 +22,20 @@ impl AutonomyPolicy {
         if NonZeroUsize::new(self.limits.max_actions_per_provider).is_none() {
             return Err("limits.max_actions_per_provider must be positive".to_string());
         }
-        if !positive_seconds(self.limits.decision_ttl_seconds) {
-            return Err("limits.decision_ttl_seconds must fit positive i64 seconds".to_string());
-        }
+        crate::autonomy::time::positive_duration(
+            self.limits.decision_ttl_seconds,
+            "limits.decision_ttl_seconds",
+        )?;
         if NonZeroUsize::new(self.limits.max_concurrent_mutations).is_none() {
             return Err("limits.max_concurrent_mutations must be positive".to_string());
         }
-        if NonZeroUsize::new(self.limits.circuit_breaker_failures).is_none()
-            || !positive_seconds(self.limits.circuit_breaker_cooldown_seconds)
-        {
-            return Err(
-                "circuit-breaker threshold and cooldown must fit positive seconds".to_string(),
-            );
+        if NonZeroUsize::new(self.limits.circuit_breaker_failures).is_none() {
+            return Err("limits.circuit_breaker_failures must be positive".to_string());
         }
+        crate::autonomy::time::positive_duration(
+            self.limits.circuit_breaker_cooldown_seconds,
+            "limits.circuit_breaker_cooldown_seconds",
+        )?;
         if NonZeroU64::new(self.freshness.inventory_max_age_seconds).is_none()
             || NonZeroU64::new(self.freshness.pricing_max_age_seconds).is_none()
         {
@@ -99,10 +95,23 @@ impl AutonomyPolicy {
             if rule.stop_schedule.is_some() && rule.stop_schedule == rule.start_schedule {
                 return Err("start_schedule and stop_schedule must differ".to_string());
             }
-            if let Some(timezone) = rule.timezone.as_deref() {
-                if timezone.parse::<chrono_tz::Tz>().is_err() {
-                    return Err(format!("invalid resource-rule timezone: {timezone}"));
+            // A cron expression means nothing without the timezone it is
+            // read in: a rule that schedules must name one, and the name
+            // must be one the timezone database knows.
+            match rule.timezone.as_deref() {
+                Some(timezone) => {
+                    if timezone.parse::<chrono_tz::Tz>().is_err() {
+                        return Err(format!("invalid resource-rule timezone: {timezone}"));
+                    }
                 }
+                None if rule.stop_schedule.is_some() || rule.start_schedule.is_some() => {
+                    return Err(
+                        "a rule with stop_schedule or start_schedule must name the timezone its \
+                         cron expressions are read in (timezone: \"<IANA name>\")"
+                            .to_string(),
+                    )
+                }
+                None => {}
             }
         }
         Ok(())

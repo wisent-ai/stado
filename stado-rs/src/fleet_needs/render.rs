@@ -24,11 +24,7 @@ pub fn render(report: &NeedsReport) -> String {
     }
     let mut out = String::new();
     for need in &report.needs {
-        let subject = match (&need.target, &need.platform) {
-            (Some(target), _) => target.clone(),
-            (None, Some(platform)) => platform.clone(),
-            (None, None) => "fleet".to_string(),
-        };
+        let subject = need.subject();
         out.push_str(&format!(
             "{} {} ({}): {}\n",
             need.severity.as_str(),

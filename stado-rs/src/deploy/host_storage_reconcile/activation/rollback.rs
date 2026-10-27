@@ -6,7 +6,7 @@ if [ "$(/usr/bin/uname -s)" != Darwin ]; then
   exit 65
 fi
 label=@LABEL@
-plist="/Library/LaunchDaemons/$label.plist"
+plist="@LAUNCHD_DAEMONS@/$label.plist"
 program="$HOME/.stado/bin/stado"
 store=@PRIMARY@
 backup_backend=@BACKUP_BACKEND@
@@ -99,7 +99,8 @@ pub(in crate::deploy::host_storage_reconcile) fn object_recovery_script(
         Some(store) => ("local", store),
         None => ("", ""),
     };
-    let body = ROLLBACK_OBJECT_API_SCRIPT
+    // Directories before any captured value, so none is read as a placeholder.
+    let body = service::with_unit_directories(ROLLBACK_OBJECT_API_SCRIPT)
         .replace("@LABEL@", &shlex_quote(&writer.label))
         .replace("@PRIMARY@", &shlex_quote(primary))
         .replace("@BACKUP_BACKEND@", &shlex_quote(backup_backend))
@@ -120,8 +121,10 @@ fn object_api_unit(
     port: u16,
 ) -> Result<String, DeployError> {
     use plist::{Dictionary, Value as Plist};
-    let home = std::env::var("HOME").map_err(|error| {
-        DeployError(format!("HOME is not set: {error}"))
+    // The unit runs without the shell's environment, so the home it is
+    // handed is the one every Stado file is kept under, never an empty HOME.
+    let home = crate::config_file::home_text().map_err(|cause| {
+        DeployError(format!("the object API unit has no home to run in: {cause}"))
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let uid = nix::unistd::getuid();

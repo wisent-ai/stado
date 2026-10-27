@@ -9,7 +9,7 @@ use crate::cli::CmdError;
 use crate::primitives::failure::FailureCode;
 use crate::queue::JobStorage;
 
-/// `stado fleet revoke-invite ID` — retire an invite before anybody uses it.
+/// `stado fleet invite revoke ID` — retire an invite before anybody uses it.
 /// Sentences, or with `--json` `{invite, target, previous, revoked,
 /// channel_key_item_remains}`.
 pub async fn revoke_invite(id: &str, as_json: bool) -> Result<bool, CmdError> {

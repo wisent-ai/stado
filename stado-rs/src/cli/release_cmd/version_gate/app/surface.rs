@@ -167,7 +167,7 @@ pub(super) fn of(load: Loader, sources: &AppSources) -> Read<Vec<String>> {
 /// version, else the Cargo.toml's package version, else the pyproject's
 /// `[project]` version, else setup.py's, else the package.json's.
 pub(super) fn declared_version(load: Loader, sources: &AppSources) -> Read<String> {
-    let source = sources.version_source();
+    let source = sources.version_source()?;
     if sources.info_plist.is_none() {
         if let Some(project) = &sources.tuist_project {
             let helpers = &sources.tuist_helpers;

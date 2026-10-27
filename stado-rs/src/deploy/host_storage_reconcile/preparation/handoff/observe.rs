@@ -8,7 +8,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn prove_listener_closed(
     let script = host_step_script(&["listener", "closed", "--port", &port.to_string()])?;
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_LISTENER_CLOSED\t{port}");
-    if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
+    if !output.succeeded() || !output.stdout.lines().any(|line| line == marker) {
         return Err(DeployError::unreachable(format!(
             "object API listener on {}:{port} did not close: {}",
             target.name,
@@ -25,7 +25,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn snapshot_unit_file(
 ) -> Result<Option<FileSnapshot>, DeployError> {
     let script = host_step_script(&["unit", "snapshot", "--path", path])?;
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "unit snapshot failed for {path} on {}: {}",
             target.name,

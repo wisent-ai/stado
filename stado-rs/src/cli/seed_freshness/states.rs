@@ -22,7 +22,7 @@ pub async fn seed_states(
 ) -> Result<Vec<(String, String)>, CmdError> {
     let runner = crate::deploy::production_runner();
     let credential_host = crate::cli::host::credential_host(target).await?;
-    let mut arguments = vec![String::from("totp-seed-state")];
+    let mut arguments = vec![String::from("totp"), String::from("seed")];
     if let Some(item) = login_item {
         arguments.push(item.to_string());
     }

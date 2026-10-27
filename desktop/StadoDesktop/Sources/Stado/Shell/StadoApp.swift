@@ -48,6 +48,10 @@ final class StadoAppDelegate: NSObject, NSApplicationDelegate {
 struct StadoApp: App {
     @NSApplicationDelegateAdaptor(StadoAppDelegate.self) private var delegate
 
+    init() {
+        NativeOperationCatalog.printPathsIfAsked()
+    }
+
     var body: some Scene {
         WindowGroup("Stado", id: "operations-console") {
             StadoFirstUseRoot(

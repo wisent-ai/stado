@@ -79,9 +79,21 @@ pub async fn mirror_to_output_uri(store: &JobStorage, job: &Job, log_fn: &mut dy
         }
     };
     for path in files {
-        let relative = path
-            .strip_prefix(&output_dir)
-            .unwrap_or(&path)
+        // The walk started at the output directory, so every file is
+        // beneath it; one that is not would be mirrored under its absolute
+        // path, outside the job's prefix, and is refused by name instead.
+        let inside = match path.strip_prefix(&output_dir) {
+            Ok(inside) => inside,
+            Err(_outside) => {
+                log_fn(&format!(
+                    "output_uri mirror refused {}: it is not inside the job's output directory {}",
+                    path.display(),
+                    output_dir.display()
+                ));
+                continue;
+            }
+        };
+        let relative = inside
             .components()
             .map(|component| component.as_os_str().to_string_lossy())
             .collect::<Vec<_>>()

@@ -13,7 +13,8 @@ use crate::queue::capacity::read_consumer_capacity;
 use crate::queue::{JobStorage, StorageError};
 
 use super::super::lifecycle::requeue_jids_after_reap;
-use super::super::{dedup_preserve_order, log, py_str_list, MonitorError};
+use super::super::{dedup_preserve_order, log, MonitorError};
+use crate::models::py_list_repr;
 use super::completions::instance_refs_with_completions;
 use super::measured::KindDurations;
 use super::race::safety_is_real_race;
@@ -66,7 +67,7 @@ pub async fn reap_dead_agents(
     let completed_refs = if refs.is_empty() {
         HashSet::new()
     } else {
-        instance_refs_with_completions(store, kind).await?
+        instance_refs_with_completions(store).await?
     };
     let mut active_refs: HashSet<String> = HashSet::new();
     for job in store.list_jobs("running").await? {
@@ -186,7 +187,7 @@ pub async fn reap_dead_agents(
         if !safety.is_empty() && safety_is_real_race(store, &safety).await {
             log(&format!(
                 "defer reap of {instance_ref_full}: running/ {} is alive by its promise",
-                py_str_list(&safety)
+                py_list_repr(&safety)
             ));
             continue;
         }
@@ -200,7 +201,7 @@ pub async fn reap_dead_agents(
         log(&format!(
             "reap_dead_agents: deleted {} VM(s): {}",
             reaped.len(),
-            py_str_list(&reaped)
+            py_list_repr(&reaped)
         ));
     }
     i64::try_from(reaped.len()).map_err(|error| {

@@ -21,7 +21,10 @@ impl RemoteObjectApi {
         {
             return Ok(None);
         }
-        let configured = crate::config::wc_stado_storage_url();
+        let configured = crate::config::wc_stado_storage_url().map_err(|cause| {
+            CmdError::click(format!("storage.stado.url cannot be resolved: {cause}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         if configured.trim().is_empty() {
             return Ok(None);
         }

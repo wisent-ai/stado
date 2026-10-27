@@ -1,13 +1,18 @@
-//! The Vast.ai adapter behind `stado market --provider vast`.
+//! `stado market`: the dispatch by `--provider`, and the Vast.ai adapter
+//! behind `--provider vast`.
 //!
-//! `list`, `unlist`, `status`, `monitor`, the `auto-list` loop and the
+//! `list`, `unlist`, `status`, `monitor`, the `follow` loop and the
 //! `readiness` verdict, each against Vast.ai's host API. Monitor and
-//! auto-list read the queue through [`JobStorage`], which honors
+//! follow read the queue through [`JobStorage`], which honors
 //! `WC_STORAGE_BACKEND`. A dry run builds no client: `--dry-run` promises the
 //! toggle decisions without calling the marketplace, so it needs no
-//! credential.
+//! credential. `--provider stado` and `stado market peer` are answered by
+//! [`super::peer`].
 
 mod readiness;
+mod readiness_text;
+
+pub(crate) use readiness::{read_vault, VaultReading};
 
 use serde_json::json;
 
@@ -17,33 +22,41 @@ use crate::queue::JobStorage;
 
 /// Dispatch one `market` subcommand to the marketplace it names.
 pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
+    if let MarketCommands::Peer(peer) = command {
+        return super::peer::declare(peer).await;
+    }
+    if provider(command) == MarketProvider::Stado {
+        return super::peer::dispatch(command).await;
+    }
+    if peer_named(command) {
+        return Err(CmdError::usage(
+            "--peer names a Stado fleet and is taken only with --provider stado",
+        ));
+    }
     match command {
         MarketCommands::List {
-            provider: MarketProvider::Vast,
             price_gpu,
             price_disk,
             price_min_bid,
             json,
-        } => list(*price_gpu, *price_disk, *price_min_bid, *json).await,
-        MarketCommands::Unlist {
-            provider: MarketProvider::Vast,
-            json,
-        } => unlist(*json).await,
-        MarketCommands::Status {
-            provider: MarketProvider::Vast,
-            json,
-        } => status(*json).await,
+            ..
+        } => {
+            let Some(price_disk) = price_disk else {
+                return Err(CmdError::usage(
+                    "listing on Vast.ai needs --price-disk, the per-GB-month disk price in USD",
+                ));
+            };
+            list(*price_gpu, *price_disk, *price_min_bid, *json).await
+        }
+        MarketCommands::Unlist { json, .. } => unlist(*json).await,
+        MarketCommands::Status { json, .. } => status(*json).await,
         MarketCommands::Readiness {
-            provider: MarketProvider::Vast,
             vault_host,
             no_vault_check,
             json,
+            ..
         } => readiness::report(vault_host.clone(), *no_vault_check, *json).await,
-        MarketCommands::Monitor {
-            provider: MarketProvider::Vast,
-            bucket,
-            json,
-        } => {
+        MarketCommands::Monitor { bucket, json, .. } => {
             // `--bucket` names the store when given; else it is the one the
             // configuration selects.
             let bucket = match bucket.as_deref() {
@@ -52,25 +65,58 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             };
             monitor(bucket, *json).await
         }
-        MarketCommands::AutoList {
-            provider: MarketProvider::Vast,
+        MarketCommands::Follow {
             idle_window_s,
             poll_interval_s,
             price_gpu,
+            price_disk,
             max_duration_s,
             dry_run,
             once,
+            ..
         } => {
+            let Some(price_disk) = price_disk else {
+                return Err(CmdError::usage(
+                    "following the queue on Vast.ai needs --price-disk, the per-GB-month disk price in USD",
+                ));
+            };
             auto_list(
                 *idle_window_s,
                 *poll_interval_s,
-                *price_gpu,
+                (*price_gpu, *price_disk),
                 *max_duration_s,
                 *dry_run,
                 *once,
             )
             .await
         }
+        MarketCommands::Peer(_) => unreachable!("peer declarations were answered above"),
+    }
+}
+
+/// The marketplace a provider-bearing subcommand names.
+pub(crate) fn provider(command: &MarketCommands) -> MarketProvider {
+    match command {
+        MarketCommands::List { provider, .. }
+        | MarketCommands::Unlist { provider, .. }
+        | MarketCommands::Status { provider, .. }
+        | MarketCommands::Readiness { provider, .. }
+        | MarketCommands::Monitor { provider, .. }
+        | MarketCommands::Follow { provider, .. } => *provider,
+        MarketCommands::Peer(_) => MarketProvider::Stado,
+    }
+}
+
+/// Whether the subcommand carries `--peer`.
+fn peer_named(command: &MarketCommands) -> bool {
+    match command {
+        MarketCommands::List { peer, .. }
+        | MarketCommands::Unlist { peer, .. }
+        | MarketCommands::Status { peer, .. }
+        | MarketCommands::Readiness { peer, .. }
+        | MarketCommands::Monitor { peer, .. }
+        | MarketCommands::Follow { peer, .. } => peer.is_some(),
+        MarketCommands::Peer(_) => false,
     }
 }
 
@@ -99,7 +145,7 @@ async fn list(
             price_gpu,
             price_disk,
             price_min_bid,
-            ..ListMachineParams::default()
+            duration: None,
         })
         .await
         .map_err(cmd_err)?;
@@ -140,7 +186,7 @@ fn now_utc_iso_z() -> String {
 async fn monitor(bucket: &str, json_output: bool) -> Result<(), CmdError> {
     let reading = vast::read_vast_api_key().await;
     let vast_machine = match reading.key.clone() {
-        None => json!({"error": reading.refusal()}),
+        None => json!({"error": vast::vast_refusal(&reading)}),
         Some(key) => match VastClient::new(key).machine_status().await {
             Ok(machine) => machine,
             Err(VastError::Config(message)) => json!({"error": message}),
@@ -175,10 +221,12 @@ async fn monitor(bucket: &str, json_output: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Run the Vast.ai bridge; the price pair is the per-GPU-hour and the
+/// per-GB-month disk price in USD.
 async fn auto_list(
     idle_window_s: i64,
     poll_interval_s: Option<u64>,
-    price_gpu: f64,
+    (price_gpu, price_disk): (f64, f64),
     max_duration_s: i64,
     dry_run: bool,
     once: bool,
@@ -187,26 +235,24 @@ async fn auto_list(
     let client = reading.key.clone().map(VastClient::new);
     if client.is_none() {
         if !dry_run {
-            return Err(CmdError::click(reading.refusal())
+            return Err(CmdError::click(vast::vast_refusal(&reading))
                 .stating(crate::primitives::failure::FailureCode::Config));
         }
-        eprintln!("[vast] {}", reading.refusal());
+        eprintln!("[vast] {}", vast::vast_refusal(&reading));
     }
-    // Python auto_list_loop's default bucket is the literal
-    // "wisent-compute" (the CLI exposes no --bucket here).
-    let store = JobStorage::with_bucket("wisent-compute").await?;
+    // The queue the bridge watches is the one the configuration selects,
+    // as `monitor` reads it; a bucket written here would watch a queue the
+    // operator never named.
+    let store = JobStorage::with_bucket(crate::config::bucket()).await?;
     let hostname = vast::system_hostname();
     let params = AutoListParams {
         idle_window_s,
         poll: poll_interval_s.map(std::time::Duration::from_secs),
         price_gpu,
+        price_disk,
         dry_run,
         once,
-        duration_s: if max_duration_s > 0 {
-            Some(max_duration_s)
-        } else {
-            None
-        },
+        duration_s: max_duration_s.is_positive().then_some(max_duration_s),
     };
     vast::auto_list_loop(client.as_ref(), &store, &hostname, params, |m| {
         println!("{m}")

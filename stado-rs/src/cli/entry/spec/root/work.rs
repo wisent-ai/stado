@@ -89,6 +89,10 @@ pub(crate) struct AgentOptions {
     /// no price is built in.
     #[arg(long)]
     pub vast_price_gpu: Option<f64>,
+    /// Per-GB-month disk price in USD. Required when the Vast bridge runs;
+    /// no price is built in.
+    #[arg(long)]
+    pub vast_price_disk: Option<f64>,
     /// Maximum rental length in seconds; zero leaves it open-ended. Required
     /// when the Vast bridge runs.
     #[arg(long)]
@@ -159,6 +163,12 @@ pub(crate) enum QualityCommands {
         /// pushed commit. Deletions have no source tree to check.
         #[arg(long, conflicts_with = "revision")]
         pre_push: bool,
+        /// An open defect this check serves, named to Oko's admission
+        /// (`oko admit compile|test|build --purpose`) before a lint or test
+        /// gate runs or the CLI is built; repeat for several. A consent the
+        /// operator limited to a purpose admits only work naming it.
+        #[arg(long = "purpose")]
+        purposes: Vec<String>,
         /// Answer in JSON: the progress lines and each gate's own report go
         /// to stderr, and stdout carries one document — the checked
         /// revisions on a pass, or the failure envelope whose `details` name
@@ -174,7 +184,7 @@ pub(crate) enum QualityCommands {
     /// was judged, with the commands left to fold in; non-zero when the CLI
     /// could not be built, read or judged. A product whose catalog record
     /// declares no CLI surface has none.
-    CommandTree {
+    Tree {
         /// The checkout to read; the working directory by default.
         #[arg(long)]
         root: Option<String>,
@@ -182,6 +192,11 @@ pub(crate) enum QualityCommands {
         /// install of the checkout builds.
         #[arg(long)]
         revision: Option<String>,
+        /// An open defect this reading serves, named to Oko's admission
+        /// (`oko admit build --purpose`) before the CLI is built; repeat for
+        /// several.
+        #[arg(long = "purpose")]
+        purposes: Vec<String>,
         /// Progress to stderr and one document on stdout: product,
         /// revision, whether it has a CLI, and `remaining`, one sentence per
         /// command.

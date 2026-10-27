@@ -32,15 +32,26 @@ pub(in crate::doctor) const CONTRACT_REMEDY: &str =
 /// nothing else.
 pub(in crate::doctor) async fn skarbiec_contract_check() -> Check {
     let url = match crate::credential_store::skarbiec_url() {
-        Some(url) => url,
+        Ok(Some(url)) => url,
         // A file-backed credential store has no broker and no contract to
         // disagree with, which is a different thing from a broker that is
         // fine.
-        None => {
+        Ok(None) => {
             return Check::pass(
                 CONTRACT_ID,
                 CONTRACT_TITLE,
                 "credential store is not a Skarbiec broker; no read contract applies".to_string(),
+                CONTRACT_REMEDY,
+            )
+        }
+        // A store selector that cannot be read is not a file store: the
+        // check fails with the selector's own refusal.
+        Err(error) => {
+            return Check::new(
+                CONTRACT_ID,
+                CONTRACT_TITLE,
+                Status::Fail,
+                format!("the credential store selector could not be read: {error}"),
                 CONTRACT_REMEDY,
             )
         }

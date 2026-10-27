@@ -32,14 +32,23 @@ fn resolve_binding(
             default.to_string(),
         )
     } else {
-        let alternate = if field.alternate_env.is_some() || field.alternate_path.is_some() {
-            cfg(
-                field.alternate_env.unwrap_or(""),
-                field.alternate_path.unwrap_or(""),
-                default,
-            )
-        } else {
-            default.to_string()
+        // An alternate binding is read from exactly the sources the catalog
+        // declares for it: an environment name, a file path, or both. A
+        // field without an alternate falls to the default.
+        let alternate = match (field.alternate_env, field.alternate_path) {
+            (Some(env), Some(path)) => cfg(env, path, default),
+            (Some(env), None) => match crate::config_file::variable(env) {
+                Ok(Some(value)) if !value.is_empty() => value,
+                Ok(Some(_)) | Ok(None) => default.to_string(),
+                Err(cause) => panic!("{cause}"),
+            },
+            (None, Some(path)) => match crate::config_file::get(path) {
+                Some(serde_json::Value::String(text)) => text,
+                Some(serde_json::Value::Number(number)) => number.to_string(),
+                Some(serde_json::Value::Bool(flag)) => flag.to_string(),
+                Some(_) | None => default.to_string(),
+            },
+            (None, None) => default.to_string(),
         };
         (field.env, field.path, alternate)
     };
@@ -131,9 +140,17 @@ fn resolve_storage_backend(backup: bool) -> String {
         backup,
         DEFAULT_STORAGE_BACKEND,
     );
-    crate::capabilities::canonical_id(crate::capabilities::RuntimeFacet::Storage, &name)
-        .unwrap_or(&name)
-        .to_string()
+    canonical_or_declared(crate::capabilities::RuntimeFacet::Storage, name)
+}
+
+/// The catalog's canonical id for a declared name, or the name as declared
+/// when the catalog has no entry for it: the validators downstream refuse
+/// an unknown name by that spelling, which is the one the operator wrote.
+fn canonical_or_declared(kind: crate::capabilities::RuntimeFacet, name: String) -> String {
+    match crate::capabilities::canonical_id(kind, &name) {
+        Some(canonical) => canonical.to_string(),
+        None => name,
+    }
 }
 
 fn canonicalize_capability_names(
@@ -142,11 +159,7 @@ fn canonicalize_capability_names(
 ) -> Vec<String> {
     values
         .into_iter()
-        .map(|name| {
-            crate::capabilities::canonical_id(kind, &name)
-                .unwrap_or(&name)
-                .to_string()
-        })
+        .map(|name| canonical_or_declared(kind, name))
         .collect()
 }
 

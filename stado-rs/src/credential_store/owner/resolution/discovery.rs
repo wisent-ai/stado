@@ -35,7 +35,7 @@ pub fn binary() -> Result<PathBuf, SkarbiecError> {
     match std::env::var("SKARBIEC_BIN") {
         Ok(explicit) => {
             let path = PathBuf::from(&explicit);
-            if !path.is_file() {
+            if !file_at(&path)? {
                 return Err(SkarbiecError::Deployment(format!(
                     "SKARBIEC_BIN names no file: {explicit}"
                 )));
@@ -52,7 +52,7 @@ pub fn binary() -> Result<PathBuf, SkarbiecError> {
     let home = home()?;
     for candidate in SKARBIEC_CANDIDATES {
         let path = PathBuf::from(candidate.replace("$HOME", &home));
-        if path.is_file() {
+        if file_at(&path)? {
             return Ok(path);
         }
     }
@@ -60,4 +60,18 @@ pub fn binary() -> Result<PathBuf, SkarbiecError> {
         "no installed skarbiec binary at {}",
         SKARBIEC_CANDIDATES.join(", ")
     )))
+}
+
+/// Whether `path` is a file. One that cannot be examined is refused naming
+/// it: read as absent, a vault or binary out of this process's reach was
+/// passed over for another candidate, or refused as not installed.
+pub(super) fn file_at(path: &std::path::Path) -> Result<bool, SkarbiecError> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(SkarbiecError::Deployment(format!(
+            "{} cannot be examined: {error}",
+            path.display()
+        ))),
+    }
 }

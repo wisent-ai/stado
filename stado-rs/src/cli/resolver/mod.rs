@@ -5,12 +5,12 @@ use std::sync::Arc;
 use clap::Subcommand;
 use serde_json::json;
 
-use crate::monitor::host_silence;
 use crate::service_resolution;
 use crate::targets::RegistryStore;
 
 use crate::cli::CmdError;
 
+mod accept;
 mod api_bind;
 mod authority;
 mod directory;
@@ -22,14 +22,22 @@ mod takeover;
 pub use crate::cli::resolver::directory::document::canonical_document;
 pub use crate::cli::resolver::directory::document::canonical_document_or_last_good;
 pub use crate::cli::resolver::serve::serve;
-pub(crate) use report::serving::await_serving;
-pub(crate) use takeover::take_authority;
+pub(crate) use report::follow::{follow_generation, follow_written};
+pub(crate) use report::serving::{await_serving, ensure_upstream_follows, follow_authority};
+pub(crate) use takeover::{
+    install as install_authority, own_command, promote as promote_authority, take_authority,
+    Handover as AuthorityHandover, Installed as InstalledAuthority,
+};
 
 pub(crate) use crate::cli::resolver::directory::document::{
-    authority_snapshot, kept_last_good_document, last_good_document,
+    authority_snapshot, directory_document, held_or_authority_snapshot, kept_last_good_document,
+    last_good_document,
+};
+pub(crate) use crate::cli::resolver::directory::remembered::recalled::forget as forget_recalled_registry;
+pub(crate) use crate::cli::resolver::directory::remembered::shared::{
+    authority_store_elsewhere, store_on_silent_authority,
 };
 pub(crate) use crate::cli::resolver::directory::source::current_target;
-pub(crate) use crate::cli::resolver::directory::source::snapshot_source;
 pub(crate) use crate::cli::resolver::directory::write::authority_compare_and_swap;
 pub(crate) use crate::cli::resolver::directory::{read_local_document, read_local_snapshot};
 pub(crate) use crate::cli::resolver::report::readers::{
@@ -118,14 +126,61 @@ pub enum ResolverCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Accept one directory generation the authority answers below the one
+    /// this host's resolver holds, after its rollback refusal named both
+    /// store versions. The serving resolver adopts exactly that generation on
+    /// its next refresh, says so, and forgets the acceptance; any other
+    /// generation stays refused.
+    Accept {
+        /// The generation the authority answers, as the refusal names it.
+        #[arg(long)]
+        generation: u64,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ask this host's resolver to read the registry now and wait until it
+    /// holds directory GENERATION or a later one; without --generation, the
+    /// one the registry authority serves, after the resolver this host reads
+    /// from follows its own. Refused with the resolver's own answer.
+    Follow {
+        /// The directory generation to hold; omitted, the registry the authority serves.
+        #[arg(long)]
+        generation: Option<u64>,
+    },
     /// The host's resolution API.
     Api {
         #[command(subcommand)]
         command: ResolverApiCommands,
     },
+    /// What this machine remembers about reading its remote registry
+    /// authority: a read given up, or one no SSH path reached, which turns
+    /// every next reader to its copy until the refresh interval passes, and
+    /// the snapshot kept for that interval.
+    Remembered {
+        #[command(subcommand)]
+        command: ResolverRememberedCommands,
+    },
     /// Emit this host's versioned registry for authenticated resolver peers.
     #[command(hide = true)]
     Snapshot,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ResolverRememberedCommands {
+    /// Show the remembered given-up read and the kept snapshot.
+    Show {
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drop both, so the next command asks the authority at once; prints
+    /// what was dropped.
+    Forget {
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -165,9 +220,30 @@ pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
             bind,
             json,
         } => relay::relay(&service, &consumer, &bind, json).await,
+        ResolverCommands::Accept { generation, json } => accept::accept(generation, json),
+        ResolverCommands::Follow { generation } => {
+            let generation = match generation {
+                Some(generation) => {
+                    tokio::task::spawn_blocking(move || follow_generation(generation))
+                        .await
+                        .map_err(|error| CmdError::click(format!("the wait for this host's resolver did not end: {error}")))?
+                        .map_err(CmdError::refused)?;
+                    generation
+                }
+                None => follow_authority(true).await?,
+            };
+            println!("this host's resolver holds directory generation {generation} or later");
+            Ok(())
+        }
         ResolverCommands::Api {
             command: ResolverApiCommands::Reassign { target, json },
         } => api_bind::api_reassign(&target, json).await,
+        ResolverCommands::Remembered { command } => match command {
+            ResolverRememberedCommands::Show { json } => directory::remembered::verbs::show(json),
+            ResolverRememberedCommands::Forget { json } => {
+                directory::remembered::verbs::forget(json)
+            }
+        },
     }
 }
 
@@ -187,8 +263,8 @@ fn logical_name(value: &str) -> Result<&str, CmdError> {
     Ok(value)
 }
 
-/// The directory as this host reads it and the service resolved for
-/// `consumer` from it, with this host's own target name.
+/// The directory as this host reads it ([`directory_document`]) and the
+/// service resolved for `consumer` from it, with this host's own target name.
 async fn resolved_for(
     service: &str,
     consumer: &str,
@@ -197,9 +273,7 @@ async fn resolved_for(
     let store = Arc::new(RegistryStore::open().await?);
     let (bootstrap, _, _) = read_local_snapshot(&store).await?;
     let target = current_target(&bootstrap).map_err(CmdError::declaration)?;
-    let source =
-        snapshot_source(Some(store), &bootstrap, &target).map_err(CmdError::declaration)?;
-    let (document, _, _) = source.fetch(host_silence::READER_CLI).await?;
+    let document = directory_document(store, &bootstrap, &target).await?;
     let resolved =
         service_resolution::resolve(&document, service, consumer).map_err(CmdError::from)?;
     Ok((resolved, target))

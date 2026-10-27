@@ -33,7 +33,7 @@ pub const BUILD_CACHE_LEAF: &str = "build-cache";
 /// Components of the queue root below an undeclared host's home. Each is
 /// opened separately with `O_DIRECTORY|O_NOFOLLOW`; no component symlink is
 /// supported.
-pub const HOME_JOBS_COMPONENTS: [&str; 3] = [".stado", "work", JOBS_LEAF];
+pub const HOME_JOBS_COMPONENTS: &[&str] = &[".stado", "work", JOBS_LEAF];
 
 static DECLARED: OnceLock<PathBuf> = OnceLock::new();
 
@@ -80,8 +80,8 @@ pub fn validate_declared(path: &str) -> Result<(), String> {
         );
     }
     if matches!(
-        components[0],
-        "boot" | "dev" | "etc" | "proc" | "run" | "sys" | "usr" | "bin" | "sbin" | "lib"
+        components.first().copied(),
+        Some("boot" | "dev" | "etc" | "proc" | "run" | "sys" | "usr" | "bin" | "sbin" | "lib")
     ) {
         return Err(format!(
             "{path} is under a system tree; declare a directory on a data volume such as /mnt/<disk>/stado"
@@ -90,26 +90,34 @@ pub fn validate_declared(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The account's home ([`crate::config_file::home`]) as an I/O error when
+/// neither HOME nor the user database names one, where this used to stop
+/// the process.
+fn home() -> std::io::Result<PathBuf> {
+    crate::config_file::home().map_err(|cause| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, format!("no work base: {cause}"))
+    })
+}
+
 /// The directory the fleet's work hangs from and the queue root's components
-/// below it: the declared root and `[jobs]`, or the resolved home and
-/// [`HOME_JOBS_COMPONENTS`].
-pub fn base_and_jobs_components() -> (PathBuf, &'static [&'static str]) {
-    match declared() {
+/// below it: the declared root and `[jobs]`, or the home and
+/// [`HOME_JOBS_COMPONENTS`]. The base is returned as declared; every reader
+/// resolves it (`queue_workdirs::roots`), and the one that opens it refuses a
+/// base that cannot be resolved instead of taking the unresolved path.
+pub fn base_and_jobs_components() -> std::io::Result<(PathBuf, &'static [&'static str])> {
+    Ok(match declared() {
         Some(root) => (root, &[JOBS_LEAF]),
-        None => {
-            let home = crate::config_file::expand_tilde("~");
-            (
-                std::fs::canonicalize(&home).unwrap_or(home),
-                &HOME_JOBS_COMPONENTS,
-            )
-        }
-    }
+        None => (home()?, HOME_JOBS_COMPONENTS),
+    })
 }
 
 /// The volume whose free space this host publishes and admits work against:
 /// the declared root, or the home.
 pub fn measured_volume() -> PathBuf {
-    declared().unwrap_or_else(|| crate::config_file::expand_tilde("~"))
+    match declared() {
+        Some(root) => root,
+        None => crate::config_file::expand_tilde("~"),
+    }
 }
 
 /// The persistent build cache root for one product and platform.

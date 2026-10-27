@@ -54,6 +54,12 @@ pub(crate) enum RegistryCommands {
         /// copy's.
         #[arg(long, conflicts_with_all = ["if_generation", "force", "allow_empty_fleet"])]
         last_known_good: bool,
+        /// Write through this host's store while the write fence of this
+        /// transaction holds it: the registry commit `placement role move
+        /// --with-authority` sends the authority whose store it fenced. A
+        /// fence of any other transaction still refuses the write.
+        #[arg(long, requires = "if_generation", conflicts_with = "last_known_good")]
+        fence_transaction: Option<String>,
         /// Emit a `stado.registry-push-receipt.v1` object instead of the
         /// sentence, for both the write and the refusal.
         #[arg(long)]
@@ -78,6 +84,12 @@ pub(crate) enum RegistryCommands {
         /// `targets.<host>.skarbiec`. A string prints bare.
         #[arg(long, conflicts_with_all = ["with_generation", "generation_only"])]
         path: Option<String>,
+        /// Read this host's last-known-good copy instead of the canonical
+        /// registry: the document readers here fall back to and the one that
+        /// names the authority this host asks. Answers while the authority
+        /// and the store are down; `--path` selects in it as in the registry.
+        #[arg(long, conflicts_with_all = ["with_generation", "generation_only"])]
+        last_known_good: bool,
     },
     /// Change one field of the canonical registry, under the generation it
     /// was read at.

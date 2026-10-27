@@ -149,11 +149,11 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
         Some(declared) => declared.into(),
         None => home()?,
     };
-    let expand = |value: &str| {
+    let expand = |value: &str| -> Result<String, String> {
         if value.is_empty() {
-            String::new()
+            Ok(String::new())
         } else {
-            real(value, &home_path).display().to_string()
+            Ok(real(value, &home_path)?.display().to_string())
         }
     };
     // The unit's own STADO_CONFIG decides; the caller's default stands only
@@ -162,7 +162,7 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
         Some(declared) => declared.as_str(),
         None => request.default_config,
     };
-    let configuration: Value = std::fs::read(expand(config_path))
+    let configuration: Value = std::fs::read(expand(config_path)?)
         .map_err(|error| error.to_string())
         .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|error| error.to_string()))
         .map_err(|error| refuse(&format!("cannot read loaded host config: {error}")))?;
@@ -171,7 +171,10 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
     let resolve = |name: &str, pointer: &str| match environment.get(name).filter(|v| !v.is_empty())
     {
         Some(declared) => declared.clone(),
-        None => text(&configuration, pointer).to_string(),
+        None => match text(&configuration, pointer) {
+            Some(value) => value.to_string(),
+            None => String::new(),
+        },
     };
     let primary_backend = canonical_backend(&resolve("WC_STORAGE_BACKEND", "/storage/backend"));
     let primary_setting = resolve("WC_LOCAL_STORAGE_PATH", "/storage/local/path");
@@ -183,7 +186,7 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
         &default_primary
     } else {
         &primary_setting
-    });
+    })?;
     let backup_backend = canonical_backend(&resolve(
         "WC_BACKUP_STORAGE_BACKEND",
         "/storage/backup/backend",
@@ -191,7 +194,7 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
     let backup_root = expand(&resolve(
         "WC_BACKUP_LOCAL_STORAGE_PATH",
         "/storage/backup/local/path",
-    ));
+    ))?;
     let mut legacy = primary_backend == "stado";
     let (mut served_backend, mut served_root) =
         if primary_backend.is_empty() || primary_backend == "local" {
@@ -234,14 +237,20 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
             Some(identity) => {
                 let reported_pid = match identity.get("pid") {
                     Some(Value::String(text)) => text.clone(),
-                    Some(Value::Null) | None => "None".into(),
+                    Some(Value::Null) | None => return Err(refuse("runtime identity names no pid")),
                     Some(other) => other.to_string(),
                 };
                 if reported_pid != pid {
                     return Err(refuse("runtime identity changed during inspection"));
                 }
-                served_backend = text(identity, "/backend").to_string();
-                served_root = expand(text(identity, "/local_path"));
+                served_backend = match text(identity, "/backend") {
+                    Some(backend) => backend.to_string(),
+                    None => String::new(),
+                };
+                served_root = match text(identity, "/local_path") {
+                    Some(root) => expand(root)?,
+                    None => String::new(),
+                };
                 legacy = false;
             }
             None if legacy && runtime.is_none() => {
@@ -259,7 +268,7 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
         None => String::new(),
     };
     let explicit_root = match environment.get("WC_LOCAL_STORAGE_PATH") {
-        Some(declared) => expand(declared),
+        Some(declared) => expand(declared)?,
         None => String::new(),
     };
     let yes = |flag: bool| if flag { "yes" } else { "no" }.to_string();

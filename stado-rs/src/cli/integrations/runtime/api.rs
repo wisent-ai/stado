@@ -41,9 +41,13 @@ impl PreparedApi {
                 wrapped
             })?
         } else {
-            let bind = shape
-                .bind
-                .unwrap_or_else(|| crate::config::dashboard_bind().to_string());
+            // `--bind` names the address; without it the listener binds where
+            // the dashboard declaration says, which is the same declared
+            // source the dashboard itself reads.
+            let bind = match shape.bind {
+                Some(bind) => bind,
+                None => crate::config::dashboard_bind().to_string(),
+            };
             let port = match shape.port {
                 Some(port) => port,
                 None => crate::config::dashboard_port()

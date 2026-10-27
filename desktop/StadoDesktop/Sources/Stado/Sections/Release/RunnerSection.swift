@@ -22,13 +22,31 @@ struct RunnerSection: View {
 
     private func readProfiles() async {
         await runner.load(fleet: fleetStore)
-        if !runner.profiles.contains(profile) { profile = runner.profiles.first ?? "" }
+        // A catalog that declares no profile leaves the selection as it was;
+        // every control is gated on the selection being a declared profile.
+        if let first = runner.profiles.first, !runner.profiles.contains(profile) { profile = first }
     }
 
     private var report: HostRunnerReport? {
         guard fleetStore.runnerHost == target,
               fleetStore.runnerReport?.profile == profile else { return nil }
         return fleetStore.runnerReport
+    }
+
+    /// The registration scope the host's own record carries; `null` in the
+    /// CLI's report when the host could not be probed, which the report's
+    /// status names.
+    private var scopeLabel: String {
+        guard let report else { return "Not read" }
+        switch report.runnerScope {
+        case .some(let scope): return scope
+        case .none: return "Not read: the host could not be probed (\(report.status))"
+        }
+    }
+
+    private var labelsLabel: String {
+        guard let report else { return "Not read" }
+        return report.runnerLabels
     }
 
     private var listenerLabel: String {
@@ -66,10 +84,10 @@ struct RunnerSection: View {
             if runner.isLoading { ProgressView("Reading runner…") }
 
             WisentField(label: "Profile", value: report?.profile ?? profile)
-            WisentField(label: "Registration scope", value: report?.runnerScope ?? "Not read")
+            WisentField(label: "Registration scope", value: scopeLabel)
             WisentField(label: "Listener", value: listenerLabel)
             WisentField(label: "Host job slot", value: hostJobSlotLabel)
-            WisentField(label: "Labels", value: report?.runnerLabels ?? "Not read")
+            WisentField(label: "Labels", value: labelsLabel)
             if let registration = report?.registration {
                 WisentField(label: "GitHub runner", value: registration.runner)
                 WisentField(label: "GitHub scope", value: registration.scope)

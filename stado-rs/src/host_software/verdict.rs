@@ -46,12 +46,15 @@ impl ProductBinary {
             policy.install_root.trim_end_matches('/'),
             policy.binary.trim_start_matches('/')
         );
+        // The file name is the path's last `/` segment; `rsplit` always
+        // yields at least one, so the policy's own binary word never stands
+        // in for it.
+        let name = match path.rsplit('/').next() {
+            Some(name) => name.to_string(),
+            None => unreachable!("str::rsplit yields at least one segment"),
+        };
         Self {
-            name: path
-                .rsplit('/')
-                .next()
-                .unwrap_or(policy.binary.as_str())
-                .to_string(),
+            name,
             path,
             desired: policy
                 .desired
@@ -73,6 +76,17 @@ pub struct Finding {
 }
 
 impl Finding {
+    /// The finding for a rollout target the fleet registry does not declare:
+    /// what it should run cannot be judged, which fails the target.
+    pub fn undeclared(product: &str, target: &str) -> Self {
+        let mut finding = Self::default();
+        finding.fail(format!(
+            "the rollout of {product} names target {target}, which the fleet registry does \
+             not declare, so what it should run cannot be judged"
+        ));
+        finding
+    }
+
     /// The one word a screen sorts and colours on. `ok` is only ever reached by a
     /// fresh report in which every declared program is accounted for.
     pub fn word(&self) -> &'static str {
@@ -123,7 +137,7 @@ fn disagreement(host: &str, row: &HostSoftware, declared: Option<&str>) -> Optio
     if !row.is_release() {
         faults.push(format!(
             "its digest {} matches no release artefact Stado published, so it is {}",
-            row.short_digest(),
+            row.sha256,
             row.provenance
         ));
     }

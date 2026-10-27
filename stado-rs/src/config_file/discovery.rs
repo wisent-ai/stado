@@ -39,6 +39,16 @@ pub(crate) fn home() -> Result<PathBuf, String> {
         .ok_or_else(|| "neither HOME nor the user database names a home directory".to_string())
 }
 
+/// The user's home as [`home`] finds it, as text, for a caller that writes it
+/// into a script, a unit or a path string: a home that is not UTF-8 is
+/// refused naming it, never written mangled.
+pub(crate) fn home_text() -> Result<String, String> {
+    home()?
+        .into_os_string()
+        .into_string()
+        .map_err(|home| format!("the home directory {home:?} is not UTF-8"))
+}
+
 /// Expand a leading `~` / `~/` to the user's home (Python `os.path.expanduser`).
 pub(crate) fn expand_tilde(entry: &str) -> PathBuf {
     if entry == "~" {
@@ -123,9 +133,9 @@ pub fn load_config_file() -> Result<&'static Map<String, Value>, ConfigError> {
         None => Map::new(),
         Some(path) => load_uncached(path)?,
     };
-    // First writer wins under a race; both computed equivalent results.
-    let _ = CACHE.set(Cache { path, data });
-    Ok(&CACHE.get().expect("cache just initialized").data)
+    // First writer wins under a race; both computed equivalent results, so
+    // the one held is the answer.
+    Ok(&CACHE.get_or_init(|| Cache { path, data }).data)
 }
 
 /// The config file as it is on disk now, bypassing the process-wide cache.

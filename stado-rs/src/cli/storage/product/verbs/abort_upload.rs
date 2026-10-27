@@ -1,4 +1,4 @@
-//! `stado storage abort-upload`.
+//! `stado storage abort`.
 
 use crate::cli::storage::*;
 

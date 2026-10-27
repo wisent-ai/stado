@@ -6,6 +6,27 @@ use serde_json::{json, Value};
 
 use super::{ArmClient, AzureError, COMPUTE_API_VERSION};
 
+/// A long-running operation's polling URL from the answer's `name` header:
+/// `None` when the answer carries none (the operation completed inline), a
+/// refusal when it carries one this client cannot read, since an operation
+/// it could not poll would be reported as finished.
+fn polling_header(
+    response: &reqwest::Response,
+    name: &str,
+    desc: &str,
+) -> Result<Option<String>, AzureError> {
+    match response.headers().get(name) {
+        None => Ok(None),
+        Some(value) => match value.to_str() {
+            Ok(url) => Ok(Some(url.to_string())),
+            Err(error) => Err(AzureError::Api(format!(
+                "Azure {desc} answered with a {name} header that is not text, so the \
+                 operation cannot be polled: {error}"
+            ))),
+        },
+    }
+}
+
 impl ArmClient {
     /// GET a JSON resource; non-2xx is an [`AzureError::Api`]. `url` may
     /// be a path or an absolute URL (LRO poll).
@@ -93,15 +114,8 @@ impl ArmClient {
         if !response.status().is_success() {
             return Err(Self::api_error(response, desc).await);
         }
-        let header = |name: &str| {
-            response
-                .headers()
-                .get(name)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string)
-        };
-        let async_op = header("azure-asyncoperation");
-        let location = header("location");
+        let async_op = polling_header(&response, "azure-asyncoperation", desc)?;
+        let location = polling_header(&response, "location", desc)?;
         if let Some(url) = async_op {
             self.poll_async_operation(&url, desc).await?;
         } else if let Some(url) = location {
@@ -118,15 +132,8 @@ impl ArmClient {
         if !response.status().is_success() {
             return Err(Self::api_error(response, desc).await);
         }
-        let header = |name: &str| {
-            response
-                .headers()
-                .get(name)
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_string)
-        };
-        let async_op = header("azure-asyncoperation");
-        let location = header("location");
+        let async_op = polling_header(&response, "azure-asyncoperation", desc)?;
+        let location = polling_header(&response, "location", desc)?;
         let text = Self::answer_text(response, desc).await?;
         if let Some(url) = async_op {
             self.poll_async_operation(&url, desc).await?;

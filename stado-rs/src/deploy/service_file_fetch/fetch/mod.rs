@@ -54,16 +54,7 @@ pub fn parse_fetch(stdout: &str) -> Result<FetchReport, DeployError> {
 
 /// The lowercase hex SHA-256 of `content`.
 pub fn digest_of(content: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(content);
-    hasher
-        .finalize()
-        .iter()
-        .fold(String::with_capacity(64), |mut text, byte| {
-            use std::fmt::Write as _;
-            let _ = write!(text, "{byte:02x}");
-            text
-        })
+    hex::encode(Sha256::digest(content))
 }
 
 /// Decode a report's payload and judge it against the host's own digest.
@@ -121,7 +112,7 @@ pub async fn fetch_file(
 ) -> Result<FetchedFile, DeployError> {
     let script = remote_fetch_script(fetch_path);
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: {}",
             target.name,

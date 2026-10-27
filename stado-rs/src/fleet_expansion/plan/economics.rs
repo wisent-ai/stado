@@ -1,9 +1,78 @@
 //! Expenditure starts now; benefit starts when the option becomes usable.
 use super::validate::timestamp;
-use crate::fleet_expansion::constants::{CENTS_PER_USD, COMPARISON_TOLERANCE, DAYS_PER_MONTH};
+use crate::fleet_expansion::constants::{CENTS_PER_USD, DAYS_PER_MONTH, PER_CENT};
 use crate::fleet_expansion::model::{Candidate, CandidateStatus, ExpansionOption};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
+
+/// Whether an amount is above zero: a sum gained, a net that pays back.
+pub(crate) fn positive(amount: f64) -> bool {
+    amount > -amount
+}
+
+/// A dollar amount as the whole cents money is kept and compared in, so two
+/// amounts are equal exactly when they are the same number of cents.
+pub(crate) fn cents(usd: f64) -> i64 {
+    (usd * CENTS_PER_USD).round() as i64
+}
+
+/// One option's stated assumptions and what they come to over the horizon.
+/// It exists only for an option that states all four assumptions, so no
+/// figure here stands in for one the option left out.
+pub(crate) struct Figures {
+    pub(crate) upfront: f64,
+    pub(crate) monthly_cost: f64,
+    /// Savings plus margin, per month, once the option is usable.
+    pub(crate) benefit: f64,
+    /// Months from now until the option is usable.
+    pub(crate) lead: f64,
+    pub(crate) committed: f64,
+    pub(crate) net: f64,
+    pub(crate) gain: f64,
+}
+
+impl Figures {
+    /// The option priced over `months`, or `None` when it leaves an
+    /// assumption out.
+    fn of(option: &ExpansionOption, months: u32) -> Option<Self> {
+        let upfront = option.upfront_usd?;
+        let monthly_cost = option.monthly_cost_usd?;
+        let benefit = option.monthly_savings_usd? + option.monthly_margin_usd?;
+        let lead = option.lead_time_days as f64 / DAYS_PER_MONTH;
+        let committed = upfront + monthly_cost * months as f64;
+        let usable_months = months as f64 - lead;
+        // An option usable only after the horizon earns nothing within it.
+        let gain = if positive(usable_months) {
+            benefit * usable_months - committed
+        } else {
+            -committed
+        };
+        Some(Self {
+            upfront,
+            monthly_cost,
+            benefit,
+            lead,
+            committed,
+            net: benefit - monthly_cost,
+            gain,
+        })
+    }
+}
+
+/// An eligible row and its figures.
+pub(crate) struct Priced<'a> {
+    pub(crate) row: &'a Candidate,
+    pub(crate) figures: Figures,
+}
+
+/// A row priced from its option; `None` for a row whose option leaves an
+/// assumption out, which [`candidate`] never marks eligible.
+pub(crate) fn priced(row: &Candidate, months: u32) -> Option<Priced<'_>> {
+    Some(Priced {
+        row,
+        figures: Figures::of(&row.option, months)?,
+    })
+}
 
 pub(crate) fn candidate(
     option: ExpansionOption,
@@ -29,25 +98,17 @@ pub(crate) fn candidate(
             ));
         }
     }
-    let values = [
-        option.upfront_usd,
-        option.monthly_cost_usd,
-        option.monthly_savings_usd,
-        option.monthly_margin_usd,
-    ];
     for (name, value) in [
-        "upfront_usd",
-        "monthly_cost_usd",
-        "monthly_savings_usd",
-        "monthly_margin_usd",
-    ]
-    .iter()
-    .zip(values)
-    {
+        ("upfront_usd", option.upfront_usd),
+        ("monthly_cost_usd", option.monthly_cost_usd),
+        ("monthly_savings_usd", option.monthly_savings_usd),
+        ("monthly_margin_usd", option.monthly_margin_usd),
+    ] {
         if value.is_none() {
             reasons.push(format!("missing economic assumption: {name}"));
         }
     }
+    let figures = Figures::of(&option, months);
     let mut row = Candidate {
         option,
         status: if unevidenced {
@@ -62,27 +123,23 @@ pub(crate) fn candidate(
         horizon_net_usd: None,
         roi_pct: None,
     };
-    let [Some(upfront), Some(cost), Some(savings), Some(margin)] = values else {
+    let Some(figures) = figures else {
         return Ok(row);
     };
-    let lead = row.option.lead_time_days as f64 / DAYS_PER_MONTH;
-    let benefit = savings + margin;
-    let net = benefit - cost;
-    let committed = upfront + cost * months as f64;
-    let gain = benefit * (months as f64 - lead).max(0.0) - committed;
+    let Figures { upfront, monthly_cost, lead, committed, net, gain, .. } = figures;
     row.committed_cost_usd = Some(committed);
     row.monthly_net_usd = Some(net);
     row.horizon_net_usd = Some(gain);
-    row.payback_months = (net > 0.0).then(|| lead + (upfront + cost * lead) / net);
-    row.roi_pct = (committed > 0.0).then(|| gain / committed * CENTS_PER_USD);
-    if committed > budget + COMPARISON_TOLERANCE {
+    row.payback_months = positive(net).then(|| lead + (upfront + monthly_cost * lead) / net);
+    row.roi_pct = positive(committed).then(|| gain / committed * PER_CENT);
+    if cents(committed) > cents(budget) {
         row.reasons.push("total expenditure exceeds budget".into());
     }
-    if net <= 0.0 {
+    if !positive(net) {
         row.reasons
             .push("no finite payback: monthly benefit does not exceed operating cost".into());
     }
-    if gain <= 0.0 {
+    if !positive(gain) {
         row.reasons
             .push("no positive cash gain within the selected horizon".into());
     }
@@ -97,46 +154,48 @@ pub(crate) fn candidate(
 }
 
 /// Sum the time-ordered cashflows instead of averaging individual paybacks.
-pub(crate) fn portfolio_payback(rows: &[&Candidate]) -> Option<f64> {
+/// Time is months from now; `None` for no selection or none that pays back.
+pub(crate) fn portfolio_payback(rows: &[&Priced<'_>]) -> Option<f64> {
     if rows.is_empty() {
         return None;
     }
-    let upfront: f64 = rows
-        .iter()
-        .map(|r| r.option.upfront_usd.unwrap_or_default())
-        .sum();
-    let monthly_cost: f64 = rows
-        .iter()
-        .map(|r| r.option.monthly_cost_usd.unwrap_or_default())
-        .sum();
+    let upfront: f64 = rows.iter().map(|r| r.figures.upfront).sum();
+    let monthly_cost: f64 = rows.iter().map(|r| r.figures.monthly_cost).sum();
     let mut starts: Vec<(f64, f64)> = rows
         .iter()
-        .map(|r| {
-            (
-                r.option.lead_time_days as f64 / DAYS_PER_MONTH,
-                r.option.monthly_savings_usd.unwrap_or_default()
-                    + r.option.monthly_margin_usd.unwrap_or_default(),
-            )
-        })
+        .map(|r| (r.figures.lead, r.figures.benefit))
         .collect();
     starts.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut balance = -upfront;
     let mut slope = -monthly_cost;
-    let mut time = 0.0;
+    // The months elapsed when the last benefit began; none has begun yet.
+    let mut time: Option<f64> = None;
     for (start, benefit) in starts {
-        if slope > 0.0 && balance <= 0.0 {
-            let crossing = time - balance / slope;
+        if positive(slope) && !positive(balance) {
+            let crossing = match time {
+                Some(time) => time - balance / slope,
+                None => -balance / slope,
+            };
             if crossing <= start {
                 return Some(crossing);
             }
         }
-        balance += slope * (start - time);
-        time = start;
+        let elapsed = match time {
+            Some(time) => start - time,
+            None => start,
+        };
+        balance += slope * elapsed;
+        time = Some(start);
         slope += benefit;
     }
-    if slope > 0.0 {
-        Some(time + (-balance).max(0.0) / slope)
-    } else {
-        None
+    if !positive(slope) {
+        return None;
+    }
+    // A balance already above water owes nothing more after the last start.
+    let owed = if positive(balance) { None } else { Some(-balance / slope) };
+    match (time, owed) {
+        (Some(time), Some(owed)) => Some(time + owed),
+        (Some(time), None) => Some(time),
+        (None, owed) => owed,
     }
 }

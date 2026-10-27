@@ -6,6 +6,7 @@ use chrono::Utc;
 
 use crate::models::{isoformat_utc, job_state, Job};
 use crate::monitor::heartbeat_guard::{self as hg, JobLiveness};
+use crate::primitives::tally::Tally;
 use crate::queue::{JobStorage, StorageError};
 
 use super::release_output::verified_release_completion;
@@ -42,7 +43,7 @@ pub(super) async fn reap_one(
     let expires = match hg::job_liveness(store, &job, now).await {
         JobLiveness::Lapsed(expires) => expires,
         JobLiveness::Unpromised => {
-            summary.unpromised += 1;
+            summary.unpromised.tally();
             return Ok(());
         }
         JobLiveness::Promised(_) | JobLiveness::WrittenAfter(_) => return Ok(()),
@@ -180,7 +181,7 @@ async fn settle(
             .move_job_if_version(&job, "running", "completed", version)
             .await?
         {
-            summary.release_completions += 1;
+            summary.release_completions.tally();
             log(&format!(
                 "{job_id}: completed from verified durable release output after its worker ended ({why})"
             ));
@@ -195,13 +196,13 @@ async fn settle(
             .move_job_if_version(&job, "running", "failed", version)
             .await?
         {
-            summary.failed += 1;
+            summary.failed.tally();
             log(&format!("{job_id}: FAILED ({why}; {refusal})"));
         }
         return Ok(());
     }
 
-    job.restarts += 1;
+    job.restarts.tally();
     job.state = job_state::QUEUED.to_string();
     job.instance_ref = None;
     job.started_at = None;
@@ -220,7 +221,7 @@ async fn settle(
         .move_job_if_version(&job, "running", "queue", version)
         .await?
     {
-        summary.requeued += 1;
+        summary.requeued.tally();
         store.cleanup_status(&job.job_id).await?;
         log(&format!(
             "{job_id}: requeued ({reason}; {why}; restart {})",

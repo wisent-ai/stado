@@ -17,14 +17,19 @@ use super::CmdError;
 
 mod client;
 mod commands;
+mod dump;
 mod external;
 mod fleet;
 mod reads;
+mod rest;
 mod supabase;
 mod verbs;
 mod writes;
 
 pub(crate) use self::commands::DatabaseCommands;
+pub(crate) use self::dump::files::BackupsArgs;
+pub(crate) use self::dump::migrate::MigrateArgs;
+pub(crate) use self::dump::BackupArgs;
 
 use self::reads::{list, resolve};
 use self::verbs::{change_consumers, declare, remove};
@@ -142,8 +147,25 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
             name,
             engine,
             port,
+            version,
             json,
-        } => fleet::place(&name, &engine, port, json).await,
+        } => fleet::place(&name, &engine, port, version.as_deref(), json).await,
+        DatabaseCommands::Backup(args) => dump::backup(args.name.as_deref(), args.keep, args.json).await,
+        DatabaseCommands::Backups(args) => dump::files::list(args.name.as_deref(), args.json),
+        DatabaseCommands::Migrate(args) => dump::migrate::run(args).await,
+        DatabaseCommands::Rest { command } => match command {
+            rest::RestCommands::Place(args) => rest::place(args).await,
+            rest::RestCommands::Retire(args) => rest::retire::retire(args).await,
+        },
+        DatabaseCommands::Cost { provider, json } => match provider {
+            DatabaseProvider::Supabase => supabase::cost::cost(json).await,
+            DatabaseProvider::Fleet => Err(CmdError::usage(
+                "--provider fleet has no bill to read: a fleet database runs on a fleet host with no vendor",
+            )),
+            DatabaseProvider::External => Err(CmdError::usage(
+                "--provider external has no bill Stado can read: the server is one Stado does not run",
+            )),
+        },
         DatabaseCommands::Adopt {
             name,
             project_ref,
@@ -201,12 +223,7 @@ async fn registry_document() -> Result<Value, CmdError> {
         return Ok(bootstrap);
     }
     let target = super::resolver::current_target(&bootstrap).map_err(CmdError::declaration)?;
-    let source = super::resolver::snapshot_source(Some(Arc::new(store)), &bootstrap, &target)
-        .map_err(CmdError::declaration)?;
-    let (document, _, _) = source
-        .fetch(crate::monitor::host_silence::READER_CLI)
-        .await?;
-    Ok(document)
+    super::resolver::directory_document(Arc::new(store), &bootstrap, &target).await
 }
 
 fn directory_routes(document: &Value) -> Result<&serde_json::Map<String, Value>, CmdError> {

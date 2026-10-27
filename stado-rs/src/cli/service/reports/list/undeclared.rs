@@ -32,21 +32,31 @@ pub(crate) async fn list_undeclared(json: bool) -> Result<(), CmdError> {
     let runner = production_runner();
     let mut found: Vec<service::UndeclaredUnit> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
-    for target in registry.local_targets() {
-        match service::undeclared_units(target, &runner).await {
+    // Every host is its own channel, so all are asked at once and a host
+    // that does not answer no longer holds the others.
+    let targets = registry.local_targets();
+    let scans = targets
+        .iter()
+        .map(|target| service::undeclared_units(target, &runner));
+    for (target, scan) in targets.iter().zip(futures::future::join_all(scans).await) {
+        match scan {
             Ok(units) => found.extend(units),
             Err(exc) => failures.push(format!("{}: {exc}", target.name)),
         }
     }
     // A label the fleet never named but the host ties to the fleet anyway is
     // the more interesting class and used to be the invisible one, so it reads
-    // first. This is the order rows are printed in and nothing else.
+    // first, then the undeclared fleet labels, then the rest. This is the
+    // order rows are printed in and nothing else.
+    let first_classes = ["outside-fleet-prefix", "undeclared"];
+    let rank = |unit: &service::UndeclaredUnit| {
+        let class = unit.classification();
+        match first_classes.iter().position(|first| *first == class) {
+            Some(place) => place,
+            None => first_classes.len(),
+        }
+    };
     found.sort_by(|left, right| {
-        let rank = |unit: &service::UndeclaredUnit| match unit.classification() {
-            "outside-fleet-prefix" => 0,
-            "undeclared" => 1,
-            _ => 2,
-        };
         rank(left)
             .cmp(&rank(right))
             .then_with(|| left.host.cmp(&right.host))

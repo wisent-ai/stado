@@ -28,10 +28,14 @@ pub(super) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
         return Err(CmdError::click("config file must contain a JSON object")
             .stating(crate::primitives::failure::FailureCode::Config));
     }
-    // A bare word is what an operator types for a string value; anything that
-    // parses as JSON keeps its type, so lists and booleans need no quoting
-    // dance.
-    let parsed: Value = serde_json::from_str(raw).unwrap_or_else(|_| Value::from(raw));
+    // A value that parses as JSON keeps its type (lists, numbers, booleans,
+    // quoted strings); a word that does not is the string the operator
+    // typed. Both are what `config set` promises, so the parse's failure is
+    // the second shape, not a lost error.
+    let parsed: Value = match serde_json::from_str(raw) {
+        Ok(value) => value,
+        Err(_not_json) => Value::from(raw),
+    };
 
     let mut cursor = &mut document;
     let segments: Vec<&str> = key.split('.').collect();
@@ -59,19 +63,11 @@ pub(super) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
         )));
     }
 
-    let body = format!("{}\n", serde_json::to_string_pretty(&document)?);
-    let temporary = std::path::PathBuf::from(format!("{}.setting", path.display()));
-    std::fs::write(&temporary, body)?;
-    if let Ok(metadata) = std::fs::metadata(&path) {
-        std::fs::set_permissions(&temporary, metadata.permissions())?;
+    config_file::replace(&path, &document)?;
+    match previous {
+        Some(previous) => println!("{key}: {previous} -> {parsed} ({})", path.display()),
+        None => println!("{key}: (absent) -> {parsed} ({})", path.display()),
     }
-    std::fs::rename(&temporary, &path)?;
-    println!(
-        "{key}: {} -> {} ({})",
-        previous.unwrap_or(Value::Null),
-        parsed,
-        path.display()
-    );
     Ok(())
 }
 
@@ -132,13 +128,7 @@ pub(super) fn unset(key: &str) -> Result<(), CmdError> {
         )));
     }
 
-    let body = format!("{}\n", serde_json::to_string_pretty(&document)?);
-    let temporary = std::path::PathBuf::from(format!("{}.unsetting", path.display()));
-    std::fs::write(&temporary, body)?;
-    if let Ok(metadata) = std::fs::metadata(&path) {
-        std::fs::set_permissions(&temporary, metadata.permissions())?;
-    }
-    std::fs::rename(&temporary, &path)?;
+    config_file::replace(&path, &document)?;
     println!("{key}: {previous} removed ({})", path.display());
     Ok(())
 }

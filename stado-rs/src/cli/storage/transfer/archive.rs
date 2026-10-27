@@ -22,11 +22,9 @@ fn sorted_archive_paths(
     let mut entries = std::fs::read_dir(directory)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by(|left, right| {
-        left.strip_prefix(root)
-            .unwrap_or(left)
-            .cmp(right.strip_prefix(root).unwrap_or(right))
-    });
+    // One directory's entries share their parent, so ordering the whole paths
+    // orders the names under `root`.
+    entries.sort();
     for path in entries {
         let metadata = std::fs::symlink_metadata(&path)?;
         if metadata.file_type().is_symlink() {
@@ -78,9 +76,16 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
             output.display()
         )));
     }
-    let output_parent = output
+    // A bare file name's parent is the empty path, which names no directory;
+    // the output is made absolute first so its parent is always a real one.
+    let output_parent = std::path::absolute(output)?
         .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
+        .ok_or_else(|| {
+            CmdError::usage(format!(
+                "archive output {} is a filesystem root, not a file path",
+                output.display()
+            ))
+        })?
         .canonicalize()?;
     if output_parent.starts_with(&source) {
         return Err(CmdError::usage(
@@ -95,19 +100,17 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
             .open(output)?;
         output_created = true;
         let encoder = flate2::GzBuilder::new()
-            .mtime(0)
+            .mtime(crate::primitives::archive::gzip_epoch())
             .write(file, flate2::Compression::default());
         let mut archive = tar::Builder::new(encoder);
         archive.mode(tar::HeaderMode::Deterministic);
         archive.follow_symlinks(false);
         let mut paths = Vec::new();
         sorted_archive_paths(&source, &source, &mut paths, &limits)?;
-        paths.sort_by(|left, right| {
-            left.strip_prefix(&source)
-                .unwrap_or(left)
-                .cmp(right.strip_prefix(&source).unwrap_or(right))
-        });
-        let mut total_member_bytes = 0_u64;
+        // Every path lies under `source`, so ordering the whole paths orders
+        // the member names.
+        paths.sort();
+        let mut total_member_bytes: u64 = Default::default();
         for path in paths {
             let name = path.strip_prefix(&source).map_err(std::io::Error::other)?;
             let metadata = std::fs::symlink_metadata(&path)?;
@@ -122,20 +125,16 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
             }
             let mut open = std::fs::OpenOptions::new();
             open.read(true);
-            #[cfg(target_os = "macos")]
-            open.custom_flags(0x0000_0100);
-            #[cfg(target_os = "linux")]
-            open.custom_flags(0x0002_0000);
+            open.custom_flags(nix::libc::O_NOFOLLOW);
             let mut member = open.open(&path)?;
             let opened_metadata = member.metadata()?;
             if opened_metadata.is_dir() && metadata.is_dir() {
                 let mut header = tar::Header::new_gnu();
                 header.set_entry_type(tar::EntryType::Directory);
-                header.set_size(0);
-                header.set_mode(0o755);
-                header.set_uid(0);
-                header.set_gid(0);
-                header.set_mtime(0);
+                crate::primitives::archive::stamp(
+                    &mut header,
+                    crate::primitives::archive::directory_mode(),
+                );
                 header.set_cksum();
                 archive.append_data(&mut header, name, std::io::empty())?;
             } else if opened_metadata.is_file() && metadata.is_file() {
@@ -190,11 +189,8 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
         })
         .stating(crate::cli::entry::error::io_failure_code(error.kind())));
     }
-    let mut file = std::fs::File::open(output)?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)?;
-    let bytes = file.metadata()?.len();
-    let sha256 = hex::encode(hasher.finalize());
+    let crate::primitives::digest::Sha256Digest { bytes, sha256 } =
+        crate::primitives::digest::sha256_file(output)?;
     if args.json {
         println!(
             "{}",

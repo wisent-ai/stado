@@ -75,7 +75,7 @@ pub async fn replace_catalog(
 
 fn plan_path(id: &str) -> Result<String, CmdError> {
     let parsed = uuid::Uuid::parse_str(id)
-        .map_err(|_| CmdError::usage("expansion plan id must be a UUID"))?;
+        .map_err(|error| CmdError::usage(format!("expansion plan id must be a UUID: {error}")))?;
     if parsed.to_string() != id {
         return Err(CmdError::usage(
             "expansion plan id must use canonical UUID spelling",

@@ -9,9 +9,7 @@
 //! records "the operator was told" from an exit status that cannot say
 //! otherwise. The report below is what makes that claim checkable.
 
-use super::send::{
-    email_subject, send_email, send_most, send_pubsub, send_skrzynka, send_slack, send_telegram,
-};
+use super::send::{email_subject, send_most, send_pubsub, send_skrzynka, send_slack, send_telegram};
 use super::{channel_failed, log, AlertChannels};
 
 /// What one channel did with one alert.
@@ -62,19 +60,6 @@ pub async fn send_alert_with(
             Err(err) => {
                 channel_failed("telegram", &err);
                 report.push(refused("telegram", &err));
-            }
-        }
-    }
-    if let Some(sendgrid) = &channels.sendgrid {
-        let subject = email_subject(subject, message);
-        match send_email(&client, sendgrid, &subject, message).await {
-            Ok(()) => {
-                log("Email sent");
-                report.push(delivered("sendgrid", &sendgrid.to));
-            }
-            Err(err) => {
-                channel_failed("email", &err);
-                report.push(refused("sendgrid", &err));
             }
         }
     }

@@ -10,8 +10,26 @@ use std::process::{Command, Output};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+mod hyphenated;
 mod leaf;
 mod unjudged;
+
+/// A run area under `root` that stands in for HOME, holding the operator's
+/// Rust toolchain where the product finds it (`~/.cargo/bin/cargo`, and the
+/// toolchains rustup reads from `~/.rustup`): the release build compiles with
+/// it, and an isolated home without it refuses the check before any gate.
+fn isolated_home(root: &Path) -> PathBuf {
+    let home = root
+        .join(".build/quality-command-tree")
+        .join(uuid::Uuid::new_v4().to_string());
+    fs::create_dir_all(&home).expect("isolated quality run area");
+    let operator = PathBuf::from(std::env::var_os("HOME").expect("HOME names the operator's home"));
+    for toolchain in [".cargo", ".rustup"] {
+        std::os::unix::fs::symlink(operator.join(toolchain), home.join(toolchain))
+            .expect("place the operator's Rust toolchain in the isolated home");
+    }
+    home
+}
 
 fn git(root: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -51,10 +69,7 @@ fn committed_cli_tree_and_historical_duplicate() {
         .parent()
         .expect("Stado checkout")
         .to_path_buf();
-    let home = root
-        .join(".build/quality-command-tree")
-        .join(uuid::Uuid::new_v4().to_string());
-    fs::create_dir_all(&home).expect("isolated quality run area");
+    let home = isolated_home(&root);
     let binary_sha256 = format!(
         "{:x}",
         Sha256::digest(fs::read(env!("CARGO_BIN_EXE_stado")).expect("read tested binary"))

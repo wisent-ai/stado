@@ -95,11 +95,12 @@ pub fn placements(registry: &crate::targets::Registry, family: Option<&str>) -> 
 ///
 /// `~/` is left as written: only the host knows its login home, and a
 /// coordinator that expanded it here would be guessing about a machine it is
-/// not running on.
+/// not running on. The two programs asked for here are in the candidate
+/// table by construction, so a table without one is a build defect and
+/// stops here by name rather than placing a runtime with no paths.
 fn declared_paths(program: &str) -> Vec<String> {
-    host_exec::program_candidates(program)
-        .unwrap_or(&[])
-        .iter()
-        .map(|path| (*path).to_string())
-        .collect()
+    match host_exec::program_candidates(program) {
+        Some(candidates) => candidates.iter().map(|path| (*path).to_string()).collect(),
+        None => panic!("{program} is not in the host-exec program candidate table"),
+    }
 }

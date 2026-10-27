@@ -8,22 +8,19 @@ use crate::providers::Provider;
 
 use super::super::log;
 
-/// Best-effort delete of a GCE VM named `hostname`.
+/// Best-effort delete of the VM named `hostname`.
 ///
-/// A requeue path (orphan + VM-gone) that moves running -> queue without
-/// calling provider.delete_instance leaves the prior agent's training
-/// subprocess running on the supposedly-gone VM, producing duplicate writes
-/// against the same gs://wisent-compute/ckpts/<run>/ path: several concurrent
-/// trainers racing on one ckpt prefix because each transient "VM missing
-/// from fleet listing" requeue spawned a new dispatch without terminating the
-/// old subprocess.
+/// A requeue that moves a job from running back to the queue leaves the
+/// prior agent's process running on the VM unless the VM is deleted, and a
+/// second dispatch of the same job would then write beside it. This deletes
+/// the VM the requeue gave up on.
 ///
-/// Looks up the full <name>@<zone> ref from `vm_cache` (a dict
+/// Looks up the full <name>@<zone> ref from `vm_cache` (a map
 /// {hostname: full_ref} built by the caller, or none when the caller built
-/// none) and lists the fleet fresh on a miss (handles the exact
-/// transient-miss case that caused the ghost-trainer bug). Never raises;
-/// returns True iff a delete call returned cleanly. Idempotent and safe on a
-/// VM that is truly gone (returns False).
+/// none) and lists the fleet fresh on a miss, so a VM a transient listing
+/// left out is still found. Never raises; returns True iff a delete call
+/// returned cleanly. Idempotent and safe on a VM that is truly gone (returns
+/// False).
 pub(super) async fn safe_delete_vm_by_hostname(
     provider: &dyn Provider,
     hostname: &str,

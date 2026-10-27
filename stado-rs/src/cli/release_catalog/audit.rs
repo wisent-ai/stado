@@ -46,7 +46,7 @@ pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
                 "{product}: release_api.publishers declares it but the release catalog holds no \
                  entry for it, so nothing builds it; register its checkout with `stado release \
                  catalog enroll <checkout>`, or for a retired product withdraw the declaration \
-                 with `stado release catalog withdraw-publisher {product}`"
+                 with `stado release catalog publisher withdraw {product}`"
             ));
             continue;
         }

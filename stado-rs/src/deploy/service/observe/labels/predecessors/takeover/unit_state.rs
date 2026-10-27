@@ -64,7 +64,10 @@ impl UnitState {
                     .to_string(),
             );
         };
-        let home = crate::config_file::expand_tilde("~");
+        let home = match crate::config_file::home() {
+            Ok(home) => home,
+            Err(cause) => return Some(format!("its served root cannot be resolved: {cause}")),
+        };
         let theirs = match served_root::resolve(&|key| self.variable(key), &home) {
             Ok(theirs) => theirs,
             Err(error) => return Some(format!("its served root cannot be resolved: {error}")),

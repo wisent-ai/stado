@@ -118,45 +118,30 @@ sweep_versions() {
     esac
   fi
   # The newest version directory, `current` itself excluded so a product
-  # whose link is stale still keeps its most recent delivery. `ls -td` sorts
-  # newest first; the listing is walked with globbing off and IFS on newline
-  # so a directory name with a space in it cannot become two words.
-  newest=""
-  listing=$(/bin/ls -td -- "$product"/*/ 2>/dev/null || true)
-  saved_ifs=$IFS
-  set -f
-  IFS='
-'
-  for candidate in $listing; do
-    candidate=${candidate%/}
-    case "$candidate" in
-      */current) continue ;;
-    esac
-    if [ -L "$candidate" ]; then continue; fi
-    newest="$candidate"
-    break
-  done
-  IFS=$saved_ifs
-  set +f
-  # The SAME glob the newest above came from. A `find` here would also list
-  # dotted entries the glob cannot see, and the two halves would disagree
-  # about the set: on this control plane's own host that difference named
+  # whose link is stale still keeps its most recent delivery, chosen from
+  # the SAME glob the sweep below walks. A `find` here would also list dotted
+  # entries the glob cannot see, and the two halves would disagree about the
+  # set: on this control plane's own host that difference named
   # `.macos-capability-backup-20260803` -- an operator's state backup living
   # beside the deliveries, which no delivery created and no reclamation may
   # take. A delivery and a build both produce plainly named directories, so
-  # the glob IS the set.
+  # the glob IS the set. A version whose age cannot be read leaves the newest
+  # unknown, and then this product gives up nothing.
+  newest_by_age "$sweep_stage" version_tree "$product"/* || return 0
   for tree in "$product"/*; do
-    [ -d "$tree" ] || continue
-    if [ -L "$tree" ]; then continue; fi
-    case "$tree" in
-      */current) continue ;;
-    esac
+    version_tree "$tree" || continue
     [ "$tree" = "$keep" ] && continue
     case "$pins" in *" ${tree##*/} "*) continue ;; esac
     [ "$tree" = "$newest" ] && continue
     settled "$tree" "$sweep_stage" || continue
     reclaim "$tree" "$sweep_stage"
   done
+}
+
+# A delivered version directory: a real directory, not the `current` link.
+version_tree() {
+  [ -d "$1" ] && [ ! -L "$1" ] || return 1
+  case "$1" in */current) return 1 ;; esac
 }
 
 if stage_enabled delivered_trees; then
@@ -244,32 +229,34 @@ backup_shape() {
     *) return 1 ;;
   esac
 }
+# A recognised backup copy of the binary in $installed: a real file named
+# with a backup shape, never the `.previous` rollback target.
+backup_copy() {
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  backup_suffix=${1#"$installed".}
+  [ "$backup_suffix" != previous ] && backup_shape "$backup_suffix"
+}
 bin="$HOME/.stado/bin"
 if [ -d "$bin" ]; then
   for installed in "$bin"/*; do
     [ -f "$installed" ] && [ -x "$installed" ] || continue
     name=${installed##*/}
     case "$name" in *.*) continue ;; esac
-    newest=""
-    listing=$(LC_ALL=C /bin/ls -td -- "$installed".* 2>/dev/null || true)
-    saved_ifs=$IFS
-    set -f
-    IFS='
-'
-    for copy in $listing; do
+    # A copy whose age cannot be read leaves the newest backup unknown, and
+    # then this binary gives up no copy.
+    newest_by_age delivery_leftovers backup_copy "$installed".* || continue
+    for copy in "$installed".*; do
       [ -f "$copy" ] && [ ! -L "$copy" ] || continue
       suffix=${copy#"$installed".}
       [ "$suffix" = previous ] && continue
       if backup_shape "$suffix"; then
-        if [ -z "$newest" ]; then newest="$copy"; continue; fi
+        [ "$copy" = "$newest" ] && continue
         settled "$copy" delivery_leftovers || continue
         reclaim "$copy" delivery_leftovers
       elif [ "$apply" = 0 ] && { [ -x "$copy" ] || /usr/bin/cmp -s "$copy" "$installed"; }; then
         printf 'STADO_RECLAIM_REFUSED\tdelivery_leftovers\t%s\t%s\n' "$copy" 'unrecognised binary copy; retained'
       fi
     done
-    IFS=$saved_ifs
-    set +f
   done
 fi
 printf 'STADO_RECLAIM_STAGE\tdelivery_leftovers\t%s\t%s\n' "$before" "$(free_kb)"

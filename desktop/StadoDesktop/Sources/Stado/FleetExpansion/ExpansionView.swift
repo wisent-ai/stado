@@ -9,6 +9,15 @@ struct FleetExpansionView: View {
     @State private var days = FleetExpansionDefaults.days
     @State private var editing: FleetExpansionOption?
     @State private var showsEditor = false
+
+    /// The catalog's stored version, or that none has been written yet: the
+    /// CLI reports a null version for a catalog the store does not hold.
+    private var catalogHeading: String {
+        if let version = store.catalogVersion {
+            return "Option catalog · version \(version)"
+        }
+        return "Option catalog · not created yet"
+    }
     @State private var confirmsReload = false
     @State private var confirmsSave = false
 
@@ -40,7 +49,7 @@ struct FleetExpansionView: View {
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                     HStack {
-                        Text("Option catalog · version \(store.catalogVersion ?? "not created")").font(.headline)
+                        Text(catalogHeading).font(.headline)
                         Spacer()
                         Button("Add option") { editing = nil; showsEditor = true }
                         Button("Save catalog") { confirmsSave = true }

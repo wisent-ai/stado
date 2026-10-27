@@ -24,7 +24,7 @@ pub(crate) async fn list_sessions(json_output: bool) -> Result<(), CmdError> {
                 .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
     let mut sessions = Vec::new();
-    for prefix in crate::machine::JOB_PREFIXES {
+    for prefix in crate::machine::JOB_PREFIXES.iter().copied() {
         let jobs = crate::queue::listing::list_jobs(&store, prefix, crate::queue::Listing::Every)
             .await
             .map_err(|error| {

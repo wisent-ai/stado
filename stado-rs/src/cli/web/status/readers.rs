@@ -8,7 +8,7 @@
 
 use serde_json::{json, Value};
 
-use super::{DNS_RESOLVED, DNS_UNRESOLVED};
+use super::{DNS_RESOLVED, DNS_UNREADABLE, DNS_UNRESOLVED};
 use crate::config::WebApiProduct;
 use crate::deploy::service::ServiceStatus;
 
@@ -24,7 +24,9 @@ use crate::deploy::service::ServiceStatus;
 ///
 /// The port in the query is `443` because `lookup_host` resolves a socket
 /// address and needs one; it is discarded, and nothing here connects.
-pub(super) async fn resolve_hostname(hostname: &str) -> (&'static str, Vec<String>) {
+pub(super) async fn resolve_hostname(
+    hostname: &str,
+) -> (&'static str, Vec<String>, Option<String>) {
     match tokio::net::lookup_host(format!("{hostname}:443")).await {
         Ok(addresses) => {
             let mut found: Vec<String> = addresses
@@ -34,16 +36,17 @@ pub(super) async fn resolve_hostname(hostname: &str) -> (&'static str, Vec<Strin
                 .collect();
             found.dedup();
             if found.is_empty() {
-                (DNS_UNRESOLVED, found)
+                (DNS_UNRESOLVED, found, None)
             } else {
-                (DNS_RESOLVED, found)
+                (DNS_RESOLVED, found, None)
             }
         }
         // A resolver that answers "no such name" and a resolver that cannot be
         // reached both arrive here as an error from the same call, and the
         // stub resolver does not distinguish them for us. Reported as
-        // unresolved with the reason in `dns_detail`, never as an address.
-        Err(_) => (DNS_UNRESOLVED, Vec::new()),
+        // unreadable with the resolver's own words, never as an address and
+        // never as the product's name having no address.
+        Err(error) => (DNS_UNREADABLE, Vec::new(), Some(error.to_string())),
     }
 }
 

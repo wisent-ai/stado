@@ -18,7 +18,7 @@ use serde_json::Value;
 use super::VastError;
 
 pub use credentials::{
-    read_vast_api_key, vast_api_key_available, VastCredentialChannel, VastCredentialReading,
+    read_vast_api_key, vast_api_key_available, vast_refusal, VAST_FIELD, VAST_ROLE,
 };
 pub use machine::{parse_machine_id_env, system_hostname};
 pub use offers::ListMachineParams;
@@ -57,15 +57,15 @@ impl VastClient {
         }
     }
 
-    /// Resolve the key from `stado-vast/api_key` in Skarbiec. The refusal
-    /// names the channel that answered and what it said, because an empty
-    /// key has three different causes and the operator needs the one in
-    /// front of them.
+    /// Resolve the key from `vast/api_key` in Skarbiec. The refusal names
+    /// the channel that answered and what it said, because an empty key has
+    /// three different causes and the operator needs the one in front of
+    /// them.
     pub async fn from_env() -> Result<Self, VastError> {
         let reading = read_vast_api_key().await;
         match reading.key.clone() {
             Some(key) => Ok(Self::new(key)),
-            None => Err(VastError::config(reading.refusal())),
+            None => Err(VastError::config(vast_refusal(&reading))),
         }
     }
 

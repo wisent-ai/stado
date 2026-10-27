@@ -16,14 +16,11 @@ pub(in crate::cli::stream) async fn probe(target_name: &str, json: bool) -> Resu
     }
     println!("host:      {} ({})", target_name, field(&report, "host"));
     println!("driver:    {}", field(&report, "driver"));
-    let boards = report
-        .get("fields")
-        .and_then(|fields| fields.get("board"))
-        .cloned()
-        .unwrap_or(Value::Null);
-    match &boards {
-        Value::String(single) => println!("board:     {single}"),
-        Value::Array(list) => {
+    // The host lists one board as text or several as a list; a report that
+    // names none, or names them in another shape, says so.
+    match report.get("fields").and_then(|fields| fields.get("board")) {
+        Some(Value::String(single)) => println!("board:     {single}"),
+        Some(Value::Array(list)) => {
             // A board entry that is not text is printed as the host wrote
             // it, not as an empty name.
             for board in list {
@@ -33,7 +30,8 @@ pub(in crate::cli::stream) async fn probe(target_name: &str, json: bool) -> Resu
                 }
             }
         }
-        _ => println!("board:     none reported"),
+        Some(other) => println!("board:     {other} (not a board name)"),
+        None => println!("board:     none reported"),
     }
     println!("drm:       {}", field(&report, "drm_nodes"));
     println!("session:   Xorg {}", field(&report, "xorg_installed"));

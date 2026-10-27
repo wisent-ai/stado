@@ -65,18 +65,35 @@ impl RequestLimits {
     /// and the operator is not asked for numbers; a bound read from the host
     /// is the source the store's document reads already use.
     pub(crate) fn measured() -> Result<Self, DashboardError> {
-        let reading = crate::providers::local::host_memory::read_host_memory();
-        let available = reading
-            .available_bytes
-            .and_then(|bytes| usize::try_from(bytes).ok())
-            .and_then(NonZeroUsize::new)
-            .ok_or_else(|| {
-                DashboardError::Refused(format!(
-                    "API request limits are not declared ({} or {}) and this host's available \
-                     memory could not be read to bound requests by it: {reading:?}",
-                    DASHBOARD_REQUEST_LIMITS_CONFIG.path, DASHBOARD_REQUEST_LIMITS_CONFIG.env
+        let unbounded = |why: String| {
+            DashboardError::Refused(format!(
+                "API request limits are not declared ({} or {}) and this host's available \
+                 memory cannot bound requests: {why}",
+                DASHBOARD_REQUEST_LIMITS_CONFIG.path, DASHBOARD_REQUEST_LIMITS_CONFIG.env
+            ))
+        };
+        // Available memory alone, with the kernel's own cause when it is not
+        // read; the swap and compressor reads of a full reading bound nothing.
+        let bytes = match crate::providers::local::host_memory::reading::read_available_and_total() {
+            Ok((available, _)) => available,
+            Err(cause) => return Err(unbounded(format!("it could not be read: {cause}"))),
+        };
+        let addressable = match usize::try_from(bytes) {
+            Ok(addressable) => addressable,
+            Err(error) => {
+                return Err(unbounded(format!(
+                    "{bytes} bytes is wider than this process addresses: {error}"
+                )))
+            }
+        };
+        let available = match NonZeroUsize::new(addressable) {
+            Some(available) => available,
+            None => {
+                return Err(unbounded(
+                    "the host reports no available memory".to_string(),
                 ))
-            })?;
+            }
+        };
         Ok(Self {
             head_bytes: available,
             body_bytes: available,

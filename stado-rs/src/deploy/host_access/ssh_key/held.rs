@@ -1,36 +1,42 @@
 //! The last repair key the vault handed out for each host, kept owner-only
-//! under `$HOME` for the day that vault cannot answer.
+//! under the home for the day that vault cannot answer.
 
-#[cfg(unix)]
-use std::io::Write;
 use std::path::PathBuf;
 
 /// Where the last key the vault handed out for each host is kept, owner-only,
-/// under `$HOME`: the vault that holds a host's repair key can be the broken
+/// under the home: the vault that holds a host's repair key can be the broken
 /// service on that very host, and the key that repairs it must not depend on
 /// it.
 const HELD_KEYS_DIR: &str = ".stado/host-keys";
 
-fn held_key_path(target: &str) -> PathBuf {
-    crate::config_file::home_dir()
-        .join(HELD_KEYS_DIR)
-        .join(target)
+/// `~/.stado/host-keys/<target>` under the home every Stado file is kept
+/// under ([`crate::config_file::home`]); a home neither HOME nor the user
+/// database names is the cause, where this process used to stop.
+fn held_key_path(target: &str) -> Result<PathBuf, String> {
+    Ok(crate::config_file::home()?.join(HELD_KEYS_DIR).join(target))
 }
 
-/// Keep the key the vault just answered, owner-only, for the day the vault
-/// cannot answer. A failure to keep it is not a failure of this command, but
-/// it is said on stderr with the path and cause: kept silently, the operator
-/// learned the repair key was missing only on the day the vault was down.
+/// Keep the key the vault just answered, owner-only, whole and flushed with
+/// its directory, for the day the vault cannot answer. A failure to keep it
+/// is not a failure of this command, but it is said on stderr with the path
+/// and cause: kept silently, the operator learned the repair key was missing
+/// only on the day the vault was down.
 #[cfg(unix)]
 pub(super) fn hold_key(target: &str, private_key: &str) {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-    let path = held_key_path(target);
+    use std::os::unix::fs::DirBuilderExt;
+    let path = match held_key_path(target) {
+        Ok(path) => path,
+        Err(cause) => {
+            eprintln!("the repair key for {target} is not held: {cause}");
+            return;
+        }
+    };
     let Some(directory) = path.parent() else {
         return;
     };
     if let Err(error) = std::fs::DirBuilder::new()
         .recursive(true)
-        .mode(0o700)
+        .mode(crate::primitives::file_mode::owner_only_directory())
         .create(directory)
     {
         eprintln!(
@@ -39,25 +45,10 @@ pub(super) fn hold_key(target: &str, private_key: &str) {
         );
         return;
     }
-    let staged = path.with_extension("staged");
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&staged)
-        .and_then(|mut file| file.write_all(private_key.as_bytes()))
-        .and_then(|()| std::fs::rename(&staged, &path));
-    if let Err(error) = written {
+    if let Err(error) = crate::primitives::document::persist(&path, private_key.as_bytes()) {
         eprintln!(
-            "{}",
-            crate::primitives::staging::failed_with(
-                format!(
-                    "the repair key for {target} is not held: {} cannot be written: {error}",
-                    path.display()
-                ),
-                &staged,
-            )
+            "the repair key for {target} is not held: {} cannot be written: {error}",
+            path.display()
         );
     }
 }
@@ -81,7 +72,7 @@ pub(super) fn held_key(target: &str) -> Option<String> {
 }
 
 fn read_held_key(target: &str) -> Result<Option<String>, String> {
-    let path = held_key_path(target);
+    let path = held_key_path(target).map_err(|cause| format!("no held key for {target}: {cause}"))?;
     let metadata = match std::fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -93,7 +84,7 @@ fn read_held_key(target: &str) -> Result<Option<String>, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
+        if crate::primitives::file_mode::open_to_others(metadata.permissions().mode()) {
             return Err(format!(
                 "held key {} is readable by others; it is not used",
                 path.display()

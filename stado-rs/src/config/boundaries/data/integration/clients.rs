@@ -67,16 +67,27 @@ pub(crate) fn parse_integration_clients(
             &format!("integration.clients.{name}"),
             &mut problems,
         );
-        let item = entry
-            .get("item")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !canonical_integration_component(item) || !item.ends_with("-integration-api") {
+        // A client is named by the Skarbiec item it presents; a declaration
+        // without one is refused by name, and the checks below run on the
+        // item it does declare.
+        let item = match entry.get("item").and_then(Value::as_str) {
+            Some(item) => item,
+            None => {
+                problems.push(format!(
+                    "integration.clients.{name}.item must name a canonical product-specific \
+                     *-integration-api item, and is absent"
+                ));
+                ""
+            }
+        };
+        if !item.is_empty()
+            && (!canonical_integration_component(item) || !item.ends_with("-integration-api"))
+        {
             problems.push(format!(
                 "integration.clients.{name}.item must be a canonical product-specific *-integration-api item"
             ));
         }
-        if !items.insert(item.to_string()) {
+        if !item.is_empty() && !items.insert(item.to_string()) {
             problems.push(format!(
                 "integration.clients maps more than one client to item {item:?}"
             ));
@@ -130,19 +141,28 @@ pub(crate) fn parse_integration_clients(
 
 static INTEGRATION_CLIENTS: LazyLock<Result<BTreeMap<String, IntegrationClient>, Vec<String>>> =
     LazyLock::new(|| {
-        let configured = match std::env::var("WC_INTEGRATION_CLIENTS")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    return Err(vec![format!(
-                        "WC_INTEGRATION_CLIENTS must be a JSON object: {error}"
-                    )])
+        // The environment declaration wins over the configuration file;
+        // unset or blank, the file's `integration.clients` is read. A value
+        // that is not Unicode cannot be JSON and is refused as such.
+        let configured = match std::env::var("WC_INTEGRATION_CLIENTS") {
+            Ok(encoded) if !encoded.trim().is_empty() => {
+                match serde_json::from_str::<Value>(&encoded) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        return Err(vec![format!(
+                            "WC_INTEGRATION_CLIENTS must be a JSON object: {error}"
+                        )])
+                    }
                 }
-            },
-            None => crate::config_file::get("integration.clients"),
+            }
+            Ok(_) | Err(std::env::VarError::NotPresent) => {
+                crate::config_file::get("integration.clients")
+            }
+            Err(std::env::VarError::NotUnicode(raw)) => {
+                return Err(vec![format!(
+                    "WC_INTEGRATION_CLIENTS must be a JSON object, and is not Unicode: {raw:?}"
+                )])
+            }
         };
         parse_integration_clients(configured.as_ref())
     });

@@ -15,52 +15,22 @@ impl RemoteObjectApi {
 
         'download: loop {
             let start = body.len();
-            let end = start.saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1));
-            let mut endpoint = origin.clone();
-            let mut selected = None;
-            for hop in 0..=3 {
-                let request = if hop == 0 {
-                    self.request(reqwest::Method::GET, endpoint.clone())
-                } else {
-                    self.http.get(endpoint.clone())
-                }
-                .header(reqwest::header::RANGE, format!("bytes={start}-{end}"));
-                let response = match sent(request).await {
-                    Ok(response) => response,
-                    Err(error) => {
-                        let cause = match crate::wait::refusal(&error) {
-                            Some(cause) => {
-                                format!("the release channel refused the connection: {cause}")
-                            }
-                            None => crate::cli::http_failure(&error),
-                        };
-                        return Err(CmdError::unreachable(format!(
-                            "public release GET of the range beginning at {start} failed: {cause}"
-                        )));
-                    }
-                };
-                if response.status().is_redirection() {
-                    let location = response
-                        .headers()
-                        .get(reqwest::header::LOCATION)
-                        .and_then(|value| value.to_str().ok())
-                        .ok_or_else(|| {
-                            CmdError::click("release redirect carries no Location")
-                                .stating(crate::primitives::failure::FailureCode::InfraDown)
-                        })?;
-                    endpoint = response.url().join(location).map_err(|error| {
-                        CmdError::click(format!("invalid release redirect: {error}"))
-                            .stating(crate::primitives::failure::FailureCode::InfraDown)
-                    })?;
-                    continue;
-                }
-                selected = Some(response);
-                break;
-            }
-            let Some(response) = selected else {
-                return Err(CmdError::click("too many release download redirects")
-                    .stating(crate::primitives::failure::FailureCode::InfraDown));
+            // The last byte of this chunk: a Range header names it inclusively.
+            let Some(end) = (start..start.saturating_add(OBJECT_API_CHUNK_BYTES)).next_back()
+            else {
+                return Err(CmdError::click(
+                    "OBJECT_API_CHUNK_BYTES declares no bytes per ranged release GET",
+                )
+                .stating(crate::primitives::failure::FailureCode::Config));
             };
+            let range = format!("bytes={start}-{end}");
+            let response = self
+                .release_response(
+                    &origin,
+                    Some(range.as_str()),
+                    &format!("public release GET of the range beginning at {start}"),
+                )
+                .await?;
             if !response.status().is_success() {
                 return Err(self.response_error(response, None).await);
             }

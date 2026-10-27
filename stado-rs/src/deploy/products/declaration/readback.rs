@@ -20,11 +20,8 @@ pub enum Readback {
 
 impl Readback {
     /// The JSON member name a `/member` pointer addresses.
-    pub fn member(&self) -> Option<&str> {
-        match self {
-            Self::Program { .. } => None,
-            Self::JsonFile { pointer, .. } => Some(pointer.trim_start_matches('/')),
-        }
+    pub fn json_member(pointer: &str) -> &str {
+        pointer.trim_start_matches('/')
     }
 }
 

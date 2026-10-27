@@ -1,4 +1,4 @@
-//! `stado space work-root TARGET [--path PATH]`: where this host keeps the
+//! `stado space root TARGET [--path PATH]`: where this host keeps the
 //! fleet's work, read from the registry or declared into it.
 //!
 //! A declaration is two writes that have to agree: the directory on the
@@ -102,7 +102,7 @@ fn parse(stdout: &str) -> Prepared {
     prepared
 }
 
-/// `space work-root` body.
+/// `space root` body.
 pub async fn dispatch(target: &str, path: Option<&str>, json: bool) -> Result<(), CmdError> {
     let store = crate::targets::RegistryStore::open().await?;
     let current = store.read_versioned().await?.ok_or_else(|| {

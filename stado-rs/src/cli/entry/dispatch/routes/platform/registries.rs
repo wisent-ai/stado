@@ -6,29 +6,34 @@ pub(super) async fn dispatch(command: RegistryCommands) -> Result<(), CmdError> 
     match command {
         RegistryCommands::Validate { path } => registry::validate(path),
         RegistryCommands::Import { path, json } => registry::import(path, json).await,
-        RegistryCommands::Push {
-            path,
-            if_generation,
-            force,
-            allow_empty_fleet,
-            last_known_good,
-            json,
-        } => {
-            registry::push(
-                path,
-                force,
-                allow_empty_fleet,
-                if_generation,
-                last_known_good,
-                json,
-            )
-            .await
+        RegistryCommands::Push { path, if_generation, force, allow_empty_fleet, last_known_good, fence_transaction, json } => {
+            if let Some(transaction) = &fence_transaction {
+                // The fence admits this process's own writes to the files it
+                // fenced; a store reached through the object API is written
+                // by the serving process, which this admission does not reach.
+                if crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
+                    == Some(crate::capabilities::StorageAdapter::StadoObject)
+                {
+                    let store = match crate::config::wc_stado_storage_url() {
+                        Ok(url) => url,
+                        Err(cause) => format!("its URL could not be read: {cause}"),
+                    };
+                    return Err(CmdError::refused(format!(
+                        "--fence-transaction {transaction} admits this process's writes to the local store it fenced, but this \
+                         host's registry store is the object API ({store}), whose writes another process makes; run it where \
+                         WC_STORAGE_BACKEND names the local store"
+                    )));
+                }
+                crate::queue::LocalBackend::admit_fence_transaction(transaction).map_err(CmdError::from)?;
+            }
+            registry::push(path, force, allow_empty_fleet, if_generation, last_known_good, json).await
         }
         RegistryCommands::Pull {
             with_generation,
             generation_only,
             path,
-        } => registry::pull(with_generation, generation_only, path.as_deref()).await,
+            last_known_good,
+        } => registry::pull(with_generation, generation_only, path.as_deref(), last_known_good).await,
         RegistryCommands::Set { path, value, json } => registry::set(&path, &value, json).await,
         RegistryCommands::SelfTarget {
             name_only,

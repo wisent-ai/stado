@@ -1,7 +1,6 @@
 //! The GitHub identity this lifecycle uses, and the API calls it makes with it.
 
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use serde_json::Value;
 
@@ -185,28 +184,19 @@ pub(crate) fn set_repository_secret(
     value: &str,
     github_token: &str,
 ) -> Result<(), DeployError> {
-    let mut child = Command::new("gh")
-        .arg("secret")
-        .arg("set")
-        .arg(name)
-        .arg("--repo")
-        .arg(format!("{GITHUB_ORGANIZATION}/{repository}"))
-        .env("GH_TOKEN", github_token)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(DeployError::io("could not start gh secret set".to_string()))?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| DeployError::unreachable("gh secret set stdin is unavailable".to_string()))?
-        .write_all(value.as_bytes())
-        .map_err(DeployError::io(
-            "could not write gh secret set stdin".to_string(),
-        ))?;
-    let output = crate::wait::child_output(child, format!("gh secret set {name}"))
-        .map_err(DeployError::io("gh secret set failed".to_string()))?;
+    // The value goes in from its own thread while gh's answer is read, so a
+    // gh that prints before it has read everything never stands on a pipe.
+    let output = crate::wait::output_with_input(
+        Command::new("gh")
+            .arg("secret")
+            .arg("set")
+            .arg(name)
+            .arg("--repo")
+            .arg(format!("{GITHUB_ORGANIZATION}/{repository}"))
+            .env("GH_TOKEN", github_token),
+        value.as_bytes(),
+    )
+    .map_err(DeployError::io(format!("gh secret set {name} failed")))?;
     if !output.status.success() {
         return Err(DeployError::unreachable(format!(
             "GitHub repository secret {name} failed: {}",

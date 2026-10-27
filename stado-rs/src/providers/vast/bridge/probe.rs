@@ -19,6 +19,10 @@ pub struct BusyState {
     /// Running jobs whose instance names this host.
     pub running_here: usize,
     pub free_vram_gb: Option<f64>,
+    /// The GPU memory the queued job declares it needs (`gpu_mem_gb`);
+    /// `None` when nothing is queued or the record vanished before it was
+    /// read.
+    pub queued_need_gb: Option<i64>,
     pub idle: bool,
 }
 
@@ -32,6 +36,18 @@ pub async fn is_stado_busy(store: &JobStorage, hostname: &str) -> Result<BusySta
     let queued = store
         .list_page("queue/", "", Some(NonZeroUsize::MIN))
         .await?;
+    let mut queued_need_gb = None;
+    for path in &queued {
+        let Some(text) = store.download_text(path).await? else {
+            continue;
+        };
+        let job = serde_json::from_str::<crate::models::Job>(&text).map_err(|error| {
+            StorageError::Other(format!(
+                "{path} is not a job record, so the memory it needs cannot be read: {error}"
+            ))
+        })?;
+        queued_need_gb = Some(job.gpu_mem_gb);
+    }
     let mut running_here: Vec<String> = Vec::new();
     for path in store.list_paths("running/", Listing::Every).await? {
         let Some(text) = store.download_text(&path).await? else {
@@ -66,6 +82,7 @@ pub async fn is_stado_busy(store: &JobStorage, hostname: &str) -> Result<BusySta
         queued: queued.len(),
         running_here: running_here.len(),
         free_vram_gb,
+        queued_need_gb,
         idle: queued.is_empty() && running_here.is_empty(),
     })
 }

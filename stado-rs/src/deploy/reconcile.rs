@@ -89,12 +89,14 @@ impl HostStanding {
     }
 }
 
+/// A text field of the inventory report, or the field named as not reported
+/// in its place: a standing that shows `(version not reported by host
+/// inventory)` is read as what it is, where empty text read as no version.
 fn text(entry: &Value, field: &str) -> String {
-    entry
-        .get(field)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+    match entry.get(field).and_then(Value::as_str) {
+        Some(value) => value.to_string(),
+        None => format!("({field} not reported by host inventory)"),
+    }
 }
 
 /// Each managed binary's drift from the inventory report, and the binaries
@@ -180,13 +182,15 @@ pub async fn examine(target_name: &str, runner: &Runner) -> HostStanding {
             platform_verdict: String::new(),
             drift: Vec::new(),
             undeclared: Vec::new(),
-            unreachable: Some(
-                report
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("host inventory failed without a detail")
-                    .to_string(),
-            ),
+            // The inventory's own detail, or what the report carried in its
+            // place, so a failure is never summarised as a bare sentence.
+            unreachable: Some(match report.get("error").and_then(Value::as_str) {
+                Some(detail) => detail.to_string(),
+                None => format!(
+                    "host inventory failed without a detail; its report carried {}",
+                    report["error"]
+                ),
+            }),
         },
         Err(DeployError {
             message: detail, ..
@@ -204,20 +208,9 @@ pub async fn examine(target_name: &str, runner: &Runner) -> HostStanding {
 
 /// The fleet's standing, as JSON an operator or another tool can read.
 pub fn report(standings: &[HostStanding], deliveries: &[Value]) -> Value {
-    let mut drifting = 0_usize;
-    let mut unreachable = 0_usize;
-    let mut undeclared = 0_usize;
-    let mut platform_mismatches = 0_usize;
     let hosts: Vec<Value> = standings
         .iter()
         .map(|standing| {
-            unreachable += usize::from(standing.unreachable.is_some());
-            drifting += usize::from(!standing.drift.is_empty());
-            undeclared += standing.undeclared.len();
-            platform_mismatches += usize::from(
-                standing.unreachable.is_none()
-                    && standing.platform_verdict != host_inventory::MATCHED,
-            );
             json!({
                 "target": standing.target,
                 "release_platform": standing.release_platform,
@@ -238,6 +231,24 @@ pub fn report(standings: &[HostStanding], deliveries: &[Value]) -> Value {
             })
         })
         .collect();
+    let drifting = standings
+        .iter()
+        .filter(|standing| !standing.drift.is_empty())
+        .count();
+    let unreachable = standings
+        .iter()
+        .filter(|standing| standing.unreachable.is_some())
+        .count();
+    let undeclared: usize = standings
+        .iter()
+        .map(|standing| standing.undeclared.len())
+        .sum();
+    let platform_mismatches = standings
+        .iter()
+        .filter(|standing| {
+            standing.unreachable.is_none() && standing.platform_verdict != host_inventory::MATCHED
+        })
+        .count();
     let failed_deliveries = deliveries
         .iter()
         .filter(|entry| entry.get("status").and_then(Value::as_str) != Some("delivered"))

@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use super::super::{Capture, ARTIFACT_NAMESPACE, AXES, CAPTURE_KEYS, STEP_OPS};
 use crate::deploy::DeployError;
+use crate::primitives::tally::Tally;
 
 /// One capture entry, checked field by field. `index` is one-based because it
 /// appears in every refusal and an operator counts a list from one.
@@ -25,19 +26,14 @@ pub(super) fn parse_capture(
         }
     }
 
-    let site_slug = text_field(object, "site_slug");
-    if site_slug.is_empty() {
-        return Err(super::refused(format!(
-            "capture {index} must carry a non-empty site_slug"
-        )));
-    }
-    let source_url = text_field(object, "source_url");
+    let site_slug = text_field(object, index, "site_slug")?;
+    let source_url = text_field(object, index, "source_url")?;
     if !source_url.starts_with("http://") && !source_url.starts_with("https://") {
         return Err(super::refused(format!(
             "capture {index} source_url must be an http or https URL"
         )));
     }
-    let axis = text_field(object, "axis");
+    let axis = text_field(object, index, "axis")?;
     if !AXES.contains(&axis.as_str()) {
         return Err(super::refused(format!(
             "capture {index} axis must be one of {}",
@@ -50,7 +46,7 @@ pub(super) fn parse_capture(
         viewport
             .and_then(|viewport| viewport.get(key))
             .and_then(Value::as_f64)
-            .is_some_and(|value| value > 0.0)
+            .is_some_and(|value| value > -value)
     };
     if !positive("width") || !positive("height") || !positive("device_scale_factor") {
         return Err(super::refused(format!(
@@ -65,7 +61,7 @@ pub(super) fn parse_capture(
     if !object
         .get("record_seconds")
         .and_then(Value::as_f64)
-        .is_some_and(|seconds| seconds >= 0.0)
+        .is_some_and(|seconds| seconds >= -seconds)
     {
         return Err(super::refused(format!(
             "capture {index} record_seconds must be a number of seconds that is zero or more"
@@ -80,22 +76,28 @@ pub(super) fn parse_capture(
                 "capture {index} steps must be an array of objects carrying op and value"
             ))
         })?;
-    for (position, step) in steps.iter().enumerate() {
-        let op = step
+    for (offset, step) in steps.iter().enumerate() {
+        let mut position = offset;
+        position.tally();
+        let Some(op) = step
             .as_object()
             .and_then(|step| step.get("op"))
             .and_then(Value::as_str)
-            .unwrap_or_default();
+        else {
+            return Err(super::refused(format!(
+                "capture {index} step {position} carries no op; it must be one of {}",
+                STEP_OPS.join(", ")
+            )));
+        };
         if !STEP_OPS.contains(&op) {
             return Err(super::refused(format!(
-                "capture {index} step {} names the operation {op}, which is not one of {}",
-                position + 1,
+                "capture {index} step {position} names the operation {op}, which is not one of {}",
                 STEP_OPS.join(", ")
             )));
         }
     }
 
-    let artifact_prefix = text_field(object, "artifact_prefix");
+    let artifact_prefix = text_field(object, index, "artifact_prefix")?;
     let batch_root = format!("stado://{ARTIFACT_NAMESPACE}/{batch}/");
     if !artifact_prefix.starts_with(&batch_root) {
         return Err(super::refused(format!(
@@ -133,11 +135,14 @@ pub(super) fn parse_capture(
     })
 }
 
-fn text_field(object: &Map<String, Value>, key: &str) -> String {
+/// A text field the capture must carry, trimmed; absent, not text or blank
+/// is refused by name.
+fn text_field(object: &Map<String, Value>, index: usize, key: &str) -> Result<String, DeployError> {
     object
         .get(key)
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| super::refused(format!("capture {index} must carry a non-empty {key}")))
 }

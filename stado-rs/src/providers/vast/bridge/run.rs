@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
 
-use crate::providers::vast::client::json::{py_float, py_value_str};
+use crate::providers::vast::client::json::{py_float, shown};
 use crate::providers::vast::{ListMachineParams, VastClient, VastError};
 use crate::queue::JobStorage;
 
@@ -47,6 +47,12 @@ pub async fn auto_list_loop(
              runs --once",
         ));
     }
+    if params.poll.is_some_and(|poll| poll.is_zero()) {
+        return Err(VastError::config(
+            "auto-list's --poll-interval-s is zero; the seconds between queue polls must be \
+             a positive number",
+        ));
+    }
     if client.is_none() && !params.dry_run {
         return Err(VastError::config(
             "auto-list without --dry-run needs a Vast.ai API key; run it with \
@@ -78,32 +84,36 @@ pub async fn auto_list_loop(
         None => log("startup: no Vast.ai credential; printing decisions only"),
         Some(client) => match client.machine_status().await {
             Ok(status) => {
-                let cur_price = status
-                    .get("listed_gpu_cost")
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                if let Some(current) = cur_price.as_f64().filter(|c| *c > 0.0) {
+                let cur_price = status.get("listed_gpu_cost");
+                // An unlisted machine answers no price, or a zero one.
+                if let Some(current) = cur_price
+                    .and_then(Value::as_f64)
+                    .filter(|price| price.is_normal() && price.is_sign_positive())
+                {
                     listed = true;
                     log(&format!(
                         "startup: listed at ${}/h on machine_id={}",
-                        py_value_str(Some(&cur_price)),
-                        py_value_str(status.get("id"))
+                        py_float(current),
+                        shown(status.get("id"))
                     ));
-                    if (current - params.price_gpu).abs() > 0.01 && !params.dry_run {
+                    // Any listed price other than the configured one is
+                    // normalized; the configured price is what Vast is sent.
+                    if current != params.price_gpu && !params.dry_run {
                         let normalize = async {
                             client.unlist_machine().await?;
                             client
                                 .list_machine(&ListMachineParams {
                                     price_gpu: params.price_gpu,
+                                    price_disk: params.price_disk,
+                                    price_min_bid: None,
                                     duration: duration_s,
-                                    ..ListMachineParams::default()
                                 })
                                 .await
                         };
                         match normalize.await {
                             Ok(_) => log(&format!(
                                 "normalized ${}/h -> ${}/h",
-                                py_value_str(Some(&cur_price)),
+                                py_float(current),
                                 py_float(params.price_gpu)
                             )),
                             Err(exc) => log(&format!("normalize failed: {exc}")),
@@ -116,7 +126,17 @@ pub async fn auto_list_loop(
             Err(exc) => log(&format!("startup probe failed: {exc}")),
         },
     }
+    // One poll at once, then one every `--poll-interval-s`; a single poll
+    // (`--once`) returns before the second.
+    let mut pace = params.poll.map(|poll| {
+        let mut pace = tokio::time::interval(poll);
+        pace.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        pace
+    });
     loop {
+        if let Some(pace) = pace.as_mut() {
+            pace.tick().await;
+        }
         // A reservation record that cannot be read may be one, so it holds the
         // cards exactly as a readable one does, and every line names its cause.
         let held = match crate::inference::reservation::active() {
@@ -147,9 +167,6 @@ pub async fn auto_list_loop(
             if params.once {
                 return Ok(());
             }
-            if let Some(poll) = params.poll {
-                tokio::time::sleep(poll).await;
-            }
             continue;
         }
         let state = match is_stado_busy(store, hostname).await {
@@ -159,9 +176,6 @@ pub async fn auto_list_loop(
                 log(&format!("poll failed: {}: {wrapped}", wrapped.kind()));
                 if params.once {
                     return Err(wrapped);
-                }
-                if let Some(poll) = params.poll {
-                    tokio::time::sleep(poll).await;
                 }
                 continue;
             }
@@ -179,7 +193,7 @@ pub async fn auto_list_loop(
             let now = std::time::Instant::now();
             let since = idle_since.get_or_insert(now);
             let idle_dur = now.duration_since(*since).as_secs() as i64;
-            match decide_action(listed, &state, idle_dur, params.idle_window_s) {
+            match decide_action(listed, &state, Some(idle_dur), params.idle_window_s) {
                 AutoListAction::List { idle_dur_s } => {
                     if params.dry_run {
                         // A dry run carries the state it would have written,
@@ -193,18 +207,21 @@ pub async fn auto_list_loop(
                         match client
                             .list_machine(&ListMachineParams {
                                 price_gpu: params.price_gpu,
+                                price_disk: params.price_disk,
+                                price_min_bid: None,
                                 duration: duration_s,
-                                ..ListMachineParams::default()
                             })
                             .await
                         {
                             Ok(_) => {
                                 listed = true;
+                                let duration = match duration_s {
+                                    Some(seconds) => format!("{seconds}s"),
+                                    None => "open-ended".to_string(),
+                                };
                                 log(&format!(
-                                    "LISTED ({idle_dur_s}s idle, ${}/h, dur={}s)",
+                                    "LISTED ({idle_dur_s}s idle, ${}/h, dur={duration})",
                                     py_float(params.price_gpu),
-                                    duration_s
-                                        .map_or_else(|| "None".to_string(), |d| d.to_string())
                                 ));
                             }
                             Err(exc) => log(&format!("list failed: {exc}")),
@@ -220,7 +237,8 @@ pub async fn auto_list_loop(
             }
         } else {
             idle_since = None;
-            if decide_action(listed, &state, 0, params.idle_window_s) == AutoListAction::Unlist {
+            let decided = decide_action(listed, &state, None, params.idle_window_s);
+            if decided == AutoListAction::Unlist {
                 if params.dry_run {
                     listed = false;
                     log(&format!("DRY-RUN would unlist ({})", counts()));
@@ -236,36 +254,37 @@ pub async fn auto_list_loop(
             }
             // Visibility for the "wait for renter to finish" path: no offer
             // of ours is up, wisent-compute has queued work and the box has
-            // near-zero free VRAM, so something is holding the GPU and the
-            // claim loop will sit idle until it lets go. The line says what
-            // was read and marks the rental as the inference it is: on a
-            // machine with no Vast credential at all it said "waiting for
-            // Vast rental to finish" over a queue of two jobs and a laptop
-            // GPU, which is a state that could not exist.
-            match decide_action(listed, &state, 0, params.idle_window_s) {
-                AutoListAction::WaitingForRental { free_vram_gb } if client.is_some() => {
+            // less free VRAM than that job declares, so something is holding
+            // the GPU and the claim loop will sit idle until it lets go. The
+            // line says what was read and marks the rental as the inference
+            // it is: on a machine with no Vast credential at all it said
+            // "waiting for Vast rental to finish" over a queue of two jobs
+            // and a laptop GPU, which is a state that could not exist.
+            match decided {
+                AutoListAction::WaitingForRental { free_vram_gb, need_gb } if client.is_some() => {
                     log(&format!(
-                        "not listed, queued={}, free_vram_gb={}: something holds the GPU, \
-                         most likely a Vast rental; wisent-compute claims when it releases",
+                        "not listed, queued={}, free_vram_gb={} below the {need_gb} GB the queued \
+                         job needs: something holds the GPU, most likely a Vast rental; \
+                         wisent-compute claims when it releases",
                         state.queued,
                         py_float(free_vram_gb)
                     ))
                 }
-                AutoListAction::WaitingForRental { free_vram_gb } => log(&format!(
-                    "not listed, queued={}, free_vram_gb={}: the GPU is occupied and this \
-                     host holds no Vast credential, so no rental of ours is on it",
+                AutoListAction::WaitingForRental { free_vram_gb, need_gb } => log(&format!(
+                    "not listed, queued={}, free_vram_gb={} below the {need_gb} GB the queued \
+                     job needs: the GPU is occupied and this host holds no Vast credential, so \
+                     no rental of ours is on it",
                     state.queued,
                     py_float(free_vram_gb)
                 )),
                 AutoListAction::BusyNotListed => log(&format!("busy ({}); not listed", counts())),
-                _ => {}
+                AutoListAction::Unlist
+                | AutoListAction::List { .. }
+                | AutoListAction::IdleCountdown { .. } => {}
             }
         }
         if params.once {
             return Ok(());
-        }
-        if let Some(poll) = params.poll {
-            tokio::time::sleep(poll).await;
         }
     }
 }

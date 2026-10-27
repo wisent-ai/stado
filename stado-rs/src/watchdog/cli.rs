@@ -27,20 +27,31 @@ pub(crate) fn configured_bucket() -> Result<String, String> {
     }
 }
 
-/// Run the declared diagnostics schedule in the caller's process. It returns
-/// only when it cannot run, with the reason.
+/// Run the declared diagnostics schedule in the caller's process: one
+/// collection per declared period, a collection that outlasts the period
+/// starting the next at once and skipping the ones it missed. It returns only
+/// when it cannot run, with the reason.
 pub(crate) async fn run(parsed: &ParsedArgs) -> String {
     if parsed.once {
         let code = once(&parsed.bucket).await;
         return format!("one collection ran and returned exit status {code}");
     }
     let interval = match parsed.interval_s.map(u64::try_from) {
-        Some(Ok(interval)) => interval,
-        Some(Err(_)) => return "--watchdog-interval-seconds must not be negative".to_string(),
+        Some(Ok(interval)) => std::num::NonZeroU64::new(interval),
+        Some(Err(negative)) => {
+            return format!("--watchdog-interval-seconds must not be negative: {negative}")
+        }
         None => return "the collection loop needs --watchdog-interval-seconds".to_string(),
     };
+    // A period of none ran collections back to back, uploading as fast as the
+    // bucket answered.
+    let Some(interval) = interval else {
+        return "--watchdog-interval-seconds must be a positive number of seconds".to_string();
+    };
+    let mut schedule = tokio::time::interval(Duration::from_secs(interval.get()));
+    schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        schedule.tick().await;
         once(&parsed.bucket).await;
-        tokio::time::sleep(Duration::from_secs(interval)).await;
     }
 }

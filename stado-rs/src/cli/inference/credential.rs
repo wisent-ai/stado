@@ -4,6 +4,16 @@ use uuid::Uuid;
 use crate::cli::CmdError;
 use crate::inference::schema::LOCAL_PROVIDER_CREDENTIAL;
 
+/// `stado inference credential`: the central local-inference bearer.
+#[derive(clap::Subcommand, Debug)]
+pub enum CredentialCommands {
+    /// Create the central local-inference bearer in Skarbiec.
+    Init {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 pub async fn init(json_output: bool) -> Result<(), CmdError> {
     let vault = crate::skarbiec::Client::configured().map_err(CmdError::from)?;
     let existing = vault

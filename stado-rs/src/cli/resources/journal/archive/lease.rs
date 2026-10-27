@@ -62,6 +62,7 @@ impl Journal {
     }
 
     pub async fn renew(&self, operation_id: &str, owner: &str) -> Result<(), CmdError> {
+        validate_operation_id(operation_id)?;
         let path = remote_path(operation_id, "lock.json");
         let versioned = self
             .store
@@ -81,6 +82,7 @@ impl Journal {
     }
 
     pub async fn release(&self, operation_id: &str, owner: &str) -> Result<(), CmdError> {
+        validate_operation_id(operation_id)?;
         let path = remote_path(operation_id, "lock.json");
         let Some(versioned) = self.store.read_text_versioned(&path).await? else {
             return Ok(());
@@ -88,6 +90,9 @@ impl Journal {
         let mut lease: OperationLease = serde_json::from_str(&versioned.content)?;
         if lease.owner != owner {
             return Err(CmdError::refused("operation lock ownership changed"));
+        }
+        if lease.released_at.is_some() {
+            return Ok(());
         }
         lease.released_at = Some(now());
         let body = String::from_utf8(canonical_json_bytes(&lease)?)

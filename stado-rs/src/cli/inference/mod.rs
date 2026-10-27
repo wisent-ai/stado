@@ -1,6 +1,7 @@
 use clap::Subcommand;
 
 use super::CmdError;
+pub use credential::CredentialCommands;
 
 mod beacon;
 mod credential;
@@ -60,18 +61,15 @@ pub enum InferenceCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Read one deployment's systemd journal over the managed host channel.
+    /// Read a systemd journal over the managed host channel: one deployment's,
+    /// or with --plan the runtime of a plan that has not committed.
     Logs {
-        name: String,
-        /// Journal lines to read.
+        /// Deployment whose journal is read; omit it with --plan.
+        #[arg(required_unless_present = "plan", conflicts_with = "plan")]
+        name: Option<String>,
+        /// Plan id of a runtime that has not committed its plan.
         #[arg(long)]
-        lines: usize,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Read systemd logs for a runtime that has not committed its plan.
-    PlanLogs {
-        plan_id: String,
+        plan: Option<String>,
         /// Journal lines to read.
         #[arg(long)]
         lines: usize,
@@ -144,10 +142,10 @@ pub enum InferenceCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Create the central local-inference bearer in Skarbiec.
-    InitCredential {
-        #[arg(long)]
-        json: bool,
+    /// The central local-inference bearer in Skarbiec.
+    Credential {
+        #[command(subcommand)]
+        command: CredentialCommands,
     },
     /// Emit this host's inference beacon fragment.
     #[command(hide = true)]
@@ -234,16 +232,20 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
         InferenceCommands::Apply { plan_id, json } => lifecycle::apply(&plan_id, json).await,
         InferenceCommands::List { json } => read::list(json).await,
         InferenceCommands::Status { name, json } => read::status(&name, json).await,
-        InferenceCommands::Logs { name, lines, json } => read::logs(&name, lines, json).await,
+        InferenceCommands::Logs {
+            name,
+            plan,
+            lines,
+            json,
+        } => match (name, plan) {
+            (Some(name), None) => read::logs(&name, lines, json).await,
+            (None, Some(plan)) => read::plan_logs(&plan, lines, json).await,
+            _ => Err(CmdError::usage("inference logs takes a deployment or --plan PLAN_ID")),
+        },
         InferenceCommands::Doctor { name, json } => read::doctor(&name, json).await,
         InferenceCommands::Verify { name, from, json } => {
             read::verify(&name, from.as_deref(), json).await
         }
-        InferenceCommands::PlanLogs {
-            plan_id,
-            lines,
-            json,
-        } => read::plan_logs(&plan_id, lines, json).await,
         InferenceCommands::Route {
             command:
                 RouteCommands::Set {
@@ -289,7 +291,9 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
             purge_cache,
             json,
         } => lifecycle::retire(&name, purge_cache, json).await,
-        InferenceCommands::InitCredential { json } => credential::init(json).await,
+        InferenceCommands::Credential {
+            command: CredentialCommands::Init { json },
+        } => credential::init(json).await,
         InferenceCommands::Beacon => beacon::local(),
     }
 }

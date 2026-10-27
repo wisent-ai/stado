@@ -2,7 +2,7 @@
 //! from the same data.
 
 use super::{
-    apply::Update,
+    apply::{listed, Moved, Update},
     scan::{Checkout, Finding},
 };
 use anyhow::Result;
@@ -21,14 +21,15 @@ pub struct Answer<'a> {
     /// `apply` only: what was done for each affected package version.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updates: Option<&'a [Update]>,
-    /// The findings that stand when the command ends: for `apply`, read again
-    /// after the updates.
+    /// The findings that stand in the committed lockfiles when the command
+    /// ends: for `apply`, read again after the updates.
     pub findings: &'a [Finding],
 }
 
 impl Answer<'_> {
-    /// Nothing selected still affects a lock, every checkout was read, and
-    /// every update asked for was made.
+    /// Nothing selected still affects a committed lock, every checkout was
+    /// read, and every update asked for was made, by it or by an earlier
+    /// update of the same lockfile.
     pub fn settled(&self) -> bool {
         self.checkouts.iter().all(|checkout| checkout.read)
             && !self.findings.iter().any(Finding::actionable)
@@ -36,7 +37,7 @@ impl Answer<'_> {
                 .updates
                 .into_iter()
                 .flatten()
-                .all(|update| update.state == "updated")
+                .all(|update| update.state.made())
     }
 }
 
@@ -60,10 +61,31 @@ fn unread(checkout: &Checkout) -> String {
     )
 }
 
-fn update_line(update: &Update) -> String {
+fn moved_part(moved: &Moved) -> String {
     format!(
-        "{} {}: {} {}{} ({})",
-        update.state,
+        "{} {} -> {}",
+        moved.package,
+        listed(moved.from.iter().map(String::as_str)),
+        listed(moved.to.iter().map(String::as_str)),
+    )
+}
+
+fn update_line(update: &Update) -> String {
+    let also = match update.moved.is_empty() {
+        true => String::new(),
+        false => format!(
+            "; cargo also moved {}",
+            update
+                .moved
+                .iter()
+                .map(moved_part)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    format!(
+        "{} {}: {} {}{} ({}){also}",
+        update.state.word(),
         lockfile_path(&update.checkout, &update.lockfile),
         update.package,
         update.from,
@@ -84,8 +106,15 @@ fn finding_line(finding: &Finding) -> String {
         Some(kind) => format!(" [informational: {kind}]"),
         None => String::new(),
     };
+    let working = match &finding.working {
+        Some(versions) => format!(
+            "; its working file, not committed, locks {}",
+            listed(versions.iter().map(String::as_str))
+        ),
+        None => String::new(),
+    };
     format!(
-        "{}: {} {}: {}{notice}{}; fixed in {}; {remedy}",
+        "{}: {} {}: {}{notice}{}; fixed in {}; {remedy}{working}",
         lockfile_path(&finding.checkout, &finding.lockfile),
         finding.package,
         finding.version,
@@ -107,6 +136,14 @@ pub fn print(answer: &Answer<'_>, json: bool) -> Result<()> {
         match &update.cause {
             Some(cause) => eprintln!("{}: {cause}", update_line(update)),
             None => println!("{}", update_line(update)),
+        }
+    }
+    for checkout in answer.checkouts {
+        for lockfile in &checkout.uncommitted {
+            println!(
+                "{} differs from its last commit; the findings read the committed one",
+                lockfile_path(&checkout.checkout, lockfile)
+            );
         }
     }
     for finding in answer.findings {

@@ -12,20 +12,22 @@ pub(super) fn deployment(message: String) -> SkarbiecError {
 }
 
 /// `action:item#field`, the spelling `token-mint --capabilities` takes and the
-/// vault records.
-pub(super) fn encode(capability: &Value) -> String {
+/// vault records. A capability the vault lists without its action or item
+/// is not one the vault wrote and is refused naming the entry, never read
+/// as `:` with blanks that would match nothing and so be added again.
+pub(super) fn encode(capability: &Value) -> Result<String, SkarbiecError> {
     let action = capability
         .get("action")
         .and_then(Value::as_str)
-        .unwrap_or_default();
+        .ok_or_else(|| deployment(format!("a vault capability names no action: {capability}")))?;
     let item = capability
         .get("item")
         .and_then(Value::as_str)
-        .unwrap_or_default();
-    match capability.get("field").and_then(Value::as_str) {
+        .ok_or_else(|| deployment(format!("a vault capability names no item: {capability}")))?;
+    Ok(match capability.get("field").and_then(Value::as_str) {
         Some(field) => format!("{action}:{item}#{field}"),
         None => format!("{action}:{item}"),
-    }
+    })
 }
 
 pub(super) fn now_seconds() -> i64 {

@@ -99,6 +99,6 @@ pub(super) fn declare_route(
         records.push(json!({ "name": product, "declared_only": true }));
     }
     crate::service_resolution::advance_generation(document)
-        .map(|_| ())
+        .map(|_generation| ())
         .map_err(CmdError::declaration)
 }

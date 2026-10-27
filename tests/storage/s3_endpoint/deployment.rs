@@ -26,11 +26,7 @@ const ACTIONS: &str = include_str!("../../../stado-rs/src/config/boundaries/api-
 /// Take every permission from group and others, the way the keyring and a
 /// bearer file have to be held.
 pub fn owner_only(path: &Path) {
-    let status = Command::new("chmod")
-        .arg("go-rwx")
-        .arg(path)
-        .status()
-        .unwrap();
+    let status = Command::new("chmod").arg("go-rwx").arg(path).status().unwrap();
     assert!(status.success(), "chmod go-rwx {}", path.display());
 }
 
@@ -64,9 +60,7 @@ impl Deployment {
         let root = repository.join(".build/storage-s3-endpoint").join(run);
         // gpg-agent's socket lives in the keyring and a Unix socket path is
         // short on macOS, so the keyring sits at a short path of its own.
-        let keyring = repository
-            .join(".build/g")
-            .join(std::process::id().to_string());
+        let keyring = repository.join(".build/g").join(std::process::id().to_string());
         fs::create_dir_all(root.join("home")).unwrap();
         fs::create_dir_all(root.join("tmp")).unwrap();
         fs::create_dir_all(root.join("store")).unwrap();
@@ -104,13 +98,7 @@ impl Deployment {
         init.args(["init", "s3-endpoint-owner"]);
         self.must("skarbiec init", init);
         let mut set = self.skarbiec();
-        set.args([
-            "set",
-            item,
-            "--type",
-            "token",
-            &format!("token={}", self.bearer),
-        ]);
+        set.args(["set", item, "--type", "token", &format!("token={}", self.bearer)]);
         self.must("skarbiec set (token)", set);
         let mut keys = self.skarbiec();
         let tag = format!("stado:role:{KEYS_ROLE}");
@@ -124,18 +112,10 @@ impl Deployment {
             format!("read:{KEYS_ITEM}#secret_access_key"),
         ];
         let mut grant = self.skarbiec();
-        grant.args([
-            "grant",
-            "issue",
-            CONSUMER,
-            "--capabilities",
-            &reads.join(","),
-        ]);
+        grant.args(["grant", "issue", CONSUMER, "--capabilities", &reads.join(",")]);
         let answer = self.must("skarbiec grant issue", grant);
         let issued: Value = serde_json::from_str(&answer).unwrap();
-        let token = issued["token"]
-            .as_str()
-            .expect("grant issue answers the bearer");
+        let token = issued["token"].as_str().expect("grant issue answers the bearer");
         fs::write(&self.token_file, token).unwrap();
         owner_only(&self.token_file);
         let mut vault = self.skarbiec();
@@ -179,18 +159,12 @@ impl Drop for Deployment {
             }
         }
         let mut agents = Command::new("gpgconf");
-        agents
-            .arg("--homedir")
-            .arg(&self.keyring)
-            .args(["--kill", "all"]);
+        agents.arg("--homedir").arg(&self.keyring).args(["--kill", "all"]);
         if let Err(error) = agents.status() {
             eprintln!("stopping the keyring's agents failed: {error}");
         }
         if let Err(error) = fs::remove_dir_all(&self.keyring) {
-            eprintln!(
-                "removing the keyring {} failed: {error}",
-                self.keyring.display()
-            );
+            eprintln!("removing the keyring {} failed: {error}", self.keyring.display());
         }
         self.save();
         eprintln!("s3 endpoint evidence: {}", self.root.display());

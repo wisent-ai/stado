@@ -6,6 +6,8 @@ mod types;
 mod validation;
 use anyhow::{bail, Context, Result};
 pub use command::{cli_catalog, run, services};
+/// Every rival claim of a product with its source fetched again.
+pub use rivals::check_claims;
 use serde_json::{json, Value};
 use std::{fs, path::Path};
 pub use types::{
@@ -39,19 +41,6 @@ pub fn embedded() -> Result<Value> {
     Ok(document)
 }
 
-/// The `schema_version` the compiled catalog is written in: the one schema
-/// this build reads, read once from the catalog itself rather than restated.
-fn embedded_schema() -> Result<&'static Value> {
-    static SCHEMA: std::sync::LazyLock<Result<Value, String>> = std::sync::LazyLock::new(|| {
-        serde_yaml::from_str::<Value>(EMBEDDED)
-            .map(|document| document["schema_version"].clone())
-            .map_err(|error| {
-                format!("the catalog compiled into this build does not parse: {error}")
-            })
-    });
-    SCHEMA.as_ref().map_err(|error| anyhow::anyhow!("{error}"))
-}
-
 pub fn product<'a>(catalog: &'a Value, id: &str) -> Result<&'a Value> {
     catalog["products"]
         .as_array()
@@ -71,13 +60,15 @@ pub fn text<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
     Ok(text)
 }
 
-/// Every product as `catalog --json` serves it: the whole validated record.
-/// A projection here dropped every field it did not list, so the rivals, the
-/// benchmark and the roadmap a record declares never reached Probierz, which
-/// reads them from this answer.
+/// Every product as `catalog --json` serves it: the whole validated record,
+/// and every roadmap status with whether it is decided
+/// (`roadmap_statuses`), so a reader tells open roadmap items from ended
+/// ones by the catalog's own declaration. A projection here dropped every
+/// field it did not list, so the rivals, the benchmark and the roadmap a
+/// record declares never reached Probierz, which reads them from this answer.
 pub fn rows(value: &Value) -> Result<Value> {
     let products = value["products"]
         .as_array()
         .context("products must be an array")?;
-    Ok(json!({ "products": products }))
+    Ok(json!({ "products": products, "roadmap_statuses": types::RoadmapStatus::published() }))
 }

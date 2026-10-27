@@ -55,7 +55,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn execute_queue_effect(
                 &intended,
             )
             .await
-            .map(|_| true),
+            .map(|_written_version| true),
         None => {
             store
                 .create_text_if_absent(crate::queue::control::CONTROL_BLOB, &intended)

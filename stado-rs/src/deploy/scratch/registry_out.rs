@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 
 use super::lease::ScratchLease;
 use crate::deploy::DeployError;
-use crate::targets::{ComputeTarget, REGISTRY_SCHEMA_VERSION};
+use crate::targets::{registry_schema_version, ComputeTarget};
 
 /// The one object every backend reads a registry from, store-relative.
 pub const REGISTRY_FILE: &str = "registry.json";
@@ -39,7 +39,7 @@ pub const SCRATCH_ROLE: &str = "scratch";
 /// destination.
 pub fn document(lease: &ScratchLease, parent: &ComputeTarget, ssh: &str) -> Value {
     json!({
-        "schema_version": REGISTRY_SCHEMA_VERSION,
+        "schema_version": registry_schema_version(),
         "coordinators": [],
         "targets": [{
             "name": lease.name,
@@ -238,13 +238,16 @@ pub fn remove(lease: Option<&ScratchLease>) -> Result<&'static str, DeployError>
             DeployError(format!("{} registry is invalid: {error}", root.display()))
                 .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
-        let targets = document["targets"].as_array();
-        if !targets.is_some_and(|targets| {
-            targets.len() == 1
-                && targets[0]["name"] == lease.name
-                && targets[0]["role"] == SCRATCH_ROLE
-                && targets[0]["ssh_key_target"] == lease.target
-        }) {
+        // A scratch registry declares exactly one target: the leased
+        // account, in the scratch role, keyed to its parent host.
+        let identifies = matches!(
+            document["targets"].as_array().map(Vec::as_slice),
+            Some([only])
+                if only["name"] == lease.name
+                    && only["role"] == SCRATCH_ROLE
+                    && only["ssh_key_target"] == lease.target
+        );
+        if !identifies {
             return Err(DeployError(format!(
                 "{} does not identify this scratch lease; nothing there was removed",
                 root.display()

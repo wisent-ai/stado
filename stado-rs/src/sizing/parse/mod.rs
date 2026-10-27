@@ -17,8 +17,11 @@ use regex::Regex;
 use crate::primitives::model_judgement;
 use crate::providers::local::host_memory::constants::MIB;
 
-static MODEL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"--model\s+(?P<model>\S+)").expect("static regex compiles"));
+/// `--model <value>` or `--model=<value>`: the one reading of a command's
+/// model every part of Stado shares ([`model_of`]).
+static MODEL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"--model(?:\s+|=)(?P<model>\S+)").expect("static regex compiles")
+});
 /// A decimal figure as PyTorch writes one: digits, and at most one fraction.
 /// Every text this admits is an `f64` literal, so reading it cannot fail.
 static OOM_PROC_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -39,13 +42,14 @@ const OTHER: &str = "OTHER";
 /// The unit letter PyTorch writes for a gibibyte figure.
 const GIB_UNIT: &str = "G";
 
-/// Python `_model_of`: `--model <value>` out of a command line,
-/// quote-stripped. Empty when absent.
-pub fn model_of(command: &str) -> String {
-    match MODEL_RE.captures(command) {
-        Some(caps) => caps["model"].trim_matches(['\'', '"']).to_string(),
-        None => String::new(),
-    }
+/// The model a command line names with `--model <value>` or
+/// `--model=<value>`, quote-stripped; `None` when it names none, or names an
+/// empty one.
+pub fn model_of(command: &str) -> Option<String> {
+    let model = MODEL_RE.captures(command)?["model"]
+        .trim_matches(['\'', '"'])
+        .to_string();
+    (!model.is_empty()).then_some(model)
 }
 
 /// MiB in one GiB: a GiB holds as many MiB as a MiB holds KiB, the square

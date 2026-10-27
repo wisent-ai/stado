@@ -41,12 +41,16 @@ pub const WC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/stado"];
 /// has, so the declaration wins. Empty when the compiled catalog names no host
 /// process, which its validation refuses.
 pub fn managed_agents() -> Vec<(String, String)> {
-    crate::deploy::service_catalog::host_unit()
-        .map(|label| {
+    match crate::deploy::service_catalog::host_unit() {
+        Ok(label) => {
             let plist = format!("$HOME/Library/LaunchAgents/{label}.plist");
             vec![(label, plist)]
-        })
-        .unwrap_or_default()
+        }
+        Err(cause) => {
+            eprintln!("cannot resolve the managed recovery unit: {cause}");
+            Vec::new()
+        }
+    }
 }
 
 /// The pass reloaded the unit and launchd has a job under the label.

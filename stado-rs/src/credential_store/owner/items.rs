@@ -1,7 +1,6 @@
 //! The item calls themselves: one write against an explicit vault, and the
 //! reads and writes that go through the resolved owner vault.
 
-use std::io::Write;
 use std::path::Path;
 
 use serde_json::{json, Value};
@@ -15,7 +14,7 @@ const ITEM_SCHEMA: &str = "skarbiec.item.v2";
 
 /// Write one item into an explicit vault through its owner.
 ///
-/// `set-json` takes a canonical payload and validates it: the kind must be one
+/// `set` takes a canonical payload and validates it: the kind must be one
 /// Skarbiec declares, every key in `fields` must be one that kind allows, and
 /// anything descriptive belongs in `context`. So `ssh-key` is not a kind — it is
 /// a `key-pair` whose fingerprint and key type are context — and passing the
@@ -33,32 +32,26 @@ pub fn store_json(
     fields: &Value,
     context: &Value,
 ) -> Result<(), SkarbiecError> {
-    let mut child = std::process::Command::new(binary)
-        .arg("set-json")
-        .arg(item)
-        .arg("--type")
-        .arg(item_type)
-        .env("SKARBIEC_VAULT_FILE", vault)
-        .env_remove("SKARBIEC_UNLOCK")
-        .env_remove("SKARBIEC_UNLOCK_FILE")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
     let payload = json!({
         "schema": ITEM_SCHEMA,
         "kind": item_type,
         "fields": fields,
         "context": context,
     });
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(payload.to_string().as_bytes())
-            .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
-    }
-    let output = crate::wait::child_output(child, format!("skarbiec set-json {item}"))
-        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    let output = crate::wait::output_with_input(
+        std::process::Command::new(binary)
+            .arg("set")
+            .arg(item)
+            .arg("--type")
+            .arg(item_type)
+            .env("SKARBIEC_VAULT_FILE", vault)
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE"),
+        payload.to_string().as_bytes(),
+    )
+    .map_err(|error| {
+        SkarbiecError::Deployment(format!("skarbiec set {item} could not run: {error}"))
+    })?;
     if !output.status.success() {
         return Err(SkarbiecError::Deployment(format!(
             "skarbiec could not store {item}: {}",

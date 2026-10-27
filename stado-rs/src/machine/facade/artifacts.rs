@@ -24,6 +24,17 @@ impl MachineFacade {
         fn security(msg: impl Into<String>) -> MachineError {
             MachineError::new("ARTIFACT_SECURITY", msg)
         }
+        // What is at `path` without following a link, none when nothing is.
+        // Path::exists follows links, so a dangling link answered "nothing
+        // here" and passed every symlink check below, and the download then
+        // wrote through it wherever it pointed.
+        fn kind(path: &Path) -> Result<Option<std::fs::FileType>, MachineError> {
+            match std::fs::symlink_metadata(path) {
+                Ok(metadata) => Ok(Some(metadata.file_type())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(security(format!("{} cannot be examined: {error}", path.display()))),
+            }
+        }
         let job = self.lookup_job(job_id).await?;
         if !job_state::is_terminal(&job.state) {
             return Err(MachineError::new(
@@ -38,7 +49,7 @@ impl MachineFacade {
         } else {
             std::env::current_dir()?.join(expanded)
         };
-        if requested_root.exists() && requested_root.is_symlink() {
+        if kind(&requested_root)?.is_some_and(|found| found.is_symlink()) {
             return Err(security("output directory must not be a symlink"));
         }
         // Symlinked ancestors are rejected, except the system temp dir and
@@ -51,11 +62,11 @@ impl MachineFacade {
             .into_iter()
             .flat_map(Path::ancestors)
         {
-            if component.exists() && component.is_symlink() && !trusted.contains(component) {
+            if kind(component)?.is_some_and(|found| found.is_symlink()) && !trusted.contains(component) {
                 return Err(security("output path must not contain symlinks"));
             }
         }
-        if requested_root.exists() && !requested_root.is_dir() {
+        if kind(&requested_root)?.is_some_and(|found| !found.is_dir()) {
             return Err(security("output directory path is not a directory"));
         }
         std::fs::create_dir_all(&requested_root)?;
@@ -101,7 +112,7 @@ impl MachineFacade {
             };
             for part in directories {
                 current.push(part);
-                if current.exists() && (current.is_symlink() || !current.is_dir()) {
+                if kind(&current)?.is_some_and(|found| found.is_symlink() || !found.is_dir()) {
                     return Err(security(format!(
                         "unsafe output path component: {}",
                         py_repr(part)
@@ -115,7 +126,7 @@ impl MachineFacade {
                     }
                 })?;
             }
-            if destination.exists() && (destination.is_symlink() || !destination.is_file()) {
+            if kind(&destination)?.is_some_and(|found| found.is_symlink() || !found.is_file()) {
                 return Err(security(format!(
                     "unsafe artifact destination: {}",
                     py_repr(relative)
@@ -146,7 +157,11 @@ impl MachineFacade {
                 let mut file = std::fs::File::open(&temporary)?;
                 let mut digest = Sha256::new();
                 let size = std::io::copy(&mut file, &mut digest)?;
+                // Flushed, renamed, and the directory flushed: an artifact
+                // the receipt names survives a power loss whole.
+                file.sync_all()?;
                 std::fs::rename(&temporary, &destination)?;
+                std::fs::File::open(&parent)?.sync_all()?;
                 Ok::<(u64, String), MachineError>((size, hex::encode(digest.finalize())))
             }
             .await;

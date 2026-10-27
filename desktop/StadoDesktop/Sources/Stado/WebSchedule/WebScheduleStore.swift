@@ -67,7 +67,6 @@ struct WebScheduleDraft: Sendable {
 /// Stado Desktop operation. Desktop never spawns the CLI.
 @MainActor
 final class WebScheduleStore: ObservableObject {
-    static let unconfigured = "No Stado endpoint is configured, so no schedule was read or written."
 
     @Published private(set) var rows: [WebScheduleRow] = []
     @Published private(set) var result: OperatorCommandResult?
@@ -82,12 +81,38 @@ final class WebScheduleStore: ObservableObject {
         self.client = client
     }
 
-    var address: OperationsDashboardAddress? {
-        try? OperationsDashboardAddress(addressString)
+    /// The dashboard address the store is pointed at, parsed, or the
+    /// parser's refusal of what it was given; an empty address is refused
+    /// too, since nothing is configured.
+    var addressReading: Result<OperationsDashboardAddress, Error> {
+        Result { try OperationsDashboardAddress(addressString) }
     }
 
+    var address: OperationsDashboardAddress? {
+        switch addressReading {
+        case .success(let address): return address
+        case .failure: return nil
+        }
+    }
+
+    /// Why no schedule was read or written, in the address parser's words.
+    private var unconfigured: String {
+        switch addressReading {
+        case .success:
+            return "A Stado endpoint is configured; no refusal to report."
+        case .failure(let error):
+            return "No usable Stado endpoint is configured (\(error)), so no schedule was read or written."
+        }
+    }
+
+    /// `nil` clears the endpoint; text is kept as given, trimmed. Pointing
+    /// the store elsewhere forgets what was read from the previous Stado.
     func configureEndpoint(_ endpoint: String?) {
-        let normalized = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalized: String
+        switch endpoint {
+        case .some(let text): normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .none: normalized = ""
+        }
         guard normalized != addressString else { return }
         addressString = normalized
         rows = []
@@ -103,7 +128,7 @@ final class WebScheduleStore: ObservableObject {
     func read() async {
         guard !isReading, !mutation.isWorking else { return }
         guard let address else {
-            readFailure = Self.unconfigured
+            readFailure = unconfigured
             return
         }
         isReading = true
@@ -143,7 +168,7 @@ final class WebScheduleStore: ObservableObject {
     private func mutate(_ arguments: [String], describedAs summary: String) async {
         guard !mutation.isWorking else { return }
         guard let address else {
-            mutation = .failed(Self.unconfigured)
+            mutation = .failed(unconfigured)
             return
         }
         mutation = .working(summary)

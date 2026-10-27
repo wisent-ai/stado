@@ -32,7 +32,7 @@ struct WorkloadStartView: View {
             TextField("Workspace on the host (__home__ for its home directory)", text: $workspace)
             TextField("Task the session is started for", text: $task, axis: .vertical)
             TextField("Model route (optional)", text: $model)
-            TextField("Maximum steps (optional)", text: $maxSteps)
+            TextField("Maximum steps the session may take", text: $maxSteps)
             Toggle("May write files in its workspace", isOn: $allowWrite)
             Toggle("May run commands in its workspace", isOn: $allowCommand)
             HStack {
@@ -50,7 +50,8 @@ struct WorkloadStartView: View {
                 }
                 .disabled(store.isLoading
                     || task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || workspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    || workspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || maxSteps.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(WisentDesign.Space.x3)

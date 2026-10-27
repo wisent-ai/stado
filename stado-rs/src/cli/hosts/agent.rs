@@ -12,9 +12,10 @@ use crate::queue::JobStorage;
 /// numbers/bools differs only for True/False/none — an accepted cosmetic
 /// deviation for env values, which are strings in practice).
 fn env_value_str(v: &serde_json::Value) -> String {
-    v.as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| v.to_string())
+    match v {
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -82,18 +83,15 @@ pub(crate) async fn apply_registry_target(
                 CmdError::click(format!("hostname '{hostname}' not in registry"))
                     .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
-        if gpu_type.is_empty() {
-            gpu_type = t.gpu_type.clone().unwrap_or_default();
+        if let (true, Some(declared)) = (gpu_type.is_empty(), &t.gpu_type) {
+            gpu_type = declared.clone();
         }
         apply_environment(&t, environment)?;
-        if matches!(environment, RegistryEnvironment::HostIdentity) {
-            println!("serve --auto: target={}", t.name);
-        } else {
-            println!(
-                "serve --auto: target={} gpu_type={gpu_type} capacity=live-resources",
-                t.name
-            );
-        }
+        let capacity = match environment {
+            RegistryEnvironment::HostIdentity => String::new(),
+            _ => format!(" gpu_type={gpu_type} capacity=live-resources"),
+        };
+        println!("serve --auto: target={}{capacity}", t.name);
         resolved = Some(t);
     } else if let Some(target) = target {
         let t = local_agent::lookup_auto(target)
@@ -106,17 +104,14 @@ pub(crate) async fn apply_registry_target(
                 t.kind
             )));
         }
-        if gpu_type.is_empty() {
-            gpu_type = t.gpu_type.clone().unwrap_or_default();
+        if let (true, Some(declared)) = (gpu_type.is_empty(), &t.gpu_type) {
+            gpu_type = declared.clone();
         }
-        if matches!(environment, RegistryEnvironment::HostIdentity) {
-            println!("serve: target={}", t.name);
-        } else {
-            println!(
-                "serve: target={} gpu_type={gpu_type} capacity=live-resources",
-                t.name
-            );
-        }
+        let capacity = match environment {
+            RegistryEnvironment::HostIdentity => String::new(),
+            _ => format!(" gpu_type={gpu_type} capacity=live-resources"),
+        };
+        println!("serve: target={}{capacity}", t.name);
         resolved = Some(t);
     }
     Ok((gpu_type, resolved))
@@ -131,6 +126,7 @@ pub async fn run(
     kind: String,
     vast_auto_list: bool,
     vast_price_gpu: Option<f64>,
+    vast_price_disk: Option<f64>,
     vast_max_duration_s: Option<i64>,
     vast_idle_window_s: Option<i64>,
     poll_seconds: Option<u64>,
@@ -160,12 +156,17 @@ pub async fn run(
     // Skarbiec and this is a local consumer. The defensive helper performs
     // the authoritative lookup below. WC_VAST_AUTO_LIST remains an explicit
     // non-secret operator override.
-    let auto_list_env = std::env::var("WC_VAST_AUTO_LIST")
-        .unwrap_or_default()
-        .trim()
-        .to_lowercase();
-    let explicit_off = matches!(auto_list_env.as_str(), "0" | "false" | "no" | "off");
-    let explicit_on = matches!(auto_list_env.as_str(), "1" | "true" | "yes" | "on");
+    let auto_list_env = match std::env::var("WC_VAST_AUTO_LIST") {
+        Ok(value) => Some(value.trim().to_lowercase()),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => {
+            return Err(CmdError::usage(format!(
+                "WC_VAST_AUTO_LIST cannot be read: {error}"
+            )))
+        }
+    };
+    let explicit_off = matches!(auto_list_env.as_deref(), Some("0" | "false" | "no" | "off"));
+    let explicit_on = matches!(auto_list_env.as_deref(), Some("1" | "true" | "yes" | "on"));
     // A reservation record that cannot be read may be one: Vast stays off,
     // and the cause is said once at agent start.
     let inference_reservation = crate::inference::reservation::active();
@@ -173,7 +174,8 @@ pub async fn run(
         eprintln!("agent: Vast disabled because the inference reservation cannot be read: {error}");
     }
     let reserved = !matches!(inference_reservation, Ok(None));
-    let env_has_api_key = if !reserved {
+    // A reserved host lists no capacity, so its Vast key is not read at all.
+    let env_has_api_key = !reserved && {
         let reading = vast::read_vast_api_key().await;
         // A channel that answered and refused is worth one line at agent
         // start; an absent channel is the ordinary state of a host that was
@@ -182,8 +184,6 @@ pub async fn run(
             eprintln!("[vast] cannot read stado-vast/api_key: {error}");
         }
         reading.key.is_some()
-    } else {
-        false
     };
     let effective_vast = !reserved
         && (vast_auto_list
@@ -224,6 +224,11 @@ pub async fn run(
         let price_gpu = vast_price_gpu.ok_or_else(|| {
             CmdError::usage("the Vast bridge needs --vast-price-gpu: the per-GPU-hour price in USD")
         })?;
+        let price_disk = vast_price_disk.ok_or_else(|| {
+            CmdError::usage(
+                "the Vast bridge needs --vast-price-disk: the per-GB-month disk price in USD",
+            )
+        })?;
         let max_duration_s = vast_max_duration_s.ok_or_else(|| {
             CmdError::usage(
                 "the Vast bridge needs --vast-max-duration-s: the longest rental in seconds, \
@@ -234,7 +239,8 @@ pub async fn run(
             idle_window_s,
             poll: Some(poll),
             price_gpu,
-            duration_s: (max_duration_s > 0).then_some(max_duration_s),
+            price_disk,
+            duration_s: max_duration_s.is_positive().then_some(max_duration_s),
             dry_run: false,
             once: false,
         };
@@ -249,27 +255,32 @@ pub async fn run(
         });
         println!("[vast] auto-list thread started (price-gpu=${price_gpu}/h)");
     }
-    match local_agent::run_agent(&gpu_type, idle_shutdown, &kind, poll).await {
+    // Poll host-local routines alongside fleet admission even while the fleet
+    // store is unreachable. Neither future needs to migrate between tasks.
+    let agent = local_agent::run_agent(&gpu_type, idle_shutdown, &kind, poll);
+    tokio::pin!(agent);
+    let result = tokio::select! {
+        result = &mut agent => result,
+        () = crate::providers::local::host_routines::run(poll) => agent.await,
+    };
+    match result {
         Ok(()) => Ok(()),
         Err(error) => {
+            let message = error.to_string();
+            let mut refusal = format!("agent loop failed: {message}");
             // Namespace policy can refuse a required key even when the
             // bearer selected the correct namespace. Name that policy in
             // the hint rather than suggesting credential replacement.
-            let message = error.to_string();
-            let hint = if message.contains("HTTP 401") {
-                format!(
+            if message.contains("HTTP 401") {
+                refusal.push_str(&format!(
                     "; the object API refused a key this binary uses — its \
                      object_api.namespaces.{} policy must grant every prefix in \
                      queue::copy::CANONICAL_PREFIXES; `stado doctor` on that host names the \
                      missing ones",
                     crate::config::QUEUE_OBJECT_NAMESPACE
-                )
-            } else {
-                String::new()
-            };
-            Err(CmdError::click(format!(
-                "agent loop failed: {message}{hint}"
-            )))
+                ));
+            }
+            Err(CmdError::click(refusal))
         }
     }
 }

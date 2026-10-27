@@ -3,9 +3,10 @@ import Foundation
 /// A machine that has put its hand up and is waiting for an operator.
 struct FleetPendingRequest: Codable, Identifiable, Equatable, Sendable {
     let hostname: String
-    let os: String
-    let arch: String
-    let kind: String
+    /// The machine's own facts, `null` when its request did not record them.
+    let os: String?
+    let arch: String?
+    let kind: String?
     let status: String
     let requestedAt: String?
     /// The SSH address the machine reported for itself. Present when the
@@ -32,9 +33,23 @@ struct FleetPendingRequest: Codable, Identifiable, Equatable, Sendable {
         return !destination.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The address `stado fleet approve` probes: the one the machine
+    /// reported, or its hostname when it reported none.
+    var probedAddress: String {
+        if isReachable, let destination {
+            return destination
+        }
+        return hostname
+    }
+
+    /// The platform the machine reported, or which of os and arch it did not.
     var platform: String {
-        let parts = [os, arch].filter { !$0.isEmpty }
-        return parts.isEmpty ? "not reported" : parts.joined(separator: " ")
+        switch (os, arch) {
+        case (let os?, let arch?): return "\(os) \(arch)"
+        case (let os?, nil): return "\(os) (arch not reported)"
+        case (nil, let arch?): return "\(arch) (os not reported)"
+        case (nil, nil): return "not reported"
+        }
     }
 
     /// What the entry will be called, which is what the operator has to
@@ -54,19 +69,10 @@ struct FleetPendingRequest: Codable, Identifiable, Equatable, Sendable {
         case targetName = "target_name"
     }
 
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        hostname = try values.decode(String.self, forKey: .hostname)
-        os = try values.decodeIfPresent(String.self, forKey: .os) ?? ""
-        arch = try values.decodeIfPresent(String.self, forKey: .arch) ?? ""
-        kind = try values.decodeIfPresent(String.self, forKey: .kind) ?? "join"
-        status = try values.decodeIfPresent(String.self, forKey: .status) ?? "pending"
-        requestedAt = try values.decodeIfPresent(String.self, forKey: .requestedAt)
-        destination = try values.decodeIfPresent(String.self, forKey: .destination)
-        inviteID = try values.decodeIfPresent(String.self, forKey: .inviteID)
-        installedKeyFingerprint = try values.decodeIfPresent(String.self, forKey: .installedKeyFingerprint)
-        targetName = try values.decodeIfPresent(String.self, forKey: .targetName)
-    }
+    /// Every field is decoded as `stado fleet pending --json` writes it: the
+    /// machine's facts are `null` when its request did not record them, the
+    /// status and hostname are always written. A document that lacks a field
+    /// is reported by key through the store's document reader.
 }
 
 /// `{"pending": [...]}` — the envelope `fleet pending --json` prints.

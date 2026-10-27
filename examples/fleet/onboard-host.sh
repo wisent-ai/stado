@@ -7,7 +7,7 @@
 #   * adopt  — `stado fleet enroll <host> --ssh <dest> --install-key`, when a
 #              plain `ssh <dest>` already works for you; Stado installs the key
 #              itself and this script's step 1 is that same command.
-#   * invite — `stado fleet invite --offline`, when you cannot reach the machine
+#   * invite — `stado fleet invite create --offline`, when you cannot reach the machine
 #              at all: its owner pastes the printed fragment and sends back an
 #              address, and step 1 below closes the invitation. See
 #              invite-a-machine.sh; in the one-line mode of the same method it
@@ -31,7 +31,6 @@ set -eu
 
 HOST=$1
 DEST=$2
-SB=${SKARBIEC_BIN:-skarbiec}
 # The vault item that plays role host-health-api; its id is the vault owner's.
 HEALTH_ITEM=${HEALTH_ITEM:?set HEALTH_ITEM to the item tagged stado:role:host-health-api}
 
@@ -44,9 +43,9 @@ stado fleet enroll "$HOST" --ssh "$DEST" --bootstrap
 stado fleet key check "$HOST"
 
 # 3. skarbiec side: the two grants every reporting host needs
-"$SB" token-mint stado-local-agent --scopes 'read:*'
-"$SB" token-mint stado-host-health-beacon --scopes "read:$HEALTH_ITEM"
-"$SB" get role:host-health-api > /dev/null
+skarbiec token-mint stado-local-agent --scopes 'read:*'
+skarbiec token-mint stado-host-health-beacon --scopes "read:$HEALTH_ITEM"
+skarbiec get role:host-health-api > /dev/null
 
 # 4. recovery program: beacon + managed units on the target
 stado host recover "$HOST"

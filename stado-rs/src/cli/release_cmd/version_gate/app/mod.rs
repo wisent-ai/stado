@@ -116,8 +116,10 @@ pub struct AppSources {
 }
 
 impl AppSources {
-    /// The file the declared version is read from.
-    pub fn version_source(&self) -> &str {
+    /// The file the declared version is read from. Clap requires one of
+    /// them on the command line; sources built any other way that name none
+    /// are refused here, naming every kind looked for.
+    pub fn version_source(&self) -> Result<&str, String> {
         self.info_plist
             .as_deref()
             .or(self.tuist_project.as_deref())
@@ -125,7 +127,9 @@ impl AppSources {
             .or(self.pyproject.as_deref())
             .or(self.setup_py.as_deref())
             .or(self.package_json.as_deref())
-            .expect("clap requires an Info.plist, a Tuist project, a Cargo.toml, a pyproject.toml, a setup.py or a package.json")
+            .ok_or_else(|| {
+                "the app names no file its version is declared in: none of an Info.plist, a Tuist project, a Cargo.toml, a pyproject.toml, a setup.py or a package.json".to_string()
+            })
     }
 }
 
@@ -138,8 +142,8 @@ pub struct AppTree {
     pub sources: AppSources,
 }
 
-fn pretty(document: &serde_json::Value) -> String {
-    serde_json::to_string_pretty(document).expect("a JSON value serialises")
+fn pretty(document: &serde_json::Value) -> Result<String, CmdError> {
+    Ok(serde_json::to_string_pretty(document)?)
 }
 
 /// Print `{"version": "...", "surface": [...]}` of the tree: the version it
@@ -151,7 +155,7 @@ pub(super) fn surface(tree: AppTree) -> Result<(), CmdError> {
     let names = surface::of(&load, &tree.sources).map_err(CmdError::declaration)?;
     println!(
         "{}",
-        pretty(&serde_json::json!({ "version": version, "surface": names }))
+        pretty(&serde_json::json!({ "version": version, "surface": names }))?
     );
     Ok(())
 }
@@ -159,7 +163,7 @@ pub(super) fn surface(tree: AppTree) -> Result<(), CmdError> {
 /// Write `released-surface.json` from the best reachable artifact, or print it.
 pub(super) fn baseline(tree: AppTree, stdout: bool) -> Result<(), CmdError> {
     let document = baseline::build(&tree.root, &tree.sources).map_err(CmdError::click)?;
-    let rendered = format!("{}\n", pretty(&document));
+    let rendered = format!("{}\n", pretty(&document)?);
     if stdout {
         print!("{rendered}");
         return Ok(());

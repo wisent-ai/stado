@@ -34,7 +34,11 @@ fn names_port(entry: &CatalogService) -> bool {
 
 /// The key the service directory files this catalog service under.
 fn directory_name(entry: &CatalogService) -> &str {
-    entry.directory_service.as_deref().unwrap_or(&entry.name)
+    // A service filed under another key declares it; otherwise its name.
+    match entry.directory_service.as_deref() {
+        Some(key) => key,
+        None => &entry.name,
+    }
 }
 
 /// The port one directory entry records for `target`, when it records an
@@ -94,7 +98,7 @@ pub(crate) async fn host_free_port(
             .await
             .map_err(CmdError::from)?;
     let printed = output.stdout.trim();
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{}: the host could not hand out a free port ({}); install the current Stado there \
              with `stado release version converge --host {}`",
@@ -104,9 +108,9 @@ pub(crate) async fn host_free_port(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    printed.parse::<u16>().map_err(|_| {
+    printed.parse::<u16>().map_err(|error| {
         CmdError::click(format!(
-            "{}: `stado host local port` printed {printed:?}, not a port",
+            "{}: `stado host local port` printed {printed:?}, not a port: {error}",
             target.name
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)

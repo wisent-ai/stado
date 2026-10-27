@@ -6,13 +6,23 @@ use crate::autonomy::storage::POLICY_PATH;
 use crate::queue::{JobStorage, StorageError};
 
 /// The operator's policy, or `None` when none was ever written: autonomy has
-/// no limits of its own to run under.
+/// no limits of its own to run under. A stored policy that cannot be read is
+/// refused naming its object and what serde could not read in it, so the
+/// tick's log and `stado optimize status` say which field to state; it stays
+/// a JSON error (`de::Error::custom`, a data error), which the CLI states as
+/// refused input, as it states every malformed document.
 pub async fn load_policy(store: &JobStorage) -> Result<Option<AutonomyPolicy>, StorageError> {
     let Some(raw) = store.download_text(POLICY_PATH).await? else {
         return Ok(None);
     };
-    let policy: AutonomyPolicy = serde_json::from_str(&raw)?;
-    policy.validate().map_err(StorageError::Other)?;
+    let policy: AutonomyPolicy = serde_json::from_str(&raw).map_err(|error| {
+        StorageError::Json(<serde_json::Error as serde::de::Error>::custom(format!(
+            "{POLICY_PATH} is not an autonomy policy this Stado reads: {error}"
+        )))
+    })?;
+    policy
+        .validate()
+        .map_err(|reason| StorageError::Other(format!("{POLICY_PATH} is refused: {reason}")))?;
     Ok(Some(policy))
 }
 

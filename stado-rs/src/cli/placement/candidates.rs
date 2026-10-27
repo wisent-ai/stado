@@ -12,17 +12,19 @@ use serde_json::Value;
 use crate::cli::CmdError;
 use crate::deploy::service::{self, ManagedService, SOURCE_REGISTRY};
 use crate::deploy::{host_channel, DeployError};
-use crate::placement::{PlacementHost, PlacementProfile, PlacementUnit};
+use crate::placement::{
+    ManagedPlacementUnit, PlacementHost, PlacementLifecycle, PlacementProfile, PlacementUnit,
+    ReleaseControlledPlacementUnit,
+};
 use crate::targets::{self, ComputeTarget, Registry};
 
 pub(in crate::cli::placement) fn deploy_error(error: DeployError) -> CmdError {
     CmdError::from(error)
 }
 
-fn release_controlled_refusal(unit: &PlacementUnit) -> CmdError {
-    let owner = unit
-        .release_controlled()
-        .expect("release-controlled refusal requires release-controlled unit");
+/// The refusal a release-controlled member answers; the owner is the one its
+/// lifecycle names, so no unit without one can reach this refusal.
+fn release_controlled_refusal(unit: &PlacementUnit, owner: &ReleaseControlledPlacementUnit) -> CmdError {
     CmdError::refused(format!(
         "release-controlled placement member {:?} for product {:?} is owned by controller \
          \"release-control\"; placement lifecycle mutation is forbidden",
@@ -32,17 +34,19 @@ fn release_controlled_refusal(unit: &PlacementUnit) -> CmdError {
 
 pub(in crate::cli::placement) fn managed_unit(
     unit: &PlacementUnit,
-) -> Result<&crate::placement::ManagedPlacementUnit, CmdError> {
-    unit.managed()
-        .ok_or_else(|| release_controlled_refusal(unit))
+) -> Result<&ManagedPlacementUnit, CmdError> {
+    match &unit.lifecycle {
+        PlacementLifecycle::Managed(managed) => Ok(managed),
+        PlacementLifecycle::ReleaseControl(owner) => Err(release_controlled_refusal(unit, owner)),
+    }
 }
 
 pub(crate) fn ensure_profile_lifecycle_mutable(profile: &PlacementProfile) -> Result<(), CmdError> {
     for logical in &profile.services {
         for host in profile.hosts.values() {
             if let Some(unit) = host.units.get(logical) {
-                if unit.release_controlled().is_some() {
-                    return Err(release_controlled_refusal(unit));
+                if let PlacementLifecycle::ReleaseControl(owner) = &unit.lifecycle {
+                    return Err(release_controlled_refusal(unit, owner));
                 }
             }
         }
@@ -74,7 +78,7 @@ pub(in crate::cli::placement) fn declared_profile_hosts(
             .into_iter()
             .filter(|managed| managed.source == SOURCE_REGISTRY)
             .collect();
-        let matched = host_profile
+        let matched: Vec<_> = host_profile
             .units
             .values()
             .filter(|spec| {
@@ -84,11 +88,12 @@ pub(in crate::cli::placement) fn declared_profile_hosts(
                         .any(|managed| managed.matches(&unit.unit) || managed.matches(&spec.name))
                 })
             })
-            .count();
-        if matched == profile.services.len() {
+            .collect();
+        if matched.len() == profile.services.len() {
             complete.push(host.clone());
-        } else if matched != 0 {
-            partial.push(format!("{host} ({matched}/{})", profile.services.len()));
+        } else if !matched.is_empty() {
+            let count = matched.len();
+            partial.push(format!("{host} ({count}/{})", profile.services.len()));
         }
     }
     if !partial.is_empty() {
@@ -108,8 +113,9 @@ pub(in crate::cli::placement) fn profile_host<'a>(
 ) -> Result<&'a PlacementHost, CmdError> {
     profile.hosts.get(host).ok_or_else(|| {
         CmdError::refused(format!(
-            "placement profile {:?} does not support destination {:?}",
-            profile.name, host
+            "placement profile {:?} does not support destination {:?}; prepare it with stado \
+             placement standby {} --host {host} --reason <why>",
+            profile.name, host, profile.name
         ))
     })
 }

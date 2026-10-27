@@ -10,10 +10,10 @@ use super::super::{answer, call, item_fields, pooler};
 
 /// Characters a masked key is shown with; a masked value stored as a
 /// credential is worse than none.
-const MASK_MARKS: [char; 2] = ['·', '…'];
+const MASK_MARKS: &[char] = &['·', '…'];
 
 /// The field name a named key is stored under: lowercase, runs of other
-/// characters as one `_`, or the key id's first characters when nothing is left.
+/// characters as one `_`, or the key's id when nothing is left.
 /// A key without a name is named by its id.
 fn key_slug(id: &str, name: Option<&str>) -> String {
     let name = match name {
@@ -31,7 +31,7 @@ fn key_slug(id: &str, name: Option<&str>) -> String {
     }
     let slug = slug.trim_matches('_').to_string();
     if slug.is_empty() {
-        id.chars().take(8).collect()
+        id.to_string()
     } else {
         slug
     }
@@ -54,14 +54,14 @@ async fn key_fields(reference: &str, token: &str) -> Result<Map<String, Value>, 
         let Some(value) = key["api_key"].as_str() else {
             return Err(CmdError::click(format!(
                 "project {reference}: key {} came back without its value",
-                key["name"]
+                crate::cli::reporting::field(&key["name"])
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         };
         if value.contains(MASK_MARKS) {
             return Err(CmdError::refused(format!(
                 "project {reference}: key {} came back masked; the access token cannot reveal it",
-                key["name"]
+                crate::cli::reporting::field(&key["name"])
             )));
         }
         match key["type"].as_str() {
@@ -81,7 +81,7 @@ async fn key_fields(reference: &str, token: &str) -> Result<Map<String, Value>, 
                 let Some(id) = key["id"].as_str() else {
                     return Err(CmdError::click(format!(
                         "project {reference}: {kind} key {} came back without its id, so it has no field to be stored under",
-                        key["name"]
+                        crate::cli::reporting::field(&key["name"])
                     ))
                     .stating(crate::primitives::failure::FailureCode::InfraDown));
                 };
@@ -110,7 +110,7 @@ async fn key_fields(reference: &str, token: &str) -> Result<Map<String, Value>, 
 async fn custom_url(reference: &str, token: &str) -> Result<Option<String>, CmdError> {
     let path = format!("/projects/{reference}/custom-hostname");
     let (status, body) = answer(reqwest::Method::GET, &path, token, None).await?;
-    if matches!(status.as_u16(), 400 | 404) {
+    if status == reqwest::StatusCode::BAD_REQUEST || status == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
     if !status.is_success() {
@@ -148,8 +148,16 @@ pub(super) async fn project_fields(
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     };
-    let name = project["name"].as_str().unwrap_or(reference);
-    let pooler = pooler(reference, token).await;
+    let name = project["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "Supabase listed project {reference} without its name: {project}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
+    let pooler = pooler(reference, token).await?;
     let mut fields = match item_fields(name, project, pooler.as_ref(), password)? {
         Value::Object(fields) => fields,
         other => {

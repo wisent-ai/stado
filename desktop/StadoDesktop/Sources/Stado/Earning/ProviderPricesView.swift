@@ -104,7 +104,10 @@ struct ProviderPricesView: View {
                     if !output.isEmpty || !errors.isEmpty {
                         DisclosureGroup("Complete command receipt") {
                             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-                                Text(exitCode.map { "Exit: \($0)" } ?? "Exit code was not supplied")
+                                switch exitCode {
+                                case .some(let code): Text("Exit: \(code)")
+                                case .none: Text("Exit code: none; the process ended by a signal or the command never reached the dashboard")
+                                }
                                 Text(output).font(WisentTypeScale.identifier())
                                 Text(errors).font(WisentTypeScale.identifier())
                             }
@@ -202,7 +205,12 @@ struct ProviderPricesView: View {
             if let state = cleanup.state { Text("Current resource state: \(state)") }
             if let allocation = cleanup.allocation {
                 Text("Queue provider field: \(allocation.provider) · \(allocation.instanceRef)")
-                Text("Execution: \(allocation.startedAt ?? "not claimed") · restarts: \(allocation.restarts)")
+                switch allocation.startedAt {
+                case .some(let started):
+                    Text("Execution started \(started) · restarts: \(allocation.restarts)")
+                case .none:
+                    Text("Execution not claimed by a worker · restarts: \(allocation.restarts)")
+                }
                 Text("\(allocation.source) · captured \(allocation.capturedAt)")
                 if let worker = allocation.workerAllocation { workerObservation(worker) }
             }

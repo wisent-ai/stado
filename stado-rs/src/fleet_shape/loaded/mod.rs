@@ -24,7 +24,8 @@ pub(in crate::fleet_shape) fn duplicate_domains(
     out: &mut Vec<Finding>,
 ) {
     for unit in loaded {
-        if unit.declaring_paths.len() < 2 {
+        // One declaring file is the healthy case; only several are a finding.
+        if !matches!(unit.declaring_paths.as_slice(), [_, _, ..]) {
             continue;
         }
         out.push(Finding {
@@ -69,8 +70,8 @@ pub(in crate::fleet_shape) fn process_identity(
     out: &mut Vec<Finding>,
     notes: &mut Vec<String>,
 ) {
-    let mut program_checked = 0_usize;
-    let mut binary_checked = 0_usize;
+    let mut program_checked = Vec::new();
+    let mut binary_checked = Vec::new();
     for unit in loaded {
         if unit.runs_declared_program() == Some(false) {
             out.push(Finding {
@@ -85,7 +86,7 @@ pub(in crate::fleet_shape) fn process_identity(
             });
         }
         if unit.runs_declared_program().is_some() {
-            program_checked += 1;
+            program_checked.push(&unit.label);
         }
         // Only where the fleet holds the unit file. This check reads two
         // process timestamps and its remedy is `service restart`, so its
@@ -99,12 +100,19 @@ pub(in crate::fleet_shape) fn process_identity(
                 check: BINARY_CHECK,
                 subject: format!("{}:{}", target.name, unit.label),
                 declared: "the process executes the binary now on disk".to_string(),
-                observed: format!(
-                    "pid {} started, then {} was replaced {} second(s) later",
-                    unit.pid,
-                    unit.running_binary().unwrap_or("its binary"),
-                    unit.binary_written_after_start().unwrap_or_default()
-                ),
+                observed: {
+                    let binary = match unit.running_binary() {
+                        Some(binary) => binary.to_string(),
+                        None => "its binary".to_string(),
+                    };
+                    match unit.binary_written_after_start() {
+                        Some(gap) => format!(
+                            "pid {} started, then {binary} was replaced {gap} second(s) later",
+                            unit.pid
+                        ),
+                        None => format!("pid {} started before {binary} was last replaced", unit.pid),
+                    }
+                },
                 command: format!(
                     "stado service restart {} --host {}",
                     unit.label, target.name
@@ -112,7 +120,7 @@ pub(in crate::fleet_shape) fn process_identity(
             });
         }
         if !unit.declaring_paths.is_empty() && unit.runs_current_binary().is_some() {
-            binary_checked += 1;
+            binary_checked.push(&unit.label);
         }
     }
     // A label launchd holds no pid for answers neither question, and saying so
@@ -140,7 +148,7 @@ pub(in crate::fleet_shape) fn process_identity(
         loaded.iter().filter(|unit| unit.declared).count(),
         undeclared,
         outside,
-        program_checked,
-        binary_checked
+        program_checked.len(),
+        binary_checked.len()
     ));
 }

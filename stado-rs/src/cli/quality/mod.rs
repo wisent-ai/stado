@@ -40,7 +40,7 @@ use std::path::Path;
 use std::process::Command;
 
 pub use self::check::{check, command_tree};
-pub(crate) use self::check::{check_revision, check_source};
+pub(crate) use self::check::{check_revision, check_revision_for, check_source};
 pub(crate) use units::check as units;
 
 pub(crate) use self::gates::Selection;

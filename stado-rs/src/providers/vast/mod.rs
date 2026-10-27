@@ -37,6 +37,6 @@ pub use bridge::{
 };
 pub use client::{
     parse_machine_id_env, read_vast_api_key, system_hostname, vast_api_key_available,
-    ListMachineParams, VastClient, VastCredentialChannel, VastCredentialReading, VAST_BASE,
+    vast_refusal, ListMachineParams, VastClient, VAST_BASE, VAST_FIELD, VAST_ROLE,
 };
 pub use error::VastError;

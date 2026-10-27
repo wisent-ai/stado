@@ -35,9 +35,15 @@ pub(super) fn walk_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
                 )
             })?
             .path();
-        if path.is_dir() {
+        let metadata = std::fs::metadata(&path).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("job output {} cannot be examined: {error}", path.display()),
+            )
+        })?;
+        if metadata.is_dir() {
             out.extend(walk_files(&path)?);
-        } else if path.is_file() {
+        } else if metadata.is_file() {
             out.push(path);
         }
     }
@@ -94,9 +100,20 @@ pub async fn upload_output(
     }
     let secrets = output_redactions(job).await?;
     for path in walk_files(output_dir)? {
-        let rel = path
-            .strip_prefix(output_dir)
-            .unwrap_or(&path)
+        // The walk started at the output directory, so every file is
+        // beneath it; one that is not would be uploaded under its absolute
+        // path, outside the job's status prefix, and is refused instead.
+        let inside = match path.strip_prefix(output_dir) {
+            Ok(inside) => inside,
+            Err(_outside) => {
+                return Err(StorageError::PathEscape(format!(
+                    "{} is not inside the job's output directory {}",
+                    path.display(),
+                    output_dir.display()
+                )))
+            }
+        };
+        let rel = inside
             .components()
             .map(|component| component.as_os_str().to_string_lossy().into_owned())
             .collect::<Vec<_>>()

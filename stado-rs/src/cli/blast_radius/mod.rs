@@ -1,4 +1,4 @@
-//! `stado blast-radius` — side-effect-free incident scope and DR readiness.
+//! `stado impact` — side-effect-free incident scope and DR readiness.
 //!
 //! The command keeps failure domains separate instead of collapsing them into
 //! "the queue is empty": primary and backup stores, Skarbiec credentials,

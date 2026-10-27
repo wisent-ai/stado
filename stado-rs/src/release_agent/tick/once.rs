@@ -1,6 +1,7 @@
 //! One reconcile pass over every release-controlled product on this host, and
 //! the loop that repeats it.
 
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 use super::product::reconcile_product;
@@ -39,10 +40,9 @@ pub async fn reconcile_once(
     // hosts it was built for.
     let control = crate::release_control::control(&document).map_err(CmdError::declaration)?;
     let mut states = Vec::new();
-    for (product, policy) in control
-        .as_ref()
-        .map(|control| control.products.iter())
-        .unwrap_or_default()
+    for (control, (product, policy)) in control
+        .iter()
+        .flat_map(|control| control.products.iter().map(move |entry| (control, entry)))
     {
         if product_filter.is_some_and(|selected| selected != product) {
             continue;
@@ -80,9 +80,6 @@ pub async fn reconcile_once(
         else {
             continue;
         };
-        let control = control.as_ref().ok_or_else(|| {
-            CmdError::declaration("release-control product resolved without its document")
-        })?;
         let result = reconcile_product(control, product, policy, target_name, target).await;
         let mut state = match result {
             Ok(state) => state,
@@ -103,20 +100,27 @@ pub async fn reconcile_once(
     // What release control left here for a product whose policy no longer
     // names this host. Only on a full pass over a document that has release
     // control at all: a product filter sees one product, not the target set.
-    if let (None, Some(control), Ok(home)) =
-        (product_filter, control.as_ref(), std::env::var("HOME"))
-    {
-        let targeted: std::collections::BTreeSet<String> = control
-            .products
-            .iter()
-            .filter(|(_, policy)| policy.targets.contains_key(target_name))
-            .map(|(product, _)| product.clone())
-            .collect();
-        for line in
-            crate::release_agent::rollout::processes::handover::retire_untargeted(&home, &targeted)
+    if let (None, Some(control)) = (product_filter, control.as_ref()) {
+        match crate::config_file::home_text() {
+            Ok(home) => {
+                let targeted: std::collections::BTreeSet<String> = control
+                    .products
+                    .iter()
+                    .filter(|(_, policy)| policy.targets.contains_key(target_name))
+                    .map(|(product, _)| product.clone())
+                    .collect();
+                for line in crate::release_agent::rollout::processes::handover::retire_untargeted(
+                    &home, &targeted,
+                )
                 .await
-        {
-            eprintln!("[release-agent] {line}");
+                {
+                    eprintln!("[release-agent] {line}");
+                }
+            }
+            Err(reason) => eprintln!(
+                "[release-agent] host={target_name}: retiring products release control no \
+                 longer targets here could not run: {reason}"
+            ),
         }
     }
     // The revisit pass, after the rollouts and never instead of them.
@@ -167,14 +171,16 @@ pub async fn reconcile_once(
     Ok(states)
 }
 
-pub async fn agent(
-    target_name: &str,
-    product_filter: Option<&str>,
-    once: bool,
-    interval_seconds: u64,
-) -> Result<(), CmdError> {
+/// The resident release role: a full pass over every product, then the finish
+/// of ready submissions, once per declared period. A pass that outlasts the
+/// period starts the next one at once and skips the ticks it missed, the
+/// cadence every other resident role of `stado serve` keeps.
+pub async fn agent(target_name: &str, interval: NonZeroU64) -> Result<(), CmdError> {
+    let mut schedule = tokio::time::interval(Duration::from_secs(interval.get()));
+    schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        let states = reconcile_once(target_name, product_filter).await?;
+        schedule.tick().await;
+        let states = reconcile_once(target_name, None).await?;
         for state in states {
             eprintln!(
                 "stado release agent product={} target={} generation={} phase={:?} detail={}",
@@ -191,9 +197,5 @@ pub async fn agent(
             }
             Err(reason) => eprintln!("stado release agent finish pass failed: {reason}"),
         }
-        if once {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_secs(interval_seconds)).await;
     }
 }

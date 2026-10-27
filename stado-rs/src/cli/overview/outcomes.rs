@@ -19,7 +19,8 @@ use serde_json::{json, Value};
 use crate::models::Job;
 use crate::queue::runs;
 use crate::queue::{JobStorage, StorageError};
-use crate::scheduler::makespan::history::extract_model_task;
+use crate::scheduler::makespan::history::task_of;
+use crate::sizing::model_of;
 
 /// The states counted per model, under the names `jobs` uses.
 const COUNTED: &[&str] = &[runs::QUEUE, runs::RUNNING, runs::COMPLETED, runs::FAILED];
@@ -50,14 +51,6 @@ impl Stamps {
     }
 }
 
-fn stated(text: String) -> Value {
-    if text.is_empty() {
-        Value::Null
-    } else {
-        json!(text)
-    }
-}
-
 /// The jobs `list_all_jobs` read under one lifecycle prefix; it answers every
 /// prefix, an empty one as an empty list.
 fn in_state<'a>(all: &'a BTreeMap<String, Vec<Job>>, state: &str) -> &'a [Job] {
@@ -73,15 +66,15 @@ pub(super) async fn job_outcomes(store: &JobStorage) -> Result<Value, StorageErr
 
     // Per model, the count in each counted state. A command naming no model
     // is counted under null rather than a made-up model name.
-    let labelled: Vec<(String, &str)> = COUNTED
+    let labelled: Vec<(Option<String>, &str)> = COUNTED
         .iter()
         .flat_map(|state| {
             jobs(state)
                 .iter()
-                .map(move |job| (extract_model_task(&job.command).0, *state))
+                .map(move |job| (model_of(&job.command), *state))
         })
         .collect();
-    let models: BTreeSet<&String> = labelled.iter().map(|(model, _)| model).collect();
+    let models: BTreeSet<&Option<String>> = labelled.iter().map(|(model, _)| model).collect();
     let by_model: Vec<Value> = models
         .into_iter()
         .map(|model| {
@@ -92,7 +85,7 @@ pub(super) async fn job_outcomes(store: &JobStorage) -> Result<Value, StorageErr
                     .count()
             };
             json!({
-                "model": stated(model.clone()),
+                "model": model,
                 "queue": count(runs::QUEUE),
                 "running": count(runs::RUNNING),
                 "completed": count(runs::COMPLETED),
@@ -110,11 +103,10 @@ pub(super) async fn job_outcomes(store: &JobStorage) -> Result<Value, StorageErr
     let failed: Vec<Value> = failed
         .into_iter()
         .map(|(_, job)| {
-            let (model, task) = extract_model_task(&job.command);
             json!({
                 "job_id": job.job_id,
-                "model": stated(model),
-                "task": stated(task),
+                "model": model_of(&job.command),
+                "task": task_of(&job.command),
                 "error": job.error,
                 "failed_at": job.failed_at,
             })
@@ -141,11 +133,10 @@ pub(super) async fn job_outcomes(store: &JobStorage) -> Result<Value, StorageErr
     let completed: Vec<Value> = completed
         .into_iter()
         .map(|(_, wall, job)| {
-            let (model, task) = extract_model_task(&job.command);
             json!({
                 "job_id": job.job_id,
-                "model": stated(model),
-                "task": stated(task),
+                "model": model_of(&job.command),
+                "task": task_of(&job.command),
                 "wall_seconds": wall,
                 "completed_at": job.completed_at,
             })

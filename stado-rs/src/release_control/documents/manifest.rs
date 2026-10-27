@@ -3,6 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The one version a signed release manifest is written and read at:
+/// <https://stado.wisent.com/docs/release#what-publication-proves>.
+pub const RELEASE_MANIFEST_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseManifest {

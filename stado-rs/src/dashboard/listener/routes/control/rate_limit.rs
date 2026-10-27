@@ -56,9 +56,11 @@ impl Dashboard {
                 http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": message}),
             ),
-            Err(_) => send_json(
+            // Configuration, storage, Skarbiec and persisted-state failures
+            // are the limiter's, not the caller's; the answer names which.
+            Err(unavailable) => send_json(
                 http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                &json!({"error": "rate limiting unavailable"}),
+                &json!({"error": format!("rate limiting unavailable: {unavailable}")}),
             ),
         }
     }

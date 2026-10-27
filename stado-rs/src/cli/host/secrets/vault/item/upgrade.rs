@@ -167,7 +167,7 @@ async fn read_json(
     )
     .await
     .map_err(|error| error.to_string())?;
-    if !answered.ok() {
+    if !answered.succeeded() {
         return Err(crate::deploy::host_channel::last_error_line(
             &answered,
             &format!("remote `skarbiec {verb}` failed"),

@@ -112,33 +112,52 @@ pub(super) fn parse_web_api_unit(
                 &format!("web_api.products.{name}.database"),
                 problems,
             );
-            let declared_name = declared.get("name").and_then(Value::as_str).unwrap_or("");
-            let field = declared.get("field").and_then(Value::as_str).unwrap_or("");
-            let variable = declared
-                .get("variable")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let field_name = !field.is_empty()
-                && field.chars().all(|character| {
-                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-                });
-            if !canonical_machine_name(declared_name) {
-                problems.push(format!(
-                    "web_api.products.{name}.database.name is required and must be canonical"
-                ));
-            } else if !field_name {
-                problems.push(format!(
-                    "web_api.products.{name}.database.field is required and must be a field name"
-                ));
-            } else if !is_env_name(variable) {
-                problems.push(format!(
-                    "web_api.products.{name}.database.variable is required and must be an environment name"
-                ));
-            } else {
+            // Each field is read as itself: absent, not a string, and a
+            // string of the wrong shape are three problems with three
+            // sentences, so the repair is the one the cause needs.
+            let location = format!("web_api.products.{name}.database");
+            let read = |key: &str, problems: &mut Vec<String>| -> Option<String> {
+                match declared.get(key) {
+                    Some(Value::String(text)) => Some(text.clone()),
+                    Some(other) => {
+                        problems.push(format!("{location}.{key} must be a string, not {other}"));
+                        None
+                    }
+                    None => {
+                        problems.push(format!("{location}.{key} is required"));
+                        None
+                    }
+                }
+            };
+            let declared_name = read("name", problems).filter(|value| {
+                let canonical = canonical_machine_name(value);
+                if !canonical {
+                    problems.push(format!("{location}.name must be canonical"));
+                }
+                canonical
+            });
+            let field = read("field", problems).filter(|value| {
+                let field_name = !value.is_empty()
+                    && value.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+                    });
+                if !field_name {
+                    problems.push(format!("{location}.field must be a field name"));
+                }
+                field_name
+            });
+            let variable = read("variable", problems).filter(|value| {
+                let env_name = is_env_name(value);
+                if !env_name {
+                    problems.push(format!("{location}.variable must be an environment name"));
+                }
+                env_name
+            });
+            if let (Some(name), Some(field), Some(variable)) = (declared_name, field, variable) {
                 database = Some(WebApiDatabase {
-                    name: declared_name.to_string(),
-                    field: field.to_string(),
-                    variable: variable.to_string(),
+                    name,
+                    field,
+                    variable,
                 });
             }
         }

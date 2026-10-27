@@ -17,7 +17,9 @@ use crate::deploy::host_storage_reconcile_program::fs::{
     checkpoint_tree, complete_physical_inventory, validate_complete_inventory,
     validate_physical_checkpoint,
 };
-use crate::deploy::host_storage_reconcile_program::json::{canonical, now, object, truthy};
+use crate::deploy::host_storage_reconcile_program::json::{
+    canonical, document_recorded, flag, now, text_recorded, time_recorded,
+};
 use crate::deploy::host_storage_reconcile_program::lifecycle::checkpoint_effective_lifecycle;
 use crate::deploy::host_storage_reconcile_program::SCHEMA;
 
@@ -40,23 +42,25 @@ pub(super) fn preflight(context: &Context) -> Step<()> {
     Ok(())
 }
 
-fn fence_is_complete(context: &Context, fence: &Value) -> bool {
-    text(fence, "schema") == Some(super::FENCE_SCHEMA)
+/// Whether the fence records everything a checkpoint stands on; a field
+/// recorded with the wrong type is refused by name rather than read as absent.
+fn fence_is_complete(context: &Context, fence: &Value) -> Step<bool> {
+    Ok(text(fence, "schema") == Some(super::FENCE_SCHEMA)
         && text(fence, "transaction") == Some(context.tx.as_str())
         && FenceStatus::read(fence, "status") == Ok(FenceStatus::Fenced)
-        && truthy(object(fence, "queue").get("drained"))
-        && truthy(object(fence, "staged_runtime").get("staged_sha256"))
-        && object(fence, "write_fence")
-            .get("status")
-            .and_then(Value::as_str)
-            == Some("acquired")
-        && truthy(fence.get("preflight_evidence"))
-        && truthy(fence.get("rechecked_at"))
+        && flag(fence.pointer("/queue/drained"), "queue.drained")?
+        && text_recorded(
+            fence.pointer("/staged_runtime/staged_sha256"),
+            "staged_runtime.staged_sha256",
+        )?
+        && fence.pointer("/write_fence/status").and_then(Value::as_str) == Some("acquired")
+        && document_recorded(fence.get("preflight_evidence"), "preflight_evidence")?
+        && time_recorded(fence.get("rechecked_at"), "rechecked_at")?)
 }
 
 pub(super) fn checkpoint(context: &Context) -> Step<()> {
     let fence = read_fence(context, "durable lifecycle fence is absent or unreadable")?;
-    if !fence_is_complete(context, &fence) {
+    if !fence_is_complete(context, &fence)? {
         return Err("durable lifecycle fence is incomplete".to_string());
     }
     if !every_writer(&fence, "stopped")? {

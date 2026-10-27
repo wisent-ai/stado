@@ -58,10 +58,10 @@ pub fn parse_requirements(body: &str) -> Result<Vec<Requirement>, DeployError> {
         found.push(Requirement {
             name: name.to_string(),
             revision: revision.to_string(),
-            install_by_default: entry
-                .get("installByDefault")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            // Playwright writes `installByDefault` as a boolean; a component
+            // without the flag, or with it in another shape, is not one it
+            // installs by default.
+            install_by_default: matches!(entry.get("installByDefault"), Some(Value::Bool(true))),
         });
     }
     if found.is_empty() {

@@ -159,9 +159,14 @@ fn unit_program(
 /// the environment starts from the catalog's, then the unit's own
 /// declaration and `--env` override it, each value resolved for this target.
 /// `listen_port` is the port the service directory records for the service on
-/// this target (`cli::directory::listen_port_for`).
+/// this target (`cli::directory::listen_port_for`). `home` is the home the
+/// target's own shell states (`host_channel::remote_home`): `$HOME` in a
+/// catalog word is resolved under it, never under a home guessed from the
+/// SSH user's name.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolved_unit(
     target: &crate::targets::ComputeTarget,
+    home: &str,
     name: &str,
     from: Option<&str>,
     args: &[String],
@@ -170,12 +175,11 @@ pub(crate) fn resolved_unit(
     listen_port: Option<u16>,
 ) -> Result<(UnitProgram, Vec<(String, String)>), CmdError> {
     let host = target.name.as_str();
-    let home = crate::deploy::service_catalog::home_for(target);
     let platform = target.release_platform.as_str();
     // A service the catalog does not carry brings no catalog environment.
     let mut unit_env: Vec<(String, String)> = match catalog_entry {
         Some(entry) => {
-            crate::deploy::service_catalog::resolve_entry(entry, &home, platform, host, listen_port)
+            crate::deploy::service_catalog::resolve_entry(entry, home, platform, host, listen_port)
                 .2
         }
         None => Vec::new(),
@@ -192,10 +196,11 @@ pub(crate) fn resolved_unit(
             acquisition_scopes: None,
             directory_service: None,
             answering: None,
+            state: Vec::new(),
         };
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,
-            &home,
+            home,
             platform,
             host,
             listen_port,
@@ -219,11 +224,20 @@ pub(crate) fn resolved_unit(
         );
     }
     for (variable, value) in std::mem::take(&mut unit.env) {
-        let value = crate::deploy::service_catalog::resolve_word(&value, &home, platform, host);
+        let value = crate::deploy::service_catalog::resolve_word(&value, home, platform, host);
         match unit_env.iter_mut().find(|(key, _)| key == &variable) {
             Some((_, current)) => *current = value,
             None => unit_env.push((variable, value)),
         }
+    }
+    let declared = |word: &str| {
+        crate::deploy::service_catalog::resolve_declared(word, target, name)
+            .map_err(CmdError::declaration)
+    };
+    unit.program = declared(&unit.program)?;
+    unit.args = unit.args.iter().map(|arg| declared(arg)).collect::<Result<_, _>>()?;
+    for (_, value) in &mut unit_env {
+        *value = declared(value)?;
     }
     Ok((unit, unit_env))
 }
@@ -232,6 +246,7 @@ pub(crate) fn resolved_unit(
 /// override the declared environment, and its `--unset-env` names leave it.
 pub(super) fn ensured_unit(
     target: &crate::targets::ComputeTarget,
+    home: &str,
     options: &EnsureOptions<'_>,
     existing: Option<&ManagedService>,
     catalog_entry: Option<&crate::deploy::service_catalog::CatalogService>,
@@ -246,6 +261,7 @@ pub(super) fn ensured_unit(
     }
     let (unit, mut unit_env) = resolved_unit(
         target,
+        home,
         options.name,
         options.from,
         options.args,
@@ -253,11 +269,10 @@ pub(super) fn ensured_unit(
         catalog_entry,
         listen_port,
     )?;
-    let home = crate::deploy::service_catalog::home_for(target);
     for (name, value) in assigned {
         let value = crate::deploy::service_catalog::resolve_word(
             &value,
-            &home,
+            home,
             &target.release_platform,
             &target.name,
         );

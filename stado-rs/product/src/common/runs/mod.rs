@@ -26,7 +26,9 @@
 //! `CACHEDIR.TAG`, so the janitor's build-cache cleaner takes it under disk
 //! pressure; a run still being written is not tagged and is never taken.
 
+mod abandoned;
 mod probes;
+pub use abandoned::reclaim_abandoned;
 pub(crate) use probes::gib;
 use probes::{bytes, create, earlier, in_use, measured, succeeded};
 

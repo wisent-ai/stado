@@ -31,9 +31,11 @@ pub fn coordinate(body: &str, product: &str) -> Result<Coordinate, DeployError> 
     let mut local_root = None;
     for line in body.lines() {
         let trimmed = line.trim_start();
-        let assignment = trimmed
-            .strip_prefix("export ")
-            .map_or(trimmed, str::trim_start);
+        // `export KEY=value` and `KEY=value` declare the same assignment.
+        let assignment = match trimmed.strip_prefix("export ") {
+            Some(exported) => exported.trim_start(),
+            None => trimmed,
+        };
         for (key, slot) in [
             (&version_key, &mut version),
             (&sha_key, &mut sha256),
@@ -62,15 +64,14 @@ pub fn coordinate(body: &str, product: &str) -> Result<Coordinate, DeployError> 
             .filter(|v| !v.is_empty())
             .ok_or_else(|| missing(LOCAL_ROOT_KEY))?,
     };
-    if !coordinate
-        .sha256
-        .bytes()
-        .all(|byte| byte.is_ascii_hexdigit())
-        || coordinate.sha256.len() != 64
-    {
+    // The digest is one SHA-256 in hex: it decodes to exactly the hash's
+    // output. Anything else is refused with the key and value.
+    let one_digest = hex::decode(&coordinate.sha256)
+        .is_ok_and(|bytes| bytes.len() == <sha2::Sha256 as sha2::Digest>::output_size());
+    if !one_digest {
         return Err(DeployError(format!(
             "the deployment env file declares {sha_key}={:?}, which is not a sha256 digest; \
-             replace it with the staged archive's 64-character digest",
+             replace it with the staged archive's hex digest",
             coordinate.sha256
         ))
         .stating(crate::primitives::failure::FailureCode::Config));

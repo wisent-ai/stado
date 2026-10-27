@@ -9,7 +9,7 @@ pub(super) async fn read_operation_owner(
     let output =
         host_channel::run_script(target, &bind_remote_script(READ_OWNER, transaction), runner)
             .await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(remote_failure_detail(
             &output,
             "operation owner could not be read",
@@ -34,27 +34,27 @@ pub(super) async fn read_operation_owner(
             .ok_or_else(|| {
                 DeployError::unreachable("operation owner omitted its native service".to_string())
             })?;
-        let scope = match owner
-            .pointer("/native_manager/domain")
-            .and_then(Value::as_str)
-        {
-            Some("system") => service::BootoutScope::System,
-            Some(domain) if domain.starts_with("gui/") || domain.starts_with("user/") => {
-                service::BootoutScope::User
-            }
-            _ => service::BootoutScope::Any,
-        };
+        // The owner's manager is the host's one Stado unit, whose recorded
+        // identity (finalisation/state/resident.rs) names its service, pids
+        // and state but no launchd domain, so its label is printed in either
+        // scope: system first, then the calling account (BootoutScope::Any).
+        let scope = service::BootoutScope::Any;
         let observed =
             crate::deploy::service_label_print::print_label(target, label, scope, runner).await;
-        let recorded_status = owner.get("status").cloned().unwrap_or(Value::Null);
+        // An owner without a recorded status reads as null, which no status
+        // word equals; the index answers that for a missing member.
+        let recorded_status = owner["status"].clone();
         let executing = recorded_status.as_str() == Some("executing");
         let (observation, effective_status) = match observed {
             Ok(state) => {
-                let owner_running = state
-                    .pid
-                    .as_deref()
-                    .and_then(|pid| pid.parse::<u64>().ok())
-                    .is_some_and(|pid| owner.get("pid").and_then(Value::as_u64) == Some(pid));
+                // The owner is running only when the loaded unit names a pid
+                // and it is the owner's recorded pid as a number prints; a
+                // unit with no process (`-`) names no pid that could match.
+                let recorded_pid = owner
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .map(|pid| pid.to_string());
+                let owner_running = state.pid.is_some() && state.pid == recorded_pid;
                 let effective_status = if !executing {
                     recorded_status.clone()
                 } else if state.unsupported.is_some() {

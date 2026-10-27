@@ -218,6 +218,6 @@ async fn carry(
     };
     tokio::io::copy_bidirectional(&mut client, &mut upstream)
         .await
-        .map(|_| ())
+        .map(|_copied_bytes| ())
         .map_err(|error| format!("copy failed: {error}"))
 }

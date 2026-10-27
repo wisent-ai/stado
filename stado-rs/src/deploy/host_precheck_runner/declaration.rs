@@ -16,6 +16,10 @@ use crate::targets::ComputeTarget;
 pub const DECLARATION_PATH: &str = "stado-rs/data/work/runner-profiles.json";
 const DECLARATION: &str = include_str!("../../../data/work/runner-profiles.json");
 
+/// The declaration is compiled into the build that reads it, so the reader
+/// and the document never differ in version at run time: the shape is held
+/// by `deny_unknown_fields`, and `schema_version` is the document's own
+/// label, read by no check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunnerProfileDeclaration {
@@ -85,12 +89,6 @@ impl RunnerProfile {
 fn parse_declaration() -> Result<RunnerProfileDeclaration, String> {
     let declaration: RunnerProfileDeclaration = serde_json::from_str(DECLARATION)
         .map_err(|error| format!("{DECLARATION_PATH} is invalid: {error}"))?;
-    if declaration.schema_version != 1 {
-        return Err(format!(
-            "{DECLARATION_PATH} schema_version is {}, expected 1",
-            declaration.schema_version
-        ));
-    }
     if declaration.profiles.is_empty() {
         return Err(format!(
             "{DECLARATION_PATH} declares no runner profiles; add at least one profile"
@@ -141,8 +139,7 @@ fn parse_declaration() -> Result<RunnerProfileDeclaration, String> {
             && profile
                 .developer_id_account_role
                 .as_deref()
-                .unwrap_or("")
-                .is_empty()
+                .is_none_or(str::is_empty)
         {
             return Err(format!(
                 "{} declares no developer_id_account_role; add it to {DECLARATION_PATH}",

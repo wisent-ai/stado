@@ -48,7 +48,14 @@ fn concurrent_shed(root: &Path, report: &mut Value) -> Result<()> {
         .into_iter()
         .map(|handle| match handle.join() {
             Ok(answer) => answer,
-            Err(_) => Err("a shed panicked".to_string()),
+            // A shed that panicked says what it panicked with.
+            Err(panic) => Err(match panic.downcast_ref::<&str>() {
+                Some(message) => format!("a shed panicked: {message}"),
+                None => match panic.downcast_ref::<String>() {
+                    Some(message) => format!("a shed panicked: {message}"),
+                    None => "a shed panicked with a payload that is not text".to_string(),
+                },
+            }),
         })
         .collect();
     report["concurrent_answers"] = json!(answers
@@ -63,11 +70,13 @@ fn concurrent_shed(root: &Path, report: &mut Value) -> Result<()> {
             anyhow::bail!("a shed beside another shed of the same run failed: {cause}");
         }
     }
-    let left: Vec<String> = fs::read_dir(&run)?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .map(|entry| entry.path().display().to_string())
-        .collect();
+    let mut left = Vec::new();
+    for entry in fs::read_dir(&run)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            left.push(entry.path().display().to_string());
+        }
+    }
     ensure!(left.is_empty(), "trees left after the shed: {left:?}");
     ensure!(
         run.join("measured-bytes").is_file(),

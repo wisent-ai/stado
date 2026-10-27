@@ -26,7 +26,7 @@ impl Dashboard {
     /// on a closed boundary names the verifier it waits on and since when.
     pub(crate) async fn validate_boundary(&self, boundary: Boundary) -> Result<(), String> {
         fn flat<T, E: std::fmt::Display>(outcome: Result<T, E>) -> Result<(), String> {
-            outcome.map(|_| ()).map_err(|error| error.to_string())
+            outcome.map(|_verified| ()).map_err(|error| error.to_string())
         }
         let waiting = crate::wait::begin(
             crate::wait::Kind::Network,
@@ -58,20 +58,16 @@ impl Dashboard {
             last_error: outcome.as_ref().err().cloned(),
             checked_at: Some(chrono::Utc::now().to_rfc3339()),
         };
-        *self
-            .boundaries
-            .write()
-            .expect("dashboard boundary state lock")
-            .verdict_mut(boundary) = verdict;
+        // Each verdict is replaced whole or has one flag set, so a panic while
+        // one was written leaves a state: taken back, every later request is
+        // still gated instead of panicking.
+        *crate::primitives::lock::written(&self.boundaries).verdict_mut(boundary) = verdict;
     }
 
     /// Whether `boundary` is open right now. Never touches the vault, so this
     /// is what every request on a healthy listener pays: one read lock.
     fn boundary_ready(&self, boundary: Boundary) -> bool {
-        self.boundaries
-            .read()
-            .expect("dashboard boundary state lock")
-            .ready(boundary)
+        crate::primitives::lock::read_held(&self.boundaries).ready(boundary)
     }
 
     /// Why a request gated on `required` is refused, for the 503 it gets:
@@ -81,11 +77,7 @@ impl Dashboard {
     /// stands closed rather than a bare `unavailable`. A boundary that
     /// reopened between the answer and this read is said to have.
     pub(crate) fn closed_boundary(&self, required: &[Boundary]) -> AuthorityUnavailable {
-        let cause = self
-            .boundaries
-            .read()
-            .expect("dashboard boundary state lock")
-            .closed_cause(required);
+        let cause = crate::primitives::lock::read_held(&self.boundaries).closed_cause(required);
         match cause {
             Some(cause) => AuthorityUnavailable::new(cause),
             None => AuthorityUnavailable::new(format!(
@@ -107,10 +99,7 @@ impl Dashboard {
         if self.boundary_ready(boundary) {
             return Recheck::Ready;
         }
-        let mut boundaries = self
-            .boundaries
-            .write()
-            .expect("dashboard boundary state lock");
+        let mut boundaries = crate::primitives::lock::written(&self.boundaries);
         let verdict = boundaries.verdict_mut(boundary);
         if verdict.ready {
             return Recheck::Ready;
@@ -125,9 +114,7 @@ impl Dashboard {
     /// Release a claim whose request ended before it recorded an outcome —
     /// the client went away mid-sweep — so the next request can revalidate.
     fn release_boundary_recheck(&self, boundary: Boundary) {
-        self.boundaries
-            .write()
-            .expect("dashboard boundary state lock")
+        crate::primitives::lock::written(&self.boundaries)
             .verdict_mut(boundary)
             .recheck_in_flight = false;
     }

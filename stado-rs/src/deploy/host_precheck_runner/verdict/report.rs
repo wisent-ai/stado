@@ -32,20 +32,26 @@ pub(crate) fn report(
         "runner_kind": profile.name,
         "runner_group": profile.github_runner_group,
         "runner_labels": profile.labels_text(),
-        // Read from the host's own registration record. A runner installed by
-        // a build that did not record its scope reports `unrecorded` rather
-        // than the declaration's desired scope.
-        "runner_scope": registered_scope(&output.stdout).unwrap_or_else(|| "unrecorded".to_string()),
+        // Read from the host's own registration record, never from the
+        // declaration's desired scope. A runner installed by a build that did
+        // not record its scope reports the documented word `unrecorded`
+        // (docs/capabilities/runner.md): null stays reserved for a host that
+        // could not be probed at all, which is how Stado Desktop tells the two
+        // apart.
+        "runner_scope": match registered_scope(&output.stdout) {
+            Some(scope) => scope,
+            None => "unrecorded".to_string(),
+        },
         "listener": listener(&output.stdout),
         // Which runner holds the host's one job slot, straight from the gate's
         // own markers: `none`, or `<account> pid=<n>`, or `<account> stale`.
         "host_job_slot": host_job_slot(&output.stdout),
         "installed": match action {
             "remove" => false,
-            _ => output.ok(),
+            _ => output.succeeded(),
         },
         "action": action,
-        "status": if output.ok() { "completed" } else { "failed" },
+        "status": if output.succeeded() { "completed" } else { "failed" },
         "exit_code": output.code,
         "stdout": output.stdout,
         "stderr": output.stderr,

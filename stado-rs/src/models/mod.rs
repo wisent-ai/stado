@@ -16,5 +16,5 @@ pub use job::{Job, JobSecretRef, WorkerAllocation, WorkerResource};
 pub use states::job_state;
 
 pub(crate) use python_compat::{
-    ensure_ascii, isoformat_utc, json_dumps_pretty_sorted, py_str_repr,
+    ensure_ascii, isoformat_utc, json_dumps_pretty_sorted, py_list_repr, py_str_repr,
 };

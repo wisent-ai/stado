@@ -131,8 +131,8 @@ pub(super) async fn verified_release_completion(
                     && input.extract == expected.extract
             })
         });
-    let identity_matches = receipt.schema_version == 1
-        && request.schema_version == 1
+    let identity_matches = receipt.schema_version == crate::release_pipeline::SCHEMA_VERSION
+        && request.schema_version == crate::release_pipeline::SCHEMA_VERSION
         && receipt.run_id == request.run_id
         && receipt.job_id == job.job_id
         && receipt.product == request.product
@@ -146,10 +146,11 @@ pub(super) async fn verified_release_completion(
         && inputs_match
         && receipt.status == crate::release_pipeline::StepStatus::Passed
         && receipt.build.status == crate::release_pipeline::StepStatus::Passed
-        && receipt.build.exit_code == Some(0)
+        && receipt.build.exit_code == Some(nix::libc::EXIT_SUCCESS)
         && receipt.failure.is_none()
         && receipt.quality.iter().all(|step| {
-            step.status == crate::release_pipeline::StepStatus::Passed && step.exit_code == Some(0)
+            step.status == crate::release_pipeline::StepStatus::Passed
+                && step.exit_code == Some(nix::libc::EXIT_SUCCESS)
         })
         && completed >= since
         && completed <= now;
@@ -182,7 +183,7 @@ pub(super) async fn verified_release_completion(
         ));
         return Ok(None);
     };
-    if u64::try_from(archive.len()).ok() != Some(artifact.bytes)
+    if !u64::try_from(archive.len()).is_ok_and(|length| length == artifact.bytes)
         || crate::release_control::sha256_bytes(&archive) != artifact.sha256
     {
         log(&format!(

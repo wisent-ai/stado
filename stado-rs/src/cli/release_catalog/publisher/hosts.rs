@@ -42,7 +42,7 @@ async fn vault_owner() -> Result<String, CmdError> {
 /// refusing with `release_api.publishers declares no publisher`.
 ///
 /// That refusal used to be the only way a new product learned it needed
-/// `catalog declare-publisher`, and the command needed a person to know which
+/// `catalog publisher declare`, and the command needed a person to know which
 /// host owns the vault. Both hosts are facts Stado can read: the client is
 /// this host's registry target, and the owner is the host this vault
 /// replicates, or this host when its vault is the authority. The declaration
@@ -81,7 +81,7 @@ pub(in crate::cli::release_catalog) async fn declare_publisher_on_fleet(
         .map_err(|error| {
             CmdError::click(format!(
                 "declaring {product}'s release publisher failed \
-                 (stado release catalog declare-publisher {product} --owner {owner} \
+                 (stado release catalog publisher declare {product} --owner {owner} \
                  --client {client}): {error}"
             ))
         })

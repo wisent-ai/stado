@@ -33,12 +33,15 @@ pub fn markers(stdout: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// One marker's value, or the empty string.
+/// One marker's value. A marker the host did not emit reads as the empty
+/// string, which no step name, digest or state word equals, so every
+/// comparison on it fails as an absent marker should; readers that need to
+/// tell absence from an empty value use [`marker_values`].
 pub fn marker<'a>(markers: &'a [(String, String)], key: &str) -> &'a str {
-    markers
-        .iter()
-        .find(|(name, _)| name == key)
-        .map_or("", |(_, value)| value.as_str())
+    match markers.iter().find(|(name, _)| name == key) {
+        Some((_, value)) => value.as_str(),
+        None => "",
+    }
 }
 
 /// Every value one repeated marker carried, in the order the host emitted
@@ -106,7 +109,7 @@ pub async fn activate_staged_program(
     let plan = plan(target, &staged.request, staged.self_store)?;
     let recheck = host_channel::run_script(target, &recheck_staged_script(&plan)?, runner).await?;
     let recheck_markers = markers(&recheck.stdout);
-    if !recheck.ok() || marker(&recheck_markers, "step") != "stage" {
+    if !recheck.succeeded() || marker(&recheck_markers, "step") != "stage" {
         return Err(DeployError::unreachable(step_failure(
             &recheck_markers,
             &recheck,
@@ -119,7 +122,7 @@ pub async fn activate_staged_program(
     }
     let probe = host_channel::run_script(target, &probe_script(&plan), runner).await?;
     let probe_markers = markers(&probe.stdout);
-    if probe.ok()
+    if probe.succeeded()
         && marker(&probe_markers, "step") == "probe"
         && marker(&probe_markers, "active_sha256") == staged.staged_sha256
     {
@@ -127,7 +130,7 @@ pub async fn activate_staged_program(
     }
     let activated = host_channel::run_script(target, &activate_script(&plan), runner).await?;
     let activate_markers = markers(&activated.stdout);
-    if !activated.ok() || marker(&activate_markers, "step") != "activate" {
+    if !activated.succeeded() || marker(&activate_markers, "step") != "activate" {
         return Err(DeployError::unreachable(step_failure(
             &activate_markers,
             &activated,

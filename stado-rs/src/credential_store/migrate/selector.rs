@@ -1,11 +1,11 @@
 //! Persisting the credential-store selector a migration commits: the config
-//! file it lands in, written whole through a temporary file beside it.
+//! file it lands in, written whole and flushed with its directory.
 
 use super::deployment;
 use crate::skarbiec::SkarbiecError;
 use serde_json::{Map, Value};
 #[cfg(unix)]
-use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 fn config_path_for_write() -> Result<PathBuf, SkarbiecError> {
@@ -28,29 +28,19 @@ fn config_path_for_write() -> Result<PathBuf, SkarbiecError> {
     {
         return Ok(path);
     }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| deployment("HOME is not set; cannot persist credentials.store"))?;
+    let home = crate::config_file::home()
+        .map_err(|cause| deployment(format!("cannot persist credentials.store: {cause}")))?;
     Ok(home.join(".stado").join("config.json"))
 }
 
 #[cfg(unix)]
 fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
-    let parent = path
-        .parent()
-        .ok_or_else(|| deployment(format!("config path {} has no parent", path.display())))?;
-    std::fs::create_dir_all(parent).map_err(|source| {
-        deployment(format!(
-            "cannot create config directory {}: {source}",
-            parent.display()
-        ))
-    })?;
     // A config that exists keeps its mode; a new one is the owner's alone. A
     // config whose metadata cannot be read is refused, not taken as absent.
     let mode = match std::fs::metadata(path) {
-        Ok(metadata) => metadata.permissions().mode(),
+        Ok(metadata) => {
+            metadata.permissions().mode() & crate::primitives::file_mode::permission_bits()
+        }
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
             crate::primitives::file_mode::owner_read_write()
         }
@@ -61,34 +51,8 @@ fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
             )))
         }
     };
-    let temporary = parent.join(format!(".stado-config-{}.tmp", std::process::id()));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(mode)
-        .open(&temporary)
-        .map_err(|source| {
-            deployment(format!(
-                "cannot create temporary config {}: {source}",
-                temporary.display()
-            ))
-        })?;
-    file.write_all(body)
-        .and_then(|_| file.sync_all())
-        .map_err(|source| {
-            deployment(crate::primitives::staging::failed_with(
-                format!(
-                    "cannot write temporary config {}: {source}",
-                    temporary.display()
-                ),
-                &temporary,
-            ))
-        })?;
-    std::fs::rename(&temporary, path).map_err(|source| {
-        deployment(crate::primitives::staging::failed_with(
-            format!("cannot replace config {}: {source}", path.display()),
-            &temporary,
-        ))
+    crate::primitives::document::persist_with_mode(path, body, mode).map_err(|source| {
+        deployment(format!("cannot replace config {}: {source}", path.display()))
     })
 }
 

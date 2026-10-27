@@ -24,9 +24,10 @@ pub async fn no_eligible_in_queue(
 ) -> Result<bool, StorageError> {
     let queued = store.list_jobs("queue").await?;
     for job in queued {
-        let need = job
-            .gpu_mem_gb
-            .max(estimate_gpu_memory(&job.command, sizing, store).await?);
+        let need = estimate_gpu_memory(&job.command, sizing, store)
+            .await?
+            .into_iter()
+            .fold(job.gpu_mem_gb, i64::max);
         if need > free_vram_gb {
             continue;
         }

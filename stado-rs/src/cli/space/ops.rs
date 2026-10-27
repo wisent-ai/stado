@@ -150,17 +150,11 @@ pub(super) async fn remove_file(
     if json_output {
         print_json(&report)
     } else {
-        println!(
-            "{}: {} {}{}",
-            outcome.target,
-            outcome.path,
-            outcome.status,
-            outcome
-                .detail
-                .as_deref()
-                .map(|detail| format!(" — {detail}"))
-                .unwrap_or_default(),
-        );
+        let said = format!("{}: {} {}", outcome.target, outcome.path, outcome.status);
+        match outcome.detail.as_deref() {
+            Some(detail) => println!("{said} — {detail}"),
+            None => println!("{said}"),
+        }
         Ok(())
     }
 }
@@ -185,7 +179,13 @@ pub(super) async fn mount_volume(
             target.name,
             mount.device,
             mount.fstype,
-            crate::deploy::host_disk::gib_from_blocks(mount.size_bytes as f64 / 1024.0),
+            match mount.size_bytes {
+                Some(bytes) => format!(
+                    "{:.1} GiB",
+                    bytes as f64 / crate::providers::local::host_memory::constants::GIB as f64
+                ),
+                None => "size not reported".to_string(),
+            },
             if mount.mounted_now {
                 "mounted"
             } else {
@@ -261,34 +261,29 @@ pub(super) async fn relocate(
     if json_output {
         print_json(&report)?;
     } else {
-        let totals = report.get("totals").unwrap_or(&Value::Null);
+        // A total the host did not report is said so, not read as zero moved,
+        // zero refused or incomplete.
+        let totals = &report["totals"];
         println!(
             "{}: {} object(s) relocated; {} refused; complete={}",
             target,
-            totals
-                .get("moved")
-                .and_then(Value::as_i64)
-                .unwrap_or_default(),
-            totals
-                .get("refused")
-                .and_then(Value::as_i64)
-                .unwrap_or_default(),
-            totals
-                .get("complete")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            crate::cli::reporting::field(&totals["moved"]),
+            crate::cli::reporting::field(&totals["refused"]),
+            crate::cli::reporting::field(&totals["complete"]),
         );
     }
     if report.get("status").and_then(Value::as_str)
         != Some(crate::deploy::host_object_relocate::OK_STATUS)
     {
+        // A failed relocation that names no error is shown as the host
+        // answered it rather than as a refusal the host never stated.
+        let cause = match report.get("error").and_then(Value::as_str) {
+            Some(error) => error.to_string(),
+            None => format!("the host's report names no error: {report}"),
+        };
         return Err(CmdError::click(format!(
             "{} object relocation failed: {}",
-            target,
-            report
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("host refused the relocation")
+            target, cause
         ))
         .machine_readable(json_output));
     }

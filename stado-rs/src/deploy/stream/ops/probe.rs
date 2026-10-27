@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::deploy::stream::{library_dir, parse_fields, report, SUNSHINE_UNIT, XORG_UNIT};
 use crate::deploy::{host_channel, DeployError, Runner};
+use crate::primitives::failure::FailureCode;
 use crate::targets::ComputeTarget;
 
 /// Can this host render and encode at all, and what would it render on?
@@ -89,32 +90,77 @@ printf '\n'
     Ok(body)
 }
 
-/// The board a probe reports for one driver UUID, as its PCI bus id.
-pub fn bus_id_for(probe_report: &Value, gpu_uuid: Option<&str>) -> Option<String> {
-    let boards = probe_report
-        .get("fields")
-        .and_then(|fields| fields.get("board"))?;
-    let rows: Vec<String> = match boards {
-        Value::String(single) => vec![single.clone()],
-        Value::Array(list) => list
-            .iter()
-            .filter_map(|value| value.as_str().map(str::to_string))
-            .collect(),
-        _ => Vec::new(),
-    };
-    for row in rows {
-        // index, uuid, name, pci.bus_id, memory.total
-        let columns: Vec<&str> = row.split(',').map(str::trim).collect();
-        let (Some(uuid), Some(bus)) = (columns.get(1), columns.get(3)) else {
-            continue;
-        };
-        match gpu_uuid {
-            Some(wanted) if *uuid != wanted => continue,
-            _ => return xorg_bus_id(bus),
+/// Why a probe names no board to render on.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BoardRefusal {
+    /// The host reported its boards and none is the one wanted.
+    NotFound(String),
+    /// The probe's board report, one of its rows, or a row's bus id cannot be read.
+    Unreadable(String),
+}
+
+impl BoardRefusal {
+    /// The failure an operator sees: a missing board, or a host whose answer is unreadable.
+    pub fn code(&self) -> FailureCode {
+        match self {
+            Self::NotFound(_) => FailureCode::NotFound,
+            Self::Unreadable(_) => FailureCode::InfraDown,
         }
     }
-    None
 }
+
+impl std::fmt::Display for BoardRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(cause) | Self::Unreadable(cause) => f.write_str(cause),
+        }
+    }
+}
+
+/// The board a probe reports for one driver UUID (the first board when none is
+/// named), as its Xorg PCI bus id. Each BOARD row holds the five columns the
+/// probe asks nvidia-smi for; a row of any other shape, or a bus id that is not
+/// one, is refused naming it, never skipped.
+pub fn bus_id_for(probe_report: &Value, gpu_uuid: Option<&str>) -> Result<String, BoardRefusal> {
+    let rows: Vec<&str> = match probe_report.get("fields").and_then(|fields| fields.get("board")) {
+        None => Vec::new(),
+        Some(Value::String(single)) => vec![single.as_str()],
+        Some(Value::Array(list)) => list
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| BoardRefusal::Unreadable(format!("a BOARD entry of the probe is not text: {value}")))
+            })
+            .collect::<Result<_, _>>()?,
+        Some(other) => {
+            return Err(BoardRefusal::Unreadable(format!(
+                "the probe's board field is neither a line nor a list: {other}"
+            )))
+        }
+    };
+    let mut reported = Vec::new();
+    for row in rows {
+        let columns: Vec<&str> = row.split(',').map(str::trim).collect();
+        let [_index, uuid, _name, bus, _memory] = columns.as_slice() else {
+            return Err(BoardRefusal::Unreadable(format!(
+                "board row {row:?} is not index, uuid, name, pci.bus_id, memory.total"
+            )));
+        };
+        match gpu_uuid {
+            Some(wanted) if *uuid != wanted => reported.push(uuid.to_string()),
+            _ => return xorg_bus_id(bus).map_err(|cause| BoardRefusal::Unreadable(format!("board {uuid}: {cause}"))),
+        }
+    }
+    Err(BoardRefusal::NotFound(match gpu_uuid {
+        Some(wanted) if reported.is_empty() => format!("no board with uuid {wanted}: the host reports no NVIDIA board"),
+        Some(wanted) => format!("no board with uuid {wanted}; the host reports {}", reported.join(", ")),
+        None => "the host reports no NVIDIA board".to_string(),
+    }))
+}
+
+/// The digits nvidia-smi writes a PCI bus id in; their count is the radix.
+const HEX_DIGITS: &str = "0123456789abcdef";
 
 /// nvidia-smi's `00000000:C2:00.0` as Xorg's `PCI:194:0:0`.
 ///
@@ -122,16 +168,22 @@ pub fn bus_id_for(probe_report: &Value, gpu_uuid: Option<&str>) -> Option<String
 /// verbatim produced a config with no matching device: the X server exited with
 /// "no screens found" and systemd restarted it every five seconds, which from
 /// outside looked like a unit stuck in `activating`.
-pub fn xorg_bus_id(smi_bus_id: &str) -> Option<String> {
+pub fn xorg_bus_id(smi_bus_id: &str) -> Result<String, String> {
     let parts: Vec<&str> = smi_bus_id.split(':').collect();
     let (bus, tail) = match parts.as_slice() {
-        [_domain, bus, tail] => (*bus, *tail),
-        [bus, tail] => (*bus, *tail),
-        _ => return None,
+        [_, bus, tail] | [bus, tail] => (*bus, *tail),
+        _ => return Err(format!("PCI bus id {smi_bus_id:?} is not [domain:]bus:device.function")),
     };
-    let (device, function) = tail.split_once('.')?;
-    let bus = u32::from_str_radix(bus.trim(), 16).ok()?;
-    let device = u32::from_str_radix(device.trim(), 16).ok()?;
-    let function = u32::from_str_radix(function.trim(), 16).ok()?;
-    Some(format!("PCI:{bus}:{device}:{function}"))
+    let (device, function) = tail
+        .split_once('.')
+        .ok_or_else(|| format!("PCI bus id {smi_bus_id:?} names no .function"))?;
+    let radix = HEX_DIGITS.chars().count() as u32;
+    let read = |field: &str, what: &str| {
+        u32::from_str_radix(field.trim(), radix)
+            .map_err(|error| format!("PCI bus id {smi_bus_id:?}: {what} {field:?} is not hex: {error}"))
+    };
+    let bus = read(bus, "bus")?;
+    let device = read(device, "device")?;
+    let function = read(function, "function")?;
+    Ok(format!("PCI:{bus}:{device}:{function}"))
 }

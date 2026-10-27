@@ -11,6 +11,7 @@ use crate::cli::release_quarantine::{
     resolve_target,
 };
 use crate::cli::CmdError;
+use crate::primitives::tally::Tally;
 use crate::release_agent::host_log_path;
 use crate::release_control::StrategyKind;
 
@@ -100,19 +101,14 @@ fn classify(path: String, extension: &'static str, read: Option<(String, u64)>) 
             lines: Vec::new(),
             state: STREAM_MISSING,
         },
-        Some((_, 0)) => StreamReport {
-            stream: extension,
-            path,
-            bytes: Some(0),
-            lines: Vec::new(),
-            state: STREAM_EMPTY,
-        },
         Some((tail, bytes)) => StreamReport {
             stream: extension,
             path,
             bytes: Some(bytes),
             lines: tail.lines().map(str::to_string).collect(),
-            state: STREAM_READ,
+            // A file the host measured as holding nothing was opened and
+            // never written.
+            state: if bytes.counts_nothing() { STREAM_EMPTY } else { STREAM_READ },
         },
     }
 }
@@ -216,12 +212,15 @@ pub(super) async fn logs(args: &ReleaseLogsArgs) -> Result<(), CmdError> {
                     (Some(_), true) => "first",
                     (Some(_), false) => "last",
                 };
+                let size = match stream.bytes {
+                    Some(bytes) => format!("{bytes} bytes"),
+                    None => "an unmeasured size".to_string(),
+                };
                 println!(
-                    "--- {} ({}): {position} {} lines of {} bytes",
+                    "--- {} ({}): {position} {} lines of {size}",
                     stream.stream,
                     stream.path,
                     stream.lines.len(),
-                    stream.bytes.unwrap_or_default()
                 );
                 for line in &stream.lines {
                     println!("{line}");

@@ -46,13 +46,20 @@ pub async fn status(name: &str, json_output: bool) -> Result<(), CmdError> {
     let store = super::super::host::beacon_store().await?;
     let report = crate::monitor::host_health::load_host_health(&store, &deployment.target).await;
     let beacon = match report {
-        Ok(report) => report
+        // A beacon that carries no entry for this deployment is a host that
+        // published health but not this model: said as `missing`, apart
+        // from a host with no beacon at all.
+        Ok(report) => match report
             .beacon
             .get("inference")
             .and_then(Value::as_object)
             .and_then(|entries| entries.get(name))
-            .cloned()
-            .unwrap_or_else(|| json!({"state": "missing"})),
+        {
+            Some(entry) => entry.clone(),
+            None => {
+                json!({"state": "missing", "detail": "the host's beacon carries no entry for this deployment"})
+            }
+        },
         Err(crate::monitor::host_health::HostHealthError::NoBeacon { .. }) => {
             json!({"state": null, "detail": "host has no health beacon"})
         }
@@ -145,7 +152,12 @@ pub async fn verify(name: &str, from: Option<&str>, json_output: bool) -> Result
     // changes. Every product chat can fail while this command, sending from
     // the model's own host, answers `verified` - the model is up and the
     // consumer's hop to it is not, and one report covers both.
-    let sender = from.unwrap_or(&deployment.target);
+    // `--from` names another host to send from; without it the call leaves
+    // from the deployment's own host, the hop a product's chat never takes.
+    let sender = match from {
+        Some(host) => host,
+        None => deployment.target.as_str(),
+    };
     let target = crate::cli::canonical_host(sender).await?;
     let result = inference::verify_completion(&target, &deployment, &bearer, &production_runner())
         .await

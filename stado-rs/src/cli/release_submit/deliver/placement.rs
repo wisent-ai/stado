@@ -38,7 +38,7 @@ async fn read(store: &JobStorage, run: &ReleaseRun) -> Result<Option<Placement>,
         return Ok(None);
     };
     let plan: Placement = serde_json::from_slice(&bytes)?;
-    if plan.schema_version != 1
+    if plan.schema_version != crate::release_pipeline::SCHEMA_VERSION
         || plan.run_id != run.run_id
         || plan.source_sha256 != run.source_sha256
         || plan.manifest_sha256 != run.manifest_sha256
@@ -68,7 +68,7 @@ pub(in crate::cli::release_submit) async fn prepare(
     }
     let (document, generation) = registry::fetch_versioned_document().await?;
     let plan = Placement {
-        schema_version: 1,
+        schema_version: crate::release_pipeline::SCHEMA_VERSION,
         run_id: run.run_id.clone(),
         source_sha256: run.source_sha256.clone(),
         manifest_sha256: run.manifest_sha256.clone(),
@@ -176,15 +176,16 @@ fn expand(
                 .join(", ")
         )));
     }
-    let mut names: Vec<&str> = deliveries
+    // A name two deliveries resolve to is refused: the first name already
+    // seen again is the one named.
+    let mut seen = std::collections::BTreeSet::new();
+    if let Some(repeated) = deliveries
         .iter()
         .map(|delivery| delivery.name.as_str())
-        .collect();
-    names.sort_unstable();
-    if let Some(pair) = names.windows(2).find(|pair| pair[0] == pair[1]) {
+        .find(|name| !seen.insert(*name))
+    {
         return Err(CmdError::refused(format!(
-            "resolved delivery name is ambiguous: {}",
-            pair[0]
+            "resolved delivery name is ambiguous: {repeated}"
         )));
     }
     Ok(deliveries)

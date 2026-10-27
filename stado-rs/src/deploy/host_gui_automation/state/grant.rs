@@ -39,7 +39,7 @@ pub(in crate::deploy::host_gui_automation) async fn grant_accessibility_inner(
     }
 
     let user = login_user(target, runner).await?;
-    let home = format!("/Users/{user}");
+    let home = host_channel::remote_user_home(target, &user, runner).await?;
     let database = format!("{home}/Library/Application Support/com.apple.TCC/TCC.db");
     run_sudo(
         target,
@@ -154,7 +154,15 @@ pub(in crate::deploy::host_gui_automation) async fn grant_accessibility_inner(
     // CuaDriver is launched directly and through LaunchServices; the Apple
     // helper is a separate signed executable run in that same Aqua session.
     // TCC identifies all three responsibility chains separately.
-    let insert = |client: &str, client_type: u8, requirement: &str| {
+    // TCC's access.client_type, in its own order: a bundle identifier is the
+    // first code, an absolute executable path the next.
+    #[derive(Clone, Copy)]
+    enum TccClient {
+        Bundle,
+        Path,
+    }
+    let insert = |client: &str, client_type: TccClient, requirement: &str| {
+        let client_type = client_type as u8;
         format!(
             "INSERT INTO access (service, client, client_type, auth_value, auth_reason, \
              auth_version, csreq, policy_id, indirect_object_identifier_type, \
@@ -163,34 +171,28 @@ pub(in crate::deploy::host_gui_automation) async fn grant_accessibility_inner(
              X'{requirement}', NULL, 0, 'UNUSED', NULL, 0, strftime('%s','now'));"
         )
     };
-    let (clients, inserts, expected_count) =
-        if let (Some(identity), Some(requirement)) = (&identity, &cua_requirement) {
-            (
-                format!(
-                    "((client = '{}' AND client_type = 0) \
-                     OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1) \
-                     OR (client = '{}' AND client_type = 1))",
-                    identity.bundle,
-                    apple_challenge_helper_path(),
-                ),
-                format!(
-                    "{} {} {}",
-                    insert(&identity.bundle, 0, requirement),
-                    insert(CUA_DRIVER_EXECUTABLE, 1, requirement),
-                    insert(apple_challenge_helper_path(), 1, &helper_requirement),
-                ),
-                "3",
-            )
-        } else {
-            (
-                format!(
-                    "(client = '{}' AND client_type = 1)",
-                    apple_challenge_helper_path(),
-                ),
-                insert(apple_challenge_helper_path(), 1, &helper_requirement),
-                "1",
-            )
-        };
+    // Every grant this run writes, so the rows deleted, inserted and read
+    // back are the same list and the expected count is its length.
+    let mut grants: Vec<(&str, TccClient, &str)> = Vec::new();
+    if let (Some(identity), Some(requirement)) = (&identity, &cua_requirement) {
+        grants.push((identity.bundle.as_str(), TccClient::Bundle, requirement.as_str()));
+        grants.push((CUA_DRIVER_EXECUTABLE, TccClient::Path, requirement.as_str()));
+    }
+    grants.push((apple_challenge_helper_path(), TccClient::Path, helper_requirement.as_str()));
+    let clients = format!(
+        "({})",
+        grants
+            .iter()
+            .map(|(client, kind, _)| format!("(client = '{client}' AND client_type = {})", *kind as u8))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    );
+    let inserts = grants
+        .iter()
+        .map(|(client, kind, requirement)| insert(client, *kind, requirement))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let expected_count = grants.len().to_string();
     let sql = format!(
         "BEGIN IMMEDIATE; DELETE FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' \
          AND {clients}; {inserts} COMMIT;",

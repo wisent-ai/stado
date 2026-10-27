@@ -145,17 +145,17 @@ try {
   // download URL gives them back with a plain GET, neither carrying the key;
   // a lifetime that is not positive is refused before any request.
   const carried = `stado-sandbox-url-${token}.txt`;
-  const upload = sandbox(['file-url', original.id, carried, '--method', 'upload']);
+  const upload = sandbox(['file', 'link', original.id, carried, '--method', 'upload']);
   assert.equal(upload.method, 'PUT', `the upload URL is not a PUT: ${JSON.stringify(upload)}`);
   const put = await fetch(upload.url, { method: 'PUT', body: token });
   report.upload_status = put.status;
   assert.ok(put.ok, `the PUT to the signed upload URL answered ${put.status}`);
-  const download = sandbox(['file-url', original.id, carried, '--method', 'download']);
+  const download = sandbox(['file', 'link', original.id, carried, '--method', 'download']);
   assert.equal(download.method, 'GET', `the download URL is not a GET: ${JSON.stringify(download)}`);
   const got = await fetch(download.url);
   report.download_status = got.status;
   assert.equal(await got.text(), token, 'the signed download URL did not give back the uploaded bytes');
-  refused(run(binary, ['sandbox', 'file-url', original.id, carried, '--method', 'download', `--ttl-seconds=-${lifetime}`]),
+  refused(run(binary, ['sandbox', 'file', 'link', original.id, carried, '--method', 'download', `--ttl-seconds=-${lifetime}`]),
     'is not a positive number of seconds a URL can stay valid');
 
   const printed = sandbox(['exec', original.id, `cat ${file}`]);
@@ -178,9 +178,9 @@ try {
   assert.ok(Array.isArray(processes.processes), `processes answered no list: ${JSON.stringify(processes)}`);
   assert.ok(Array.isArray(sandbox(['conversations', original.id]).conversations),
     'conversations answered no list');
-  const ai = sandbox(['ai-usage', original.id]);
+  const ai = sandbox(['ai', 'usage', original.id]);
   assert.ok(ai.sandboxId === original.id && typeof ai.blocked === 'boolean' && Array.isArray(ai.usage),
-    `ai-usage answered no usage of ${original.id}: ${JSON.stringify(ai)}`);
+    `ai usage answered no usage of ${original.id}: ${JSON.stringify(ai)}`);
 
   const started = sandbox(['exec', original.id, '--detach', 'tail -f /dev/null']);
   assert.ok(Number.isSafeInteger(started.processId), `exec --detach answered no process id: ${JSON.stringify(started)}`);
@@ -212,17 +212,17 @@ try {
   const created = sandbox(['environment', 'create', environmentName]);
   const environment = created.environments.find(row => row.name === environmentName);
   assert.ok(environment?.id, `environment create did not list ${environmentName}: ${JSON.stringify(created)}`);
-  const repositories = sandbox(['environment', 'repos']);
+  const repositories = sandbox(['environment', 'repo', 'list']);
   assert.ok(Array.isArray(repositories.installations) && Array.isArray(repositories.selectedRepositories),
-    `environment repos answered no installations and selection: ${JSON.stringify(repositories)}`);
-  success(run(binary, ['sandbox', 'environment', 'set-var', environment.id, 'STADO_SANDBOX_TOKEN'], process.env, `${token}\n`));
-  refused(run(binary, ['sandbox', 'environment', 'set-var', environment.id, 'STADO_SANDBOX_TOKEN'], process.env, ''),
+    `environment repo list answered no installations and selection: ${JSON.stringify(repositories)}`);
+  success(run(binary, ['sandbox', 'environment', 'var', 'set', environment.id, 'STADO_SANDBOX_TOKEN'], process.env, `${token}\n`));
+  refused(run(binary, ['sandbox', 'environment', 'var', 'set', environment.id, 'STADO_SANDBOX_TOKEN'], process.env, ''),
     'standard input holds no value for STADO_SANDBOX_TOKEN');
   const configured = sandbox(['create', '--ttl-seconds', lifetime, '--environment', environment.id]);
   const printedVariable = sandbox(['exec', configured.id, 'printenv STADO_SANDBOX_TOKEN']);
   assert.ok(printedVariable.stdout.includes(token), `a sandbox of ${environment.id} does not hold its variable`);
   assert.deepEqual(sandbox(['delete', configured.id]), { deleted: configured.id });
-  sandbox(['environment', 'rm-var', environment.id, 'STADO_SANDBOX_TOKEN']);
+  sandbox(['environment', 'var', 'remove', environment.id, 'STADO_SANDBOX_TOKEN']);
   sandbox(['environment', 'delete', environment.id]);
   assert.ok(!sandbox(['environment', 'list']).environments.some(row => row.id === environment.id),
     `environment ${environment.id} is still listed after its deletion`);

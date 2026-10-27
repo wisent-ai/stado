@@ -74,19 +74,16 @@ fn binding(spec: &str) -> Result<Binding, CmdError> {
     })
 }
 
-/// Read every binding from `store`, then become `command` with them in its
-/// environment. `delegated` says the store is one consumer's grant, which
-/// cannot list the vault, so a role is asked of Skarbiec as `role:<role>`.
-/// Returns only when the program could not be started.
-pub(in crate::cli::secrets) async fn run(
+/// Every binding read from `store`, each variable once. `delegated` says the
+/// store is one consumer's grant, which cannot list the vault, so a role is
+/// asked of Skarbiec as `role:<role>`; `reader` names who reads, in a
+/// failed read's cause.
+async fn values(
     store: &Store,
     delegated: bool,
     env: &[String],
-    command: &[String],
-) -> Result<(), CmdError> {
-    let (program, arguments) = command
-        .split_first()
-        .ok_or_else(|| CmdError::usage("credentials run needs the program to start after `--`"))?;
+    reader: &str,
+) -> Result<BTreeMap<String, String>, CmdError> {
     let mut values: BTreeMap<String, String> = BTreeMap::new();
     for spec in env {
         let binding = binding(spec)?;
@@ -103,9 +100,40 @@ pub(in crate::cli::secrets) async fn run(
         };
         let value = field_value(store, &item, &binding.field)
             .await
-            .map_err(|error| error.within(format!("{} for {program}", binding.variable)))?;
+            .map_err(|error| error.within(format!("{} for {reader}", binding.variable)))?;
         values.insert(binding.variable, value);
     }
+    Ok(values)
+}
+
+/// The fields `env` names (`NAME=ITEM#FIELD`, as `--env` writes them), read
+/// from the selected store, or with `route` under one consumer's own grant:
+/// the read `credentials run` makes, for another launcher such as `sandbox
+/// fleet exec --credential`.
+pub(crate) async fn granted(
+    env: &[String],
+    route: Option<String>,
+    consumer: Option<String>,
+    grant_file: Option<String>,
+) -> Result<BTreeMap<String, String>, CmdError> {
+    let delegated = route.is_some();
+    let store = super::commands::dispatch::delegated_or_selected(route, consumer, grant_file)?;
+    values(&store, delegated, env, "the sandboxed command").await
+}
+
+/// Read every binding from `store`, then become `command` with them in its
+/// environment. `delegated` says the store is one consumer's grant.
+/// Returns only when the program could not be started.
+pub(in crate::cli::secrets) async fn run(
+    store: &Store,
+    delegated: bool,
+    env: &[String],
+    command: &[String],
+) -> Result<(), CmdError> {
+    let (program, arguments) = command
+        .split_first()
+        .ok_or_else(|| CmdError::usage("credentials run needs the program to start after `--`"))?;
+    let values = values(store, delegated, env, program).await?;
     let failure = std::process::Command::new(program)
         .args(arguments)
         .envs(&values)

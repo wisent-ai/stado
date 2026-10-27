@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::deploy::local_install::artifact::Bins;
 use crate::deploy::local_install::{label, systemd_unit, LocalOs};
-use crate::deploy::{py_dict_repr, DeployError};
+use crate::deploy::DeployError;
 
 use self::env::install_env;
 use self::exec::exec_args_for;
@@ -101,7 +101,7 @@ impl InstallPlan {
                 self.os.python_name()
             ),
             format!("  exec: {}", self.exec_args.join(" ")),
-            format!("  env:  {}", py_dict_repr(&self.env)),
+            format!("  env:  {:?}", self.env),
         ]
     }
 }
@@ -126,7 +126,7 @@ pub fn plan(
             label(name)
         },
         exec_args: exec_args_for(bins, kind, name)?,
-        env: install_env(home, kind, hf_token),
+        env: install_env(home, kind, hf_token)?,
         daemon,
         startup: None,
     })

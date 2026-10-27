@@ -78,8 +78,8 @@ impl RateLimiter {
         request: &ConsumeRequest,
     ) -> Result<ConsumeResponse, RateLimitError> {
         validate_request(client, request)?;
-        let now = u64::try_from(chrono::Utc::now().timestamp_millis()).map_err(|_| {
-            RateLimitError::InvalidRequest("system clock is before epoch".to_string())
+        let now = u64::try_from(chrono::Utc::now().timestamp_millis()).map_err(|error| {
+            RateLimitError::InvalidRequest(format!("system clock is before epoch: {error}"))
         })?;
         let reset_at = now.checked_add(request.window_ms).ok_or_else(|| {
             RateLimitError::InvalidRequest("window overflows epoch time".to_string())

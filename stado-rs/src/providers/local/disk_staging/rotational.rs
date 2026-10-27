@@ -1,86 +1,79 @@
-//! Whether a candidate mount is spinning rust: the partition-name regex, the
-//! /proc/mounts device lookup, the /sys/block base-name resolution, the
-//! `queue/rotational` read, and the injectable and live forms of the answer
-//! that ranks an SSD above a larger HDD.
+//! Read a candidate's medium from the kernel's block-device hierarchy.
+//! A partition uses its actual parent device, not a guessed name obtained
+//! by stripping digits. Every failed lookup retains the operation and cause.
 
 use super::*;
 
-static NVME_PART_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"^(nvme\d+n\d+)p\d+$").expect("static regex compiles"));
+use std::os::unix::fs::FileTypeExt;
 
 /// Pure parser: backing device for a mount point (last match in
 /// /proc/mounts wins). Python `_mount_device`.
-pub fn parse_mount_device(text: &str, mnt: &str) -> Option<String> {
-    let mut dev = None;
+pub fn parse_mount_device(text: &str, mnt: &str) -> Result<Option<String>, String> {
+    let mut selected = None;
     for line in text.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 && parts[1] == mnt {
-            dev = Some(parts[0].to_string());
+        let mut fields = line.split([' ', '\t']).filter(|field| !field.is_empty());
+        let (Some(device), Some(mount_point)) = (fields.next(), fields.next()) else {
+            return Err(format!("/proc/mounts row {line:?} has no source and mount point"));
+        };
+        if super::mounts::decode_mount_field(mount_point)? == mnt {
+            selected = Some(device);
         }
     }
-    dev
+    selected.map(super::mounts::decode_mount_field)
+        .transpose()
+        .map(|device| device.map(std::borrow::Cow::into_owned))
 }
 
-/// Pure: block-device base name for a partition name
-/// (Python the `nvme...pN` regex + trailing-digit strip of `_is_rotational`).
-pub fn block_base_name(name: &str) -> String {
-    if let Some(caps) = NVME_PART_RE.captures(name) {
-        return caps[1].to_string();
-    }
-    name.trim_end_matches(|c: char| c.is_ascii_digit())
-        .to_string()
-}
-
-/// Pure: resolve the /sys/block base dir for a device name — the name
-/// itself when it exists under sys_root, else the partition-stripped base.
-pub fn resolved_block_base(sys_root: &Path, name: &str) -> String {
-    if sys_root.join("block").join(name).exists() {
-        name.to_string()
-    } else {
-        block_base_name(name)
+/// Resolve the device the kernel says owns this queue. A partition's
+/// `partition` attribute identifies it; its sysfs parent is the disk.
+fn queue_device(sys_root: &Path, name: &std::ffi::OsStr) -> Result<PathBuf, String> {
+    let declared = sys_root.join("class").join("block").join(name);
+    let device = std::fs::canonicalize(&declared)
+        .map_err(|error| format!("cannot resolve {}: {error}", declared.display()))?;
+    let partition = device.join("partition");
+    match std::fs::symlink_metadata(&partition) {
+        Ok(_) => device.parent().map(Path::to_path_buf).ok_or_else(|| {
+            format!("partition {} has no parent block device", device.display())
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(device),
+        Err(error) => Err(format!("cannot inspect {}: {error}", partition.display())),
     }
 }
 
-/// Pure: read /sys/block/<base>/queue/rotational; unreadable -> true (HDD).
-pub fn rotational_file_value(sys_root: &Path, base: &str) -> bool {
-    match std::fs::read_to_string(
-        sys_root
-            .join("block")
-            .join(base)
-            .join("queue")
-            .join("rotational"),
-    ) {
-        Ok(text) => text.trim() == "1",
-        Err(_) => true,
+/// The kernel's queue attribute is 1 for rotational, 0 for non-rotational.
+/// https://www.kernel.org/doc/html/latest/block/queue-sysfs.html
+fn rotational_file_value(device: &Path) -> Result<bool, String> {
+    let path = device.join("queue").join("rotational");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    match text.trim() {
+        "1" => Ok(true),
+        "0" => Ok(false),
+        other => Err(format!("{} holds {other:?}, not 0 or 1", path.display())),
     }
 }
 
-/// True if the mount's backing block device is rotational (HDD).
-/// Python `_is_rotational` with injectable mounts text + /sys root.
-pub fn is_rotational_at(mounts_text: &str, sys_root: &Path, mnt: &str) -> bool {
-    // Unknown resolves to True so an unidentifiable device is treated as an
-    // HDD and never wins over a confirmed SSD. Multi-GB shard staging is
-    // write-throughput bound, so an SSD is strongly preferable to a larger
-    // HDD.
-    let Some(dev) = parse_mount_device(mounts_text, mnt) else {
-        return true;
-    };
-    if !dev.starts_with("/dev/") {
-        return true;
+/// Whether the mount's backing block device is rotational (HDD), or why
+/// that cannot be read. Python `_is_rotational` with injectable mounts text
+/// + /sys root.
+pub fn is_rotational_at(mounts_text: &str, sys_root: &Path, mnt: &str) -> Result<bool, String> {
+    let dev = parse_mount_device(mounts_text, mnt)?
+        .ok_or_else(|| format!("/proc/mounts has no entry for {mnt}"))?;
+    let metadata = std::fs::metadata(&dev)
+        .map_err(|error| format!("cannot inspect mount source {dev}: {error}"))?;
+    if !metadata.file_type().is_block_device() {
+        return Err(format!("{mnt} is backed by {dev}, not a block device"));
     }
-    // os.path.basename(os.path.realpath(dev)).
-    let Some(name) = std::fs::canonicalize(&dev)
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-    else {
-        return true;
-    };
-    let base = resolved_block_base(sys_root, &name);
-    rotational_file_value(sys_root, &base)
+    let resolved = std::fs::canonicalize(&dev)
+        .map_err(|error| format!("cannot resolve {dev}: {error}"))?;
+    let name = resolved.file_name()
+        .ok_or_else(|| format!("{dev} resolves to {}, which names no device", resolved.display()))?;
+    rotational_file_value(&queue_device(sys_root, name)?)
 }
 
 /// Python `_is_rotational` against the live /proc/mounts + /sys.
-pub fn is_rotational(mnt: &str) -> bool {
-    let mounts = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
+pub fn is_rotational(mnt: &str) -> Result<bool, String> {
+    let mounts = std::fs::read_to_string("/proc/mounts")
+        .map_err(|error| format!("cannot read /proc/mounts: {error}"))?;
     is_rotational_at(&mounts, Path::new("/sys"), mnt)
 }

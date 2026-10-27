@@ -18,6 +18,13 @@ fn valid_env_name(name: &str) -> bool {
 /// disagree about which broker, consumer and grant are in play: a check that
 /// asks a different endpoint than the read would use proves nothing.
 fn agent_secret_client() -> Result<crate::skarbiec::Client, StorageError> {
+    // Read as empty, an unresolved agent service would send the agent to the
+    // shared Skarbiec below; it is refused with its cause instead.
+    if let Some(cause) = crate::config::agent_skarbiec_url_absent() {
+        return Err(StorageError::Other(format!(
+            "agent.skarbiec.url names a service this host cannot resolve: {cause}"
+        )));
+    }
     let agent_token_file = crate::config::agent_skarbiec_token_file();
     if Path::new(agent_token_file).is_file() {
         let configured_url = crate::config::agent_skarbiec_url();
@@ -75,7 +82,7 @@ pub(crate) async fn secrets_resolvable_here(job: &Job) -> Result<(), String> {
     // The local field allowlist refuses at resolution just as surely as a
     // missing grant does, so it is asked here too.
     for (env_name, reference) in &job.secret_env {
-        if !crate::config::agent_secret_reference_allowed(&reference.role, &reference.field) {
+        if !crate::config::agent_secret_reference_allowed(&reference.role, &reference.field)? {
             return Err(format!(
                 "secret {env_name} needs role {}#{} and this host's agent.skarbiec.secret_fields \
                  does not allow it",
@@ -86,12 +93,16 @@ pub(crate) async fn secrets_resolvable_here(job: &Job) -> Result<(), String> {
     let client = agent_secret_client().map_err(|error| error.to_string())?;
     let visible = client.list_items().await.map_err(|error| {
         let text = error.to_string();
-        // The broker did answer and refused the consumer (401 or 403): a
-        // grant it does not hold, or one whose expires_at has passed. Naming
-        // the grant sends the diagnosis there instead of at the broker's URL.
-        // The status decides, not the broker's wording.
+        // The broker did answer and refused the consumer (unauthorized or
+        // forbidden): a grant it does not hold, or one whose expires_at has
+        // passed. Naming the grant sends the diagnosis there instead of at the
+        // broker's URL. The status decides, not the broker's wording.
+        let refused = |status: u16| {
+            status == reqwest::StatusCode::UNAUTHORIZED.as_u16()
+                || status == reqwest::StatusCode::FORBIDDEN.as_u16()
+        };
         match error.status() {
-            Some(401 | 403) => format!(
+            Some(status) if refused(status) => format!(
                 "this host's agent grant for consumer {} is missing or has expired at the broker ({text}); \
                  `skarbiec grant list` shows its expires_at, and `skarbiec grant issue {} --capabilities … \
                  --replace-capabilities --token-file {}` renews it",
@@ -130,7 +141,9 @@ pub(crate) async fn resolve_job_secret_environment(
                 job.job_id
             )));
         }
-        if !crate::config::agent_secret_reference_allowed(&reference.role, &reference.field) {
+        if !crate::config::agent_secret_reference_allowed(&reference.role, &reference.field)
+            .map_err(StorageError::Other)?
+        {
             return Err(StorageError::Other(format!(
                 "job {} secret {env_name} is outside agent.skarbiec.secret_fields",
                 job.job_id

@@ -7,14 +7,77 @@
 
 use std::io::Read;
 
-use clap::Args;
+use clap::{Args, Subcommand};
 use serde_json::Value;
 
 use crate::providers::BoxProvider;
 
 use super::agent::stated;
 use super::verbs::{failure, print};
-use super::{CmdError, EnvironmentId, EnvironmentKey, RepositoryArgs, SecretFileArgs, SecretPath};
+use super::{CmdError, EnvironmentId, EnvironmentKey, EnvironmentName, RepositoryArgs, SecretFileArgs, SecretPath};
+
+#[derive(Subcommand)]
+pub enum EnvironmentCommands {
+    /// List the environments.
+    List,
+    /// Create an empty environment.
+    Create(EnvironmentName),
+    /// Delete an environment.
+    Delete(EnvironmentId),
+    /// Set or remove an environment's variables.
+    #[command(subcommand)]
+    Var(VarCommands),
+    /// Set or remove an environment's secret files.
+    #[command(subcommand)]
+    File(FileCommands),
+    /// List the GitHub repositories Boat can clone, or clone one into every
+    /// new sandbox.
+    #[command(subcommand)]
+    Repo(RepoCommands),
+}
+
+#[derive(Subcommand)]
+pub enum VarCommands {
+    /// Set a variable; its value is the one line on standard input.
+    Set(EnvironmentKey),
+    /// Remove a variable.
+    Remove(EnvironmentKey),
+}
+
+#[derive(Subcommand)]
+pub enum FileCommands {
+    /// Set a secret file from a local file's text.
+    Set(SecretFileArgs),
+    /// Remove a secret file.
+    Remove(SecretPath),
+}
+
+#[derive(Subcommand)]
+pub enum RepoCommands {
+    /// List the GitHub repositories Boat can clone, with the id `repo add`
+    /// takes, and the ones already selected.
+    List(RepositoryListArgs),
+    /// Clone a GitHub repository into every new sandbox.
+    Add(RepositoryArgs),
+}
+
+/// Run one `stado sandbox environment` command against Boat.
+pub(super) async fn dispatch(
+    provider: &BoxProvider,
+    command: EnvironmentCommands,
+) -> Result<(), CmdError> {
+    match command {
+        EnvironmentCommands::List => list(provider).await,
+        EnvironmentCommands::Create(named) => create(provider, &named.name).await,
+        EnvironmentCommands::Delete(args) => delete(provider, &args).await,
+        EnvironmentCommands::Var(VarCommands::Set(args)) => set_var(provider, &args).await,
+        EnvironmentCommands::Var(VarCommands::Remove(args)) => remove_var(provider, &args).await,
+        EnvironmentCommands::File(FileCommands::Set(args)) => set_file(provider, &args).await,
+        EnvironmentCommands::File(FileCommands::Remove(args)) => remove_file(provider, &args).await,
+        EnvironmentCommands::Repo(RepoCommands::List(args)) => repositories(provider, &args).await,
+        EnvironmentCommands::Repo(RepoCommands::Add(args)) => add_repo(provider, &args).await,
+    }
+}
 
 #[derive(Args, Debug)]
 pub struct RepositoryListArgs {

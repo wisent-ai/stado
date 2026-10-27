@@ -7,6 +7,14 @@ use super::record::Job;
 use crate::models::python_compat::ensure_ascii;
 
 impl Job {
+    /// The hourly cost the job may not exceed, when it declares one. A fresh
+    /// record's cap is no cap, and only a positive normal amount binds: a
+    /// cap of nothing, a negative one, an infinite one or a NaN caps nothing.
+    pub fn hourly_cap_usd(&self) -> Option<f64> {
+        let cap = self.max_cost_per_hour_usd;
+        (cap.is_normal() && cap.is_sign_positive()).then_some(cap)
+    }
+
     /// Why a job that just lost its worker for `reason` must fail instead of
     /// going back to the queue, or `None` when it goes back.
     ///

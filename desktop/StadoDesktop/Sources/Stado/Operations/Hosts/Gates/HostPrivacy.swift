@@ -49,12 +49,12 @@ struct HostPrivacy: Decodable, Sendable {
         var id: String { key }
     }
 
+    static let documents = FolderName(key: "documents", name: "Documents")
+    static let desktop = FolderName(key: "desktop", name: "Desktop")
+    static let downloads = FolderName(key: "downloads", name: "Downloads")
+
     /// The folders in the order the command prints them, with their names.
-    static let folders: [FolderName] = [
-        FolderName(key: "documents", name: "Documents"),
-        FolderName(key: "desktop", name: "Desktop"),
-        FolderName(key: "downloads", name: "Downloads"),
-    ]
+    static let folders: [FolderName] = [documents, desktop, downloads]
 
     /// The declared grants macOS does not honour.
     var refusedGrants: [Grant] {

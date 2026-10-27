@@ -19,7 +19,7 @@ use super::runners::{
 mod interactive;
 mod status;
 
-use interactive::{attach, default_max_steps, start, StartArguments};
+use interactive::{attach, start, StartArguments};
 use status::status;
 
 #[derive(Subcommand)]
@@ -81,8 +81,9 @@ pub enum WorkloadCommands {
         /// Model route the session runs on; the harness default otherwise.
         #[arg(long)]
         model: Option<String>,
-        /// Upper bound on the session's steps.
-        #[arg(long, default_value_t = default_max_steps())]
+        /// Upper bound on the session's steps. Nobody watches a detached
+        /// session, so its bound is the caller's to state; Stado picks none.
+        #[arg(long)]
         max_steps: u32,
         /// Let the session write files in its workspace.
         #[arg(long)]

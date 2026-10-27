@@ -28,8 +28,16 @@ extension FleetControlStore {
             )
             registryImport = receipt
             if receipt.accepted {
-                let generation = receipt.generation.map { " Canonical generation \($0)." } ?? ""
-                registryImportMutation = .succeeded("\(receipt.outcomeSentence)\(generation)")
+                // An accepted import names the generation it wrote or found;
+                // a receipt that names none says so instead of hiding it.
+                let sentence: String
+                switch receipt.generation {
+                case .some(let generation):
+                    sentence = "\(receipt.outcomeSentence) Canonical generation \(generation)."
+                case .none:
+                    sentence = "\(receipt.outcomeSentence) The receipt named no canonical generation."
+                }
+                registryImportMutation = .succeeded(sentence)
                 await refresh()
             } else {
                 registryImportMutation = .failed(receipt.outcomeSentence)

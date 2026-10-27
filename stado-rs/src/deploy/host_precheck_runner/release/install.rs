@@ -52,13 +52,14 @@ async fn install_profile(
         shlex_quote(&scope.label())
     );
     let record = format!("{runner_root}/.stado/registered-runner");
+    // Both are `test` commands: their exit status is the answer.
     let configured = host_channel::run_script(
         &target,
         &format!("test -f {}/.runner", shlex_quote(&runner_root)),
         &production_runner(),
     )
     .await?
-    .ok();
+    .succeeded();
     let record_matches = host_channel::run_script(
         &target,
         &format!(
@@ -68,7 +69,7 @@ async fn install_profile(
         &production_runner(),
     )
     .await?
-    .ok();
+    .succeeded();
     let already_registered = configured && record_matches;
     // A host that carries a runner registered against something else is the
     // case this lifecycle used to skip: it wrote files, restarted nothing and
@@ -131,7 +132,7 @@ async fn install_profile(
         host_channel::run_script(&target, &script, &production_runner()).await?
     };
     let mut value = report(&target, &output, "install", profile);
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: {} runner installation failed: {}",
             target.name,
@@ -258,7 +259,7 @@ pub async fn install_declared(
     // not a property of the runner. Minting it inside `install` would let a
     // Brama that refuses a route (HTTP 401 on `PUT /v1/admin/routes`) stop a
     // repository from getting a runner at all, for a secret its checks never
-    // read. `runner model-review` reconciles it, and the report says so rather
+    // read. `runner review` reconciles it, and the report says so rather
     // than leaving the capability unnamed.
     if profile.needs_model_review() {
         value["model_review"] = match repository {
@@ -266,7 +267,7 @@ pub async fn install_declared(
                 "secret": MODEL_REVIEW_SECRET,
                 "state": "declared",
                 "reconcile_with": format!(
-                    "stado runner model-review {target_name} --repository {repository}"
+                    "stado runner review {target_name} --repository {repository}"
                 ),
             }),
             None => json!({

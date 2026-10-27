@@ -10,14 +10,14 @@ pub(super) async fn dispatch(command: IdentityCommands) -> Result<(), CmdError> 
             identity,
             json,
         } => identity::verify(kind, identity, json).await,
-        IdentityCommands::RelayChallenge {
+        IdentityCommands::Relay {
             provider: IdentityProvider::Apple,
             identity,
             authorization_id,
             preflight,
             json,
         } => identity::relay_apple_challenge(identity, authorization_id, preflight, json).await,
-        IdentityCommands::IssueCapabilities {
+        IdentityCommands::Issue {
             provider: IdentityProvider::Apple,
             target,
             agent,

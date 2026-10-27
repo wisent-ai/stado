@@ -1,8 +1,9 @@
 //! The on-box runtime layout and the idempotent run.sh written into it,
-//! with the base64 encoder the input-artifact payload needs.
+//! with the input-artifact payload carried as standard base64.
 //!
 //! Port of `stado/scheduler/dispatch/box/output.py`.
 
+use base64::Engine as _;
 use serde_json::Value;
 
 use crate::models::Job;
@@ -35,32 +36,6 @@ pub fn runtime_paths(job_id: &str) -> RuntimePaths {
     }
 }
 
-/// RFC 4648 standard-alphabet base64 with padding (Python `base64.b64encode`).
-/// Hand-rolled because the crate's dependency set has no base64 crate.
-fn base64_encode(data: &[u8]) -> String {
-    const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(B64[(n >> 18) as usize & 63] as char);
-        out.push(B64[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            B64[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            B64[n as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    out
-}
-
 /// Python `command_wrapper`: the idempotent run.sh written into the box.
 pub fn command_wrapper(job: &Job, paths: &RuntimePaths) -> String {
     let command = shell_quote(&build_job_command(job));
@@ -71,7 +46,9 @@ pub fn command_wrapper(job: &Job, paths: &RuntimePaths) -> String {
     // json.dumps(..., sort_keys=True, separators=(",", ":")) then b64.
     let sorted: std::collections::BTreeMap<String, Value> =
         job.resolved_input_artifacts.clone().into_iter().collect();
-    let artifact_payload = base64_encode(
+    // RFC 4648 standard alphabet with padding, as Python's base64.b64encode
+    // writes and `base64 --decode` on the box reads.
+    let artifact_payload = base64::engine::general_purpose::STANDARD.encode(
         serde_json::to_string(&sorted)
             .expect("artifact map serialization is infallible")
             .as_bytes(),

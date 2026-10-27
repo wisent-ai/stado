@@ -37,7 +37,7 @@ pub(in crate::cli::service_converge) async fn converge_native_readers(
     // registry document at :registry.json`, reported as a failed delivery on
     // every apply against such a host. Recorded rather than silent, because a
     // leg that did not run is a fact about the pass.
-    if declared_services(target) == 0 {
+    if !declares_services(target) {
         pass.releases.push(Released {
             binary: "stado-readers".to_string(),
             version,
@@ -94,7 +94,7 @@ pub(in crate::cli::service_converge) async fn converge_native_readers(
     );
     let outcome = host_channel::run_script(&reader_target, &script, runner).await;
     let (status, detail) = match outcome {
-        Ok(output) if output.ok() => (COMPLETED, output.stdout.trim().to_string()),
+        Ok(output) if output.succeeded() => (COMPLETED, output.stdout.trim().to_string()),
         Ok(output) => {
             let captured = json!({
                 "operation": "native_reader_convergence",
@@ -114,14 +114,14 @@ pub(in crate::cli::service_converge) async fn converge_native_readers(
     });
 }
 
-/// How many services this target declares, read from the registry document's
-/// own `targets[].services` list — the same field the registry doctor and the
-/// service reconciler read.
-fn declared_services(target: &ComputeTarget) -> usize {
+/// Whether this target declares any service, read from the registry
+/// document's own `targets[].services` list — the same field the registry
+/// doctor and the service reconciler read; a target without that list
+/// declares none.
+fn declares_services(target: &ComputeTarget) -> bool {
     target
         .extra
         .get("services")
         .and_then(serde_json::Value::as_array)
-        .map(Vec::len)
-        .unwrap_or_default()
+        .is_some_and(|services| !services.is_empty())
 }

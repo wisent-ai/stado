@@ -28,18 +28,20 @@ use serde_json::Value;
 
 mod discovery;
 mod readers;
+mod replace;
 mod validation;
 
-pub use discovery::{config_path, find_config_file, load_config_file};
-pub(crate) use discovery::{expand_tilde, home, home_dir};
+pub use discovery::{config_path, find_config_file, load_config_file, load_config_file_fresh};
+pub(crate) use discovery::{expand_tilde, home, home_dir, home_text};
 pub(crate) use readers::variable;
+pub(crate) use replace::replace;
 pub use readers::{field_value, get, get_fresh, resolve, resolve_list};
 pub use validation::validate;
 
 /// Environment variable naming an explicit config file path.
 pub const FILE_ENV: &str = "STADO_CONFIG";
 /// Candidate config file locations, searched in order after $STADO_CONFIG.
-pub const CANDIDATES: [&str; 3] = [
+pub const CANDIDATES: &[&str] = &[
     "stado.config.json",
     "~/.config/stado/config.json",
     "~/.stado/config.json",

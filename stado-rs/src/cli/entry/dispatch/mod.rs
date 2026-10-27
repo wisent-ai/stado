@@ -38,6 +38,12 @@ use failure::{failure_point, failure_service};
 /// [`crate::primitives::failure::retry_exit_code`] when the failure is one a
 /// retry can clear. See `stado.wisent.com/docs/cli`.
 pub async fn main_entry() -> i32 {
+    // Every command that reaches a product operation records which Stado
+    // build ran it (the product crate's records name it), and not only
+    // `stado product`: a release hand-off and a quality check export and
+    // check committed source through the same operations. Registered once,
+    // at entry, before any command runs.
+    stado_product::register_build(crate::cli::setup::product::build());
     // Parse in two steps rather than through `Cli::parse()` — which is
     // exactly these two steps — so the matches tree is still in hand
     // afterwards. It is the only place the subcommand path exists as data

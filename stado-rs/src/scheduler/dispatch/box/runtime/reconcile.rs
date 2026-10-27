@@ -83,7 +83,11 @@ impl BoxRuntime<'_> {
         let exit_code: i64 = exit_text
             .trim()
             .parse()
-            .map_err(|_| BoxError::transport("the Boat command exit file is not an exit code"))?;
+            .map_err(|error| {
+                BoxError::transport(format!(
+                    "the Boat command exit file holds {exit_text:?}, not an exit code: {error}"
+                ))
+            })?;
         for stream in Stream::BOTH {
             let path = stream.path(&paths);
             let content = match self.provider.client.read_file(&box_id, path, "utf-8").await {

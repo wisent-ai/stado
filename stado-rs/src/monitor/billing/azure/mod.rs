@@ -22,8 +22,20 @@ const ARM_BASE: &str = "https://management.azure.com";
 /// Available credit balance via ARM. The service-principal object is read from
 /// the item that plays [`config::AZURE_BILLING_ROLE`] in Skarbiec and nowhere
 /// else. A vault/auth/request failure is terminal for this source: silently
-/// falling through would bypass the credential policy.
+/// falling through would bypass the credential policy. The section carries
+/// the provisioning credit gate's decision on the balance it read
+/// (`provision_gate`), so every reader of the published document sees whether
+/// a VM create or start is admitted now, and why not.
 pub(super) async fn azure_section(_store: &JobStorage) -> Value {
+    let mut section = balance_section().await;
+    section["provision_gate"] = crate::providers::azure::credit::standing(&section).await;
+    section
+}
+
+/// The Azure billing section as the collector reads it, for a caller that
+/// must decide on the balance now (the provisioning credit gate) rather than
+/// read the collector's last stored pass.
+pub(crate) async fn balance_section() -> Value {
     let role = config::AZURE_BILLING_ROLE;
     let vault = match crate::skarbiec::Client::configured() {
         Ok(vault) => vault,

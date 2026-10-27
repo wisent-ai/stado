@@ -16,8 +16,9 @@ fn listening_word(listening: Option<bool>) -> &'static str {
     }
 }
 
-/// Print the resolver's state, its API and adapters, the authority, the
-/// vault's keyring-lock repair, the serve stops and every blocker.
+/// Print the resolver's state, its process, its API and adapters, the
+/// authority, the vault's keyring-lock repair, the serve stops and every
+/// blocker, all read from `report` as `--json` prints it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn print(
     target: &str,
@@ -31,7 +32,7 @@ pub(super) fn print(
     authority_target: &str,
     authority: &AuthorityAnswer,
     repair: Option<&KeyringLockRepair>,
-    serve_stops: &Value,
+    report: &Value,
     blockers: &[String],
 ) {
     println!(
@@ -39,6 +40,18 @@ pub(super) fn print(
          stale={}",
         if stale { "yes" } else { "no" }
     );
+    let process = &report["process"];
+    match (
+        process["cpuTime"].as_str(),
+        process["elapsed"].as_str(),
+        process["why"].as_str(),
+    ) {
+        (Some(cpu), Some(elapsed), _) => {
+            println!("process pid={} cpu={cpu} elapsed={elapsed}", crate::cli::reporting::field(&process["pid"]))
+        }
+        (_, _, Some(why)) => println!("process not read: {why}"),
+        _ => println!("process not read: the report names no reading"),
+    }
     println!("api {api_bind} {}", listening_word(api_listening));
     for (adapter, listening) in probed {
         println!(
@@ -66,6 +79,14 @@ pub(super) fn print(
             "unreachable"
         },
     );
+    let remembered = &report["authority"]["remembered"];
+    if let Some(standing) = remembered["unanswered"].as_str() {
+        println!("authority not asked: {standing}");
+    }
+    let kept = &remembered["kept_snapshot"];
+    if let (Some(version), Some(until)) = (kept["version"].as_str(), kept["until"].as_str()) {
+        println!("authority snapshot kept version={version} until={until}");
+    }
     if let Some(repair) = repair {
         println!(
             "vault keyring-lock-repair holder={} started={} outcome={}",
@@ -77,6 +98,7 @@ pub(super) fn print(
             }
         );
     }
+    let serve_stops = &report["serve_stops"];
     if let Some(cause) = serve_stops["unreadable"].as_str() {
         println!("serve stops unreadable: {cause}");
     } else if !serve_stops.is_null() {
@@ -95,7 +117,7 @@ pub(super) fn print(
              defect: {defect}",
             text("version"),
             text("revision"),
-            serve_stops["stops"],
+            crate::cli::reporting::field(&serve_stops["stops"]),
             text("first_at"),
             text("latest_at"),
             text("latest_failure"),

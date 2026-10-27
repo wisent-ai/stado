@@ -26,14 +26,17 @@ use crate::observations::OBSERVED;
 fn software_json(software: Result<&Report, &String>) -> Value {
     match software {
         Ok(report) => report.json(),
+        // A report that could not be written counted nothing; its counts
+        // are absent, not zero, so a reader never takes "no programs" for
+        // an observation. `programs` is the empty list it is.
         Err(detail) => json!({
             "state": "unrecorded",
             "observed": "never",
             "detail": detail,
-            "reported": 0,
-            "release": 0,
-            "unmanaged": 0,
-            "scripts": 0,
+            "reported": Value::Null,
+            "release": Value::Null,
+            "unmanaged": Value::Null,
+            "scripts": Value::Null,
             "programs": [],
         }),
     }
@@ -45,8 +48,13 @@ pub(in crate::cli::service_converge) fn report_json(
     rows: &[Row],
     software: Result<&Report, &String>,
 ) -> Value {
+    // A run that applied nothing is reported over an empty pass; the
+    // `applied` member says which.
     let empty = AppliedPass::default();
-    let pass = applied.unwrap_or(&empty);
+    let pass = match applied {
+        Some(pass) => pass,
+        None => &empty,
+    };
     json!({
         "target": target,
         "state": if rows.is_empty() { UNDECLARED } else { "declared" },
@@ -93,8 +101,13 @@ pub(in crate::cli::service_converge) fn emit(
     result: &ServiceConvergeResult,
     json_output: bool,
 ) -> Result<(), CmdError> {
+    // A run that applied nothing (report-only, or refused before applying)
+    // is rendered over an empty pass; `applied` says which.
     let empty = AppliedPass::default();
-    let pass = result.applied.as_ref().unwrap_or(&empty);
+    let pass = match result.applied.as_ref() {
+        Some(pass) => pass,
+        None => &empty,
+    };
     let rows = result.rows.as_slice();
     if json_output {
         println!("{}", serde_json::to_string_pretty(&result.report_json())?);

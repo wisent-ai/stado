@@ -82,10 +82,12 @@ pub async fn create(
         .iter()
         .find(|row| row.name == name && !swept.destroyed.contains(&row.name))
     {
-        let until = row.lease.as_ref().map_or_else(
-            || "an unreadable record".to_string(),
-            |held| held.expires_at.clone(),
-        );
+        // A lease whose record could be read says when it expires; one that
+        // could not is said to be unreadable.
+        let until = match row.lease.as_ref() {
+            Some(held) => held.expires_at.clone(),
+            None => "an unreadable record".to_string(),
+        };
         return Err(DeployError(format!(
             "scratch lease '{name}' already exists on '{}' and expires at {until}",
             target.name
@@ -95,10 +97,12 @@ pub async fn create(
 
     // The root is checked before an account exists, so a refusal here leaves
     // the host exactly as it was.
-    let root = request
-        .root
-        .clone()
-        .unwrap_or_else(|| lease::local_root(&name));
+    // A request that names a root uses it; one that names none is given
+    // the lease's own local root.
+    let root = match request.root.clone() {
+        Some(root) => root,
+        None => lease::local_root(&name),
+    };
     let root = std::path::absolute(&root).map_err(DeployError::io(format!(
         "{} is not resolvable",
         root.display()
@@ -116,10 +120,21 @@ pub async fn create(
     open_account(&target, &name, &profile.shell, runner).await?;
 
     let ssh = scratch_ssh(&target, &name)?;
-    let leased: ComputeTarget = serde_json::from_value(
-        registry_out::document(&record, &target, &ssh)["targets"][0].clone(),
-    )
-    .map_err(|exc| {
+    // The document this process just wrote declares one target, the lease;
+    // it is read back through the registry's own model so what the lease
+    // enters with is exactly what the document says.
+    let document = registry_out::document(&record, &target, &ssh);
+    let declared = match document["targets"].as_array().map(Vec::as_slice) {
+        Some([only]) => only.clone(),
+        _not_one_target => {
+            return Err(DeployError(format!(
+                "the scratch registry document declares other than one target: {}",
+                document["targets"]
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config))
+        }
+    };
+    let leased: ComputeTarget = serde_json::from_value(declared).map_err(|exc| {
         DeployError(format!("the leased target does not parse: {exc}"))
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;

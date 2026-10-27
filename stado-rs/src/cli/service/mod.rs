@@ -156,13 +156,13 @@ pub(crate) async fn declared_matching(
             registry::read_registry().await?
         }
     };
-    declared_in(&registry, name, host)
+    declared_in(&registry, name, host).await
 }
 
 /// The declared managed set matching NAME in `registry`, as
 /// [`declared_matching`] answers it, for a caller that already holds the
 /// registry it must act from.
-pub(crate) fn declared_in(
+pub(crate) async fn declared_in(
     registry: &targets::Registry,
     name: &str,
     host: Option<&str>,
@@ -184,18 +184,20 @@ pub(crate) fn declared_in(
         // record lands: the unit a product declares is known from the
         // catalog, and a unit that came up with no main pid is exactly the
         // one whose log is needed.
-        if let Some(unit) = host.and_then(|host| catalog_unit(name, host, registry).transpose()) {
-            return Ok(vec![unit?]);
+        if let Some(host) = host {
+            if let Some(unit) = catalog_unit(name, host, registry).await? {
+                return Ok(vec![unit]);
+            }
         }
         return Err(unmanaged(name, host));
     }
     Ok(found)
 }
 
-/// The unit the service catalog declares for `name`, as the host's own unit,
-/// when `host` is one registry target; `None` when the catalog has no such
-/// product.
-fn catalog_unit(
+/// The unit the service catalog declares for `name`, as the host's own unit
+/// under the home the host's own shell states, when `host` is one registry
+/// target; `None` when the catalog has no such product.
+async fn catalog_unit(
     name: &str,
     host: &str,
     registry: &crate::targets::Registry,
@@ -216,7 +218,9 @@ fn catalog_unit(
     else {
         return Ok(None);
     };
-    let home = crate::deploy::service_catalog::home_for(target);
+    let home = crate::deploy::host_channel::remote_home(target, &crate::deploy::production_runner())
+        .await
+        .map_err(click)?;
     let service = if target.release_platform.starts_with("linux") {
         service::systemd_service(
             &target.name,

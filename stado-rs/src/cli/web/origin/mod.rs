@@ -41,11 +41,12 @@ pub(crate) struct WebEdgeOwner {
 /// the edge terminates nothing for the name, and the refusal names the
 /// command that creates it.
 pub(crate) fn web_edge_owner(hostname: &str) -> Result<WebEdgeOwner, String> {
-    let products = match crate::config::web_api_products() {
-        Ok(products) => products,
-        Err(_) if crate::config_file::get("web_api.products").is_none() => {
-            return Err(no_owner(hostname));
-        }
+    // No table at all is no owner for any name; the refusal names the command
+    // that declares one. A declared table that is refused is reported with
+    // its problems, since the owner may be in it.
+    let products = match crate::config::declared_web_api_products() {
+        Ok(Some(products)) => products,
+        Ok(None) => return Err(no_owner(hostname)),
         Err(problems) => return Err(problems.join("; ")),
     };
     products

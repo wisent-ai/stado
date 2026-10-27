@@ -13,6 +13,28 @@ pub(in crate::providers::local::agent::tick) fn phase_name(
     }
 }
 
+/// Whether `error` is the fleet store not answering: a server error from the
+/// object API, a held store, or a request that could not be made or connect.
+/// Such a tick did not run; it is not an error in the agent.
+pub(in crate::providers::local::agent::tick) fn store_unavailable(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        if let Some(storage) = cause.downcast_ref::<crate::queue::StorageError>() {
+            return match storage {
+                crate::queue::StorageError::Stado { status, .. }
+                | crate::queue::StorageError::Gcs { status, .. } => {
+                    reqwest::StatusCode::from_u16(*status).is_ok_and(|code| code.is_server_error())
+                }
+                crate::queue::StorageError::Held(_) => true,
+                crate::queue::StorageError::Http(http) => http.is_connect() || http.is_request(),
+                _ => false,
+            };
+        }
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|http| http.is_connect() || http.is_request())
+    })
+}
+
 /// Unwrap one phase of a tick. A fleet store that does not answer ends that
 /// tick, says which store failure it was, and the next poll runs again: the
 /// worker is one role of the host's one Stado process, and a gateway error
@@ -34,7 +56,7 @@ macro_rules! tick_phase {
             Ok(value) => value,
             Err(error) => {
                 let error: anyhow::Error = error.into();
-                if $crate::providers::local::agent::tick::store_unavailable(&error) {
+                if $crate::providers::local::agent::tick::phase::store_unavailable(&error) {
                     $log(&format!(
                         "tick did not run: the fleet store did not answer ({error:#}); the next \
                          poll runs again"

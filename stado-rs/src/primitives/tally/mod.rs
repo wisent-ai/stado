@@ -15,6 +15,9 @@ pub trait Tally {
     /// Take one item away. A count at its type's minimum stays there rather
     /// than wrapping to a count of more items than it holds.
     fn retract(&mut self);
+    /// Whether no item has joined the count: the count a fresh counter
+    /// starts at, which is its type's `Default`.
+    fn counts_nothing(&self) -> bool;
 }
 
 macro_rules! tally {
@@ -26,6 +29,10 @@ macro_rules! tally {
 
             fn retract(&mut self) {
                 *self = self.saturating_sub(<$kind>::from(STEP));
+            }
+
+            fn counts_nothing(&self) -> bool {
+                *self == <$kind>::default()
             }
         }
     )*};

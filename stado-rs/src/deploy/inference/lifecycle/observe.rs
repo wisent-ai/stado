@@ -69,7 +69,7 @@ if [ "$state" != running ]; then
   printf 'ERROR\tinference container is %s\n' "$state"; false
 fi
 endpoint_host={endpoint_host}
-curl --fail --silent --show-error --max-time $(printf '%s' '15') -H "Authorization: Bearer $token" "http://$endpoint_host:{port}/v1/models" >/dev/null
+curl --fail --silent --show-error -H "Authorization: Bearer $token" "http://$endpoint_host:{port}/v1/models" >/dev/null
 printf 'READY\tauthenticated\n'
 "#
     );
@@ -98,7 +98,7 @@ pub async fn verify_completion(
         r#"set -euo pipefail
 token=$(printf '%s' {secret} | base64 --decode)
 endpoint_host={endpoint_host}
-curl --fail --silent --show-error --max-time $(printf '%s' '120') -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data {payload} "http://$endpoint_host:{port}/v1/chat/completions"
+curl --fail --silent --show-error -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data {payload} "http://$endpoint_host:{port}/v1/chat/completions"
 printf '\n'
 "#
     );

@@ -6,7 +6,7 @@ use crate::cli::CmdError;
 use crate::service_resolution;
 use crate::targets::{self, RegistryStore};
 
-use crate::cli::resolver::authority::execute::execute;
+use crate::cli::resolver::authority::execute::{execute, OpenWaits};
 use crate::cli::resolver::authority::paths::target_ssh_paths;
 use crate::cli::resolver::authority::refusal::refuse_authority;
 use crate::cli::resolver::directory::read_local_snapshot;
@@ -62,7 +62,7 @@ impl SnapshotSource {
                 // A read of this authority that another command already gave
                 // up on less than an interval ago is not sent again: the
                 // reader goes on to its copy at once.
-                if let Some(standing) = super::unanswered::standing(target) {
+                if let Some(standing) = super::remembered::unanswered::standing(target) {
                     return Err(CmdError::unreachable(standing));
                 }
                 match crate::cli::resolver::held_on_host(target) {
@@ -80,7 +80,7 @@ impl SnapshotSource {
                 // finds this read standing instead of sending its own.
                 let route = crate::cli::resolver::Route::Host(target);
                 match crate::cli::resolver::bound_seconds(&route) {
-                    Ok(Some(bound)) => super::unanswered::asking(target, bound.seconds),
+                    Ok(Some(bound)) => super::remembered::unanswered::asking(target, bound.seconds),
                     Ok(None) => {}
                     Err(unreadable) => eprintln!(
                         "stado: the read of the registry authority {target} is sent without \
@@ -88,70 +88,102 @@ impl SnapshotSource {
                     ),
                 }
                 // One read: a failure is the read's answer, said whole, and
-                // the reader goes on to its copy with it.
-                let reads = async {
-                    Self::fetch_authority_paths(target, ssh, command, reader)
-                        .await
-                        .map_err(CmdError::unreachable)
-                };
-                match crate::cli::resolver::unless_held(
-                    crate::cli::resolver::Route::Host(target),
-                    reads,
-                )
-                .await
-                {
-                    Ok(read) => {
-                        // A read that ended, answered or refused, is no
-                        // longer in flight.
-                        if read.is_ok() {
-                            super::unanswered::forget(target);
-                        } else {
-                            super::unanswered::answered(target);
+                // the reader goes on to its copy with it. The authority's own
+                // wait lines are kept as they arrive, so a read given up on
+                // says what the authority itself stood on.
+                let open = OpenWaits::default();
+                let reads = Self::fetch_authority_paths(target, ssh, command, reader, &open);
+                let route_held = crate::cli::resolver::Route::Host(target);
+                let (sentence, silent) =
+                    match crate::cli::resolver::unless_held(route_held, reads).await {
+                        Ok(Ok(snapshot)) => {
+                            super::remembered::unanswered::forget(target);
+                            return Ok(snapshot);
                         }
-                        read
+                        // The authority answered, with a refusal: it is
+                        // reachable, and the next reader asks it again.
+                        Ok(Err(unread)) if !unread.silent => {
+                            super::remembered::unanswered::answered(target);
+                            return Err(CmdError::unreachable(unread.sentence));
+                        }
+                        // No SSH path reached the host at all: each next
+                        // reader would stand the same connection failure, so
+                        // it is kept like a read given up on.
+                        Ok(Err(unread)) => (unread.sentence, true),
+                        Err(held) => (format!("{held}; {}", open.said()), false),
+                    };
+                // The interval measures how long the record stands; an
+                // interval that cannot be read is added to the refusal
+                // instead of the read being remembered.
+                match crate::cli::resolver::bound_seconds(&route) {
+                    Ok(Some(bound)) => {
+                        super::remembered::unanswered::remember(target, bound.seconds, &sentence)
                     }
-                    Err(held) => {
-                        // The interval measures how long the read stood; an
-                        // interval that cannot be read is added to the
-                        // refusal instead of the read being remembered.
-                        match crate::cli::resolver::bound_seconds(&route) {
-                            Ok(Some(bound)) => {
-                                super::unanswered::remember(target, bound.seconds, &held)
-                            }
-                            Ok(None) => {}
-                            Err(unreadable) => {
-                                return Err(CmdError::unreachable(format!(
-                                    "{held}; it is not remembered as unanswered: {unreadable}"
-                                )))
-                            }
-                        }
-                        Err(CmdError::unreachable(held))
+                    Ok(None) if silent => super::remembered::unanswered::answered(target),
+                    Ok(None) => {}
+                    Err(unreadable) => {
+                        return Err(CmdError::unreachable(format!(
+                            "{sentence}; it is not remembered as unanswered: {unreadable}"
+                        )))
                     }
                 }
+                Err(CmdError::unreachable(sentence))
             }
         }
     }
 
+    /// Ask every SSH path of the authority at once and take the first
+    /// snapshot that answers. The paths were asked one after another, so a
+    /// declared first path that accepts connections and answers nothing held
+    /// every registry read for as long as it stood before a path that answers
+    /// was tried at all. The reads still standing when one answers are
+    /// dropped, and each ends its wait saying it was cut short. When none
+    /// answers, every path's own failure is named, in the declared order, and
+    /// the read is `silent` when no path reached the host at all.
     async fn fetch_authority_paths(
         target: &str,
         paths: &[targets::SshConnectionPath],
         command: &str,
         reader: &'static str,
-    ) -> Result<(Value, String, u64), String> {
+        open: &OpenWaits,
+    ) -> Result<(Value, String, u64), AuthorityUnread> {
+        use futures::stream::{FuturesUnordered, StreamExt};
+
         if paths.is_empty() {
-            return Err("registry authority has no SSH connection path".to_string());
+            return Err(AuthorityUnread {
+                sentence: "registry authority has no SSH connection path".to_string(),
+                silent: false,
+            });
         }
-        let mut failures = Vec::new();
-        for path in paths {
-            match Self::fetch_authority(target, &path.destination, command, reader).await {
+        let mut reads = paths
+            .iter()
+            .enumerate()
+            .map(|(order, path)| async move {
+                let read =
+                    Self::fetch_authority(target, &path.destination, command, reader, open).await;
+                (order, path, read)
+            })
+            .collect::<FuturesUnordered<_>>();
+        let mut failures = Vec::with_capacity(paths.len());
+        let mut silent = true;
+        while let Some((order, path, read)) = reads.next().await {
+            match read {
                 Ok(snapshot) => return Ok(snapshot),
-                Err(error) => failures.push(format!("{}: {error}", path.name)),
+                Err(failure) => {
+                    silent &= failure.silent;
+                    failures.push((order, format!("{}: {}", path.name, failure.sentence)));
+                }
             }
         }
-        Err(format!(
-            "no registry authority SSH connection path answered ({})",
-            failures.join("; ")
-        ))
+        failures.sort_by_key(|(order, _)| *order);
+        let named: Vec<String> = failures.into_iter().map(|(_, failure)| failure).collect();
+        Err(AuthorityUnread {
+            sentence: format!(
+                "no registry authority SSH connection path answered ({})",
+                named.join("; ")
+            ),
+            silent,
+        })
     }
 
     async fn fetch_authority(
@@ -159,14 +191,15 @@ impl SnapshotSource {
         ssh: &str,
         command: &str,
         reader: &'static str,
-    ) -> Result<(Value, String, u64), String> {
+        open: &OpenWaits,
+    ) -> Result<(Value, String, u64), AuthorityUnread> {
         let remote_command = format!("{} resolver snapshot", crate::deploy::shlex_quote(command));
-        let output = match execute(ssh, &remote_command).await {
+        let output = match execute(ssh, &remote_command, open).await {
             Ok(output) => output,
             Err(error) => {
                 let sentence = format!("registry authority SSH failed: {error:#}");
                 refuse_authority(target, reader, &sentence);
-                return Err(sentence);
+                return Err(AuthorityUnread { sentence, silent: true });
             }
         };
         // SSH carries the exit status as a u32; zero is success, and a channel
@@ -189,26 +222,36 @@ impl SnapshotSource {
             // which is a different finding from a silent host and must not
             // be counted as one.
             refuse_authority(target, reader, &sentence);
-            return Err(sentence);
+            return Err(AuthorityUnread { sentence, silent: false });
         }
+        let answered = |sentence: String| AuthorityUnread { sentence, silent: false };
         let payload: SnapshotPayload = serde_json::from_slice(&output.stdout)
-            .map_err(|error| format!("invalid registry authority response: {error}"))?;
-        validate_snapshot(payload)
+            .map_err(|error| answered(format!("invalid registry authority response: {error}")))?;
+        validate_snapshot(payload).map_err(answered)
     }
 }
 
+/// Why a read of the registry authority returned no snapshot, and whether
+/// it never reached the host: `silent` when every SSH path failed to
+/// connect, which the next reader would stand again; otherwise the host
+/// answered, with a refusal or a document that is not a snapshot.
+struct AuthorityUnread {
+    sentence: String,
+    silent: bool,
+}
+
 fn parsed_registry(document: &Value) -> Result<targets::Registry, String> {
-    targets::load_registry_from_str(
-        &serde_json::to_string(document).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())
+    let text = serde_json::to_string(document)
+        .map_err(|error| format!("the registry document cannot be written as JSON: {error}"))?;
+    targets::load_registry_from_str(&text)
+        .map_err(|error| format!("the registry document is not a registry: {error}"))
 }
 
 pub(crate) fn current_target(document: &Value) -> Result<String, String> {
     let hostname = crate::providers::vast::system_hostname();
     parsed_registry(document)?
         .lookup_self(&hostname)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("this host {hostname:?} cannot be found in the registry: {error}"))?
         .map(|target| target.name.clone())
         .ok_or_else(|| format!("resolver host {hostname:?} has no registry target identity"))
 }

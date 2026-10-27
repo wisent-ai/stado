@@ -30,16 +30,13 @@ fn selected(
     // A fleet that declares no web products has none to report; a
     // declaration that is there and does not parse is refused with its
     // problems.
-    if crate::config_file::get("web_api.products").is_none() {
-        return Ok(None);
-    }
-    match crate::config::web_api_products() {
-        Ok(products) => Ok(Some(
+    match crate::config::declared_web_api_products() {
+        Ok(products) => Ok(products.map(|products| {
             products
                 .iter()
                 .map(|(name, product)| (name.clone(), product))
-                .collect(),
-        )),
+                .collect()
+        })),
         Err(problems) => Err(CmdError::declaration(problems.join("; "))),
     }
 }

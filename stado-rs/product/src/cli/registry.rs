@@ -85,13 +85,16 @@ pub fn command() -> Command {
             .arg(
                 value(
                     "add-roadmap",
-                    "Add or replace a roadmap item: {\"title\",\"status\",\"outcome\",\"source\"} as JSON",
+                    "Add or replace a roadmap item: {\"title\",\"status\",\"outcome\",\"source\"} as JSON; status planned, in_progress, delivered, rejected or superseded; an ended item also names \"decision\" (where it was decided) and a superseded one \"superseded_by\" (the title that replaced it)",
                 )
                 .action(ArgAction::Append),
             )
             .arg(
-                value("remove-roadmap", "Remove the roadmap item with this title")
-                    .action(ArgAction::Append),
+                value(
+                    "remove-roadmap",
+                    "Remove the roadmap item with this title: only for an item recorded in error; record a dropped or replaced idea as rejected or superseded instead",
+                )
+                .action(ArgAction::Append),
             )
             .arg(value(
                 "benchmark",
@@ -122,6 +125,12 @@ pub fn command() -> Command {
                     "Authorize this registry removal without a terminal prompt",
                 ))
                 .arg(flag("json", "Print the mutation result")),
+        )
+        .subcommand(
+            Command::new("check-claims")
+                .about("Fetch the source of every rival claim of one product again: current, changed since it was read, or unreachable with the cause")
+                .arg(positional("PRODUCT").required(true))
+                .arg(flag("json", "Print every claim's state")),
         )
 }
 

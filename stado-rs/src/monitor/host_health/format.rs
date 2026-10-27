@@ -1,49 +1,38 @@
-//! The operator rendering of a loaded report, plus the four Python
-//! coercions it is written in terms of (`str`, truthiness, `x or '-'`,
-//! `get(key, '-')`).
+//! The operator rendering of a loaded report: each beacon value as the
+//! beacon stated it, and "not reported" where it stated nothing.
 
 use serde_json::Value;
 
 use super::HostHealthReport;
 
-/// Python `str(value)`: strings raw, null -> "None", everything else in its
-/// JSON spelling (serde_json prints floats Python-style, e.g. "85.0").
-fn py_str(value: &Value) -> String {
+/// A value the beacon stated: text raw, everything else in its JSON
+/// spelling (serde_json prints floats Python-style, e.g. "85.0").
+fn shown(value: &Value) -> String {
     match value {
-        Value::Null => "None".to_string(),
         Value::String(s) => s.clone(),
         other => other.to_string(),
     }
 }
 
-/// Whether the beacon stated a value: null, false and an empty string, list
-/// or object say nothing, while a number is a measurement even when it is zero.
-fn py_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(_) => true,
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
-/// A beacon field, or that the beacon did not report it. An empty or false
-/// value counts as not reported; a dash read as a value the beacon held.
+/// A beacon field as the beacon stated it, or that it did not report it.
+/// Only an absent key, null or an empty string say nothing: `false`, zero and
+/// an empty list are values the beacon held. Python truthiness printed a
+/// beacon's `false` as not reported, so a stated "no" read as silence.
 fn reported(value: Option<&Value>) -> String {
     match value {
-        Some(v) if py_truthy(v) => py_str(v),
-        _ => crate::cli::reporting::NOT_REPORTED.to_string(),
+        None | Some(Value::Null) => crate::cli::reporting::NOT_REPORTED.to_string(),
+        Some(Value::String(text)) if text.is_empty() => crate::cli::reporting::NOT_REPORTED.to_string(),
+        Some(v) => shown(v),
     }
 }
 
 /// A beacon measurement with its unit, or that the beacon carries no such
-/// key; a value the beacon does carry is shown even when it is zero.
+/// value; a value the beacon does carry is shown even when it is zero.
+/// Python's `str()` printed a null measurement as `None` beside its unit.
 fn measured(value: Option<&Value>, unit: &str) -> String {
     match value {
-        Some(v) => format!("{}{unit}", py_str(v)),
-        None => crate::cli::reporting::NOT_REPORTED.to_string(),
+        None | Some(Value::Null) => crate::cli::reporting::NOT_REPORTED.to_string(),
+        Some(v) => format!("{}{unit}", shown(v)),
     }
 }
 
@@ -89,18 +78,14 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
     {
         for (name, state) in units {
             if let Some(state_map) = state.as_object() {
-                let state_value = state_map.get("state");
-                let state_text = match state_value {
-                    Some(v) if py_truthy(v) => py_str(v),
-                    _ => crate::cli::reporting::NOT_REPORTED.to_string(),
-                };
+                let state_text = reported(state_map.get("state"));
                 lines.push(format!("  {name}: {state_text}"));
             } else {
-                lines.push(format!("  {name}: {}", py_str(state)));
+                lines.push(format!("  {name}: {}", reported(Some(state))));
             }
         }
     } else {
-        lines.push("  -".to_string());
+        lines.push(format!("  {}", crate::cli::reporting::NOT_REPORTED));
     }
     lines.push("last_log:".to_string());
     lines.push(reported(get("last_log")));

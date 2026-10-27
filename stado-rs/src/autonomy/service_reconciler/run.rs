@@ -5,6 +5,7 @@ use chrono::{SecondsFormat, Utc};
 
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::deploy::service;
+use crate::primitives::tally::Tally;
 use crate::queue::{JobStorage, StorageError};
 
 use super::endpoint::{endpoint_states, EndpointState};
@@ -54,7 +55,7 @@ pub async fn reconcile(
     // A host that declares a product's old units but not the product's one
     // process gets that process now; the next pass retires the old units.
     outcomes.extend(
-        super::replacements::ensure_replacements(&statuses, policy, &mut gate, &mut summary)
+        super::replacements::ensure_replacements(&statuses, policy, &runner, &mut gate, &mut summary)
             .await?,
     );
 
@@ -69,11 +70,11 @@ pub async fn reconcile(
         // The unit that publishes this host's health beacon: one whose own
         // command runs the host-health role, read by Stado's own command
         // definitions, never from its label.
-        let is_beacon = crate::deploy::service_catalog::host_roles(
-            &host_product,
-            &service::declared_line(&status.service),
-        )
-        .contains(&"--health-interval-seconds");
+        let is_beacon = crate::deploy::service_catalog::host_roles(&host_product, &service::declared_line(&status.service))
+            .map_err(|cause| {
+                StorageError::Other(format!("service reconcile cannot read {}: {cause}", status.service.unit_id()))
+            })?
+            .contains(&"--health-interval-seconds");
         let mut outcome = ServiceReconcileOutcome {
             host: status.service.host.clone(),
             service: status.service.name.clone(),
@@ -96,7 +97,7 @@ pub async fn reconcile(
                 // and the host channel is its evidence and its repair path.
                 Some("beacon_repair")
             } else {
-                summary.unknown += 1;
+                summary.unknown.tally();
                 outcome.classification = UNKNOWN_EVIDENCE.to_string();
                 outcome.detail = status.detail.clone();
                 outcomes.push(outcome);
@@ -109,7 +110,7 @@ pub async fn reconcile(
             // that is not that product's unit is work the product's one
             // process does: its absence is the intended state, and repairing
             // it would start it again beside that process.
-            if let Some(detail) = super::predecessors::replaced(&status.service).await {
+            if let Some(detail) = super::predecessors::replaced(&status.service, &runner).await {
                 outcome.classification = "retired".to_string();
                 outcome.detail = detail;
                 outcomes.push(outcome);
@@ -128,16 +129,18 @@ pub async fn reconcile(
             }
             // A `failed` unit is the same repair as a missing one: the unit
             // exists, nothing runs under it, and `ensure` restarts in place.
-            summary.missing += 1;
-            let endpoint = endpoints
-                .get(&status.service.name)
-                .copied()
-                .unwrap_or(EndpointState::Absent);
+            summary.missing.tally();
+            // A service the endpoint sweep has no row for declares no
+            // endpoint, which `absent` names.
+            let endpoint = match endpoints.get(&status.service.name).copied() {
+                Some(state) => state,
+                None => EndpointState::Absent,
+            };
             outcome.endpoint_state = endpoint.word().to_string();
             if status.service.source != service::SOURCE_REGISTRY {
                 outcome.classification = "externally_managed".to_string();
                 outcome.detail = "service belongs to the fixed recovery program".to_string();
-                summary.blocked += 1;
+                summary.blocked.tally();
                 outcomes.push(outcome);
                 continue;
             }
@@ -145,7 +148,7 @@ pub async fn reconcile(
                 outcome.classification = "endpoint_unverified".to_string();
                 outcome.endpoint_state = EndpointState::Unverified.word().to_string();
                 outcome.detail = format!("reachability sweep did not complete: {error}");
-                summary.blocked += 1;
+                summary.blocked.tally();
                 outcomes.push(outcome);
                 continue;
             }
@@ -159,7 +162,7 @@ pub async fn reconcile(
                     outcome.classification = "endpoint_unverified".to_string();
                     outcome.detail =
                         "unit is missing, but endpoint absence was not proven".to_string();
-                    summary.blocked += 1;
+                    summary.blocked.tally();
                     outcomes.push(outcome);
                     continue;
                 }
@@ -167,7 +170,7 @@ pub async fn reconcile(
         };
         let Some(planned_action) = kind else { continue };
 
-        summary.planned += 1;
+        summary.planned.tally();
         outcome.action = format!("planned_{planned_action}");
         if policy.mode == AutonomyMode::Report || policy.emergency_paused {
             outcome.classification = "planned".to_string();
@@ -185,7 +188,7 @@ pub async fn reconcile(
             Err(error) => {
                 outcome.classification = "repair_failed".to_string();
                 outcome.detail = error.to_string();
-                summary.failures += 1;
+                summary.failures.tally();
                 outcomes.push(outcome);
                 continue;
             }
@@ -198,7 +201,7 @@ pub async fn reconcile(
             Err(refusal) => {
                 outcome.classification = refusal.classification.to_string();
                 outcome.detail = refusal.detail;
-                summary.blocked += 1;
+                summary.blocked.tally();
                 outcomes.push(outcome);
                 continue;
             }
@@ -249,14 +252,14 @@ pub async fn reconcile(
                 outcome.changed = changed;
                 outcome.detail = detail;
                 if changed {
-                    summary.changed += 1;
+                    summary.changed.tally();
                 }
                 gate.record(None).await?;
             }
             Err(error) => {
                 outcome.classification = error.kind.classification().to_string();
                 outcome.detail = error.detail.clone();
-                summary.failures += 1;
+                summary.failures.tally();
                 // Only a mutation that actually failed on a host feeds the
                 // circuit breaker. `identity_unresolved` and
                 // `declaration_incomplete` are refusals computed before any

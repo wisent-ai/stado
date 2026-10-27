@@ -179,7 +179,7 @@ pub(crate) fn committed_file_if_present(
 pub(crate) fn snapshot(root: &Path, commit: &str) -> Result<Vec<u8>, CmdError> {
     let tar = git(root, &["archive", "--format=tar", commit])?;
     let mut gz = GzBuilder::new()
-        .mtime(NO_MTIME)
+        .mtime(crate::primitives::archive::gzip_epoch())
         .write(Vec::new(), Compression::best());
     {
         let mut files = tar::Builder::new(&mut gz);
@@ -214,7 +214,3 @@ const STATUS_WIDTH: usize = 2;
 /// Where the path starts in such an entry, after `XY` and one space:
 /// https://git-scm.com/docs/git-status#_short_format
 const PATH_START: usize = 3;
-
-/// The gzip MTIME that says no time stamp is available, so the same commit
-/// always yields the same bytes: https://www.rfc-editor.org/rfc/rfc1952#page-7
-const NO_MTIME: u32 = 0;

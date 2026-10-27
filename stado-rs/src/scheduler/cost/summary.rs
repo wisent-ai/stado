@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::primitives::tally::Tally;
 use crate::queue::{JobStorage, StorageError};
 
 use super::rows::collect::collect_completed;
@@ -48,15 +49,14 @@ pub async fn report(store: &JobStorage) -> Result<Report, StorageError> {
             ),
             (
                 &mut rep.by_model,
-                if r.model.is_empty() {
-                    "(no --model in the command)".to_string()
-                } else {
-                    r.model.clone()
+                match &r.model {
+                    Some(model) => model.clone(),
+                    None => "(no --model in the command)".to_string(),
                 },
             ),
         ] {
             let bucket = table.entry(key).or_default();
-            bucket.jobs += 1;
+            bucket.jobs.tally();
             bucket.wall_s += r.wall_s;
             if let Some(cost) = r.cost_usd {
                 bucket.cost_usd += cost;
@@ -73,6 +73,11 @@ pub async fn report(store: &JobStorage) -> Result<Report, StorageError> {
     Ok(rep)
 }
 
+/// Hours in `seconds`, by the one declared count of seconds in an hour.
+fn hours(seconds: f64) -> f64 {
+    seconds / crate::monitor::billing::SECONDS_PER_HOUR as f64
+}
+
 /// Python `format_report` — the exact `stado cost report` output lines.
 pub fn format_report(rep: &Report) -> Vec<String> {
     let mut lines = Vec::new();
@@ -81,7 +86,7 @@ pub fn format_report(rep: &Report) -> Vec<String> {
     lines.push(format!("unpriced_jobs:      {}", rep.total_unpriced_jobs));
     lines.push(format!(
         "total_wall_hours:   {:.2}",
-        rep.total_wall_s / 3600.0
+        hours(rep.total_wall_s)
     ));
     lines.push(String::new());
     lines.push("by target_kind:".to_string());
@@ -89,7 +94,7 @@ pub fn format_report(rep: &Report) -> Vec<String> {
         lines.push(format!(
             "  {k:<10} jobs={:<5} wall_h={:>7.2} cost=${:.4} unpriced={}",
             v.jobs,
-            v.wall_s / 3600.0,
+            hours(v.wall_s),
             v.cost_usd,
             v.unpriced_jobs
         ));

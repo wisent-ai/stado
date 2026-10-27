@@ -46,15 +46,30 @@ pub fn managed_roots() -> Result<Vec<String>, DeployError> {
 /// the same `$HOME/.stado/bin`, and reporting a four-day-old unowned agent as
 /// possibly-skarbiec would be worse than saying nothing.
 pub fn product_guess(command: &str) -> String {
-    let tail = |root: &str| root.strip_prefix(HOME_PREFIX).unwrap_or(root).to_string();
+    // A declared root is `$HOME`-relative; the tail after that prefix is
+    // what the host's absolute path ends with.
+    let tail = |root: &str| match root.strip_prefix(HOME_PREFIX) {
+        Some(relative) => relative.to_string(),
+        None => root.to_string(),
+    };
     let deployed = format!("{}/", tail(DEPLOYED_SERVICES_ROOT));
     if let Some((_, rest)) = command.split_once(deployed.as_str()) {
-        let name = rest.split(['/', ' ']).next().unwrap_or_default();
+        // The deployed service's name is the path segment after the root,
+        // up to the next separator or argument boundary.
+        let name = match rest.split(['/', ' ']).next() {
+            Some(name) => name,
+            None => "",
+        };
         if !name.is_empty() {
             return name.to_string();
         }
     }
-    let products = crate::deploy::products::declared().unwrap_or_default();
+    // A catalog that cannot be read cannot name a product; the guess says
+    // so, and the row stays fleet-affiliated only by its declaring paths.
+    let products = match crate::deploy::products::declared() {
+        Ok(products) => products,
+        Err(error) => return format!("{UNKNOWN_PRODUCT} (product catalog unreadable: {error})"),
+    };
     for product in products {
         if command.contains(&format!("{}/{}", tail(product.root()), product.name)) {
             return product.name.clone();

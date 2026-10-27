@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use super::darwin;
 use super::{
     digest, fsync_dir, join, make_private_dirs, parent_of, privileged_clone,
-    recover_privileged_clone, regular_identity, PRIVATE_FILE,
+    recover_privileged_clone, regular_identity,
 };
 use crate::deploy::host_storage_reconcile_program::{Context, Step};
 
@@ -20,7 +20,7 @@ pub(in crate::deploy::host_storage_reconcile_program) fn clone_file(
     source: &str,
     destination: &str,
 ) -> Step<()> {
-    make_private_dirs(&parent_of(destination))?;
+    make_private_dirs(&parent_of(destination)?)?;
     if let Ok(info) = fs::symlink_metadata(&context.staging) {
         if !info.is_dir() {
             return Err("unsafe transaction clone staging root".to_string());
@@ -61,13 +61,18 @@ pub(in crate::deploy::host_storage_reconcile_program) fn clone_file(
         return Err("copy-on-write clone verification failed".to_string());
     }
     let settled = (|| -> io::Result<()> {
+        // A clone keeps its source's flags; the placed file carries none, so
+        // no immutable flag seals it against the transaction's later steps.
         if darwin::SUPPORTED {
-            darwin::set_flags(&temporary, 0)?;
+            darwin::set_flags(&temporary, Default::default())?;
         }
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(PRIVATE_FILE))?;
+        fs::set_permissions(
+            &temporary,
+            fs::Permissions::from_mode(crate::primitives::file_mode::owner_read_write()),
+        )?;
         fs::File::open(&temporary)?.sync_all()?;
         fs::rename(&temporary, destination)
     })();
     settled.map_err(|error| format!("cannot place clone at {destination}: {error}"))?;
-    fsync_dir(&parent_of(destination))
+    fsync_dir(&parent_of(destination)?)
 }

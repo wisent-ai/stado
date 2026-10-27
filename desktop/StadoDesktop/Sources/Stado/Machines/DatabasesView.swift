@@ -21,6 +21,10 @@ struct DatabasesView: View {
     @State private var pendingRemoval: DatabaseRow?
     @State private var pendingDestruction: DatabaseRow?
     @State private var consumerEditor: ConsumerEdit?
+    @State private var moving: DatabaseMoveTarget?
+    @StateObject private var copies = DatabaseCopyStore()
+    @State private var serving: DatabaseRestTarget?
+    @StateObject private var bill = DatabaseBillStore()
 
     var body: some View {
         WisentScreen(
@@ -35,6 +39,12 @@ struct DatabasesView: View {
                 WisentAction("Adopt all", symbol: "arrow.triangle.2.circlepath", isEnabled: !store.isRefreshing) {
                     Task { await store.adopt(name: nil) }
                 },
+                WisentAction("Back up all", symbol: "externaldrive.badge.timemachine", isEnabled: !copies.isRunning) {
+                    Task { await copies.backup(name: nil) }
+                },
+                WisentAction("Read the Supabase bill", symbol: "dollarsign.circle", isEnabled: !bill.isReading) {
+                    Task { await bill.read() }
+                },
                 WisentAction("Push…", symbol: "arrow.up.doc") { isPushing = true },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
                     Task { await store.refresh() }
@@ -43,7 +53,7 @@ struct DatabasesView: View {
             scrolls: false,
             constrainsWidth: false
         ) {
-            VStack(spacing: 0) {
+            VStack(spacing: .zero) {
                 if let problem = store.problem {
                     WisentErrorBanner(title: "The database plane refused", detail: problem)
                 }
@@ -55,6 +65,8 @@ struct DatabasesView: View {
                         .padding(.horizontal, WisentDesign.Space.x4)
                         .padding(.vertical, WisentDesign.Space.x2)
                 }
+                DatabaseCopyPanel(store: copies)
+                DatabaseBillPanel(store: bill)
                 if store.rows.isEmpty {
                     WisentEmptyPanel(
                         title: store.isRefreshing ? "Reading" : "No databases declared",
@@ -63,7 +75,7 @@ struct DatabasesView: View {
                             : "Declare one to give its consumers a placement endpoint and a credential coordinate.",
                         symbol: "cylinder"
                     )
-                    Spacer(minLength: 0)
+                    Spacer(minLength: .zero)
                 } else {
                     table
                 }
@@ -84,6 +96,7 @@ struct DatabasesView: View {
         .sheet(item: $pendingDestruction) { row in
             destructionDialog(row)
         }
+        .databaseCopySheets(store: copies, moving: $moving, serving: $serving)
     }
 
     private func removalDialog(_ row: DatabaseRow) -> WisentDecisionDialog {
@@ -133,17 +146,25 @@ struct DatabasesView: View {
         )
     }
 
+    /// Column widths from the design system's own measures: a database
+    /// name fits the facet rail, an engine word two of the widest spaces,
+    /// placement text (with its host) the facet rail, a scope list the widest
+    /// space and a half again.
+    private static let nameWidth = WisentAppLayout.facetRailWidth
+    private static let engineWidth = WisentDesign.Space.x10 + WisentDesign.Space.x10
+    private static let placementWidth = WisentAppLayout.facetRailWidth
+    private static let scopesWidth = WisentDesign.Space.x10 + WisentDesign.Space.x10 + WisentDesign.Space.x8
+
     private var table: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: .zero) {
             HStack(spacing: WisentDesign.Space.x3) {
-                Text("DATABASE").frame(width: 140, alignment: .leading)
-                Text("ENGINE").frame(width: 80, alignment: .leading)
-                Text("PLACEMENT").frame(width: 180, alignment: .leading)
-                Text("SCOPES").frame(width: 110, alignment: .leading)
+                Text("DATABASE").frame(width: Self.nameWidth, alignment: .leading)
+                Text("ENGINE").frame(width: Self.engineWidth, alignment: .leading)
+                Text("PLACEMENT").frame(width: Self.placementWidth, alignment: .leading)
+                Text("SCOPES").frame(width: Self.scopesWidth, alignment: .leading)
                 Text("CREDENTIAL ITEM").frame(maxWidth: .infinity, alignment: .leading)
             }
             .font(WisentTypeScale.eyebrow())
-            .tracking(0.6)
             .foregroundStyle(WisentDesign.muted)
             .padding(.horizontal, WisentDesign.Space.x4)
             .padding(.vertical, WisentDesign.Space.x2)
@@ -153,24 +174,23 @@ struct DatabasesView: View {
                     Text(row.database)
                         .font(WisentTypeScale.bodyStrong())
                         .foregroundStyle(WisentDesign.ink)
-                        .frame(width: 140, alignment: .leading)
+                        .frame(width: Self.nameWidth, alignment: .leading)
                     Text(row.engine)
                         .font(WisentTypeScale.body())
                         .foregroundStyle(WisentDesign.muted)
-                        .frame(width: 80, alignment: .leading)
+                        .frame(width: Self.engineWidth, alignment: .leading)
                     Text(placement(row))
                         .font(WisentTypeScale.body())
                         .foregroundStyle(row.placed ? WisentDesign.success : WisentDesign.warning)
-                        .frame(width: 180, alignment: .leading)
+                        .frame(width: Self.placementWidth, alignment: .leading)
                     Text(row.scopes.joined(separator: ", "))
                         .font(WisentTypeScale.body())
                         .foregroundStyle(WisentDesign.ink)
-                        .frame(width: 110, alignment: .leading)
-                    VStack(alignment: .leading, spacing: 2) {
+                        .frame(width: Self.scopesWidth, alignment: .leading)
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                         Text(row.item)
                             .font(WisentTypeScale.identifier())
                             .foregroundStyle(WisentDesign.ink)
-                            .lineLimit(1)
                             .truncationMode(.middle)
                         Text(consumerSummary(row))
                             .font(WisentTypeScale.caption())
@@ -191,6 +211,7 @@ struct DatabasesView: View {
                         Button("Adopt from Supabase") {
                             Task { await store.adopt(name: row.database) }
                         }
+                        DatabaseCopyMenuItems(database: row.database, store: copies, moving: $moving, serving: $serving)
                         Divider()
                         Button("Remove…", role: .destructive) {
                             pendingRemoval = row
@@ -206,12 +227,16 @@ struct DatabasesView: View {
                 .padding(.horizontal, WisentDesign.Space.x4)
                 .frame(height: WisentAppLayout.denseRowHeight)
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: .zero)
         }
     }
 
     private func placement(_ row: DatabaseRow) -> String {
-        row.placed ? (row.activeHost.map { "placed · \($0)" } ?? "placed") : "not placed"
+        guard row.placed else { return "not placed" }
+        if let host = row.activeHost {
+            return "placed · \(host)"
+        }
+        return "placed, no active host listed"
     }
 
     private func consumerSummary(_ row: DatabaseRow) -> String {
@@ -268,6 +293,6 @@ private struct DatabaseConsumerForm: View {
             }
         }
         .padding(WisentDesign.Space.x6)
-        .frame(width: 460)
+        .frame(width: WisentAppLayout.dialogWidth)
     }
 }

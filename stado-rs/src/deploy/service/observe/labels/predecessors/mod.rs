@@ -62,14 +62,21 @@ pub async fn retire_found(
         // retired again until it holds. Without a record it is left alone.
         if crate::deploy::service_catalog::api_role(role) {
             retirements.push(match record::taken_over(target, &role.unit, runner).await {
-                Some(_) => retirement(target, &role.unit, runner).await,
-                None => PredecessorRetirement {
+                Ok(Some(_)) => retirement(target, &role.unit, runner).await,
+                Ok(None) => PredecessorRetirement {
                     unit: role.unit.clone(),
                     state: "kept".to_string(),
                     detail: format!(
                         "it holds the API listener: only {} retires it, when it starts the API \
                          on the same storage root",
                         running.unit_id()
+                    ),
+                },
+                Err(error) => PredecessorRetirement {
+                    unit: role.unit.clone(),
+                    state: "unknown".to_string(),
+                    detail: format!(
+                        "whether it was taken over is not known, so it is left as it is: {error}"
                     ),
                 },
             });
@@ -132,13 +139,35 @@ pub async fn role_retired(
         return listener::listener_retired(target, running, role, stopped, runner).await;
     }
     if crate::deploy::service_catalog::api_role(role) {
-        return record::taken_over(target, &role.unit, runner).await;
+        return match record::taken_over(target, &role.unit, runner).await {
+            Ok(proof) => proof,
+            Err(error) => {
+                eprintln!(
+                    "stado: whether {} was taken over is not known: {error}",
+                    role.unit
+                );
+                None
+            }
+        };
     }
-    roles_missing(target, running, role, runner)
-        .await
-        .ok()?
-        .is_none()
-        .then(|| format!("{} runs its role ({})", running.unit_id(), role.flag))
+    // The unit is retired when its replacement runs the role; a host that
+    // did not answer whether it does proves nothing, and says so.
+    match roles_missing(target, running, role, runner).await {
+        Ok(None) => Some(format!(
+            "{} runs its role ({})",
+            running.unit_id(),
+            role.flag
+        )),
+        Ok(Some(_missing)) => None,
+        Err(error) => {
+            eprintln!(
+                "stado: whether {} runs {} is not known: {error}",
+                running.unit_id(),
+                role.flag
+            );
+            None
+        }
+    }
 }
 
 async fn retirement(target: &ComputeTarget, unit: &str, runner: &Runner) -> PredecessorRetirement {

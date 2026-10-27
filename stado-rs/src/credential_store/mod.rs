@@ -81,11 +81,13 @@ pub fn admin_credentials() -> Result<AdminCredentials, SkarbiecError> {
     })
 }
 
+/// The scheme of a store selector: what precedes `://`, or the whole word
+/// for a bare selector such as `skarbiec`.
 fn scheme_of(raw: &str) -> String {
-    raw.split_once("://")
-        .map(|(scheme, _)| scheme)
-        .unwrap_or(raw)
-        .to_string()
+    match raw.split_once("://") {
+        Some((scheme, _rest)) => scheme.to_string(),
+        None => raw.to_string(),
+    }
 }
 
 fn unsupported(scheme: &str) -> SkarbiecError {
@@ -120,13 +122,16 @@ pub fn configured_selector() -> Result<String, SkarbiecError> {
             path.display()
         ))
     })?;
-    let raw = root
+    // `credentials.store` names the store; a config without it, or with it
+    // blank, keeps the default store the product declares.
+    let raw = match root
         .get("credentials")
         .and_then(|section| section.get("store"))
         .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(DEFAULT_STORE)
-        .trim();
+    {
+        Some(declared) if !declared.trim().is_empty() => declared.trim(),
+        _ => DEFAULT_STORE,
+    };
     parse_selector(raw)?;
     Ok(raw.to_string())
 }
@@ -191,8 +196,14 @@ fn file_backend(path: &str) -> Result<Backend, SkarbiecError> {
 /// and on an agent VM that path is the platform's own one-shot handoff.
 fn configured_client(url: Option<&str>) -> Result<Client, SkarbiecError> {
     let token_file = crate::config::skarbiec_token_file();
+    // The selector's own address when it names one; the configured broker
+    // otherwise.
+    let url = match url {
+        Some(selected) => selected,
+        None => crate::config::skarbiec_url(),
+    };
     Client::direct(
-        url.unwrap_or_else(|| crate::config::skarbiec_url()),
+        url,
         crate::config::skarbiec_consumer(),
         token_file,
         crate::skarbiec::GrantMode::for_grant_file(token_file),
@@ -241,12 +252,14 @@ pub async fn read_declared_string(
 /// The broker's base URL when the selected store is a Skarbiec, and `None`
 /// when it is a file. Exposed for diagnostics that need to talk to the broker
 /// directly rather than through a `Client`, which would need a grant the probe
-/// deliberately does without.
-pub fn skarbiec_url() -> Option<String> {
-    match selected().ok()? {
-        Backend::Skarbiec { url } => {
-            Some(url.unwrap_or_else(|| crate::config::skarbiec_url().to_string()))
-        }
+/// deliberately does without. A selector that cannot be read is the error it
+/// answers with: a file store and an unreadable selection are not one answer.
+pub fn skarbiec_url() -> Result<Option<String>, SkarbiecError> {
+    Ok(match selected()? {
+        Backend::Skarbiec { url } => Some(match url {
+            Some(url) => url,
+            None => crate::config::skarbiec_url().to_string(),
+        }),
         Backend::File { .. } => None,
-    }
+    })
 }

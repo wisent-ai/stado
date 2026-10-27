@@ -104,7 +104,10 @@ impl BoxClient {
             events.push(event.clone());
         }
         let (next_cursor, has_more) = match value.get("pageInfo").and_then(Value::as_object) {
-            Some(page) => (jstr(page.get("nextCursor")), jbool(page.get("hasMore"))),
+            Some(page) => (
+                jstr(page.get("nextCursor"), "pageInfo.nextCursor", "event list")?,
+                jbool(page.get("hasMore"), "pageInfo.hasMore", "event list")?,
+            ),
             None => (String::new(), false),
         };
         Ok(BoxEventPage {

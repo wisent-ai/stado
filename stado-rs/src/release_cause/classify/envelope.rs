@@ -20,7 +20,11 @@ use super::super::cause::QuarantineCause;
 /// prefix their points with service and layer (`brama.gateway.…`), and the
 /// depth carries no meaning by contract, so the operation is what is read.
 fn operation(point: &str) -> &str {
-    point.rsplit('.').next().unwrap_or(point)
+    // The segment after the last dot; a point with no dots is one segment.
+    match point.rsplit_once('.') {
+        Some((_prefix, operation)) => operation,
+        None => point,
+    }
 }
 
 /// What one envelope means for a rollout, from the operation that refused and
@@ -74,7 +78,11 @@ fn objects(text: &str) -> Vec<Value> {
                     found.push(value);
                 }
             }
-            _ => rest = tail.strip_prefix('{').unwrap_or_default(),
+            // The `{` starts no JSON value (serde refused it, or the text
+            // ended): log text around an envelope is not JSON, so this is the
+            // scan's answer, not a failure. Step over the `{`, which `tail`
+            // starts with, and scan on.
+            _ => rest = &tail['{'.len_utf8()..],
         }
     }
     found
@@ -129,10 +137,13 @@ pub(super) fn classify(text: &str) -> Option<Named> {
     for envelope in objects(text) {
         let node = deepest(&envelope);
         for candidate in [node, &envelope] {
-            let point = candidate
-                .get("failure_point")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            // A nested cause may carry only a code; the point is then the
+            // empty operation, which names no cause, and the outer envelope
+            // is tried next. A detail the envelope does not carry is no text.
+            let point = match candidate.get("failure_point").and_then(Value::as_str) {
+                Some(point) => point,
+                None => "",
+            };
             let Some(code) = candidate
                 .get("error_code")
                 .and_then(Value::as_str)
@@ -140,19 +151,24 @@ pub(super) fn classify(text: &str) -> Option<Named> {
             else {
                 continue;
             };
-            let detail = candidate
-                .get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            let detail = match candidate.get("detail").and_then(Value::as_str) {
+                Some(detail) => detail,
+                None => "",
+            };
             if let Some(found) = named(point, code, detail) {
                 return Some(found);
             }
         }
     }
-    // No object closed: the tail was cut inside one. Read its keys anyway.
+    // No object closed: the tail was cut inside one. Read its keys anyway;
+    // a `detail` cut away entirely leaves the point and code as the evidence.
     let start = text.find("\"failure_point\":")?;
     let cut = &text[start..];
     let point = field(cut, "failure_point")?;
     let code = Code::parse(field(cut, "error_code")?)?;
-    named(point, code, field(cut, "detail").unwrap_or_default())
+    let detail = match field(cut, "detail") {
+        Some(detail) => detail,
+        None => "",
+    };
+    named(point, code, detail)
 }

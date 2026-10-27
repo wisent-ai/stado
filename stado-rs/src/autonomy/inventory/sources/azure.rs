@@ -120,8 +120,20 @@ fn azure_resource(
             value_text(item, &["type"])
         ));
     };
-    let name = value_text(item, &["name"]).unwrap_or_else(|| native.clone());
-    let native_type = value_text(item, &["type"]).unwrap_or_else(|| "resource".to_string());
+    // The portal names a resource by its `name`; a row without one is
+    // known by its id. The `type` decides the kind every consumer sorts on,
+    // so a row that names none is a Resource Graph shape this inventory
+    // does not know, and is refused by name instead of being filed as a
+    // generic resource.
+    let name = match value_text(item, &["name"]) {
+        Some(name) => name,
+        None => native.clone(),
+    };
+    let Some(native_type) = value_text(item, &["type"]) else {
+        return Err(format!(
+            "Resource Graph row {native} names no resource type and is not recorded"
+        ));
+    };
     let kind = azure_resource_type(&native_type);
     let mut resource = ResourceRecord::new(
         ProviderId::Azure,
@@ -141,10 +153,13 @@ fn azure_resource(
                 .and_then(Value::as_str)
         })
         .or_else(|| item.pointer("/properties/status").and_then(Value::as_str));
-    resource.phase = word.map_or(
-        crate::providers::LifecyclePhase::Unknown,
-        crate::providers::azure::resource_phase,
-    );
+    // A row that reports no power, provisioning or status word has a
+    // phase nobody stated: the record says so, and `state` stays empty so
+    // the reader sees the row carried no word rather than a lower-cased one.
+    resource.phase = match word {
+        Some(word) => crate::providers::azure::resource_phase(word),
+        None => crate::providers::LifecyclePhase::Unknown,
+    };
     resource.state = word.map(str::to_ascii_lowercase);
     resource.created_at = item
         .pointer("/properties/timeCreated")
@@ -159,11 +174,10 @@ fn azure_resource(
         );
     }
     collect_resource_references(item, &mut resource.dependencies);
-    resource.source_revision = item
-        .get("etag")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| canonical_revision(item));
+    resource.source_revision = Some(match item.get("etag").and_then(Value::as_str) {
+        Some(etag) => etag.to_string(),
+        None => canonical_revision(item),
+    });
     resource.evidence = item.clone();
     resource.apply_identity_labels();
     Ok(resource)

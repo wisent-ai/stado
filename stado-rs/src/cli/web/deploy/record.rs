@@ -81,7 +81,7 @@ pub(super) async fn record_declaration(
         let mut endpoints = Map::new();
         endpoints.insert(
             host.clone(),
-            json!({"url": format!("http://127.0.0.1:{port}")}),
+            json!({"url": crate::primitives::http::origin::loopback_origin(port)}),
         );
         entry.insert("endpoints".to_string(), Value::Object(endpoints));
         entry.insert("managed_service".to_string(), json!(&product));
@@ -95,7 +95,7 @@ pub(super) async fn record_declaration(
         entry.insert(
             "verify".to_string(),
             json!({"kind": "http", "path": &readyz, "expect_status":
-                200}),
+                reqwest::StatusCode::OK.as_u16()}),
         );
         entry.insert("declaration".to_string(), declaration_value.clone());
 

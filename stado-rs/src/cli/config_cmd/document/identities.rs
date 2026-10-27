@@ -72,25 +72,27 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
         // A `role#field` whose role the agent never held could not be read
         // by any job before the rename either: the agent's grant covered its
         // listed items only. It is withdrawn, named, rather than granted.
-        let roles: Vec<String> = agent
-            .get("roles")
-            .and_then(Value::as_array)
-            .map(|roles| {
-                roles
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+        // An agent that declares no roles holds none: every `role#field` is
+        // then withdrawn, which is what its grant covered.
+        let roles: Vec<String> = match agent.get("roles").and_then(Value::as_array) {
+            Some(declared) => declared
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect(),
+            None => Vec::new(),
+        };
         if let Some(fields) = agent.get_mut("secret_fields").and_then(Value::as_array_mut) {
             fields.retain(|entry| {
                 let Some(reference) = entry.as_str() else {
                     return true;
                 };
-                let role = reference
-                    .split_once('#')
-                    .map_or(reference, |(role, _)| role);
+                // `role#field` names its role before the `#`; a bare entry
+                // is a role with no field and is read whole.
+                let role = match reference.split_once('#') {
+                    Some((role, _field)) => role,
+                    None => reference,
+                };
                 let held = roles.iter().any(|declared| declared == role);
                 if !held {
                     dropped.push(reference.to_string());
@@ -229,9 +231,11 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
         .and_then(Value::as_str)
     {
         Some(declared) => config_file::expand_tilde(declared),
-        None => config_file::home_dir().join(".stado/stado-skarbiec-token"),
+        None => config_file::home()
+            .map_err(CmdError::declaration)?
+            .join(".stado/stado-skarbiec-token"),
     };
-    if !token_file.is_file() {
+    if !crate::primitives::presence::present(&token_file)? || !token_file.is_file() {
         return Err(CmdError::refused(format!(
             "identity migration refused; {} has no Stado bearer file; config unchanged",
             token_file.display()
@@ -256,15 +260,10 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
     std::io::Write::write_all(&mut backup_file, original.as_bytes())?;
-    let temporary = std::path::PathBuf::from(format!("{}.migrating-identities", path.display()));
-    std::fs::write(
-        &temporary,
-        format!("{}\n", serde_json::to_string_pretty(&document)?),
-    )?;
-    if let Ok(metadata) = std::fs::metadata(&path) {
-        std::fs::set_permissions(&temporary, metadata.permissions())?;
-    }
-    std::fs::rename(&temporary, &path)?;
+    // The previous file is on disk before the config is replaced, so a power
+    // loss never leaves a new config beside an empty backup.
+    backup_file.sync_all()?;
+    crate::config_file::replace(&path, &document)?;
     println!(
         "{}: migrated identity settings to stado; removed {}; withdrew secret_fields of roles \
          the agent never held: [{}]; previous file: {}",

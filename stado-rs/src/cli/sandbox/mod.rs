@@ -1,25 +1,17 @@
-//! `stado sandbox` — the Boat sandboxes this deployment's key can reach, as
-//! an agent or a script drives them: list and show, create and rename, run a
-//! command and follow or stop one run in the background, read, write and
-//! download files, hand a coding agent a prompt and follow it, read the
-//! sandbox's events and usage, its conversations, the history of its
-//! commands with their stored output and its processes, add an SSH key,
-//! give a port a URL, keep the disk as a named snapshot, fork, stop (or
-//! force a stop whose save fails), power-cycle one that stopped answering,
-//! share one with its organization, resume and delete, and register the
-//! webhooks Boat posts every sandbox's lifecycle events to.
+//! `stado sandbox` exposes two distinct execution boundaries as JSON.
 //!
-//! The scheduler rents a sandbox per job and owns its whole life; these verbs
-//! are the same Boat Public API v1 calls handed to a caller directly, through
-//! the one client the provider builds (`BoxProvider::from_env`). So the key
-//! is the Skarbiec item that plays `cloud-boat`, `boat.api_url` names another
-//! API base, and a sandbox created here lives `boat.ttl_seconds` unless the
-//! call states its own lifetime. Every answer is printed as JSON; a refusal
-//! Boat gave keeps its status, code and request id in the error.
+//! `fleet` operates gVisor sandboxes on registered Linux hosts through the
+//! authorized host channel. It dispatches before Boat configuration or secrets
+//! are read and never rents a machine or falls back to ordinary containers.
+//!
+//! The other verbs use Boat Public API v1 through `BoxProvider::from_env`.
+//! Boat credentials, API origin and lifetime are deployment configuration;
+//! provider refusals preserve their status, code and request id.
 
 mod agent;
 mod args;
 mod environments;
+mod fleet;
 mod history;
 mod snapshots;
 mod verbs;
@@ -29,7 +21,7 @@ use clap::Subcommand;
 
 pub use agent::FileUrlArgs;
 pub use args::*;
-pub use environments::RepositoryListArgs;
+pub use environments::{EnvironmentCommands, RepositoryListArgs};
 pub use history::{AiAccessArgs, AiUsageArgs, CommandRef, HistoryArgs, LogsArgs};
 pub use snapshots::ShareRef;
 pub use webhooks::WebhookCommands;
@@ -38,6 +30,9 @@ use super::CmdError;
 
 #[derive(Subcommand)]
 pub enum SandboxCommands {
+    /// Operate fleet-owned gVisor sandboxes on registered Linux bare-metal hosts.
+    #[command(subcommand)]
+    Fleet(fleet::FleetCommands),
     /// List every sandbox the key can reach, every page.
     List,
     /// Show one sandbox: its state, address and snapshot status.
@@ -75,10 +70,9 @@ pub enum SandboxCommands {
     Delete(SandboxId),
     /// Rename a sandbox, or change or clear when it stops by itself.
     Update(UpdateArgs),
-    /// Hand the coding agent in a sandbox a prompt and print the prompt run.
-    Prompt(PromptArgs),
-    /// Print a prompt run's status.
-    PromptStatus(PromptRunId),
+    /// Hand the coding agent in a sandbox a prompt, or read a prompt run.
+    #[command(subcommand)]
+    Prompt(PromptCommands),
     /// Give the running turn of a sandbox's coding agent an extra
     /// instruction; it keeps what it was doing.
     Steer(SteerArgs),
@@ -90,13 +84,13 @@ pub enum SandboxCommands {
     /// Print one page of a sandbox's events and the cursor of the next.
     Events(EventsArgs),
     /// Allow an OpenSSH public key into a sandbox.
-    SshKey(SshKeyArgs),
+    #[command(subcommand)]
+    Key(KeyCommands),
     /// Download a file or folder from a sandbox into a new local file.
     Download(DownloadArgs),
-    /// Print a short-lived URL the sandbox serves for one file: a GET of it
-    /// downloads the file, a PUT of the bytes writes it, with no size limit
-    /// and no key. The URL is a secret until it expires.
-    FileUrl(FileUrlArgs),
+    /// Sign the short-lived URL a sandbox serves for one file.
+    #[command(subcommand)]
+    File(SandboxFileCommands),
     /// Give a port inside a sandbox a stable public HTTPS URL.
     Host(HostArgs),
     /// Save, list, show and delete named snapshots: a sandbox's disk kept
@@ -120,12 +114,10 @@ pub enum SandboxCommands {
     /// Print the processes of a sandbox, busiest first, or the last sample
     /// Boat kept of a stopped one.
     Processes(SandboxId),
-    /// Print the AI requests a sandbox's agents made through Boat's proxy,
-    /// per day, credential and model, their tokens and cost, and whether it
-    /// is blocked.
-    AiUsage(AiUsageArgs),
-    /// Let a sandbox's requests through Boat's AI proxy, or refuse them.
-    AiAccess(AiAccessArgs),
+    /// Read what a sandbox's agents asked of Boat's AI proxy, or let its
+    /// requests through or refuse them.
+    #[command(subcommand)]
+    Ai(AiCommands),
     /// Manage the account's webhooks: the HTTPS endpoints Boat posts sandbox
     /// lifecycle events to, and their signing secrets.
     #[command(subcommand)]
@@ -133,26 +125,35 @@ pub enum SandboxCommands {
 }
 
 #[derive(Subcommand)]
-pub enum EnvironmentCommands {
-    /// List the environments.
-    List,
-    /// Create an empty environment.
-    Create(EnvironmentName),
-    /// Delete an environment.
-    Delete(EnvironmentId),
-    /// Set a variable; its value is the one line on standard input.
-    SetVar(EnvironmentKey),
-    /// Remove a variable.
-    RmVar(EnvironmentKey),
-    /// Set a secret file from a local file's text.
-    SetFile(SecretFileArgs),
-    /// Remove a secret file.
-    RmFile(SecretPath),
-    /// List the GitHub repositories Boat can clone, with the id `add-repo`
-    /// takes, and the ones already selected.
-    Repos(RepositoryListArgs),
-    /// Clone a GitHub repository into every new sandbox.
-    AddRepo(RepositoryArgs),
+pub enum PromptCommands {
+    /// Hand the coding agent in a sandbox a prompt and print the prompt run.
+    Send(PromptArgs),
+    /// Print a prompt run's status.
+    Status(PromptRunId),
+}
+
+#[derive(Subcommand)]
+pub enum KeyCommands {
+    /// Allow an OpenSSH public key into a sandbox.
+    Add(SshKeyArgs),
+}
+
+#[derive(Subcommand)]
+pub enum SandboxFileCommands {
+    /// Print a short-lived URL the sandbox serves for one file: a GET of it
+    /// downloads the file, a PUT of the bytes writes it, with no size limit
+    /// and no key. The URL is a secret until it expires.
+    Link(FileUrlArgs),
+}
+
+#[derive(Subcommand)]
+pub enum AiCommands {
+    /// Print the AI requests a sandbox's agents made through Boat's proxy,
+    /// per day, credential and model, their tokens and cost, and whether it
+    /// is blocked.
+    Usage(AiUsageArgs),
+    /// Let a sandbox's requests through Boat's AI proxy, or refuse them.
+    Access(AiAccessArgs),
 }
 
 #[derive(Subcommand)]
@@ -194,8 +195,15 @@ pub enum ProcessCommands {
 }
 
 pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
+    let command = match command {
+        SandboxCommands::Fleet(command) => return fleet::dispatch(command).await,
+        command => command,
+    };
     let provider = verbs::provider()?;
     match command {
+        SandboxCommands::Fleet(_) => {
+            unreachable!("fleet commands dispatch before Boat credentials")
+        }
         SandboxCommands::List => verbs::list(&provider).await,
         SandboxCommands::Show(sandbox) => verbs::show(&provider, &sandbox.id).await,
         SandboxCommands::Create(args) => verbs::create(&provider, &args).await,
@@ -212,9 +220,11 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
         SandboxCommands::Command(args) => history::command(&provider, &args).await,
         SandboxCommands::Logs(args) => history::logs(&provider, &args).await,
         SandboxCommands::Processes(sandbox) => history::processes(&provider, &sandbox.id).await,
-        SandboxCommands::AiUsage(args) => history::ai_usage(&provider, &args).await,
-        SandboxCommands::AiAccess(args) => history::ai_access(&provider, &args).await,
-        SandboxCommands::FileUrl(args) => agent::file_url(&provider, &args).await,
+        SandboxCommands::Ai(AiCommands::Usage(args)) => history::ai_usage(&provider, &args).await,
+        SandboxCommands::Ai(AiCommands::Access(args)) => history::ai_access(&provider, &args).await,
+        SandboxCommands::File(SandboxFileCommands::Link(args)) => {
+            agent::file_url(&provider, &args).await
+        }
         SandboxCommands::Read(args) => verbs::read(&provider, &args).await,
         SandboxCommands::Write(args) => verbs::write(&provider, &args).await,
         SandboxCommands::Fork(args) => verbs::fork(&provider, &args).await,
@@ -224,13 +234,15 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
         SandboxCommands::Resume(args) => verbs::resume(&provider, &args).await,
         SandboxCommands::Delete(sandbox) => verbs::delete(&provider, &sandbox.id).await,
         SandboxCommands::Update(args) => agent::update(&provider, &args).await,
-        SandboxCommands::Prompt(args) => agent::prompt(&provider, &args).await,
-        SandboxCommands::PromptStatus(run) => agent::prompt_status(&provider, &run).await,
+        SandboxCommands::Prompt(PromptCommands::Send(args)) => agent::prompt(&provider, &args).await,
+        SandboxCommands::Prompt(PromptCommands::Status(run)) => {
+            agent::prompt_status(&provider, &run).await
+        }
         SandboxCommands::Steer(args) => agent::steer(&provider, &args).await,
         SandboxCommands::Desktop(sandbox) => agent::desktop(&provider, &sandbox.id).await,
         SandboxCommands::Interrupt(sandbox) => agent::interrupt(&provider, &sandbox.id).await,
         SandboxCommands::Events(args) => agent::events(&provider, &args).await,
-        SandboxCommands::SshKey(args) => agent::ssh_key(&provider, &args).await,
+        SandboxCommands::Key(KeyCommands::Add(args)) => agent::ssh_key(&provider, &args).await,
         SandboxCommands::Download(args) => agent::download(&provider, &args).await,
         SandboxCommands::Host(args) => agent::host(&provider, &args).await,
         SandboxCommands::Snapshot(sub) => match sub {
@@ -248,19 +260,7 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
             SnapshotCommands::Share(named) => snapshots::share(&provider, &named.name).await,
             SnapshotCommands::Unshare(args) => snapshots::unshare(&provider, &args).await,
         },
-        SandboxCommands::Environment(sub) => match sub {
-            EnvironmentCommands::List => environments::list(&provider).await,
-            EnvironmentCommands::Create(named) => {
-                environments::create(&provider, &named.name).await
-            }
-            EnvironmentCommands::Delete(args) => environments::delete(&provider, &args).await,
-            EnvironmentCommands::SetVar(args) => environments::set_var(&provider, &args).await,
-            EnvironmentCommands::RmVar(args) => environments::remove_var(&provider, &args).await,
-            EnvironmentCommands::SetFile(args) => environments::set_file(&provider, &args).await,
-            EnvironmentCommands::RmFile(args) => environments::remove_file(&provider, &args).await,
-            EnvironmentCommands::AddRepo(args) => environments::add_repo(&provider, &args).await,
-            EnvironmentCommands::Repos(args) => environments::repositories(&provider, &args).await,
-        },
+        SandboxCommands::Environment(sub) => environments::dispatch(&provider, sub).await,
         SandboxCommands::Webhook(sub) => webhooks::dispatch(&provider, sub).await,
     }
 }

@@ -59,8 +59,11 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
     let (census, census_read) = cache_report.census();
     disk.reading.tagged_build_caches = census;
     disk.reading.tagged_build_caches_read = census_read;
-    let disk = crate::deploy::host_disk::disk_report(&target, disk);
-    let mut document = disk.as_object().cloned().unwrap_or_else(Map::new);
+    // `disk_report` always returns an object; the fields below join it.
+    let mut document = match crate::deploy::host_disk::disk_report(&target, disk) {
+        Value::Object(document) => document,
+        _not_an_object => unreachable!("host_disk::disk_report returns an object"),
+    };
     // Which walk the census rows came from, so a reader (and the real test)
     // can tell the verdict's one walk from a disk read's own census.
     document.insert(
@@ -76,15 +79,10 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
                 .collect(),
         ),
     );
-    document.insert(
-        "work_root".to_string(),
-        target.work_root.clone().map_or(Value::Null, Value::String),
-    );
+    // Serde writes an absent option as `null`.
+    document.insert("work_root".to_string(), json!(target.work_root));
     let mount = lines::work_root_mount(&Value::Object(document.clone()));
-    document.insert(
-        "work_root_mount".to_string(),
-        mount.map_or(Value::Null, Value::String),
-    );
+    document.insert("work_root_mount".to_string(), json!(mount));
     document.insert(
         "build_caches".to_string(),
         cache_json(&cache_declaration, &cache_report),
@@ -107,7 +105,10 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         &target.release_platform,
         weles_recordings_dir.as_deref(),
     );
-    let mut document = report.as_object().cloned().unwrap_or_else(Map::new);
+    let mut document = match report {
+        Value::Object(document) => document,
+        _not_an_object => unreachable!("the report was built from an object above"),
+    };
     document.insert("rule".to_string(), coverage["rule"].clone());
     document.insert("coverage".to_string(), coverage.clone());
     document.insert(
@@ -118,12 +119,13 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
     if json_output {
         print_json(&report)?;
     } else {
-        let usage = report.get("usage").unwrap_or(&Value::Null);
-        let state = report.get("cleanup_state").unwrap_or(&Value::Null);
-        let last_pass = state
-            .get("last_pass_at")
-            .and_then(Value::as_str)
-            .unwrap_or("never");
+        let usage = &report["usage"];
+        let state = &report["cleanup_state"];
+        // A host whose janitor has never run records no last pass.
+        let last_pass = match state.get("last_pass_at").and_then(Value::as_str) {
+            Some(stamp) => stamp,
+            None => "never",
+        };
         println!("{} space", target.name);
         if let Some(error) = report.get("inventory_incomplete").and_then(Value::as_str) {
             println!("inventory incomplete: {error}");
@@ -140,9 +142,10 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
             usage_field("capacity"),
         );
         print_volumes(&report);
+        lines::print_unread(&report);
         super::coverage::print_coverage(&coverage);
         println!("last pass: {last_pass}");
-        lines::print_memory(report.get("memory").unwrap_or(&Value::Null));
+        lines::print_memory(&report["memory"]);
         if let Some(line) = report
             .get("accelerators")
             .and_then(|block| block.get("line"))
@@ -155,13 +158,17 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         }
     }
     if report.get("status").and_then(Value::as_str) != Some(crate::deploy::host_disk::OK_STATUS) {
+        // The host's own error, else the status it did report, so a read
+        // that failed without a sentence is still told apart from one that
+        // reported no status at all.
+        let cause = match (report.get("error").and_then(Value::as_str), report.get("status")) {
+            (Some(error), _) => error.to_string(),
+            (None, Some(status)) => format!("it reported status {status} with no error"),
+            (None, None) => "it reported neither a status nor an error".to_string(),
+        };
         return Err(CmdError::click(format!(
-            "{} space report could not read the host: {}",
-            target.name,
-            report
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("host read failed")
+            "{} space report could not read the host: {cause}",
+            target.name
         ))
         .machine_readable(json_output));
     }

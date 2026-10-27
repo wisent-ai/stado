@@ -33,13 +33,11 @@ struct Register {
 
 static REGISTER: LazyLock<Mutex<Register>> = LazyLock::new(Mutex::default);
 
-/// The register, or the sentence that says a scan's thread died holding it.
+/// The register. A scan records its verdict as one insert or replace, so a
+/// scan that died holding it left a register: it is taken back, where the
+/// refusal it used to answer stopped every later scan of the process.
 fn register() -> Result<MutexGuard<'static, Register>, String> {
-    REGISTER.lock().map_err(|poisoned| {
-        format!(
-            "the scan register is poisoned: a scan ended while recording its verdict ({poisoned})"
-        )
-    })
+    Ok(crate::primitives::lock::held(&REGISTER))
 }
 
 fn now() -> String {

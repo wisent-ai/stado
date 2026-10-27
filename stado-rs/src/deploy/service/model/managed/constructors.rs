@@ -67,12 +67,11 @@ pub fn resident_host_service(services: &[ManagedService]) -> Option<&ManagedServ
 /// declaration wins over the fixed list, because an operator who adopted a
 /// recovery label explicitly said what its path and name are.
 pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
-    let mut services: Vec<ManagedService> = target
-        .extra
-        .get(SERVICES_KEY)
-        .and_then(Value::as_array)
-        .map(|records| {
-            records
+    // A target with no services block declares none; the resident host
+    // service and the recovery agents are still added below for a Mac.
+    let mut services: Vec<ManagedService> =
+        match target.extra.get(SERVICES_KEY).and_then(Value::as_array) {
+            Some(records) => records
                 .iter()
                 .filter_map(Value::as_object)
                 // `service declare` records desired state before a unit
@@ -81,9 +80,9 @@ pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
                 // it through `record_declaration` after the host action.
                 .filter(|record| record.get("declared_only").and_then(Value::as_bool) != Some(true))
                 .map(|record| ManagedService::from_record(&target.name, record))
-                .collect()
-        })
-        .unwrap_or_default();
+                .collect(),
+            None => Vec::new(),
+        };
     if resident_host_service(&services).is_some()
         || !crate::targets::platform_accepts_job(&target.release_platform, "Darwin", "")
     {

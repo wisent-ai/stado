@@ -33,14 +33,28 @@ impl<'c> Tx<'c> {
     }
 
     /// Ends the transaction: commits it when `commit`, else rolls it back.
-    /// `None` when a statement still holds it.
+    /// Refused when it has already ended or a statement still holds it.
     fn finish(
         &mut self,
         commit: bool,
-    ) -> Option<impl Future<Output = std::result::Result<(), sea_orm::DbErr>> + Send + 'static>
+    ) -> Result<impl Future<Output = std::result::Result<(), sea_orm::DbErr>> + Send + 'static>
     {
-        let transaction = Arc::try_unwrap(self.transaction.take()?).ok()?;
-        Some(async move {
+        let Some(shared) = self.transaction.take() else {
+            return Err(Error::Conversion(
+                "the transaction has already ended".to_owned(),
+            ));
+        };
+        let transaction = match Arc::try_unwrap(shared) {
+            Ok(transaction) => transaction,
+            Err(still_shared) => {
+                // The holder keeps it; this end is refused, not lost.
+                self.transaction = Some(still_shared);
+                return Err(Error::Conversion(
+                    "the transaction is still in use by a statement".to_owned(),
+                ));
+            }
+        };
+        Ok(async move {
             if commit {
                 transaction.commit().await
             } else {
@@ -50,9 +64,7 @@ impl<'c> Tx<'c> {
     }
 
     pub fn commit(mut self) -> Result<()> {
-        let ending = self
-            .finish(true)
-            .ok_or_else(|| Error::Conversion("the transaction is still in use".to_owned()))?;
+        let ending = self.finish(true)?;
         self.client.wait("commit the transaction", ending)??;
         Ok(())
     }
@@ -60,7 +72,9 @@ impl<'c> Tx<'c> {
 
 impl Drop for Tx<'_> {
     fn drop(&mut self) {
-        if let Some(ending) = self.finish(false) {
+        // A committed transaction has ended; one a statement still holds is
+        // rolled back by its holder's drop. Neither is a rollback to run.
+        if let Ok(ending) = self.finish(false) {
             let _ = wait(
                 &self.client.runtime,
                 None,

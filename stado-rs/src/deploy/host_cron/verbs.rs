@@ -20,7 +20,7 @@ pub async fn prune(
         .replace(MATCH_MARK, &format!("\"{}\"", cron_pattern(matching)?))
         .replace(APPLY_MARK, if apply { "yes" } else { "no" });
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the cron read did not complete",
@@ -43,7 +43,7 @@ pub async fn restore(
     }
     let script = RESTORE_SCRIPT.replace(RESTORE_MARK, &format!("\"{}\"", shlex_quote(backup_path)));
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the cron restore did not complete",

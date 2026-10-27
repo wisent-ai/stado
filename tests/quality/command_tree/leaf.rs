@@ -54,9 +54,7 @@ fn clap_leaves_are_not_sent_to_the_model() {
         .parent()
         .expect("Stado checkout")
         .to_path_buf();
-    let home = root
-        .join(".build/quality-command-tree")
-        .join(uuid::Uuid::new_v4().to_string());
+    let home = super::isolated_home(&root);
     let bin = home.join("bin");
     let calls = home.join("oko-calls.log");
     recorder(&bin, &real_oko(), &calls);
@@ -74,7 +72,17 @@ fn clap_leaves_are_not_sent_to_the_model() {
         .args(["--revision", &revision])
         .output()
         .expect("run the real quality check");
-    let asked = fs::read_to_string(&calls).expect("the recorder saw the model calls");
+    // The recorder writes its log at the first call through it, so a check
+    // that never called Oko leaves none; the run's own status and words then
+    // say why, in the report the assertions below print.
+    let asked = match fs::read_to_string(&calls) {
+        Ok(asked) => asked,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => panic!(
+            "the recorder's log {} cannot be read: {error}",
+            calls.display()
+        ),
+    };
     let report = json!({
         "source_revision": revision,
         "binary": env!("CARGO_BIN_EXE_stado"),

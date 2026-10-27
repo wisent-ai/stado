@@ -60,11 +60,13 @@ impl CustodyOperation {
     }
 
     /// How the host's Stado is asked for it.
-    fn name(self) -> String {
+    fn name(self) -> Result<String, CmdError> {
         use clap::ValueEnum;
-        self.to_possible_value()
-            .map(|value| value.get_name().to_owned())
-            .expect("every custody operation has a command-line name")
+        let value = self.to_possible_value().ok_or_else(|| {
+            CmdError::click("a custody operation is hidden from the command line".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?;
+        Ok(value.get_name().to_owned())
     }
 }
 
@@ -174,6 +176,8 @@ pub async fn vault_token_sync(
             .machine_readable(json_output));
         }
     }
+    let export_operation =
+        CustodyOperation::Export.name().map_err(|error| error.machine_readable(json_output))?;
     let exported = host_channel::run_program(
         &source.target,
         &[
@@ -181,7 +185,7 @@ pub async fn vault_token_sync(
             "-c",
             HOST_CUSTODY,
             "stado-token-custody",
-            &CustodyOperation::Export.name(),
+            &export_operation,
             &source.vault,
             consumer,
             source_token_file,
@@ -197,7 +201,7 @@ pub async fn vault_token_sync(
         .stating(FailureCode::InfraDown)
         .machine_readable(json_output)
     })?;
-    if !exported.ok() {
+    if !exported.succeeded() {
         return Err(CmdError::click(format!(
             "{}: token export refused: {}",
             source.target.name,
@@ -206,6 +210,8 @@ pub async fn vault_token_sync(
         .stating(FailureCode::Refused)
         .machine_readable(json_output));
     }
+    let delivery_operation =
+        mode.operation().name().map_err(|error| error.machine_readable(json_output))?;
     let installed = host_channel::run_program_with_stdin(
         &destination.target,
         &[
@@ -213,7 +219,7 @@ pub async fn vault_token_sync(
             "-c",
             HOST_CUSTODY,
             "stado-token-custody",
-            &mode.operation().name(),
+            &delivery_operation,
             &destination.vault,
             consumer,
             token_file,
@@ -231,7 +237,7 @@ pub async fn vault_token_sync(
         .machine_readable(json_output)
     })?;
     drop(exported);
-    if !installed.ok() {
+    if !installed.succeeded() {
         return Err(CmdError::click(format!(
             "{}: token delivery refused: {}",
             destination.target.name,

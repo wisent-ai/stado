@@ -9,9 +9,8 @@ use nix::unistd::{access, AccessFlags};
 
 use crate::deploy::{CommandOutput, CommandSpec, Runner};
 
-/// Seconds in a minute, by the SI definition of the minute:
-/// https://www.bipm.org/en/publications/si-brochure
-const SECONDS_PER_MINUTE: u64 = 60;
+/// Seconds in a minute, read from the `time` crate's own minute.
+const SECONDS_PER_MINUTE: u64 = time::Duration::MINUTE.whole_seconds().unsigned_abs();
 
 /// How far back the interface-change window reaches: one beacon interval, so
 /// consecutive beacons tile the timeline without this module persisting a
@@ -47,7 +46,7 @@ pub(super) async fn probe(runner: &Runner, argv: Vec<String>) -> Result<CommandO
     let output = runner(CommandSpec::new(argv))
         .await
         .map_err(|error| format!("`{named}` could not run: {error}"))?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(format!(
             "`{named}` exited {}: {}",
             output.code,

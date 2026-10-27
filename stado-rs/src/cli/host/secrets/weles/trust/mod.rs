@@ -64,7 +64,7 @@ async fn live_skarbiec_environment(
             )
             .await
             .map_err(|error| error.to_string())?;
-            Ok::<Option<String>, String>(if read.ok() {
+            Ok::<Option<String>, String>(if read.succeeded() {
                 let declared = read.stdout.trim();
                 (!declared.is_empty()).then(|| declared.to_string())
             } else {

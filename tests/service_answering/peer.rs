@@ -78,8 +78,8 @@ struct Run {
 
 impl Run {
     fn new() -> Self {
-        let home = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("service-answering-peer")
+        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/journeys/service-answering-peer")
             .join(std::process::id().to_string());
         if home.exists() {
             std::fs::remove_dir_all(&home).expect("a previous run's home is removed");

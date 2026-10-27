@@ -94,25 +94,30 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         &build.manifest_sha256,
     );
     let now = Utc::now().to_rfc3339();
-    let mut run = load(&id).await?.unwrap_or(ReleaseRun {
-        schema_version: 1,
-        run_id: id.clone(),
-        product: m.product.clone(),
-        version: build.version.clone(),
-        channel,
-        source_commit: build.source_commit.clone(),
-        source_sha256: build.source_sha256.clone(),
-        source_uri: build.source_uri.clone(),
-        manifest_sha256: build.manifest_sha256.clone(),
-        manifest_uri: build.manifest_uri.clone(),
-        build_id: Some(build.build_id.clone()),
-        state: ReleaseRunState::Submitting,
-        platforms: BTreeMap::new(),
-        deliveries: BTreeMap::new(),
-        failure: None,
-        created_at: now.clone(),
-        updated_at: now,
-    });
+    let mut run = match load(&id).await? {
+        Some(recorded) => recorded,
+        // No run is recorded under this id yet: this submission records it,
+        // and the identity checks below hold for it by construction.
+        None => ReleaseRun {
+            schema_version: crate::release_pipeline::SCHEMA_VERSION,
+            run_id: id.clone(),
+            product: m.product.clone(),
+            version: build.version.clone(),
+            channel,
+            source_commit: build.source_commit.clone(),
+            source_sha256: build.source_sha256.clone(),
+            source_uri: build.source_uri.clone(),
+            manifest_sha256: build.manifest_sha256.clone(),
+            manifest_uri: build.manifest_uri.clone(),
+            build_id: Some(build.build_id.clone()),
+            state: ReleaseRunState::Submitting,
+            platforms: BTreeMap::new(),
+            deliveries: BTreeMap::new(),
+            failure: None,
+            created_at: now.clone(),
+            updated_at: now,
+        },
+    };
     if run.source_commit != build.source_commit
         || run.source_sha256 != build.source_sha256
         || run.manifest_sha256 != build.manifest_sha256

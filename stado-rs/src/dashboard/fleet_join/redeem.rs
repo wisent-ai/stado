@@ -58,20 +58,25 @@ pub(super) async fn verify(store: &JobStorage, id: &str, secret: &str) -> Result
         })
     });
 
-    // A missing invite still pays for a digest and a comparison; skipping
-    // them would make "no such id" the fast answer. With no stored digest the
-    // presented one is compared with itself, and the verdict below refuses
-    // it because there is no invite to accept.
+    // A missing invite, or one with no stored digest (offline), still pays for
+    // a digest and a comparison; skipping them would make "no such id" the
+    // fast answer. With no stored digest the presented one is compared with
+    // itself, and the verdict below refuses it because there is no digest to
+    // accept.
     let presented = invite::secret_digest(secret);
-    let expected = match &found {
-        Some(accepted) => accepted.invite.secret_sha256.as_str(),
+    let stored = found
+        .as_ref()
+        .and_then(|accepted| accepted.invite.secret_sha256.as_deref());
+    let expected = match stored {
+        Some(stored) => stored,
         None => presented.as_str(),
     };
     let secret_ok = invite::digests_match(expected, &presented);
-    let usable = found.as_ref().is_some_and(|accepted| {
-        accepted.invite.id == id
-            && invite::effective_status(&accepted.invite, Utc::now()) == invite::STATUS_OPEN
-    });
+    let usable = stored.is_some()
+        && found.as_ref().is_some_and(|accepted| {
+            accepted.invite.id == id
+                && invite::effective_status(&accepted.invite, Utc::now()) == invite::STATUS_OPEN
+        });
 
     match found {
         Some(accepted) if secret_ok & usable => Ok(accepted),

@@ -13,15 +13,19 @@ pub struct HostRoom {
 }
 
 impl HostRoom {
-    /// This host now.
+    /// This host now. A volume whose statistics cannot be read leaves the
+    /// disk reading unread, which every comparison here skips rather than
+    /// treating as no room.
     pub fn read(state_dir: &str) -> Self {
+        // The same reading the disk-full rule takes of a volume.
+        let free_disk_bytes =
+            match crate::providers::local::space_reclaim::rule::read_volume(std::path::Path::new(state_dir)) {
+                Ok(volume) => Some(volume.free_bytes),
+                Err(_unreadable_volume) => None,
+            };
         Self {
             available_memory_bytes: read_host_memory().available_bytes,
-            free_disk_bytes: nix::sys::statvfs::statvfs(std::path::Path::new(state_dir))
-                .ok()
-                .map(|stat| {
-                    (stat.blocks_available() as i64).saturating_mul(stat.fragment_size() as i64)
-                }),
+            free_disk_bytes,
         }
     }
 

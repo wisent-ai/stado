@@ -50,3 +50,16 @@ pub fn resident_unit_paths(home: &Path, label: &str) -> impl Iterator<Item = Pat
     ]
     .into_iter()
 }
+
+/// A shell program with this module's directories spelled into it: every
+/// `@LAUNCHD_DAEMONS@`, `@USER_LAUNCHD_AGENTS@`, `@SYSTEMD_UNITS@` and
+/// `@USER_SYSTEMD_UNITS@` becomes the declared directory, so a script text
+/// holds no copy of its own. The two user directories are home-relative, so
+/// the script writes `$HOME/` before them.
+pub fn with_unit_directories(script: &str) -> String {
+    script
+        .replace("@LAUNCHD_DAEMONS@", LAUNCHD_DAEMONS)
+        .replace("@USER_LAUNCHD_AGENTS@", USER_LAUNCHD_AGENTS)
+        .replace("@SYSTEMD_UNITS@", SYSTEMD_UNITS)
+        .replace("@USER_SYSTEMD_UNITS@", USER_SYSTEMD_UNITS)
+}

@@ -48,13 +48,29 @@ pub fn run(mut arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
                 let state = result["state"]
                     .as_str()
                     .context("Cargo receipt has no state")?;
-                let operation = result["operation"]
-                    .as_str()
-                    .context("Cargo receipt has no operation")?;
                 let path = result["path"]
                     .as_str()
                     .context("Cargo receipt has no path")?;
-                println!("{state} {operation} {path}");
+                // An invocation that has written no result names no operation.
+                match result["operation"].as_str() {
+                    Some(operation) => println!("{state} {operation} {path}"),
+                    None if state == "unfinished" => println!("{state} {path}"),
+                    None => bail!("Cargo receipt {path} has no operation"),
+                }
+            }
+            // Every entry that should have been a receipt and could not be
+            // read, with why; the rest above are still the answer.
+            for unread in answer["unread"]
+                .as_array()
+                .context("Cargo results answer has no unread array")?
+            {
+                let path = unread["path"]
+                    .as_str()
+                    .context("Cargo unread entry has no path")?;
+                let cause = unread["cause"]
+                    .as_str()
+                    .context("Cargo unread entry has no cause")?;
+                eprintln!("unread {path}: {cause}");
             }
         }
         return Ok(libc::EXIT_SUCCESS);

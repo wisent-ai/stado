@@ -25,17 +25,18 @@ use super::{git, remote_tags, run, REMOTE};
 
 const TAG_NAMESPACE: &str = "appstore/";
 /// What the tagging workflow must still say for a tag to outrank HEAD.
-const TAGGING_FACTS: [&str; 3] = [
+const TAGGING_FACTS: &[&str] = &[
     "tag=\"appstore/${version_string}(${build_version})\"",
     "READY_FOR_SALE|PENDING_DEVELOPER_RELEASE",
     "git push origin \"refs/tags/$tag\"",
 ];
-/// major.minor.patch
+/// A release version is three period-separated integers, major.minor.patch:
+/// <https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleshortversionstring>.
 const SLOTS: usize = 3;
 const LOOKUP: &str = "https://itunes.apple.com/lookup?bundleId=";
 /// The surface names a bundle identifier is spelled with: the Tuist reader's
 /// and the Info.plist reader's.
-const BUNDLE_KINDS: [&str; 2] = ["app-bundle-id:", "bundle-id:"];
+const BUNDLE_KINDS: &[&str] = &["app-bundle-id:", "bundle-id:"];
 const REGENERATE: &str = "Regenerate it with `stado release gate app baseline`.";
 
 static TAG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
@@ -43,20 +44,26 @@ static TAG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         .expect("valid")
 });
 
-fn slots(version: &str) -> Vec<u64> {
+/// The integers of a dotted version, or why one is not an integer.
+fn slots(version: &str) -> Read<Vec<u64>> {
     version
         .split('.')
-        .map(|slot| slot.parse().unwrap_or_default())
+        .map(|slot| {
+            slot.parse::<u64>()
+                .map_err(|error| format!("version {version:?} has the part {slot:?}, which is not a whole number: {error}"))
+        })
         .collect()
 }
 
-/// `left` compared with `right` slot by slot, a missing slot counting as zero.
-pub(in super::super) fn order(left: &str, right: &str) -> Ordering {
-    let (mut left, mut right) = (slots(left), slots(right));
+/// `left` compared with `right` slot by slot, a slot one of them does not
+/// spell counting as none; a version whose parts are not whole numbers is
+/// refused by name.
+pub(in super::super) fn order(left: &str, right: &str) -> Read<Ordering> {
+    let (mut left, mut right) = (slots(left)?, slots(right)?);
     let width = left.len().max(right.len());
-    left.resize(width, 0);
-    right.resize(width, 0);
-    left.cmp(&right)
+    left.resize(width, Default::default());
+    right.resize(width, Default::default());
+    Ok(left.cmp(&right))
 }
 
 fn assert_release_scheme(root: &Path, workflow: &str) -> Read<()> {
@@ -79,9 +86,24 @@ fn ranked(tags: Vec<(String, String)>) -> Vec<(String, String, String)> {
         .filter_map(|(name, sha)| {
             let found = TAG_PATTERN.captures(&name)?;
             let version = found["version"].to_string();
-            let mut padded = slots(&version);
-            padded.resize(padded.len().max(SLOTS), 0);
-            Some(((padded, slots(&found["build"])), name, version, sha))
+            // The pattern admits digits only, so a slot fails to parse only
+            // past u64; such a tag is not one this ladder can rank.
+            let mut padded = match slots(&version) {
+                Ok(padded) => padded,
+                Err(cause) => {
+                    eprintln!("stado release gate: skipping tag {name}: {cause}");
+                    return None;
+                }
+            };
+            padded.resize(padded.len().max(SLOTS), Default::default());
+            let build = match slots(&found["build"]) {
+                Ok(build) => build,
+                Err(cause) => {
+                    eprintln!("stado release gate: skipping tag {name}: {cause}");
+                    return None;
+                }
+            };
+            Some(((padded, build), name, version, sha))
         })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| right.0.cmp(&left.0));
@@ -105,7 +127,7 @@ fn published(root: &Path, sources: &AppSources) -> Read<Option<(String, String, 
             eprintln!("stado release gate: tag {tag} names version {version} but its tree declares {declared}; skipping it and looking further back");
             continue;
         }
-        if slots(&version).len() != SLOTS {
+        if slots(&version)?.len() != SLOTS {
             return Err(format!("tag {tag} carries version {version}, which is not a major.minor.patch triple, so the rule cannot advance it; name the next version deliberately"));
         }
         let surface = surface::of(&load, sources)?;
@@ -155,7 +177,12 @@ pub(in super::super) fn live_version(committed: &Value) -> Read<String> {
     let output =
         crate::wait::output(Command::new("curl").args(["-sS", &format!("{LOOKUP}{bundle}")]))
             .map_err(|error| format!("curl could not start: {error}"))?;
-    let answer = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
+    let answer = serde_json::from_slice::<Value>(&output.stdout).map_err(|error| {
+        format!(
+            "the App Store's lookup answer for {bundle} is not JSON ({error}; {}), so what is on sale is unproven, which is not the same as fine",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+    })?;
     answer["results"]
         .as_array()
         .into_iter()
@@ -205,12 +232,12 @@ pub(in super::super) fn provenance(
     if newest_tag(record).as_deref() != Some(tag) {
         return Err(format!("released-surface.json is tag {tag}, but origin already serves a newer {TAG_NAMESPACE}* tag, which supersedes it. {REGENERATE}"));
     }
-    match order(live, released) {
+    match order(live, released)? {
         Ordering::Less => return Err(format!("released-surface.json claims {released}, but the App Store serves {live}, which is older. {REGENERATE}")),
         Ordering::Greater => return Err(format!("released-surface.json describes {released}, but the App Store already sells {live}, whose {TAG_NAMESPACE}* tag supersedes it. {REGENERATE}")),
         Ordering::Equal => {}
     }
-    if order(declared, live) == Ordering::Less {
+    if order(declared, live)? == Ordering::Less {
         return Err(format!("{version_source} declares {declared} while {live} is already on sale, and App Store Connect refuses a version it has already seen"));
     }
     println!("baseline {released} is tag {tag}, which origin serves at the commit the source handoff recorded, and is the version the App Store sells");

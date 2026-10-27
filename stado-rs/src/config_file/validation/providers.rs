@@ -7,7 +7,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::config_file::readers::{binding_in, field_in, py_truthy};
+use crate::config_file::readers::{binding_in, field_in, stated};
 
 /// The canonical providers this document enables, having judged the enabled
 /// and fenced lists against each other and each provider's required keys.
@@ -107,8 +107,8 @@ pub(super) fn declared(
             continue;
         };
         for field in variant.config.iter().filter(|field| field.required) {
-            let configured = field_in(root, field).is_some_and(py_truthy)
-                || binding_in(root, field.alternate_path).is_some_and(py_truthy);
+            let configured = field_in(root, field).is_some_and(stated)
+                || binding_in(root, field.alternate_path).is_some_and(stated);
             if !configured {
                 problems.push(format!(
                     "{} provider needs {} (environment override {})",
@@ -131,29 +131,30 @@ pub(super) fn cloud_release_coordinates(
         .iter()
         .any(|provider| crate::capabilities::dispatches_agent_machines(*provider));
     if cloud_agent_provider {
-        let api = field_in(root, &crate::capabilities::API_URL_CONFIG)
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if api.is_empty() {
-            problems.push(
+        // The canonical endpoint and the release coordinates are required
+        // text for a cloud dispatcher; each is judged by what the document
+        // declares, and an absent or non-text value is named as such.
+        match field_in(root, &crate::capabilities::API_URL_CONFIG).and_then(Value::as_str) {
+            Some(api) if api.starts_with("https://") => {}
+            Some(api) if !api.is_empty() => problems.push("api.url must use HTTPS".to_string()),
+            Some(_) | None => problems.push(
                 "cloud agents need explicit api.url for the canonical Stado endpoint".to_string(),
-            );
-        } else if !api.starts_with("https://") {
-            problems.push("api.url must use HTTPS".to_string());
+            ),
         }
         for field in [
             &crate::capabilities::RELEASE_VERSION_CONFIG,
             &crate::capabilities::RELEASE_PLATFORM_CONFIG,
         ] {
-            let value = field_in(root, field)
+            let exact = field_in(root, field)
                 .and_then(Value::as_str)
-                .unwrap_or_default();
-            if value.is_empty()
-                || value.trim() != value
-                || !value
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
-            {
+                .is_some_and(|value| {
+                    !value.is_empty()
+                        && value.trim() == value
+                        && value
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+                });
+            if !exact {
                 problems.push(format!(
                     "{} must be an exact non-empty release coordinate containing only letters, digits, '.', '_' or '-'",
                     field.path
@@ -172,7 +173,7 @@ pub(super) fn azure_control_plane(
 ) {
     let azure_provider = active_providers.contains(&crate::capabilities::ProviderId::Azure);
     if azure_provider {
-        if !field_in(root, &crate::capabilities::DEPLOYMENT_ID_CONFIG).is_some_and(py_truthy) {
+        if !field_in(root, &crate::capabilities::DEPLOYMENT_ID_CONFIG).is_some_and(stated) {
             problems.push(
                 "Azure control plane needs deployment.id for trusted-proxy \
                  deployment binding"
@@ -194,7 +195,7 @@ pub(super) fn azure_control_plane(
                 "Azure control plane needs an owner-only secrets.skarbiec.token_file",
             ),
         ] {
-            if !field_in(root, field).is_some_and(py_truthy) {
+            if !field_in(root, field).is_some_and(stated) {
                 problems.push(remedy.to_string());
             }
         }
@@ -208,31 +209,32 @@ pub(super) fn azure_control_plane(
         );
     }
     if azure_provider {
-        let agent_url = field_in(root, &crate::capabilities::AGENT_SKARBIEC.url)
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let agent_consumer = field_in(root, &crate::capabilities::AGENT_SKARBIEC.consumer)
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !agent_url.starts_with("https://") {
-            problems.push(
+        // The agent's vault endpoint and consumer are required text; a
+        // declaration that is absent, or not text, is named as such.
+        match field_in(root, &crate::capabilities::AGENT_SKARBIEC.url).and_then(Value::as_str) {
+            Some(agent_url) if agent_url.starts_with("https://") => {}
+            Some(_) | None => problems.push(
                 "agent.skarbiec.url must be an HTTPS Skarbiec endpoint reachable from Azure VMs"
                     .to_string(),
-            );
+            ),
         }
-        if agent_consumer.is_empty()
-            || !agent_consumer.ends_with("-agent")
-            || matches!(
-                agent_consumer,
-                "stado" | "stado-control-plane" | "stado-local-agent" | "stado-azure-agent"
-            )
-        {
+        let scoped_agent_consumer = field_in(root, &crate::capabilities::AGENT_SKARBIEC.consumer)
+            .and_then(Value::as_str)
+            .is_some_and(|agent_consumer| {
+                !agent_consumer.is_empty()
+                    && agent_consumer.ends_with("-agent")
+                    && !matches!(
+                        agent_consumer,
+                        "stado" | "stado-control-plane" | "stado-local-agent" | "stado-azure-agent"
+                    )
+            });
+        if !scoped_agent_consumer {
             problems.push(
                 "Azure dispatch requires a scoped workload-agent consumer ending in -agent"
                     .to_string(),
             );
         }
-        if !field_in(root, &crate::capabilities::AGENT_SKARBIEC.token_file).is_some_and(py_truthy) {
+        if !field_in(root, &crate::capabilities::AGENT_SKARBIEC.token_file).is_some_and(stated) {
             problems.push(
                 "agent.skarbiec.token_file is required; Stado cannot dispatch Azure VMs \
                  without an operator-provided owner-only workload grant"

@@ -22,6 +22,7 @@
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::deploy::service::{self, UndeclaredUnit};
 use crate::deploy::Runner;
+use crate::primitives::tally::Tally;
 
 use super::super::receipts::{ServiceReconcileOutcome, ServiceReconcileSummary};
 
@@ -31,26 +32,29 @@ const STADO_HOME_SEGMENT: &str = "/.stado/";
 /// Is `unit` an undeclared fleet unit that runs nothing and either failed or
 /// is held by no launchd domain?
 fn is_idle_stray(unit: &UndeclaredUnit) -> bool {
+    // `launchctl print` states the last exit code in every domain; a job
+    // that never exited states none and has not failed.
     let exited_nonzero = unit
         .last_exit
-        .or_else(|| unit.status.trim().parse::<i64>().ok())
-        .is_some_and(|code| code != 0);
+        .is_some_and(|code| code != i64::from(nix::libc::EXIT_SUCCESS));
     unit.classification() == "undeclared"
         && unit.pid.trim().is_empty()
         && (exited_nonzero || unit.loaded_domains.is_empty())
         && !unit.declared_program().contains(STADO_HOME_SEGMENT)
 }
 
-/// The catalog product whose program `unit` runs on `target`, when one does.
+/// The catalog product whose program `unit` runs on `target`, when one does;
+/// `$HOME` in its program resolves under `home`, the home the host states.
 fn owner(
     target: &crate::targets::ComputeTarget,
+    home: &str,
     unit: &UndeclaredUnit,
 ) -> Result<Option<String>, String> {
     Ok(crate::deploy::service_catalog::owner_of(
         &unit.label,
         &unit.declared_program(),
         &unit.running_program,
-        &crate::deploy::service_catalog::home_for(target),
+        home,
         &target.release_platform,
         &target.name,
     )?
@@ -88,7 +92,7 @@ pub(in crate::autonomy::service_reconciler) async fn retire_strays(
     let registry = match crate::targets::fetch_registry_or_last_good().await {
         Ok((registry, _)) => registry,
         Err(error) => {
-            summary.failures += 1;
+            summary.failures.tally();
             let detail = format!("registry unreadable, no host scanned: {error}");
             scan_failed(&mut outcomes, "", &detail);
             return outcomes;
@@ -99,8 +103,20 @@ pub(in crate::autonomy::service_reconciler) async fn retire_strays(
         let units = match service::undeclared_units(target, runner).await {
             Ok(units) => units,
             Err(error) => {
-                summary.failures += 1;
+                summary.failures.tally();
                 let detail = format!("undeclared-unit scan failed: {error}");
+                scan_failed(&mut outcomes, &target.name, &detail);
+                continue;
+            }
+        };
+        let home = match crate::deploy::host_channel::remote_home(target, runner).await {
+            Ok(home) => home,
+            Err(error) => {
+                summary.failures.tally();
+                let detail = format!(
+                    "the home {} states cannot be read, so no unit's owner can be judged: {error}",
+                    target.name
+                );
                 scan_failed(&mut outcomes, &target.name, &detail);
                 continue;
             }
@@ -110,16 +126,24 @@ pub(in crate::autonomy::service_reconciler) async fn retire_strays(
             .filter(|unit| unit.classification() == "undeclared")
         {
             // A product's own unit is declared by the catalog whatever the
-            // registry says, and ensure and the repair steps own it.
-            if crate::deploy::service_catalog::is_catalog_unit(&unit.label).unwrap_or(true) {
-                continue;
+            // registry says, and ensure and the repair steps own it. A catalog
+            // that cannot be read leaves the unit's ownership unknown, which
+            // is the row's failure.
+            match crate::deploy::service_catalog::is_catalog_unit(&unit.label) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => {
+                    summary.failures.tally();
+                    outcomes.push(row(unit, "repair_failed", false, error));
+                    continue;
+                }
             }
-            match owner(target, unit) {
+            match owner(target, &home, unit) {
                 Ok(None) => {}
                 // Its product's predecessor step retires it.
                 Ok(Some(_)) => continue,
                 Err(error) => {
-                    summary.failures += 1;
+                    summary.failures.tally();
                     outcomes.push(row(unit, "repair_failed", false, error));
                     continue;
                 }
@@ -154,19 +178,19 @@ pub(in crate::autonomy::service_reconciler) async fn retire_strays(
                 }
             );
             if plan_only {
-                summary.planned += 1;
+                summary.planned.tally();
                 let detail = format!("{why}; retirement not executed in this mode");
                 outcomes.push(row(unit, "planned", false, detail));
                 continue;
             }
             match service::retire_label(target, &unit.label, runner).await {
                 Ok((state, detail)) if state == "retired" => {
-                    summary.changed += 1;
+                    summary.changed.tally();
                     outcomes.push(row(unit, "retired", true, format!("{why}: {detail}")));
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    summary.failures += 1;
+                    summary.failures.tally();
                     outcomes.push(row(unit, "repair_failed", false, error.to_string()));
                 }
             }

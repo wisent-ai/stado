@@ -26,7 +26,7 @@ use tokio::process::Command;
 
 use crate::cli::CmdError;
 
-use crate::deploy::host_exec::{installed_program, OKO_CLI};
+use crate::deploy::host_exec::{installed_program, OKO_CLI, TAMA_CLI};
 
 /// The action class a ruling constrains that compiling a product is.
 pub const BUILD: &str = "build";
@@ -34,6 +34,12 @@ pub const BUILD: &str = "build";
 pub const RELEASE: &str = "release";
 /// The action class a ruling constrains that installing a product is.
 pub const INSTALL: &str = "install";
+/// The action class a ruling constrains that a static check compiling or
+/// analysing the source without building it is (a `lint` quality gate).
+pub const COMPILE: &str = "compile";
+/// The action class a ruling constrains that running a product's tests is
+/// (a `test` quality gate).
+pub const TEST: &str = "test";
 
 /// The environment variable that carries an admitted operation's admission
 /// for `action` to the processes it runs: the admitted process's pid, a
@@ -42,17 +48,83 @@ pub fn inherited(action: &str) -> String {
     format!("STADO_ADMITTED_{}", action.to_uppercase())
 }
 
+/// The parent and program of process `pid` as `ps` reads them; none when no
+/// such process runs.
+async fn process_row(pid: &str) -> Result<Option<(String, String)>, String> {
+    let shown = format!("ps -o ppid= -o comm= -p {pid}");
+    let mut command = Command::new("ps");
+    command
+        .args(["-o", "ppid=", "-o", "comm=", "-p", pid])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let output = crate::wait::until(
+        crate::wait::Kind::Process,
+        &shown,
+        "the process table",
+        command.output(),
+    )
+    .await
+    .map_err(|error| format!("{shown} did not run: {error}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let row = text.trim();
+    match (output.status.success(), row.split_once(char::is_whitespace)) {
+        (true, Some((parent, program))) => {
+            Ok(Some((parent.trim().to_owned(), program.trim().to_owned())))
+        }
+        (false, _) if row.is_empty() => Ok(None),
+        _ => Err(format!(
+            "{shown} exited {} with {row:?}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+    }
+}
+
+/// Whether `pid` is a running ancestor of this process that runs Stado:
+/// the admission a value names is honoured only from the Stado operation
+/// that was admitted and started this one, never from a value typed by hand
+/// that names any other process.
+async fn stado_ancestor(pid: &str) -> Result<bool, String> {
+    let own = std::env::current_exe()
+        .map_err(|error| format!("this Stado's own executable cannot be read: {error}"))?;
+    let mut current = std::os::unix::process::parent_id().to_string();
+    loop {
+        let Some((parent, program)) = process_row(&current).await? else {
+            return Ok(false);
+        };
+        if current == pid {
+            return Ok(std::path::Path::new(&program).file_name() == own.file_name());
+        }
+        if parent == current {
+            return Ok(false);
+        }
+        current = parent;
+    }
+}
+
 /// Whether a process that started this one was admitted for the action
 /// `variable` carries. This process's own earlier admission is not one: each
 /// of its operations (a delivery plan's every step) is asked. A value Stado
-/// did not write (not Unicode, no pid) admits nothing, so Oko is asked.
-fn admitted_above(variable: &str) -> bool {
-    match std::env::var(variable) {
-        Ok(value) => match value.split_once(' ') {
-            Some((pid, _answer)) => pid != std::process::id().to_string(),
-            None => false,
-        },
-        Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => false,
+/// did not write (not Unicode, no pid), or one naming a process that is not
+/// a running Stado among this process's ancestors, admits nothing, so Oko is
+/// asked; a process table that cannot be read is said, and Oko is asked.
+async fn admitted_above(variable: &str) -> bool {
+    let value = match std::env::var(variable) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => return false,
+    };
+    let Some((pid, _answer)) = value.split_once(' ') else {
+        return false;
+    };
+    if pid == std::process::id().to_string() {
+        return false;
+    }
+    match stado_ancestor(pid).await {
+        Ok(admitted) => admitted,
+        Err(cause) => {
+            eprintln!("stado: the admission {variable} names process {pid}, whose ancestry cannot be read ({cause}); Oko is asked");
+            false
+        }
     }
 }
 
@@ -65,9 +137,18 @@ fn admitted_above(variable: &str) -> bool {
 /// the same action (module doc).
 pub async fn refusal(action: &str, product: Option<&str>, purposes: &[&str]) -> Result<(), String> {
     let variable = inherited(action);
-    if admitted_above(&variable) {
+    if admitted_above(&variable).await {
         return Ok(());
     }
+    let scope = match product {
+        Some(product) => format!("{action} of {product}"),
+        None => action.to_string(),
+    };
+    // A consent the operator gave one session covers that session's work
+    // only, so Oko is told which session runs this one.
+    let session = calling_session().await.map_err(|cause| {
+        format!("{scope} is not run: the agent session it runs under could not be read ({cause})")
+    })?;
     let mut words = vec!["admit", action];
     if let Some(product) = product {
         words.extend(["--product", product]);
@@ -75,14 +156,13 @@ pub async fn refusal(action: &str, product: Option<&str>, purposes: &[&str]) -> 
     for purpose in purposes {
         words.extend(["--purpose", *purpose]);
     }
+    if let Some(session) = &session {
+        words.extend(["--session", session.as_str()]);
+    }
     words.push("--json");
-    let scope = match product {
-        Some(product) => format!("{action} of {product}"),
-        None => action.to_string(),
-    };
     let answer = match decision(&words).await {
         Decision::Allowed(reason) => reason,
-        Decision::Absent(cause) => {
+        Decision::Unanswered(Unanswered::Absent(cause)) => {
             format!("no Oko is installed on this machine ({cause}), so no ruling governs {scope}")
         }
         Decision::Refused(reason) => {
@@ -90,7 +170,7 @@ pub async fn refusal(action: &str, product: Option<&str>, purposes: &[&str]) -> 
                 "{scope} is not run: the operator's rulings do not allow it now ({reason})"
             ))
         }
-        Decision::Unread(cause) => {
+        Decision::Unanswered(Unanswered::Unread(cause)) => {
             return Err(format!(
                 "{scope} is not run: Oko gave no admission decision, so whether the operator's \
                  rulings allow it was never read ({cause})"
@@ -107,65 +187,111 @@ pub async fn refusal(action: &str, product: Option<&str>, purposes: &[&str]) -> 
 enum Decision {
     /// Allowed, with the reason Oko gives.
     Allowed(String),
-    /// No Oko is installed at any of its declared paths, with where it was
-    /// looked for.
-    Absent(String),
     /// Not allowed, with the reason quoting the ruling.
     Refused(String),
-    /// No verdict: the program could not be run, or it answered something
-    /// that is not one, with what it said.
+    /// No verdict, and why.
+    Unanswered(Unanswered),
+}
+
+/// Why an installed program (Oko, Tama) gave no JSON answer.
+pub(crate) enum Unanswered {
+    /// The program is installed at none of its declared paths, with where
+    /// it was looked for.
+    Absent(String),
+    /// The program could not be run, or it answered something that is not
+    /// JSON, with what it said.
     Unread(String),
 }
 
-async fn decision(words: &[&str]) -> Decision {
-    // A home that is not known is not a machine without Oko: where Oko would
-    // be installed was never looked at.
-    let oko = match (installed_program(OKO_CLI), std::env::var_os("HOME")) {
-        (Ok(oko), _) => oko,
-        (Err(missing), Some(_)) => return Decision::Absent(missing),
-        (Err(missing), None) => {
-            return Decision::Unread(format!("oko {} did not run: {missing}", words.join(" ")))
+/// The agent session this process runs under, as Tama's register of agent
+/// sessions answers it (`tama sessions self --json`): none when no recorded
+/// session holds this process or any of its ancestors (a command the operator
+/// runs himself), and none on a machine with no Tama installed, which records
+/// no session at all.
+async fn calling_session() -> Result<Option<String>, String> {
+    let words = ["sessions", "self", "--json"];
+    match installed_json(TAMA_CLI, &words).await {
+        Ok(answer) => match &answer["session"] {
+            Value::String(session) => Ok(Some(session.clone())),
+            Value::Null => Ok(None),
+            other => Err(format!(
+                "tama {} answered session {other}, neither a session id nor null",
+                words.join(" ")
+            )),
+        },
+        Err(Unanswered::Absent(_)) => Ok(None),
+        Err(Unanswered::Unread(cause)) => Err(cause),
+    }
+}
+
+/// What `oko <words>` printed as JSON, whatever it exited with (Oko prints a
+/// refused verdict and exits non-zero), or why it printed none.
+pub(crate) async fn oko_json(words: &[&str]) -> Result<Value, Unanswered> {
+    installed_json(OKO_CLI, words).await
+}
+
+/// What the installed `program` printed as JSON for `words`, whatever it
+/// exited with, or why it printed none.
+async fn installed_json(program: &str, words: &[&str]) -> Result<Value, Unanswered> {
+    // A home that is not known is not a machine without the program: where
+    // it would be installed was never looked at.
+    let installed = match (installed_program(program), crate::config_file::home()) {
+        (Ok(installed), _) => installed,
+        (Err(missing), Ok(_)) => return Err(Unanswered::Absent(missing)),
+        (Err(missing), Err(cause)) => {
+            return Err(Unanswered::Unread(format!(
+                "{program} {} did not run: {missing}; {cause}",
+                words.join(" ")
+            )))
         }
     };
-    let shown = format!("{} {}", oko.display(), words.join(" "));
-    let mut command = Command::new(&oko);
+    let shown = format!("{} {}", installed.display(), words.join(" "));
+    let mut command = Command::new(&installed);
     command
         .args(words)
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
-    let output = match crate::wait::until(
+    let output = crate::wait::until(
         crate::wait::Kind::Process,
         &shown,
         "the caller's directory",
         command.output(),
     )
     .await
-    {
-        Ok(output) => output,
-        Err(error) => return Decision::Unread(format!("{shown} did not run: {error}")),
-    };
-    let unread = |why: String| {
-        Decision::Unread(format!(
-            "{shown} exited {} without a verdict ({why}): {}",
+    .map_err(|error| Unanswered::Unread(format!("{shown} did not run: {error}")))?;
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        Unanswered::Unread(format!(
+            "{shown} exited {} without an answer (its output is not JSON: {error}): {}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         ))
-    };
-    let verdict: Value = match serde_json::from_slice(&output.stdout) {
+    })
+}
+
+async fn decision(words: &[&str]) -> Decision {
+    let verdict = match oko_json(words).await {
         Ok(verdict) => verdict,
-        Err(error) => return unread(format!("its output is not JSON: {error}")),
+        Err(unanswered) => return Decision::Unanswered(unanswered),
     };
     match (verdict["allowed"].as_bool(), verdict["reason"].as_str()) {
         (Some(true), Some(reason)) => Decision::Allowed(reason.to_owned()),
         (Some(false), Some(reason)) => Decision::Refused(reason.to_owned()),
-        _ => unread("its JSON states no boolean allowed and string reason".to_string()),
+        _ => Decision::Unanswered(Unanswered::Unread(format!(
+            "oko {} answered no verdict: its JSON states no boolean allowed and string reason: {verdict}",
+            words.join(" ")
+        ))),
     }
 }
 
 /// [`refusal`] for a product operation that compiles or publishes, serving
-/// no named purpose: refused, nothing was exported or built.
-pub async fn require(action: &str, product: Option<&str>) -> Result<(), CmdError> {
-    refusal(action, product, &[])
+/// the open defects `purposes` the caller named (none when it named none):
+/// refused, nothing was exported or built.
+pub async fn require(
+    action: &str,
+    product: Option<&str>,
+    purposes: &[&str],
+) -> Result<(), CmdError> {
+    refusal(action, product, purposes)
         .await
         .map_err(|refused| CmdError::refused(format!("{refused}; nothing was exported or built")))
 }

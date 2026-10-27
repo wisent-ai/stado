@@ -81,9 +81,12 @@ pub(crate) fn trusted_request_host(
     if host.eq_ignore_ascii_case("localhost") {
         return true;
     }
+    // A loopback address is trusted on its own; any other address, and a
+    // name that is not an address, is trusted only behind the HTTPS proxy
+    // that terminates for this deployment.
     match host.parse::<std::net::IpAddr>() {
         Ok(address) => address.is_loopback() || proxy_https,
-        Err(_) => proxy_https,
+        Err(_a_name_not_an_address) => proxy_https,
     }
 }
 

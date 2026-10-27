@@ -15,9 +15,12 @@ pub(super) async fn running_tick(
     pid: i32,
     log_fn: &mut dyn FnMut(&str),
 ) -> Result<(), StorageError> {
-    let used = gpu::smi_job_used_gb(pid).await;
-    if used > slot.slot.peak_vram_gb {
-        slot.slot.peak_vram_gb = used;
+    match gpu::smi_job_used_gb(pid).await {
+        Ok(Some(used)) if used > slot.slot.peak_vram_gb => slot.slot.peak_vram_gb = used,
+        Ok(_) => {}
+        // The peak keeps what was read before; this tick's footprint is not
+        // a zero, and the log says why it is missing.
+        Err(cause) => log_fn(&format!("{job_id}: GPU memory of pid {pid}'s tree unread: {cause}")),
     }
     if slot.paused {
         return Ok(());
@@ -57,10 +60,7 @@ pub(super) async fn running_tick(
         // The upload finishes or the store refuses it; nothing bounds it
         // by a clock, so a slow object store still receives the log.
         if let Err(exc) = upload.await {
-            log_fn(&format!(
-                "heartbeat log upload failed for {job_id}: {}",
-                head_chars(&exc.to_string(), 160)
-            ));
+            log_fn(&format!("heartbeat log upload failed for {job_id}: {exc}"));
         }
     }
     Ok(())
@@ -116,12 +116,21 @@ async fn take_back(
     Ok(())
 }
 
+/// What a job whose verification command exited non-zero is recorded with:
+/// the command's own code plus this offset, as
+/// <https://stado.wisent.com/docs/jobs> states it.
+const VERIFY_EXIT_OFFSET: i32 = 1000;
+/// What a job whose verification command could not be started is recorded
+/// with, as <https://stado.wisent.com/docs/jobs> states it.
+const VERIFY_UNSTARTED: i32 = 1999;
+
 /// Run a cleanly exited job's verification command (see
 /// `Job.verify_command`) in the workload's own directory, and answer the
-/// exit code the job is recorded with when verification fails: the secret
-/// environment unresolvable, the command's own code plus 1000, or 1999 when
-/// it could not start. The command defines its own failure conditions; the
-/// runner imposes no wall-clock cap.
+/// exit code the job is recorded with when verification fails: `i32::MAX`
+/// when its secret environment cannot be resolved (and the command is not
+/// run without it), the command's own code plus [`VERIFY_EXIT_OFFSET`], or
+/// [`VERIFY_UNSTARTED`] when it could not start. The command defines its own
+/// failure conditions; the runner imposes no wall-clock cap.
 pub(super) async fn verification_failure(
     job: &Job,
     verify_cmd: &str,
@@ -129,15 +138,11 @@ pub(super) async fn verification_failure(
     job_id: &str,
     log_fn: &mut dyn FnMut(&str),
 ) -> Option<i32> {
-    let mut failure = None;
     let secret_environment = match resolve_job_secret_environment(job).await {
         Ok(environment) => environment,
-        Err(_) => {
-            failure = Some(i32::MAX);
-            log_fn(&format!(
-                "verify_command secret resolution failed for {job_id}"
-            ));
-            BTreeMap::new()
+        Err(error) => {
+            log_fn(&format!("verify_command secret resolution failed for {job_id}: {error}"));
+            return Some(i32::MAX);
         }
     };
     let mut command = tokio::process::Command::new("/bin/sh");
@@ -151,17 +156,15 @@ pub(super) async fn verification_failure(
     )
     .await
     {
+        Ok(out) if out.status.success() => None,
         Ok(out) => {
             let vrc = python_returncode(out.status);
-            if vrc != 0 {
-                failure = Some(1000 + vrc);
-                log_fn(&format!("verify_command failed for {job_id}: rc={vrc}"));
-            }
+            log_fn(&format!("verify_command failed for {job_id}: rc={vrc}"));
+            Some(VERIFY_EXIT_OFFSET.saturating_add(vrc))
         }
-        Err(_) => {
-            failure = Some(1999);
-            log_fn(&format!("verify_command failed to start for {job_id}"));
+        Err(error) => {
+            log_fn(&format!("verify_command failed to start for {job_id}: {error}"));
+            Some(VERIFY_UNSTARTED)
         }
     }
-    failure
 }

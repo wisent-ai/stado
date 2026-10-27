@@ -68,8 +68,13 @@ struct Policy {
     retry_backoff_seconds: Option<String>,
 }
 
+/// A request body this boundary cannot read: the caller gets `bad_request`,
+/// the log keeps serde's reason so an old field name and no JSON differ.
 fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, HandlerError> {
-    serde_json::from_slice(body).map_err(|_| HandlerError::BadRequest)
+    serde_json::from_slice(body).map_err(|error| {
+        tracing::warn!(cause = %error, "integration automation request body unreadable");
+        HandlerError::BadRequest
+    })
 }
 /// The program Oko is installed as on every host.
 pub(super) const OKO: &str = "oko";
@@ -158,7 +163,10 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
         }
         "routines-create" => {
             let value: Create = decode(body)?;
-            uuid::Uuid::parse_str(&value.id).map_err(|_| HandlerError::BadRequest)?;
+            uuid::Uuid::parse_str(&value.id).map_err(|error| {
+                tracing::warn!(id = %value.id, cause = %error, "routines-create id is not a uuid");
+                HandlerError::BadRequest
+            })?;
             let mut argv = words(&[
                 "routines",
                 "create",
@@ -230,19 +238,26 @@ pub(super) async fn handle(action: &str, body: &[u8]) -> HandlerResult {
     let output = crate::deploy::host_channel::run_program(&target, &program, &runner)
         .await
         .map_err(HandlerError::upstream)?;
-    let data = serde_json::from_str::<Value>(&output.stdout);
-    if let (true, Err(error)) = (output.ok(), &data) {
-        return Err(HandlerError::upstream(format!(
-            "{} succeeded with output that is not JSON ({error}): {}",
-            program.join(" "),
-            output.stdout
-        )));
-    }
+    // A successful run must answer in JSON; a run that did not succeed may
+    // print anything, and its stdout is carried as text beside the status.
     // A successful transport is not a successful owner operation. Retain its
     // structured refusal (e.g. Slack readiness) and bounded actual diagnostic.
-    Ok(
-        json!({"hostId": host, "operation": action, "exitStatus": output.code,
-        "data": data.unwrap_or(Value::Null),
-        "diagnostic": output.stderr}),
-    )
+    let data = match serde_json::from_str::<Value>(&output.stdout) {
+        Ok(document) => document,
+        Err(error) if output.succeeded() => {
+            return Err(HandlerError::upstream(format!(
+                "{} succeeded with output that is not JSON ({error}): {}",
+                program.join(" "),
+                output.stdout
+            )))
+        }
+        Err(_refusal_printed_as_text) => Value::from(output.stdout.as_str()),
+    };
+    Ok(json!({
+        "hostId": host,
+        "operation": action,
+        "exitStatus": output.code,
+        "data": data,
+        "diagnostic": output.stderr,
+    }))
 }

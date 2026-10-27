@@ -17,14 +17,15 @@ const MANIFEST: &str = ".wisent-release.json";
 #[derive(Clone, Copy)]
 pub(crate) enum Selection {
     /// The gates declared as `format`; a web gate may run more than a
-    /// formatter and cannot be rewritten by `stado quality format`.
+    /// formatter and cannot be rewritten by `stado quality format`. Pre-push
+    /// and the change hand-off (`stado release changes submit`), which
+    /// records source and builds nothing, use this selection.
     Formatting,
     /// Every gate a product installation runs before it builds. The full
-    /// `stado quality check`, change hand-off and release submission use
-    /// this selection; pre-push uses `Formatting`.
+    /// `stado quality check` and release submission use this selection.
     Installation,
     /// No gate: the product's CLI built as its installation builds it, and
-    /// its command tree read and judged (`stado quality command-tree`).
+    /// its command tree read and judged (`stado quality tree`).
     CommandTree,
 }
 
@@ -190,7 +191,7 @@ pub(super) fn declared_gates(
         product: manifest.product.clone(),
         root,
         gates,
-        web_version: version.clone().filter(|_| web),
+        web_version: version.clone().filter(|_version| web),
         build: recipe.build.argv.clone(),
         stage: recipe.stage.clone(),
         env: recipe.env.clone(),

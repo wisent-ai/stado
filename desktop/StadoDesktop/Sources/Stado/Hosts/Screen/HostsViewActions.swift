@@ -8,9 +8,15 @@ extension HostsView {
     func focusRoutedHost() {
         guard let focusedHost, !focusedHost.isEmpty else { return }
         facet = .all
-        let match = (store.snapshot?.workers ?? [])
-            .first { ($0.targetName ?? $0.displayName) == focusedHost }
-        selection = match?.id ?? focusedHost
+        // The routed host's row when the snapshot lists it; otherwise the
+        // name itself is selected, so the table opens on it once it appears.
+        var selected = focusedHost
+        if let snapshot = store.snapshot,
+           let match = snapshot.workers.first(where: { ($0.targetName ?? $0.displayName) == focusedHost })
+        {
+            selected = match.id
+        }
+        selection = selected
         clearFocusedHost()
     }
 
@@ -58,8 +64,12 @@ extension HostsView {
     /// hosts publishing capacity under a target name.
     var knownNames: Set<String> {
         var names = Set(fleetStore.targets.map(\.name))
-        for host in store.snapshot?.workers ?? [] {
-            if let target = host.targetName { names.insert(target) }
+        // Without a snapshot no host publishes capacity; the declared
+        // targets are the whole set.
+        if let snapshot = store.snapshot {
+            for host in snapshot.workers {
+                if let target = host.targetName { names.insert(target) }
+            }
         }
         return names
     }

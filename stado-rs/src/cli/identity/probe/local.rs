@@ -1,6 +1,6 @@
 //! The machine this command is running on, and the channel's own login user.
 
-use super::accounts::account_ids;
+use super::accounts::{account_ids, AccountObservation};
 use crate::targets::{ComputeTarget, IdentityBinding};
 
 /// Does the approved channel land on the very user this binding names?
@@ -50,32 +50,30 @@ pub(in crate::cli::identity) fn is_local_target(target: &ComputeTarget) -> bool 
 }
 
 /// The Apple accounts the current user is signed into on this machine, or
-/// none when they cannot be read; why not is said on stderr, so an unknown
-/// answer carries its cause.
-pub(in crate::cli::identity) fn local_apple_accounts() -> Option<Vec<String>> {
+/// why they could not be read, so an unknown answer carries its cause.
+pub(in crate::cli::identity) fn local_apple_accounts() -> AccountObservation {
     let output = match crate::wait::output(
         std::process::Command::new("defaults").args(["read", "MobileMeAccounts"]),
     ) {
         Ok(output) => output,
         Err(error) => {
-            eprintln!(
+            return AccountObservation::Unknown(format!(
                 "this machine's Apple accounts cannot be read: defaults did not run: {error}"
-            );
-            return None;
+            ))
         }
     };
     if !output.status.success() {
-        eprintln!(
+        return AccountObservation::Unknown(format!(
             "this machine's Apple accounts cannot be read: defaults read MobileMeAccounts ended {}: {}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
-        );
-        return None;
+        ));
     }
     let found = account_ids(&String::from_utf8_lossy(&output.stdout));
     if found.is_empty() {
-        None
-    } else {
-        Some(found)
+        return AccountObservation::Unknown(
+            "this machine answered defaults read MobileMeAccounts without an AccountID".to_string(),
+        );
     }
+    AccountObservation::Accounts(found)
 }

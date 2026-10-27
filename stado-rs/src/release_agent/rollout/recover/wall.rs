@@ -119,7 +119,7 @@ async fn ask_wall(
     command
         .args(["-n", "-u", &target.run_as_user, "-H", "/usr/bin/env"])
         .arg(format!("HOME={}", target.home))
-        .arg("PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        .arg(crate::primitives::tool_path::vault_assignment(&target.home))
         .arg(&skarbiec)
         .args(&predicate.args)
         .stdin(Stdio::null());
@@ -185,20 +185,30 @@ pub(crate) fn hold_for(
     };
     match verdict {
         None => recorded(None),
-        Some((release_cause::WallVerdict::Present, detail)) => Some(CauseHold {
-            cause: run.cause,
-            evidence: run.evidence.clone(),
-            digests: run.digests.clone(),
-            ground: HoldGround::Observed {
-                check: run
-                    .cause
-                    .predicate(&run.evidence)
-                    .map(|predicate| format!("skarbiec {}", predicate.args.join(" ")))
-                    .unwrap_or_else(|| "skarbiec route verify".to_string()),
-                detail: detail.unwrap_or_else(|| run.evidence.clone()),
-                at: Utc::now(),
-            },
-        }),
+        Some((release_cause::WallVerdict::Present, detail)) => {
+            // A cause with a predicate is checked by that exact command; a
+            // cause without one is checked by the route verification. The
+            // probe's own detail names what it saw, else the evidence the
+            // run recorded is what stands.
+            let check = match run.cause.predicate(&run.evidence) {
+                Some(predicate) => format!("skarbiec {}", predicate.args.join(" ")),
+                None => "skarbiec route verify".to_string(),
+            };
+            let detail = match detail {
+                Some(detail) => detail,
+                None => run.evidence.clone(),
+            };
+            Some(CauseHold {
+                cause: run.cause,
+                evidence: run.evidence.clone(),
+                digests: run.digests.clone(),
+                ground: HoldGround::Observed {
+                    check,
+                    detail,
+                    at: Utc::now(),
+                },
+            })
+        }
         Some((release_cause::WallVerdict::Gone, _)) => None,
         Some((release_cause::WallVerdict::Unknown, why)) => recorded(why),
     }

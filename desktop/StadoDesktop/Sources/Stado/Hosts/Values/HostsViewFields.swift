@@ -47,13 +47,18 @@ extension HostsView {
         guard let free = host.freeRAMGB, let total = host.totalRAMGB else {
             return "Not reported"
         }
-        return "\(StadoFormat.decimal(free)) free of \(StadoFormat.decimal(total)) GB"
+        return "\(StadoFormat.decimal(free)) free of \(StadoFormat.decimal(total)) GiB"
     }
 
+    /// A host publishes `free_vram_gb` null when its admission is closed and
+    /// nothing read the cards, so the card total stands alone then.
     func vram(_ host: WorkerNode) -> String {
-        guard let total = host.totalVRAMGB, total > 0, let free = host.freeVRAMGB, free >= 0 else {
+        guard let total = host.totalVRAMGB, !total.isZero, total.sign == .plus else {
             return "Not reported"
         }
-        return "\(StadoFormat.decimal(free)) free of \(StadoFormat.decimal(total)) GB"
+        guard let free = host.freeVRAMGB, free.sign == .plus else {
+            return "\(StadoFormat.decimal(total)) GiB, free not measured"
+        }
+        return "\(StadoFormat.decimal(free)) free of \(StadoFormat.decimal(total)) GiB"
     }
 }

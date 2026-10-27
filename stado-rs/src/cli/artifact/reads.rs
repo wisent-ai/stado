@@ -59,14 +59,18 @@ pub(super) async fn show(r#ref: &str, as_json: bool) -> Result<(), CmdError> {
     let manifest = registry.resolve_manifest(&parse_ref(r#ref)?).await?;
     let aliases = registry.aliases_for(&manifest.ref_).await?;
     if as_json {
-        let mut value = manifest.to_dict();
-        let map = value.as_object_mut().expect("to_dict is an object");
+        let Value::Object(mut map) = manifest.to_dict() else {
+            return Err(CmdError::click(format!(
+                "the manifest of {} did not serialize as a JSON object",
+                manifest.ref_
+            )));
+        };
         map.insert(
             "aliases".into(),
             Value::Array(aliases.into_iter().map(Value::from).collect()),
         );
         map.insert("requested_ref".into(), Value::from(r#ref));
-        println!("{}", json_pretty_sorted(&value));
+        println!("{}", json_pretty_sorted(&Value::Object(map)));
         return Ok(());
     }
     println!("Artifact:     {}", manifest.ref_.coordinate());

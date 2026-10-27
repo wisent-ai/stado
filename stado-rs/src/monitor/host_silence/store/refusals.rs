@@ -140,7 +140,7 @@ fn refusal_blob(
     reader: &str,
     reason: &str,
     detail: &str,
-) -> Result<(String, String), serde_json::Error> {
+) -> Result<(String, String), crate::queue::StorageError> {
     let at = Utc::now();
     let record = RefusalRecord {
         host: host.to_string(),
@@ -150,7 +150,7 @@ fn refusal_blob(
         detail: detail.to_string(),
     };
     let body = serde_json::to_string_pretty(&record)?;
-    Ok((refusal_object_path(host, at), body))
+    Ok((refusal_object_path(host, at)?, body))
 }
 
 /// Where a refusal record is written: a store the caller holds, or the one

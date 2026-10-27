@@ -8,7 +8,7 @@
 //! the two indirect addresses need, request headers whose values are vault
 //! fields by role, an optional JSON `body`, the status the component answers
 //! when it works (`expect_status`) and optionally a text its answer carries
-//! (`expect_body`). Stado runs them (`stado public-status check`) and
+//! (`expect_body`). Stado runs them (`stado availability check`) and
 //! publishes what each answered; nothing else declares a component.
 
 use anyhow::{bail, Context, Result};

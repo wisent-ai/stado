@@ -27,21 +27,22 @@ pub fn parse_allowlist(body: &str) -> Vec<String> {
     let mut found: Option<&str> = None;
     for line in body.lines() {
         let trimmed = line.trim_start();
-        let assignment = trimmed
-            .strip_prefix("export ")
-            .map_or(trimmed, str::trim_start);
+        // A shell `export` prefix is part of the legacy spelling.
+        let assignment = match trimmed.strip_prefix("export ") {
+            Some(exported) => exported.trim_start(),
+            None => trimmed,
+        };
         if let Some(value) = assignment.strip_prefix(&format!("{ALLOWLIST_KEY}=")) {
             found = Some(value);
         }
     }
-    let legacy = found.is_some();
-    let content = found
-        .map(crate::deploy::service_env_file::effective_text)
-        .unwrap_or(body);
-    let entries: Vec<&str> = if legacy {
-        content.split(',').collect()
-    } else {
-        content.lines().collect()
+    // The legacy assignment carries a comma-separated value; the canonical
+    // file is one action per line.
+    let entries: Vec<&str> = match found {
+        Some(assigned) => crate::deploy::service_env_file::effective_text(assigned)
+            .split(',')
+            .collect(),
+        None => body.lines().collect(),
     };
     let mut seen = BTreeSet::new();
     let mut actions = Vec::with_capacity(entries.len());
@@ -69,7 +70,7 @@ pub async fn host_allowlist(
     runner: &Runner,
 ) -> Result<Vec<String>, DeployError> {
     let fetched = service_file_fetch::fetch_file(target, allowlist_file, runner).await?;
-    if !fetched.ok() {
+    if !fetched.whole() {
         return Err(DeployError::unreachable(format!(
             "{}: could not read {allowlist_file} to learn which actions this worker accepts: {} ({})",
             target.name,

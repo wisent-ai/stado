@@ -7,9 +7,7 @@
 //! marker line the caller insists on seeing before it believes the write.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use base64::engine::general_purpose::STANDARD;
@@ -33,31 +31,17 @@ pub(in crate::cli::recovery) fn install_local_config(
     })?;
     fs::create_dir_all(parent)?;
     let backup = path_with_suffix(&prepared.path, ".pre-stado-recovery")?;
-    if prepared.path.exists() && !backup.exists() {
+    // The one-time rollback copy is taken only when there is a config and
+    // no copy yet; either that cannot be examined is refused with its cause:
+    // read as absent, the install wrote over a config with no rollback, or
+    // over the rollback with the already-replaced config.
+    let present = crate::primitives::presence::present;
+    if present(&prepared.path)? && !present(&backup)? {
         fs::copy(&prepared.path, &backup)?;
     }
-    let temp = path_with_suffix(
-        &prepared.path,
-        &format!(".recovery-{}.tmp", uuid::Uuid::new_v4()),
-    )?;
-    let write_result = (|| -> Result<(), std::io::Error> {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temp)?;
-        file.write_all(&prepared.bytes)?;
-        file.sync_all()?;
-        fs::rename(&temp, &prepared.path)?;
-        fs::File::open(parent)?.sync_all()?;
-        Ok(())
-    })();
-    write_result.map_err(|error| {
-        CmdError::click(crate::primitives::staging::failed_with(
-            format!("cannot write {}: {error}", prepared.path.display()),
-            &temp,
-        ))
-        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    crate::primitives::document::persist(&prepared.path, &prepared.bytes).map_err(|error| {
+        CmdError::click(format!("cannot write {}: {error}", prepared.path.display()))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
     println!(
         "  wrote {} (rollback: {})",
@@ -98,7 +82,7 @@ pub(in crate::cli::recovery) async fn install_remote_configs(
         let output = host_channel::run_script(&target, &script, &runner)
             .await
             .map_err(deploy_error)?;
-        if !output.ok() || !output.stdout.contains("STADO_RECOVERY_CONFIG\tinstalled\t") {
+        if !output.succeeded() || !output.stdout.contains("STADO_RECOVERY_CONFIG\tinstalled\t") {
             return Err(CmdError::click(format!(
                 "{host}: config cutover failed: {}",
                 host_channel::last_error_line(&output, "missing recovery config marker")

@@ -105,12 +105,15 @@ fn open_quota_tickets(runner: &dyn AzRunner) -> Result<Vec<Value>, RepliesError>
         .collect())
 }
 
-/// Python `_region_from_title`.
-pub fn region_from_title(title: &str) -> String {
+/// The region a ticket title names in its closing parentheses (Python
+/// `_region_from_title`); a title that names none has no region, rather than
+/// an empty one.
+pub fn region_from_title(title: &str) -> Option<String> {
     region_re()
         .captures(title)
-        .map(|caps| caps[1].trim().to_string())
-        .unwrap_or_default()
+        .and_then(|caps| caps.name("region"))
+        .map(|region| region.as_str().trim().to_string())
+        .filter(|region| !region.is_empty())
 }
 
 /// Reusable enumerator: one row per Open quota-classification Azure
@@ -131,7 +134,7 @@ pub fn list_open_azure_tickets(runner: &dyn AzRunner) -> Result<Vec<Value>, Repl
         out.push(json!({
             "name": name,
             "title": title,
-            "region": title.map(region_from_title),
+            "region": title.and_then(region_from_title),
             "last_sender": last.get("sender"),
             "last_sent": last.get("createdDate"),
             "last_subject": last.get("subject"),

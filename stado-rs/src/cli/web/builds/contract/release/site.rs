@@ -30,7 +30,7 @@ pub(in crate::cli::web::builds) fn site_root(
         )));
     }
     let root = source.join(declared);
-    if !root.is_dir() {
+    if !crate::primitives::presence::present(&root)? || !root.is_dir() {
         return Err(CmdError::click(format!(
             "--root names {}, which is not a directory: the recipe declares the site root, and after the build there is nothing there to serve",
             root.display()

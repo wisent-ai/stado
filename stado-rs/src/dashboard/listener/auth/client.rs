@@ -18,13 +18,16 @@ pub(crate) async fn authorize_service(
     service: &str,
     action: &str,
 ) -> Result<bool, AuthorityUnavailable> {
-    config::service_api_deployers().map_err(|refusals| {
+    let deployers = config::service_api_deployers().map_err(|refusals| {
         AuthorityUnavailable::new(format!(
             "service_api.deployers is refused: {}",
             refusals.join("; ")
         ))
     })?;
-    let Some(policy) = config::service_deployer_for(service, action) else {
+    let Some(policy) = deployers
+        .values()
+        .find(|deployer| deployer.allows(service, action))
+    else {
         return Ok(false);
     };
     let Some(supplied) = presented_bearer(request) else {

@@ -21,16 +21,17 @@ const NODE_TOOLCHAIN_DIRECTORIES: &[&str] = &["/opt/homebrew/bin", "/usr/local/b
 ///
 /// A builder that installs Node somewhere else has none of these
 /// directories, and its `PATH` is then the answer: the bare name is run,
-/// and [`run`]'s own refusal names the toolchain if that fails too.
-fn toolchain_program(name: &str) -> String {
-    let found = NODE_TOOLCHAIN_DIRECTORIES
-        .iter()
-        .map(|directory| PathBuf::from(directory).join(name))
-        .find(|candidate| candidate.is_file());
-    match found {
-        Some(candidate) => candidate.display().to_string(),
-        None => name.to_string(),
+/// and [`run`]'s own refusal names the toolchain if that fails too. A
+/// candidate that cannot be examined is refused naming it: skipped, the
+/// release ran a different npm, or the bare name, than the host carries.
+fn toolchain_program(name: &str) -> Result<String, CmdError> {
+    for directory in NODE_TOOLCHAIN_DIRECTORIES {
+        let candidate = PathBuf::from(directory).join(name);
+        if crate::primitives::presence::present(&candidate)? && candidate.is_file() {
+            return Ok(candidate.display().to_string());
+        }
     }
+    Ok(name.to_string())
 }
 
 /// Run one `npm` verb with the interpreter its shim needs.
@@ -45,7 +46,7 @@ pub(in crate::cli::web::builds) fn npm(
     arguments: &[&str],
     variables: &[(String, String)],
 ) -> Result<(), CmdError> {
-    let program = toolchain_program("npm");
+    let program = toolchain_program("npm")?;
     // Unset is no inherited PATH; one that is not text is refused, never
     // read as unset so that npm runs without the directories it names.
     let mut path = match std::env::var("PATH") {

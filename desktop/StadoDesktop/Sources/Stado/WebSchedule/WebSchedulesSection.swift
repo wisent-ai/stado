@@ -35,7 +35,7 @@ struct WebSchedulesSection: View {
                     DisclosureGroup("Command output") {
                         VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                             Text(StadoCLI.commandLine(result.arguments))
-                            Text("Exit code: \(result.exitCode.map(String.init) ?? "not reported")")
+                            Text(result.exitCodeLine)
                             Text(result.standardOutput)
                             Text(result.standardError)
                         }

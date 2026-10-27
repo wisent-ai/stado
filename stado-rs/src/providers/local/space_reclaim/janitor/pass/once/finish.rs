@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::providers::local::space_reclaim::janitor::policy::roots::free_bytes;
 use crate::providers::local::space_reclaim::janitor::state::read_state;
+use crate::providers::local::space_reclaim::janitor::state::report::build::elapsed_ms;
 use crate::providers::local::space_reclaim::janitor::state::report::canonical::canonical_json;
 use crate::providers::local::space_reclaim::janitor::state::report::CleanupReport;
 use crate::providers::local::space_reclaim::janitor::state::write::write_state;
@@ -21,12 +22,16 @@ pub(crate) fn finish(
     attempted_at: f64,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
+    // The closing reading is part of the report: a volume that could not be
+    // read after the cleaners is said beside the pass, not left as unmeasured
+    // in silence.
     if let Some(home) = home {
-        if let Ok(free) = free_bytes(home) {
-            report.free_bytes_after = Some(free);
+        match free_bytes(home) {
+            Ok(free) => report.free_bytes_after = Some(free),
+            Err(exc) => report.add_error("free_bytes_after", &exc),
         }
     }
-    report.duration_ms = (started.elapsed().as_secs_f64() * 1000.0).max(0.0) as i64;
+    report.duration_ms = Some(elapsed_ms(started));
     if let Some(state_dir) = state_dir {
         let value = report.to_value();
         if let Err(exc) = write_state(state_dir, &value, attempted_at) {
@@ -41,8 +46,11 @@ pub(crate) fn finish(
     }
     let value = report.to_value();
     let line = canonical_json(&value);
-    // Python swallows logging failures.
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| log_fn(&line)));
+    // A log sink that panics must not end the pass that already ran; that it
+    // did is said on standard error.
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| log_fn(&line))).is_err() {
+        eprintln!("stado: the space-reclaim log sink panicked while writing this pass's report");
+    }
     value
 }
 

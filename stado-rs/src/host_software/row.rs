@@ -83,10 +83,4 @@ impl HostSoftware {
             "provenance": self.provenance,
         })
     }
-
-    /// The digest, short enough to read inside a sentence and long enough to
-    /// look up. A full 64 characters mid-sentence is a sentence nobody reads.
-    pub(super) fn short_digest(&self) -> &str {
-        self.sha256.get(..12).unwrap_or(&self.sha256)
-    }
 }

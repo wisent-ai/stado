@@ -95,8 +95,8 @@ pub(crate) async fn catalog_identity(
                 format!("canonical pipeline release signature is unavailable at {signature_uri}"),
             )
         })?;
-    let signature = String::from_utf8(signature).map_err(|_| {
-        DeployError("canonical pipeline release signature is not UTF-8".to_string())
+    let signature = String::from_utf8(signature).map_err(|error| {
+        DeployError(format!("canonical pipeline release signature is not UTF-8: {error}"))
             .stating(FailureCode::Refused)
     })?;
     crate::release_control::verify_manifest(public_key, &manifest, &signature)

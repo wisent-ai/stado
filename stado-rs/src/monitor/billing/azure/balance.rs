@@ -17,23 +17,22 @@ pub(super) async fn azure_section_with(
     login_base: &str,
     arm_base: &str,
 ) -> Value {
-    let missing: Vec<&str> = ["tenant_id", "client_id", "client_secret"]
-        .into_iter()
-        .filter(|key| {
-            sp.get(*key)
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
-        })
-        .collect();
-    if !missing.is_empty() {
-        return azure_error(
-            "config_error",
-            format!("Azure SP secret missing keys: {}", py_list_repr(&missing)),
-        );
-    }
-    let tenant_id = sp["tenant_id"].as_str().expect("validated above");
-    let client_id = sp["client_id"].as_str().expect("validated above");
-    let client_secret = sp["client_secret"].as_str().expect("validated above");
+    let field = |key: &str| sp.get(key).and_then(Value::as_str).filter(|value| !value.is_empty());
+    let (tenant_id, client_id, client_secret) =
+        match (field("tenant_id"), field("client_id"), field("client_secret")) {
+            (Some(tenant), Some(client), Some(secret)) => (tenant, client, secret),
+            (tenant, client, secret) => {
+                let missing: Vec<&str> = [("tenant_id", tenant), ("client_id", client), ("client_secret", secret)]
+                    .into_iter()
+                    .filter(|(_key, value)| value.is_none())
+                    .map(|(key, _value)| key)
+                    .collect();
+                return azure_error(
+                    "config_error",
+                    format!("Azure SP secret missing keys: {}", py_list_repr(&missing)),
+                );
+            }
+        };
 
     // Python ClientSecretCredential.get_token("https://management.azure.com/.default").
     let token_url = format!("{login_base}/{tenant_id}/oauth2/v2.0/token");
@@ -147,27 +146,37 @@ pub(super) async fn azure_section_with(
     } else {
         json!({})
     };
-    let props = body.get("properties").unwrap_or(&body).clone();
+    // A balance document carries its fields under `properties`; one without
+    // that member is read as the fields themselves.
+    let props = match body.get("properties") {
+        Some(properties) => properties.clone(),
+        None => body.clone(),
+    };
     let amount = extract_amount(&props);
-    let estimated = props
-        .pointer("/balanceSummary/estimatedBalance/value")
-        .cloned()
-        .unwrap_or_else(|| amount.clone());
-    let currency = props
+    // The estimated balance, or the current one when Azure estimates none.
+    let estimated = match props.pointer("/balanceSummary/estimatedBalance/value") {
+        Some(value) => value.clone(),
+        None => amount.clone(),
+    };
+    // The currency Azure names for the balance, in the first of the places
+    // its APIs name it; null when it names none, never a currency assumed.
+    let currency = match props
         .get("creditCurrency")
         .or_else(|| props.get("billingCurrency"))
         .or_else(|| props.pointer("/balanceSummary/currentBalance/currency"))
         .or_else(|| props.pointer("/amount/currency"))
-        .cloned()
-        .unwrap_or_else(|| json!("USD"));
-    let expired = props
-        .pointer("/expiredCredit/value")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let pending = props
-        .pointer("/pendingEligibleCharges/value")
-        .cloned()
-        .unwrap_or(Value::Null);
+    {
+        Some(currency) => currency.clone(),
+        None => Value::Null,
+    };
+    let expired = match props.pointer("/expiredCredit/value") {
+        Some(value) => value.clone(),
+        None => Value::Null,
+    };
+    let pending = match props.pointer("/pendingEligibleCharges/value") {
+        Some(value) => value.clone(),
+        None => Value::Null,
+    };
 
     let mut billing_property = Value::Null;
     let mut scope_detail = Value::Null;
@@ -196,9 +205,12 @@ pub(super) async fn azure_section_with(
             }
         }
     }
-    let property_props = billing_property
-        .get("properties")
-        .unwrap_or(&billing_property);
+    // A billing property document carries its fields under `properties`;
+    // one without that member is read as the fields themselves.
+    let property_props = match billing_property.get("properties") {
+        Some(properties) => properties,
+        None => &billing_property,
+    };
     let grant = property_props
         .get("billingProfileSpendingLimitDetails")
         .and_then(Value::as_array)
@@ -210,15 +222,15 @@ pub(super) async fn azure_section_with(
                 })
                 .or_else(|| details.first())
         });
-    let grant_amount = grant
-        .and_then(|detail| detail.get("amount"))
-        .cloned()
-        .unwrap_or(Value::Null);
-    let credit_used = grant_amount
-        .as_f64()
-        .zip(amount.as_f64())
-        .map(|(grant, balance)| json!(grant - balance))
-        .unwrap_or(Value::Null);
+    // `Value` indexing writes an absent member as null.
+    let grant_amount = match grant {
+        Some(detail) => detail["amount"].clone(),
+        None => Value::Null,
+    };
+    let credit_used = match (grant_amount.as_f64(), amount.as_f64()) {
+        (Some(grant), Some(balance)) => json!(grant - balance),
+        _ => Value::Null,
+    };
 
     json!({
         "status": "ok",
@@ -233,8 +245,10 @@ pub(super) async fn azure_section_with(
         "currency": currency,
         "expired_credit": expired,
         "pending_eligible_charges": pending,
-        "pending_credit_adjustments": props.pointer("/pendingCreditAdjustments/value").cloned().unwrap_or(Value::Null),
-        "is_estimated_balance": props.get("isEstimatedBalance").cloned().unwrap_or(Value::Null),
+        // A field Azure did not answer is null, as `json!` writes an absent
+        // option.
+        "pending_credit_adjustments": props.pointer("/pendingCreditAdjustments/value"),
+        "is_estimated_balance": props.get("isEstimatedBalance"),
         "credit_depleted": match config::billing_net_alert_usd() {
             Ok(threshold) => json!(extract_amount(&props).as_f64().is_some_and(|balance| balance <= threshold)),
             Err(_) => Value::Null,
@@ -242,15 +256,15 @@ pub(super) async fn azure_section_with(
         "net_alert_detail": config::billing_net_alert_usd().err(),
         "grant_amount": grant_amount,
         "credit_used": credit_used,
-        "grant_start_date": grant.and_then(|detail| detail.get("startDate")).cloned().unwrap_or(Value::Null),
-        "grant_end_date": grant.and_then(|detail| detail.get("endDate")).cloned().unwrap_or(Value::Null),
-        "grant_type": grant.and_then(|detail| detail.get("type")).cloned().unwrap_or(Value::Null),
-        "grant_status": grant.and_then(|detail| detail.get("status")).cloned().unwrap_or(Value::Null),
-        "billing_account": property_props.get("billingAccountDisplayName").cloned().unwrap_or(Value::Null),
-        "billing_profile": property_props.get("billingProfileDisplayName").cloned().unwrap_or(Value::Null),
-        "billing_profile_status": property_props.get("billingProfileStatus").cloned().unwrap_or(Value::Null),
-        "subscription_billing_status": property_props.get("subscriptionBillingStatus").cloned().unwrap_or(Value::Null),
-        "subscription_billing_type": property_props.get("subscriptionBillingType").cloned().unwrap_or(Value::Null),
+        "grant_start_date": grant.and_then(|detail| detail.get("startDate")),
+        "grant_end_date": grant.and_then(|detail| detail.get("endDate")),
+        "grant_type": grant.and_then(|detail| detail.get("type")),
+        "grant_status": grant.and_then(|detail| detail.get("status")),
+        "billing_account": property_props.get("billingAccountDisplayName"),
+        "billing_profile": property_props.get("billingProfileDisplayName"),
+        "billing_profile_status": property_props.get("billingProfileStatus"),
+        "subscription_billing_status": property_props.get("subscriptionBillingStatus"),
+        "subscription_billing_type": property_props.get("subscriptionBillingType"),
         "overage_risk": property_props.get("billingProfileSpendingLimit").and_then(Value::as_str) == Some("Off"),
         "scope_detail": scope_detail,
         "raw": props,
@@ -272,7 +286,9 @@ fn extract_amount(props: &Value) -> Value {
         .filter(|value| !value.is_null())
         .or_else(|| map.get("availableBalance"));
     match amount {
-        Some(Value::Object(object)) => object.get("value").cloned().unwrap_or(Value::Null),
+        // An amount object Azure sent without `value` states no amount; a
+        // map index would panic on it.
+        Some(amount @ Value::Object(_)) => amount["value"].clone(),
         Some(value) => value.clone(),
         None => Value::Null,
     }

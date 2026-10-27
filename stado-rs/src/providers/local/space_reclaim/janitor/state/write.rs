@@ -49,11 +49,11 @@ pub(crate) fn write_state(
     // the error: rewritten from this pass alone it lost every other writer's
     // stamps and the promises it held, without a word.
     let previous = read_state(state_dir)?;
-    let mut by_writer = previous
-        .get(WRITER_ATTEMPTS)
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    // A state no writer stamped yet carries no stamps forward.
+    let mut by_writer = match previous.get(WRITER_ATTEMPTS).and_then(Value::as_object) {
+        Some(stamped) => stamped.clone(),
+        None => Map::new(),
+    };
     if let Some(writer) = report.get("writer").and_then(Value::as_str) {
         by_writer.insert(writer.to_string(), serde_json::json!(attempted_at));
     }
@@ -61,10 +61,10 @@ pub(crate) fn write_state(
     // is what `space report` reports - and never moves backwards: a slower
     // writer finishing after a newer pass by another writer must not rewind
     // it.
-    let last_attempt_at = previous
-        .get("last_attempt_at")
-        .and_then(Value::as_f64)
-        .map_or(attempted_at, |recorded| recorded.max(attempted_at));
+    let last_attempt_at = match previous.get("last_attempt_at").and_then(Value::as_f64) {
+        Some(recorded) => recorded.max(attempted_at),
+        None => attempted_at,
+    };
     // When the last pass was prevented rather than run, and never moving
     // backwards either.
     //
@@ -87,19 +87,11 @@ pub(crate) fn write_state(
     // already does. What the arithmetic needs is prevented-since-a-known-time,
     // and that is what this is.
     let prevented_now = pass_was_prevented(report);
-    let last_prevented_at = previous
-        .get("last_prevented_at")
-        .and_then(Value::as_f64)
-        .map_or_else(
-            || prevented_now.then_some(attempted_at),
-            |recorded| {
-                Some(if prevented_now {
-                    recorded.max(attempted_at)
-                } else {
-                    recorded
-                })
-            },
-        );
+    let last_prevented_at = match previous.get("last_prevented_at").and_then(Value::as_f64) {
+        Some(recorded) if prevented_now => Some(recorded.max(attempted_at)),
+        Some(recorded) => Some(recorded),
+        None => prevented_now.then_some(attempted_at),
+    };
     // Success belongs to the host, not to the observing pass. Since a busy
     // writer can finish after the owner whose report it copied, retain the
     // later valid RFC 3339 timestamp rather than trusting write order.
@@ -113,13 +105,21 @@ pub(crate) fn write_state(
         .and_then(|previous| previous.get("last_success_at"))
         .and_then(Value::as_str)
         .map(str::to_string);
-    let parsed =
-        |stamp: &str| chrono::DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok();
+    // A stamp that is not RFC 3339 cannot be ordered; the other is kept and
+    // the unreadable one is named on stderr.
+    let parsed = |stamp: &str| chrono::DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00"));
     let last_success_at = match (incoming_success, recorded_success) {
         (Some(incoming), Some(recorded)) => match (parsed(&incoming), parsed(&recorded)) {
-            (Some(incoming_at), Some(recorded_at)) if recorded_at > incoming_at => Some(recorded),
-            (None, Some(_)) => Some(recorded),
-            _ => Some(incoming),
+            (Ok(incoming_at), Ok(recorded_at)) if recorded_at > incoming_at => Some(recorded),
+            (Ok(_), Ok(_)) => Some(incoming),
+            (Err(error), Ok(_)) => {
+                eprintln!("janitor state: this pass's last_success_at {incoming:?} is not RFC 3339 ({error}); the recorded {recorded:?} is kept");
+                Some(recorded)
+            }
+            (_, Err(error)) => {
+                eprintln!("janitor state: the recorded last_success_at {recorded:?} is not RFC 3339 ({error}); this pass's {incoming:?} replaces it");
+                Some(incoming)
+            }
         },
         (incoming, recorded) => incoming.or(recorded),
     };
@@ -158,18 +158,23 @@ pub(crate) fn write_state(
         state.insert(LAST_COMPLETED_REPORT.to_string(), completed);
     }
     let payload = canonical_json(&Value::Object(state));
-    // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}".
+    // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}";
+    // a clock before the epoch cannot tell two writes apart, so it is refused.
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_err(|error| {
+            JanitorError::os(&format!(
+                "the host clock reads before the Unix epoch, so the state file's temporary name cannot be made unique: {error}"
+            ))
+        })?
+        .as_nanos();
     let temp = state_dir.join(format!(".{STATE_NAME}.{}.{nanos}", std::process::id()));
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .custom_flags(nix::libc::O_NOFOLLOW)
-            .mode(0o600)
+            .mode(crate::primitives::file_mode::owner_read_write())
             .open(&temp)?;
         file.write_all(payload.as_bytes())?;
         file.flush()?;

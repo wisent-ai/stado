@@ -42,7 +42,7 @@ pub(super) fn answer<T: Send + 'static>(
     // A closed channel means the task ended without sending: it stopped.
     let receive = move || match receiver.recv() {
         Ok(outcome) => outcome,
-        Err(_) => Answer::Stopped,
+        Err(std::sync::mpsc::RecvError) => Answer::Stopped,
     };
     match Handle::try_current() {
         Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {

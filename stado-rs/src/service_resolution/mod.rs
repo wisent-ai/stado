@@ -31,6 +31,9 @@ pub use validate::validate_registry_contract;
 
 const DIRECTORY_KEY: &str = "service_directory";
 
+/// How far one change of the directory advances its generation.
+const GENERATION_STEP: u64 = 1; // https://stado.wisent.com/docs/primitives/directory ("every registry writer that changes the directory advances it by one")
+
 /// The scheme a configuration value uses to name a service instead of an
 /// address: `stado://service/<name>?consumer=<consumer>`.
 pub const SERVICE_SCHEME: &str = "stado://service/";
@@ -45,37 +48,33 @@ pub const SERVICE_SCHEME: &str = "stado://service/";
 /// the registry declares for that adapter on this host, read from the
 /// last-known-good copy: the same number the resolver is about to bind, so a
 /// reader started beside it gets a connection error to report rather than an
-/// empty URL that ends its process. An adapter neither declares answers
-/// empty, which every reader refuses with its own sentence. Any other value
-/// is returned as it is.
-pub fn local_address(value: &str) -> String {
+/// empty URL that ends its process. An adapter neither published nor
+/// declared, or a value naming no consumer, is refused with its cause, so
+/// the reader says why instead of calling an empty address invalid. Any
+/// other value is returned as it is.
+pub fn local_address(value: &str) -> Result<String, String> {
     let Some(named) = value.trim().strip_prefix(SERVICE_SCHEME) else {
-        return value.to_string();
+        return Ok(value.to_string());
     };
     let (service, consumer) = match named.split_once("?consumer=") {
         Some((service, consumer)) => (service, consumer),
         None => (named, ""),
     };
     if service.is_empty() || consumer.is_empty() {
-        eprintln!(
-            "stado: {value:?} names no consumer; write {SERVICE_SCHEME}<service>?consumer=<consumer>"
-        );
-        return String::new();
+        return Err(format!(
+            "{value:?} names no consumer; write {SERVICE_SCHEME}<service>?consumer=<consumer>"
+        ));
     }
     if let Some(url) = crate::cli::resolver::published_adapter_url(service, consumer) {
-        return url;
+        return Ok(url);
     }
-    match declared_adapter_url(service, consumer) {
-        Ok(url) => url,
-        Err(detail) => {
-            eprintln!(
-                "stado: no listening resolver on this host published an adapter for {service} as \
-                 consumer {consumer}, and the registry copy does not declare one: {detail}; \
-                 `stado resolver status` names the adapters this host serves"
-            );
-            String::new()
-        }
-    }
+    declared_adapter_url(service, consumer).map_err(|detail| {
+        format!(
+            "{value}: no listening resolver on this host published an adapter for {service} as \
+             consumer {consumer}, and the registry copy does not declare one: {detail}; \
+             `stado resolver status` names the adapters this host serves"
+        )
+    })
 }
 
 /// `http://<bind>` the last-known-good registry declares for this host's
@@ -101,10 +100,14 @@ pub fn directory(document: &Value) -> Result<Option<ServiceDirectory>, String> {
         .transpose()
 }
 
-fn profile_is_locked(document: &Value, profile: &str) -> Result<bool, String> {
+/// The placement transaction holding `profile`, if one does.
+fn holding_transaction(
+    document: &Value,
+    profile: &str,
+) -> Result<Option<crate::placement::PlacementTransaction>, String> {
     Ok(crate::placement::transactions(document)?
-        .iter()
-        .any(|transaction| transaction.profile == profile))
+        .into_iter()
+        .find(|transaction| transaction.profile == profile))
 }
 
 /// Resolve a logical service for one workload identity. Resolution fails while
@@ -134,10 +137,12 @@ pub fn resolve(
             consumer: consumer.to_string(),
         })?;
     if let Some(profile) = &route.placement_profile {
-        if profile_is_locked(document, profile).map_err(ResolveError::Declaration)? {
+        if let Some(transaction) =
+            holding_transaction(document, profile).map_err(ResolveError::Declaration)?
+        {
             return Err(ResolveError::Moving {
                 service: service.to_string(),
-                profile: profile.clone(),
+                transaction,
             });
         }
     }
@@ -163,17 +168,17 @@ pub fn resolve(
         .get("ssh")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let ssh_fallbacks = target
-        .get("ssh_fallbacks")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| {
+    // A target that declares no ssh_fallbacks has none: the registry states
+    // its primary SSH path as the only one. A list that does not parse is
+    // refused with the parser's cause.
+    let ssh_fallbacks = match target.get("ssh_fallbacks") {
+        None => Vec::new(),
+        Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
             ResolveError::Declaration(format!(
                 "service {service:?} has invalid SSH fallback paths: {error}"
             ))
-        })?
-        .unwrap_or_default();
+        })?,
+    };
     Ok(ResolvedService {
         name: service.to_string(),
         generation: directory.generation,
@@ -216,7 +221,7 @@ pub fn retarget_profile(
     if changed {
         directory.generation = directory
             .generation
-            .checked_add(1)
+            .checked_add(GENERATION_STEP)
             .ok_or_else(|| "registry.service_directory.generation overflow".to_string())?;
         *value = serde_json::to_value(directory)
             .map_err(|error| format!("could not serialize service directory: {error}"))?;
@@ -234,17 +239,24 @@ pub fn retarget_profile(
 /// could hold a directory that had already changed beneath it and read a
 /// generation saying it had not.
 pub fn advance_generation(document: &mut Value) -> Result<u64, String> {
+    advance_block_generation(document, DIRECTORY_KEY)
+}
+
+/// Advance `registry.<key>.generation` by the declared step and return the
+/// new value: the directory's counter and release_control's are advanced the
+/// same way, so no writer spells its own increment.
+pub fn advance_block_generation(document: &mut Value, key: &str) -> Result<u64, String> {
     let block = document
-        .get_mut(DIRECTORY_KEY)
+        .get_mut(key)
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| format!("registry.{DIRECTORY_KEY}: is not an object"))?;
+        .ok_or_else(|| format!("registry.{key}: is not an object"))?;
     let current = block
         .get("generation")
         .and_then(Value::as_u64)
-        .ok_or_else(|| format!("registry.{DIRECTORY_KEY}.generation is not an unsigned integer"))?;
+        .ok_or_else(|| format!("registry.{key}.generation is not an unsigned integer"))?;
     let next = current
-        .checked_add(1)
-        .ok_or_else(|| format!("registry.{DIRECTORY_KEY}.generation overflow"))?;
+        .checked_add(GENERATION_STEP)
+        .ok_or_else(|| format!("registry.{key}.generation overflow"))?;
     block.insert("generation".to_string(), Value::from(next));
     Ok(next)
 }

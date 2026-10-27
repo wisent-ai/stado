@@ -64,19 +64,21 @@ pub(crate) fn inherit_safe_agent_environment(command: &mut tokio::process::Comma
         }
     }
     // Foundation ignores HOME on macOS. Keep its declared runtime home when
-    // present, otherwise align it with the HOME used by the workload's POSIX tools.
+    // present, otherwise the home Stado itself resolves (HOME, else the user
+    // database), so the workload's Foundation and POSIX tools agree.
     #[cfg(target_os = "macos")]
     {
         let declared = std::env::var_os("CFFIXED_USER_HOME").filter(|value| !value.is_empty());
-        let home = std::env::var_os("HOME").filter(|value| !value.is_empty());
-        match (declared, home) {
+        match (declared, crate::config_file::home()) {
             (Some(declared), _) => {
                 command.env("CFFIXED_USER_HOME", declared);
             }
-            (None, Some(home)) => {
+            (None, Ok(home)) => {
                 command.env("CFFIXED_USER_HOME", home);
             }
-            (None, None) => {}
+            (None, Err(cause)) => {
+                eprintln!("the workload's Foundation home is not set: {cause}");
+            }
         }
     }
     command.envs(WORKLOAD_GIT_ENV.iter().copied());

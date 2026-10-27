@@ -13,7 +13,7 @@ mod redaction;
 pub use coercion::required_dict;
 /// Named out of tree by `http::api_error` and by the `client::commands`,
 /// `client::files`, `client::lifecycle` and `client::prompts` readers.
-pub(crate) use coercion::{first_truthy_str, jbool, jstr};
+pub(crate) use coercion::{first_stated, jbool, jint, jstr};
 /// Named out of tree by the `client::lifecycle` create / get / list /
 /// update / fork verbs.
 pub use parse::{parse_box_info, parse_sandbox_envelope};

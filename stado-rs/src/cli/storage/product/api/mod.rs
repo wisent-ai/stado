@@ -81,32 +81,55 @@ pub(in crate::cli::storage) fn partial_content_bounds(
     let content_range = response
         .headers()
         .get(reqwest::header::CONTENT_RANGE)
-        .and_then(|value| value.to_str().ok())
         .ok_or_else(|| {
             CmdError::click(format!(
                 "Stado object API {operation} partial response carries no Content-Range"
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?
+        .to_str()
+        .map_err(|error| {
+            CmdError::click(format!(
+                "Stado object API {operation} Content-Range is not text: {error}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?;
-    let invalid = || {
+    let invalid = |cause: String| {
         CmdError::click(format!(
-            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
+            "Stado object API {operation} returned invalid Content-Range {content_range:?}: {cause}"
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown)
     };
     let (range, total) = content_range
         .strip_prefix("bytes ")
         .and_then(|value| value.split_once('/'))
-        .ok_or_else(invalid)?;
-    let (start, end) = range.split_once('-').ok_or_else(invalid)?;
-    let start = start.parse::<usize>().map_err(|_| invalid())?;
-    let end = end.parse::<usize>().map_err(|_| invalid())?;
-    let total = total.parse::<usize>().map_err(|_| invalid())?;
-    let end_exclusive = end.checked_add(1).ok_or_else(invalid)?;
+        .ok_or_else(|| invalid("it is not `bytes <first>-<last>/<total>`".to_owned()))?;
+    let (start, end) = range
+        .split_once('-')
+        .ok_or_else(|| invalid("it names no `<first>-<last>` range".to_owned()))?;
+    let start = start
+        .parse::<usize>()
+        .map_err(|error| invalid(format!("first byte {start:?}: {error}")))?;
+    let end = end
+        .parse::<usize>()
+        .map_err(|error| invalid(format!("last byte {end:?}: {error}")))?;
+    let total = total
+        .parse::<usize>()
+        .map_err(|error| invalid(format!("total {total:?}: {error}")))?;
+    // A Content-Range names both its first and its last byte, so the bytes it
+    // carries are the inclusive range between them.
+    let (length, Some(counted)) = (start..=end).size_hint() else {
+        return Err(invalid(format!(
+            "bytes {start} to {end} are more than this machine can count"
+        )));
+    };
+    let end_exclusive = start
+        .checked_add(counted)
+        .ok_or_else(|| invalid(format!("last byte {end} has no byte after it")))?;
     if start != expected_start
         || end < start
         || end_exclusive > total
-        || end_exclusive.saturating_sub(start) > OBJECT_API_CHUNK_BYTES
+        || length > OBJECT_API_CHUNK_BYTES
     {
         return Err(CmdError::click(format!(
             "Stado object API {operation} returned invalid Content-Range {content_range:?} \
@@ -117,51 +140,69 @@ pub(in crate::cli::storage) fn partial_content_bounds(
     Ok((end_exclusive, total))
 }
 
-/// The total object size a resumed `206` body declares, refused unless the
-/// body starts exactly where the bytes already held end. An object GET and a
-/// release GET resume the same way, so they read the header the same way.
-pub(in crate::cli::storage) fn resumed_content_total(
+/// The byte count a response's `Content-Length` declares, `None` when it
+/// declares none. A count this machine cannot address is refused with the
+/// count, not read as undeclared. An object GET, a release GET and a release
+/// presence probe read the header the same way.
+pub(in crate::cli::storage) fn declared_size(
     response: &reqwest::Response,
-    expected_start: usize,
     operation: &str,
-) -> Result<usize, CmdError> {
-    let content_range = response
-        .headers()
-        .get(reqwest::header::CONTENT_RANGE)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "Stado object API {operation} partial response carries no Content-Range"
-            ))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })?;
-    let invalid = || {
-        CmdError::click(format!(
-            "Stado object API {operation} returned invalid Content-Range {content_range:?}"
-        ))
-        .stating(crate::primitives::failure::FailureCode::InfraDown)
-    };
-    let (range, total) = content_range
-        .strip_prefix("bytes ")
-        .and_then(|value| value.split_once('/'))
-        .ok_or_else(invalid)?;
-    let (start, _) = range.split_once('-').ok_or_else(invalid)?;
-    let start = start.parse::<usize>().map_err(|_| invalid())?;
-    let total = total.parse::<usize>().map_err(|_| invalid())?;
-    if start != expected_start {
-        return Err(CmdError::click(format!(
-            "Stado object API {operation} resumed at byte {start}, expected {expected_start}"
-        ))
-        .stating(crate::primitives::failure::FailureCode::InfraDown));
-    }
-    Ok(total)
+) -> Result<Option<usize>, CmdError> {
+    response
+        .content_length()
+        .map(|length| {
+            usize::try_from(length).map_err(|error| {
+                CmdError::click(format!(
+                    "Stado object API {operation} declares {length} bytes, more than this \
+                     machine can address: {error}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })
+        })
+        .transpose()
 }
 
 /// Send one object API request; its wait is said on stderr before the
 /// answer is awaited (`crate::wait`), so a gateway that never answers is
-/// named instead of looking like a hung command.
+/// named instead of looking like a hung command. Every answer that is not
+/// an answer ends the request at once with its cause, as the job store's
+/// object client does: an address this host's resolver already holds
+/// unanswered past its refresh interval is refused before the request is
+/// sent; a request sent before that is abandoned once the resolver
+/// publishes it held, or once it outlasts that interval
+/// ([`crate::cli::resolver::unless_held`]); a connection the object API
+/// refuses is named as refused, never waited on again.
 pub(in crate::cli::storage) async fn sent(
     builder: reqwest::RequestBuilder,
-) -> reqwest::Result<reqwest::Response> {
-    crate::wait::send(crate::wait::Kind::ObjectApi, "object API", builder).await
+) -> Result<reqwest::Response, CmdError> {
+    let (client, request) = builder.build_split();
+    let request = request?;
+    let what = format!("{} {}", request.method(), request.url());
+    match crate::cli::resolver::held_at(request.url()) {
+        Ok(None) => {}
+        Ok(Some(held)) => {
+            return Err(CmdError::unreachable(format!("{what} not sent: {held}")));
+        }
+        Err(unreadable) => {
+            return Err(CmdError::unreachable(format!(
+                "{what} not sent: whether this host's resolver holds that adapter cannot be \
+                 read: {unreadable}"
+            )));
+        }
+    }
+    let address = request.url().clone();
+    let request =
+        crate::wait::send_built(crate::wait::Kind::ObjectApi, "object API", client, request);
+    match crate::cli::resolver::unless_held(crate::cli::resolver::Route::Address(&address), request)
+        .await
+    {
+        Ok(Ok(response)) => Ok(response),
+        Ok(Err(error)) => match crate::wait::refusal(&error) {
+            Some(cause) => Err(CmdError::unreachable(format!(
+                "{what}: the object API refused the connection: {cause}"
+            ))),
+            None => Err(CmdError::from(error).within(what)),
+        },
+        Err(held) => Err(CmdError::unreachable(held)),
+    }
 }

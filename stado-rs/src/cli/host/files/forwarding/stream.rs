@@ -61,7 +61,7 @@ pub(super) async fn stream_file(
     )
     .await
     .map_err(CmdError::from)?;
-    if !prepare.ok() {
+    if !prepare.succeeded() {
         return Err(CmdError::click(format!(
             "{target}: cannot prepare the delivery directory: {}",
             crate::deploy::host_channel::last_error_line(&prepare, "remote mkdir failed")
@@ -100,7 +100,7 @@ pub(super) async fn stream_file(
                     "{target}: cannot run scp to deliver the file: {error}"
                 ))
             })?;
-        if !copy.ok() {
+        if !copy.succeeded() {
             return Err(CmdError::click(format!(
                 "{target}: cannot deliver the file: {}",
                 copy.detail()
@@ -120,15 +120,17 @@ pub(super) async fn stream_file(
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
         .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{target}: delivery failed: {}",
             crate::deploy::host_channel::last_error_line(&output, "remote secret write failed")
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    Ok((
-        format!("$HOME/{subdir}/{name}"),
-        usize::try_from(bytes).unwrap_or(usize::MAX),
-    ))
+    let delivered = usize::try_from(bytes).map_err(|error| {
+        CmdError::refused(format!(
+            "{target}: delivered {bytes} bytes, more than this platform can count: {error}"
+        ))
+    })?;
+    Ok((format!("$HOME/{subdir}/{name}"), delivered))
 }

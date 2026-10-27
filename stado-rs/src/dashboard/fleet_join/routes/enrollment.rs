@@ -118,7 +118,7 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
         Some(current) => store
             .compare_and_swap_text(&path, &current.version, &body)
             .await
-            .map(|_| true),
+            .map(|_written_version| true),
         None => store.create_text_if_absent(&path, &body).await,
     };
     match recorded {

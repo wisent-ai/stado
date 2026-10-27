@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::artifacts_models::{ArtifactError, ArtifactManifest, ArtifactRef};
 
 use super::{
-    alias_path, manifest_path, stringify_json_scalar, ArtifactRegistry, RegistryError,
+    alias_path, alias_text, manifest_path, ArtifactRegistry, RegistryError,
     MANIFEST_PREFIX,
 };
 
@@ -60,8 +60,8 @@ impl ArtifactRegistry {
         let alias: Value = serde_json::from_str(&raw).map_err(|exc| corrupt(exc.to_string()))?;
         let target_version = alias
             .get("target_version")
-            .map(stringify_json_scalar)
-            .ok_or_else(|| corrupt("missing 'target_version'".to_string()))?;
+            .and_then(alias_text)
+            .ok_or_else(|| corrupt("no text 'target_version'".to_string()))?;
         let target = reference.with_version(&target_version)?;
         self.get(&target).await?;
         Ok(target)

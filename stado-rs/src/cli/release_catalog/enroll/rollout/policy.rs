@@ -11,11 +11,14 @@ use crate::release_control::DEFAULT_REPLACE_READINESS_PATH;
 use crate::release_pipeline::RuntimeContract;
 
 /// The policy document, from the registry and the manifest's runtime.
+/// `home` is the host's own stated home (host_channel::remote_home), never
+/// one derived from its SSH user name.
 pub(super) fn policy_for(
     document: &Value,
     product: &str,
     runtime: &RuntimeContract,
     host: &str,
+    home: &str,
     port: u16,
     one_unit: bool,
 ) -> Result<Value, CmdError> {
@@ -49,13 +52,6 @@ pub(super) fn policy_for(
             CmdError::click(format!("registry target {host} declares no ssh user"))
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-    let home = if user == "root" {
-        "/root".to_string()
-    } else if platform.starts_with("darwin") {
-        format!("/Users/{user}")
-    } else {
-        format!("/home/{user}")
-    };
     let mut strategy = document
         .pointer("/release_control/products")
         .and_then(Value::as_object)
@@ -77,7 +73,8 @@ pub(super) fn policy_for(
     } else {
         let (first, second) = free_candidate_ports(document, port)?;
         (
-            Value::from(format!("127.0.0.1:{port}")),
+            // The stable bind is this host's loopback at the declared port.
+            Value::from(std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)).to_string()),
             json!([first, second]),
         )
     };
@@ -151,23 +148,33 @@ fn free_candidate_ports(document: &Value, stable: u16) -> Result<(u16, u16), Cmd
                     .as_array()
                     .ok_or_else(|| unreadable("candidate_ports", ports))?
                 {
-                    let read = port.as_u64().and_then(|port| u16::try_from(port).ok());
-                    used.insert(read.ok_or_else(|| unreadable("candidate_ports", port))?);
+                    let number = port.as_u64().ok_or_else(|| unreadable("candidate_ports", port))?;
+                    used.insert(u16::try_from(number).map_err(|error| {
+                        CmdError::refused(format!(
+                            "release_control.products.{product}.targets.{host}.candidate_ports \
+                             holds {number}, which is not a port ({error}); nothing was enrolled"
+                        ))
+                    })?);
                 }
             }
             if let Some(bind) = target.get("stable_bind").filter(|bind| !bind.is_null()) {
-                let read = bind
-                    .as_str()
-                    .and_then(|bind| bind.rsplit_once(':'))
-                    .and_then(|(_, port)| port.parse::<u16>().ok());
-                used.insert(read.ok_or_else(|| unreadable("stable_bind", bind))?);
+                let text = bind.as_str().ok_or_else(|| unreadable("stable_bind", bind))?;
+                let (_, port) = text
+                    .rsplit_once(':')
+                    .ok_or_else(|| unreadable("stable_bind", bind))?;
+                used.insert(port.parse::<u16>().map_err(|error| {
+                    CmdError::refused(format!(
+                        "release_control.products.{product}.targets.{host}.stable_bind {text:?} \
+                         names no port ({error}); nothing was enrolled"
+                    ))
+                })?);
             }
         }
     }
-    let highest = used.iter().next_back().copied().unwrap_or(stable);
-    let first = highest.checked_add(1);
-    let second = first.and_then(|port| port.checked_add(1));
-    match (first, second) {
+    let highest = used.into_iter().fold(stable, u16::max);
+    // The ports above the highest one in use, lowest first.
+    let mut free = (highest..=u16::MAX).filter(|port| *port > highest);
+    match (free.next(), free.next()) {
         (Some(first), Some(second)) => Ok((first, second)),
         _ => Err(CmdError::unreachable(
             "no free candidate ports above the ports release policies already use",

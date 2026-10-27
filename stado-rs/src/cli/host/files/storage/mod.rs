@@ -75,6 +75,6 @@ pub async fn storage_root_reconcile_worker(
         &runner,
     )
     .await
-    .map(|_| ())
+    .map(|_report| ())
     .map_err(CmdError::from)
 }

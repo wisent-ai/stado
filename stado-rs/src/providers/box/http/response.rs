@@ -7,7 +7,7 @@
 use serde_json::{Map, Value};
 
 use super::super::types::{
-    first_truthy_str, required_dict, safe_text, transient_status, BoxApiError, BoxError,
+    first_stated, required_dict, safe_text, transient_status, BoxApiError, BoxError,
 };
 
 /// The whole response body.
@@ -21,10 +21,10 @@ pub(super) fn parse_json(raw: &[u8]) -> Result<Map<String, Value>, BoxError> {
     if raw.is_empty() {
         return Ok(Map::new());
     }
-    let text =
-        std::str::from_utf8(raw).map_err(|_| BoxError::transport("Boat returned invalid JSON"))?;
-    let value: Value = serde_json::from_str(text)
-        .map_err(|_| BoxError::transport("Boat returned invalid JSON"))?;
+    // The parser's position is said, never the body: a success body may
+    // carry what the transport failure path deliberately redacts.
+    let value: Value = serde_json::from_slice(raw)
+        .map_err(|error| BoxError::transport(format!("Boat returned invalid JSON: {error}")))?;
     required_dict(value, "JSON")
 }
 
@@ -47,7 +47,7 @@ pub(super) fn api_error(status: u16, raw: &[u8]) -> BoxError {
         Err(error) => (Map::new(), format!(" (the body is not JSON: {error})")),
     };
     let nested = payload.get("error").and_then(Value::as_object);
-    let code = first_truthy_str(
+    let code = first_stated(
         &[payload.get("code"), nested.and_then(|e| e.get("code"))],
         "http_error",
     );
@@ -57,14 +57,14 @@ pub(super) fn api_error(status: u16, raw: &[u8]) -> BoxError {
         "Boat answered HTTP {status} without a message: {}{unreadable}",
         String::from_utf8_lossy(raw).trim()
     );
-    let message = first_truthy_str(
+    let message = first_stated(
         &[
             payload.get("message"),
             nested.and_then(|e| e.get("message")),
         ],
         &unnamed,
     );
-    let request_id = first_truthy_str(&[payload.get("requestId")], "");
+    let request_id = first_stated(&[payload.get("requestId")], "");
     BoxApiError::new(
         status,
         &code,

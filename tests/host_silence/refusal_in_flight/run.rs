@@ -35,8 +35,8 @@ pub(crate) struct Run {
 
 impl Run {
     pub(crate) fn new() -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("host-silence-refusal-in-flight")
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/journeys/host-silence-refusal-in-flight")
             .join(std::process::id().to_string());
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(".stado/cache")).expect("create the run directory");

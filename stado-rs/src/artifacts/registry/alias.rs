@@ -6,7 +6,7 @@ use crate::artifacts_models::{ArtifactError, ArtifactManifest, ArtifactRef};
 use crate::queue::StorageError;
 
 use super::{
-    actor, alias_path, manifest_path, now, stringify_json_scalar, ArtifactRegistry, RegistryError,
+    actor, alias_path, alias_text, manifest_path, now, ArtifactRegistry, RegistryError,
     ALIAS_PREFIX,
 };
 
@@ -59,13 +59,10 @@ impl ArtifactRegistry {
         let content = crate::queue::submit::json_dumps_sorted_compact(&record);
         let current = self.store.read_text_versioned(&path).await?;
         let Some(current) = current else {
-            if expected_previous.is_some_and(|previous| !previous.is_empty()) {
+            if let Some(previous) = expected_previous.filter(|previous| !previous.is_empty()) {
                 return Err(ArtifactError::new(
                     "ARTIFACT_ALIAS_CONFLICT",
-                    format!(
-                        "alias {alias_ref} does not exist; expected {}",
-                        expected_previous.unwrap_or_default()
-                    ),
+                    format!("alias {alias_ref} does not exist; expected {previous}"),
                 )
                 .into());
             }
@@ -89,8 +86,8 @@ impl ArtifactRegistry {
             serde_json::from_str(&current.content).map_err(|exc| corrupt(exc.to_string()))?;
         let current_target = current_record
             .get("target_version")
-            .map(stringify_json_scalar)
-            .ok_or_else(|| corrupt("missing 'target_version'".to_string()))?;
+            .and_then(alias_text)
+            .ok_or_else(|| corrupt("no text 'target_version'".to_string()))?;
         if current_target == target.version {
             return Ok(alias_ref);
         }
@@ -147,11 +144,11 @@ impl ArtifactRegistry {
         })?;
         let current_target = current_record
             .get("target_version")
-            .map(stringify_json_scalar)
+            .and_then(alias_text)
             .ok_or_else(|| {
                 ArtifactError::new(
                     "ARTIFACT_CORRUPT_ALIAS",
-                    format!("invalid alias record for {alias_ref}: missing 'target_version'"),
+                    format!("invalid alias record for {alias_ref}: no text 'target_version'"),
                 )
             })?;
         if current_target != expected_target {
@@ -196,7 +193,7 @@ impl ArtifactRegistry {
             {
                 let alias = value
                     .get("alias")
-                    .map(stringify_json_scalar)
+                    .and_then(alias_text)
                     .filter(|alias| !alias.is_empty())
                     .ok_or_else(|| {
                         ArtifactError::new(

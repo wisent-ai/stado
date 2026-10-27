@@ -3,116 +3,115 @@
 use crate::cli::storage::*;
 
 impl RemoteObjectApi {
+    /// The release channel's answer for `origin`, its redirects followed to
+    /// where the bytes live. Only the channel itself is sent the reader's
+    /// credentials; where it redirects to is asked without them. A failed
+    /// send ends at once with its cause, named `what`; a redirect back to an
+    /// address already asked is a cycle, refused with the addresses followed.
+    pub(in crate::cli::storage) async fn release_response(
+        &self,
+        origin: &url::Url,
+        range: Option<&str>,
+        what: &str,
+    ) -> Result<reqwest::Response, CmdError> {
+        let mut endpoint = origin.clone();
+        let mut followed: Vec<url::Url> = Vec::new();
+        loop {
+            let mut request = if followed.is_empty() {
+                self.request(reqwest::Method::GET, endpoint.clone())
+            } else {
+                self.http.get(endpoint.clone())
+            };
+            if let Some(range) = range {
+                request = request.header(reqwest::header::RANGE, range);
+            }
+            let response = sent(request)
+                .await
+                .map_err(|error| error.within(format!("{what} failed")))?;
+            if !response.status().is_redirection() {
+                return Ok(response);
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .ok_or_else(|| {
+                    CmdError::click("release redirect carries no Location")
+                        .stating(crate::primitives::failure::FailureCode::InfraDown)
+                })?
+                .to_str()
+                .map_err(|error| {
+                    CmdError::click(format!("release redirect Location is not text: {error}"))
+                        .stating(crate::primitives::failure::FailureCode::InfraDown)
+                })?;
+            let next = response.url().join(location).map_err(|error| {
+                CmdError::click(format!("invalid release redirect: {error}"))
+                    .stating(crate::primitives::failure::FailureCode::InfraDown)
+            })?;
+            followed.push(endpoint);
+            if followed.contains(&next) {
+                let chain: Vec<&str> = followed.iter().map(url::Url::as_str).collect();
+                return Err(CmdError::unreachable(format!(
+                    "release redirects return to {next}, already asked: {}",
+                    chain.join(" -> ")
+                )));
+            }
+            endpoint = next;
+        }
+    }
+
+    /// One release object. Every error the channel answers with ends the read
+    /// at once with that cause: a GET sent again after a failed send or a
+    /// body cut short only waits on the same dependency again.
     pub(in crate::cli::storage) async fn get_release(
         &self,
         uri: &str,
     ) -> Result<Vec<u8>, CmdError> {
         let origin = self.endpoint("/api/release/object", &[("uri", uri)])?;
+        let response = self.release_response(&origin, None, "release GET").await?;
+        if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            drop(response);
+            return self.get_release_in_ranges(origin).await;
+        }
+        if !response.status().is_success() {
+            return Err(self.response_error(response, None).await);
+        }
+
+        let total = declared_size(&response, "release GET")?;
         let mut body = Vec::new();
-        let mut last_read_error = None;
-
-        for recovery in 0..=3 {
-            let mut endpoint = origin.clone();
-            for hop in 0..=3 {
-                let mut request = if hop == 0 {
-                    self.request(reqwest::Method::GET, endpoint.clone())
-                } else {
-                    self.http.get(endpoint.clone())
-                };
-                if !body.is_empty() {
-                    request =
-                        request.header(reqwest::header::RANGE, format!("bytes={}-", body.len()));
-                }
-                let response = sent(request).await?;
-                if response.status().is_redirection() {
-                    let location = response
-                        .headers()
-                        .get(reqwest::header::LOCATION)
-                        .and_then(|value| value.to_str().ok())
-                        .ok_or_else(|| {
-                            CmdError::click("release redirect carries no Location")
-                                .stating(crate::primitives::failure::FailureCode::InfraDown)
-                        })?;
-                    endpoint = response.url().join(location).map_err(|error| {
-                        CmdError::click(format!("invalid release redirect: {error}"))
-                            .stating(crate::primitives::failure::FailureCode::InfraDown)
-                    })?;
-                    continue;
-                }
-                if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE && body.is_empty() {
-                    drop(response);
-                    return self.get_release_in_ranges(origin).await;
-                }
-                if !response.status().is_success() {
-                    return Err(self.response_error(response, None).await);
-                }
-                if !body.is_empty() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                    return Err(CmdError::click(format!(
-                        "Stado object API release GET refused byte resume at offset {}",
+        if let Some(total) = total {
+            body.reserve(total);
+        }
+        let mut response = response;
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+                // The stream ending is not the object ending. The release
+                // route streams an unranged GET until its own window closes
+                // and then closes the body cleanly, with no length declared
+                // and no error to read: the darwin archive of 0.13.46 is
+                // 73,864,632 bytes and two reads of it here returned
+                // 22,925,186 and 15,318,446, both as `Ok`. A short object with
+                // a successful exit is worse than a failed download, because
+                // every caller downstream -- digest verification, archive
+                // extract, a host staging a release -- reports its own true
+                // finding about bytes that were never the object.
+                //
+                // Whole is provable only against a declared total, so that
+                // is the only thing accepted here. Anything else goes to the
+                // bounded byte-range reader, which asks for one chunk at a
+                // time and knows the total from every `Content-Range` it gets
+                // back.
+                Ok(None) if total == Some(body.len()) => return Ok(body),
+                Ok(None) => return self.get_release_in_ranges(origin).await,
+                Err(error) => {
+                    return Err(CmdError::unreachable(format!(
+                        "Stado object API release GET response body connection closed before \
+                         completion after {} bytes: {error}",
                         body.len()
-                    ))
-                    .stating(crate::primitives::failure::FailureCode::InfraDown));
+                    )));
                 }
-
-                let expected_start = body.len();
-                let total = if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-                    Some(resumed_content_total(
-                        &response,
-                        expected_start,
-                        "release GET",
-                    )?)
-                } else {
-                    response
-                        .content_length()
-                        .and_then(|length| usize::try_from(length).ok())
-                };
-                if let Some(total) = total {
-                    body.reserve(total.saturating_sub(body.capacity()));
-                }
-
-                let mut response = response;
-                loop {
-                    match response.chunk().await {
-                        Ok(Some(chunk)) => body.extend_from_slice(&chunk),
-                        // The stream ending is not the object ending. The
-                        // release route streams an unranged GET until its own
-                        // window closes and then closes the body cleanly, with
-                        // no length declared and no error to read: the darwin
-                        // archive of 0.13.46 is 73,864,632 bytes and two reads
-                        // of it here returned 22,925,186 and 15,318,446, both
-                        // as `Ok`. A short object with a successful exit is
-                        // worse than a failed download, because every caller
-                        // downstream -- digest verification, archive extract,
-                        // a host staging a release -- reports its own true
-                        // finding about bytes that were never the object.
-                        //
-                        // Whole is provable only against a declared total, so
-                        // that is the only thing accepted here. Anything else
-                        // goes to the bounded byte-range reader below, which
-                        // asks for one chunk at a time and knows the total
-                        // from every `Content-Range` it gets back.
-                        Ok(None) if total == Some(body.len()) => return Ok(body),
-                        Ok(None) => return self.get_release_in_ranges(origin).await,
-                        Err(error) => {
-                            last_read_error = Some(format!(
-                                "Stado object API release GET response body connection closed \
-                                 before completion after {} bytes: {error}",
-                                body.len()
-                            ));
-                            break;
-                        }
-                    }
-                }
-                break;
-            }
-            if recovery == 3 {
-                break;
             }
         }
-        Err(match last_read_error {
-            Some(error) => CmdError::unreachable(error),
-            None => CmdError::unreachable("release GET exceeded three redirects"),
-        })
     }
 
     /// Ask the release channel itself whether it serves one object.
@@ -145,9 +144,7 @@ impl RemoteObjectApi {
                     // A redirect names where the bytes live and need not say
                     // how many there are; read as zero, a published archive
                     // was handed to its target as a zero-byte download.
-                    let size = response
-                        .content_length()
-                        .and_then(|value| usize::try_from(value).ok());
+                    let size = declared_size(&response, "release presence probe")?;
                     Ok(Presence::Present {
                         size,
                         version: None,

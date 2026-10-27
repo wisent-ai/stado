@@ -9,7 +9,9 @@ use std::sync::LazyLock;
 /// Python `_REGION_RE`.
 pub(super) fn region_re() -> &'static regex::Regex {
     static RE: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"\(([^)]+)\)\s*$").expect("static regex compiles"));
+        LazyLock::new(|| {
+            regex::Regex::new(r"\((?P<region>[^)]+)\)\s*$").expect("static regex compiles")
+        });
     &RE
 }
 

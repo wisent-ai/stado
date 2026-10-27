@@ -164,9 +164,15 @@ impl RuntimeReport {
             "browser_engine_state".to_string(),
             json!(self.browser_engine_state()),
         );
+        // The component rows are plain data; a serialization failure would
+        // be a defect of this build and is said as such, never written as
+        // null for a reader to take as "no components".
         object.insert(
             "components".to_string(),
-            serde_json::to_value(&self.components).unwrap_or(Value::Null),
+            match serde_json::to_value(&self.components) {
+                Ok(components) => components,
+                Err(error) => json!({ "unserializable": error.to_string() }),
+            },
         );
         object
     }

@@ -31,11 +31,13 @@ pub struct AllocationQuotes {
     pub complete: bool,
     pub book_created_at: Option<String>,
     pub book_error: Option<String>,
-    pub price_sources: Vec<Value>,
+    /// The price book's sources; null when no book was read (`book_error` says why).
+    pub price_sources: Option<Vec<Value>>,
     pub inventory_snapshot_id: Option<String>,
     pub inventory_created_at: Option<String>,
     pub inventory_error: Option<String>,
-    pub inventory_sources: Vec<Value>,
+    /// The inventory's sources; null when no snapshot was read (`inventory_error` says why).
+    pub inventory_sources: Option<Vec<Value>>,
     pub quotes: Vec<AllocationQuote>,
 }
 
@@ -99,14 +101,14 @@ pub async fn quote_jobs(store: &JobStorage, job_ids: &[String]) -> AllocationQuo
         price_sources: book.as_ref().map(|book| book.sources.iter().map(|source| json!({
             "provider": source.provider, "state": source.state, "source": source.source,
             "observed_at": source.observed_at, "error": source.error,
-        })).collect()).unwrap_or_default(),
+        })).collect()),
         inventory_snapshot_id: inventory.as_ref().map(|snapshot| snapshot.snapshot_id.clone()),
         inventory_created_at: inventory.as_ref().map(|snapshot| snapshot.created_at.clone()),
         inventory_error,
         inventory_sources: inventory.as_ref().map(|snapshot| snapshot.sources.iter().map(|source| json!({
             "provider": source.provider, "account": source.account, "state": source.state,
             "observed_at": source.observed_at, "coverage": source.coverage, "upstream_error": source.upstream_error,
-        })).collect()).unwrap_or_default(),
+        })).collect()),
         quotes,
     }
 }
@@ -175,11 +177,11 @@ fn select<'a>(
                 quote.provider == ProviderId::Local
                     && quote.source == "autonomy policy"
                     && quote.machine_type.is_none()
-                    && Purchase::decode(&quote.purchase_option).ok() == Some(Purchase::OnDemand)
+                    && matches!(Purchase::decode(&quote.purchase_option), Ok(Purchase::OnDemand))
                     && HourUnit::accepts(&quote.unit)
                     && quote.currency == "USD"
                     && quote.hourly_usd.is_finite()
-                    && quote.hourly_usd >= 0.0
+                    && quote.hourly_usd >= -quote.hourly_usd
             }),
             reference,
         );

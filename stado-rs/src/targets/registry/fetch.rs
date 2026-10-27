@@ -118,15 +118,32 @@ pub async fn fetch_registry_or_last_good_detail(
 }
 
 /// The last-known-good copy for a reader whose authority read already failed
-/// with `cause`, or gave up on it: a diagnostic whose read budget runs out
-/// before the authority answers (an object API answering 503 after longer
-/// than the budget) still has this copy to read, and without it reports
-/// every section as never read.
+/// with `cause`, or gave up on it, while the copy is no older than the
+/// max-stale this host's resolver declares; an older copy is not the
+/// registry any more, so it is said and the authority's refusal stands.
 pub fn last_good_after(cause: &str) -> Option<(Registry, Option<RegistryCopyNotice>)> {
-    let (registry, meta, age) = load_last_good().filter(|_| !store_is_local_filesystem())?;
+    let (registry, meta, age) = (!store_is_local_filesystem()).then(load_last_good).flatten()?;
+    match last_good_max_stale() {
+        Ok(max_stale) if u64::try_from(age).is_ok_and(|age| age <= max_stale) => {}
+        Ok(max_stale) => {
+            report_registry_notice(&format!(
+                "the last-known-good registry copy is {age}s old, past the {max_stale}s max-stale \
+                 this host's resolver declares, so it is not read in place of the authority, \
+                 which did not answer: {cause}"
+            ));
+            return None;
+        }
+        Err(why) => {
+            report_registry_notice(&format!(
+                "the last-known-good registry copy is not read in place of the authority, which \
+                 did not answer ({cause}): how long it may stand in cannot be read: {why}"
+            ));
+            return None;
+        }
+    }
     let mut notice = format!(
         "reading the last-known-good registry copy from {age}s ago ({}, read_at {}, generation {}) because the authority did not answer: {cause}",
-        registry_last_good_path().unwrap_or_default().display(),
+        last_good_location(),
         meta.read_at,
         meta.generation,
     );
@@ -159,15 +176,24 @@ pub fn last_good_after(cause: &str) -> Option<(Registry, Option<RegistryCopyNoti
 /// Returns the copy with the sentence the caller puts before the operator,
 /// or `None` when no copy is kept or the store is a local directory.
 pub fn last_good_for_this_host() -> Option<(Registry, String)> {
-    let (registry, meta, age) = load_last_good().filter(|_| !store_is_local_filesystem())?;
+    let (registry, meta, age) = (!store_is_local_filesystem()).then(load_last_good).flatten()?;
     let notice = format!(
         "acting on a unit of this machine from the last-known-good registry copy from {age}s \
          ago ({}, read_at {}, generation {}), not through the object API the unit may be",
-        registry_last_good_path().unwrap_or_default().display(),
+        last_good_location(),
         meta.read_at,
         meta.generation,
     );
     Some((registry, notice))
+}
+
+/// Where the last-known-good copy is kept, for a sentence that names it; a
+/// host whose HOME names no cache directory keeps none anywhere.
+fn last_good_location() -> String {
+    match registry_last_good_path() {
+        Some(path) => path.display().to_string(),
+        None => "the registry cache directory (HOME is unset)".to_string(),
+    }
 }
 
 /// The registry for a command that must not depend on the registry authority
@@ -183,18 +209,9 @@ pub async fn registry_without_authority(
     purpose: &str,
 ) -> Result<(Registry, Option<String>), RegistryFetchError> {
     if store_is_local_filesystem() {
-        return fetch_registry_remote()
-            .await
-            .map(|registry| (registry, None));
+        return fetch_registry_remote().await.map(|registry| (registry, None));
     }
-    let location = match registry_last_good_path() {
-        Some(path) => path.display().to_string(),
-        None => {
-            return Err(RegistryFetchError::Absent {
-                location: "the registry cache directory (HOME is unset)".to_string(),
-            })
-        }
-    };
+    let location = last_good_location();
     let (registry, meta, age) = load_last_good().ok_or(RegistryFetchError::Absent {
         location: location.clone(),
     })?;
@@ -275,7 +292,7 @@ pub async fn load_registry_auto() -> Result<Registry, RegistryError> {
         Err(authority) => {
             report_registry_notice(&format!(
                 "reading the registry snapshot bundled with this binary because the authority did not answer and there is no last-known-good copy at {}: {authority}",
-                registry_last_good_path().unwrap_or_default().display(),
+                last_good_location(),
             ));
             load_bundled_registry()
         }

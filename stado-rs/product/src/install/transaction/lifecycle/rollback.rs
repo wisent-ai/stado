@@ -140,6 +140,30 @@ fn rollback_inner(
             remove_path(runtime, path)?;
         }
     }
+    // An installation of the running program migrated its resident unit to
+    // the command line of the release rolled back here; the restored
+    // executable renders it again from its own catalog, or the unit would
+    // restart on an option only the newer release has.
+    if surface == "cli" {
+        let program = restored
+            .keys()
+            .find(|path| path.file_name() == Some(std::ffi::OsStr::new(id)));
+        if let Some(program) = program {
+            let rendered = services::restore_host_unit(product, &runtime.home, program)
+                .with_context(|| {
+                    format!(
+                        "the files of {id} were rolled back, but its resident unit was not rendered again through {}",
+                        program.display()
+                    )
+                })?;
+            if let Some(host) = rendered {
+                previous.extra.insert(
+                    "resident_unit".to_owned(),
+                    json!({"host": host, "rendered_by": program}),
+                );
+            }
+        }
+    }
     ownership::verify_content(&previous)?;
     let identities = ownership::code_identities(&previous)?;
     previous

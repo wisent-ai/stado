@@ -76,7 +76,8 @@ pub(super) async fn load_job_requirements(
         objects: Vec::new(),
         refused: Vec::new(),
     };
-    for blob in store.list_blobs_with_meta(&prefix).await? {
+    // Names and update times only: no declaration's metadata is read.
+    for blob in store.list_blobs_sized(&prefix).await? {
         if !blob.name.ends_with(".json") {
             continue;
         }
@@ -92,15 +93,23 @@ pub(super) async fn load_job_requirements(
             ),
             None => blob.name.clone(),
         });
-        let Some(body) = store
-            .download_text(&blob.name)
-            .await?
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        else {
-            declarations
-                .refused
-                .push(format!("{} is not readable JSON", blob.name));
-            continue;
+        let body = match store.download_text(&blob.name).await? {
+            Some(text) => match serde_json::from_str::<Value>(&text) {
+                Ok(body) => body,
+                Err(error) => {
+                    declarations
+                        .refused
+                        .push(format!("{} is not readable JSON: {error}", blob.name));
+                    continue;
+                }
+            },
+            None => {
+                declarations.refused.push(format!(
+                    "{} was listed but the store did not hold it when read",
+                    blob.name
+                ));
+                continue;
+            }
         };
         match body.get("schema").and_then(Value::as_str) {
             Some(schema) if schema == REQUIREMENTS_SCHEMA => {}
@@ -172,18 +181,22 @@ pub(super) fn declared_trajectories(target: &ComputeTarget) -> Vec<RequirementCl
                     .and_then(Value::as_str)
                     .filter(|value| !value.is_empty())
             };
-            let unit = text("name").or_else(|| text("label"));
+            // A declaration that names neither a service name nor a label
+            // names no unit the beacon could report, so it claims nothing.
+            let Some(unit) = text("name").or_else(|| text("label")) else {
+                return None;
+            };
+            // The beacon reports a unit under its launchd label or systemd
+            // unit, and that is the key the missing-plist row is filed
+            // under, so it is resolved here exactly as `declared_units`
+            // resolves it.
+            let label = match text("label").or_else(|| text("unit")) {
+                Some(label) => label,
+                None => unit,
+            };
             Some(RequirementClaim {
-                unit: unit.unwrap_or("(unnamed service)").to_string(),
-                // The beacon reports a unit under its launchd label or systemd
-                // unit, and that is the key the missing-plist row is filed
-                // under, so it is resolved here exactly as `declared_units`
-                // resolves it.
-                label: text("label")
-                    .or_else(|| text("unit"))
-                    .or(unit)
-                    .unwrap_or_default()
-                    .to_string(),
+                unit: unit.to_string(),
+                label: label.to_string(),
                 trajectory: trajectory.to_string(),
             })
         })

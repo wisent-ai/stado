@@ -208,22 +208,59 @@ pub(crate) fn parse_web_api_products(
     }
 }
 
-static WEB_API_PRODUCTS: LazyLock<Result<BTreeMap<String, WebApiProduct>, Vec<String>>> =
+/// The declared web products: `None` when neither `WC_WEB_API_PRODUCTS` nor
+/// the config file declares the table, refused problems when one does and it
+/// does not parse. The override and the file are read in one place, so no
+/// reader can mistake a refused override for a fleet that declares nothing.
+static WEB_API_PRODUCTS: LazyLock<Result<Option<BTreeMap<String, WebApiProduct>>, Vec<String>>> =
     LazyLock::new(|| {
-        match std::env::var("WC_WEB_API_PRODUCTS")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(encoded) => serde_json::from_str::<Value>(&encoded)
-                .map_err(|error| vec![format!("WC_WEB_API_PRODUCTS must be valid JSON: {error}")])
-                .and_then(|parsed| parse_web_api_products(Some(&parsed))),
-            None => parse_web_api_products(crate::config_file::get("web_api.products").as_ref()),
-        }
+        // `WC_WEB_API_PRODUCTS` overrides the config file's block when it is
+        // set and not blank; unset or blank, the file is read. A value that
+        // is not Unicode cannot be JSON and is refused as such.
+        let declared = match std::env::var("WC_WEB_API_PRODUCTS") {
+            Ok(encoded) if !encoded.trim().is_empty() => {
+                Some(serde_json::from_str::<Value>(&encoded).map_err(|error| {
+                    vec![format!("WC_WEB_API_PRODUCTS must be valid JSON: {error}")]
+                })?)
+            }
+            Ok(_) | Err(std::env::VarError::NotPresent) => {
+                crate::config_file::get("web_api.products")
+            }
+            Err(std::env::VarError::NotUnicode(raw)) => {
+                return Err(vec![format!(
+                    "WC_WEB_API_PRODUCTS must be valid JSON, and is not Unicode: {raw:?}"
+                )])
+            }
+        };
+        declared
+            .map(|table| parse_web_api_products(Some(&table)))
+            .transpose()
     });
 
+static UNDECLARED: LazyLock<Vec<String>> = LazyLock::new(|| {
+    vec![
+        "web_api.products is not declared, in WC_WEB_API_PRODUCTS or the config file; \
+         `stado web declare` declares a product"
+            .to_string(),
+    ]
+});
+
+/// The declared web products, for a reader that needs the table: an
+/// undeclared table is refused like a malformed one.
 pub fn web_api_products() -> Result<&'static BTreeMap<String, WebApiProduct>, &'static [String]> {
     match &*WEB_API_PRODUCTS {
-        Ok(products) => Ok(products),
+        Ok(Some(products)) => Ok(products),
+        Ok(None) => Err(UNDECLARED.as_slice()),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
+/// The declared web products, for a reader to whom no table means nothing to
+/// serve, own or report: `None` only when nothing declares one.
+pub fn declared_web_api_products(
+) -> Result<Option<&'static BTreeMap<String, WebApiProduct>>, &'static [String]> {
+    match &*WEB_API_PRODUCTS {
+        Ok(products) => Ok(products.as_ref()),
         Err(problems) => Err(problems.as_slice()),
     }
 }

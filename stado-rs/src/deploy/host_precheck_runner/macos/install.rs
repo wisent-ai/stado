@@ -165,9 +165,12 @@ GATE
 root install -o root -g wheel -m 0755 "$gate" "$runner_root/job-gate.sh"
 rm -f "$gate"
 
+# The Stado route to Brama is allowed at the host its URL names, not at an
+# address spelled here.
+brama_host=$(printf '%s' __BRAMA_URL__ | sed -E 's#^[a-z]+://([^:/]+).*#\1#')
 anchor=$(mktemp "$staging/anchor.XXXXXX")
 cat > "$anchor" <<RULES
-pass out quick proto tcp from any to 127.0.0.1 port __BRAMA_PORT__ user $runner_user
+pass out quick proto tcp from any to $brama_host port __BRAMA_PORT__ user $runner_user
 block return out quick proto { tcp udp } from any to { __BLOCKED_NETWORKS__ } user $runner_user
 RULES
 root install -o root -g wheel -m 0644 "$anchor" /etc/pf.anchors/com.wisent.stado-precheck

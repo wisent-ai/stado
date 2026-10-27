@@ -50,10 +50,15 @@ pub const UNPROVENANCED: &str = "unprovenanced";
 /// merely asked whether the object exists in some clone somewhere.
 const PUBLISHED_BRANCH: &str = "origin/main";
 
-/// Length of a full git object id, written out because a short id is ambiguous
-/// over the lifetime of a repository and this record outlives the terminal it
-/// was printed in.
-const COMMIT_ID_LENGTH: usize = 40;
+/// Git's empty tree in the SHA-1 object format, the format this fleet's
+/// repositories use. It is a git-defined object id, so its length is the
+/// length of every full object id.
+const EMPTY_TREE_ID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// Length of a full git object id, measured from [`EMPTY_TREE_ID`], because a
+/// short id is ambiguous over the lifetime of a repository and this record
+/// outlives the terminal it was printed in.
+const COMMIT_ID_LENGTH: usize = EMPTY_TREE_ID.len();
 
 /// The manifest delivered beside an artifact, at
 /// `~/.stado/provenance/<artifact>.json` on the host that carries it.
@@ -98,16 +103,20 @@ pub fn is_commit_id(value: &str) -> bool {
 /// no, and something else for "that object is not in this repository", which
 /// is also a no as far as an operator is concerned -- an artifact whose commit
 /// this clone has never heard of is exactly as untraceable as one with no
-/// commit at all.
-pub fn reachable_in_repo(commit: &str, repo: &Path) -> bool {
-    is_commit_id(commit)
-        && crate::wait::output(Command::new("git").arg("-C").arg(repo).args([
-            "merge-base",
-            "--is-ancestor",
-            commit,
-            PUBLISHED_BRANCH,
-        ]))
-        .is_ok_and(|output| output.status.success())
+/// commit at all. A git that cannot be started answered nothing, so that is
+/// refused with its cause rather than reported as a commit nobody produced.
+pub fn reachable_in_repo(commit: &str, repo: &Path) -> Result<bool, String> {
+    if !is_commit_id(commit) {
+        return Ok(false);
+    }
+    crate::wait::output(Command::new("git").arg("-C").arg(repo).args([
+        "merge-base",
+        "--is-ancestor",
+        commit,
+        PUBLISHED_BRANCH,
+    ]))
+    .map(|output| output.status.success())
+    .map_err(|error| format!("git merge-base cannot run in {}: {error}", repo.display()))
 }
 
 /// The checkout an artifact was built in: the tree enclosing the `target/`
@@ -121,13 +130,22 @@ pub fn reachable_in_repo(commit: &str, repo: &Path) -> bool {
 /// Walked from the artifact outwards, so a nested or vendored checkout
 /// resolves to the tree that actually built it rather than to whatever
 /// encloses that tree.
-pub fn source_repo(path: &Path) -> Option<PathBuf> {
-    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    absolute
+///
+/// A path that cannot be resolved is refused: read as itself, a relative or
+/// linked path walked the wrong ancestors and answered "no checkout".
+pub fn source_repo(path: &Path) -> Result<Option<PathBuf>, String> {
+    let absolute = std::fs::canonicalize(path)
+        .map_err(|error| format!("{} cannot be resolved: {error}", path.display()))?;
+    for build_root in absolute
         .ancestors()
         .filter(|ancestor| ancestor.file_name() == Some(std::ffi::OsStr::new("target")))
         .filter_map(Path::parent)
-        .find_map(checkout_root)
+    {
+        if let Some(root) = checkout_root(build_root)? {
+            return Ok(Some(root));
+        }
+    }
+    Ok(None)
 }
 
 /// The root of the checkout `directory` belongs to, or `None` when it belongs
@@ -135,8 +153,8 @@ pub fn source_repo(path: &Path) -> Option<PathBuf> {
 ///
 /// `release newest` reads it to find the workspace: one checkout per
 /// repository side by side means the workspace is that root's parent.
-pub fn checkout_root(directory: &Path) -> Option<PathBuf> {
-    git(directory, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
+pub fn checkout_root(directory: &Path) -> Result<Option<PathBuf>, String> {
+    Ok(git(directory, &["rev-parse", "--show-toplevel"])?.map(PathBuf::from))
 }
 
 /// A checkout this process can ask reachability questions of.
@@ -145,33 +163,32 @@ pub fn checkout_root(directory: &Path) -> Option<PathBuf> {
 /// the build, so the repository has to be found rather than remembered. The
 /// running binary's own checkout comes first, because
 /// `./target/release/stado host provenance ...` during an incident already
-/// names the right tree; the working directory is the fallback for an
-/// installed CLI invoked from inside the source. Neither existing means
-/// reachability is unknown, and unknown is then reported as unknown rather
-/// than folded into "not reachable".
-pub fn local_repo() -> Option<PathBuf> {
-    if let Some(repo) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| source_repo(&exe))
-    {
-        return Some(repo);
+/// names the right tree; the working directory is the next place asked, for
+/// an installed CLI invoked from inside the source. Neither being a checkout
+/// means reachability is unknown, reported as unknown rather than folded into
+/// "not reachable"; a binary or directory that cannot be read is refused.
+pub fn local_repo() -> Result<Option<PathBuf>, String> {
+    let exe = std::env::current_exe()
+        .map_err(|error| format!("the running binary cannot be located: {error}"))?;
+    if let Some(repo) = source_repo(&exe)? {
+        return Ok(Some(repo));
     }
-    checkout_root(&std::env::current_dir().ok()?)
+    let here = std::env::current_dir()
+        .map_err(|error| format!("the working directory cannot be read: {error}"))?;
+    checkout_root(&here)
 }
 
-/// One `git` read against a checkout, trimmed, or `None` if it did not run or
-/// did not succeed. Local reads only: this never touches a host and never
-/// fetches, so an offline builder still gets a truthful `HEAD`.
-fn git(repo: &Path, arguments: &[&str]) -> Option<String> {
-    let output =
-        crate::wait::output(Command::new("git").arg("-C").arg(repo).args(arguments)).ok()?;
+/// One `git` read against a checkout, trimmed, or `None` when git answered
+/// with a refusal or nothing (outside a repository it refuses). A git that
+/// cannot be started is an error, never "not a checkout". Local reads only:
+/// this never touches a host and never fetches, so an offline builder still
+/// gets a truthful `HEAD`.
+fn git(repo: &Path, arguments: &[&str]) -> Result<Option<String>, String> {
+    let output = crate::wait::output(Command::new("git").arg("-C").arg(repo).args(arguments))
+        .map_err(|error| format!("git {} cannot run in {}: {error}", arguments.join(" "), repo.display()))?;
     if !output.status.success() {
-        return None;
+        return Ok(None);
     }
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
+    Ok((!text.is_empty()).then_some(text))
 }

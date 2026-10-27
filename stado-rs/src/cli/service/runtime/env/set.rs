@@ -35,7 +35,7 @@ pub(crate) async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> 
         )));
     }
     #[cfg(unix)]
-    if metadata.permissions().mode() & 0o077 != 0 {
+    if crate::primitives::file_mode::open_to_others(metadata.permissions().mode()) {
         return Err(CmdError::usage(format!("{value_file} must be owner-only")));
     }
     let value = std::fs::read_to_string(source).map_err(|error| {
@@ -99,20 +99,18 @@ pub(crate) async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> 
         } else {
             None
         };
-        let state = verdict
-            .as_ref()
-            .map_or(service_env_file::EXPECT_UNVERIFIED, |readback| {
-                readback.state
-            });
+        // A key that was not written was not read back, which is its state.
+        let (state, effective) = match &verdict {
+            Some(readback) => (readback.state, readback.effective_cell()),
+            None => (service_env_file::EXPECT_UNVERIFIED, "not read back".to_string()),
+        };
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
             key.to_string(),
             reported_cell(&updated.status),
             state.to_string(),
-            verdict
-                .as_ref()
-                .map_or_else(|| "not read back".to_string(), ReadBack::effective_cell),
+            effective,
             reported_cell(&updated.detail),
         ]);
         payload.push(json!({
@@ -124,7 +122,7 @@ pub(crate) async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> 
             "update": updated.to_json(),
             "readback": state,
             "effective_value": verdict.as_ref().and_then(|readback| readback.effective.clone()),
-            "effective_chars": verdict.as_ref().map(|readback| readback.chars),
+            "effective_chars": verdict.as_ref().and_then(|readback| readback.chars),
             "owning_marker": verdict.as_ref().and_then(|readback| readback.marker.clone()),
         }));
     }

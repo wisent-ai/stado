@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exitedCleanly } from '../../native/process.mjs';
@@ -33,14 +33,28 @@ const own = JSON.parse(readFileSync(join(root, '.wisent-release.json'), 'utf8'))
 const output = join(root, '.build', 'release-push-order', `run-${randomUUID()}`);
 const workspace = join(output, 'workspace');
 const remotes = join(output, 'remotes');
+const home = join(output, 'home');
+mkdirSync(home, { recursive: true });
+const bin = join(home, '.stado', 'bin');
+mkdirSync(bin, { recursive: true });
+symlinkSync(okoBinary, join(bin, 'oko'));
 const runId = randomUUID();
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const environment = {
   ...process.env,
+  HOME: home,
+  STADO_CONFIG: join(output, 'config.json'),
+  WC_STORAGE_BACKEND: 'local',
+  WC_LOCAL_STORAGE_PATH: join(output, 'store'),
+  GIT_AUTHOR_NAME: 'Release journey',
+  GIT_AUTHOR_EMAIL: 'journey@example.invalid',
+  GIT_COMMITTER_NAME: 'Release journey',
+  GIT_COMMITTER_EMAIL: 'journey@example.invalid',
   PATH: `${dirname(okoBinary)}:${process.env.PATH}`,
   OKO_DEFECT_REGISTER: join(output, 'defects.json'),
   STADO_RELEASE_LOOP_REGISTER: join(output, 'release-loop.json'),
 };
+writeFileSync(environment.STADO_CONFIG, '{}\n');
 const report = {
   started_at: new Date().toISOString(),
   revision: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(),
@@ -92,12 +106,17 @@ try {
   const ahead = checkout(`push-ahead-${runId}`, true);
   const even = checkout(`push-even-${runId}`, true);
   const loose = checkout(`push-loose-${runId}`, false);
+  writeFileSync(join(workspace, 'notes.txt'), 'Not a checkout.\n');
+  symlinkSync('missing-checkout', join(workspace, 'dangling'));
+  symlinkSync(ahead, join(workspace, 'checkout-link'));
   const added = [randomUUID(), randomUUID()];
   for (const file of added) commit(ahead, file);
   const upstreamHead = ok('git', ['rev-parse', 'origin/main'], ahead).trim();
 
   const plan = JSON.parse(ok(stadoBinary, ['release', 'newest', '--root', workspace, '--plan', '--json'], workspace));
   const counted = Object.fromEntries(plan.unpushed.map(entry => [entry.repository, entry]));
+  assert.deepEqual(Object.keys(counted).sort(),
+    [ahead, even, loose].map(path => path.split('/').pop()).sort());
   const name = path => path.split('/').pop();
   assert.equal(counted[name(ahead)].ahead, added.length, JSON.stringify(plan.unpushed));
   assert.equal(counted[name(even)].ahead, added.length - added.length, JSON.stringify(plan.unpushed));

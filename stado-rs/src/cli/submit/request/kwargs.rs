@@ -48,33 +48,42 @@ pub(super) fn cli_kwargs_json(
     ])
 }
 
-pub(super) fn get_str(map: &Map<String, Value>, key: &str) -> String {
-    map.get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+/// The merged map's `key` read by `read`; a field the map lacks, or holds as another
+/// type (a profile that wrote it so), is refused naming the field and what it holds.
+fn field<T>(
+    map: &Map<String, Value>,
+    key: &str,
+    kind: &str,
+    read: impl FnOnce(&Value) -> Option<T>,
+) -> Result<T, String> {
+    let value = map
+        .get(key)
+        .ok_or_else(|| format!("the merged submit settings hold no {key}"))?;
+    read(value).ok_or_else(|| format!("the merged submit settings hold {key} = {value}, not {kind}"))
 }
 
-pub(super) fn get_i64(map: &Map<String, Value>, key: &str) -> i64 {
-    map.get(key).and_then(Value::as_i64).unwrap_or_default()
+pub(super) fn get_str(map: &Map<String, Value>, key: &str) -> Result<String, String> {
+    field(map, key, "text", |value| value.as_str().map(str::to_string))
 }
 
-pub(super) fn get_f64(map: &Map<String, Value>, key: &str) -> f64 {
-    map.get(key).and_then(Value::as_f64).unwrap_or_default()
+pub(super) fn get_i64(map: &Map<String, Value>, key: &str) -> Result<i64, String> {
+    field(map, key, "an integer", Value::as_i64)
 }
 
-pub(super) fn get_bool(map: &Map<String, Value>, key: &str) -> bool {
-    map.get(key).and_then(Value::as_bool).unwrap_or_default()
+pub(super) fn get_f64(map: &Map<String, Value>, key: &str) -> Result<f64, String> {
+    field(map, key, "a number", Value::as_f64)
 }
 
-pub(super) fn get_str_list(map: &Map<String, Value>, key: &str) -> Vec<String> {
-    map.get(key)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+pub(super) fn get_bool(map: &Map<String, Value>, key: &str) -> Result<bool, String> {
+    field(map, key, "true or false", Value::as_bool)
+}
+
+pub(super) fn get_str_list(map: &Map<String, Value>, key: &str) -> Result<Vec<String>, String> {
+    field(map, key, "a list of text", |value| {
+        value
+            .as_array()?
+            .iter()
+            .map(|item| item.as_str().map(str::to_string))
+            .collect::<Option<Vec<String>>>()
+    })
 }

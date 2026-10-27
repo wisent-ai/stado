@@ -80,19 +80,18 @@ struct ReleaseDoctorReport: Decodable, Sendable {
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        product = try values.decodeIfPresent(String.self, forKey: .product) ?? ""
-        target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
+        product = try values.decode(String.self, forKey: .product)
+        target = try values.decode(String.self, forKey: .target)
         desiredVersion = try values.decodeIfPresent(String.self, forKey: .desiredVersion)
         observedVersion = try values.decodeIfPresent(String.self, forKey: .observedVersion)
-        phase = try values.decodeIfPresent(String.self, forKey: .phase) ?? ""
-        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
-        candidate = try values.decodeIfPresent(ReleaseCandidate.self, forKey: .candidate)
-            ?? ReleaseCandidate()
-        quarantined = try values.decodeIfPresent([ReleaseQuarantineEntry].self, forKey: .quarantined) ?? []
-        gates = try values.decodeIfPresent(ReleaseGates.self, forKey: .gates) ?? ReleaseGates()
-        verdict = ReleaseVerdict(try values.decodeIfPresent(String.self, forKey: .verdict) ?? "")
-        blockers = try values.decodeIfPresent([String].self, forKey: .blockers) ?? []
-        remedies = try values.decodeIfPresent([String].self, forKey: .remedies) ?? []
+        phase = try values.decode(String.self, forKey: .phase)
+        detail = try values.decode(String.self, forKey: .detail)
+        candidate = try values.decode(ReleaseCandidate.self, forKey: .candidate)
+        quarantined = try values.decode([ReleaseQuarantineEntry].self, forKey: .quarantined)
+        gates = try values.decode(ReleaseGates.self, forKey: .gates)
+        verdict = ReleaseVerdict(try values.decode(String.self, forKey: .verdict))
+        blockers = try values.decode([String].self, forKey: .blockers)
+        remedies = try values.decode([String].self, forKey: .remedies)
     }
 }
 
@@ -112,23 +111,10 @@ struct ReleaseCandidate: Decodable, Sendable {
         healthStatus != "no_candidate"
     }
 
-    init(port: Int? = nil, healthStatus: String = "no_candidate", pidAlive: Bool? = nil) {
-        self.port = port
-        self.healthStatus = healthStatus
-        self.pidAlive = pidAlive
-    }
-
     enum CodingKeys: String, CodingKey {
         case port
         case healthStatus = "health_status"
         case pidAlive = "pid_alive"
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        port = try values.decodeIfPresent(Int.self, forKey: .port)
-        healthStatus = try values.decodeIfPresent(String.self, forKey: .healthStatus) ?? "no_candidate"
-        pidAlive = try values.decodeIfPresent(Bool.self, forKey: .pidAlive)
     }
 }
 
@@ -137,28 +123,14 @@ struct ReleaseCandidate: Decodable, Sendable {
 /// and what memory the host has left. A builder that stops publishing is most
 /// often one that ran out of one or the other.
 struct ReleaseGates: Decodable, Sendable {
-    let diskPressureUnresolved: Bool
+    /// Whether disk pressure stands unresolved; `null` when no pressure
+    /// source reported, which is not the same answer as resolved.
+    let diskPressureUnresolved: Bool?
     let freeGB: Double?
     let usedPercent: Double?
     let headroomGB: Double?
     let memoryAvailableGB: Double?
     let memorySwapUsedPct: Int?
-
-    init(
-        diskPressureUnresolved: Bool = false,
-        freeGB: Double? = nil,
-        usedPercent: Double? = nil,
-        headroomGB: Double? = nil,
-        memoryAvailableGB: Double? = nil,
-        memorySwapUsedPct: Int? = nil
-    ) {
-        self.diskPressureUnresolved = diskPressureUnresolved
-        self.freeGB = freeGB
-        self.usedPercent = usedPercent
-        self.headroomGB = headroomGB
-        self.memoryAvailableGB = memoryAvailableGB
-        self.memorySwapUsedPct = memorySwapUsedPct
-    }
 
     enum CodingKeys: String, CodingKey {
         case diskPressureUnresolved = "disk_pressure_unresolved"
@@ -167,15 +139,5 @@ struct ReleaseGates: Decodable, Sendable {
         case headroomGB = "headroom_gb"
         case memoryAvailableGB = "memory_available_gb"
         case memorySwapUsedPct = "memory_swap_used_pct"
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        diskPressureUnresolved = try values.decodeIfPresent(Bool.self, forKey: .diskPressureUnresolved) ?? false
-        freeGB = try values.decodeIfPresent(Double.self, forKey: .freeGB)
-        usedPercent = try values.decodeIfPresent(Double.self, forKey: .usedPercent)
-        headroomGB = try values.decodeIfPresent(Double.self, forKey: .headroomGB)
-        memoryAvailableGB = try values.decodeIfPresent(Double.self, forKey: .memoryAvailableGB)
-        memorySwapUsedPct = try values.decodeIfPresent(Int.self, forKey: .memorySwapUsedPct)
     }
 }

@@ -24,25 +24,19 @@ struct PublicOriginReceiptPanel: View {
                         .textSelection(.enabled)
                     Spacer(minLength: .zero)
                 }
-                WisentField(label: "Target", value: receipt.target.isEmpty ? "Not reported" : receipt.target)
-                WisentField(
-                    label: "Publication",
-                    value: receipt.publication.isEmpty ? "Not reported" : receipt.publication
-                )
+                WisentField(label: "Target", value: receipt.target)
+                WisentField(label: "Publication", value: receipt.publication)
                 if let funnel = receipt.funnel {
                     WisentField(label: "Funnel", value: funnel.summary)
                 }
-                if let resolution = receipt.resolution {
-                    WisentField(label: "Resolution", value: resolution.state.word)
+                if let webDeclaration = receipt.webDeclaration {
+                    WisentField(label: "Web declaration", value: webDeclaration.summary)
                 }
-                if let readback = receipt.readback {
-                    WisentField(label: "Public readback", value: readback.summary)
-                    if let detail = readback.detail, !detail.isEmpty {
-                        line(detail, tone: .neutral)
-                    }
-                }
+                WisentField(label: "Resolution", value: receipt.resolution.state.word)
+                WisentField(label: "Public readback", value: receipt.readback.summary)
+                line(receipt.readback.detail, tone: .neutral)
                 handlers
-                if let refusal = receipt.refusal, !refusal.isEmpty {
+                if let refusal = receipt.refusal {
                     line(refusal, tone: .danger)
                 }
             }
@@ -51,11 +45,9 @@ struct PublicOriginReceiptPanel: View {
 
     @ViewBuilder
     private var handlers: some View {
-        if receipt.handlers.isEmpty {
-            line("The convergence reported no handler.", tone: .neutral)
-        } else {
+        if let handlers = receipt.handlers, !handlers.isEmpty {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
-                ForEach(receipt.handlers) { handler in
+                ForEach(handlers) { handler in
                     Text(handler.reviewLine)
                         .font(WisentTypeScale.identifierSmall())
                         .foregroundStyle(WisentDesign.ink)
@@ -64,6 +56,10 @@ struct PublicOriginReceiptPanel: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ForEach(receipt.handlerLines, id: \.self) { sentence in
+                line(sentence, tone: .neutral)
+            }
         }
     }
 

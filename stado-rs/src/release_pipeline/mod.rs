@@ -10,8 +10,11 @@ mod records;
 mod validate;
 
 pub const PRODUCT_MANIFEST: &str = ".wisent-release.json";
+/// The `.wisent-release.json` contract version every product carries, and
+/// the version of every record the pipeline keeps for a release:
+/// <https://stado.wisent.com/docs/release/submit>.
 pub const SCHEMA_VERSION: u32 = 1;
-pub const RUNNER_PLATFORMS: [&str; 2] = ["darwin-arm64", "linux-amd64"];
+pub const RUNNER_PLATFORMS: &[&str] = &["darwin-arm64", "linux-amd64"];
 
 pub use contract::catalog::{CatalogSourceIdentity, ReleaseCatalogEntry};
 pub use contract::manifest::{

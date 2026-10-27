@@ -11,12 +11,6 @@ pub fn normalize_gpu_name(name: &str) -> String {
         .replace("geforce-", "nvidia-")
 }
 
-/// Pure: first line of a `nvidia-smi --format=csv,noheader,nounits` reply
-/// as an integer MiB count. None when unparsable (Python ValueError path).
-pub fn parse_smi_mib_first(stdout: &str) -> Option<i64> {
-    stdout.trim().lines().next()?.trim().parse().ok()
-}
-
 /// Python `_detect_gpu_type`: nvidia-smi on Linux, sysctl brand string on
 /// macOS, else "cpu". A host without `nvidia-smi` has no NVIDIA driver; one
 /// whose `nvidia-smi` is there and fails is refused, not routed as a CPU host.
@@ -68,28 +62,33 @@ pub struct GpuCard {
 }
 
 /// Pure parser for `nvidia-smi --query-gpu=uuid,memory.total,memory.free
-/// --format=csv,noheader,nounits`: one [`GpuCard`] per readable row.
-pub fn parse_gpu_cards(stdout: &str) -> Vec<GpuCard> {
+/// --format=csv,noheader,nounits`: one [`GpuCard`] per row, its MiB in whole
+/// GiB. A row the driver printed and this cannot read is refused naming it:
+/// dropping it would hide a card the host has from every admission decision.
+pub fn parse_gpu_cards(stdout: &str) -> Result<Vec<GpuCard>, String> {
+    use crate::providers::local::host_memory::constants::{GIB, MIB};
+    let mib_per_gib = GIB / MIB;
     let mut cards = Vec::new();
-    for line in stdout.lines() {
-        let mut fields = line.split(',').map(str::trim);
-        let (Some(uuid), Some(total), Some(free)) = (fields.next(), fields.next(), fields.next())
-        else {
-            continue;
-        };
-        let (Ok(total_mib), Ok(free_mib)) = (total.parse::<i64>(), free.parse::<i64>()) else {
-            continue;
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        let fields: Vec<&str> = line.split(',').map(str::trim).collect();
+        let [uuid, total, free] = fields.as_slice() else {
+            return Err(format!("nvidia-smi printed {line:?}, not uuid, memory.total, memory.free"));
         };
         if uuid.is_empty() {
-            continue;
+            return Err(format!("nvidia-smi printed {line:?} with no card uuid"));
         }
+        let mib = |name: &str, value: &str| {
+            value
+                .parse::<i64>()
+                .map_err(|error| format!("nvidia-smi's {name} {value:?} for {uuid} is not a MiB count: {error}"))
+        };
         cards.push(GpuCard {
             uuid: uuid.to_string(),
-            total_vram_gb: total_mib / 1024,
-            free_vram_gb: free_mib / 1024,
+            total_vram_gb: mib("memory.total", total)? / mib_per_gib,
+            free_vram_gb: mib("memory.free", free)? / mib_per_gib,
         });
     }
-    cards
+    Ok(cards)
 }
 
 /// Every accelerator this host has, newest driver reading. Empty when the
@@ -119,19 +118,21 @@ pub async fn smi_gpu_cards() -> Result<Vec<GpuCard>, String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    Ok(parse_gpu_cards(&String::from_utf8_lossy(&out.stdout)))
+    parse_gpu_cards(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// Python `_detect_local_vram_gb`: total VRAM in GB of the largest card this
-/// host has, 0 if it has none.
+/// host has; a host with no card has the accelerator memory of no card.
 ///
 /// The largest single card, not the sum: a job that does not shard can only
 /// use one board, and every admission comparison downstream treats this as
 /// "the biggest thing that fits".
 pub async fn detect_local_vram_gb() -> Result<i64, String> {
     let cards = smi_gpu_cards().await?;
-    Ok(match cards.iter().map(|card| card.total_vram_gb).max() {
+    let totals = cards.iter().map(|card| card.total_vram_gb);
+    Ok(match totals.clone().max() {
         Some(largest) => largest,
-        None => 0,
+        // No card: the sum over the cards it has, which is none.
+        None => totals.sum(),
     })
 }

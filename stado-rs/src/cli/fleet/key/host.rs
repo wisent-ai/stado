@@ -28,7 +28,7 @@ pub(super) async fn install_public_key(
         FailureCode::InfraDown,
     )
     .await
-    .map(|_| ())
+    .map(|_command_output| ())
 }
 
 /// Take `public_key` off `target`'s `authorized_keys`; an empty key names
@@ -53,7 +53,7 @@ pub(super) async fn remove_public_key(
         FailureCode::InfraDown,
     )
     .await
-    .map(|_| ())
+    .map(|_command_output| ())
 }
 
 /// Open the channel to `target` with the key the store now holds, and answer

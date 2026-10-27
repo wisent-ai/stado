@@ -5,8 +5,8 @@
 //!   `reap_dead_agents` (dead / never-worked / wedged VM reaper).
 //! - [`heartbeat_guard`]: per-job heartbeat + GCS checkpoint freshness
 //!   signals that defer reaps of productive VMs.
-//! - [`alerts`]: multi-channel alert fan-out (Slack, Telegram, SendGrid,
-//!   GCP Pub/Sub over REST).
+//! - [`alerts`]: multi-channel alert fan-out (Slack, Telegram, Skrzynka
+//!   e-mail, most SMS, GCP Pub/Sub over REST).
 //! - [`billing`]: `billing_health/credits.json` collector (BigQuery billing
 //!   export + Azure ARM balance).
 //! - [`host_health`]: read side of the `host_health/<host>.json` beacon.
@@ -25,6 +25,7 @@
 pub mod alerts;
 pub mod billing;
 pub mod heartbeat_guard;
+pub mod host_activity;
 pub mod host_health;
 pub mod host_silence;
 // The Python module is stado/monitor/monitor.py — same nested name.

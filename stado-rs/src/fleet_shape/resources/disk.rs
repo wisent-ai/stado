@@ -2,7 +2,7 @@
 
 use super::super::{Finding, DISK_CHECK};
 use crate::deploy::{host_disk, Runner};
-use crate::providers::local::space_reclaim::rule::{VolumeReading, DISK_FULL_PERCENT};
+use crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT;
 use crate::targets::ComputeTarget;
 
 /// A finding when a host's volume is at the disk-full threshold: its janitor
@@ -25,25 +25,21 @@ pub(in crate::fleet_shape) async fn disk_headroom(
             return;
         }
     };
-    let kib = |key: &str| {
-        report["usage"][key]
-            .as_str()
-            .and_then(|value| value.trim().parse::<i64>().ok())
-            .and_then(|value| value.checked_mul(1024))
-    };
-    let (Some(total_bytes), Some(free_bytes)) = (kib("blocks_kb"), kib("available_kb")) else {
-        out.push(Finding {
-            check: DISK_CHECK,
-            subject: target.name.clone(),
-            declared: format!("the volume stays under {DISK_FULL_PERCENT}% used"),
-            observed: "df answered without its size and available columns".to_string(),
-            command: format!("stado space report {} --json", target.name),
-        });
-        return;
-    };
-    let volume = VolumeReading {
-        total_bytes,
-        free_bytes,
+    // The one df-row reader the host verdict and the disk report use, so this
+    // check cannot disagree with them about a row whose figures are not
+    // numbers, and says which figure it could not read.
+    let volume = match host_disk::volume_of_report(&report) {
+        Ok(volume) => volume,
+        Err(cause) => {
+            out.push(Finding {
+                check: DISK_CHECK,
+                subject: target.name.clone(),
+                declared: format!("the volume stays under {DISK_FULL_PERCENT}% used"),
+                observed: cause,
+                command: format!("stado space report {} --json", target.name),
+            });
+            return;
+        }
     };
     if volume.full() {
         out.push(Finding {

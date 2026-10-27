@@ -58,5 +58,9 @@ pub(super) fn strip_ansi(text: &str) -> std::borrow::Cow<'_, str> {
 /// row of `release doctor` stays one row without cutting the sentence that
 /// earned the name.
 pub(in crate::release_cause) fn evidence_line(text: &str) -> String {
-    text.lines().next().unwrap_or_default().to_string()
+    // Empty text has no first line and keeps as nothing.
+    match text.lines().next() {
+        Some(line) => line.to_string(),
+        None => String::new(),
+    }
 }

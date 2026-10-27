@@ -38,7 +38,7 @@ impl WebApiEdge {
 }
 
 pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Vec<String>> {
-    let Some(Value::Object(entry)) = value else {
+    let Some(object @ Value::Object(entry)) = value else {
         return Err(vec![
             "web_api.edge must be an object with target, address and contact".to_string(),
         ]);
@@ -54,21 +54,47 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
         registrar_credential: Option<serde::de::IgnoredAny>,
     }
     crate::config::boundaries::declared_fields::<Fields>(
-        value.expect("matched as an object above"),
+        object,
         "web_api.edge",
         &mut problems,
     );
-    let target = entry.get("target").and_then(Value::as_str).unwrap_or("");
-    if !canonical_machine_name(target) {
-        problems.push("web_api.edge.target is required and must be a canonical target".to_string());
+    // Each required field is read as itself: absent, not a string, and a
+    // string of the wrong shape are three problems with three sentences.
+    let required = |name: &str, problems: &mut Vec<String>| -> Option<String> {
+        match entry.get(name) {
+            Some(Value::String(text)) => Some(text.clone()),
+            Some(other) => {
+                problems.push(format!("web_api.edge.{name} must be a string, not {other}"));
+                None
+            }
+            None => {
+                problems.push(format!("web_api.edge.{name} is required"));
+                None
+            }
+        }
+    };
+    let mut target = required("target", &mut problems);
+    if target
+        .as_deref()
+        .is_some_and(|target| !canonical_machine_name(target))
+    {
+        problems.push("web_api.edge.target must be a canonical target".to_string());
+        target = None;
     }
-    let address = entry.get("address").and_then(Value::as_str).unwrap_or("");
-    if address.parse::<std::net::Ipv4Addr>().is_err() {
-        problems.push("web_api.edge.address is required and must be an IPv4 address".to_string());
+    let mut address = required("address", &mut problems);
+    if let Some(Err(error)) = address.as_deref().map(str::parse::<std::net::Ipv4Addr>) {
+        problems.push(format!(
+            "web_api.edge.address must be an IPv4 address: {error}"
+        ));
+        address = None;
     }
-    let contact = entry.get("contact").and_then(Value::as_str).unwrap_or("");
-    if !contact.contains('@') || contact.chars().any(char::is_whitespace) {
-        problems.push("web_api.edge.contact is required and must be a mail address".to_string());
+    let mut contact = required("contact", &mut problems);
+    if contact
+        .as_deref()
+        .is_some_and(|contact| !contact.contains('@') || contact.chars().any(char::is_whitespace))
+    {
+        problems.push("web_api.edge.contact must be a mail address".to_string());
+        contact = None;
     }
     let registrar_credential = match entry.get("registrar_credential") {
         None => None,
@@ -79,15 +105,14 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
             None
         }
     };
-    if problems.is_empty() {
-        Ok(WebApiEdge {
-            target: target.to_string(),
-            address: address.to_string(),
-            contact: contact.to_string(),
+    match (target, address, contact, problems.is_empty()) {
+        (Some(target), Some(address), Some(contact), true) => Ok(WebApiEdge {
+            target,
+            address,
+            contact,
             registrar_credential,
-        })
-    } else {
-        Err(problems)
+        }),
+        _ => Err(problems),
     }
 }
 

@@ -27,7 +27,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn correlate_served_store(
     let command = host_step_script(&["store", "served", "--port", &port.to_string()])?;
     let script = format!("printf '%s' {} | {command}", shlex_quote(&encoded));
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "object API physical-store correlation failed on {}:{port}: {}",
             target.name,

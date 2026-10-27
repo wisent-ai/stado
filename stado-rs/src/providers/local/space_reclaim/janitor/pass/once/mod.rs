@@ -16,7 +16,9 @@ use crate::providers::local::space_reclaim::janitor::pass::lock::holds;
 use crate::providers::local::space_reclaim::janitor::pass::lock::ownership::{
     acquire_lock_state, retired_locks_active,
 };
-use crate::providers::local::space_reclaim::janitor::pass::lock::{ensure_state_dir, secure_home};
+use crate::providers::local::space_reclaim::janitor::pass::lock::{
+    ensure_state_dir, secure_home, user_home,
+};
 use crate::providers::local::space_reclaim::janitor::pass::once::entry::CleanupWriter;
 use crate::providers::local::space_reclaim::janitor::pass::once::finish::{
     finish, preserve_previous_report,
@@ -38,12 +40,11 @@ pub(crate) async fn cleanup_once(
     let started = Instant::now();
     let attempted_at = epoch_now();
     let hostname = crate::providers::vast::system_hostname();
-    let mut report = CleanupReport::base(active_job_count, &hostname);
-    report.writer = writer.as_str();
+    let mut report = CleanupReport::base(active_job_count, &hostname, writer.as_str());
     report.writer_version = crate::binary::build_identity::BUILD_IDENTITY;
     report.every_seconds = writer.every().map(|every| every.as_secs());
 
-    let home = match secure_home(&crate::config_file::expand_tilde("~")) {
+    let home = match user_home().and_then(|home| secure_home(&home)) {
         Ok(home) => home,
         Err(exc) => {
             report.add_error("runtime", &exc);
@@ -91,7 +92,7 @@ pub(crate) async fn cleanup_once(
     // after the queue was asked is kept as live under the lock.
     let store_wait = Instant::now();
     let registry = fetch_canonical_registry().await;
-    report.store_wait_ms = store_wait.elapsed().as_millis().min(i64::MAX as u128) as i64;
+    report.charge_store_wait(store_wait);
     let asked = asked::ask(&home, &mut report).await;
     // The build-cache walk reads the whole home, for minutes on a full
     // developer host. Run under the exclusive lock it refused every running

@@ -24,9 +24,12 @@ pub async fn gcp_fanout(
     justification: &str,
     contact_email: &str,
 ) -> Vec<Value> {
-    let targets: Vec<String> = regions
-        .map(<[String]>::to_vec)
-        .unwrap_or_else(|| config::regions().to_vec());
+    // A request that names regions asks in those; one that names none asks
+    // in every declared GCP_REGIONS entry.
+    let targets: Vec<String> = match regions {
+        Some(named) => named.to_vec(),
+        None => config::regions().to_vec(),
+    };
     if targets.is_empty() {
         return vec![json!({
             "provider": crate::capabilities::ProviderId::Gcp.as_str(), "ok": false,
@@ -98,9 +101,12 @@ pub async fn azure_fanout(accel: &str, new_limit: i64, regions: Option<&[String]
             "error": format!("no Azure compute family matches accel '{accel}'"),
         })];
     }
-    let targets: Vec<String> = regions
-        .map(<[String]>::to_vec)
-        .unwrap_or_else(|| config::azure_locations().to_vec());
+    // A request that names locations asks in those; one that names none
+    // asks in every declared AZURE_LOCATIONS entry.
+    let targets: Vec<String> = match regions {
+        Some(named) => named.to_vec(),
+        None => config::azure_locations().to_vec(),
+    };
     if targets.is_empty() {
         return vec![json!({
             "provider": crate::capabilities::ProviderId::Azure.as_str(), "ok": false,
@@ -112,10 +118,17 @@ pub async fn azure_fanout(accel: &str, new_limit: i64, regions: Option<&[String]
     for loc in &targets {
         for fam in &families {
             let row = match azure_request_increase(subscription, loc, fam, new_limit).await {
-                Ok(r) if r.get("available").and_then(Value::as_bool) == Some(false) => json!({
-                    "provider": crate::capabilities::ProviderId::Azure.as_str(), "location": loc, "family": fam, "ok": false,
-                    "error": r.get("reason").and_then(Value::as_str).unwrap_or("not available"),
-                }),
+                Ok(r) if r.get("available").and_then(Value::as_bool) == Some(false) => {
+                    // Azure's own reason, or its whole answer when it names none.
+                    let error = match r.get("reason").and_then(Value::as_str) {
+                        Some(reason) => reason.to_string(),
+                        None => format!("unavailable, with no reason given: {r}"),
+                    };
+                    json!({
+                        "provider": crate::capabilities::ProviderId::Azure.as_str(), "location": loc, "family": fam, "ok": false,
+                        "error": error,
+                    })
+                }
                 Ok(r) => {
                     let mut row = json!({"provider": crate::capabilities::ProviderId::Azure.as_str(), "location": loc, "family": fam, "ok": true});
                     merge_object(&mut row, r);

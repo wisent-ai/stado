@@ -7,90 +7,76 @@
 use serde_json::Value;
 
 /// Bytes as an operator reads them, through the same helper the rest of this
-/// capability uses for disk figures.
+/// capability uses for disk figures (it takes 1 KiB blocks, `df -Pk`'s unit).
 pub fn gib(bytes: i64) -> String {
-    format!(
-        "{:.1} GiB",
-        crate::deploy::host_disk::gib_from_blocks((bytes / 1024) as f64)
-    )
+    use crate::providers::local::host_memory::constants::KIB;
+    format!("{:.1} GiB", crate::deploy::host_disk::gib_from_blocks((bytes / KIB) as f64))
 }
 
 /// Print the rule line, the verdict, the janitor sentence and every
-/// uncovered path.
+/// uncovered path. A field the report does not carry is said as
+/// [`crate::cli::reporting::NOT_REPORTED`], never as a word nobody measured.
 pub fn print_coverage(coverage: &Value) {
+    use crate::cli::reporting::field;
     let rule = &coverage["rule"];
+    let triggered = match rule["triggered"].as_bool() {
+        Some(true) => "triggered",
+        Some(false) => "not triggered",
+        None => "whether it triggered is not reported",
+    };
     match rule["used_percent"].as_f64() {
         Some(used) => println!(
-            "rule: delete everything the fleet put here at {}% used; volume {used:.1}% used ({})",
-            rule["full_percent"],
-            if rule["triggered"].as_bool() == Some(true) {
-                "triggered"
-            } else {
-                "not triggered"
-            }
+            "rule: delete everything the fleet put here at {}% used; volume {used:.1}% used ({triggered})",
+            field(&rule["full_percent"]),
         ),
         None => println!(
             "rule: delete everything the fleet put here at {}% used; volume unreadable",
-            rule["full_percent"]
+            field(&rule["full_percent"])
         ),
     }
-    let verdict = match coverage.get("verdict").and_then(Value::as_str) {
-        Some(verdict) => verdict,
-        None => "verdict not reported",
-    };
     match coverage.get("detail").and_then(Value::as_str) {
-        Some(detail) => println!("disk: {verdict} — {detail}"),
-        None => println!("disk: {verdict}"),
+        Some(detail) => println!("disk: {} — {detail}", field(&coverage["verdict"])),
+        None => println!("disk: {}", field(&coverage["verdict"])),
     }
     if let Some(janitor) = coverage.get("janitor") {
-        println!(
-            "janitor: {} — {}",
-            janitor
-                .get("outcome")
-                .and_then(Value::as_str)
-                .unwrap_or("never_run"),
-            janitor
-                .get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or("no janitor detail"),
-        );
+        println!("janitor: {} — {}", field(&janitor["outcome"]), field(&janitor["detail"]));
         if let Some(pass) = janitor.get("report").filter(|pass| pass.is_object()) {
             if let Some(cleaners) = pass.get("cleaners").and_then(Value::as_object) {
                 for (name, result) in cleaners {
                     println!(
                         "cleaner {name}: scanned {}, eligible {}, deleted {}; retained {}",
-                        result["scanned_items"],
-                        result["eligible_items"],
-                        result["deleted_items"],
-                        result["skipped"]
+                        field(&result["scanned_items"]),
+                        field(&result["eligible_items"]),
+                        field(&result["deleted_items"]),
+                        field(&result["skipped"])
                     );
                 }
             }
             if let Some(errors) = pass.get("errors").and_then(Value::as_array) {
                 for error in errors {
-                    println!("cleanup error: {error}");
+                    println!("cleanup error: {}", field(error));
                 }
             }
         }
     }
-    let empty = Vec::new();
+    let Some(uncovered) = coverage.get("uncovered").and_then(Value::as_array) else {
+        println!("uncovered paths: {}", crate::cli::reporting::NOT_REPORTED);
+        return;
+    };
     // The first word of each row is the mechanism, not a verdict about the
-    // path: the cleaner whose area holds it, or `uncovered` when nothing in
-    // the product looks there — the user's data.
-    for row in coverage
-        .get("uncovered")
-        .and_then(Value::as_array)
-        .unwrap_or(&empty)
-    {
-        let label = row
-            .get("mechanism")
-            .and_then(Value::as_str)
-            .unwrap_or("uncovered");
-        let size = match row.get("bytes").and_then(Value::as_i64) {
+    // path: the cleaner whose area holds it, or `uncovered` for a row that
+    // names none, which is how the report says nothing in the product looks
+    // there — the user's data.
+    for row in uncovered {
+        let label = match row["mechanism"].as_str() {
+            Some(mechanism) => mechanism,
+            None => "uncovered",
+        };
+        let size = match row["bytes"].as_i64() {
             Some(bytes) => gib(bytes),
             None => "size not reported".to_string(),
         };
-        match row.get("path").and_then(Value::as_str) {
+        match row["path"].as_str() {
             Some(path) => println!("{label}\t{size}\t{path}"),
             None => println!("{label}\t{size}\ta coverage row without a path: {row}"),
         }

@@ -32,11 +32,29 @@ pub(in crate::fleet_shape) fn service_artefacts(
     out: &mut Vec<Finding>,
     notes: &mut Vec<String>,
 ) {
-    let artefacts: Vec<crate::deploy::host_inventory::ServiceArtifact> = reading
-        .get("service_artifacts")
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-    let mut compared = 0_usize;
+    // A host that reported no artefact list, or one that is not a list of
+    // artefacts, compared nothing; the note says which, never "0 found".
+    let artefacts: Vec<crate::deploy::host_inventory::ServiceArtifact> =
+        match reading.get("service_artifacts") {
+            None => {
+                notes.push(format!(
+                    "{}: the host reported no service_artifacts, so no service artefact was compared",
+                    target.name
+                ));
+                return;
+            }
+            Some(value) => match serde_json::from_value(value.clone()) {
+                Ok(artefacts) => artefacts,
+                Err(error) => {
+                    notes.push(format!(
+                        "{}: the host's service_artifacts cannot be read ({error}), so no service artefact was compared",
+                        target.name
+                    ));
+                    return;
+                }
+            },
+        };
+    let mut compared = Vec::new();
     for artefact in &artefacts {
         // A version the host read from both files answers the question an
         // mtime only gestures at, so it is judged first and the timestamps
@@ -58,12 +76,11 @@ pub(in crate::fleet_shape) fn service_artefacts(
                     artefact.label, target.name
                 ),
             });
-            compared += 1;
+            compared.push(&artefact.label);
             continue;
         }
-        match artefact.at_least_as_new_as_installed() {
-            Some(false) => {
-                let behind = artefact.seconds_behind_installed().unwrap_or_default();
+        match artefact.seconds_behind_installed() {
+            Some(behind) if behind.is_positive() => {
                 out.push(Finding {
                     check: ARTEFACT_CHECK,
                     subject: format!("{}:{}", target.name, artefact.label),
@@ -74,7 +91,7 @@ pub(in crate::fleet_shape) fn service_artefacts(
                     observed: format!(
                         "current -> {} is {} day(s) older than the installed {}",
                         artefact.current_target,
-                        behind / 86_400,
+                        chrono::TimeDelta::seconds(behind).num_days(),
                         artefact.program
                     ),
                     command: format!(
@@ -82,9 +99,9 @@ pub(in crate::fleet_shape) fn service_artefacts(
                         artefact.label, target.name
                     ),
                 });
-                compared += 1;
+                compared.push(&artefact.label);
             }
-            Some(true) => compared += 1,
+            Some(_) => compared.push(&artefact.label),
             // No mtime for one side: nothing was proven, and saying so is the
             // difference between "every artefact is current" and "no artefact
             // was read".
@@ -95,6 +112,6 @@ pub(in crate::fleet_shape) fn service_artefacts(
         "{}: {} service artefact(s) found, {} compared against their installed program",
         target.name,
         artefacts.len(),
-        compared
+        compared.len()
     ));
 }

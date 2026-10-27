@@ -55,7 +55,7 @@ pub async fn repair_runtime(
         let output =
             crate::deploy::native_signing::run_runner_reconciliation(target, &script, runner)
                 .await?;
-        if !output.ok() {
+        if !output.succeeded() {
             return Err(DeployError::unreachable(format!(
                 "{}: runner runtime repair of {root} failed: {} {}",
                 target.name, output.stdout, output.stderr
@@ -239,11 +239,17 @@ async fn remove_profile(
             },
             profile,
         ),
-        &[("__TOKEN__", shlex_quote(&token))],
+        &[
+            ("__TOKEN__", shlex_quote(&token)),
+            (
+                "__TOOL_PATH__",
+                crate::primitives::tool_path::SEARCH_PATH.to_string(),
+            ),
+        ],
     );
     let output = host_channel::run_script(&target, &script, &production_runner()).await?;
     let mut value = report(&target, &output, "remove", profile);
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: {} runner removal failed: {}",
             target.name,

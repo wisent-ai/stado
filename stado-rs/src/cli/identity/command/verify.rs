@@ -43,10 +43,18 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 None => NOT_REPORTED,
             };
             // A host that gives no reason prints none: the reason follows the
-            // word only when the host stated one.
-            let reason = match row["drivable_reason"].as_str() {
-                Some(reason) => format!("  {reason}"),
-                None => String::new(),
+            // words only when the host stated one. The observation's reason
+            // comes first, since it says why the identity column is empty.
+            let reasons: Vec<&str> = [
+                row["observed_reason"].as_str(),
+                row["drivable_reason"].as_str(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            let reason = match reasons.is_empty() {
+                true => String::new(),
+                false => format!("  {}", reasons.join("; ")),
             };
             println!(
                 "{:<24} {:<32} {:<8} {}{}",

@@ -88,7 +88,12 @@ impl Service {
     /// The default is exactly the probe `service verify` already ran, so no
     /// entry changes verdict because this field came into existence.
     pub fn verification(&self) -> VerifyDescriptor {
-        self.verify.clone().unwrap_or_default()
+        // The declaration's own descriptor when the author wrote one; the
+        // derived probe otherwise, which is what `verify` always ran.
+        match &self.verify {
+            Some(declared) => declared.clone(),
+            None => VerifyDescriptor::default(),
+        }
     }
 
     /// The address `host` is told to dial, or `None` if the directory hands

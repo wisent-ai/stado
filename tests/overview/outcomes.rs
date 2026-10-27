@@ -16,8 +16,9 @@ fn overview_counts_queued_jobs_per_named_model_and_states_unmeasured_throughput(
         "python run.py --model alpha --task second",
     ];
     let unnamed = ["python run.py"];
-    for command in named.iter().chain(unnamed.iter()) {
-        store.submit("overview-outcomes-run", command);
+    // A run id names one submission request, so each job is its own run.
+    for (run, command) in named.iter().chain(unnamed.iter()).enumerate() {
+        store.submit(&format!("overview-outcomes-run-{run}"), command);
     }
 
     let document: Value = serde_json::from_str(&store.succeeded(&["overview", "--json"]))

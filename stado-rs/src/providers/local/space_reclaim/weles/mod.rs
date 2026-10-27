@@ -1,5 +1,6 @@
 //! Weles recordings cleanup: whole-run eviction of every run directory under
-//! the host's recordings root.
+//! the host's declared recordings root (`targets[].weles.recordings_dir`); a
+//! host that declares none is skipped as `recordings_dir_undeclared`.
 //!
 //! The scan is path-based: the safety gate is the ordered series of refusals
 //! before the removal (hidden or reserved names, symbolic links, another
@@ -13,6 +14,6 @@
 mod scan;
 mod tree_ops;
 
-pub use scan::{recordings_root, scan_weles, CLEANER};
+pub use scan::{scan_weles, CLEANER};
 
 pub(super) use tree_ops::{dir_size, remove_tree};

@@ -30,7 +30,8 @@ struct Store {
 
 impl Store {
     fn new(case: &str) -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("host-exec-pool");
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/journeys/host-exec-pool");
         std::fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(format!("{case}-{}", std::process::id()));
         for directory in [".locks", ".metadata"] {

@@ -42,7 +42,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
         runner,
     )
     .await?;
-    if !source_write.ok() {
+    if !source_write.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: writing the Apple challenge helper source failed: {}",
             target.name,
@@ -184,7 +184,7 @@ async fn sign_helper(
         runner,
     )
     .await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: sign Apple challenge helper failed: {}",
             target.name,
@@ -195,7 +195,12 @@ async fn sign_helper(
     let reports: serde_json::Value = serde_json::from_str(&output.stdout).map_err(|error| {
         DeployError::unreachable(format!("invalid Apple challenge signing receipt: {error}"))
     })?;
-    let report = &reports[0];
+    let Some([report]) = reports.as_array().map(Vec::as_slice) else {
+        return Err(DeployError::unreachable(format!(
+            "{}: the Apple challenge signing receipt is not one report: {reports}",
+            target.name
+        )));
+    };
     if report["state"].as_str() != Some("stable") {
         return Err(DeployError::unreachable(format!(
             "{}: Apple challenge helper signature is {}",

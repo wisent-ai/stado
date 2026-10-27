@@ -31,8 +31,9 @@ pub enum MobileCommands {
         /// Operating-system interface carrying the phone tether, for example en7.
         #[arg(long)]
         interface: String,
-        /// Loopback address to listen on. Non-loopback binds are refused.
-        #[arg(long, default_value = "127.0.0.1")]
+        /// Loopback address to listen on, stated by the deployment. Non-loopback
+        /// binds are refused.
+        #[arg(long)]
         bind: IpAddr,
         /// Local proxy port the browser is pointed at; no port is assumed.
         #[arg(long)]
@@ -147,24 +148,39 @@ async fn read_header(stream: &mut TcpStream, limit: usize) -> io::Result<(Vec<u8
     }
 }
 
+/// The line ending HTTP/1.1 messages use (RFC 9112 §2.1).
+const CRLF: &[u8] = b"\r\n";
+
+/// Port zero asks the kernel to choose an ephemeral local port for the
+/// upstream socket: <https://man7.org/linux/man-pages/man7/ip.7.html>.
+const EPHEMERAL_PORT: u16 = 0;
+
 fn split_first_line(header: &[u8]) -> io::Result<(&str, &[u8])> {
     let end = header
-        .windows(2)
-        .position(|window| window == b"\r\n")
+        .windows(CRLF.len())
+        .position(|window| window == CRLF)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing HTTP request line"))?;
-    let line = std::str::from_utf8(&header[..end])
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "request line is not UTF-8"))?;
-    Ok((line, &header[end + 2..]))
+    let line = std::str::from_utf8(&header[..end]).map_err(|error| {
+        io::Error::new(io::ErrorKind::InvalidData, format!("request line is not UTF-8: {error}"))
+    })?;
+    Ok((line, &header[end + CRLF.len()..]))
 }
 
-fn authority_host_port(authority: &str, default_port: u16) -> io::Result<(String, u16)> {
-    let candidate = format!("http://{authority}");
-    let parsed = url::Url::parse(&candidate)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid proxy authority"))?;
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "proxy authority has no host"))?;
-    Ok((host.to_owned(), parsed.port().unwrap_or(default_port)))
+/// The host and port of a CONNECT request's authority-form target, which
+/// always names its port (RFC 9110 §9.3.6): a target without one is refused.
+fn authority_host_port(authority: &str) -> io::Result<(String, u16)> {
+    let invalid = |why: String| io::Error::new(io::ErrorKind::InvalidData, why);
+    let (host, port) = authority
+        .rsplit_once(':')
+        .ok_or_else(|| invalid(format!("CONNECT target {authority:?} names no port")))?;
+    let port = port
+        .parse::<u16>()
+        .map_err(|error| invalid(format!("CONNECT target {authority:?} has the port {port:?}: {error}")))?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if host.is_empty() {
+        return Err(invalid(format!("CONNECT target {authority:?} names no host")));
+    }
+    Ok((host.to_owned(), port))
 }
 
 async fn connect_from(source: Ipv4Addr, host: &str, port: u16) -> io::Result<TcpStream> {
@@ -174,18 +190,19 @@ async fn connect_from(source: Ipv4Addr, host: &str, port: u16) -> io::Result<Tcp
             continue;
         };
         let socket = TcpSocket::new_v4()?;
-        socket.bind(SocketAddr::new(IpAddr::V4(source), 0))?;
+        socket.bind(SocketAddr::new(IpAddr::V4(source), EPHEMERAL_PORT))?;
         match socket.connect(SocketAddr::V4(destination)).await {
             Ok(stream) => return Ok(stream),
             Err(error) => last_error = Some(error),
         }
     }
-    Err(last_error.unwrap_or_else(|| {
-        io::Error::new(
+    Err(match last_error {
+        Some(error) => error,
+        None => io::Error::new(
             io::ErrorKind::AddrNotAvailable,
             format!("{host}:{port} has no reachable IPv4 address"),
-        )
-    }))
+        ),
+    })
 }
 
 async fn proxy_connection(
@@ -195,19 +212,21 @@ async fn proxy_connection(
 ) -> io::Result<()> {
     let (header, header_end) = read_header(&mut client, max_header_bytes).await?;
     let (line, remainder) = split_first_line(&header)?;
-    let mut parts = line.split_whitespace();
-    let method = parts.next().unwrap_or_default();
-    let target = parts.next().unwrap_or_default();
-    let version = parts.next().unwrap_or_default();
-    if target.is_empty() || !version.starts_with("HTTP/") || parts.next().is_some() {
-        client
-            .write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
-            .await?;
-        return Ok(());
-    }
+    // method SP request-target SP HTTP-version (RFC 9112 §3); any other
+    // shape is answered Bad Request.
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let (method, target, version) = match words.as_slice() {
+        [method, target, version] if version.starts_with("HTTP/") => (*method, *target, *version),
+        _ => {
+            client
+                .write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+                .await?;
+            return Ok(());
+        }
+    };
 
     if method.eq_ignore_ascii_case("CONNECT") {
-        let (host, port) = authority_host_port(target, 443)?;
+        let (host, port) = authority_host_port(target)?;
         let mut upstream = connect_from(source, &host, port).await?;
         client
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -217,10 +236,10 @@ async fn proxy_connection(
         return Ok(());
     }
 
-    let parsed = url::Url::parse(target).map_err(|_| {
+    let parsed = url::Url::parse(target).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "forward proxy requests must use an absolute http:// URL",
+            format!("forward proxy requests must use an absolute http:// URL: {error}"),
         )
     })?;
     if parsed.scheme() != "http" {

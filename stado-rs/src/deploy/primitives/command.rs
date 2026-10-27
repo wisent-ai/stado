@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
-use super::process::run_process;
+use super::process::{run_process, run_process_relayed};
 
 /// One planned external command: full argv (program first) and an optional
 /// stdin payload. The command runs until it exits.
@@ -73,4 +73,12 @@ where
 /// The production runner: every command through `tokio::process::Command`.
 pub fn production_runner() -> Runner {
     runner_fn(run_process)
+}
+
+/// [`production_runner`] that also writes each command's stdout and stderr
+/// through to this process's own as they arrive, for a command whose point
+/// is the remote program's output (`stado host exec`), so a long run is seen
+/// working rather than standing silent after its wait line.
+pub fn relaying_runner() -> Runner {
+    runner_fn(run_process_relayed)
 }

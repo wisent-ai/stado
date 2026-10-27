@@ -45,10 +45,10 @@ fn live_entry<'a>(target: &ComputeTarget, capacity: &'a [Value]) -> Option<&'a V
         .iter()
         .filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("local"))
         .find(|entry| {
-            let consumer = entry
-                .get("consumer_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            // A publication that names no consumer belongs to no host.
+            let Some(consumer) = entry.get("consumer_id").and_then(Value::as_str) else {
+                return false;
+            };
             hostnames.iter().any(|host| {
                 consumer == format!("local-{host}")
                     || consumer
@@ -99,18 +99,24 @@ pub(super) fn admission_refusal(target: &ComputeTarget, capacity: &[Value]) -> O
     }
 }
 
-pub(super) fn target_score(target: &ComputeTarget, capacity: &[Value]) -> i64 {
+/// Where `target` stands in the order hosts are offered a session, from what
+/// its own agent published: hosts that say they accept and state their free
+/// cores come first, more free cores before fewer; then this host before
+/// others. A host that published nothing, or did not state its cores, is
+/// still offered last, and its refusal is named by [`admission_refusal`].
+/// Sort descending by this key; ties fall to the host's name.
+pub(super) fn placement_order(target: &ComputeTarget, capacity: &[Value]) -> (bool, Option<i64>, bool) {
     let live = live_entry(target, capacity);
     let accepting = live
         .and_then(|entry| entry.get("accepting_jobs"))
         .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let available_cpu_cores = live
+        == Some(true);
+    let free_cores = live
         .and_then(|entry| entry.get("available_cpu_cores"))
-        .and_then(Value::as_i64)
-        .unwrap_or_default()
-        .max(0);
-    let live_bonus = if accepting { 1_000_000 } else { 0 };
-    let local_bonus = i64::from(host_channel::target_is_this_host(target));
-    live_bonus + available_cpu_cores.saturating_mul(1_000) + local_bonus
+        .and_then(Value::as_i64);
+    (
+        accepting && free_cores.is_some(),
+        free_cores,
+        host_channel::target_is_this_host(target),
+    )
 }

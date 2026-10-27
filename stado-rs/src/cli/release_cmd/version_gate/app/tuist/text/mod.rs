@@ -11,10 +11,11 @@ pub(super) mod literal;
 
 use regex::Regex;
 
+use crate::primitives::tally::Tally;
+
 /// Every failure is a sentence naming the file and what could not be read.
 pub(crate) type Read<T> = Result<T, String>;
 
-const STEP: usize = 1;
 const QUOTE: char = '"';
 const ESCAPE: char = '\\';
 const MULTILINE_QUOTE: &str = "\"\"\"";
@@ -32,22 +33,15 @@ pub(crate) fn string(text: &[char]) -> String {
 
 /// `text` without surrounding whitespace.
 pub(crate) fn trimmed(text: &[char]) -> &[char] {
-    let start = text
-        .iter()
-        .position(|character| !character.is_whitespace())
-        .unwrap_or(text.len());
-    let end = text
-        .iter()
-        .rposition(|character| !character.is_whitespace())
-        .map_or(start, |last| last + STEP);
-    &text[start..end]
+    let start = text.iter().take_while(|character| character.is_whitespace()).count();
+    let rest = &text[start..];
+    let trailing = rest.iter().rev().take_while(|character| character.is_whitespace()).count();
+    &rest[..rest.len() - trailing]
 }
 
 pub(crate) fn starts(text: &[char], index: usize, pattern: &str) -> bool {
-    pattern
-        .chars()
-        .enumerate()
-        .all(|(offset, expected)| text.get(index + offset * STEP) == Some(&expected))
+    let pattern: Vec<char> = pattern.chars().collect();
+    text.get(index..).is_some_and(|rest| rest.starts_with(&pattern))
 }
 
 pub(crate) fn find(text: &[char], from: usize, pattern: &str) -> Option<usize> {
@@ -59,34 +53,43 @@ pub(crate) fn char_index(text: &str, byte: usize) -> usize {
     text[..byte].chars().count()
 }
 
-/// A regex match anchored at the start of `text`, as `(member, char end)`.
+/// A regex match anchored at the start of `text`, as `(member, char end)`;
+/// a pattern with no `member` group yields an empty member.
 pub(crate) fn anchored(pattern: &Regex, text: &[char]) -> Option<(String, usize)> {
     let owned = string(text);
     let captures = pattern.captures(&owned)?;
-    let whole = captures.get(0)?;
-    let member = captures
-        .name("member")
-        .map_or_else(String::new, |found| found.as_str().to_string());
-    Some((member, char_index(&owned, whole.end())))
+    let member = match captures.name("member") {
+        Some(found) => found.as_str().to_string(),
+        None => String::new(),
+    };
+    Some((member, char_index(&owned, captures.get_match().end())))
 }
 
-/// What an error quotes of the manifest: the rest of the line it stopped on.
+/// What an error quotes of the manifest: the rest of the line it stopped on,
+/// or that it stopped at the end of the manifest.
 pub(crate) fn excerpt(text: &[char], index: usize) -> String {
-    let rest = text.get(index..).unwrap_or_default();
-    let line_end = rest
-        .iter()
-        .position(|character| *character == '\n')
-        .unwrap_or(rest.len());
-    string(&rest[..line_end]).trim().to_string()
+    let line: String = match text.get(index..) {
+        Some(rest) => rest.iter().take_while(|character| **character != '\n').collect(),
+        None => String::new(),
+    };
+    match line.trim() {
+        "" => "the end of the manifest".to_string(),
+        line => line.to_string(),
+    }
 }
 
 /// Whitespace and comments, of which this manifest has plenty inside literals.
 pub(crate) fn skip_trivia(text: &[char], mut index: usize, origin: &str) -> Read<usize> {
     while index < text.len() {
         if text[index].is_whitespace() {
-            index += STEP;
+            index.tally();
         } else if starts(text, index, LINE_COMMENT) {
-            index = find(text, index, "\n").map_or(text.len(), |end| end + STEP);
+            // To the line's end; the newline itself is whitespace, stepped
+            // over on the next turn.
+            index = match find(text, index, "\n") {
+                Some(end) => end,
+                None => text.len(),
+            };
         } else if starts(text, index, BLOCK_OPEN) {
             let end = find(text, index + BLOCK_OPEN.len(), BLOCK_CLOSE)
                 .ok_or_else(|| format!("{origin}: a block comment is never closed"))?;
@@ -105,17 +108,24 @@ pub(crate) fn skip_string(text: &[char], mut index: usize, origin: &str) -> Read
             .ok_or_else(|| format!("{origin}: a multi-line string literal is never closed"))?;
         return Ok(end + MULTILINE_QUOTE.len());
     }
-    index += STEP;
+    index.tally();
     while index < text.len() {
         match text[index] {
-            ESCAPE => index += STEP + STEP,
-            QUOTE => return Ok(index + STEP),
+            ESCAPE => {
+                // The escape and the character it escapes.
+                index.tally();
+                index.tally();
+            }
+            QUOTE => {
+                index.tally();
+                return Ok(index);
+            }
             '\n' => {
                 return Err(format!(
                     "{origin}: a string literal runs off the end of its line"
                 ))
             }
-            _ => index += STEP,
+            _ => index.tally(),
         }
     }
     Err(format!("{origin}: a string literal is never closed"))
@@ -154,17 +164,17 @@ pub(crate) fn balanced(text: &[char], mut index: usize, origin: &str) -> Read<us
             index = skip_trivia(text, index, origin)?;
         } else if let Some(expected) = closer(character) {
             stack.push(expected);
-            index += STEP;
+            index.tally();
         } else if is_closer(character) {
             if stack.pop() != Some(character) {
                 return Err(stray(text, index, origin));
             }
-            index += STEP;
+            index.tally();
             if stack.is_empty() {
                 return Ok(index);
             }
         } else {
-            index += STEP;
+            index.tally();
         }
     }
     Err(format!(
@@ -176,7 +186,8 @@ pub(crate) fn balanced(text: &[char], mut index: usize, origin: &str) -> Read<us
 /// Comma-separated pieces at depth zero, ignoring commas inside anything.
 pub(crate) fn split_top_level(text: &[char], origin: &str) -> Read<Vec<Vec<char>>> {
     let mut pieces = Vec::new();
-    let (mut start, mut index) = (0, 0);
+    let mut start: usize = Default::default();
+    let mut index = start;
     while index < text.len() {
         let character = text[index];
         if character == QUOTE {
@@ -189,10 +200,10 @@ pub(crate) fn split_top_level(text: &[char], origin: &str) -> Read<Vec<Vec<char>
             return Err(stray(text, index, origin));
         } else if character == ',' {
             pieces.push(text[start..index].to_vec());
-            index += STEP;
+            index.tally();
             start = index;
         } else {
-            index += STEP;
+            index.tally();
         }
     }
     pieces.push(text[start..].to_vec());

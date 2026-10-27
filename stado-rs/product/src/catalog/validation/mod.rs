@@ -2,7 +2,7 @@ use super::{
     text,
     types::{
         list_field, DeclaredKeychain, Dependency, Family, Integration, ProductStatus, RecipeKind,
-        RoadmapItem, SurfaceKind, Visibility, FEATURES,
+        SurfaceKind, Visibility, FEATURES,
     },
 };
 use crate::common::slug;
@@ -12,6 +12,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 mod public_status;
+mod roadmap;
 mod service;
 
 /// The field parses as `T`, or the refusal names the field and the word.
@@ -21,12 +22,6 @@ fn choice<'a, T: Deserialize<'a>>(value: &'a Value, field: &str) -> Result<T> {
 }
 
 pub fn validate(document: &Value) -> Result<()> {
-    let readable = super::embedded_schema()?;
-    if &document["schema_version"] != readable {
-        bail!(
-            "catalog schema_version must be {readable}, the schema this build's own catalog is written in"
-        );
-    }
     let products = document["products"]
         .as_array()
         .context("products must be a list")?;
@@ -153,21 +148,7 @@ pub fn validate(document: &Value) -> Result<()> {
                 }
             }
         }
-        for item in product["roadmap"]
-            .as_array()
-            .context("roadmap must be a list")?
-        {
-            // The status is a RoadmapStatus, so an unknown one is refused here
-            // with serde's reason and the item it came from.
-            let row = RoadmapItem::deserialize(item)
-                .with_context(|| format!("{id}: invalid roadmap item"))?;
-            if row.title.trim().is_empty()
-                || row.outcome.trim().is_empty()
-                || row.source.trim().is_empty()
-            {
-                bail!("{id}: roadmap title, outcome and source must be non-empty");
-            }
-        }
+        roadmap::validate(id, product)?;
         super::rivals::validate(id, product)?;
         for item in product["integrations"]
             .as_array()

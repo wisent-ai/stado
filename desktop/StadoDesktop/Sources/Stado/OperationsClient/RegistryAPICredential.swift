@@ -13,15 +13,30 @@ struct RegistryAPICredential {
             || environment["STADO_REGISTRY_API_TOKEN_FILE"] != nil
     }
 
+    /// The documented precedence: the `STADO_REGISTRY_API_*` environment
+    /// variables, then the saved settings, then the documented defaults — the
+    /// local dashboard and `~/.stado/registry-api-desktop-token` under the
+    /// user's home directory as the system reports it.
     static func load(from defaults: UserDefaults = .standard) -> Self {
         let environment = ProcessInfo.processInfo.environment
-        let home = environment["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path
-        return Self(
-            endpoint: environment["STADO_REGISTRY_API_URL"]
-                ?? defaults.string(forKey: endpointKey) ?? DashboardEndpointPreference.localURL,
-            tokenFile: environment["STADO_REGISTRY_API_TOKEN_FILE"]
-                ?? defaults.string(forKey: tokenFileKey) ?? "\(home)/.stado/registry-api-desktop-token"
-        )
+        let endpoint: String
+        if let fromEnvironment = environment["STADO_REGISTRY_API_URL"] {
+            endpoint = fromEnvironment
+        } else if let saved = defaults.string(forKey: endpointKey) {
+            endpoint = saved
+        } else {
+            endpoint = DashboardEndpointPreference.localURL
+        }
+        let tokenFile: String
+        if let fromEnvironment = environment["STADO_REGISTRY_API_TOKEN_FILE"] {
+            tokenFile = fromEnvironment
+        } else if let saved = defaults.string(forKey: tokenFileKey) {
+            tokenFile = saved
+        } else {
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            tokenFile = "\(home)/.stado/registry-api-desktop-token"
+        }
+        return Self(endpoint: endpoint, tokenFile: tokenFile)
     }
 
     func save(to defaults: UserDefaults = .standard) throws {

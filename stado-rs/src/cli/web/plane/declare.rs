@@ -218,7 +218,7 @@ fn mount_prefix<'a>(request: &DeclareRequest<'_>, prefix: &'a str) -> Result<&'a
     // The owner is required now rather than at the first `route`: a mount is
     // rendered inside its owner's site block, so one with no owner is a block
     // with nowhere to go, and the hostname would get no certificate at all.
-    let declared_products = crate::config::web_api_products().map_err(|problems| {
+    let declared_products = crate::config::declared_web_api_products().map_err(|problems| {
         CmdError::usage(format!(
             "the declared web products cannot be read, so the owner of {} cannot be found: {}",
             request.hostname,
@@ -226,7 +226,8 @@ fn mount_prefix<'a>(request: &DeclareRequest<'_>, prefix: &'a str) -> Result<&'a
         ))
     })?;
     let owner = declared_products
-        .iter()
+        .into_iter()
+        .flatten()
         .find(|(other, product)| {
             other.as_str() != request.name
                 && product.hostname() == request.hostname

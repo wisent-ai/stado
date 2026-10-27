@@ -3,9 +3,14 @@
 
 use crate::cli::CmdError;
 
-/// GiB with one decimal, or a dash for a number this host did not answer with.
+/// GiB as the host answered, rounded where it is printed, or `not observed`
+/// for a number this host did not answer with: the two outcomes the probe
+/// reports, each in its words.
 pub(super) fn gigabytes(value: Option<f64>) -> String {
-    value.map_or_else(|| "not observed".to_string(), |gb| format!("{gb} GiB"))
+    match value {
+        Some(gb) => format!("{gb:.1} GiB"),
+        None => "not observed".to_string(),
+    }
 }
 
 /// What the two backend names mean when they do not agree, read off the
@@ -44,12 +49,11 @@ pub(super) fn claiming_outcome(
             .observations
             .iter()
             .filter(|read| !read.complete())
-            .map(|read| {
-                format!(
-                    "{}: {}",
-                    read.operation,
-                    read.detail.as_deref().unwrap_or("no result")
-                )
+            .map(|read| match read.detail.as_deref() {
+                Some(detail) => format!("{}: {detail}", read.operation),
+                // An incomplete read that recorded no detail is said as such,
+                // not given a word it never produced.
+                None => format!("{}: incomplete, and the read recorded no detail", read.operation),
             })
             .collect::<Vec<_>>()
             .join("; ");

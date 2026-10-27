@@ -40,13 +40,8 @@ fn declared(name: &str) -> String {
 
 impl Run {
     fn start() -> Self {
-        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let root = repository
-            .join(".build/storage-buckets")
-            .join(uuid::Uuid::new_v4().to_string());
+        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+        let root = repository.join(".build/storage-buckets").join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let mut git = Command::new("git");
         git.current_dir(&repository).args(["rev-parse", "HEAD"]);
@@ -87,11 +82,7 @@ impl Run {
 
     fn answered(&mut self, args: &[&str]) -> Value {
         let output = self.bucket(args);
-        assert!(
-            output.status.success(),
-            "{args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert!(output.status.success(), "{args:?}: {}", String::from_utf8_lossy(&output.stderr));
         serde_json::from_slice(&output.stdout).unwrap()
     }
 
@@ -102,18 +93,13 @@ impl Run {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(!output.status.success(), "{args:?} was accepted: {stdout}");
         let said = causes.iter().any(|cause| stderr.contains(cause));
-        assert!(
-            said,
-            "{args:?}: the refusal says none of {causes:?}: {stderr}"
-        );
+        assert!(said, "{args:?}: the refusal says none of {causes:?}: {stderr}");
     }
 }
 
 fn names(listed: &Value) -> Vec<String> {
     let rows = listed["buckets"].as_array().unwrap();
-    rows.iter()
-        .map(|row| row["bucket"].as_str().unwrap().to_string())
-        .collect()
+    rows.iter().map(|row| row["bucket"].as_str().unwrap().to_string()).collect()
 }
 
 #[test]
@@ -134,19 +120,13 @@ fn a_bucket_is_created_read_changed_rekeyed_and_removed_on_its_host() {
     let mut list = vec!["list"];
     list.extend(on);
     let listed = run.answered(&list);
-    assert!(
-        names(&listed).contains(&name),
-        "list does not read the bucket back from {host}"
-    );
+    assert!(names(&listed).contains(&name), "list does not read the bucket back from {host}");
     let mut show = vec!["show", name.as_str()];
     show.extend(on);
     let shown = run.answered(&show);
     let same = shown["grant"] == created["grant"];
     assert!(same, "show reads another grant than create wrote: {shown}");
-    run.refused(
-        &create,
-        &[format!("{host} already serves bucket {name}").as_str()],
-    );
+    run.refused(&create, &[format!("{host} already serves bucket {name}").as_str()]);
 
     let mut update = vec!["update", name.as_str()];
     update.extend(["--grant", "inbox/=get,list", "--grant", "outbox/=put"]);
@@ -156,10 +136,7 @@ fn a_bucket_is_created_read_changed_rekeyed_and_removed_on_its_host() {
     let reread = run.answered(&show);
     let same = reread["grant"] == updated["grant"];
     assert!(same, "show does not read the new grant back: {reread}");
-    assert!(
-        reread["grant"] != shown["grant"],
-        "update left the grant as it was: {reread}"
-    );
+    assert!(reread["grant"] != shown["grant"], "update left the grant as it was: {reread}");
 
     let rotated = run.answered(&["rotate", name.as_str(), "--json"]);
     assert_eq!(rotated["rotated"], json!(true));
@@ -169,10 +146,7 @@ fn a_bucket_is_created_read_changed_rekeyed_and_removed_on_its_host() {
     let mut wrong = vec!["delete", name.as_str(), "--confirm", "another-bucket"];
     wrong.extend(on);
     run.refused(&wrong, &["nothing was removed"]);
-    assert!(
-        names(&run.answered(&list)).contains(&name),
-        "a refused delete removed the bucket"
-    );
+    assert!(names(&run.answered(&list)).contains(&name), "a refused delete removed the bucket");
     let mut delete = vec!["delete", name.as_str(), "--confirm", name.as_str()];
     delete.extend(reload);
     delete.extend(on);
@@ -183,25 +157,16 @@ fn a_bucket_is_created_read_changed_rekeyed_and_removed_on_its_host() {
     let after = run.bucket(&list);
     if after.status.success() {
         let listed: Value = serde_json::from_slice(&after.stdout).unwrap();
-        assert!(
-            !names(&listed).contains(&name),
-            "list still reads the deleted bucket from {host}"
-        );
+        assert!(!names(&listed).contains(&name), "list still reads the deleted bucket from {host}");
     } else {
         let stderr = String::from_utf8_lossy(&after.stderr);
-        assert!(
-            stderr.contains(&format!("{host} declares no readable buckets")),
-            "{stderr}"
-        );
+        assert!(stderr.contains(&format!("{host} declares no readable buckets")), "{stderr}");
     }
     let missing = format!("no bucket {name}");
     let empty = format!("{host} declares no readable buckets");
     run.refused(&show, &[missing.as_str(), empty.as_str()]);
     run.refused(&update, &[missing.as_str(), empty.as_str()]);
-    run.refused(
-        &["rotate", name.as_str(), "--json"],
-        &["the vault holds no key"],
-    );
+    run.refused(&["rotate", name.as_str(), "--json"], &["the vault holds no key"]);
 
     run.report["outcome"] = json!("passed");
     run.save();

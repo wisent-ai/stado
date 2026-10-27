@@ -6,6 +6,7 @@
 use serde_json::{json, Value};
 
 use super::mail::MailProbe;
+use super::notices::Recorded;
 use super::render::print_watch;
 use crate::cli::CmdError;
 use crate::monitor::billing::{HealthEvaluation, ProviderHealth, Signal};
@@ -14,6 +15,7 @@ pub(super) fn report(
     document: &Value,
     evaluation: &HealthEvaluation,
     mail: &MailProbe,
+    recorded: &[Recorded],
     as_json: bool,
 ) -> Result<(), CmdError> {
     if as_json {
@@ -31,11 +33,12 @@ pub(super) fn report(
                 "new_alerts": signal_values(&evaluation.new_signals),
                 "cleared": evaluation.cleared,
                 "mail": mail.as_value(),
+                "notices_recorded": recorded.iter().map(Recorded::as_value).collect::<Vec<Value>>(),
             }))?
         );
         return Ok(());
     }
-    print_watch(document, evaluation, mail);
+    print_watch(document, evaluation, mail, recorded);
     Ok(())
 }
 

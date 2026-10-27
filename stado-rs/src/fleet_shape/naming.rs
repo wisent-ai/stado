@@ -5,6 +5,7 @@
 
 use super::{Finding, PREFIX_CHECK, SUFFIX_CHECK};
 use crate::deploy::{local_install, service};
+use crate::primitives::tally::Tally;
 use crate::targets::{ComputeTarget, Registry};
 
 /// The label prefix this fleet's installer mints: `com.wisent.<name>`.
@@ -41,7 +42,7 @@ pub(in crate::fleet_shape) fn doubled_prefix(
     measured: &mut usize,
 ) {
     for unit in loaded {
-        *measured += 1;
+        measured.tally();
         if let Some(one) = retired_to_one(&unit.label) {
             out.push(Finding {
                 check: PREFIX_CHECK,
@@ -103,7 +104,7 @@ pub(in crate::fleet_shape) fn doubled_suffix(
         if service.kind != service::KIND_SYSTEMD {
             continue;
         }
-        *measured += 1;
+        measured.tally();
         let Some(stem) = service.unit.strip_suffix(local_install::SYSTEMD_SUFFIX) else {
             continue;
         };
@@ -148,7 +149,7 @@ pub(in crate::fleet_shape) fn declared_doubled_prefix(
         if service.label.is_empty() {
             continue;
         }
-        *measured += 1;
+        measured.tally();
         let Some(rest) = service.label.strip_prefix(MINTED_PREFIX) else {
             continue;
         };
@@ -201,7 +202,7 @@ pub(in crate::fleet_shape) fn profile_unit_names(
                     profile.name
                 );
                 if unit.kind == service::KIND_SYSTEMD {
-                    *suffixes += 1;
+                    suffixes.tally();
                     if let Some(stem) = unit.unit.strip_suffix(local_install::SYSTEMD_SUFFIX) {
                         if stem.ends_with(local_install::SYSTEMD_SUFFIX) {
                             out.push(Finding {
@@ -220,7 +221,7 @@ pub(in crate::fleet_shape) fn profile_unit_names(
                     }
                     continue;
                 }
-                *labels += 1;
+                labels.tally();
                 let Some(rest) = unit.unit.strip_prefix(MINTED_PREFIX) else {
                     continue;
                 };

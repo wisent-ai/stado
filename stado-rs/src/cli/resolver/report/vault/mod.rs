@@ -80,7 +80,6 @@ impl VaultConsultations {
     /// effort; the listener calls this after every change it makes.
     pub(crate) fn publish(&self) {
         let Some(path) = vault_path() else { return };
-        let Some(parent) = path.parent() else { return };
         let body = match serde_json::to_vec_pretty(self) {
             Ok(body) => body,
             Err(error) => {
@@ -88,20 +87,10 @@ impl VaultConsultations {
                 return;
             }
         };
-        let temp = path.with_extension(format!("{}.tmp", std::process::id()));
-        let written = std::fs::create_dir_all(parent)
-            .and_then(|()| std::fs::write(&temp, &body))
-            .and_then(|()| std::fs::rename(&temp, &path));
-        if let Err(error) = written {
+        if let Err(error) = crate::primitives::document::persist(&path, &body) {
             eprintln!(
-                "{}",
-                crate::primitives::staging::failed_with(
-                    format!(
-                        "[dashboard] could not publish its vault consultations to {}: {error}",
-                        path.display()
-                    ),
-                    &temp,
-                )
+                "[dashboard] could not publish its vault consultations to {}: {error}",
+                path.display()
             );
         }
     }

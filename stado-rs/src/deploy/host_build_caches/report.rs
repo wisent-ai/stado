@@ -38,18 +38,18 @@ impl BuildCacheReport {
     /// nobody finished. A refused directory leaves its contents unknown,
     /// even if the walk found readable caches elsewhere.
     pub fn census(&self) -> (Vec<crate::deploy::host_disk::DiskItem>, bool) {
-        let rows =
-            self.entries
-                .iter()
-                .filter_map(|entry| {
-                    entry.kib.parse::<i64>().ok().map(|blocks_kb| {
-                        crate::deploy::host_disk::DiskItem {
-                            blocks_kb,
-                            path: entry.path.clone(),
-                        }
-                    })
-                })
-                .collect();
+        let rows = self
+            .entries
+            .iter()
+            .filter_map(|entry| match entry.kib.parse::<i64>() {
+                Ok(blocks_kb) => Some(crate::deploy::host_disk::DiskItem {
+                    blocks_kb,
+                    path: entry.path.clone(),
+                }),
+                // The program prints `-` for a row it did not size.
+                Err(_not_a_size) => None,
+            })
+            .collect();
         let walked = !self.entries.iter().any(|entry| {
             entry.state == super::program::SCAN_FAILED
                 || entry.state == super::program::ROOT_ABSENT

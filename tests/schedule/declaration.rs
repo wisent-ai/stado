@@ -6,6 +6,10 @@
 //!
 //! The real `stado` runs against an isolated local store under the build
 //! directory, and every verdict is read back with `stado schedule show`.
+//! The schedules a host holds while the fleet store does not answer are
+//! journeyed in `held`.
+mod held;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -22,7 +26,8 @@ struct Store {
 
 impl Store {
     fn new(case: &str) -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("schedule-declaration");
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/journeys/schedule-declaration");
         std::fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(format!("{case}-{}", std::process::id()));
         for directory in [".locks", ".metadata"] {

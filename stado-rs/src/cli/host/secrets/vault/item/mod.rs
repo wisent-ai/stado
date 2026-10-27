@@ -214,8 +214,12 @@ pub fn summarize_local() -> Result<(), crate::cli::CmdError> {
         .map_err(|error| refused(format!("the item document could not be read: {error}")))?;
     let document: Value = serde_json::from_str(&input)
         .map_err(|error| refused(format!("the item document is not JSON: {error}")))?;
-    let empty = serde_json::Map::new();
-    let fields = document["fields"].as_object().unwrap_or(&empty);
+    let fields = document["fields"].as_object().ok_or_else(|| {
+        refused(
+            "the item document carries no fields object, so it is not an item Skarbiec wrote"
+                .to_string(),
+        )
+    })?;
     let mut names: Vec<&String> = fields.keys().collect();
     names.sort();
     let summary: Vec<Value> = names
@@ -234,7 +238,12 @@ pub fn summarize_local() -> Result<(), crate::cli::CmdError> {
             })
         })
         .collect();
-    let context = document["context"].as_object().unwrap_or(&empty);
+    let context = document["context"].as_object().ok_or_else(|| {
+        refused(
+            "the item document carries no context object, so it is not an item Skarbiec wrote"
+                .to_string(),
+        )
+    })?;
     let mut keys: Vec<&String> = context.keys().collect();
     keys.sort();
     let context: Vec<Value> = keys

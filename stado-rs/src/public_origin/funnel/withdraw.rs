@@ -4,7 +4,7 @@ use crate::primitives::failure::FailureCode;
 
 async fn configuration(target: &ComputeTarget, runner: &Runner) -> Result<Value, DeployError> {
     let output = tailscale(target, &["serve", "status", "--json"], runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: {}",
             target.name,
@@ -53,14 +53,17 @@ pub async fn withdraw(target: &ComputeTarget, runner: &Runner) -> Result<Value, 
     let endpoints = public_endpoints(&before)?;
     let mut handlers = Vec::new();
     for endpoint in &endpoints {
-        let port = endpoint
-            .rsplit_once(':')
-            .map(|(_, port)| port)
-            .filter(|port| matches!(*port, "443" | "8443" | "10000"))
-            .ok_or_else(|| {
-                DeployError(format!("unsupported public endpoint {endpoint}"))
-                    .stating(FailureCode::Refused)
-            })?;
+        // The node's own serve report names every endpoint it publishes, so
+        // the port is read from that answer rather than checked against a
+        // copy of Tailscale's permitted list.
+        let unsupported = |cause: String| {
+            DeployError(format!("unsupported public endpoint {endpoint}: {cause}"))
+                .stating(FailureCode::Refused)
+        };
+        let Some((_, port)) = endpoint.rsplit_once(':') else {
+            return Err(unsupported("it names no port".to_string()));
+        };
+        port.parse::<u16>().map_err(|error| unsupported(error.to_string()))?;
         let paths = before.get("Web").and_then(|web| web.get(endpoint))
             .and_then(|web| web.get("Handlers")).and_then(Value::as_object)
             .filter(|paths| !paths.is_empty())
@@ -78,7 +81,7 @@ pub async fn withdraw(target: &ComputeTarget, runner: &Runner) -> Result<Value, 
             runner,
         )
         .await?;
-        if !output.ok() {
+        if !output.succeeded() {
             return Err(DeployError::unreachable(format!(
                 "{}: withdrawing public {port}{path} failed: {}",
                 target.name,

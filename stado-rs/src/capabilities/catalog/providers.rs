@@ -94,7 +94,6 @@ define_providers! {
     Supabase => ("supabase", []),
     Slack => ("slack", []),
     Telegram => ("telegram", []),
-    Sendgrid => ("sendgrid", []),
     Skrzynka => ("skrzynka", []),
     Most => ("most", []),
     Macos => ("macos", []),
@@ -128,6 +127,7 @@ impl ProviderId {
             | Self::Nebius
             | Self::Oblivus
             | Self::Oracle
+            | Self::Ovhcloud
             | Self::Runpod
             | Self::Salad
             | Self::Scaleway

@@ -14,18 +14,28 @@ use super::SkarbiecError;
 
 /// The envelope version when `raw` is an encrypted envelope, plain JSON or
 /// base64 of it: an object with a string `v` and a string `c` and nothing a
-/// value would carry instead.
+/// value would carry instead. This is a recognizer, not a parser: a value
+/// that is not base64, or not JSON, or not that object is a plain value and
+/// answers `None`; nothing about it is an error to report.
 fn envelope_version(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     let decoded = if trimmed.starts_with('{') {
         trimmed.as_bytes().to_vec()
     } else {
-        base64::engine::general_purpose::STANDARD
-            .decode(trimmed)
-            .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(trimmed))
-            .ok()?
+        match base64::engine::general_purpose::STANDARD.decode(trimmed) {
+            Ok(decoded) => decoded,
+            Err(_not_standard_base64) => {
+                match base64::engine::general_purpose::URL_SAFE.decode(trimmed) {
+                    Ok(decoded) => decoded,
+                    Err(_not_base64_at_all) => return None,
+                }
+            }
+        }
     };
-    let document: Value = serde_json::from_slice(&decoded).ok()?;
+    let document: Value = match serde_json::from_slice(&decoded) {
+        Ok(document) => document,
+        Err(_not_json) => return None,
+    };
     let object = document.as_object()?;
     let version = object.get("v")?.as_str()?;
     object.get("c")?.as_str()?;

@@ -205,7 +205,8 @@ pub(crate) enum HostManagedRunCommands {
     ///
     /// The command is fixed to `cargo build --locked --release`; only the
     /// manifest and binary name vary. The manifest must resolve below the
-    /// selected account's `$HOME/.stado/work/runs`.
+    /// selected account's `$HOME/.stado/work/runs`. Check source through
+    /// `stado product cargo check` before submitting a release build.
     Build {
         target: String,
         /// Absolute Cargo.toml path inside a delivered managed run.

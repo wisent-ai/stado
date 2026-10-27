@@ -12,9 +12,6 @@ const VERB: &str = "release local converge";
 pub(in crate::cli::release_cmd) async fn converge_local_readers(
     args: &ReleaseConvergeLocalReadersArgs,
 ) -> Result<(), CmdError> {
-    use sha2::Digest as _;
-    use std::io::Read as _;
-
     if args.name != "stado" {
         return Err(CmdError::refused(format!(
             "{VERB} only supports the Stado product"
@@ -26,29 +23,12 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
                 "{VERB} requires a lowercase SHA-256"
             )));
         }
-        let mut archive = std::fs::File::open(archive_path).map_err(|error| {
-            CmdError::click(format!(
-                "{VERB}: cannot open verified archive {}: {error}",
-                archive_path.display()
-            ))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
-        let mut digest = sha2::Sha256::new();
-        let mut buffer = [0_u8; 1024 * 1024];
-        loop {
-            let count = archive.read(&mut buffer).map_err(|error| {
-                CmdError::click(format!(
-                    "{VERB}: cannot read verified archive {}: {error}",
-                    archive_path.display()
-                ))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-            })?;
-            if count == 0 {
-                break;
-            }
-            digest.update(&buffer[..count]);
-        }
-        let actual = hex::encode(digest.finalize());
+        let actual = crate::primitives::digest::sha256_file(archive_path)
+            .map_err(|error| {
+                CmdError::click(format!("{VERB}: cannot read verified archive: {error}"))
+                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+            })?
+            .sha256;
         if &actual != expected {
             return Err(CmdError::click(format!(
                 "{VERB}: archive digest mismatch: expected {expected}, got {actual}"
@@ -91,19 +71,37 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
             ))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
-    if std::fs::canonicalize(&executable).ok().as_deref() == Some(running.as_path()) {
+    // An install path that is absent is not this binary; one that cannot be
+    // resolved is refused, because read as "not this binary" the release
+    // coordinate was silently left at the previous version.
+    let installed = match std::fs::canonicalize(&executable) {
+        Ok(installed) => Some(installed),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(CmdError::click(format!(
+                "{VERB}: cannot resolve the installed executable {}: {error}",
+                executable.display()
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind())))
+        }
+    };
+    if installed.as_deref() == Some(running.as_path()) {
         let marker = directory.join("stado.release-version");
-        let staged = directory.join("stado.release-version.release-incoming");
-        std::fs::write(&staged, format!("{}\n", env!("CARGO_PKG_VERSION")))
-            .and_then(|()| std::fs::rename(&staged, &marker))
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "{VERB}: cannot record the installed Stado release \
-                     coordinate at {}: {error}",
-                    marker.display()
-                ))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-            })?;
+        // Queue agents of any account on the host read it, so it keeps the
+        // shared-read mode a plain write gave it, now whole and durably.
+        crate::primitives::document::persist_with_mode(
+            &marker,
+            format!("{}\n", env!("CARGO_PKG_VERSION")).as_bytes(),
+            crate::primitives::file_mode::shared_read(),
+        )
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{VERB}: cannot record the installed Stado release \
+                 coordinate at {}: {error}",
+                marker.display()
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?;
         log(&format!(
             "{VERB}: {} names {}, so queue agents on an older image \
              recycle themselves after their active jobs",

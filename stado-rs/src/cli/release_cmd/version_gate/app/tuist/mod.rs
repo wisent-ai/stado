@@ -40,12 +40,6 @@ use text::{balanced, char_index, chars, skip_trivia, split_top_level, trimmed, R
 const APP_PRODUCT: &str = "app";
 const KEY_SHORT_VERSION: &str = "CFBundleShortVersionString";
 const MARKETING_VERSION_VARIABLE: &str = "$(MARKETING_VERSION)";
-const STEP: usize = 1;
-/// Where a piece of manifest text starts.
-const TEXT_START: usize = 0;
-/// A manifest declares exactly this many of `targets:`, `.app` targets and
-/// marketing versions.
-const EXACTLY_ONE: usize = 1;
 
 /// The one shape a marketing version is declared in.
 static MARKETING_VERSION: LazyLock<Regex> =
@@ -86,29 +80,49 @@ pub(super) struct Target {
     version: String,
 }
 
+/// What lies between the delimiter at `opening` and the one `balanced`
+/// matches to it, and the index just past that closing delimiter. Both
+/// delimiters are read off the text rather than counted.
+fn enclosed<'t>(text: &'t [char], opening: usize, origin: &str) -> Read<(&'t [char], usize)> {
+    let end = balanced(text, opening, origin)?;
+    let inside = text[opening..end]
+        .split_first()
+        .and_then(|(_opening, rest)| rest.split_last())
+        .map(|(_closing, inside)| inside);
+    match inside {
+        Some(inside) => Ok((inside, end)),
+        None => Err(format!(
+            "{origin}: the delimiter at character {opening} is not closed by another"
+        )),
+    }
+}
+
 fn targets_array(manifest: &str, origin: &str) -> Read<Vec<char>> {
     let found = TARGETS_LABEL.find_iter(manifest).collect::<Vec<_>>();
     let [label] = found.as_slice() else {
         return Err(format!(
-            "{origin}: found {} `targets:` arrays, expected {EXACTLY_ONE}. The manifest's shape changed, so which targets ship is unknown rather than fewer.",
+            "{origin}: found {} `targets:` arrays, expected exactly one. The manifest's shape changed, so which targets ship is unknown rather than fewer.",
             found.len()
         ));
     };
     let text = chars(manifest);
-    let opening = char_index(manifest, label.end()) - STEP;
-    let end = balanced(&text, opening, origin)?;
-    Ok(text[opening + STEP..end - STEP].to_vec())
+    // The label's match ends with the array's opening bracket.
+    let opening = char_index(manifest, label.end() - '['.len_utf8());
+    let (inside, _end) = enclosed(&text, opening, origin)?;
+    Ok(inside.to_vec())
 }
 
 fn one_target(piece: &[char], project: &Project, origin: &str) -> Read<Target> {
-    let start = skip_trivia(piece, TEXT_START, origin)?;
+    let start = skip_trivia(piece, Default::default(), origin)?;
     let (body, from) = target::resolved(trimmed(&piece[start..]), project, origin)?;
-    let opening = body
-        .iter()
-        .position(|&character| character == '(')
-        .expect("a resolved target is a call");
-    let end = balanced(&body, opening, &from)?;
-    let labels = arguments::labelled(&body[opening + STEP..end - STEP], &from)?;
+    let Some(opening) = body.iter().position(|&character| character == '(') else {
+        return Err(format!(
+            "{from}: a resolved target is not a call: {:?}",
+            arguments::spelled(&body)
+        ));
+    };
+    let (inside, end) = enclosed(&body, opening, &from)?;
+    let labels = arguments::labelled(inside, &from)?;
     let name = string_argument(
         arguments::required(&labels, "name", &from, "a target")?,
         &from,
@@ -166,7 +180,7 @@ fn one_target(piece: &[char], project: &Project, origin: &str) -> Read<Target> {
         .collect::<BTreeSet<_>>();
     let [version] = versions.iter().collect::<Vec<_>>()[..] else {
         return Err(format!(
-            "{at} stamps {MARKETING_VERSION_VARIABLE} but its own settings set {} distinct .marketingVersion(...) values ({}), expected {EXACTLY_ONE}, so the version it carries is unknown.",
+            "{at} stamps {MARKETING_VERSION_VARIABLE} but its own settings set {} distinct .marketingVersion(...) values ({}), expected exactly one, so the version it carries is unknown.",
             versions.len(),
             versions.iter().cloned().collect::<Vec<_>>().join(", ")
         ));
@@ -185,15 +199,16 @@ fn parse_targets(manifest: &str, project: &Project, origin: &str) -> Read<Vec<Ta
     if found.is_empty() {
         return Err(format!("{origin}: the `targets:` array is empty"));
     }
-    let apps = found
+    let apps: Vec<&Target> = found
         .iter()
         .filter(|declared| declared.product == APP_PRODUCT)
-        .count();
-    if apps != EXACTLY_ONE {
+        .collect();
+    let [_app] = apps.as_slice() else {
         return Err(format!(
-            "{origin}: found {apps} targets with product .app, expected {EXACTLY_ONE}. The App Store record belongs to exactly one application, so which artifact carries the version would otherwise be undefined."
+            "{origin}: found {} targets with product .app, expected exactly one. The App Store record belongs to exactly one application, so which artifact carries the version would otherwise be undefined.",
+            apps.len()
         ));
-    }
+    };
     Ok(found)
 }
 
@@ -206,12 +221,17 @@ fn manifest_text(load: Loader, manifest: &str) -> Read<String> {
 /// its `.member` targets are declared in.
 fn shipping(load: Loader, manifest: &str, helpers: &[String]) -> Read<Vec<Target>> {
     let text = manifest_text(load, manifest)?;
+    // A manifest path names a file in some directory, the repository root's
+    // included (an empty parent); one that names none cannot place the
+    // files the manifest declares beside it.
+    let Some(dir) = Path::new(manifest).parent() else {
+        return Err(format!(
+            "{manifest}: names no file inside a directory, so the paths the manifest declares cannot be resolved"
+        ));
+    };
     let project = Project {
         load,
-        dir: Path::new(manifest)
-            .parent()
-            .map(|dir| dir.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+        dir: dir.to_string_lossy().into_owned(),
         helpers,
     };
     Ok(parse_targets(&text, &project, manifest)?

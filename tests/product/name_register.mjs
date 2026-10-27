@@ -41,9 +41,6 @@ mkdirSync(join(root, ".build"), { recursive: true });
 const output = mkdtempSync(join(realpathSync(join(root, ".build")), "product-name-register-"));
 const catalogPath = join(output, "products.yml");
 const registerPath = join(output, "NAMES.md");
-const schema = /^schema_version:\s*(?<version>\S+)/m.exec(
-	readFileSync(join(root, "catalog/products.yml"), "utf8"),
-).groups.version;
 const report = { started_at: new Date().toISOString(), commands: [], result: "failed" };
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function run(program, args) {
@@ -129,7 +126,7 @@ try {
 		surface: surface.nameWithOwner, unclaimed: unclaimed.nameWithOwner };
 	writeFileSync(
 		catalogPath,
-		`schema_version: ${schema}\nauthority:\n  owner: stado\n  rule: test catalog\nproducts:\n${[
+		`authority:\n  owner: stado\n  rule: test catalog\nproducts:\n${[
 			record("alpha", githubSide.nameWithOwner, [["cli", githubSide.nameWithOwner]]),
 			record("beta", owned.nameWithOwner, [["cli", owned.nameWithOwner], ["desktop", surface.nameWithOwner]]),
 		].join("\n")}\n`,

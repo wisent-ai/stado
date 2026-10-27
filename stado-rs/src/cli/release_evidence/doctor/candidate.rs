@@ -1,6 +1,9 @@
 //! The candidate's own liveness: the one remote program this command owns,
 //! and the section of the report it answers.
 
+use std::net::{Ipv4Addr, SocketAddrV4};
+
+use reqwest::StatusCode;
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
@@ -23,9 +26,11 @@ const CANDIDATE_MARKER: &str = "STADO_CANDIDATE";
 /// independently in one round trip; either can fail while the other succeeds.
 ///
 /// A curl failure is not an error here. "Nothing is listening" is an answer
-/// to the operator's question, so the status word is empty and this side
-/// reports [`HEALTH_UNREACHABLE`]; a script that exited non-zero would turn
-/// the diagnosis into a transport failure.
+/// to the operator's question, so curl's non-zero exit empties the status
+/// word and this side reports [`HEALTH_UNREACHABLE`]; a script that exited
+/// non-zero would turn the diagnosis into a transport failure. The request
+/// carries no time cut of its own: the candidate's answer or curl's own
+/// failure ends it.
 const CANDIDATE_PROBE_BODY: &str = r#"set -u
 LC_ALL=C
 export LC_ALL
@@ -34,23 +39,43 @@ if kill -0 "$pid" 2>/dev/null; then
 else
   alive=false
 fi
-status=$(/usr/bin/curl --silent --output /dev/null --max-time 3 \
-  --write-out '%{http_code}' "http://127.0.0.1:$port$readiness_path" 2>/dev/null) || status=""
+status=$(/usr/bin/curl --silent --output /dev/null \
+  --write-out '%{http_code}' "http://$address$readiness_path" 2>/dev/null) || status=""
 printf 'STADO_CANDIDATE\t%s\t%s\n' "$alive" "$status"
 "#;
 
 /// The probe bound to one recorded candidate.
 ///
-/// `pid` and `port` are typed integers, so they reach the shell as digits.
-/// The readiness path is the registry's own declaration and is quoted the
-/// way [`crate::deploy::host_inventory::remote_inventory_script`] quotes its
+/// `pid` and the address are typed values, so they reach the shell as digits
+/// and dots. The candidate listens on the loopback interface at its recorded
+/// port, as the release agent spawns it. The readiness path is the registry's
+/// own declaration and is quoted the way
+/// [`crate::deploy::host_inventory::remote_inventory_script`] quotes its
 /// declared program set — the same rule, so no operator input and no
 /// unquoted registry value ever reaches the remote shell.
 fn candidate_probe_script(pid: i32, port: u16, readiness_path: &str) -> String {
     format!(
-        "pid={pid}\nport={port}\nreadiness_path={}\n{CANDIDATE_PROBE_BODY}",
+        "pid={pid}\naddress={}\nreadiness_path={}\n{CANDIDATE_PROBE_BODY}",
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
         shlex_quote(readiness_path)
     )
+}
+
+/// The health word for the status curl wrote: none (curl failed) is
+/// unreachable, a success status is ok, any other status is named. A status
+/// that is not an HTTP status is refused naming it.
+fn health_of(status: &str) -> Result<String, CmdError> {
+    if status.is_empty() {
+        return Ok(HEALTH_UNREACHABLE.to_string());
+    }
+    match StatusCode::from_bytes(status.as_bytes()) {
+        Ok(code) if code.is_success() => Ok(HEALTH_OK.to_string()),
+        Ok(code) => Ok(format!("http_{}", code.as_u16())),
+        Err(error) => Err(CmdError::refused(format!(
+            "the candidate probe printed {status:?} as the readiness status, which is not an \
+             HTTP status: {error}"
+        ))),
+    }
 }
 
 /// The candidate section: the port, whether the recorded pid is still there,
@@ -82,23 +107,30 @@ pub(super) async fn candidate_section(
     let output = host_channel::run_script(target, &script, &production_runner())
         .await
         .map_err(CmdError::from)?;
-    let mut pid_alive = Value::Null;
-    let mut health = HEALTH_UNREACHABLE.to_string();
+    // The probe prints exactly one marker line; any other line is the
+    // channel's own output and is not read. A marker line of another shape,
+    // or none at all, is refused naming what came back.
+    let mut answer = None;
     for line in output.stdout.lines() {
-        let fields = host_channel::marker_fields(line);
-        if fields.first() != Some(&CANDIDATE_MARKER) || fields.len() != 3 {
-            continue;
+        match host_channel::marker_fields(line).as_slice() {
+            [marker, alive, status] if *marker == CANDIDATE_MARKER => {
+                answer = Some((Value::from(*alive == "true"), health_of(status)?));
+            }
+            [marker, ..] if *marker == CANDIDATE_MARKER => {
+                return Err(CmdError::refused(format!(
+                    "the candidate probe printed a {CANDIDATE_MARKER} line that is not \
+                     <alive>\\t<status>: {line:?}"
+                )));
+            }
+            _ => {}
         }
-        pid_alive = Value::from(fields[1] == "true");
-        health = match fields[2].parse::<u16>() {
-            Ok(status) if (200..300).contains(&status) => HEALTH_OK.to_string(),
-            // curl writes `000` when it never got a response, which is the
-            // same finding as an empty status: nothing answered.
-            Ok(0) => HEALTH_UNREACHABLE.to_string(),
-            Ok(status) => format!("http_{status}"),
-            Err(_) => HEALTH_UNREACHABLE.to_string(),
-        };
     }
+    let Some((pid_alive, health)) = answer else {
+        return Err(CmdError::refused(format!(
+            "the candidate probe printed no {CANDIDATE_MARKER} line; it answered: {:?}",
+            output.stdout
+        )));
+    };
     Ok(json!({
         "port": candidate.port,
         "health_status": health,

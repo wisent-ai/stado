@@ -89,7 +89,7 @@ pub(super) async fn install_darwin_daemon(
     if let Some(left) = crate::primitives::staging::remove(&staged) {
         echo(&format!("[plist] {left}"));
     }
-    if !install.ok() {
+    if !install.succeeded() {
         return Err(DeployError::unreachable(format!(
             "sudo -n install {unit_path} was refused: {}",
             install.detail()
@@ -97,9 +97,14 @@ pub(super) async fn install_darwin_daemon(
     }
     echo(&format!("[plist] installed {unit_path}"));
     let service = format!("system/{}", plan.label);
-    let _ = runner(sudo(vec!["/bin/launchctl", "bootout", &service]))
+    // A daemon that was not loaded refuses bootout, which is the state
+    // bootstrap needs; any refusal is said, and bootstrap decides.
+    let unloaded = runner(sudo(vec!["/bin/launchctl", "bootout", &service]))
         .await
         .map_err(DeployError::unreachable)?;
+    if !unloaded.succeeded() {
+        echo(&format!("[note] sudo -n launchctl bootout {service}: {}", unloaded.detail().trim()));
+    }
     let bootstrap = runner(sudo(vec![
         "/bin/launchctl",
         "bootstrap",
@@ -108,7 +113,7 @@ pub(super) async fn install_darwin_daemon(
     ]))
     .await
     .map_err(DeployError::unreachable)?;
-    if !bootstrap.ok() {
+    if !bootstrap.succeeded() {
         return Err(DeployError::unreachable(format!(
             "sudo -n launchctl bootstrap system {unit_path} failed: {}",
             bootstrap.detail()
@@ -122,7 +127,7 @@ pub(super) async fn install_darwin_daemon(
     ] {
         let line = step.join(" ");
         let ran = runner(sudo(step)).await.map_err(DeployError::unreachable)?;
-        if !ran.ok() {
+        if !ran.succeeded() {
             return Err(DeployError::unreachable(format!(
                 "sudo -n {line} failed: {}",
                 ran.detail()

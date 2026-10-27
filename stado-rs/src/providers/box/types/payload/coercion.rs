@@ -1,6 +1,5 @@
-//! Reading Boat's JSON values: the object check, truthiness and text.
-
-use std::num::FpCategory;
+//! Reading Boat's JSON values: the object check, text, booleans and the
+//! first value an answer states among several places it may put one.
 
 use serde_json::{Map, Value};
 
@@ -16,51 +15,72 @@ pub fn required_dict(value: Value, context: &str) -> Result<Map<String, Value>, 
     }
 }
 
-/// Whether a JSON value counts as present: null, false, a zero, an empty
-/// text, list or object do not.
-pub(crate) fn py_truthy(value: &Value) -> bool {
+/// The text Boat answered as `field` in its `answer` answer. An absent or
+/// null field says nothing and reads empty; any other value that is not a
+/// JSON string is refused naming the answer, the field and what Boat sent.
+/// Truthiness read `false` and `0` as absent and printed `true` as Python's
+/// `True`, so a state, id or cursor of the wrong type passed as text.
+pub(crate) fn jstr(value: Option<&Value>, field: &str, answer: &str) -> Result<String, BoxError> {
     match value {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f.classify() != FpCategory::Zero),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
+        None | Some(Value::Null) => Ok(String::new()),
+        Some(Value::String(text)) => Ok(text.clone()),
+        Some(other) => Err(BoxError::transport(format!(
+            "Boat's {answer} answer carries {field} as {other}, not text"
+        ))),
     }
 }
 
-/// A JSON value as text: strings pass through, null reads `None`, booleans
-/// `True`/`False`, containers their JSON form.
-pub(crate) fn py_str(value: &Value) -> String {
+/// A value Boat sent, as an error message shows it: its JSON form, or that
+/// the answer carried none.
+pub(crate) fn shown(value: Option<&Value>) -> String {
     match value {
-        Value::Null => "None".to_string(),
-        Value::Bool(b) => if *b { "True" } else { "False" }.to_string(),
-        Value::Number(n) => n.to_string(),
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
+        Some(value) => value.to_string(),
+        None => "nothing".to_string(),
     }
 }
 
-/// The text of a present value, empty for one that is absent or does not
-/// count as present.
-pub(crate) fn jstr(value: Option<&Value>) -> String {
+/// The boolean Boat answered as `field` in its `answer` answer. Only a JSON
+/// boolean is one: truthiness read the string "false" as true and a missing
+/// field as false, so a prompt that never finished could read as done and a
+/// failed command as one that never said. Anything else is refused naming
+/// the answer, the field and what Boat sent.
+pub(crate) fn jbool(value: Option<&Value>, field: &str, answer: &str) -> Result<bool, BoxError> {
     match value {
-        Some(v) if py_truthy(v) => py_str(v),
-        _ => String::new(),
+        Some(Value::Bool(flag)) => Ok(*flag),
+        Some(other) => Err(BoxError::transport(format!(
+            "Boat's {answer} answer carries {field} as {other}, not a boolean"
+        ))),
+        None => Err(BoxError::transport(format!("Boat's {answer} answer carries no {field}"))),
     }
 }
 
-/// Whether the value is present and counts as true.
-pub(crate) fn jbool(value: Option<&Value>) -> bool {
-    value.is_some_and(py_truthy)
+/// The whole number Boat answered as `field`, or `None` when the answer
+/// carries none (absent or null). Any other value is refused naming the
+/// answer and what Boat sent: read as `None`, an exit code Boat sent as text
+/// or as a fraction read as a command that never said how it ended.
+pub(crate) fn jint(value: Option<&Value>, field: &str, answer: &str) -> Result<Option<i64>, BoxError> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) if number.is_i64() => Ok(number.as_i64()),
+        Some(other) => Err(BoxError::transport(format!(
+            "Boat's {answer} answer carries {field} as {other}, not a whole number"
+        ))),
+    }
 }
 
-/// The first present value as text, else `default_text`, the sentence the
-/// caller states for an answer that named none of them.
-pub(crate) fn first_truthy_str(values: &[Option<&Value>], default_text: &str) -> String {
+/// The first value Boat stated among `values`, else `default_text`, the
+/// sentence the caller states for an answer that named none of them. A value
+/// is stated unless it is absent, null or empty text; text reads as itself
+/// and any other value as its JSON form. Truthiness skipped `false` and `0`
+/// as unstated and printed `true` as Python's `True`, so a code or reason
+/// Boat sent could be replaced by the caller's sentence.
+pub(crate) fn first_stated(values: &[Option<&Value>], default_text: &str) -> String {
     for value in values.iter().flatten() {
-        if py_truthy(value) {
-            return py_str(value);
+        match value {
+            Value::Null => {}
+            Value::String(text) if text.is_empty() => {}
+            Value::String(text) => return text.clone(),
+            other => return other.to_string(),
         }
     }
     default_text.to_string()

@@ -65,7 +65,7 @@ impl MachineFacade {
         if job_id.is_empty() || job_id.contains('/') || job_id.contains('\\') {
             return Err(not_found());
         }
-        for prefix in JOB_PREFIXES {
+        for prefix in JOB_PREFIXES.iter().copied() {
             if let Some(mut job) = self.store.read_job(prefix, job_id).await? {
                 job.state = if prefix == "queue" {
                     "queued".into()
@@ -94,9 +94,11 @@ impl MachineFacade {
 
     pub(crate) async fn observed_job(&self, job: &Job) -> Value {
         let mut value = normalize_job(job);
+        // A job with no provider instance has no cleanup to observe, which
+        // the document says as `null`; an observation that failed says why.
         value["provider_cleanup"] =
             match super::contract::cancellation::provider_cleanup(&self.store, job).await {
-                Ok(observation) => observation.unwrap_or(Value::Null),
+                Ok(observation) => serde_json::json!(observation),
                 Err(error) => serde_json::json!({
                     "job_id": job.job_id, "operation": "observe_instance_removal",
                     "removed": null, "error": error.to_string(),

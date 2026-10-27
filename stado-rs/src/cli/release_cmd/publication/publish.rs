@@ -102,7 +102,7 @@ pub(crate) async fn publish_pipeline_release(
         .clone()
         .ok_or_else(|| CmdError::refused("qualification receipt carries no completion time"))?;
     let manifest = ReleaseManifest {
-        schema_version: 1,
+        schema_version: release_control::RELEASE_MANIFEST_SCHEMA_VERSION,
         product: request.product.to_string(),
         version: request.version.to_string(),
         platform: request.platform.to_string(),

@@ -18,7 +18,7 @@ mod oko_automation;
 
 use serde_json::{json, Value};
 
-use super::{constant_time_eq, http_status, Request, Response};
+use super::{constant_time_eq, http_status, send_json, Request, Response};
 
 #[derive(Debug)]
 pub(super) enum HandlerError {
@@ -69,7 +69,7 @@ pub(super) async fn validate_startup() -> Result<(), String> {
     }
     crate::skarbiec::validate_integration_verifier()
         .await
-        .map(|_| ())
+        .map(|_answer| ())
         .map_err(|error| error.to_string())
 }
 
@@ -105,9 +105,10 @@ fn error_response(error: HandlerError) -> Response {
     envelope_uncapped(status, json!({"ok": false, "error": {"code": code}}))
 }
 
+/// The envelope as the dashboard sends every JSON answer: the document
+/// serialized by the dashboard's own responder, which never drops a body.
 fn envelope_uncapped(status: u16, value: Value) -> Response {
-    let encoded = serde_json::to_vec(&value).unwrap_or_default();
-    Response::new(status, "OK", "application/json", &encoded)
+    send_json(status, &value)
 }
 
 fn unavailable() -> Response {
@@ -126,7 +127,11 @@ fn parse_path(path: &str) -> Option<(&str, &str)> {
     Some((domain, action))
 }
 
-async fn authenticate(request: &Request, domain: &str, action: &str) -> Result<bool, ()> {
+/// Whether the request's bearer is one a client allowed `domain/action`
+/// holds; `Err` names why that could not be decided (the client
+/// declarations or a client's token could not be read), and the caller
+/// answers unavailable after logging it.
+async fn authenticate(request: &Request, domain: &str, action: &str) -> Result<bool, String> {
     let Some(presented) = request
         .header("authorization")
         .and_then(|value| value.strip_prefix("Bearer "))
@@ -134,24 +139,20 @@ async fn authenticate(request: &Request, domain: &str, action: &str) -> Result<b
     else {
         return Ok(false);
     };
-    let clients = crate::config::integration_clients().map_err(|_| ())?;
-    let mut eligible = false;
+    let clients = crate::config::integration_clients()
+        .map_err(|problems| format!("integration clients cannot be read: {}", problems.join("; ")))?;
     for policy in clients
         .values()
         .filter(|policy| policy.allows(domain, action))
     {
-        eligible = true;
         let expected = crate::skarbiec::read_integration_token(policy.item(), "token")
             .await
-            .map_err(|_| ())?
+            .map_err(|error| format!("integration token of {} cannot be read: {error}", policy.item()))?
             .filter(|value| !value.trim().is_empty())
-            .ok_or(())?;
+            .ok_or_else(|| format!("integration token of {} is empty or absent", policy.item()))?;
         if constant_time_eq(presented.as_bytes(), expected.as_bytes()) {
             return Ok(true);
         }
-    }
-    if !eligible {
-        return Ok(false);
     }
     Ok(false)
 }
@@ -198,7 +199,10 @@ pub(super) async fn handle(
                 json!({"ok": false, "error": {"code": "unauthorized"}}),
             )
         }
-        Err(()) => return unavailable(),
+        Err(cause) => {
+            tracing::warn!(%domain, %action, %cause, "integration authentication could not be decided");
+            return unavailable();
+        }
     }
     match dispatch(domain, action, &request.body, store).await {
         Ok(value) => envelope_uncapped(

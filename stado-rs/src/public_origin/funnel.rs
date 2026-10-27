@@ -147,7 +147,7 @@ pub async fn read(
     runner: &Runner,
 ) -> Result<Publication, DeployError> {
     let output = tailscale(target, &["serve", "status", "--json"], runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError(format!(
             "{} could not report its serve configuration: {}",
             target.name,
@@ -249,7 +249,7 @@ pub async fn converge(
         .await?;
         // The node answered and would not publish (Funnel not permitted for
         // it, the port taken): a refusal, not an outage.
-        if !output.ok() {
+        if !output.succeeded() {
             return Err(DeployError(format!(
                 "{} refused to publish {path} on {}: {}",
                 target.name,

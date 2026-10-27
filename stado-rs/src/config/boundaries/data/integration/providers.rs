@@ -117,19 +117,28 @@ pub(crate) fn parse_integration_providers(
 
 static INTEGRATION_PROVIDERS: LazyLock<Result<BTreeMap<String, IntegrationProvider>, Vec<String>>> =
     LazyLock::new(|| {
-        let configured = match std::env::var("WC_INTEGRATION_PROVIDERS")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    return Err(vec![format!(
-                        "WC_INTEGRATION_PROVIDERS must be a JSON object: {error}"
-                    )])
+        // The environment declaration wins over the configuration file;
+        // unset or blank, the file's `integration.providers` is read. A
+        // value that is not Unicode cannot be JSON and is refused as such.
+        let configured = match std::env::var("WC_INTEGRATION_PROVIDERS") {
+            Ok(encoded) if !encoded.trim().is_empty() => {
+                match serde_json::from_str::<Value>(&encoded) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        return Err(vec![format!(
+                            "WC_INTEGRATION_PROVIDERS must be a JSON object: {error}"
+                        )])
+                    }
                 }
-            },
-            None => crate::config_file::get("integration.providers"),
+            }
+            Ok(_) | Err(std::env::VarError::NotPresent) => {
+                crate::config_file::get("integration.providers")
+            }
+            Err(std::env::VarError::NotUnicode(raw)) => {
+                return Err(vec![format!(
+                    "WC_INTEGRATION_PROVIDERS must be a JSON object, and is not Unicode: {raw:?}"
+                )])
+            }
         };
         parse_integration_providers(configured.as_ref())
     });
@@ -142,6 +151,13 @@ pub fn integration_providers(
     }
 }
 
-pub fn integration_provider(domain: &str) -> Option<&'static IntegrationProvider> {
-    integration_providers().ok()?.get(domain)
+/// The provider policy for `domain`: `Ok(None)` when the declaration is
+/// valid and names no such domain, `Err` with the declaration's problems
+/// when `integration.providers` itself is invalid, so a caller asking for
+/// one domain learns the whole declaration is refused rather than reading
+/// the domain as unconfigured.
+pub fn integration_provider(
+    domain: &str,
+) -> Result<Option<&'static IntegrationProvider>, &'static [String]> {
+    Ok(integration_providers()?.get(domain))
 }

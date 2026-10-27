@@ -8,9 +8,7 @@ use super::super::*;
 /// Fold the marker lines of stdout into a reading.
 pub fn parse_output(stdout: &str) -> DiskReading {
     let mut reading = DiskReading::default();
-    let mut memory_level_pct: Option<i64> = None;
-    let mut memory_pages: Vec<String> = Vec::new();
-    let mut meminfo: Vec<String> = Vec::new();
+    let mut memory = MemoryMarkers::default();
     for line in stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
             ["STADO_CLONE_ROOT", path] => {
@@ -29,11 +27,20 @@ pub fn parse_output(stdout: &str) -> DiskReading {
                 // declared work root's); the one with less room before the
                 // threshold is the reading, as the janitor's rule judges it.
                 let tighter = match (&reading.usage, headroom_kb(&row)) {
-                    (None, _) => true,
-                    (Some(_), None) => false,
-                    (Some(kept), Some(new)) => match headroom_kb(kept) {
-                        Some(old) => new < old,
-                        None => true,
+                    (None, Ok(_)) => true,
+                    // Kept, as the only row so far, and named as unmeasured.
+                    (None, Err(cause)) => {
+                        reading.unread.push(cause);
+                        true
+                    }
+                    (Some(_), Err(cause)) => {
+                        reading.unread.push(cause);
+                        false
+                    }
+                    (Some(kept), Ok(new)) => match headroom_kb(kept) {
+                        Ok(old) => new < old,
+                        // The kept row's cause was recorded when it was kept.
+                        Err(_kept_unmeasured) => true,
                     },
                 };
                 if tighter {
@@ -50,7 +57,13 @@ pub fn parse_output(stdout: &str) -> DiskReading {
                     mounted_on: (*mounted).to_string(),
                 });
             }
-            ["STADO_BLOCK_DEVICE", row] => reading.block_devices.push(parse_lsblk_pairs(row)),
+            ["STADO_BLOCK_DEVICE", row] => {
+                let device = parse_lsblk_pairs(row);
+                if let Some(cause) = &device.size_unread {
+                    reading.unread.push(format!("block device {}: {cause}", device.name));
+                }
+                reading.block_devices.push(device);
+            }
             ["STADO_BLOCK_DEVICES_END", _] => reading.block_devices_read = true,
             ["STADO_CLEANUP_STATE", payload] => {
                 reading.state = parse_state(payload);
@@ -62,11 +75,16 @@ pub fn parse_output(stdout: &str) -> DiskReading {
                 };
             }
             ["STADO_LIVE_STADO", pids] => {
-                reading.live_stado_pids = Some(
-                    pids.split_whitespace()
-                        .filter_map(|pid| pid.parse().ok())
-                        .collect(),
-                );
+                let mut alive = Vec::new();
+                for pid in pids.split_whitespace() {
+                    match pid.parse::<u32>() {
+                        Ok(pid) => alive.push(pid),
+                        Err(error) => reading
+                            .unread
+                            .push(format!("live stado process {pid:?} is not a pid: {error}")),
+                    }
+                }
+                reading.live_stado_pids = Some(alive);
             }
             ["STADO_LIVE_STADO"] => reading.live_stado_pids = Some(Vec::new()),
             ["STADO_CLEANUP_LOCK", pid, command] => {
@@ -75,25 +93,9 @@ pub fn parse_output(stdout: &str) -> DiskReading {
                     command: (*command).trim().to_string(),
                 });
             }
+            fields if memory.take(fields) => {}
             // Printed whether or not anything held it, so "nobody is holding
             // the lock" is distinguishable from "this host could not be asked".
-            ["STADO_MEMORY", "page_size", value] => {
-                reading.memory.page_size_bytes = value.split_whitespace().next().and_then(fold_int);
-            }
-            ["STADO_MEMORY", "level_pct", value] => {
-                memory_level_pct = fold_int(value);
-            }
-            ["STADO_MEMORY", "total_bytes", value] => {
-                reading.memory.total_bytes = fold_int(value);
-            }
-            ["STADO_MEMORY", "swap", value] => {
-                let (used, total) =
-                    crate::providers::local::host_memory::reading::swapusage_bytes(value);
-                reading.memory.swap_used_bytes = used;
-                reading.memory.swap_total_bytes = total;
-            }
-            ["STADO_MEMORY_PAGES", row] => memory_pages.push((*row).to_string()),
-            ["STADO_MEMINFO", row] => meminfo.push((*row).to_string()),
             ["STADO_CLEANUP_LOCK_END", path] => {
                 reading.lock_read = true;
                 reading.lock_path = Some((*path).to_string());
@@ -106,61 +108,76 @@ pub fn parse_output(stdout: &str) -> DiskReading {
             // with no snapshots at all is told apart from a host nobody could
             // ask.
             ["STADO_SNAPSHOT_END", _] => reading.snapshots.supported = true,
-            ["STADO_DISK_ITEM", blocks, path] => {
-                if let Ok(blocks_kb) = blocks.parse::<i64>() {
-                    reading.inventory.push(DiskItem {
-                        blocks_kb,
-                        path: (*path).to_string(),
-                    });
-                }
-            }
-            ["STADO_BUILD_CACHE_ITEM", blocks, path] => {
-                if let Ok(blocks_kb) = blocks.parse::<i64>() {
-                    reading.tagged_build_caches.push(DiskItem {
-                        blocks_kb,
-                        path: (*path).to_string(),
-                    });
-                }
-            }
+            ["STADO_DISK_ITEM", blocks, path] => match blocks.parse::<i64>() {
+                Ok(blocks_kb) => reading.inventory.push(DiskItem {
+                    blocks_kb,
+                    path: (*path).to_string(),
+                }),
+                Err(error) => reading
+                    .unread
+                    .push(format!("directory {path}: size {blocks:?} is not a block count: {error}")),
+            },
+            ["STADO_BUILD_CACHE_ITEM", blocks, path] => match blocks.parse::<i64>() {
+                Ok(blocks_kb) => reading.tagged_build_caches.push(DiskItem {
+                    blocks_kb,
+                    path: (*path).to_string(),
+                }),
+                Err(error) => reading
+                    .unread
+                    .push(format!("build cache {path}: size {blocks:?} is not a block count: {error}")),
+            },
             ["STADO_BUILD_CACHE_END", _] => reading.tagged_build_caches_read = true,
             ["STADO_CLONE_SUMMARY", path, total, hour, day] => {
-                if let (Ok(total), Ok(older_than_hour), Ok(older_than_day)) = (
-                    total.parse::<i64>(),
-                    hour.parse::<i64>(),
-                    day.parse::<i64>(),
-                ) {
-                    reading.clone_summaries.push(CloneSummary {
-                        path: (*path).to_string(),
-                        total,
-                        older_than_hour,
-                        older_than_day,
-                    });
+                let count = |name: &str, value: &str| {
+                    value
+                        .parse::<i64>()
+                        .map_err(|error| format!("clone summary {path}: {name} {value:?} is not a count: {error}"))
+                };
+                let counts = count("total", total).and_then(|total| {
+                    Ok((total, count("older than an hour", hour)?, count("older than a day", day)?))
+                });
+                match counts {
+                    Ok((total, older_than_hour, older_than_day)) => {
+                        reading.clone_summaries.push(CloneSummary {
+                            path: (*path).to_string(),
+                            total,
+                            older_than_hour,
+                            older_than_day,
+                        })
+                    }
+                    Err(cause) => reading.unread.push(cause),
                 }
             }
             _ => {}
         }
     }
-    fold_memory(&mut reading, memory_level_pct, &memory_pages, &meminfo);
+    reading.memory = fold_memory(memory);
     reading
 }
 
 /// KiB that may still be written to the volume of `usage` before the
-/// disk-full rule's threshold, by the rule's own arithmetic; none for a row
-/// whose sizes are not numbers.
-fn headroom_kb(usage: &DiskUsage) -> Option<i64> {
-    let total = usage.blocks_kb.parse::<i64>().ok()?;
-    let free = usage.available_kb.parse::<i64>().ok()?;
-    Some(crate::providers::local::space_reclaim::rule::headroom_bytes(total, free))
+/// disk-full rule's threshold, by the rule's own arithmetic, or why a row
+/// whose sizes are not numbers has none.
+fn headroom_kb(usage: &DiskUsage) -> Result<i64, String> {
+    let count = |name: &str, value: &str| {
+        value.parse::<i64>().map_err(|error| {
+            format!("df row for {}: {name} {value:?} is not a block count: {error}", usage.mounted_on)
+        })
+    };
+    let total = count("blocks", &usage.blocks_kb)?;
+    let free = count("available", &usage.available_kb)?;
+    Ok(crate::providers::local::space_reclaim::rule::headroom_bytes(total, free))
 }
 
 /// `lsblk -P` prints `KEY="value"` pairs; the values are what the kernel
 /// said, quotes and all, so an embedded quote arrives as `\"`.
 pub fn parse_lsblk_pairs(row: &str) -> BlockDevice {
+    const OPEN: &str = "=\"";
     let mut device = BlockDevice::default();
     let mut rest = row;
-    while let Some(equals) = rest.find("=\"") {
+    while let Some(equals) = rest.find(OPEN) {
         let key = rest[..equals].trim();
-        let after = &rest[equals + 2..];
+        let after = &rest[equals + OPEN.len()..];
         let mut value = String::new();
         let mut chars = after.char_indices();
         let mut end = after.len();
@@ -172,7 +189,7 @@ pub fn parse_lsblk_pairs(row: &str) -> BlockDevice {
                     }
                 }
                 '"' => {
-                    end = index + 1;
+                    end = index + ch.len_utf8();
                     break;
                 }
                 other => value.push(other),
@@ -180,15 +197,27 @@ pub fn parse_lsblk_pairs(row: &str) -> BlockDevice {
         }
         match key {
             "NAME" => device.name = value,
-            "SIZE" => device.size_bytes = value.parse().unwrap_or_default(),
-            "TYPE" => device.kind = value,
-            "FSTYPE" => device.fstype = value,
+            "SIZE" if value.is_empty() => {}
+            "SIZE" => match value.parse::<i64>() {
+                Ok(bytes) => device.size_bytes = Some(bytes),
+                Err(error) => {
+                    device.size_unread = Some(format!("lsblk printed the size {value:?}, which is not a byte count: {error}"))
+                }
+            },
+            "TYPE" => {
+                device.device_type = DeviceType::of(&value);
+                device.kind = value;
+            }
+            "FSTYPE" => {
+                device.signature = Signature::of(&value);
+                device.fstype = value;
+            }
             "MOUNTPOINT" => device.mountpoint = value,
             "UUID" => device.uuid = value,
             "MODEL" => device.model = value,
             _ => {}
         }
-        rest = &after[end.min(after.len())..];
+        rest = &after[end..];
     }
     device
 }

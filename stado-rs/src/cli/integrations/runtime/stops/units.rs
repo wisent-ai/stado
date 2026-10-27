@@ -31,15 +31,10 @@ struct Loop {
 }
 
 fn path() -> Result<PathBuf, String> {
-    std::env::var_os("HOME")
-        .map(|home| {
-            PathBuf::from(home)
-                .join(".stado")
-                .join("failing-units.json")
-        })
-        .ok_or_else(|| {
-            "HOME is not set, so the crash loops of this host's units have no file to be kept in"
-                .to_string()
+    crate::config_file::home()
+        .map(|home| home.join(".stado").join("failing-units.json"))
+        .map_err(|cause| {
+            format!("the crash loops of this host's units have no file to be kept in: {cause}")
         })
 }
 

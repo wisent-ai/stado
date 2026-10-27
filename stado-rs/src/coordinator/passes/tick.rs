@@ -98,6 +98,9 @@ pub async fn run_tick(
             crate::schedules::SWEEP_PATH
         ));
     }
+    // A host that declares a delivery plan checks and installs its repairs
+    // at this tick's own cadence, in a pass beside the tick.
+    crate::coordinator::delivery::fire();
     // Coordinator-authoritative sizing: re-zero any queued job whose model
     // has no measured peak (stamp the measured peak if one exists) BEFORE
     // assignment. A pre-0.4.237 agent that requeues a job writes the old
@@ -172,7 +175,7 @@ pub async fn run_tick(
             "routing: repaired {n_pin_repairs} conflicting host-pinned assignments"
         ));
     }
-    let mut total: i64 = 0;
+    let mut scheduled: Vec<i64> = Vec::new();
     for arm in providers {
         match arm {
             ResolvedProvider::Box { name, provider } => {
@@ -185,7 +188,7 @@ pub async fn run_tick(
                     }
                 };
                 match run_box_tick(store, provider, &owner).await {
-                    Ok(n) => total += n,
+                    Ok(n) => scheduled.push(n),
                     Err(exc) => log(&format!("provider {name} tick failed: {exc}")),
                 }
             }
@@ -195,11 +198,11 @@ pub async fn run_tick(
                 if reaped > 0 {
                     log(&format!("{name}: reaped {reaped} dead-agent VM(s)"));
                 }
-                total += if autonomy_requires_routing {
+                scheduled.push(if autonomy_requires_routing {
                     schedule_queued_jobs_routed(store, provider.as_ref(), name, secrets).await?
                 } else {
                     schedule_queued_jobs(store, provider.as_ref(), name, secrets).await?
-                };
+                });
             }
         }
     }
@@ -236,5 +239,5 @@ pub async fn run_tick(
         // never billed).
         collect_billing(store).await;
     }
-    Ok(total)
+    Ok(scheduled.iter().sum())
 }

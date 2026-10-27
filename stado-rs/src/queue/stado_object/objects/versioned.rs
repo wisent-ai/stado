@@ -26,22 +26,25 @@ impl StadoObjectBackend {
         if !response.status().is_success() {
             return Err(Self::response_error(response).await);
         }
-        let version = response
-            .headers()
-            .get(VERSION_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
+        let header = response.headers().get(VERSION_HEADER).ok_or_else(|| {
+            StorageError::Other(format!("Stado object API omitted {VERSION_HEADER} for {path}"))
+        })?;
+        let version = header
+            .to_str()
+            .map_err(|error| {
                 StorageError::Other(format!(
-                    "Stado object API omitted {VERSION_HEADER} for {path}"
+                    "Stado object API sent a {VERSION_HEADER} for {path} that is not visible ASCII: {error}"
                 ))
             })?
             .to_string();
+        if version.is_empty() {
+            return Err(StorageError::Other(format!(
+                "Stado object API sent an empty {VERSION_HEADER} for {path}"
+            )));
+        }
         // The same measured room as the unversioned read: this is the route
         // the canonical registry and every conditional-write document take.
-        let room = crate::providers::local::helpers::memory_gb()
-            .ok()
-            .map(|(available_gib, _)| (available_gib * f64::from(1u32 << 30)) as usize);
+        let room = super::text_room(path);
         let bytes = Self::whole_body(response, path, room).await?;
         let content = String::from_utf8(bytes)
             .map_err(|error| StorageError::Other(format!("invalid UTF-8 in {path}: {error}")))?;

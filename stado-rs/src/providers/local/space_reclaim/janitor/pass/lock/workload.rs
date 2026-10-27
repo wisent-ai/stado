@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use crate::providers::local::space_reclaim::janitor::pass::lock::file::{io_code, open_lock};
 use crate::providers::local::space_reclaim::janitor::pass::lock::holds;
-use crate::providers::local::space_reclaim::janitor::pass::lock::{ensure_state_dir, secure_home};
+use crate::providers::local::space_reclaim::janitor::pass::lock::{
+    ensure_state_dir, secure_home, user_home,
+};
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 
 /// The agent's word for "a standalone cleanup holds the exclusive lock, so
@@ -87,7 +89,7 @@ pub fn acquire_workload_lock_in(
 /// means a standalone cleanup currently owns the exclusive lock, or has asked
 /// for its turn, so admission must be retried later.
 pub fn acquire_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, JanitorError> {
-    acquire_workload_lock_in(&crate::config_file::expand_tilde("~"), holder)
+    acquire_workload_lock_in(&user_home()?, holder)
 }
 
 /// The shared hold for one live workload that waits, as a lock wait in the
@@ -98,7 +100,7 @@ pub fn acquire_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, Janit
 /// asked for its turn: running workloads are letting it have the lock, and a
 /// new hold would keep it from ever getting it.
 pub fn wait_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, JanitorError> {
-    let state_dir = ensure_state_dir(&secure_home(&crate::config_file::expand_tilde("~"))?)?;
+    let state_dir = ensure_state_dir(&secure_home(&user_home()?)?)?;
     if holds::turn_requested(&state_dir)? {
         return Ok(None);
     }
@@ -134,7 +136,7 @@ pub fn wait_workload_lock(holder: &str) -> Result<Option<WorkloadLock>, JanitorE
 /// to wait for its turn waits, instead of being refused while the janitor
 /// waits for a schedule that may not come before the operator does.
 pub fn wait_for_janitor_turn(holder: &str) -> Result<(), JanitorError> {
-    let state_dir = ensure_state_dir(&secure_home(&crate::config_file::expand_tilde("~"))?)?;
+    let state_dir = ensure_state_dir(&secure_home(&user_home()?)?)?;
     let file = open_lock(&state_dir)?;
     let path = state_dir.join(crate::providers::local::space_reclaim::janitor::LOCK_NAME);
     let what = format!(
@@ -155,24 +157,33 @@ pub fn wait_for_janitor_turn(holder: &str) -> Result<(), JanitorError> {
 }
 
 /// How many live workloads hold the cleanup lock now, as their records say:
-/// the active job count a pass run outside the agent reports.
-pub fn live_workload_count() -> Result<usize, JanitorError> {
-    let state_dir = ensure_state_dir(&secure_home(&crate::config_file::expand_tilde("~"))?)?;
+/// the active job count a pass run outside the agent reports, in the type the
+/// report carries it. Every pass outside the agent passes this, never a count
+/// of its own choosing: a pass that reported none cleared caches under
+/// running jobs.
+pub fn live_workload_count() -> Result<i64, JanitorError> {
+    let state_dir = ensure_state_dir(&secure_home(&user_home()?)?)?;
     let (workloads, unreadable) = holds::live(&state_dir);
-    match unreadable.first() {
-        Some(problem) => Err(JanitorError::os(&format!(
+    if let Some(problem) = unreadable.first() {
+        return Err(JanitorError::os(&format!(
             "a workload hold record cannot be read, so the running workloads are not known: \
              {problem}"
-        ))),
-        None => Ok(workloads.len()),
+        )));
     }
+    i64::try_from(workloads.len()).map_err(|error| {
+        JanitorError::os(&format!(
+            "{} running workloads count past what a cleanup report holds: {error}",
+            workloads.len()
+        ))
+    })
 }
 
 /// Who keeps the janitor from its turn on this machine: each live shared
 /// hold with its acquisition timestamp, then the turn request and unread
 /// records. This is a diagnostic observation, not permission to steal a lock.
 pub fn workload_holders() -> String {
-    let state_dir = match secure_home(&crate::config_file::expand_tilde("~"))
+    let state_dir = match user_home()
+        .and_then(|home| secure_home(&home))
         .and_then(|home| ensure_state_dir(&home))
     {
         Ok(state_dir) => state_dir,

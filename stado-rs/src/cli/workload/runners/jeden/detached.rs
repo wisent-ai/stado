@@ -21,8 +21,9 @@ use crate::queue::submit::{
     submit_batch, ResolvedHardwareProjection, SubmitOptions, CPU_MACHINE_TYPE,
 };
 
-/// Version of the record `stado workload start` returns. A reader that
-/// understands this number knows every field below is present.
+/// Version of the record `stado workload start` returns, as
+/// <https://stado.wisent.com/docs/capabilities/workload> states it. A reader
+/// that understands this number knows every field below is present.
 pub(super) const RECORD_SCHEMA_VERSION: u64 = 1;
 
 /// The fleet service a session reaches its models through.
@@ -134,7 +135,7 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
             // mentions a model by name would otherwise be sized onto a GPU
             // host and then wait for VRAM no session ever uses.
             resolved_hardware: Some(ResolvedHardwareProjection {
-                gpu_mem_gb: 0,
+                gpu_mem_gb: Default::default(),
                 gpu_type: String::new(),
                 machine_type: CPU_MACHINE_TYPE.to_string(),
             }),
@@ -219,10 +220,11 @@ fn run_id(kind: &str, workspace: &str) -> String {
 /// written by this command.
 pub(super) fn workspace_of(kind: &str, run_id: &str) -> Option<String> {
     let rest = run_id.strip_prefix(&format!("workload-{kind}-"))?;
-    let mut parts = rest.rsplitn(3, '-');
-    let _pid = parts.next()?;
-    let _stamp = parts.next()?;
-    parts.next().map(str::to_string)
+    // `<workspace>-<stamp>-<pid>`: the workspace is what precedes the last
+    // two separators, whatever separators it holds itself.
+    let (rest, _pid) = rest.rsplit_once('-')?;
+    let (workspace, _stamp) = rest.rsplit_once('-')?;
+    Some(workspace.to_string())
 }
 
 /// The one command the worker runs: the managed Jeden, in the workspace
@@ -237,9 +239,12 @@ pub(super) fn workspace_of(kind: &str, run_id: &str) -> Option<String> {
 /// The two sentences below are what the job's retained log carries instead.
 fn session_command(checkout: &str, request: &DetachedRequest<'_>, router: Option<&str>) -> String {
     let workspace = workspace_expression(checkout);
-    let router_env = router
-        .map(|url| format!("BRAMA_URL={} ", shell_quote(url)))
-        .unwrap_or_default();
+    // A session with no resolved router leaves BRAMA_URL to Jeden's own
+    // resolution on the host, which says itself which model route it took.
+    let router_env = match router {
+        Some(url) => format!("BRAMA_URL={} ", shell_quote(url)),
+        None => String::new(),
+    };
     let mut command = format!(
         "if ! cd {workspace} 2>/dev/null; then printf 'the worker cannot enter %s on this host; grant the Stado agent access to that directory or start the session in a workspace it can read\\n' {workspace} >&2; exit 1; fi; \
          if [ ! -x \"$HOME\"/{MANAGED_JEDEN} ]; then printf 'the managed Jeden is missing or not executable at %s on this host; install it with `stado product install jeden`\\n' \"$HOME\"/{MANAGED_JEDEN} >&2; exit 1; fi; \

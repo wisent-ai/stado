@@ -28,7 +28,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
         .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{target}: cannot read provenance manifests: {}",
             crate::deploy::host_channel::last_error_line(&output, "remote provenance read failed")
@@ -40,9 +40,12 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
     let mut records: std::collections::BTreeMap<String, crate::binary::provenance::Provenance> =
         std::collections::BTreeMap::new();
     let mut unreadable: Vec<String> = Vec::new();
-    let mut helpers: usize = 0;
+    let mut helpers: Vec<String> = Vec::new();
     let mut present: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
-    let mut markers: usize = 0;
+    let mut markers: Vec<String> = Vec::new();
+    // Why a row's reachability is unresolved when a check was attempted and
+    // could not answer, said beside the rows rather than dropped.
+    let mut unresolved_causes: Vec<String> = Vec::new();
     let mut receipts: Vec<DeliveryReceipt> = Vec::new();
     for line in output.stdout.lines() {
         if let Some(artifact) = line.strip_prefix("STADO-ARTIFACT ") {
@@ -51,12 +54,12 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             // question nobody asked and hides the one that matters.
             // A line without all three words names no artefact this report
             // can place; skipped, the artefact vanished from the report.
-            let mut words = artifact.trim().splitn(3, ' ');
-            let (Some(kind), Some(digest), Some(name)) = (
-                words.next(),
-                words.next().map(str::trim),
-                words.next().map(str::trim).filter(|name| !name.is_empty()),
-            ) else {
+            let words = artifact.trim().split_once(' ').and_then(|(kind, rest)| {
+                rest.split_once(' ')
+                    .map(|(digest, name)| (kind, digest.trim(), name.trim()))
+            });
+            let Some((kind, digest, name)) = words.filter(|(_kind, _digest, name)| !name.is_empty())
+            else {
                 unreadable.push(format!(
                     "artifact line names no kind, digest and name: {artifact}"
                 ));
@@ -64,11 +67,11 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             };
             let digest = digest.to_string();
             if kind == "script" {
-                helpers += 1;
+                helpers.push(name.to_string());
                 continue;
             }
             if kind == "marker" {
-                markers += 1;
+                markers.push(name.to_string());
                 continue;
             }
             if !digest.is_empty() && digest != "-" {
@@ -99,7 +102,16 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         }
     }
 
-    let repository = crate::binary::provenance::local_repo();
+    // No checkout here leaves reachability unresolved for every row; a binary
+    // or directory that cannot be read, or a git that cannot run, is said
+    // instead of being read as "no checkout".
+    let repository = match crate::binary::provenance::local_repo() {
+        Ok(repository) => repository,
+        Err(cause) => {
+            unresolved_causes.push(cause);
+            None
+        }
+    };
     let now = chrono::Utc::now();
     let carried: Vec<CarriedArtifact> = names
         .into_iter()
@@ -116,9 +128,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                     .iter()
                     .filter(|receipt| receipt.binary == artifact)
                     .filter(|receipt| {
-                        installed
-                            .map(|actual| receipt.artifact_sha256.eq_ignore_ascii_case(actual))
-                            .unwrap_or_default()
+                        installed.is_some_and(|actual| receipt.artifact_sha256.eq_ignore_ascii_case(actual))
                     })
                     .collect();
                 candidates.sort_by(|left, right| right.installed_at.cmp(&left.installed_at));
@@ -135,20 +145,27 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                     Some(false)
                 }
                 (Some(_), None) => None,
-                (Some(commit), Some(repository)) => Some(
-                    crate::binary::provenance::reachable_in_repo(commit, repository),
-                ),
+                (Some(commit), Some(repository)) => {
+                    match crate::binary::provenance::reachable_in_repo(commit, repository) {
+                        Ok(reachable) => Some(reachable),
+                        Err(cause) => {
+                            unresolved_causes.push(format!("{artifact}: {cause}"));
+                            None
+                        }
+                    }
+                }
             };
             let stamp = match (&record, &receipt) {
                 (Some(record), _) => Some(record.at.clone()),
                 (None, Some(receipt)) => Some(receipt.installed_at.clone()),
                 (None, None) => None,
             };
-            let age_seconds = stamp.as_deref().and_then(|stamp| {
-                chrono::DateTime::parse_from_rfc3339(stamp)
-                    .ok()
-                    .map(|stamp| (now - stamp.with_timezone(&chrono::Utc)).num_seconds())
-            });
+            // A stamp that will not parse leaves the age unknown; the table
+            // says "unreadable stamp" for it.
+            let age_seconds = match stamp.as_deref().map(chrono::DateTime::parse_from_rfc3339) {
+                Some(Ok(stamp)) => Some((now - stamp.with_timezone(&chrono::Utc)).num_seconds()),
+                Some(Err(_)) | None => None,
+            };
             let describes = match (&record, &receipt, installed) {
                 (Some(record), _, Some(actual)) => Some(record.sha256.eq_ignore_ascii_case(actual)),
                 // Digest-matched above, so a receipt-accounted row describes
@@ -181,8 +198,8 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             .iter()
             .filter(|item| item.reachable.is_none())
             .count(),
-        helpers,
-        markers,
+        helpers: helpers.len(),
+        markers: markers.len(),
     };
     let drifted = counts.drifted;
 
@@ -227,6 +244,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                 "repository": repository.as_ref().map(|path| path.display().to_string()),
                 "artifacts": artifacts,
                 "unreadable_manifests": unreadable,
+                "unresolved_causes": unresolved_causes,
                 "drifted": drifted,
                 "unresolved": counts.unresolved,
                 "helper_scripts": counts.helpers,
@@ -236,60 +254,13 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         return Ok(());
     }
 
-    let rows: Vec<Vec<String>> = carried
-        .iter()
-        .map(|item| {
-            let age = match (item.age_seconds, item.accounted()) {
-                (Some(seconds), _) => {
-                    crate::cli::registry::human_age(chrono::TimeDelta::seconds(seconds))
-                }
-                // A record whose timestamp will not parse was hand-edited; say
-                // so instead of showing an age.
-                (None, true) => "unreadable stamp".to_string(),
-                (None, false) => "never".to_string(),
-            };
-            let reachable = match item.reachable {
-                Some(true) => "yes",
-                Some(false) => "no",
-                None => "not checked",
-            };
-            let describes = match item.describes {
-                Some(true) => "match",
-                Some(false) => "REPLACED",
-                None => "-",
-            };
-            vec![
-                item.artifact.clone(),
-                item.accounted_by().as_str().to_string(),
-                item.commit(),
-                item.builder(),
-                age,
-                reachable.to_string(),
-                describes.to_string(),
-            ]
-        })
-        .collect();
-    // Before the early return as well as before the table: a host whose only
-    // provenance file is corrupt must not read as a host with nothing to say.
-    for error in &unreadable {
-        eprintln!("{target}: a provenance manifest could not be read: {error}");
-    }
-    if rows.is_empty() {
-        println!("{target}: carries no stado-managed programs");
-        return Ok(());
-    }
-    crate::cli::reporting::table::print(
-        &[
-            "ARTIFACT",
-            "ACCOUNTED",
-            "COMMIT",
-            "BUILDER",
-            "AGE",
-            "REACHABLE",
-            "BYTES",
-        ],
-        &rows,
-    );
-    super::trailers::print(target, &carried, &counts, rows.len(), repository.is_none());
+    super::text::print(&super::text::Findings {
+        target,
+        carried: &carried,
+        counts: &counts,
+        unreadable: &unreadable,
+        unresolved_causes: &unresolved_causes,
+        repository_missing: repository.is_none(),
+    });
     Ok(())
 }

@@ -11,7 +11,7 @@ mod capacity;
 mod detached;
 mod sessions;
 
-use capacity::{admission_refusal, live_capacity, target_score};
+use capacity::{admission_refusal, live_capacity, placement_order};
 
 pub(crate) use attach::connect_jeden;
 pub(crate) use detached::{start_detached, DetachedRequest};
@@ -60,15 +60,25 @@ pub(super) const SESSION_ROOT_VARIABLE: &str = "JEDEN_SESSION_ROOT";
 /// from the fleet, as declared job secrets its agent resolves.
 pub(super) const OPERATOR_GRANT_FILE: &str = ".stado/local-operator-skarbiec-token";
 
+/// The workspace the caller stands in: the current directory's name when it
+/// is a valid workspace component, else the home workspace, which is where a
+/// caller standing in no checkout (its home, `/`) runs. A current directory
+/// that cannot be read is said before the home workspace is taken.
 pub(crate) fn current_workspace() -> String {
-    std::env::current_dir()
-        .ok()
-        .and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .filter(|name| validate_component("workspace", name).is_ok())
-        .unwrap_or_else(|| HOME_WORKSPACE.to_string())
+    let directory = match std::env::current_dir() {
+        Ok(directory) => directory,
+        Err(error) => {
+            eprintln!(
+                "stado: the current directory cannot be read ({error}), so the session runs \
+                 in the home workspace"
+            );
+            return HOME_WORKSPACE.to_string();
+        }
+    };
+    match directory.file_name().map(|name| name.to_string_lossy().into_owned()) {
+        Some(name) if validate_component("workspace", &name).is_ok() => name,
+        _ => HOME_WORKSPACE.to_string(),
+    }
 }
 
 pub(super) fn validate_component(label: &str, value: &str) -> Result<(), CmdError> {
@@ -122,10 +132,21 @@ pub(super) fn shell_quote(value: &str) -> String {
 /// opened elsewhere, and refused a ledger that was present. Another host
 /// never sees this process's environment, so it keeps the default.
 pub(super) fn ledger_root(target: &ComputeTarget) -> (String, String) {
-    let moved = host_channel::target_is_this_host(target)
-        .then(|| std::env::var(SESSION_ROOT_VARIABLE).ok())
-        .flatten()
-        .filter(|root| !root.is_empty());
+    let moved = if host_channel::target_is_this_host(target) {
+        match std::env::var(SESSION_ROOT_VARIABLE) {
+            Ok(root) if !root.is_empty() => Some(root),
+            Ok(_) | Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(root)) => {
+                eprintln!(
+                    "stado: {SESSION_ROOT_VARIABLE} is not UTF-8 ({root:?}), so the session \
+                     ledger stays at ~/{DEFAULT_LEDGER}"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
     match moved {
         Some(root) => (format!("'{}'", root.replace('\'', "'\\''")), root),
         None => (
@@ -135,12 +156,14 @@ pub(super) fn ledger_root(target: &ComputeTarget) -> (String, String) {
     }
 }
 
+/// `path` under the home every Stado file is kept under
+/// ([`crate::config_file::home`]: HOME, else the user database).
 pub(super) fn expand_home(path: &str) -> Result<std::path::PathBuf, CmdError> {
-    let home = std::env::var_os("HOME").ok_or_else(|| {
-        CmdError::click("HOME is not set; set it before attaching")
+    let home = crate::config_file::home().map_err(|cause| {
+        CmdError::click(format!("a Jeden session cannot be attached here: {cause}"))
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    Ok(std::path::PathBuf::from(home).join(path))
+    Ok(home.join(path))
 }
 
 /// Every host that may carry a Jeden session, best first.
@@ -162,10 +185,18 @@ pub(super) async fn candidates(
             let canonical = registry.staleness_seconds.is_none();
             (registry, canonical)
         }
-        Err(_) => (
-            crate::targets::load_bundled_registry().map_err(CmdError::from)?,
-            false,
-        ),
+        Err(error) => {
+            // Only this host can still be offered from the registry built
+            // into the binary; every remote candidate is refused below.
+            eprintln!(
+                "stado: the canonical registry cannot be read ({error}); placing on this host \
+                 from the registry built into stado"
+            );
+            (
+                crate::targets::load_bundled_registry().map_err(CmdError::from)?,
+                false,
+            )
+        }
     };
     if let Some(name) = requested_target {
         let target = host_channel::resolve_target(&registry, name)
@@ -191,8 +222,8 @@ pub(super) async fn candidates(
         .cloned()
         .collect::<Vec<_>>();
     targets.sort_by(|left, right| {
-        target_score(right, &capacity)
-            .cmp(&target_score(left, &capacity))
+        placement_order(right, &capacity)
+            .cmp(&placement_order(left, &capacity))
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(targets)
@@ -217,13 +248,12 @@ pub(super) async fn probe_ready(
 ) -> Result<HostReadiness, String> {
     let (ledger, _) = ledger_root(target);
     let workspace = workspace_expression(checkout);
-    let resume_probe = resume
-        .map(|session| {
-            format!(
-                "if [ ! -d {ledger}/{session} ]; then printf 'session ledger is missing: %s\\n' {ledger}/{session} >&2; ready=no; fi\n"
-            )
-        })
-        .unwrap_or_default();
+    let resume_probe = match resume {
+        Some(session) => format!(
+            "if [ ! -d {ledger}/{session} ]; then printf 'session ledger is missing: %s\\n' {ledger}/{session} >&2; ready=no; fi\n"
+        ),
+        None => String::new(),
+    };
     let probe = format!(
         r#"ready=yes
 if [ ! -d {workspace} ]; then
@@ -247,7 +277,7 @@ fi
     );
     let runner = crate::deploy::production_runner();
     match host_channel::run_script(target, &probe, &runner).await {
-        Ok(output) if output.ok() && output.stdout.trim().starts_with("ready") => {
+        Ok(output) if output.succeeded() && output.stdout.trim().starts_with("ready") => {
             Ok(HostReadiness {
                 reads_own_credentials: output.stdout.trim().ends_with("own-credentials"),
             })

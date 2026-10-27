@@ -1,6 +1,8 @@
 //! The exact release coordinate this deployment runs, and the route it
 //! travels.
 
+use std::net::IpAddr;
+
 use serde_json::Value;
 
 use crate::config;
@@ -57,99 +59,68 @@ pub(in crate::doctor) async fn check_release_channel() -> Check {
     findings_for_origin_route(&api, &mut findings).await;
 
     let uri = format!("stado://releases/stado/{version}/{platform}/release.json");
-    let endpoint = format!("{api}/api/release/object");
-    // The client the product itself uses, trust store, timeouts, tailnet route
-    // and all. A bare `reqwest::Client::new()` here measured a different path
-    // than the one a release travels, which is how this check kept passing
-    // over a route no release could use.
-    let client = match crate::cli::storage::fleet_https_client() {
-        Ok(client) => client,
-        Err(error) => {
-            findings.note(
-                Status::Fail,
-                format!("cannot build the fleet HTTPS client: {error}"),
-            );
-            findings.remedy(RELEASE_REMEDY);
-            return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
-        }
+    let verdict = match fetch_manifest(&api, &uri).await {
+        Ok(manifest) => manifest_identity(&manifest, &version, &platform)
+            .map_err(|refusal| format!("{uri}: {refusal}")),
+        Err(refusal) => Err(refusal),
     };
-    let response =
-        match crate::wait::request(client.get(&endpoint).query(&[("uri", uri.as_str())])).await {
-            Ok(response) => response,
-            Err(error) => {
-                findings.note(
-                    Status::Fail,
-                    format!("exact release manifest {uri} is unreachable: {error}"),
-                );
-                findings.remedy(RELEASE_REMEDY);
-                return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
-            }
-        };
-    if !response.status().is_success() {
-        findings.note(
-            Status::Fail,
-            format!(
-                "exact release manifest {uri} returned HTTP {}",
-                response.status()
-            ),
-        );
-        findings.remedy(RELEASE_REMEDY);
-        return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
-    }
-    let body = match response.text().await {
-        Ok(body) => body,
-        Err(error) => {
-            findings.note(
-                Status::Fail,
-                format!("cannot read exact release manifest {uri}: {error}"),
-            );
-            findings.remedy(RELEASE_REMEDY);
-            return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
-        }
-    };
-    match serde_json::from_str::<Value>(&body) {
-        Ok(manifest)
-            if manifest.get("product").and_then(Value::as_str) == Some("stado")
-                && manifest.get("version").and_then(Value::as_str) == Some(version.as_str())
-                && manifest.get("platform").and_then(Value::as_str) == Some(platform.as_str())
-                && manifest
-                    .get("source_revision")
-                    .and_then(Value::as_str)
-                    .is_some_and(|commit| {
-                        matches!(commit.len(), 40 | 64)
-                            && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    })
-                && manifest
-                    .get("artifact_sha256")
-                    .and_then(Value::as_str)
-                    .is_some_and(|digest| {
-                        digest.len() == 64
-                            && digest
-                                .bytes()
-                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                    }) =>
-        {
-            findings.note(
-                Status::Pass,
-                format!("{uri} is reachable and identifies the immutable release archive"),
-            )
-        }
-        Ok(_) => {
-            findings.note(
-                Status::Fail,
-                format!("{uri} has invalid identity or archive digest"),
-            );
-            findings.remedy(RELEASE_REMEDY);
-        }
-        Err(error) => {
-            findings.note(
-                Status::Fail,
-                format!("{uri} is not a valid release manifest: {error}"),
-            );
+    match verdict {
+        Ok(()) => findings.note(
+            Status::Pass,
+            format!("{uri} is reachable and identifies the immutable release archive"),
+        ),
+        Err(refusal) => {
+            findings.note(Status::Fail, refusal);
             findings.remedy(RELEASE_REMEDY);
         }
     }
     findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY)
+}
+
+/// The manifest at `uri`, read through the client the product itself uses,
+/// trust store, tailnet route and all, or why it could not be read. A bare
+/// `reqwest::Client::new()` here measured a different path than the one a
+/// release travels, which is how this check kept passing over a route no
+/// release could use.
+async fn fetch_manifest(api: &str, uri: &str) -> Result<Value, String> {
+    let client = crate::cli::storage::fleet_https_client()
+        .map_err(|error| format!("cannot build the fleet HTTPS client: {error}"))?;
+    let endpoint = format!("{api}/api/release/object");
+    let response = crate::wait::request(client.get(&endpoint).query(&[("uri", uri)]))
+        .await
+        .map_err(|error| format!("exact release manifest {uri} is unreachable: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("exact release manifest {uri} returned HTTP {}", response.status()));
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("cannot read exact release manifest {uri}: {error}"))?;
+    serde_json::from_str(&body).map_err(|error| format!("{uri} is not a valid release manifest: {error}"))
+}
+
+/// Whether `manifest` names this deployment's product, version and platform,
+/// a full source commit and a SHA-256 archive digest; the first field that
+/// does not, with what it holds, when one does not.
+fn manifest_identity(manifest: &Value, version: &str, platform: &str) -> Result<(), String> {
+    let field = |name: &str| manifest.get(name).and_then(Value::as_str);
+    for (name, expected) in [("product", "stado"), ("version", version), ("platform", platform)] {
+        match field(name) {
+            Some(stated) if stated == expected => {}
+            Some(stated) => return Err(format!("its {name} is {stated:?}, not {expected:?}")),
+            None => return Err(format!("it states no {name}")),
+        }
+    }
+    // A git object id: SHA-1, or SHA-256 in a repository of that format.
+    let commit = field("source_revision").ok_or("it states no source_revision")?;
+    if !crate::binary::provenance::is_commit_id(commit) && !crate::deploy::host_release::is_sha256(commit) {
+        return Err(format!("its source_revision {commit:?} is not a full git object id"));
+    }
+    let digest = field("artifact_sha256").ok_or("it states no artifact_sha256")?;
+    if !crate::deploy::host_release::is_sha256(digest) {
+        return Err(format!("its artifact_sha256 {digest:?} is not a lowercase SHA-256"));
+    }
+    Ok(())
 }
 
 /// Where a tailnet release origin resolves, judged against the tailnet's own
@@ -159,32 +130,56 @@ pub(in crate::doctor) async fn check_release_channel() -> Check {
 /// than a failure: this process will reach the right address, and the host
 /// scripts that fetch a release with `curl` will not.
 async fn findings_for_origin_route(api: &str, findings: &mut Findings) {
-    let Some(host) = url::Url::parse(api)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_string))
+    let origin = match url::Url::parse(api) {
+        Ok(origin) => origin,
+        Err(error) => {
+            findings.note(Status::Fail, format!("STADO_API_URL {api:?} is not a URL: {error}"));
+            findings.remedy(RELEASE_REMEDY);
+            return;
+        }
+    };
+    let Some(host) = origin
+        .host_str()
         .filter(|host| crate::remote::tailnet::is_magicdns_name(host))
+        .map(str::to_string)
     else {
+        return;
+    };
+    // The port the release travels to: the URL's own, or its scheme's.
+    let Some(port) = origin.port_or_known_default() else {
+        findings.note(Status::Fail, format!("STADO_API_URL {api:?} names no port and no known scheme"));
+        findings.remedy(RELEASE_REMEDY);
         return;
     };
     let pinned = crate::remote::tailnet::address_of(&host);
     // A resolver with no answer for this suffix is exactly the state being
-    // measured; its own failure is the answer.
-    let resolved: Vec<std::net::IpAddr> = tokio::net::lookup_host(format!("{host}:443"))
+    // measured; its own failure is the answer, and it is said as it came.
+    let resolved: Result<Vec<IpAddr>, String> = tokio::net::lookup_host((host.as_str(), port))
         .await
         .map(|addresses| addresses.map(|address| address.ip()).collect())
-        .unwrap_or_default();
-    match pinned {
-        None if resolved.is_empty() => {
+        .map_err(|error| error.to_string());
+    match (pinned, resolved) {
+        (None, Err(said)) => {
             findings.note(
                 Status::Fail,
                 format!(
                     "{host} is a tailnet name that neither this node's tailnet map nor the \
-                     system resolver can place"
+                     system resolver can place (the resolver said: {said})"
                 ),
             );
             findings.remedy(ORIGIN_ROUTE_REMEDY);
         }
-        None => findings.note(
+        (None, Ok(resolved)) if resolved.is_empty() => {
+            findings.note(
+                Status::Fail,
+                format!(
+                    "{host} is a tailnet name that neither this node's tailnet map nor the \
+                     system resolver can place (the resolver answered no address)"
+                ),
+            );
+            findings.remedy(ORIGIN_ROUTE_REMEDY);
+        }
+        (None, Ok(resolved)) => findings.note(
             Status::Warn,
             format!(
                 "{host} resolves only through the system resolver ({}); this node's tailnet map \
@@ -192,7 +187,17 @@ async fn findings_for_origin_route(api: &str, findings: &mut Findings) {
                 render_addresses(&resolved)
             ),
         ),
-        Some(address) if !resolved.contains(&address) => {
+        (Some(address), Err(said)) => {
+            findings.note(
+                Status::Warn,
+                format!(
+                    "the tailnet places {host} at {address}; the system resolver cannot place it \
+                     ({said}). Stado pins the tailnet route, a host-side curl does not"
+                ),
+            );
+            findings.remedy(ORIGIN_ROUTE_REMEDY);
+        }
+        (Some(address), Ok(resolved)) if !resolved.contains(&address) => {
             findings.note(
                 Status::Warn,
                 format!(
@@ -203,7 +208,7 @@ async fn findings_for_origin_route(api: &str, findings: &mut Findings) {
             );
             findings.remedy(ORIGIN_ROUTE_REMEDY);
         }
-        Some(address) => findings.note(
+        (Some(address), Ok(_)) => findings.note(
             Status::Pass,
             format!("{host} resolves to its tailnet address {address}"),
         ),
@@ -211,11 +216,11 @@ async fn findings_for_origin_route(api: &str, findings: &mut Findings) {
 }
 
 const ORIGIN_ROUTE_REMEDY: &str =
-    "make the tailnet's MagicDNS suffix resolve through the tailnet responder (100.100.100.100) \
-     on this machine, so every consumer of the release origin takes the tailnet route and not a \
-     public front end";
+    "make the tailnet's MagicDNS suffix resolve through the tailnet's own DNS responder on this \
+     machine (Tailscale's `--accept-dns`), so every consumer of the release origin takes the \
+     tailnet route and not a public front end";
 
-fn render_addresses(addresses: &[std::net::IpAddr]) -> String {
+fn render_addresses(addresses: &[IpAddr]) -> String {
     if addresses.is_empty() {
         return "nothing".to_string();
     }

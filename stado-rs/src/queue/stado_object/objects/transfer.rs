@@ -48,11 +48,26 @@ impl StadoObjectBackend {
         path: &str,
         limit: Option<usize>,
     ) -> Result<Vec<u8>, StorageError> {
-        let declared = response
-            .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.trim().parse::<usize>().ok());
+        // A Content-Length the API wrote is a byte count or a refusal: one
+        // that is not a number is not read as "no length", which would let
+        // the body in past the limit the header exists to enforce.
+        let declared = match response.headers().get(reqwest::header::CONTENT_LENGTH) {
+            None => None,
+            Some(value) => {
+                let text = value.to_str().map_err(|error| {
+                    StorageError::Other(format!(
+                        "Stado object API declared a Content-Length for {path} that is not \
+                         text: {error}"
+                    ))
+                })?;
+                Some(text.trim().parse::<usize>().map_err(|error| {
+                    StorageError::Other(format!(
+                        "Stado object API declared Content-Length {text:?} for {path}, which \
+                         is not a byte count: {error}"
+                    ))
+                })?)
+            }
+        };
         if let (Some(limit), Some(declared)) = (limit, declared) {
             if declared > limit {
                 return Err(StorageError::Other(format!(

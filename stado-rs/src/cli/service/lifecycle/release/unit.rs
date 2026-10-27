@@ -36,9 +36,9 @@ pub(crate) async fn host_sudo_password(
 /// broker grant is stale. The secret stays in captured process memory and is
 /// handed directly to SSH stdin; stdout is never forwarded.
 async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
-    let home = std::env::var("HOME").map_err(|error| error.to_string())?;
-    let skarbiec = std::path::Path::new(&home).join(".stado/bin/skarbiec");
-    let vault = std::path::Path::new(&home).join(".stado/skarbiec.vault.json");
+    let home = crate::config_file::home()?;
+    let skarbiec = home.join(".stado/bin/skarbiec");
+    let vault = home.join(".stado/skarbiec.vault.json");
     let inherited =
         std::env::var("PATH").map_err(|error| format!("PATH cannot be read: {error}"))?;
     let path = format!("{}:{inherited}", crate::primitives::tool_path::SEARCH_PATH);

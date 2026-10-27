@@ -4,7 +4,6 @@
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -22,9 +21,10 @@ impl Drop for StagedInput {
 }
 
 async fn stage_input(content: &str) -> Result<StagedInput, ConsoleError> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| ConsoleError::unavailable("HOME is required to stage operator input"))?;
-    let directory = PathBuf::from(home).join(".stado/work/operator-input");
+    let home = crate::config_file::home().map_err(|cause| {
+        ConsoleError::unavailable(format!("operator input has nowhere to be staged: {cause}"))
+    })?;
+    let directory = home.join(".stado/work/operator-input");
     tokio::fs::create_dir_all(&directory)
         .await
         .map_err(|error| {
@@ -32,16 +32,19 @@ async fn stage_input(content: &str) -> Result<StagedInput, ConsoleError> {
                 "could not create operator input directory: {error}"
             ))
         })?;
+    // The stamp makes the staged file's name unique across restarts; a
+    // clock before the epoch is a host fault, said rather than stamped zero.
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
+        .map_err(|error| ConsoleError::unavailable(format!("the clock answers a time before the epoch, so operator input cannot be staged: {error}")))?
         .as_nanos();
-    let sequence = INPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let sequence = crate::primitives::tally::draw(&INPUT_SEQUENCE);
     let path = directory.join(format!("{}-{now}-{sequence}.json", std::process::id()));
     let mut options = tokio::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    options.mode(0o600);
+    // Read and write by the owner alone, as POSIX names the bits.
+    options.mode(u32::from(nix::libc::S_IRUSR | nix::libc::S_IWUSR));
     let mut file = options
         .open(&path)
         .await
@@ -83,7 +86,14 @@ pub(super) async fn run(body: &[u8], limits: Limits) -> Result<Value, ConsoleErr
         .map_err(|error| ConsoleError::bad_request(format!("invalid JSON: {error}")))?;
     validate(&request, limits)?;
     let staged = if request.args.iter().any(|arg| arg == INPUT_PLACEHOLDER) {
-        Some(stage_input(request.input.as_deref().unwrap_or_default()).await?)
+        // The placeholder stands for the request's `input`; a request that
+        // uses it and sends none is refused, not run on an empty file.
+        let Some(input) = request.input.as_deref() else {
+            return Err(ConsoleError::bad_request(format!(
+                "args name {INPUT_PLACEHOLDER} but the request carries no input to stage"
+            )));
+        };
+        Some(stage_input(input).await?)
     } else {
         None
     };
@@ -100,7 +110,13 @@ pub(super) async fn run(body: &[u8], limits: Limits) -> Result<Value, ConsoleErr
             })
             .collect::<Vec<_>>()
     });
-    let mut child = command(staged_args.as_deref().unwrap_or(&request.args))?
+    // With staged input the placeholder is replaced; without, the request's
+    // own arguments run as given.
+    let args: &[String] = match staged_args.as_deref() {
+        Some(staged) => staged,
+        None => &request.args,
+    };
+    let mut child = command(args)?
         .stdin(if request.stdin.is_some() {
             Stdio::piped()
         } else {
@@ -155,7 +171,13 @@ pub(super) async fn run(body: &[u8], limits: Limits) -> Result<Value, ConsoleErr
     let (stdout, stderr, status, stdin_error) = execution.await?;
     let stdout = String::from_utf8_lossy(&stdout).into_owned();
     let stderr = String::from_utf8_lossy(&stderr).into_owned();
-    let structured = serde_json::from_str::<Value>(stdout.trim()).ok();
+    // A command that printed JSON is handed to the client parsed as well;
+    // one that printed anything else is handed its text alone, with
+    // `structured` null, which is what the field means.
+    let structured = match serde_json::from_str::<Value>(stdout.trim()) {
+        Ok(document) => document,
+        Err(_not_json) => Value::Null,
+    };
     Ok(
         json!({ "ok": status.success() && stdin_error.is_none(), "exit_code": status.code(), "read_only": is_read_only(&request.args),
         "args": request.args, "stdout": stdout, "stderr": stderr, "stdout_truncated": false,

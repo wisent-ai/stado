@@ -90,7 +90,7 @@ impl Dashboard {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return Ok(send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "registry authorization unavailable"}),
+                    &self.closed_boundary(&[Boundary::Registry]).body("registry"),
                 ));
             }
             if let Err(response) = registry_policy::authorized(request, "policy-read").await {
@@ -102,7 +102,7 @@ impl Dashboard {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return Ok(send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "registry authorization unavailable"}),
+                    &self.closed_boundary(&[Boundary::Registry]).body("registry"),
                 ));
             }
             if let Err(response) = registry_policy::authorized(request, "cleanup-read").await {
@@ -117,7 +117,7 @@ impl Dashboard {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return Ok(send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                    &json!({"error": "registry authorization unavailable"}),
+                    &self.closed_boundary(&[Boundary::Registry]).body("registry"),
                 ));
             }
             if let Err(response) = registry_policy::authorized(request, "policy-read").await {

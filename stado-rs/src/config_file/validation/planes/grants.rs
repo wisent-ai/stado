@@ -13,10 +13,19 @@ pub(in crate::config_file::validation) fn workload_secret_fields(
     root: &Map<String, Value>,
     problems: &mut Vec<String>,
 ) -> Vec<Value> {
-    let configured_roles = field_in(root, &crate::capabilities::AGENT_SKARBIEC_ROLES_CONFIG)
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    // `agent.skarbiec.roles` lists the roles `secret_fields` may name; a
+    // document without it declares none, and one that declares it in
+    // another shape is refused by name rather than read as none.
+    let configured_roles = match field_in(root, &crate::capabilities::AGENT_SKARBIEC_ROLES_CONFIG) {
+        Some(Value::Array(roles)) => roles.clone(),
+        Some(other) => {
+            problems.push(format!(
+                "agent.skarbiec.roles must be a list of role names, and is {other}"
+            ));
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
     match field_in(
         root,
         &crate::capabilities::AGENT_SKARBIEC_SECRET_FIELDS_CONFIG,

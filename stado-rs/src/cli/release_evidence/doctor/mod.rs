@@ -177,7 +177,10 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
     // The refusal, spelled out where the operator is already looking. This is
     // the line that turns "the rollout is not moving" into "the rollout is
     // being held, on purpose, for this, and here is how to overrule it".
-    if let Some(run) = report["cause_run"].as_object() {
+    // Read through the value, not the object map: a key the record lacks
+    // reads as null instead of panicking the doctor.
+    let run = &report["cause_run"];
+    if run.is_object() {
         let label = if run["held"] == Value::Bool(true) {
             "held"
         } else {
@@ -227,6 +230,9 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
             cell(&summary["total"]),
             cell(&summary["unclassified"])
         );
+        for unreadable in summary["unreadable_causes"].as_array().into_iter().flatten() {
+            println!("unreadable cause  {}", cell(unreadable));
+        }
         match summary["dominant_cause"].as_str() {
             Some(dominant) => println!(
                 "dominant cause    {dominant} ({} of {})",

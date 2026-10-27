@@ -185,6 +185,7 @@ async fn deliver(
     if let Err(error) = crate::cli::release_loop::allowed::require(
         crate::cli::release_loop::allowed::RELEASE,
         Some(product),
+        &[],
     )
     .await
     {

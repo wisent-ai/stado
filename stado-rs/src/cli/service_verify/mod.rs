@@ -76,7 +76,7 @@ pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
         findings.extend(standby);
     }
     record_observations(&findings);
-    emit(&findings, json_output);
+    emit(&findings, json_output)?;
     fail_on_unreachable(&findings)
 }
 
@@ -172,6 +172,6 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
 /// `service verify`: sweep the whole directory from every declared vantage.
 pub async fn verify(host: Option<&str>, json_output: bool) -> Result<(), CmdError> {
     let findings = sweep(host).await?;
-    emit(&findings, json_output);
+    emit(&findings, json_output)?;
     fail_on_unreachable(&findings)
 }

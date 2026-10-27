@@ -30,7 +30,7 @@ pub(super) async fn examine(
     // the unit questions against it would report `not-deployed` for something
     // that was never deployable.
     if declared.is_redirect() {
-        let (dns_state, addresses) = resolve_hostname(declared.hostname()).await;
+        let (dns_state, addresses, resolver_error) = resolve_hostname(declared.hostname()).await;
         let published =
             expected.is_some_and(|address| addresses.iter().any(|found| found == address));
         let word = if edge_error.is_some() {
@@ -50,6 +50,7 @@ pub(super) async fn examine(
                 "edge": declared.edge(),
                 "edge_error": edge_error,
                 "dns": dns_state,
+                "dns_error": resolver_error,
                 "addresses": addresses,
                 "expected_address": expected,
             }),
@@ -63,7 +64,7 @@ pub(super) async fn examine(
     // asking a host about `com.wisent.web.<product>`, a unit that does not
     // exist and never will.
     if let Some(service) = declared.upstream_service() {
-        let (dns_state, addresses) = resolve_hostname(declared.hostname()).await;
+        let (dns_state, addresses, resolver_error) = resolve_hostname(declared.hostname()).await;
         let published =
             expected.is_some_and(|address| addresses.iter().any(|found| found == address));
         let upstream = upstream_service_state(service, managed_all);
@@ -91,6 +92,7 @@ pub(super) async fn examine(
                 "edge": declared.edge(),
                 "edge_error": edge_error,
                 "dns": dns_state,
+                "dns_error": resolver_error,
                 "addresses": addresses,
                 "expected_address": expected,
             }),
@@ -99,7 +101,7 @@ pub(super) async fn examine(
     }
     let unit = super::unit_label(name);
     let port = declared.port();
-    let (dns_state, addresses) = resolve_hostname(declared.hostname()).await;
+    let (dns_state, addresses, resolver_error) = resolve_hostname(declared.hostname()).await;
 
     // The port question is asked on the host, and only when there is a unit
     // to ask about. A host read for a product the registry does not manage
@@ -110,23 +112,25 @@ pub(super) async fn examine(
     let mut port_detail = String::new();
     let mut holders: Vec<String> = Vec::new();
 
-    let unit_state = managed
-        .map(|row| row.state.clone())
-        .unwrap_or_else(|| "undeclared".to_string());
+    // A service the registry manages has a unit state from its beacon; a
+    // service no unit runs is undeclared.
+    let unit_state = match managed {
+        Some(row) => row.state.clone(),
+        None => "undeclared".to_string(),
+    };
     // A service no unit runs has no report time and no detail: said as null,
     // not as empty text that reads like a report with nothing in it.
     let reported_at = managed.map(|row| row.reported_at.clone());
 
-    let mut word = if managed.is_none() {
-        VERDICT_NOT_DEPLOYED
-    } else if unit_state != service::STATE_ACTIVE {
-        VERDICT_UNIT_DOWN
-    } else {
-        VERDICT_SERVING
+    // Only an active unit's row is asked about its port; the verdict and that
+    // row are decided together, so the port read never meets a missing row.
+    let (mut word, active) = match managed {
+        None => (VERDICT_NOT_DEPLOYED, None),
+        Some(row) if row.state != service::STATE_ACTIVE => (VERDICT_UNIT_DOWN, None),
+        Some(row) => (VERDICT_SERVING, Some(row)),
     };
 
-    if word == VERDICT_SERVING {
-        let managed = managed.expect("an active row exists to have been judged active");
+    if let Some(managed) = active {
         match crate::cli::canonical_host(&managed.service.host).await {
             Ok(target) => {
                 match service_serving::read_serving(
@@ -157,17 +161,25 @@ pub(super) async fn examine(
                                 )
                             })
                             .collect();
-                        port_state = verdicts
-                            .first()
-                            .map(|verdict| verdict.verdict.to_string())
-                            .unwrap_or_else(|| service_serving::PORT_UNKNOWN.to_string());
+                        // The port verdict is the first verdict for the one
+                        // port asked about; a report with none is unknown.
+                        port_state = match verdicts.first() {
+                            Some(verdict) => verdict.verdict.to_string(),
+                            None => service_serving::PORT_UNKNOWN.to_string(),
+                        };
                         if serving != service_serving::SERVING_YES {
                             word = VERDICT_PORT_UNHELD;
-                            port_detail =
-                                service_serving::failure(&managed.service.host, &report, &verdicts)
-                                    .unwrap_or_else(|| {
-                                        format!("port {port} is not held by {unit}")
-                                    });
+                            // The serving reader names the failure when the
+                            // report lets it; otherwise the port is simply
+                            // not held by the unit.
+                            port_detail = match service_serving::failure(
+                                &managed.service.host,
+                                &report,
+                                &verdicts,
+                            ) {
+                                Some(failure) => failure,
+                                None => format!("port {port} is not held by {unit}"),
+                            };
                         }
                     }
                     // The host could not be asked. That is not a passing
@@ -200,8 +212,12 @@ pub(super) async fn examine(
     // pointing at the wrong place.
     let dns_detail = match (expected, dns_state) {
         (_, DNS_UNREADABLE) => format!(
-            "{} could not be resolved by this host's resolver",
-            declared.hostname()
+            "{} could not be resolved by this host's resolver: {}",
+            declared.hostname(),
+            match &resolver_error {
+                Some(error) => error.as_str(),
+                None => "the resolver gave no reason",
+            }
         ),
         (_, DNS_UNRESOLVED) => format!("{} resolves to no address", declared.hostname()),
         (Some(address), _) if !addresses.iter().any(|found| found == address) => format!(

@@ -19,7 +19,7 @@ pub fn resource_phase(word: &str) -> LifecyclePhase {
             ProvisioningState::Failed | ProvisioningState::Deleting | ProvisioningState::Canceled,
         ) => LifecyclePhase::Ended,
         Ok(_) => LifecyclePhase::Running,
-        Err(_) => LifecyclePhase::Unknown,
+        Err(_outside_both_vocabularies) => LifecyclePhase::Unknown,
     }
 }
 
@@ -86,8 +86,12 @@ impl PowerState {
 /// The VM's lifecycle from its power code, `None` when it has none yet.
 pub fn lifecycle(vm: &Value) -> Option<Lifecycle> {
     let word = power_state(vm)?;
-    let phase = PowerState::deserialize(Value::String(word.clone()))
-        .map_or(LifecyclePhase::Unknown, PowerState::phase);
+    // The phase keeps the word beside it, so a code outside the documented
+    // list is reported as unknown with the code Azure actually wrote.
+    let phase = match PowerState::deserialize(Value::String(word.clone())) {
+        Ok(power) => power.phase(),
+        Err(_undocumented_power_code) => LifecyclePhase::Unknown,
+    };
     Some(Lifecycle { word, phase })
 }
 
@@ -96,7 +100,13 @@ pub fn lifecycle(vm: &Value) -> Option<Lifecycle> {
 /// RUNNING/STAGING/PROVISIONING. A VM mid-update still consumes GPU quota
 /// and is not requeued; mid-create it has no power state yet and is alive.
 pub fn vm_is_alive(vm: &Value) -> bool {
-    let provisioning = ProvisioningState::deserialize(&vm["properties"]["provisioningState"]).ok();
+    // A provisioning state Azure does not document, or none at all, is no
+    // state this verdict can lean on; the power code below still decides.
+    let provisioning = match ProvisioningState::deserialize(&vm["properties"]["provisioningState"])
+    {
+        Ok(state) => Some(state),
+        Err(_absent_or_undocumented) => None,
+    };
     let starting = matches!(
         provisioning,
         Some(ProvisioningState::Creating | ProvisioningState::Updating)

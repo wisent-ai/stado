@@ -39,6 +39,27 @@ pub(super) async fn release_state(
     }
 }
 
+/// [`release_state`] of every `(product, target)` pair, as many at once as
+/// the bulk budget allows ([`crate::queue::migrations::bulk_workers`], the
+/// one every bulk object read takes), keyed by the pair: each is its own
+/// object read, and one after another they stood the store's wait once per
+/// target.
+pub(super) async fn release_states(
+    pairs: &[(String, String)],
+) -> Result<std::collections::HashMap<(String, String), Result<Option<Vec<u8>>, CmdError>>, CmdError>
+{
+    use futures::stream::StreamExt;
+    let workers = crate::queue::migrations::bulk_workers().map_err(CmdError::from)?;
+    Ok(futures::stream::iter(pairs.iter().cloned())
+        .map(|(product, target)| async move {
+            let state = release_state(&product, &target).await;
+            ((product, target), state)
+        })
+        .buffered(workers)
+        .collect()
+        .await)
+}
+
 pub(super) async fn recent_runs(
     product: Option<&str>,
     limit: usize,

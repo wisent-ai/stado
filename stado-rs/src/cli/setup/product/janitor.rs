@@ -72,11 +72,6 @@ pub(super) async fn janitor_hold(
     loop {
         janitor::wait_for_janitor_turn(&holder).map_err(unheld)?;
         let running = janitor::live_workload_count().map_err(unheld)?;
-        let running = i64::try_from(running).map_err(|error| {
-            CmdError::click(format!(
-                "{holder}: {running} running workloads count past i64: {error}"
-            ))
-        })?;
         let report = janitor::run_cleanup_once(
             running,
             janitor::CleanupWriter::Cli { every: None },

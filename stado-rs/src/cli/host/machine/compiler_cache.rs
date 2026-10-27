@@ -58,7 +58,7 @@ pub(crate) async fn compiler_cache(
     // ended well and printed no JSON report is not a report of success.
     let report = match &parsed {
         Ok(report) => report.clone(),
-        Err(_) => json!(output.stdout.trim()),
+        Err(_not_json) => json!(output.stdout.trim()),
     };
     // The host's own report says what it found; a bare last line of its JSON
     // says nothing.
@@ -70,9 +70,13 @@ pub(crate) async fn compiler_cache(
     });
     fields.insert("report".to_string(), report.clone());
     fields.insert("stderr".to_string(), json!(output.stderr.trim()));
-    if !output.ok() {
-        let detail =
-            observed.unwrap_or_else(|| host_channel::last_error_line(&output, "no output"));
+    if !output.succeeded() {
+        // A refusal the host reported in JSON is named by its state; one
+        // without a report is named by the last line the host printed.
+        let detail = match observed {
+            Some(observed) => observed,
+            None => host_channel::last_error_line(&output, "no output"),
+        };
         fields.insert("status".to_string(), json!("compiler_cache_refused"));
         fields.insert("detail".to_string(), json!(detail));
         if json {

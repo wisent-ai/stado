@@ -10,7 +10,7 @@ mod seal;
 
 use std::fs;
 use std::io;
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::BorrowedFd;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -27,16 +27,13 @@ pub(super) use inventory::{
 };
 pub(super) use seal::{checkpoint_tree, seal_tree, set_tree_modes, validate_sealed_tree};
 
-pub(super) const PRIVATE_FILE: u32 = 0o600;
-const PRIVATE_DIRECTORY: u32 = 0o700;
-/// A SHA-256 digest written as lowercase hexadecimal.
-const SHA256_HEX_CHARACTERS: usize = 64;
-
-pub(super) fn parent_of(path: &str) -> String {
-    Path::new(path)
-        .parent()
-        .map(|parent| parent.to_string_lossy().into_owned())
-        .unwrap_or_default()
+/// The directory holding `path`; a path with none (the filesystem root, or
+/// nothing at all) is refused by name rather than read as the empty path.
+pub(super) fn parent_of(path: &str) -> Step<String> {
+    match Path::new(path).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => Ok(parent.to_string_lossy().into_owned()),
+        _ => Err(format!("{path:?} has no parent directory")),
+    }
 }
 
 pub(super) fn join(root: &str, relative: &str) -> String {
@@ -49,7 +46,7 @@ pub(super) fn join(root: &str, relative: &str) -> String {
 pub(super) fn make_private_dirs(path: &str) -> Step<()> {
     fs::DirBuilder::new()
         .recursive(true)
-        .mode(PRIVATE_DIRECTORY)
+        .mode(crate::primitives::file_mode::owner_only_directory())
         .create(path)
         .map_err(|error| format!("cannot create {path}: {error}"))
 }
@@ -65,14 +62,16 @@ pub(super) fn real_directory(path: &str) -> bool {
     matches!(fs::symlink_metadata(path), Ok(info) if info.is_dir())
 }
 
-fn absolute(path: &str) -> PathBuf {
+fn absolute(path: &str) -> Step<PathBuf> {
     let path = Path::new(path);
     let joined = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir()
             .map(|directory| directory.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
+            .map_err(|error| {
+                format!("cannot resolve {} against the working directory: {error}", path.display())
+            })?
     };
     let mut normal = PathBuf::new();
     for component in joined.components() {
@@ -84,21 +83,24 @@ fn absolute(path: &str) -> PathBuf {
             other => normal.push(other),
         }
     }
-    normal
+    Ok(normal)
 }
 
 /// Whether `path` lies strictly inside one of `roots`, after `..` is resolved.
-fn path_within(path: &str, roots: &[&str]) -> bool {
-    let candidate = absolute(path);
-    roots.iter().any(|root| {
-        let root = absolute(root);
-        candidate != root && candidate.starts_with(&root)
-    })
+fn path_within(path: &str, roots: &[&str]) -> Step<bool> {
+    let candidate = absolute(path)?;
+    for root in roots {
+        let root = absolute(root)?;
+        if candidate != root && candidate.starts_with(&root) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn confined(path: &str, roots: &[&str], label: &str) -> Step<String> {
-    if path_within(path, roots) {
-        Ok(absolute(path).to_string_lossy().into_owned())
+    if path_within(path, roots)? {
+        Ok(absolute(path)?.to_string_lossy().into_owned())
     } else {
         Err(format!("{label} escaped its captured transaction roots"))
     }
@@ -112,12 +114,11 @@ fn privileged(context: &Context, arguments: &[&str], label: &str) -> Step<Output
             "{label}: resident transaction lock descriptor is unavailable"
         ));
     };
-    let duplicate = unsafe { nix::libc::dup(lock) };
-    if duplicate < 0 {
-        return Err(format!("{label}: {}", io::Error::last_os_error()));
-    }
-    // SAFETY: `duplicate` is a fresh descriptor this process owns.
-    let stdin = Stdio::from(unsafe { OwnedFd::from_raw_fd(duplicate) });
+    // SAFETY: `lock` is the resident transaction lock this process holds open
+    // for its whole run; it is only borrowed here to be duplicated.
+    let duplicate = nix::unistd::dup(unsafe { BorrowedFd::borrow_raw(lock) })
+        .map_err(|errno| format!("{label}: {}", io::Error::from(errno)))?;
+    let stdin = Stdio::from(duplicate);
     let output = crate::wait::output(
         Command::new("/usr/bin/sudo")
             .arg("-n")
@@ -129,17 +130,16 @@ fn privileged(context: &Context, arguments: &[&str], label: &str) -> Step<Output
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let detail = if stderr.is_empty() { stdout } else { stderr };
-        let last = detail.trim().lines().last().map(str::to_string);
-        return Err(format!(
-            "{label}: {}",
-            last.as_deref().unwrap_or("privileged command failed")
-        ));
+        return Err(match detail.trim().lines().last() {
+            Some(last) => format!("{label}: {last}"),
+            None => format!("{label}: privileged command failed with {} and printed nothing", output.status),
+        });
     }
     Ok(output)
 }
 
 fn privileged_digest(context: &Context, path: &str) -> Step<String> {
-    let (source, label) = if path_within(path, &[&context.primary, &context.backup]) {
+    let (source, label) = if path_within(path, &[&context.primary, &context.backup])? {
         (
             confined(
                 path,
@@ -148,7 +148,7 @@ fn privileged_digest(context: &Context, path: &str) -> Step<String> {
             )?,
             "cannot hash unreadable physical-root file",
         )
-    } else if path_within(path, &[&context.staging]) {
+    } else if path_within(path, &[&context.staging])? {
         (
             confined(
                 path,
@@ -166,13 +166,16 @@ fn privileged_digest(context: &Context, path: &str) -> Step<String> {
         label,
     )?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let encoded = stdout.split_whitespace().next().unwrap_or("");
-    if encoded.len() != SHA256_HEX_CHARACTERS
-        || !encoded
-            .chars()
-            .all(|character| character.is_ascii_digit() || ('a'..='f').contains(&character))
-    {
-        return Err("privileged confined digest has invalid output".to_string());
+    let encoded = stdout
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| "privileged confined digest printed no digest".to_string())?;
+    // A SHA-256 digest is the hash's own output size in bytes, written as
+    // lowercase hexadecimal.
+    let bytes = hex::decode(encoded)
+        .map_err(|error| format!("privileged confined digest {encoded:?} is not hexadecimal: {error}"))?;
+    if bytes.len() != <Sha256 as Digest>::output_size() || hex::encode(&bytes) != encoded {
+        return Err(format!("privileged confined digest {encoded:?} is not a lowercase SHA-256 digest"));
     }
     Ok(encoded.to_string())
 }
@@ -264,18 +267,25 @@ pub(super) fn metadata_name(relative: &str) -> String {
 /// on the way to it.
 pub(super) fn metadata_path(root: &str, relative: &str) -> Step<String> {
     let candidate = join(&join(root, ".metadata"), &metadata_name(relative));
-    let directory = parent_of(&candidate);
+    let directory = parent_of(&candidate)?;
     let inside = Path::new(&directory)
         .strip_prefix(root)
-        .map_err(|_| format!("metadata path leaves its root: {candidate}"))?;
+        .map_err(|error| format!("metadata path leaves its root: {candidate}: {error}"))?;
     let mut current = PathBuf::from(root);
     for component in inside.components() {
         current.push(component);
-        if fs::symlink_metadata(&current).is_ok_and(|info| info.file_type().is_symlink()) {
-            return Err(format!(
-                "symlinked metadata directory: {}",
-                current.display()
-            ));
+        match fs::symlink_metadata(&current) {
+            Ok(info) if info.file_type().is_symlink() => {
+                return Err(format!(
+                    "symlinked metadata directory: {}",
+                    current.display()
+                ));
+            }
+            Ok(_directory) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("cannot inspect metadata directory {}: {error}", current.display()))
+            }
         }
     }
     Ok(candidate)

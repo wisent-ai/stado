@@ -15,10 +15,7 @@ use super::super::MonitorError;
 /// VM to judge.
 pub(super) async fn instance_refs_with_completions(
     store: &JobStorage,
-    kind: &str,
 ) -> Result<HashSet<String>, MonitorError> {
-    // Python keeps `kind` in the signature (unused in the body there too).
-    let _ = kind;
     let mut refs = HashSet::new();
     for job in store.list_jobs("completed").await? {
         if let Some(r) = job.instance_ref.filter(|r| !r.is_empty()) {

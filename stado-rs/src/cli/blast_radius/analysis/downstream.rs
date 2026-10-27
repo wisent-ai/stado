@@ -81,7 +81,7 @@ pub(in crate::cli::blast_radius) fn downstream_impacts(
         if pubsub_hit { "degraded" } else { "unaffected" },
         &[],
         "incident notifications",
-        "Pub/Sub is one alert sink; independently configured Slack, Telegram or SendGrid sinks can survive",
+        "Pub/Sub is one alert sink; independently configured Slack, Telegram, Skrzynka or most sinks can survive",
     ));
 
     impacts.push(impact(

@@ -78,7 +78,7 @@ async fn read_loaded_units(
     script: &str,
 ) -> Result<(Vec<UndeclaredUnit>, Option<PathBinary>), DeployError> {
     let output = host_channel::run_script(target, script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the loaded-unit scan did not complete",

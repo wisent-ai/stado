@@ -10,10 +10,12 @@ use crate::deploy::{inference::routes, production_runner};
 use crate::inference::schema;
 
 /// One alias, as the registry declares it and as the gateway host serves it.
+/// An alias with no fallback list declared says so (`null`), apart from one
+/// that declares an empty list.
 fn entry(registry: &schema::Registry, alias: &str) -> Value {
     json!({
         "destination": registry.routes.get(alias),
-        "fallbacks": registry.fallbacks.get(alias).cloned().unwrap_or_default(),
+        "fallbacks": registry.fallbacks.get(alias),
     })
 }
 
@@ -73,10 +75,12 @@ pub async fn show(
     let mut diverged = Vec::new();
     for alias in &aliases {
         let declared = entry(&registry, alias);
-        let serving = served
-            .as_ref()
-            .map(|served| entry(served, alias))
-            .unwrap_or(Value::Null);
+        // With no served snapshot read, what the gateway serves is unknown
+        // (`null`), which never agrees with a declaration.
+        let serving = match served.as_ref() {
+            Some(served) => entry(served, alias),
+            None => Value::Null,
+        };
         let agrees = serving == declared;
         if !agrees {
             diverged.push(alias.clone());
@@ -176,10 +180,11 @@ pub async fn show(
             };
             println!(
                 "{alias:<32} {verdict:<9} declared={} serving={}{answers}",
-                row["declared"], row["serving"]
+                crate::cli::reporting::field(&row["declared"]),
+                crate::cli::reporting::field(&row["serving"])
             );
             if row.get("answers").and_then(Value::as_bool) == Some(false) {
-                println!("{:<32} {}", "", row["probe"]);
+                println!("{:<32} {}", "", crate::cli::reporting::field(&row["probe"]));
             }
         }
         if repaired.is_some() {

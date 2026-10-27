@@ -131,20 +131,34 @@ pub struct CleanerPlan {
 }
 
 /// The per-cleaner rows of a janitor report, in the report's own key order.
-pub fn cleaner_plans(plan: &Value) -> Vec<CleanerPlan> {
-    let Some(cleaners) = plan.get("cleaners").and_then(Value::as_object) else {
-        return Vec::new();
+///
+/// `cleaners: null` is a pass that reached no cleaner (its `outcome` says
+/// which), so it has no rows. A report without the key, or a cleaner without
+/// one of its counts, is refused naming what is missing: read as zero, it
+/// reported a pass that counted nothing as one that found nothing to remove.
+pub fn cleaner_plans(plan: &Value) -> Result<Vec<CleanerPlan>, String> {
+    let cleaners = match plan.get("cleaners") {
+        Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Object(cleaners)) => cleaners,
+        Some(other) => return Err(format!("the janitor report's cleaners is not a map: {other}")),
+        None => return Err("the janitor report carries no cleaners".to_string()),
     };
-    let count =
-        |section: &Value, key: &str| section.get(key).and_then(Value::as_i64).unwrap_or_default();
     cleaners
         .iter()
-        .map(|(name, section)| CleanerPlan {
-            name: name.clone(),
-            scanned_items: count(section, "scanned_items"),
-            eligible_items: count(section, "eligible_items"),
-            deleted_items: count(section, "deleted_items"),
-            expected_bytes: count(section, "expected_bytes"),
+        .map(|(name, section)| {
+            let count = |key: &str| {
+                section
+                    .get(key)
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| format!("cleaner {name} reports no integer {key}: {section}"))
+            };
+            Ok(CleanerPlan {
+                name: name.clone(),
+                scanned_items: count("scanned_items")?,
+                eligible_items: count("eligible_items")?,
+                deleted_items: count("deleted_items")?,
+                expected_bytes: count("expected_bytes")?,
+            })
         })
         .collect()
 }
@@ -153,10 +167,7 @@ pub fn cleaner_plans(plan: &Value) -> Vec<CleanerPlan> {
 pub fn to_report(target: &ComputeTarget, outcome: &PreviewOutcome) -> Map<String, Value> {
     let mut report = host_channel::base_report(target);
     report.insert("stado_binary".to_string(), json!(outcome.binary));
-    report.insert(
-        "plan".to_string(),
-        outcome.plan.clone().unwrap_or(Value::Null),
-    );
+    report.insert("plan".to_string(), json!(outcome.plan));
     report.insert("unavailable".to_string(), json!(outcome.unavailable));
     report
 }

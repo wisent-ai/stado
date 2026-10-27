@@ -9,34 +9,36 @@
 # The method has two modes, and this script runs the one that works without
 # publishing anything:
 #
-#   offline (here)  — `stado fleet invite --offline` prints a fragment. The
-#                     machine's owner pastes it into a terminal there, it
+#   offline (here)  — `stado fleet invite create --offline` prints a fragment.
+#                     The machine's owner pastes it into a terminal there, it
 #                     installs the fleet's PUBLIC key and prints `user@address`,
 #                     they send that back, and the operator closes the
 #                     invitation with `stado fleet enroll --ssh … --bootstrap`.
 #                     Needs no DNS name, no ingress, no HTTP route at all.
-#   one line        — `stado fleet invite` (no flag) prints a single `curl` line
-#                     the owner runs. It only does that after proving
-#                     `<control-point>/join.sh` answers 200 from this host; when
-#                     it cannot, it prints why and falls back to offline mode.
-#                     See the commented block at the bottom, and
+#   one line        — `stado fleet invite create` (no flag) prints a single
+#                     `curl` line the owner runs. It only does that after
+#                     proving `<control-point>/join.sh` answers 200 from this
+#                     host; when it cannot, it prints why and falls back to
+#                     offline mode. See the commented block at the bottom, and
 #                     ../../cli.md#the-control-point-check for the reasons.
 #
 # Prerequisites here: a reachable `skarbiec serve` with SKARBIEC_VAULT_FILE
-# pointing at the operator vault. No STADO_API_URL is needed for offline mode —
-# nothing in it contacts a control point.
+# pointing at the operator vault, and SKARBIEC_BIN naming the skarbiec program.
+# No STADO_API_URL is needed for offline mode — nothing in it contacts a
+# control point.
 #
 # On the machine being added: nothing. No Stado binary, no credentials, no
 # outward HTTPS — its owner pastes one fragment, and Remote Login has to be on
 # before the enrollment below can read the machine.
 #
-# Usage: sh invite-a-machine.sh <name>                  # step 1: mint and print the fragment
-#        sh invite-a-machine.sh <name> <user@address>   # step 2: the address came back
+# Usage: NAME=<name> sh invite-a-machine.sh                  # step 1: mint and print the fragment
+#        NAME=<name> sh invite-a-machine.sh <user@address>   # step 2: the address came back
 set -eu
 
-NAME=$1
-ADDRESS=${2:-}
-SB=${SKARBIEC_BIN:-skarbiec}
+NAME=${NAME:?set NAME to the registry target name the machine joins as}
+# Empty on step 1; the address the machine's owner sent back on step 2.
+ADDRESS="$*"
+SB=${SKARBIEC_BIN:?set SKARBIEC_BIN to the skarbiec program}
 # The vault item that plays role host-health-api; its id is the vault owner's.
 HEALTH_ITEM=${HEALTH_ITEM:?set HEALTH_ITEM to the item tagged stado:role:host-health-api}
 
@@ -55,17 +57,17 @@ if [ -z "$ADDRESS" ]; then
   #    How long it stays usable is yours to state: EXPIRES, a number plus
   #    s, m, h or d; Stado assumes none. `--uses N` lets more machines redeem it.
   EXPIRES=${EXPIRES:?set EXPIRES to how long the invitation stays usable, a number plus s, m, h or d}
-  stado fleet invite --name "$NAME" --expires "$EXPIRES" --offline
+  stado fleet invite create --name "$NAME" --expires "$EXPIRES" --offline
 
   # 2. the operator's own view: this invitation now reads
   #    `open (offline, awaiting address)` — waiting on a person, not a clock.
-  stado fleet invites
+  stado fleet invite list
 
   printf '%s\n' \
     "send the fragment above to whoever holds the machine," \
     "then rerun with the user@address their terminal printed:" \
-    "  sh invite-a-machine.sh $NAME <user@address>"
-  exit 0
+    "  NAME=$NAME sh invite-a-machine.sh <user@address>"
+  exit
 fi
 
 # 3. the address came back. Close the invitation with the ordinary
@@ -79,13 +81,13 @@ stado fleet enroll "$NAME" --ssh "$ADDRESS" --bootstrap
 
 # 4. the invitation is `spent` now, and any other one still open can be closed
 #    before its expiry.
-stado fleet invites
-# stado fleet revoke-invite <id>
+stado fleet invite list
+# stado fleet invite revoke <id>
 
 # 5. the channel the fleet now owns, and the grants a reporting host needs
 stado fleet key check "$NAME"
-"$SB" token-mint stado-local-agent --scopes 'read:*'
-"$SB" token-mint stado-host-health-beacon --scopes "read:$HEALTH_ITEM"
+"$SB" grant issue stado-local-agent --capabilities 'read:*'
+"$SB" grant issue stado-host-health-beacon --capabilities "read:$HEALTH_ITEM"
 
 # 6. recovery program: beacon + managed units on the target
 stado host recover "$NAME"
@@ -98,11 +100,12 @@ stado host beacon list
 # things must all hold on the host serving STADO_API_URL: the name resolves,
 # an ingress fronts the loopback-bound dashboard, and the release there serves
 # GET /api/fleet/invite/key, POST /api/fleet/join and GET /join.sh. Until then
-# `stado fleet invite` reports which of those is missing and mints an offline
-# invitation instead — it never prints a curl line it cannot stand behind.
+# `stado fleet invite create` reports which of those is missing and mints an
+# offline invitation instead — it never prints a curl line it cannot stand
+# behind.
 #
 #   export STADO_API_URL=<control-origin-the-machine-can-reach>
-#   stado fleet invite --name "$NAME" --expires "$EXPIRES"    # prints the token ONCE, plus the line
+#   stado fleet invite create --name "$NAME" --expires "$EXPIRES"   # prints the token ONCE, plus the line
 #                                        # curl -fsSL <control>/join.sh | sh -s -- <id>.<secret>
 #   stado fleet pending                  # the machine reports itself here
 #   stado fleet pending --json |

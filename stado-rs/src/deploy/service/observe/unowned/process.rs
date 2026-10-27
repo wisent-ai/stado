@@ -89,7 +89,7 @@ pub async fn unowned_processes(
     }
     let script = UNOWNED_SCRIPT.replace("@ROOTS@", &roots.join(" "));
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the unowned-process scan did not complete",
@@ -112,12 +112,12 @@ pub async fn unowned_processes(
     for line in output.stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
             ["STADO_UNOWNED_OWNED", count] => {
-                scan.owned_pids = count.trim().parse().map_err(|_| unreadable(line))?;
+                scan.owned_pids = count.trim().parse().map_err(|_not_count| unreadable(line))?;
             }
             ["STADO_UNOWNED_ROOT", root, matched, under] => scan.roots.push((
                 (*root).trim().to_string(),
-                matched.trim().parse().map_err(|_| unreadable(line))?,
-                under.trim().parse().map_err(|_| unreadable(line))?,
+                matched.trim().parse().map_err(|_not_count| unreadable(line))?,
+                under.trim().parse().map_err(|_not_count| unreadable(line))?,
             )),
             ["STADO_UNOWNED_JUDGED", pid, verdict, owner] => scan.judged.push((
                 (*pid).trim().to_string(),

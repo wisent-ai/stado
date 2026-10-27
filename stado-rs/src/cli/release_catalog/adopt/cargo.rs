@@ -95,7 +95,7 @@ pub(super) struct Package {
 
 pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
     let manifest = checkout.join("Cargo.toml");
-    if !manifest.is_file() {
+    if !crate::primitives::presence::present(&manifest)? || !manifest.is_file() {
         return Err(CmdError::refused(format!(
             "{} has no Cargo.toml at its root; --kind cargo reads the package from it",
             checkout.display()
@@ -135,8 +135,13 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
     // The root package is the one whose manifest is the checkout's; a
     // manifest cargo names but that cannot be resolved is refused, never
     // read as some other package's.
+    let malformed = |detail: String| {
+        CmdError::click(format!("cargo metadata for {} {detail}", manifest.display()))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    };
     let mut root_package = None;
-    for package in metadata["packages"].as_array().into_iter().flatten() {
+    let packages = crate::primitives::presence::listed(&metadata["packages"], "its packages").map_err(&malformed)?;
+    for package in packages {
         let Some(path) = package["manifest_path"].as_str() else {
             return Err(CmdError::click(format!(
                 "cargo metadata for {} lists a package without its manifest_path: {package}",
@@ -176,17 +181,20 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
                 .stating(crate::primitives::failure::FailureCode::Config)
             })
     };
-    let binaries: Vec<String> = package["targets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|target| {
-            target["kind"]
-                .as_array()
-                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin"))
-        })
-        .filter_map(|target| target["name"].as_str().map(str::to_string))
-        .collect();
+    // A target list in another shape, or a binary target without its name,
+    // is refused: read as empty or skipped, a package was said to declare
+    // no binary, or was adopted shipping fewer programs than it builds.
+    let mut binaries: Vec<String> = Vec::new();
+    for target in crate::primitives::presence::listed(&package["targets"], "its targets").map_err(&malformed)? {
+        let kinds = crate::primitives::presence::listed(&target["kind"], "a target's kind").map_err(&malformed)?;
+        if !kinds.iter().any(|kind| kind == "bin") {
+            continue;
+        }
+        let name = target["name"]
+            .as_str()
+            .ok_or_else(|| malformed(format!("lists a binary target without its name: {target}")))?;
+        binaries.push(name.to_string());
+    }
     let name = text("name")?;
     if binaries.is_empty() {
         return Err(CmdError::refused(format!(

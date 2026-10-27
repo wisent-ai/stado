@@ -73,7 +73,7 @@ enum NativeSpaceOperations {
                     choices: ["", "get", "put"]),
                 .init(id: "expires", label: "Seconds the presigned URL stays valid (1 to 604800)", option: "--expires"),
             ], mutates: false),
-        .init(id: "s3-endpoint", title: "Describe and check a namespace's S3 endpoint", path: ["storage", "s3-endpoint"],
+        .init(id: "s3-endpoint", title: "Describe and check a namespace's S3 endpoint", path: ["storage", "endpoint"],
             hostPlacement: .none, fields: [
                 .init(id: "namespace", label: "Namespace (bucket and access key id)", required: true),
             ], mutates: false),
@@ -120,7 +120,7 @@ enum NativeSpaceOperations {
                 .init(id: "uri", label: "Object: stado://<namespace>/<key>", required: true),
             ]),
         .init(id: "object-abort-upload", title: "Discard the staged parts of an interrupted upload",
-            path: ["storage", "abort-upload"], hostPlacement: .none, fields: [
+            path: ["storage", "abort"], hostPlacement: .none, fields: [
                 .init(id: "uri", label: "Target object the upload was writing: stado://<namespace>/<key>", required: true),
                 .init(id: "dry-run", label: "Report the parts and remove nothing", option: "--dry-run", flag: true),
             ]),
@@ -138,6 +138,22 @@ enum NativeSpaceOperations {
             fields: bucketFields + [
                 .init(id: "confirm", label: "Bucket name again", option: "--confirm", required: true),
                 .init(id: "reload", label: "Unit to restart afterwards (optional)", option: "--reload-service"),
+            ]),
+        .init(id: "storage-fence-status", title: "Read whether this API host's local object store is fenced, and by what", path: ["storage", "fence", "status"],
+            hostPlacement: .none, fields: [
+                .init(id: "root", label: "Store root (the configured local storage path when empty)", option: "--root"),
+            ], mutates: false),
+        .init(id: "storage-fence-arm", title: "Fence every write to this API host's local object store for a transaction", path: ["storage", "fence", "arm"],
+            hostPlacement: .none, fields: [
+                .init(id: "transaction", label: "Transaction the fence belongs to", option: "--transaction", required: true),
+                .init(id: "reason", label: "Why the store is fenced", option: "--reason", required: true),
+                .init(id: "root", label: "Store root (the configured local storage path when empty)", option: "--root"),
+            ]),
+        .init(id: "storage-fence-disarm", title: "Lift the write fence a transaction armed", path: ["storage", "fence", "disarm"],
+            hostPlacement: .none, fields: [
+                .init(id: "transaction", label: "Transaction that armed the fence", option: "--transaction", required: true),
+                .init(id: "reason", label: "Why the fence is lifted", option: "--reason", required: true),
+                .init(id: "root", label: "Store root (the configured local storage path when empty)", option: "--root"),
             ]),
         .init(id: "preview-reclaim", title: "Preview selected reclamation stages", path: ["space", "reclaim"],
             hostPlacement: .positional, fields: reclaimFields, fixedArguments: ["--dry-run"], mutates: false),
@@ -165,9 +181,9 @@ enum NativeSpaceOperations {
                 .init(id: "device", label: "Device leaf, such as sdb1", option: "--device", required: true),
                 .init(id: "mountPoint", label: "Absolute mount point on the selected host", option: "--mount-point", required: true),
             ]),
-        .init(id: "read-work-root", title: "Read where the agent keeps the fleet's work", path: ["space", "work-root"],
+        .init(id: "read-work-root", title: "Read where the agent keeps the fleet's work", path: ["space", "root"],
             hostPlacement: .positional, fields: [], mutates: false),
-        .init(id: "declare-work-root", title: "Declare the work root on a data volume", path: ["space", "work-root"],
+        .init(id: "declare-work-root", title: "Declare the work root on a data volume", path: ["space", "root"],
             hostPlacement: .positional, fields: [
                 .init(id: "path", label: "Absolute directory on the selected mounted data volume", option: "--path", required: true),
             ]),

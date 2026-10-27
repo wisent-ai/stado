@@ -20,7 +20,11 @@ pub(in crate::cli::directory) mod endpoints;
 /// accepted after it, for hosts reached by name rather than by number.
 pub(crate) fn routable_address(target: &targets::ComputeTarget) -> Option<String> {
     let (_, ssh) = target.ssh_connections().next()?;
-    let address = ssh.rsplit('@').next().unwrap_or(ssh).trim();
+    // `user@address`, or a bare address when the record names no user.
+    let address = match ssh.rsplit_once('@') {
+        Some((_user, address)) => address.trim(),
+        None => ssh.trim(),
+    };
     (!address.is_empty()).then(|| address.to_string())
 }
 
@@ -32,7 +36,12 @@ pub(crate) fn routable_address(target: &targets::ComputeTarget) -> Option<String
 /// is a fact even while the address around it is not.
 pub(crate) fn service_port(entry: &Value, active: &str) -> Option<u16> {
     if let Some(port) = entry.get("port").and_then(Value::as_u64) {
-        return u16::try_from(port).ok();
+        // A declared port is the answer; one wider than a TCP port names
+        // nothing this fleet can dial.
+        return match u16::try_from(port) {
+            Ok(port) => Some(port),
+            Err(_wider_than_a_port) => None,
+        };
     }
     let declared = entry
         .get("endpoints")
@@ -40,10 +49,12 @@ pub(crate) fn service_port(entry: &Value, active: &str) -> Option<u16> {
         .and_then(|endpoints| endpoints.get(active))
         .and_then(|endpoint| endpoint.get("url"))
         .and_then(Value::as_str)?;
-    declared
-        .rsplit(':')
-        .next()
-        .and_then(|tail| tail.trim_end_matches('/').parse().ok())
+    // The port is the one the URL states; a URL that states none, or text
+    // that is not a URL, names no port.
+    match url::Url::parse(declared) {
+        Ok(url) => url.port(),
+        Err(_not_a_url) => None,
+    }
 }
 
 /// Prove something answers HTTP there. A gateway that refuses an

@@ -72,7 +72,7 @@ pub(super) async fn refresh_local_unit_lifecycle(
     if !cfg!(target_os = "linux") {
         return;
     }
-    let pending: Vec<(String, String, SystemdManager)> = document
+    let pending: Vec<(String, String, Result<SystemdManager, String>)> = document
         .get("units")
         .and_then(Value::as_object)
         .into_iter()
@@ -80,13 +80,29 @@ pub(super) async fn refresh_local_unit_lifecycle(
         .filter_map(|(unit, entry)| {
             let fields = entry.as_object()?;
             let state = fields.get("state").and_then(Value::as_str)?;
-            let manager = SystemdManager::parse(fields.get("manager").and_then(Value::as_str)?)?;
+            // The manager is carried as a result so a word that names no
+            // manager is said on the unit below, not dropped here.
+            let manager = match fields.get("manager").and_then(Value::as_str) {
+                Some(word) => SystemdManager::parse(word),
+                None => Err("the collector's sample names no manager".to_string()),
+            };
             (state != crate::deploy::service::STATE_ACTIVE)
                 .then(|| (unit.clone(), state.to_string(), manager))
         })
         .collect();
 
     for (unit, collector_state, manager) in pending {
+        // A sample whose manager word names no systemd manager cannot be
+        // asked about; the unit says so, as it does for an unread state.
+        let manager = match manager {
+            Ok(manager) => manager,
+            Err(unread) => {
+                if let Some(fields) = unit_fields(document, &unit) {
+                    fields.insert("lifecycle_unread".to_string(), json!(unread));
+                }
+                continue;
+            }
+        };
         // An unread native state leaves the collector's state as it was, and
         // now says so on the unit, instead of leaving no trace that the
         // reconciliation was attempted and could not read systemd.
@@ -112,8 +128,14 @@ pub(super) async fn refresh_local_unit_lifecycle(
         let Some(native_word) = properties.get("ActiveState").map(String::as_str) else {
             continue;
         };
-        let Some(native_state) = SystemdActiveState::parse(native_word) else {
-            continue;
+        let native_state = match SystemdActiveState::parse(native_word) {
+            Ok(state) => state,
+            Err(unknown) => {
+                if let Some(fields) = unit_fields(document, &unit) {
+                    fields.insert("lifecycle_unread".to_string(), json!(unknown));
+                }
+                continue;
+            }
         };
 
         let triggers: Vec<String> = properties
@@ -159,10 +181,18 @@ pub(super) async fn refresh_local_unit_lifecycle(
                     }
                 };
                 let trigger_state = trigger_properties.get("ActiveState");
+                // A trigger state systemd does not write is said beside the
+                // unread triggers; it never counts as an active trigger.
+                let trigger_up = match trigger_state.map(|state| SystemdActiveState::parse(state)) {
+                    Some(Ok(state)) => state.up_or_starting(),
+                    Some(Err(unknown)) => {
+                        triggers_unread.push(format!("{trigger}: {unknown}"));
+                        false
+                    }
+                    None => false,
+                };
                 if trigger_properties.get("LoadState").map(String::as_str) == Some("loaded")
-                    && trigger_state
-                        .and_then(|state| SystemdActiveState::parse(state))
-                        .is_some_and(SystemdActiveState::up_or_starting)
+                    && trigger_up
                 {
                     active_trigger = trigger_state.map(|state| (trigger.clone(), state.clone()));
                     break;

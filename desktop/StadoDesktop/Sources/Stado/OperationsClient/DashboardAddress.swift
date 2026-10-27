@@ -23,7 +23,7 @@ struct OperationsDashboardAddress: Equatable, Sendable {
         if components.path == "/" {
             components.path = ""
         }
-        while components.path.count > 1 && components.path.hasSuffix("/") {
+        while components.path.hasSuffix("/") && components.path != "/" {
             components.path.removeLast()
         }
         guard let normalized = components.url else {

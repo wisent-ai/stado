@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use crate::cli::host::{credential_host, gnupg_home};
+use crate::cli::host::{credential_host_at, gnupg_home, release_managed_skarbiec_in};
 use crate::cli::CmdError;
 use crate::deploy::{host_channel, shlex_quote, CommandOutput, Runner};
 use crate::targets::ComputeTarget;
@@ -22,12 +22,16 @@ pub(super) struct VaultHost {
 }
 
 impl VaultHost {
-    /// The host that holds the fleet vault now, read from its own declaration.
-    pub(super) async fn owner(name: &str, runner: &Runner) -> Result<Self, CmdError> {
-        let declared = credential_host(name).await?;
+    /// The host that holds the fleet vault now, read from its own declaration;
+    /// its Skarbiec release from `registry`, the document the move read once.
+    pub(super) async fn owner(
+        target: ComputeTarget,
+        registry: &Value,
+        runner: &Runner,
+    ) -> Result<Self, CmdError> {
+        let declared = credential_host_at(target).await?;
         let skarbiec =
-            crate::cli::host::release_managed_skarbiec(&declared.target, runner, &declared.home)
-                .await?;
+            release_managed_skarbiec_in(registry, &declared.target, runner, &declared.home).await?;
         Ok(Self {
             target: declared.target,
             home: declared.home,
@@ -41,16 +45,16 @@ impl VaultHost {
     /// pointed at `relative` under its home, where the placement profile
     /// writes the vault.
     pub(super) async fn destination(
-        name: &str,
+        target: ComputeTarget,
         relative: &str,
+        registry: &Value,
         runner: &Runner,
     ) -> Result<Self, CmdError> {
-        let target = crate::cli::canonical_host(name).await?;
         let home = host_channel::remote_home(&target, runner)
             .await
             .map_err(CmdError::from)?;
         let gnupg_home = gnupg_home(&target, runner).await?;
-        let skarbiec = crate::cli::host::release_managed_skarbiec(&target, runner, &home).await?;
+        let skarbiec = release_managed_skarbiec_in(registry, &target, runner, &home).await?;
         let vault = format!("{home}/{relative}");
         Ok(Self {
             target,
@@ -91,7 +95,7 @@ impl VaultHost {
             None => host_channel::run_command(&self.target, command, runner).await,
         }
         .map_err(|error| format!("{}: {shown} did not run: {error}", self.target.name))?;
-        if !answered.ok() {
+        if !answered.succeeded() {
             return Err(host_channel::last_error_line(
                 &answered,
                 &format!("{}: {shown} failed", self.target.name),
@@ -205,4 +209,75 @@ pub(super) fn live_items(listed: &Value) -> Result<Vec<String>, String> {
     }
     live.sort();
     Ok(live)
+}
+
+/// Register the new owner using the destination keyring's public key.
+pub(super) async fn register(plan: &super::plan::Plan, runner: &Runner) -> Result<Value, String> {
+    let public = plan
+        .destination
+        .gpg(
+            &["--armor", "--export", "--", &plan.owner_uid],
+            None,
+            runner,
+        )
+        .await?;
+    if public.trim().is_empty() {
+        return Err(format!(
+            "{}'s keyring exported no public key for {}",
+            plan.destination.target.name, plan.owner_uid
+        ));
+    }
+    plan.source
+        .skarbiec(
+            &[
+                "recipient",
+                "add",
+                &plan.owner_uid,
+                "--import",
+                "/dev/stdin",
+            ],
+            Some(&public),
+            runner,
+        )
+        .await
+}
+
+/// `stado placement move <profile's services> --to-host <destination>` by
+/// this same Stado, through the runner that says what it waits for; its
+/// committed report, or with `check` its preflight's report (`--check`,
+/// which claims and changes nothing).
+pub(super) async fn placement_move(
+    plan: &super::plan::Plan,
+    runner: &Runner,
+    check: bool,
+) -> Result<Value, String> {
+    let program = std::env::current_exe()
+        .map_err(|error| format!("this Stado's own executable cannot be named: {error}"))?;
+    let mut argv: Vec<String> = vec![
+        program.display().to_string(),
+        "placement".into(),
+        "move".into(),
+    ];
+    argv.extend(plan.profile.services.iter().cloned());
+    argv.extend([
+        "--to-host".into(),
+        plan.destination.target.name.clone(),
+        "--json".into(),
+    ]);
+    if check {
+        argv.push("--check".into());
+    } else {
+        // Called only after the owner was rotated (or already was the one
+        // the destination holds): the move may carry the vault.
+        argv.push("--vault-owner-rotated".into());
+    }
+    let shown = argv.join(" ");
+    let output = runner(crate::deploy::CommandSpec { argv, stdin: None })
+        .await
+        .map_err(|error| format!("{shown} did not run: {error}"))?;
+    if !output.succeeded() {
+        return Err(format!("{shown} failed: {}", output.stderr.trim()));
+    }
+    serde_json::from_str(output.stdout.trim())
+        .map_err(|error| format!("{shown} printed no readable report: {error}"))
 }

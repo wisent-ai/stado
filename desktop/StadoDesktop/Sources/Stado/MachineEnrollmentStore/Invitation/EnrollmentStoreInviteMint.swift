@@ -18,7 +18,7 @@ extension MachineEnrollmentStore {
         persistPlan()
     }
 
-    /// `stado fleet invite --name NAME --expires LIFETIME [--offline] --json`
+    /// `stado fleet invite create --name NAME --expires LIFETIME [--offline] --json`
     /// — mint one invitation, once. The lifetime is the operator's; none is
     /// assumed.
     ///
@@ -53,18 +53,23 @@ extension MachineEnrollmentStore {
                 ? "Minting the key pair the fleet will use to reach \(machine), and the fragment its owner pastes to accept it."
                 : "Minting one invitation code for \(machine) and the key pair the fleet will use to reach it, after checking that the control point really serves the join script."
         )
-        var arguments = ["fleet", "invite", "--name", machine, "--expires", lifetime]
+        var arguments = ["fleet", "invite", "create", "--name", machine, "--expires", lifetime]
         if requested == .offline {
             arguments.append("--offline")
         }
         arguments.append("--json")
         do {
             let result = try await run(arguments)
-            guard result.ok, let invite: MachineInvite = Self.decode(from: result.standardOutput) else {
+            if !result.ok {
                 failure = .invite(result.message, machine: machine)
                 outcome = .failed(result.message)
                 return
             }
+            let invite = try Self.document(
+                MachineInvite.self,
+                of: "stado fleet invite create --json",
+                from: result.standardOutput
+            )
             mintedInvite = invite
             plan.invite = invite.record
             plan.inviteMode = invite.mode
@@ -89,11 +94,11 @@ extension MachineEnrollmentStore {
         guard invite.mode == .offline else {
             return "Invitation \(invite.id) is open. The code below is shown once and is not written down anywhere in this app."
         }
-        let why = invite.checkpoint?.headline ?? "The control plane did not say why."
+        let why = invite.checkpoint.headline
         guard requested == .online else {
             return "Invitation \(invite.id) is open and waiting for a person, not for a machine. The fragment below carries the public half of the fleet's key and nothing else."
         }
-        let opening = invite.checkpoint?.isRefusal == true
+        let opening = invite.checkpoint.isRefusal
             ? "The control point could not serve the join script"
             : "No one-line invitation could be built"
         return "\(opening), so invitation \(invite.id) was minted as an offline one and there is nothing for the machine to run. \(why)"

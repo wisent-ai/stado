@@ -6,7 +6,7 @@ use crate::cli::CmdError;
 /// it immediately. The local agent keeps reconciling the declaration, including
 /// after driver resets and host reboots.
 pub async fn gpu_power_limit(target: &str, watts: u32, json: bool) -> Result<(), CmdError> {
-    if watts == 0 {
+    if std::num::NonZeroU32::new(watts).is_none() {
         return Err(CmdError::usage("WATTS must be a positive integer"));
     }
     declare_power_cap(target, Some(watts), json).await
@@ -96,15 +96,16 @@ fi
   --format=csv,noheader,nounits
 "#
     );
-    let declared = watts.map_or_else(
-        || "the driver default".to_string(),
-        |watts| format!("{watts} W"),
-    );
+    // An unset cap is a declaration of its own: the driver keeps its default.
+    let declared = match watts {
+        Some(watts) => format!("{watts} W"),
+        None => "the driver default".to_string(),
+    };
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
         .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{target}: registry now requires {declared} at generation {generation}, but immediate reconciliation failed: {}",
             crate::deploy::host_channel::last_error_line(
@@ -129,7 +130,10 @@ fi
     } else {
         println!(
             "{target}: gpu_power_limit_watts={} (generation {generation})",
-            watts.map_or_else(|| "unset".to_string(), |watts| watts.to_string())
+            match watts {
+                Some(watts) => watts.to_string(),
+                None => "unset".to_string(),
+            }
         );
         print!("{}", output.stdout);
     }
@@ -157,11 +161,16 @@ pub async fn cron(
     }
     let resolved = crate::cli::canonical_host(target).await?;
     let runner = crate::deploy::production_runner();
-    let outcome = match restore {
-        Some(path) => crate::deploy::host_cron::restore(&resolved, path, &runner)
+    let outcome = match (restore, prune) {
+        (Some(path), _) => crate::deploy::host_cron::restore(&resolved, path, &runner)
             .await
             .map_err(CmdError::from)?,
-        None => crate::deploy::host_cron::prune(&resolved, prune.unwrap_or(""), apply, &runner)
+        (None, Some(pattern)) => crate::deploy::host_cron::prune(&resolved, pattern, apply, &runner)
+            .await
+            .map_err(CmdError::from)?,
+        // Without --prune the verb only reads: host_cron::prune documents the
+        // empty pattern as the one that reads and changes nothing.
+        (None, None) => crate::deploy::host_cron::prune(&resolved, "", apply, &runner)
             .await
             .map_err(CmdError::from)?,
     };

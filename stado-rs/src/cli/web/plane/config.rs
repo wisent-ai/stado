@@ -38,47 +38,36 @@ where
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let original = std::fs::read_to_string(&path)?;
-    let mut document: Value = serde_json::from_str(&original).map_err(CmdError::from)?;
-    if !document.is_object() {
+    let Value::Object(mut document) =
+        serde_json::from_str::<Value>(&original).map_err(CmdError::from)?
+    else {
         return Err(CmdError::click("config file must contain a JSON object")
             .stating(crate::primitives::failure::FailureCode::Config));
-    }
-    let web_api = document
-        .as_object_mut()
-        .expect("checked above")
+    };
+    let Value::Object(web_api) = document
         .entry("web_api".to_string())
-        .or_insert_with(|| json!({}));
-    if !web_api.is_object() {
+        .or_insert_with(|| json!({}))
+    else {
         return Err(CmdError::click("web_api must be an object")
             .stating(crate::primitives::failure::FailureCode::Config));
-    }
-    let entry = web_api
-        .as_object_mut()
-        .expect("checked above")
+    };
+    let Value::Object(map) = web_api
         .entry(section.to_string())
-        .or_insert_with(|| json!({}));
-    let map = entry.as_object_mut().ok_or_else(|| {
-        CmdError::click(format!("web_api.{section} must be an object"))
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
+        .or_insert_with(|| json!({}))
+    else {
+        return Err(CmdError::click(format!("web_api.{section} must be an object"))
+            .stating(crate::primitives::failure::FailureCode::Config));
+    };
     mutation(map)?;
     // The parsers refuse an empty map, so a removal that empties the plane
     // collapses the section rather than leaving a document nothing validates.
     if map.is_empty() {
-        web_api
-            .as_object_mut()
-            .expect("checked above")
-            .remove(section);
+        web_api.remove(section);
     }
-    if web_api
-        .as_object()
-        .is_some_and(|section| section.is_empty())
-    {
-        document
-            .as_object_mut()
-            .expect("checked above")
-            .remove("web_api");
+    if web_api.is_empty() {
+        document.remove("web_api");
     }
+    let document = Value::Object(document);
 
     let problems = crate::config_file::validate(&document);
     if !problems.is_empty() {
@@ -87,12 +76,6 @@ where
             problems.join("; ")
         )));
     }
-    let body = format!("{}\n", serde_json::to_string_pretty(&document)?);
-    let temporary = std::path::PathBuf::from(format!("{}.web-setting", path.display()));
-    std::fs::write(&temporary, body)?;
-    if let Ok(metadata) = std::fs::metadata(&path) {
-        std::fs::set_permissions(&temporary, metadata.permissions())?;
-    }
-    std::fs::rename(&temporary, &path)?;
+    crate::config_file::replace(&path, &document)?;
     Ok(document)
 }

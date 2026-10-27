@@ -47,14 +47,31 @@ impl client::Handler for Peer {
 }
 
 pub(crate) async fn connect(destination: &str) -> Result<Session> {
-    connect_with(destination, None).await
+    connect_as(destination, None, false).await
+}
+
+/// A session held open for as long as its holder lives, opening channels
+/// on it (the resolver's tunnel to its registry authority): refused until
+/// SSH keepalive is declared, since only keepalive ends one whose peer
+/// stopped answering.
+pub(crate) async fn connect_long_lived(destination: &str) -> Result<Session> {
+    connect_as(destination, None, true).await
+}
+
+/// A session serving the reverse forward `reverse`, which is long-lived.
+async fn connect_with(destination: &str, reverse: Option<reverse::Ports>) -> Result<Session> {
+    connect_as(destination, reverse, reverse.is_some()).await
 }
 
 /// Connect and authenticate, saying so at both ends (`crate::wait`): an SSH
 /// server that accepts the TCP connection and answers nothing names itself.
-async fn connect_with(destination: &str, reverse: Option<reverse::Ports>) -> Result<Session> {
+async fn connect_as(
+    destination: &str,
+    reverse: Option<reverse::Ports>,
+    long_lived: bool,
+) -> Result<Session> {
     let waiting = crate::wait::begin(crate::wait::Kind::Host, "SSH connection", destination);
-    let result = open(destination, reverse).await;
+    let result = open(destination, reverse, long_lived).await;
     match &result {
         Ok(_) => waiting.done(),
         Err(error) => waiting.failed(format!("{error:#}")),
@@ -62,7 +79,7 @@ async fn connect_with(destination: &str, reverse: Option<reverse::Ports>) -> Res
     result
 }
 
-async fn open(destination: &str, reverse: Option<reverse::Ports>) -> Result<Session> {
+async fn open(destination: &str, reverse: Option<reverse::Ports>, long_lived: bool) -> Result<Session> {
     crate::deploy::host_users::validate_ssh_target(destination)?;
     let (user, host) = match destination.split_once('@') {
         Some((user, host)) => (user.to_string(), host),
@@ -84,9 +101,10 @@ async fn open(destination: &str, reverse: Option<reverse::Ports>) -> Result<Sess
             )
         })?;
     }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is required for SSH trust and credentials")?;
+    // The home every Stado file is kept under: a resolver or agent unit
+    // started without HOME still finds known_hosts and its keys.
+    let home = crate::config_file::home()
+        .map_err(|cause| anyhow::anyhow!("SSH trust and credentials have no home: {cause}"))?;
     // A server on another port is trusted under the name known_hosts gives
     // it, `[host]:port`, as OpenSSH reads it.
     let trusted_as = match port {
@@ -98,9 +116,14 @@ async fn open(destination: &str, reverse: Option<reverse::Ports>) -> Result<Sess
         home: home.clone(),
         reverse,
     };
-    let handle = client::connect(config::client(reverse.is_some())?, (host, port), peer)
+    let handle = client::connect(config::client(long_lived || reverse.is_some())?, (host, port), peer)
         .await
-        .with_context(|| format!("connect and verify SSH host {destination}"))?;
+        .with_context(|| match crate::remote::tailnet::unreachable_because(host) {
+            Some(cause) => format!(
+                "connect and verify SSH host {destination}: the tailnet carries no traffic to it, {cause}"
+            ),
+            None => format!("connect and verify SSH host {destination}"),
+        })?;
     let mut session = Session::new(handle);
     let identity = if reverse.is_none() {
         auth::configured_identity(&home)

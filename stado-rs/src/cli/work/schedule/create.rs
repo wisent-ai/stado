@@ -4,11 +4,10 @@
 use chrono::Utc;
 
 use crate::models::isoformat_utc;
-use crate::queue::JobStorage;
-use crate::schedules::{
-    self, compute_next_due, cron_is_valid, generate_schedule_id, read_schedule, Schedule,
-};
+use crate::queue::{JobStorage, StorageError};
+use crate::schedules::{compute_next_due, cron_is_valid, generate_schedule_id, Schedule};
 
+use super::declare::{declare, Declared};
 use crate::cli::{CmdError, ScheduleCreateArgs};
 
 /// Who declares the schedule, read as a job submission reads its submitter
@@ -52,10 +51,12 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     let next_due = compute_next_due(&args.cron, now, &args.tz).map_err(|exc| {
         CmdError::usage(format!("could not compute next run ({}): {exc}", args.tz))
     })?;
-    let sid = args
-        .id
-        .map(|id| super::stored_id(&id.to_string()))
-        .unwrap_or_else(generate_schedule_id);
+    // A caller-retained id is stored in the schedule-id form; without one a
+    // new schedule gets a fresh id.
+    let sid = match args.id {
+        Some(id) => super::stored_id(&id.to_string()),
+        None => generate_schedule_id(),
+    };
     let mut sched = Schedule::new(&sid, &args.cron, &args.command);
     sched.tz = args.tz.clone();
     sched.enabled = !args.disabled;
@@ -83,138 +84,91 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.overlap_policy = args.overlap_policy;
     sched.created_by = created_by()?;
     sched.next_due_at = isoformat_utc(next_due);
-    let store = JobStorage::new().await?;
-    if args.id.is_some() {
-        if let Some(existing) = read_schedule(&store, &sid).await? {
-            // A caller-retained identity makes the declaration safe to repeat:
-            // the same declaration again is already done, and a different one
-            // is refused naming what differs, so an install can declare its
-            // schedule on every run without ever overwriting another's.
-            let differs = declaration_differences(&existing, &sched);
-            if args.converge && !existing.deleted && !differs.is_empty() {
-                return converge(&store, &sched, &differs, args.json).await;
-            }
-            if existing.deleted || !differs.is_empty() {
-                return Err(CmdError::refused(format!(
-                    "schedule {sid} already exists{}; change it with `stado schedule edit {sid}`, \
-                     declare it again with --converge when this declaration owns the id, \
-                     or remove it with `stado schedule rm {sid}`",
-                    if existing.deleted {
-                        " as a deleted record".to_string()
-                    } else {
-                        format!(" with a different {}", differs.join(", "))
-                    }
-                )));
-            }
-            if args.json {
-                println!("{}", existing.to_json());
-            } else {
-                println!("schedule {sid} is already declared as asked; nothing changed");
-            }
-            return Ok(());
-        }
+    let id_retained = args.id.is_some();
+    let declared: Result<Declared, Declaring> = async {
+        let store = JobStorage::new().await?;
+        super::held::deliver(&store).await??;
+        Ok(declare(&store, &sched, id_retained, args.converge).await??)
     }
-    schedules::write_schedule(&store, &sched).await?;
+    .await;
+    let outcome = match declared {
+        Ok(outcome) => outcome,
+        // The store did not answer: the declaration is kept on this host and
+        // the next schedule command that reaches the store writes it there.
+        Err(Declaring::Unanswered(error)) => return held(&sched, args, id_retained, &error),
+        Err(Declaring::Refused(error)) => return Err(error),
+    };
     if args.json {
-        println!("{}", sched.to_json());
+        println!("{}", outcome.schedule().to_json());
         return Ok(());
     }
-    let state = if sched.enabled { "enabled" } else { "DISABLED" };
-    println!("created schedule {sid} ({state})");
-    println!("  cron:     {}  ({})", args.cron, args.tz);
-    println!("  next run: {}", sched.next_due_at);
-    println!("  command:  {}", args.command);
-    Ok(())
-}
-
-/// Bring the standing schedule under `wanted`'s id to `wanted`'s declaration
-/// in place: every declared field is the caller's, while what the schedule
-/// has done (created, fired, its last run and job, a leased occurrence) is
-/// kept. Its next run is computed from now, as `schedule edit` computes it.
-/// A record deleted meanwhile is refused, never raised again.
-async fn converge(
-    store: &JobStorage,
-    wanted: &Schedule,
-    differs: &[&str],
-    json: bool,
-) -> Result<(), CmdError> {
-    let sid = wanted.schedule_id.clone();
-    let converged = schedules::edit_schedule(store, &sid, |standing| {
-        standing.command = wanted.command.clone();
-        standing.cron = wanted.cron.clone();
-        standing.tz = wanted.tz.clone();
-        standing.enabled = wanted.enabled;
-        standing.provider = wanted.provider.clone();
-        standing.pin_to_provider = wanted.pin_to_provider;
-        standing.preemptible = wanted.preemptible;
-        standing.max_cost_per_hour_usd = wanted.max_cost_per_hour_usd;
-        standing.priority = wanted.priority;
-        standing.gpu_type = wanted.gpu_type.clone();
-        standing.vram_gb = wanted.vram_gb;
-        standing.machine_type = wanted.machine_type.clone();
-        standing.pinned_host = wanted.pinned_host.clone();
-        standing.repo = wanted.repo.clone();
-        standing.repo_ref = wanted.repo_ref.clone();
-        standing.repo_workdir = wanted.repo_workdir.clone();
-        standing.repo_extras = wanted.repo_extras.clone();
-        standing.pre_command = wanted.pre_command.clone();
-        standing.apt_packages = wanted.apt_packages.clone();
-        standing.output_uri = wanted.output_uri.clone();
-        standing.verify_command = wanted.verify_command.clone();
-        standing.exclusive = wanted.exclusive;
-        standing.boot_disk_gb = wanted.boot_disk_gb;
-        standing.runtime_seconds_estimate = wanted.runtime_seconds_estimate;
-        standing.secret_env = wanted.secret_env.clone();
-        standing.overlap_policy = wanted.overlap_policy;
-        standing.next_due_at = wanted.next_due_at.clone();
-    })
-    .await?
-    .ok_or_else(|| {
-        CmdError::refused(format!(
-            "schedule {sid} was removed while it was being brought to its declaration; \
-             it is not declared again"
-        ))
-    })?;
-    if json {
-        println!("{}", converged.to_json());
-    } else {
-        println!(
-            "schedule {sid} brought to its declaration: changed {}",
-            differs.join(", ")
-        );
-        println!("  next run: {}", converged.next_due_at);
+    match &outcome {
+        Declared::Created(_) => {
+            let state = if sched.enabled { "enabled" } else { "DISABLED" };
+            println!("created schedule {sid} ({state})");
+            println!("  cron:     {}  ({})", args.cron, args.tz);
+            println!("  next run: {}", sched.next_due_at);
+            println!("  command:  {}", args.command);
+        }
+        Declared::Unchanged(_) => {
+            println!("schedule {sid} is already declared as asked; nothing changed");
+        }
+        Declared::Converged(converged, differs) => {
+            println!(
+                "schedule {sid} brought to its declaration: changed {}",
+                differs.join(", ")
+            );
+            println!("  next run: {}", converged.next_due_at);
+        }
     }
     Ok(())
 }
 
-/// The declared fields in which `existing` differs from `wanted`: what the
-/// schedule submits, when, where and with which secrets. Bookkeeping such as
-/// its next run, its creator and its leases is not a declaration.
-fn declaration_differences(existing: &Schedule, wanted: &Schedule) -> Vec<&'static str> {
-    let mut differs = Vec::new();
-    let mut compare = |name: &'static str, same: bool| {
-        if !same {
-            differs.push(name);
+/// Keep `sched` on this host because the store answered `error` instead of
+/// taking it, and say where and why.
+fn held(
+    sched: &Schedule,
+    args: &ScheduleCreateArgs,
+    id_retained: bool,
+    error: &StorageError,
+) -> Result<(), CmdError> {
+    let path = super::held::hold(sched, id_retained, args.converge, error)?;
+    if args.json {
+        let report = serde_json::json!({
+            "held": path.display().to_string(),
+            "refusal": error.to_string(),
+            "schedule": serde_json::from_str::<serde_json::Value>(&sched.to_json())?,
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "held schedule {} on this host at {}: the fleet store did not answer ({error}); \
+             the next schedule command that reaches it writes it there",
+            sched.schedule_id,
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Why a declaration was not made: the store did not answer, so it is kept
+/// on this host, or something else refused it.
+enum Declaring {
+    Unanswered(StorageError),
+    Refused(CmdError),
+}
+
+impl From<CmdError> for Declaring {
+    fn from(error: CmdError) -> Self {
+        Declaring::Refused(error)
+    }
+}
+
+impl From<StorageError> for Declaring {
+    fn from(error: StorageError) -> Self {
+        match super::held::unanswered(&error) {
+            true => Declaring::Unanswered(error),
+            false => Declaring::Refused(error.into()),
         }
-    };
-    compare("command", existing.command == wanted.command);
-    compare("cron", existing.cron == wanted.cron);
-    compare("timezone", existing.tz == wanted.tz);
-    compare("enabled state", existing.enabled == wanted.enabled);
-    compare("pinned host", existing.pinned_host == wanted.pinned_host);
-    compare("provider", existing.provider == wanted.provider);
-    compare(
-        "secret environment",
-        existing.secret_env == wanted.secret_env,
-    );
-    compare(
-        "repository",
-        existing.repo == wanted.repo && existing.repo_ref == wanted.repo_ref,
-    );
-    compare("pre-command", existing.pre_command == wanted.pre_command);
-    compare(
-        "overlap policy",
-        existing.overlap_policy == wanted.overlap_policy,
-    );
-    differs
+    }
 }

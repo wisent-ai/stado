@@ -24,12 +24,13 @@ pub(super) use write::set_policy;
 /// `Ok(None)` is "no client presented a bearer that matches this action", and
 /// it is also what an undeclared boundary produces: `registry_api.clients`
 /// empty means the loop has nothing to compare against, so the route refuses
-/// with `401`. `Err(())` is reserved for a declaration that cannot be read,
-/// which is an outage and answers `503`.
+/// with `401`. `Err` names why the decision could not be made (the client
+/// declarations or a client's token could not be read), which is an outage:
+/// the caller logs it and answers `503`.
 pub(super) async fn authenticate(
     request: &Request,
     action: &str,
-) -> Result<Option<&'static config::RegistryApiClient>, ()> {
+) -> Result<Option<&'static config::RegistryApiClient>, String> {
     let Some(supplied) = request
         .header("authorization")
         .and_then(|value| value.trim().strip_prefix("Bearer "))
@@ -37,7 +38,8 @@ pub(super) async fn authenticate(
     else {
         return Ok(None);
     };
-    let clients = config::registry_api_clients().map_err(|_| ())?;
+    let clients = config::registry_api_clients()
+        .map_err(|problems| format!("registry API clients cannot be read: {}", problems.join("; ")))?;
     let mut matched = None;
     for client in clients
         .values()
@@ -45,9 +47,9 @@ pub(super) async fn authenticate(
     {
         let expected = crate::skarbiec::read_registry_token(client.item(), "token")
             .await
-            .map_err(|_| ())?
+            .map_err(|error| format!("registry token of {} cannot be read: {error}", client.item()))?
             .filter(|value| !value.is_empty())
-            .ok_or(())?;
+            .ok_or_else(|| format!("registry token of {} is empty or absent", client.item()))?;
         if constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
             // Two clients sharing one bearer means neither identity is
             // established, so the request is refused rather than attributed.
@@ -68,10 +70,13 @@ pub(super) async fn authorized(request: &Request, action: &str) -> Result<(), Re
             http_status(reqwest::StatusCode::UNAUTHORIZED),
             &json!({"error": "unauthorized"}),
         )),
-        Err(()) => Err(send_json(
-            http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-            &json!({"error": "registry authorization unavailable"}),
-        )),
+        Err(cause) => {
+            tracing::warn!(%action, %cause, "registry authentication could not be decided");
+            Err(send_json(
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+                &json!({"error": "registry authorization unavailable"}),
+            ))
+        }
     }
 }
 

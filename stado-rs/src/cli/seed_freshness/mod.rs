@@ -11,7 +11,7 @@
 //! The vault knows whether a seed EXISTS. It cannot know whether that seed
 //! still MATCHES an enrolment, because matching is only observable where a
 //! computed code is submitted to a provider and accepted or refused. So
-//! `skarbiec totp-seed-state` answers the vault's half — `present`,
+//! `skarbiec totp seed` answers the vault's half — `present`,
 //! `declared_empty`, `field_absent` — and deliberately stops there.
 //!
 //! The other half is written by the sign-in loop. Brama's journal

@@ -1,16 +1,34 @@
-//! Handing one failure to the local Claude Code CLI: the prompt it is given,
-//! where that binary is found, and what the attempt records about itself.
+//! Handing one failure to a detached Jeden session: the prompt it is given,
+//! how the session is started, and what the job's state records about it.
+//!
+//! The session is started through Stado's own `workload start jeden-session`,
+//! so it is placed on a host with room for it, reaches its model through
+//! Brama with the fleet's grant, and is an ordinary queue job: retained
+//! output, `stado job watch`, `stado cancel`. No model CLI found on this
+//! host's PATH, and no credential read here, takes part.
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use super::{
     scan_new_failures, state_load, state_save, FailureRecord, FixError, ALREADY_DISPATCHED,
-    CLAUDE_NOT_FOUND, DISPATCHED, DISPATCH_FAILED, DRY_RUN,
+    DISPATCHED, REFUSED,
 };
 use crate::queue::JobStorage;
 
-/// Build the structured prompt passed to the local Claude Code CLI for ONE
-/// failed job, with the job's whole recorded error.
+/// The workload kind a fix runs as.
+const SESSION_KIND: &str = "jeden-session";
+
+/// Where a fix session works: the workspace the operator names with
+/// `--failure-fixer-workspace`.
+#[derive(Debug, Clone)]
+pub struct FixSession {
+    pub workspace: String,
+    /// The step bound every fix session runs under, as the host declares it.
+    pub max_steps: u32,
+}
+
+/// Build the structured prompt a fix session is started with for ONE failed
+/// job, with the job's whole recorded error.
 pub fn format_fix_prompt(rec: &FailureRecord) -> String {
     format!(
         "You are the wisent-compute autonomous failure-fixer.\n\
@@ -38,142 +56,129 @@ pub fn format_fix_prompt(rec: &FailureRecord) -> String {
     )
 }
 
-/// Python `_claude_bin`: locate the local `claude` CLI on PATH
-/// (`shutil.which`). None when absent or not executable.
-pub fn claude_bin() -> Option<String> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join("claude");
-        if candidate.is_file() && is_executable(&candidate) {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
+/// The sessions a job's state says were started for it, oldest first. A job
+/// with no state yet has had none; a state that keeps no list of sessions
+/// (a record written before sessions were listed, or a damaged one) is
+/// refused by name, never read as "never dispatched".
+fn sessions_of(job_id: &str, state: &Value) -> Result<Vec<Value>, FixError> {
+    if state.as_object().is_some_and(serde_json::Map::is_empty) {
+        return Ok(Vec::new());
     }
-    None
+    state["sessions"].as_array().cloned().ok_or_else(|| {
+        FixError::Session(format!(
+            "the failure-fixer state of job {job_id} keeps no list of the sessions started for \
+             it: {state}"
+        ))
+    })
 }
 
-#[cfg(unix)]
-fn is_executable(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.metadata()
-        .map(|meta| meta.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+/// Start the session and read back the placement record it printed.
+fn start_session(session: &FixSession, prompt: &str) -> Result<Value, FixError> {
+    let stado = std::env::current_exe()?;
+    let proc = crate::wait::output(
+        std::process::Command::new(&stado)
+            .args(["workload", "start", SESSION_KIND, "--workspace"])
+            .arg(&session.workspace)
+            .arg("--task")
+            .arg(prompt)
+            .arg("--max-steps")
+            .arg(session.max_steps.to_string())
+            .args(["--allow-write", "--allow-command", "--json"]),
+    )?;
+    if !proc.status.success() {
+        return Err(FixError::Session(format!(
+            "`stado workload start {SESSION_KIND} --workspace {}` ended with {}: {}",
+            session.workspace,
+            proc.status,
+            String::from_utf8_lossy(&proc.stderr).trim()
+        )));
+    }
+    let record: Value = serde_json::from_slice(&proc.stdout)?;
+    if !record["job_id"].is_string() {
+        return Err(FixError::Session(format!(
+            "`stado workload start {SESSION_KIND}` printed a record without a job_id: {record}"
+        )));
+    }
+    Ok(record)
 }
 
-#[cfg(not(unix))]
-fn is_executable(path: &std::path::Path) -> bool {
-    path.is_file()
-}
-
-/// Python `dispatch_fix`: exec the local `claude` CLI with the fix prompt
-/// for ONE failed job. Returns the dispatch record dict (JSON). When
-/// `execute` is false, returns the dispatch payload without exec'ing.
+/// Start one fix session for ONE failed job, unless this same failure
+/// already had one. Returns the dispatch record (JSON).
 pub async fn dispatch_fix(
     rec: &FailureRecord,
     store: &JobStorage,
-    execute: bool,
+    session: &FixSession,
 ) -> Result<Value, FixError> {
-    let mut state = state_load(store, &rec.job_id).await?;
-    let attempts = state.get("attempts").and_then(Value::as_i64).unwrap_or(0);
-    if state.get("failed_at").and_then(Value::as_str) == Some(rec.failed_at.as_str()) {
+    let state = state_load(store, &rec.job_id).await?;
+    let mut sessions = sessions_of(&rec.job_id, &state)?;
+    if state["failed_at"].as_str() == Some(rec.failed_at.as_str()) {
         return Ok(json!({
             "job_id": rec.job_id,
             "status": ALREADY_DISPATCHED,
-            "attempts": attempts,
+            "attempts": sessions.len(),
             "failed_at": rec.failed_at,
         }));
     }
-    let prompt = format_fix_prompt(rec);
-    let claude = claude_bin();
-    if !execute {
-        return Ok(json!({
-            "job_id": rec.job_id,
-            "status": DRY_RUN,
-            "attempts": attempts,
-            "claude_bin": claude.clone().unwrap_or_else(|| "(not found on PATH)".to_string()),
-            "prompt_bytes": prompt.chars().count(),
-            "prompt": prompt,
-        }));
-    }
-    let Some(claude) = claude else {
-        return Ok(json!({
-            "job_id": rec.job_id,
-            "status": CLAUDE_NOT_FOUND,
-            "attempts": attempts,
-            "error": "`claude` CLI not on PATH. Install Claude Code before \
-                      running the failure-fixer.",
-        }));
-    };
-    let anthropic_key = crate::skarbiec::read_string("anthropic", "api_key")
-        .await?
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            crate::skarbiec::SkarbiecError::MissingValue("stado-anthropic/api_key".into())
-        })?;
-    // The CLI receives its credential from Skarbiec for this child only.
-    let proc = crate::wait::output(
-        std::process::Command::new(&claude)
-            .arg("-p")
-            .arg(&prompt)
-            .env("ANTHROPIC_API_KEY", anthropic_key),
-    )?;
-    // `null` when a signal ended the child: no exit code is invented for it,
-    // and `last_status` says how it ended.
-    let rc = proc.status.code();
-    let stdout = String::from_utf8_lossy(&proc.stdout);
-    let stderr = String::from_utf8_lossy(&proc.stderr);
-    if !state.is_object() {
-        state = Value::Object(Map::new());
-    }
-    let slot = state.as_object_mut().expect("ensured object");
-    slot.insert("attempts".into(), Value::from(attempts + 1));
-    slot.insert(
-        "last_dispatched_at".into(),
-        Value::from(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-    );
-    slot.insert("last_returncode".into(), json!(rc));
-    slot.insert("last_status".into(), Value::from(proc.status.to_string()));
-    slot.insert("last_stdout".into(), Value::from(stdout.as_ref()));
-    slot.insert("last_stderr".into(), Value::from(stderr.as_ref()));
-    slot.insert("failed_at".into(), Value::from(rec.failed_at.as_str()));
-    slot.insert("batch_id".into(), Value::from(rec.batch_id.as_str()));
-    slot.insert("command".into(), Value::from(rec.command.as_str()));
+    let placed = start_session(session, &format_fix_prompt(rec))?;
+    sessions.push(json!({
+        "dispatched_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "failed_at": rec.failed_at,
+        "job_id": placed["job_id"],
+        "target": placed["target"],
+        "run_id": placed["run_id"],
+    }));
+    let state = json!({
+        "sessions": sessions,
+        "failed_at": rec.failed_at,
+        "batch_id": rec.batch_id,
+        "command": rec.command,
+    });
     state_save(store, &rec.job_id, &state).await?;
     Ok(json!({
         "job_id": rec.job_id,
-        "status": if proc.status.success() { DISPATCHED } else { DISPATCH_FAILED },
-        "attempts": attempts + 1,
-        "returncode": rc,
-        "ended": proc.status.to_string(),
-        "stdout": stdout,
+        "status": DISPATCHED,
+        "attempts": sessions.len(),
+        "session": placed,
     }))
 }
 
-/// Python `scan_and_dispatch`: scan failed/ -> exec local `claude` per
-/// failure. `skip_dispatched` skips every job that ever had a session, not
-/// only the failure that had it, and records it as ALREADY_DISPATCHED.
-/// Returns the per-job dispatch records.
+/// Scan failed/ and start one fix session per failure not handled yet.
+/// `skip_dispatched` skips every job that ever had a session, not only the
+/// failure that had it, and records it as ALREADY_DISPATCHED. A job whose
+/// fix cannot be started, or whose state cannot be read, is listed as
+/// refused with the cause; the other jobs of the pass still get theirs.
 pub async fn scan_and_dispatch(
     since_iso: Option<&str>,
     command_pattern: Option<&str>,
-    execute: bool,
+    session: &FixSession,
     store: &JobStorage,
     skip_dispatched: bool,
 ) -> Result<Vec<Value>, FixError> {
     let mut out = Vec::new();
     for rec in scan_new_failures(store, since_iso, command_pattern).await? {
-        if skip_dispatched {
-            let prior = state_load(store, &rec.job_id).await?;
-            let attempts = prior.get("attempts").and_then(Value::as_i64).unwrap_or(0);
-            if attempts > 0 {
-                out.push(json!({
-                    "job_id": rec.job_id,
-                    "status": ALREADY_DISPATCHED,
-                    "attempts": attempts,
-                }));
-                continue;
+        let outcome = async {
+            if skip_dispatched {
+                let prior = state_load(store, &rec.job_id).await?;
+                let sessions = sessions_of(&rec.job_id, &prior)?;
+                if !sessions.is_empty() {
+                    return Ok(json!({
+                        "job_id": rec.job_id,
+                        "status": ALREADY_DISPATCHED,
+                        "attempts": sessions.len(),
+                    }));
+                }
             }
+            dispatch_fix(&rec, store, session).await
         }
-        out.push(dispatch_fix(&rec, store, execute).await?);
+        .await;
+        out.push(match outcome {
+            Ok(record) => record,
+            Err(error) => json!({
+                "job_id": rec.job_id,
+                "status": REFUSED,
+                "error": error.to_string(),
+            }),
+        });
     }
     Ok(out)
 }

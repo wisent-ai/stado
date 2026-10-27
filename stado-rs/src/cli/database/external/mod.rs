@@ -26,7 +26,12 @@ const URL_SHAPE: &str = "<engine>://user:password@host:port/database";
 /// The engine a connection URL's scheme names: the scheme itself, without
 /// the `+srv`-style transport suffix, and `postgres` for `postgresql`.
 fn engine_of(scheme: &str) -> String {
-    let base = scheme.split('+').next().unwrap_or(scheme);
+    // `split` always yields its first piece, the whole scheme when it holds
+    // no `+`, so the base is read without a second value to fall back on.
+    let base = match scheme.split_once('+') {
+        Some((base, _transport)) => base,
+        None => scheme,
+    };
     if base == "postgresql" {
         "postgres".to_string()
     } else {

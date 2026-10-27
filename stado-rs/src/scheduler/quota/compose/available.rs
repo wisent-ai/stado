@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::providers::Provider;
 use crate::queue::JobStorage;
@@ -28,21 +28,36 @@ async fn available_instances_from_quotas(
     provider_name: &str,
     quotas: &Value,
 ) -> Result<BTreeMap<String, i64>, QuotaError> {
-    let provider_quotas = quotas
-        .get(quota_provider_key(provider_name))
-        .cloned()
-        .unwrap_or(json!({}));
+    // A provider the quota document does not name has no accelerator to
+    // place. A section that is not a map of accelerator rows is refused:
+    // read as none, a garbled reservations file stopped every placement on
+    // the provider with no word of why.
+    let rows = match quotas.get(quota_provider_key(provider_name)) {
+        None => return Ok(BTreeMap::new()),
+        Some(Value::Object(rows)) => rows,
+        Some(other) => {
+            return Err(QuotaError::Provider(crate::providers::ProviderError::Value(
+                format!(
+                    "{provider_name} quota section {} is not a map of accelerator rows: {other}",
+                    quota_provider_key(provider_name)
+                ),
+            )))
+        }
+    };
     let running_counts = provider.list_running_instances().await?;
 
     let mut available = BTreeMap::new();
-    let Some(rows) = provider_quotas.as_object() else {
-        return Ok(available);
-    };
     for (accel_type, cfg) in rows {
         let total: i64 = py_int("total", cfg.get("total"))?.into_iter().sum();
         let reserved: i64 = py_int("reserved", cfg.get("reserved"))?.into_iter().sum();
-        let used = running_counts.get(accel_type).copied().unwrap_or_default();
-        available.insert(accel_type.clone(), (total - reserved - used).max(0));
+        // Running instances are listed per accelerator; one with none running
+        // is not listed, and its count is the empty sum.
+        let used: i64 = running_counts.get(accel_type).into_iter().sum();
+        // Placeable slots: the headroom when there is any, otherwise none.
+        let free: i64 = std::iter::once(total - reserved - used)
+            .filter(|headroom| headroom.is_positive())
+            .sum();
+        available.insert(accel_type.clone(), free);
     }
     Ok(available)
 }

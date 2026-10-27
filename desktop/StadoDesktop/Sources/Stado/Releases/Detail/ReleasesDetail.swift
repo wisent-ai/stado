@@ -65,11 +65,21 @@ extension ReleasesView {
                 HStack(alignment: .top, spacing: WisentDesign.Space.x6) {
                     WisentField(
                         label: "Desired version",
-                        value: report.desiredVersion ?? "The registry declares none"
+                        value: {
+                            switch report.desiredVersion {
+                            case .some(let value): return value
+                            case .none: return "The registry report contains no desired version."
+                            }
+                        }()
                     )
                     WisentField(
                         label: "Observed version",
-                        value: report.observedVersion ?? "The host has recorded none",
+                        value: {
+                            switch report.observedVersion {
+                            case .some(let value): return value
+                            case .none: return "The host report contains no observed version."
+                            }
+                        }(),
                         tone: report.isConverged ? .success : .warning
                     )
                     WisentField(label: "Phase", value: report.phase)
@@ -84,7 +94,6 @@ extension ReleasesView {
                     VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                         Text("BLOCKERS")
                             .font(WisentTypeScale.eyebrow())
-                            .tracking(0.6)
                             .foregroundStyle(WisentDesign.muted)
                         ForEach(report.blockers, id: \.self) { blocker in
                             Text(blocker)
@@ -100,7 +109,6 @@ extension ReleasesView {
                     VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                         Text("WHAT ENDS IT")
                             .font(WisentTypeScale.eyebrow())
-                            .tracking(0.6)
                             .foregroundStyle(WisentDesign.muted)
                         ForEach(report.remedies, id: \.self) { remedy in
                             Text(remedy)
@@ -114,16 +122,25 @@ extension ReleasesView {
                 HStack(alignment: .top, spacing: WisentDesign.Space.x6) {
                     WisentField(
                         label: "Disk pressure",
-                        value: report.gates.diskPressureUnresolved
-                            ? "Unresolved — the host is not claiming work"
-                            : "Resolved",
-                        tone: report.gates.diskPressureUnresolved ? .danger : .neutral
+                        value: {
+                            switch report.gates.diskPressureUnresolved {
+                            case .some(true): return "Unresolved — the host is not claiming work"
+                            case .some(false): return "Resolved"
+                            case .none: return "The host report omitted the disk-pressure reading."
+                            }
+                        }(),
+                        tone: report.gates.diskPressureUnresolved == true ? .danger : .neutral
                     )
                     WisentField(label: "Free space", value: ConsoleFormat.gigabytes(report.gates.freeGB))
                     WisentField(
                         label: "Volume used",
-                        value: report.gates.usedPercent.map { String(format: "%.1f%% against 80%%", $0) } ?? "Not observed",
-                        tone: (report.gates.usedPercent ?? 0) >= 80 ? .warning : .neutral
+                        value: {
+                            switch report.gates.usedPercent {
+                            case .some(let used): return String(format: "%.1f%% observed", used)
+                            case .none: return "The host report omitted volume usage."
+                            }
+                        }(),
+                        tone: report.gates.diskPressureUnresolved == true ? .warning : .neutral
                     )
                     WisentField(
                         label: "Memory",
@@ -150,7 +167,7 @@ extension ReleasesView {
     private func memorySummary(_ gates: ReleaseGates) -> String {
         var clauses: [String] = []
         if let available = gates.memoryAvailableGB {
-            clauses.append("\(StadoFormat.decimal(available)) GB available")
+            clauses.append("\(StadoFormat.decimal(available)) GiB available")
         }
         if let swap = gates.memorySwapUsedPct {
             clauses.append("swap \(swap)%")
@@ -170,7 +187,12 @@ extension ReleasesView {
         WisentSectionBox(
             title: "Installed software on \(row.target)",
             detail: softwareDetail(row),
-            trailing: row.software.map { $0.hasReport ? $0.verdict : "never" } ?? "unreported"
+            trailing: {
+                switch row.software {
+                case .some(let software): return software.hasReport ? software.verdict : "No host software report"
+                case .none: return "Software report not read"
+                }
+            }()
         ) {
             if let software = row.software {
                 HStack(alignment: .top, spacing: WisentDesign.Space.x6) {
@@ -200,7 +222,6 @@ extension ReleasesView {
                     VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                         Text("FINDINGS")
                             .font(WisentTypeScale.eyebrow())
-                            .tracking(0.6)
                             .foregroundStyle(WisentDesign.muted)
                         ForEach(software.findings, id: \.self) { finding in
                             Text(finding)

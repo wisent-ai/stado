@@ -38,7 +38,7 @@ pub(in crate::cli::seed_freshness) async fn remote_seed_state(
         .map_err(CmdError::from)?;
     if !output.succeeded() {
         return Err(CmdError::click(format!(
-            "{}: Skarbiec totp-seed-state failed: {}",
+            "{}: Skarbiec totp seed failed: {}",
             resolved.name,
             crate::deploy::host_channel::whole_failure(&output)
         ))
@@ -46,7 +46,7 @@ pub(in crate::cli::seed_freshness) async fn remote_seed_state(
     }
     serde_json::from_str(output.stdout.trim()).map_err(|error| {
         CmdError::click(format!(
-            "{}: Skarbiec totp-seed-state returned unreadable JSON ({error}): {}",
+            "{}: Skarbiec totp seed returned unreadable JSON ({error}): {}",
             resolved.name,
             output.stdout.trim()
         ))

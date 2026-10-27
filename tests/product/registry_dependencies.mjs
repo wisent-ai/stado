@@ -29,9 +29,6 @@ const output = mkdtempSync(
 );
 const home = join(output, "home");
 const catalogPath = join(output, "products.yml");
-const schema = /^schema_version:\s*(?<version>\S+)/m.exec(
-	readFileSync(join(root, "catalog/products.yml"), "utf8"),
-).groups.version;
 const report = {
 	started_at: new Date().toISOString(),
 	commands: [],
@@ -102,7 +99,7 @@ try {
 	mkdirSync(home, { recursive: true });
 	writeFileSync(
 		catalogPath,
-		`schema_version: ${schema}\nauthority:\n  owner: stado\n  rule: test catalog\nproducts:\n${record("alpha")}\n${record("beta")}\n`,
+		`authority:\n  owner: stado\n  rule: test catalog\nproducts:\n${record("alpha")}\n${record("beta")}\n`,
 	);
 
 	let answer = set(

@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::autonomy::model::{ResourceKind, ResourceRecord};
 use crate::capabilities::ProviderId;
 
-use super::aws_tags;
+use super::{aws_tags, console_name};
 
 pub(super) async fn aws_snapshots(
     client: &aws_sdk_ec2::Client,
@@ -25,7 +25,12 @@ pub(super) async fn aws_snapshots(
                 .send(),
         )
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            format!(
+                "EC2 DescribeSnapshots in {region}: {}",
+                aws_sdk_ec2::error::DisplayErrorContext(&error)
+            )
+        })?;
         for snapshot in output.snapshots() {
             let Some(native) = snapshot.snapshot_id() else {
                 return Err(format!(
@@ -35,7 +40,7 @@ pub(super) async fn aws_snapshots(
                 ));
             };
             let labels = aws_tags(snapshot.tags());
-            let name = labels.get("Name").map(String::as_str).unwrap_or(native);
+            let name = console_name(&labels, native);
             let mut resource = ResourceRecord::new(
                 ProviderId::Aws,
                 account,

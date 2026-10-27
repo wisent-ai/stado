@@ -103,8 +103,13 @@ pub(crate) async fn publish_and_admit(
             Some(crate::providers::local::space_reclaim::CLEANUP_LOCK_ERROR)
         }
     };
+    // A drain asked of this worker ([`crate::providers::local::agent::drain`])
+    // admits nothing more, and the publication says so with the same reason.
+    let drain = crate::providers::local::agent::drain::requested();
     let policy_reason = if queue_control.paused {
         Some("queue_paused")
+    } else if drain.is_some() {
+        Some("drain_requested")
     } else if pressure_active {
         Some("disk_pressure_active")
     } else {
@@ -115,7 +120,7 @@ pub(crate) async fn publish_and_admit(
         policy_reason.is_none(),
         policy_reason,
         available_accelerators,
-        free_vram_gb,
+        Some(free_vram_gb),
         total_vram_gb,
         agent_diag.clone(),
     );
@@ -147,6 +152,20 @@ pub(crate) async fn publish_and_admit(
             self_terminate(kind, log_fn).await;
             return Ok(Step::Stop);
         }
+        return Ok(Step::Done);
+    }
+    if let Some(reason) = drain {
+        agent_diag.insert("drain_reason".into(), Value::from(reason.clone()));
+        // The slots already running were advanced before this gate; the
+        // loop ends once none is left.
+        if slots.is_empty() {
+            log_fn(&format!("drain: {reason}; no job runs here, exiting"));
+            return Ok(Step::Stop);
+        }
+        log_fn(&format!(
+            "drain: {reason}; claiming nothing, {} running job(s) finish first",
+            slots.len()
+        ));
         return Ok(Step::Done);
     }
     if !accepting_jobs && !pressure_active {

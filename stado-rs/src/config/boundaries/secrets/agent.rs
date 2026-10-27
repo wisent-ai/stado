@@ -6,17 +6,20 @@
 
 use std::sync::LazyLock;
 
+use serde_json::Value;
+
 use crate::config_file::{expand_tilde, resolve as cfg, resolve_list as cfg_list};
 
+/// The agent Skarbiec URL as the configuration writes it, unresolved: what a
+/// unit installed on this host carries when the service it names cannot be
+/// resolved now, so the unit's own process resolves it when it reads it.
+static AGENT_SKARBIEC_URL_CONFIGURED: LazyLock<String> =
+    LazyLock::new(|| cfg("WC_AGENT_SKARBIEC_URL", "agent.skarbiec.url", ""));
 /// A configured `stado://service/skarbiec?consumer=<consumer>` is that
-/// adapter's address as this host's resolver published it.
-static AGENT_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
-    crate::service_resolution::local_address(&cfg(
-        "WC_AGENT_SKARBIEC_URL",
-        "agent.skarbiec.url",
-        "",
-    ))
-});
+/// adapter's address as this host's resolver published it; one that does
+/// not resolve keeps the cause, so no reader takes it for an unset URL.
+static AGENT_SKARBIEC_URL: LazyLock<Result<String, String>> =
+    LazyLock::new(|| crate::service_resolution::local_address(&AGENT_SKARBIEC_URL_CONFIGURED));
 static AGENT_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
     cfg(
         "WC_AGENT_SKARBIEC_CONSUMER",
@@ -50,9 +53,12 @@ static AGENT_SKARBIEC_SECRET_FIELDS: LazyLock<Vec<String>> = LazyLock::new(|| {
 fn env_and_file_list(variable: &str, key: &str) -> Vec<String> {
     let mut entries = cfg_list(variable, key, &[]);
     if std::env::var(variable).is_ok_and(|value| !value.trim().is_empty()) {
-        let from_file = crate::config_file::get(key)
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default();
+        // A file without the list, or with it as another type, adds
+        // nothing to the environment's; `config validate` names a wrong type.
+        let from_file: Vec<Value> = match crate::config_file::get(key) {
+            Some(Value::Array(entries)) => entries,
+            _ => Vec::new(),
+        };
         for entry in from_file.iter().filter_map(|value| value.as_str()) {
             if !entries.iter().any(|known| known == entry) {
                 entries.push(entry.to_string());
@@ -87,9 +93,27 @@ pub(crate) fn resident_worker_environment_key(name: &str) -> &str {
 
 /// Skarbiec endpoint reachable by workload agents. Cloud agents require HTTPS;
 /// a device-local agent may leave this empty and use
-/// [`crate::config::skarbiec_url`].
+/// [`crate::config::skarbiec_url`]. A configured service that this host
+/// cannot resolve answers empty too, with its cause in
+/// [`agent_skarbiec_url_absent`], as [`crate::config::skarbiec_url`] does:
+/// a reader that would fall back to the shared Skarbiec on empty asks that
+/// first, so an unresolved service is never read as an unset URL.
 pub fn agent_skarbiec_url() -> &'static str {
-    AGENT_SKARBIEC_URL.as_str()
+    match AGENT_SKARBIEC_URL.as_ref() {
+        Ok(url) => url,
+        Err(_explained_by_agent_skarbiec_url_absent) => "",
+    }
+}
+
+/// Why the configured agent Skarbiec service cannot be resolved on this
+/// host; `None` when the URL resolved or is not a named service.
+pub fn agent_skarbiec_url_absent() -> Option<&'static str> {
+    AGENT_SKARBIEC_URL.as_ref().err().map(String::as_str)
+}
+
+/// The agent Skarbiec URL as configured, before a named service is resolved.
+pub fn agent_skarbiec_url_configured() -> &'static str {
+    AGENT_SKARBIEC_URL_CONFIGURED.as_str()
 }
 
 /// Consumer the agent reads workload secrets as: `stado`, or the scoped
@@ -124,17 +148,37 @@ pub fn agent_skarbiec_secret_fields() -> &'static [String] {
 /// writes a new product's build secret into the file of a running agent; a
 /// capacity publication of the startup list alone hid it from every
 /// coordinator until the agent restarted.
-pub fn agent_skarbiec_secret_fields_now() -> Vec<String> {
+pub fn agent_skarbiec_secret_fields_now() -> Result<Vec<String>, String> {
     let mut fields = AGENT_SKARBIEC_SECRET_FIELDS.clone();
-    let fresh = crate::config_file::get_fresh("agent.skarbiec.secret_fields")
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
-    for entry in fresh.iter().filter_map(|value| value.as_str()) {
-        if !fields.iter().any(|known| known == entry) {
-            fields.push(entry.to_string());
+    for entry in fresh_secret_fields()? {
+        if !fields.contains(&entry) {
+            fields.push(entry);
         }
     }
-    fields
+    Ok(fields)
+}
+
+/// The `agent.skarbiec.secret_fields` list the config file holds now. A file
+/// that names no list enrolls nothing beyond the startup list. A file that
+/// cannot be read, a list of another type, or an entry that is not text is
+/// refused naming it: read as nothing, it withheld every secret enrolled
+/// after start and said only that the job was not allowed.
+fn fresh_secret_fields() -> Result<Vec<String>, String> {
+    match crate::config_file::get_fresh("agent.skarbiec.secret_fields")? {
+        None => Ok(Vec::new()),
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .map(|entry| match entry {
+                Value::String(reference) => Ok(reference.clone()),
+                other => Err(format!(
+                    "agent.skarbiec.secret_fields holds {other}, which is not a role#field reference"
+                )),
+            })
+            .collect(),
+        Some(other) => Err(format!(
+            "agent.skarbiec.secret_fields is {other}, not a list of role#field references"
+        )),
+    }
 }
 
 /// Backend messaging items Stado resolves for the operator session through
@@ -147,8 +191,9 @@ pub fn backend_messaging_skarbiec_items() -> &'static [String] {
 /// Matching without allocating keeps this check cheap on every admission path;
 /// only a reference the loaded list lacks is looked up again in the config
 /// file as it is now, so a product enrolled after this agent started is
-/// served without restarting it.
-pub fn agent_secret_reference_allowed(role: &str, field: &str) -> bool {
+/// served without restarting it. A config file that cannot be read now is
+/// the refusal, not a "no".
+pub fn agent_secret_reference_allowed(role: &str, field: &str) -> Result<bool, String> {
     let matches = |entry: &str| {
         entry
             .split_once('#')
@@ -156,15 +201,8 @@ pub fn agent_secret_reference_allowed(role: &str, field: &str) -> bool {
                 allowed_role == role && allowed_field == field
             })
     };
-    AGENT_SKARBIEC_SECRET_FIELDS
-        .iter()
-        .any(|entry| matches(entry))
-        || crate::config_file::get_fresh("agent.skarbiec.secret_fields")
-            .and_then(|value| value.as_array().cloned())
-            .is_some_and(|entries| {
-                entries
-                    .iter()
-                    .filter_map(|value| value.as_str())
-                    .any(matches)
-            })
+    if AGENT_SKARBIEC_SECRET_FIELDS.iter().any(|entry| matches(entry)) {
+        return Ok(true);
+    }
+    Ok(fresh_secret_fields()?.iter().any(|entry| matches(entry)))
 }

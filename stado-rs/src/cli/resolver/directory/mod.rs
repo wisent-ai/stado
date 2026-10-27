@@ -8,7 +8,7 @@ use crate::cli::CmdError;
 
 pub(in crate::cli::resolver) mod document;
 pub(in crate::cli::resolver) mod source;
-mod unanswered;
+pub(in crate::cli::resolver) mod remembered;
 pub(in crate::cli::resolver) mod write;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,6 +16,16 @@ pub(in crate::cli::resolver) mod write;
 struct SnapshotPayload {
     store_version: String,
     document: Value,
+}
+
+/// What this host's resolver answers on its API: the snapshot it holds and
+/// the authority a copy was refreshed from, absent on the authority itself.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HeldPayload {
+    store_version: String,
+    document: Value,
+    read_from: Option<String>,
 }
 
 fn validate_snapshot(payload: SnapshotPayload) -> Result<(Value, String, u64), String> {
@@ -81,6 +91,33 @@ pub(crate) async fn read_local_snapshot(
 /// and a snapshot command left waiting after it is a process and a
 /// connection the authority keeps for nobody.
 pub(super) async fn emit_snapshot() -> Result<(), CmdError> {
+    let ((document, store_version, _), read_from) = held_snapshot().await?;
+    // Another host asks this command for the authority's own generation;
+    // a copy this host refreshed from the authority is not served onward.
+    if let Some(authority) = read_from {
+        return Err(CmdError::click(format!(
+            "this host is not the registry authority: its resolver holds a copy read from \
+             {authority}, which is the host to ask"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&SnapshotPayload {
+            store_version,
+            document,
+        })?
+    );
+    Ok(())
+}
+
+/// The registry generation this host's running resolver holds in memory,
+/// with the store version it was read under and its generation, and the
+/// authority it was refreshed from when this host is not the authority;
+/// refused with the reason when no live resolver publishes one or the one it
+/// holds is past its declared max-stale.
+pub(in crate::cli::resolver) async fn held_snapshot(
+) -> Result<((Value, String, u64), Option<String>), CmdError> {
     use crate::cli::resolver::report::published::{published_state, publisher_running, state_path};
     use crate::primitives::failure::FailureCode;
     let refused = |detail: String| CmdError::click(detail).stating(FailureCode::InfraDown);
@@ -152,18 +189,15 @@ pub(super) async fn emit_snapshot() -> Result<(), CmdError> {
     }
     // Checked as every reader of the authority checks it, so this command
     // never prints a document its readers would refuse.
-    let payload: SnapshotPayload = serde_json::from_str(&body).map_err(|error| {
+    let payload: HeldPayload = serde_json::from_str(&body).map_err(|error| {
         refused(format!(
             "the resolver at {url} answered no registry snapshot ({error}): {body}"
         ))
     })?;
-    let (document, store_version, _) = validate_snapshot(payload).map_err(CmdError::declaration)?;
-    println!(
-        "{}",
-        serde_json::to_string(&SnapshotPayload {
-            store_version,
-            document,
-        })?
-    );
-    Ok(())
+    let snapshot = validate_snapshot(SnapshotPayload {
+        store_version: payload.store_version,
+        document: payload.document,
+    })
+    .map_err(CmdError::declaration)?;
+    Ok((snapshot, payload.read_from))
 }

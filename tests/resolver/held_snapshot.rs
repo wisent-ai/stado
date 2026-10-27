@@ -13,6 +13,10 @@
 //! authority whose store stands would hold every host's registry read behind
 //! it; asked of the resolver with no measure, every reader that gives up over
 //! SSH would leave one snapshot process waiting on the authority.
+//! The same deployment carries `stado resolver follow --generation N`: refused
+//! while no resolver published its state; serving, the held generation ends it
+//! at once, a higher one is refused with the resolver's own answer, and a
+//! registry push is what the next snapshot answers; stopped, it is refused.
 use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
@@ -262,4 +266,35 @@ fn the_authority_snapshot_answers_from_the_running_resolver_and_never_reads_the_
         )),
         "the refusal names the resolver API that answered nothing: {said}"
     );
+}
+
+#[test]
+fn following_a_generation_ends_on_the_resolvers_own_answer() {
+    let mut deployment = Deployment::start();
+    deployment.cli("config-init", &["config", "init"]);
+    let api_bind = deployment.free_bind();
+    let generation = deployment.import_registry(&api_bind);
+    let (held, above) = (generation.to_string(), generation.saturating_add(generation));
+    assert!(above > generation, "the template's generation is counted from above zero");
+    let refused = |deployment: &Deployment, name: &str, wanted: &str, said: &str| {
+        let output = deployment.run(name, &["resolver", "follow", "--generation", wanted]);
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(!output.status.success() && stderr.contains(said), "follow {wanted}: {stderr}");
+    };
+    refused(&deployment, "follow-unpublished", &held, "no resolver has published its state on this host");
+    deployment.serve();
+    let followed = deployment.cli("follow-held", &["resolver", "follow", "--generation", &held]);
+    assert!(followed.contains(&format!("holds directory generation {generation} or later")), "{followed}");
+    // On the authority, the generation its store holds, with no upstream to ask.
+    let authority = deployment.cli("follow-authority", &["resolver", "follow"]);
+    assert!(authority.contains(&format!("holds directory generation {generation} or later")), "{authority}");
+    let said = format!("it holds generation {generation}, so that registry does not carry directory generation {above} yet");
+    refused(&deployment, "follow-above", &above.to_string(), &said);
+    // A write that lands in the authority's store is what its snapshot answers next, at once.
+    let (token, file) = (deployment.cli("token", &["registry", "pull", "--generation-only"]), deployment.root.join("registry.json"));
+    let pushed: Value = serde_json::from_str(&deployment.cli("push", &["registry", "push", &file.to_string_lossy(), "--if-generation", token.trim(), "--json"])).unwrap();
+    let snapshot: Value = serde_json::from_str(deployment.cli("after-push", &["resolver", "snapshot"]).trim()).unwrap();
+    assert_eq!(snapshot["store_version"], pushed["generation"], "{snapshot} after {pushed}");
+    let pid = deployment.stop();
+    refused(&deployment, "follow-stopped", &held, &format!("the resolver that published last (pid {pid}) is not running"));
 }

@@ -84,11 +84,18 @@ pub(crate) async fn publish_placement_policy_report(
 
     // Staged as a file because the delivery channel carries files: the same
     // delivered-file path any other artifact takes, checksummed on arrival,
-    // rather than a private scp with the audit trail removed.
+    // rather than a private scp with the audit trail removed. Staged under
+    // the Stado home in a directory of its own (the move records' directory
+    // holds only move records), not the system's shared temporary directory.
+    let staging = crate::config_file::home()
+        .map_err(CmdError::declaration)?
+        .join(".stado")
+        .join("placement-policy");
+    std::fs::create_dir_all(&staging)?;
     let staged = tempfile::Builder::new()
         .prefix("stado-placement-policy-")
         .suffix(".json")
-        .tempfile()?;
+        .tempfile_in(&staging)?;
     std::fs::write(
         staged.path(),
         format!("{}\n", serde_json::to_string_pretty(&policy)?),

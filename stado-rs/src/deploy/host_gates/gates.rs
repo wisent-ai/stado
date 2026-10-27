@@ -42,7 +42,8 @@ pub struct HostGates {
     pub cleanup_success_age_seconds: Option<i64>,
     /// Available bytes from the host's `df -Pk` reading, never from a pressure flag.
     pub free_bytes: Option<u64>,
-    /// The same available space as GiB, rounded to one decimal.
+    /// The same available space as GiB, as measured; a report rounds it where
+    /// it prints it.
     pub free_gb: Option<f64>,
     /// Percent of the volume in use, as the disk-full rule judges it.
     pub used_percent: Option<f64>,
@@ -74,10 +75,13 @@ pub struct HostGates {
     /// net of them; this is the other side of that subtraction.
     pub running_workloads: Option<i64>,
     pub reserved: Option<serde_json::Value>,
-    pub reservations: Vec<serde_json::Value>,
+    /// The live holds, or `None` when the host could not read them (it then
+    /// admits nothing, with admission_reason `reservations_unread`).
+    pub reservations: Option<Vec<serde_json::Value>>,
     pub available_cpu_cores: Option<i64>,
     pub total_cpu_cores: Option<i64>,
-    pub available_accelerators: BTreeMap<String, i64>,
+    /// Placements by accelerator class, or `None` when the host published nothing.
+    pub available_accelerators: Option<BTreeMap<String, i64>>,
     pub free_ram_gb: Option<f64>,
     pub total_ram_gb: Option<f64>,
     pub free_vram_gb: Option<i64>,
@@ -122,6 +126,9 @@ pub struct HostGates {
     pub complete: bool,
     pub observations: Vec<DiagnosticRead>,
     pub pressure_source: Option<&'static str>,
+    /// Why this command's own disk reading gave no volume, when it gave
+    /// none: beside `disk_pressure_unresolved`, it names what to repair.
+    pub local_disk_unread: Option<String>,
     pub published_diagnostics: Option<serde_json::Value>,
 }
 

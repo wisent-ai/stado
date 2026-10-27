@@ -62,13 +62,21 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
 
     let mut normalized = Map::new();
     // Stado owns provider selection unless the caller supplies a constraint.
+    // An unstated numeric constraint is the one `stado submit` takes when none
+    // is given, read from that one declaration (no VRAM floor, no cost cap,
+    // the ordinary priority) so the two submit paths cannot drift and a
+    // stored request keeps the digest it was reserved under.
+    let unstated = crate::queue::submit::SubmitOptions::default();
     normalized.insert("provider".into(), Value::from(""));
     normalized.insert("gpu_type".into(), Value::from(""));
     normalized.insert("pinned_host".into(), Value::from(""));
-    normalized.insert("vram_gb".into(), Value::from(0));
-    normalized.insert("max_cost_per_hour_usd".into(), Value::from(0.0));
+    normalized.insert("vram_gb".into(), Value::from(unstated.vram_gb));
+    normalized.insert(
+        "max_cost_per_hour_usd".into(),
+        Value::from(unstated.max_cost_per_hour_usd),
+    );
     normalized.insert("pin_to_provider".into(), Value::from(false));
-    normalized.insert("priority".into(), Value::from(0));
+    normalized.insert("priority".into(), Value::from(unstated.priority));
     normalized.insert("repo".into(), Value::from(""));
     normalized.insert("repo_ref".into(), Value::from(""));
     normalized.insert("repo_workdir".into(), Value::from(""));
@@ -102,14 +110,18 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
             return Err(invalid(format!("{name} must be a string")));
         }
     }
-    let pinned_host = normalized["pinned_host"].as_str().unwrap_or_default();
+    let Some(pinned_host) = normalized["pinned_host"].as_str() else {
+        return Err(invalid("pinned_host must be a string"));
+    };
     if !pinned_host.is_empty() && !HOSTNAME_RE.is_match(pinned_host) {
         return Err(invalid(
             "pinned_host must be a lowercase consumer host name (letters, digits, dot, dash)",
         ));
     }
-    let repo = normalized["repo"].as_str().unwrap_or_default();
-    let repo_ref = normalized["repo_ref"].as_str().unwrap_or_default();
+    let (Some(repo), Some(repo_ref)) = (normalized["repo"].as_str(), normalized["repo_ref"].as_str())
+    else {
+        return Err(invalid("repo and repo_ref must be strings"));
+    };
     if repo.is_empty() {
         if !repo_ref.is_empty() {
             return Err(invalid("repo_ref is valid only when repo is set"));
@@ -126,7 +138,7 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
             return Err(invalid(format!("{name} must be an integer")));
         }
     }
-    if normalized["vram_gb"].as_i64().unwrap_or_default() < 0 {
+    if normalized["vram_gb"].as_i64().is_some_and(i64::is_negative) {
         return Err(invalid("vram_gb must not be negative"));
     }
     // Stado keeps no restart count; a submitter that starts its own launches
@@ -149,7 +161,7 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     let Some(cost) = normalized["max_cost_per_hour_usd"].as_f64() else {
         return Err(invalid("max_cost_per_hour_usd must be non-negative"));
     };
-    if cost < 0.0 {
+    if cost.is_sign_negative() {
         return Err(invalid("max_cost_per_hour_usd must be non-negative"));
     }
     // Python normalizes to float so the digest sees "1.0", not "1".
@@ -230,7 +242,7 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
                 "secret_env.{env_name} requires path-safe role and field strings"
             )));
         }
-        if !config::agent_secret_reference_allowed(role, field) {
+        if !config::agent_secret_reference_allowed(role, field).map_err(invalid)? {
             return Err(invalid(format!(
                 "secret_env.{env_name} reference is not in agent.skarbiec.secret_fields"
             )));

@@ -228,8 +228,8 @@ fn write_holder(mut file: &File, holder: &Holder, path: &Path) -> Result<(), Cmd
         CmdError::unreachable(format!("the role holder record is too long: {error}"))
     })?;
     file.set_len(length)
-        .and_then(|_| file.write_all(&body))
-        .and_then(|_| file.sync_all())
+        .and_then(|()| file.write_all(&body))
+        .and_then(|()| file.sync_all())
         .map_err(|error| {
             CmdError::unreachable(format!(
                 "the role holder record {} cannot be written: {error}",

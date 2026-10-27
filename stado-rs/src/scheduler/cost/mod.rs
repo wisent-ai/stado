@@ -25,9 +25,9 @@ mod projection;
 mod rows;
 mod summary;
 
-pub use measure::attribution::{model_from_command, target_kind};
+pub use measure::attribution::target_kind;
 pub use projection::{project_batch, Projection};
 pub use rows::collect::collect_completed;
 pub use rows::row::CostRow;
-pub use rows::wall_time::{estimate_wall_time, wall_time_table};
+pub use rows::wall_time::{estimate_wall_time, wall_time_table, WallTimes};
 pub use summary::{format_report, report, BucketSummary, Report};

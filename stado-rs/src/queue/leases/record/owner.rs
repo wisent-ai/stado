@@ -9,7 +9,7 @@
 //! another host cannot be observed from here, so it is held and named.
 
 use std::collections::HashSet;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -24,12 +24,19 @@ pub struct OwnerInvocation {
     owner_id: String,
 }
 
+/// The set of owners running here. A thread that panicked while holding it
+/// left only a completed insert or remove behind, so the set it guards is
+/// still the set and is taken as it is.
+fn active_owners() -> MutexGuard<'static, HashSet<String>> {
+    match ACTIVE_OWNERS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 impl OwnerInvocation {
     pub fn begin(owner_id: &str) -> Self {
-        ACTIVE_OWNERS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(owner_id.to_string());
+        active_owners().insert(owner_id.to_string());
         Self {
             owner_id: owner_id.to_string(),
         }
@@ -37,19 +44,13 @@ impl OwnerInvocation {
 
     /// Whether `owner_id`'s invocation is running in this process now.
     pub fn running(owner_id: &str) -> bool {
-        ACTIVE_OWNERS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .contains(owner_id)
+        active_owners().contains(owner_id)
     }
 }
 
 impl Drop for OwnerInvocation {
     fn drop(&mut self) {
-        ACTIVE_OWNERS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&self.owner_id);
+        active_owners().remove(&self.owner_id);
     }
 }
 
@@ -80,18 +81,16 @@ fn this_host() -> String {
     HOST.clone()
 }
 
-/// Whether a pid on this host is a process now: `kill(pid, 0)` succeeds, or
-/// is refused only because the process belongs to somebody else.
+/// Whether a pid on this host is a process now, by the one answer every
+/// caller gets ([`crate::primitives::procutil::pid_alive`]). A recorded pid
+/// beyond what a `pid_t` holds names no process.
 fn pid_alive(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else {
-        return false;
-    };
-    if pid <= 0 {
-        return false;
-    }
-    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) {
-        Ok(()) => true,
-        Err(errno) => errno == nix::errno::Errno::EPERM,
+    match i32::try_from(pid) {
+        Ok(pid) => crate::primitives::procutil::pid_alive(pid),
+        Err(beyond) => {
+            eprintln!("stado: lease owner pid {pid} is no process id ({beyond})");
+            false
+        }
     }
 }
 

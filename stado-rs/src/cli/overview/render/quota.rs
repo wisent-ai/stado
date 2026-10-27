@@ -6,6 +6,8 @@
 
 use serde_json::Value;
 
+use crate::cli::reporting::field;
+
 pub(super) fn print_quota(document: &Value) {
     println!("quota:");
     let quota = &document["quota"];
@@ -26,7 +28,7 @@ pub(super) fn print_quota(document: &Value) {
             for (accel, row) in rows {
                 println!(
                     "  {provider}/{accel}: total={} used={} reserved={} available={}",
-                    row["total"], row["used"], row["reserved"], row["available"]
+                    field(&row["total"]), field(&row["used"]), field(&row["reserved"]), field(&row["available"])
                 );
             }
         }

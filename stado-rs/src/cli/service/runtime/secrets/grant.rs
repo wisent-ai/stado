@@ -1,4 +1,4 @@
-//! `service grant sync` and `service token-file sync`.
+//! `service grant sync` and `service bearer sync`.
 
 use super::*;
 
@@ -29,7 +29,13 @@ pub(crate) async fn grant_sync(options: GrantSyncOptions<'_>) -> Result<(), CmdE
     let lifetime = crate::credential_store::grant::GrantLifetime::stated(ttl_seconds)
         .ok_or_else(|| CmdError::usage("--ttl-seconds must be positive"))?;
     let capabilities = capabilities.join(",");
-    let audience = audience.unwrap_or(consumer);
+    // `--audience` is declared as defaulting to the consumer
+    // (`commands::spec::unit_inputs::credentials`); the grant names whichever
+    // was given.
+    let audience = match audience {
+        Some(audience) => audience,
+        None => consumer,
+    };
     let services = declared_matching(name, Some(host)).await?;
     let runner = production_runner();
     let mut payload = Vec::new();

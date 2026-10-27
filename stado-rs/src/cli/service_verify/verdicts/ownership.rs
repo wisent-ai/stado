@@ -56,11 +56,24 @@ pub(in crate::cli::service_verify) async fn judge_ownership(
         if service.active_host != finding.host {
             continue;
         }
-        let Some(port) = url::Url::parse(&finding.endpoint)
-            .ok()
-            .and_then(|url| url.port())
-        else {
-            continue;
+        // Ownership is judged on the endpoint's port; an endpoint that is
+        // not a URL, or names no port, cannot be judged and the row says so.
+        let port = match url::Url::parse(&finding.endpoint).map(|url| url.port()) {
+            Ok(Some(port)) => port,
+            Ok(None) => {
+                finding.detail = format!(
+                    "{}; ownership is unjudged because the endpoint names no port",
+                    finding.detail
+                );
+                continue;
+            }
+            Err(error) => {
+                finding.detail = format!(
+                    "{}; ownership is unjudged because the endpoint is not a URL: {error}",
+                    finding.detail
+                );
+                continue;
+            }
         };
         // The stable bind is held by the rollout's proxy by declaration, so
         // ownership-by-label is the wrong question for it. Checked before the

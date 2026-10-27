@@ -111,11 +111,11 @@ pub(crate) async fn store_vault_item(
 /// whose own output is a single JSON document.
 ///
 /// With `if_absent` the owner's Skarbiec creates the item only when no live
-/// item has that id (`set-json --if-absent`, decided and written under one
+/// item has that id (`set --if-absent`, decided and written under one
 /// vault generation, so of two concurrent creators only one writes); an
 /// existing item is left as it is and reported with `created: false`.
 ///
-/// `tags` sets the item's tag list (`set-json --tags`); `None` leaves an
+/// `tags` sets the item's tag list (`set --tags`); `None` leaves an
 /// existing item's tags as they are.
 pub(crate) async fn write_vault_item(
     target: &str,
@@ -161,7 +161,7 @@ pub(crate) async fn write_vault_item(
         gnupg_environment.as_str(),
         vault_environment.as_str(),
         skarbiec.as_str(),
-        "set-json",
+        "set",
         item,
         "--type",
         item_type,
@@ -183,21 +183,21 @@ pub(crate) async fn write_vault_item(
     )
     .await
     .map_err(CmdError::from)?;
-    if !stored.ok() {
+    if !stored.succeeded() {
         return Err(CmdError::click(format!(
-            "{}: Skarbiec set-json failed for {item}: {}",
+            "{}: Skarbiec set failed for {item}: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&stored, "remote command failed")
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    // Skarbiec's set-json answers whether it wrote the item. The visibility
+    // Skarbiec's set answers whether it wrote the item. The visibility
     // check below rests on that answer, so one that is not JSON or does not
     // say `created` is refused with what Skarbiec printed; it comes from a
     // Skarbiec older than `--if-absent`, which the host's release replaces.
     let unanswered = |cause: String| {
         CmdError::click(format!(
-            "{}: Skarbiec set-json for {item} did not say whether it created the item \
+            "{}: Skarbiec set for {item} did not say whether it created the item \
              ({cause}); it printed: {}",
             resolved.name,
             stored.stdout.trim()

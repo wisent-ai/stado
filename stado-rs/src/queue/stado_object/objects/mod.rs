@@ -18,9 +18,23 @@ use super::StadoObjectBackend;
 use crate::queue::{BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 use crate::remote::object_store::ObjectRef;
 
-/// Bytes in one gibibyte, the unit `memory_gb` answers in
-/// (https://physics.nist.gov/cuu/Units/binary.html).
-const BYTES_PER_GIB: f64 = (1u64 << 30) as f64;
+/// The bytes a text read may buffer: the memory this host has available now,
+/// the operating system's own measure read at the moment of the read. A host
+/// whose memory cannot be read reads the document unbounded, because an
+/// unknown is not a limit, and says so.
+pub(super) fn text_room(path: &str) -> Option<usize> {
+    let available = crate::providers::local::host_memory::reading::read_available_and_total()
+        .and_then(|(available, _)| {
+            usize::try_from(available).map_err(|error| format!("available memory {available} is not a byte count: {error}"))
+        });
+    match available {
+        Ok(bytes) => Some(bytes),
+        Err(cause) => {
+            tracing::warn!("{path} is read without a memory bound: this host's available memory cannot be read: {cause}");
+            None
+        }
+    }
+}
 
 mod listing;
 mod metadata;
@@ -61,18 +75,8 @@ impl BlobBackend for StadoObjectBackend {
     async fn download_text(&self, path: &str) -> Result<Option<String>, StorageError> {
         // A text object is buffered whole in this process, so a reply larger
         // than the memory this host has available now is refused before its
-        // body is requested: the operating system's own measure, read at the
-        // moment of the read. A host whose memory cannot be read reads the
-        // document unbounded, because an unknown is not a limit, and says so.
-        let room = match crate::providers::local::helpers::memory_gb() {
-            Ok((available_gib, _)) => Some((available_gib * BYTES_PER_GIB) as usize),
-            Err(cause) => {
-                tracing::warn!(
-                    "{path} is read without a memory bound: this host's available memory cannot be read: {cause}"
-                );
-                None
-            }
-        };
+        // body is requested.
+        let room = text_room(path);
         let Some(bytes) = self.download_bytes_limited(path, room).await? else {
             return Ok(None);
         };

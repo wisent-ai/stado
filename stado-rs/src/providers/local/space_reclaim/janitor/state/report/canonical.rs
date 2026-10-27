@@ -22,30 +22,31 @@ fn write_canonical(value: &Value, out: &mut String) {
             let mut keys: Vec<&String> = map.keys().collect();
             keys.sort();
             out.push('{');
-            for (index, key) in keys.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_canonical(&Value::String((*key).clone()), out);
+            let mut separator = "";
+            for key in keys {
+                out.push_str(separator);
+                separator = ",";
+                write_canonical(&Value::String(key.clone()), out);
                 out.push(':');
-                write_canonical(&map[*key], out);
+                write_canonical(&map[key], out);
             }
             out.push('}');
         }
         Value::Array(items) => {
             out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
+            let mut separator = "";
+            for item in items {
+                out.push_str(separator);
+                separator = ",";
                 write_canonical(item, out);
             }
             out.push(']');
         }
         // serde_json's own serializer matches json.dumps for scalars;
-        // ensure_ascii escaping keeps Python parity for strings.
+        // ensure_ascii escaping keeps Python parity for strings. A JSON scalar
+        // always serializes: serde_json fails only on map keys that are not strings.
         other => out.push_str(&crate::models::ensure_ascii(
-            &serde_json::to_string(other).unwrap_or_else(|_| "null".to_string()),
+            &serde_json::to_string(other).expect("a JSON scalar always serializes"),
         )),
     }
 }

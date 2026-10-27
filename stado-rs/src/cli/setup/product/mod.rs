@@ -13,15 +13,7 @@ use clap::{parser::ValueSource, ArgMatches, Command, FromArgMatches, Subcommand}
 
 use crate::cli::CmdError;
 
-/// The role whose item holds the fleet's Apple certificate and key: the vault
-/// item carrying `stado:role:macos-development-signing`. It signs every product
-/// installation unless the operator names another role through
-/// `WISENT_CODESIGN_ROLE` or supplies `WISENT_CODESIGN_CERTIFICATE_PEM`.
-///
-/// A role says what the secret is for, never which item holds it, so renaming
-/// or replacing the item changes nothing here; it is the same role the
-/// release manifests name in `secret_env`.
-pub const SIGNING_ROLE: &str = "macos-development-signing";
+pub use stado_product::SIGNING_ROLE;
 
 /// One parsed `stado product` invocation. Its operations are declared once, by
 /// the product crate, and parsed by the same clap tree as the rest of Stado.
@@ -107,7 +99,22 @@ async fn remote_service_operation(
     }
     let mut words = vec!["product".to_string(), action.to_string()];
     words.extend(command_line_words(action, arguments, &target.name));
+    // `--purpose` is global, so the verb's own definition does not list it:
+    // carried here, the host's Stado names the same defects to its Oko.
+    for purpose in purposes(matches) {
+        words.extend(["--purpose".to_string(), purpose.to_string()]);
+    }
     Ok(Some((target.name.clone(), words)))
+}
+
+/// The open defects the operator named with `--purpose`, in the order given.
+fn purposes(matches: &ArgMatches) -> Vec<&str> {
+    matches
+        .get_many::<String>("purpose")
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect()
 }
 
 /// The text `id` was given in `arguments`; `None` when it was not given or
@@ -186,6 +193,7 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
         crate::cli::release_loop::allowed::require(
             crate::cli::release_loop::allowed::BUILD,
             product,
+            &purposes(&command.matches),
         )
         .await?;
     }

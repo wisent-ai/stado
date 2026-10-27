@@ -29,8 +29,7 @@ async fn record_names(store: &JobStorage, prefix: &str) -> Result<Vec<String>, S
 
 /// The model a record's command runs, when it names one.
 fn record_model(doc: &Value) -> Option<String> {
-    let model = model_of(doc.get("command").and_then(Value::as_str)?);
-    (!model.is_empty()).then_some(model)
+    model_of(doc.get("command").and_then(Value::as_str)?)
 }
 
 impl Sizing {
@@ -107,13 +106,13 @@ impl Sizing {
                 continue;
             }
             // Python `isinstance(peak, int)`: a JSON float (74.0) is not an
-            // int and as_i64 rejects it the same way. A peak that is not
-            // positive is an unmeasured or CPU job, not an observation.
+            // int and as_i64 rejects it the same way, as it does an integer
+            // beyond the sample type, which nothing measured. A peak that is
+            // not positive is an unmeasured or CPU job, not an observation.
             let Some(peak) = doc
                 .get("peak_vram_gb")
-                .and_then(Value::as_u64)
-                .and_then(std::num::NonZeroU64::new)
-                .and_then(|peak| i64::try_from(peak.get()).ok())
+                .and_then(Value::as_i64)
+                .filter(|peak| peak.is_positive())
             else {
                 continue;
             };

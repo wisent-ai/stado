@@ -4,8 +4,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::release_control::identifier;
 
+/// The one version a source-revision record is written and read at:
+/// <https://stado.wisent.com/docs/release#one-version-one-build>.
+pub const REVISION_SCHEMA_VERSION: u32 = 1;
+
+/// A full Git commit name is forty hexadecimal digits:
+/// <https://git-scm.com/docs/gitrevisions>.
+const FULL_COMMIT_DIGITS: usize = 40;
+
 fn full_git_revision(value: &str) -> bool {
-    value.len() == 40
+    value.len() == FULL_COMMIT_DIGITS
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -48,7 +56,7 @@ impl CoordinateRevision {
             );
         }
         Ok(Self {
-            schema_version: 1,
+            schema_version: REVISION_SCHEMA_VERSION,
             product: product.to_string(),
             version: version.to_string(),
             platform: platform.to_string(),
@@ -68,7 +76,7 @@ impl CoordinateRevision {
 
     /// Whether this claim describes the coordinate the caller is publishing.
     pub fn describes(&self, product: &str, version: &str, platform: &str) -> bool {
-        self.schema_version == 1
+        self.schema_version == REVISION_SCHEMA_VERSION
             && self.product == product
             && self.version == version
             && self.platform == platform
@@ -93,7 +101,7 @@ impl VersionRevision {
             return Err("version source revision must be a full lowercase Git commit".to_string());
         }
         Ok(Self {
-            schema_version: 1,
+            schema_version: REVISION_SCHEMA_VERSION,
             product: product.to_string(),
             version: version.to_string(),
             source_revision: source_revision.to_string(),
@@ -105,6 +113,6 @@ impl VersionRevision {
     }
 
     pub fn describes(&self, product: &str, version: &str) -> bool {
-        self.schema_version == 1 && self.product == product && self.version == version
+        self.schema_version == REVISION_SCHEMA_VERSION && self.product == product && self.version == version
     }
 }

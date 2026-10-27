@@ -78,13 +78,14 @@ pub(super) fn here(
     state: &str,
     log_fn: &mut dyn FnMut(&str),
 ) -> RenewOutcome {
-    // Read as the empty path, an unset HOME would point the launcher's GnuPG
-    // home at /.gnupg, where the vault's key is not.
-    let home = match std::env::var("HOME") {
+    // An empty path would point the launcher's GnuPG home at /.gnupg, where
+    // the vault's key is not; the home every Stado file is kept under (HOME,
+    // else the user database) also answers for an agent unit without HOME.
+    let home = match crate::config_file::home() {
         Ok(home) => home,
         Err(error) => {
             log_fn(&format!(
-                "agent grant: {consumer} {state} and renewal could not run: HOME cannot be read: {error}"
+                "agent grant: {consumer} {state} and renewal could not run: {error}"
             ));
             return RenewOutcome::Failed;
         }
@@ -95,7 +96,7 @@ pub(super) fn here(
             .args(["--replace-capabilities", "--token-file", token_file])
             .arg("--until-revoked")
             .env("SKARBIEC_VAULT_FILE", vault)
-            .env("GNUPGHOME", format!("{home}/.gnupg"))
+            .env("GNUPGHOME", home.join(".gnupg"))
             .env("PATH", crate::primitives::tool_path::SEARCH_PATH)
             .env_remove("SKARBIEC_UNLOCK")
             .env_remove("SKARBIEC_UNLOCK_FILE"),

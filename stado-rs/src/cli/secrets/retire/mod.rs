@@ -8,7 +8,7 @@
 //! into it while something on the machine still treated it as the vault.
 //! Deleting the file then deletes that credential. This command compares the
 //! copy with the owner item by item, moves every item the owner lacks or holds
-//! older onto the owner (`skarbiec set-json` there, the write `credentials item
+//! older onto the owner (`skarbiec set` there, the write `credentials item
 //! put` uses), proves the owner now holds all of them, and only then removes
 //! the file. Without `--apply` it only reports.
 
@@ -21,7 +21,7 @@ use crate::cli::CmdError;
 mod compare;
 use compare::{compare, text, Comparison};
 
-/// Skarbiec's `set-json` refusal of a payload another live item already
+/// Skarbiec's `set` refusal of a payload another live item already
 /// holds (`<holder> already holds exactly this payload; an exact duplicate is
 /// refused …`), the owner's own content comparison.
 const DUPLICATE_REFUSAL: &str = "already holds exactly this payload";
@@ -85,7 +85,11 @@ fn print(run: &Retirement<'_>, json_output: bool) -> Result<(), CmdError> {
     println!("moved:    {}", run.moved.len());
     println!("held under another id: {}", run.duplicates.len());
     for item in run.not_moved {
-        println!("not moved: {} — {}", item["id"], item["why"]);
+        println!(
+            "not moved: {} — {}",
+            crate::cli::reporting::field(&item["id"]),
+            crate::cli::reporting::field(&item["why"])
+        );
     }
     println!("removed:  {}", run.removed);
     Ok(())
@@ -170,7 +174,7 @@ pub(crate) async fn retire_copy(
     let mut duplicates = Vec::new();
     let mut not_moved = Vec::new();
     for item in &comparison.missing {
-        // What the owner's set-json cannot take is named and left in the
+        // What the owner's set cannot take is named and left in the
         // copy, which then stays: a legacy envelope has no kind until the
         // copy is upgraded, and an id outside the host channel's alphabet (a
         // credential-lifecycle record such as `directory:credential/<name>`)

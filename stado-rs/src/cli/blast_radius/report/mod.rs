@@ -74,9 +74,12 @@ pub(in crate::cli::blast_radius) fn print_human(report: &BlastRadiusReport) {
             infrastructure.summary.critical_failures,
         );
         for probe in &infrastructure.probes {
-            let count = probe
-                .count
-                .map_or_else(String::new, |count| format!(", count={count}"));
+            // A probe that counted objects prints the count; one that did
+            // not count prints nothing in its place.
+            let count = match probe.count {
+                Some(count) => format!(", count={count}"),
+                None => String::new(),
+            };
             println!(
                 "- [{}] {} / {}: {}{} — {}",
                 probe.severity, probe.service, probe.name, probe.state, count, probe.resource,
@@ -106,7 +109,7 @@ pub(in crate::cli::blast_radius) fn print_human(report: &BlastRadiusReport) {
         println!("Backup error: {error}");
     }
     println!(
-        "Machine-readable detail: stado blast-radius --dependency {} --json",
+        "Machine-readable detail: stado impact --dependency {} --json",
         report.dependency
     );
     println!("Recovery order:");

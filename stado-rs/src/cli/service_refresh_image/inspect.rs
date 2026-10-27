@@ -49,9 +49,12 @@ pub(super) fn actionable(
 
 /// Why a unit that is not stale is left alone, naming what was found.
 fn refusal(row: &UnitImageObservation) -> String {
-    let pid = row
-        .pid
-        .map_or_else(|| "its process".to_string(), |pid| format!("pid {pid}"));
+    // The sentence names the process by pid when the observation carries
+    // one; a unit observed without a pid is spoken of as its process.
+    let pid = match row.pid {
+        Some(pid) => format!("pid {pid}"),
+        None => "its process".to_string(),
+    };
     match (&row.running, &row.installed) {
         (Some(running), Some(installed)) if running.is_same_file(installed) => format!(
             "{} is not stale and was not restarted: {pid} is executing {}, which IS the file its \

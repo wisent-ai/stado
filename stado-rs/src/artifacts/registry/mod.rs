@@ -82,15 +82,11 @@ impl ArtifactRegistry {
     }
 }
 
-/// Python `str(value)` for JSON scalars (used where Python stringifies
-/// `alias["target_version"]` etc.). Numbers render without a trailing
-/// `.0`, matching Python's `str(int)` for integral values.
-fn stringify_json_scalar(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Bool(b) => if *b { "True" } else { "False" }.to_string(),
-        Value::Number(n) => n.to_string(),
-        Value::Null => "None".to_string(),
-        other => other.to_string(),
-    }
+/// An alias record's text field: its JSON string, or `None` when the record
+/// carries none or carries another type, which every caller refuses as a
+/// corrupt alias naming the field. Python's `str()` turned a null target
+/// into the version `None`, and the lookup then reported that version as
+/// missing instead of the record as corrupt.
+fn alias_text(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_string)
 }

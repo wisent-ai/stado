@@ -104,25 +104,32 @@ pub async fn collect_and_publish(store: &JobStorage) -> Result<InventorySnapshot
 }
 
 fn resolve_dependencies(resources: &mut [ResourceRecord]) {
-    let mut aliases = BTreeMap::new();
-    for resource in resources.iter() {
-        aliases.insert(
-            resource.native_reference.clone(),
-            resource.resource_id.clone(),
-        );
-        aliases.insert(resource.name.clone(), resource.resource_id.clone());
-        if let Some(tail) = resource.native_reference.rsplit('/').next() {
-            aliases
-                .entry(tail.to_string())
-                .or_insert_with(|| resource.resource_id.clone());
-        }
+    if resources.iter().all(|resource| resource.dependencies.is_empty()) {
+        return;
     }
+    let mut aliases = BTreeMap::new();
+    let mut pending = Vec::with_capacity(resources.len());
     for resource in resources {
-        resource.dependencies = resource
-            .dependencies
-            .iter()
-            .filter_map(|reference| aliases.get(reference).cloned())
-            .filter(|dependency| dependency != &resource.resource_id)
+        let id = resource.resource_id.as_str();
+        aliases.insert(resource.native_reference.as_str(), id);
+        aliases.insert(resource.name.as_str(), id);
+        if let Some(tail) = resource.native_reference.rsplit('/').next() {
+            aliases.entry(tail).or_insert(id);
+        }
+        pending.push((id, &mut resource.dependencies));
+    }
+    for (id, dependencies) in pending {
+        *dependencies = std::mem::take(dependencies)
+            .into_iter()
+            .filter_map(|reference| {
+                // Canonical identities are declarations, not native alias candidates.
+                if reference.starts_with("stado://") {
+                    Some(reference)
+                } else {
+                    aliases.get(reference.as_str()).map(|id| (*id).to_owned())
+                }
+            })
+            .filter(|dependency| dependency.as_str() != id)
             .collect();
     }
 }

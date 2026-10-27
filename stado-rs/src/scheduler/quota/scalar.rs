@@ -30,7 +30,7 @@ pub(in crate::scheduler::quota) fn py_int(
             .trim()
             .parse()
             .map(Some)
-            .map_err(|_| refused(&Value::String(s.clone()))),
+            .map_err(|_not_integer| refused(&Value::String(s.clone()))),
         Some(other) => Err(refused(other)),
     }
 }

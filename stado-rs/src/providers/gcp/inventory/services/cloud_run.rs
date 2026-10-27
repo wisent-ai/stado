@@ -8,10 +8,15 @@ use serde_json::{json, Value};
 use crate::providers::gcp::inventory::{Detail, ProbeState};
 
 pub(in crate::providers::gcp::inventory) fn cloud_run_service_detail(value: &Value) -> Detail {
-    let terminal = value
+    // A service without a terminal condition is one the API has not judged;
+    // the detail says so instead of carrying a state word GCP never wrote.
+    let terminal = match value
         .pointer("/terminalCondition/state")
         .and_then(Value::as_str)
-        .unwrap_or("UNKNOWN");
+    {
+        Some(state) => state,
+        None => "(terminal condition not reported by the API)",
+    };
     let latest_ready = value.get("latestReadyRevision").and_then(Value::as_str);
     let latest_created = value.get("latestCreatedRevision").and_then(Value::as_str);
     let ready = terminal == "CONDITION_SUCCEEDED"

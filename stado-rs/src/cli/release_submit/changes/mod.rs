@@ -82,16 +82,17 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
             json,
         } => {
             let change = source::prepare(source, commit, task, session)?;
-            // A commit that fails a gate its product's installation runs (any
-            // kind) or its lock fails the batch build that takes it, and with
-            // it every other session's work in that batch; refusing the
-            // handoff names it to the session that pushed it, while that
-            // session can still repair it.
+            // The hand-off records source; it builds nothing and spends no
+            // build budget. What the recorded source shows without a build
+            // is checked here, so an unformatted commit is named to the
+            // session that pushed it while it can still repair it. The batch
+            // build that takes the change runs every gate the product's
+            // installation runs, and that build qualifies it.
             crate::cli::quality::check_revision(
                 source,
                 &change.source_commit,
                 crate::cli::quality::Report::Stderr,
-                crate::cli::quality::Selection::Installation,
+                crate::cli::quality::Selection::Formatting,
             )
             .await
             .map_err(|refusal| {
@@ -193,14 +194,14 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                 println!("{}", serde_json::to_string(&statuses)?);
             } else {
                 for row in statuses {
-                    println!(
-                        "{} {} {} {} {}",
-                        row.change.id,
-                        row.change.product,
-                        row.change.task_id,
-                        row.state,
-                        row.failure.unwrap_or_default()
+                    let line = format!(
+                        "{} {} {} {}",
+                        row.change.id, row.change.product, row.change.task_id, row.state,
                     );
+                    match row.failure {
+                        Some(failure) => println!("{line} {failure}"),
+                        None => println!("{line}"),
+                    }
                 }
             }
             Ok(())

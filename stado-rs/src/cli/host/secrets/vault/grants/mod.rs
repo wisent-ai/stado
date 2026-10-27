@@ -76,7 +76,12 @@ pub async fn grant_item_read(
 /// grant goes to the owner over the host channel. Progress goes to stderr: callers print one
 /// JSON document on stdout.
 pub async fn settle_consumer_reads(item: &str, fields: &[&str]) -> Result<(), CmdError> {
-    if crate::credential_store::skarbiec_url().is_none() {
+    // A file store has no grants to settle; an unreadable selector is
+    // refused with its own words, never read as a file store.
+    let brokered = crate::credential_store::skarbiec_url().map_err(|error| {
+        CmdError::click(error.to_string()).stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    if brokered.is_none() {
         return Ok(());
     }
     let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
@@ -187,7 +192,7 @@ async fn ensure_item_read(
     let granted = crate::deploy::host_channel::run_program(&resolved, &invocation, &runner)
         .await
         .map_err(CmdError::from)?;
-    if !granted.ok() {
+    if !granted.succeeded() {
         return Err(CmdError::refused(format!(
             "{}: Skarbiec refused to grant {consumer} a read of {item}#{field}: {}",
             resolved.name,

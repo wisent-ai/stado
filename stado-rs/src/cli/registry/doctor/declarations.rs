@@ -15,9 +15,10 @@ fn value_at<'a>(root: &'a Value, dotted: &str) -> Option<&'a Value> {
 }
 
 /// One line of JSON for a declared value, so a finding shows what was written
-/// rather than only where.
+/// rather than only where. A `Value` always serializes, so `Display`, which
+/// writes the same compact JSON, is the rendering.
 fn rendered(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+    value.to_string()
 }
 
 /// Why a declared value never reaches behaviour, or `None` when it does.
@@ -29,14 +30,19 @@ fn unread_reason(field: &DeclaredField, sibling: Option<String>) -> Option<Strin
     match field.consumer {
         Consumer::Fleet(reader) => {
             let condition = field.reached_when?;
-            let observed = sibling.unwrap_or_else(|| "(absent)".to_string());
-            if observed.starts_with(condition.value_prefix) {
-                return None;
+            // The condition is met only by a sibling that is present and
+            // starts with the prefix; an absent sibling is named as absent.
+            match sibling {
+                Some(observed) if observed.starts_with(condition.value_prefix) => None,
+                Some(observed) => Some(format!(
+                    "its only reader {reader} runs when {} starts with {:?}, and that key is {observed}",
+                    condition.path, condition.value_prefix
+                )),
+                None => Some(format!(
+                    "its only reader {reader} runs when {} starts with {:?}, and that key is absent",
+                    condition.path, condition.value_prefix
+                )),
             }
-            Some(format!(
-                "its only reader {reader} runs when {} starts with {:?}, and that key is {observed}",
-                condition.path, condition.value_prefix
-            ))
         }
         Consumer::Unread => Some("no code path in this build reads it".to_string()),
     }
@@ -45,11 +51,15 @@ fn unread_reason(field: &DeclaredField, sibling: Option<String>) -> Option<Strin
 /// A sibling value rendered for a finding: strings bare, everything else as JSON,
 /// so a URL reads as a URL and a number still reads unambiguously.
 fn sibling_value(root: &Value, condition: SiblingCondition) -> Option<String> {
-    value_at(root, condition.path).map(|value| {
-        value
-            .as_str()
-            .map_or_else(|| rendered(value), str::to_string)
-    })
+    value_at(root, condition.path).map(shown)
+}
+
+/// A value as a finding shows it: a string bare, anything else as JSON.
+fn shown(value: &Value) -> String {
+    match value.as_str() {
+        Some(text) => text.to_string(),
+        None => rendered(value),
+    }
 }
 
 /// Registry fields on one target that no consumer reads, from both halves of the
@@ -130,13 +140,13 @@ pub(super) fn unread_declarations(target: &ComputeTarget, entry: &Value) -> Vec<
 /// fail here: every caller reaches `doctor` through a storage handle that already
 /// loaded and parsed the same file.
 pub(super) fn unread_configuration() -> Vec<Finding> {
-    let subject = crate::config_file::config_path()
-        .ok()
-        .flatten()
-        .map_or_else(
-            || "stado config".to_string(),
-            |path| path.display().to_string(),
-        );
+    // The finding's subject is the configuration file; a deployment that
+    // carries none, or whose file the loader refuses, is named by that.
+    let subject = match crate::config_file::config_path() {
+        Ok(Some(path)) => path.display().to_string(),
+        Ok(None) => "stado config (no file)".to_string(),
+        Err(error) => format!("stado config (unreadable: {error})"),
+    };
     let mut findings = Vec::new();
     for field in crate::capabilities::DECLARED_FIELDS {
         if field.surface != DeclarationSurface::Configuration {
@@ -149,11 +159,7 @@ pub(super) fn unread_configuration() -> Vec<Finding> {
         let sibling = field
             .reached_when
             .and_then(|condition| crate::config_file::get(condition.path))
-            .map(|value| {
-                value
-                    .as_str()
-                    .map_or_else(|| rendered(&value), str::to_string)
-            });
+            .map(|value| shown(&value));
         if let Some(reason) = unread_reason(field, sibling) {
             findings.push(Finding::new(
                 "unread-declaration",

@@ -111,8 +111,17 @@ pub(super) fn parameter_str<'a>(
     })
 }
 
-pub(super) fn json_u64(value: &Value) -> Option<u64> {
-    value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+/// A count the GCP API writes either as a JSON number or, for its int64
+/// fields, as a decimal string. Either reads as a number; any other shape
+/// is reported as the API wrote it, so a reader sees what was there rather
+/// than `null` standing in for it.
+pub(super) fn json_count(value: &Value) -> Value {
+    match value {
+        Value::Number(_number) => value.clone(),
+        Value::String(text) => match text.parse::<u64>() {
+            Ok(count) => Value::from(count),
+            Err(_not_a_decimal) => value.clone(),
+        },
+        _other_shape => value.clone(),
+    }
 }

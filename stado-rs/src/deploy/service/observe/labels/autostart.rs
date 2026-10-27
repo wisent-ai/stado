@@ -26,12 +26,12 @@ if [ "$os" = Darwin ]; then
     candidate=$1
     case "$candidate" in
       system)
-        [ -e "/Library/LaunchDaemons/$label.plist" ] ||
+        [ -e "@LAUNCHD_DAEMONS@/$label.plist" ] ||
           /usr/bin/sudo -n "$launch" print "system/$label" >/dev/null 2>&1
         ;;
       gui/*|user/*)
-        [ -e "$HOME/Library/LaunchAgents/$label.plist" ] ||
-          [ -e "/Library/LaunchAgents/$label.plist" ] ||
+        [ -e "$HOME/@USER_LAUNCHD_AGENTS@/$label.plist" ] ||
+          [ -e "/@USER_LAUNCHD_AGENTS@/$label.plist" ] ||
           "$launch" print "$candidate/$label" >/dev/null 2>&1
         ;;
       *) return 1 ;;
@@ -136,7 +136,8 @@ fn autostart_script(label: &str, action: &str, scope: &str) -> Result<String, De
         return Err(DeployError(format!("invalid autostart scope {scope:?}"))
             .stating(crate::primitives::failure::FailureCode::Refused));
     }
-    Ok(AUTOSTART_SCRIPT
+    // Directories before the label, so a label is never read as a placeholder.
+    Ok(with_unit_directories(AUTOSTART_SCRIPT)
         .replace("@LABEL@", &format!("\"{}\"", quote_unit_path(label)?))
         .replace("@ACTION@", action)
         .replace("@REQUESTED_SCOPE@", scope))
@@ -152,7 +153,7 @@ pub async fn label_autostart(
     let output =
         host_channel::run_script(target, &autostart_script(label, "inspect", "any")?, runner)
             .await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "autostart inspection failed",
@@ -189,7 +190,7 @@ pub async fn set_label_autostart(
     let action = if enabled { "enable" } else { "disable" };
     let output =
         host_channel::run_script(target, &autostart_script(label, action, scope)?, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "autostart mutation failed",

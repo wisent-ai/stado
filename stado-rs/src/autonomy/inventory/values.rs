@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value;
 
 use crate::autonomy::model::SourceState;
-use crate::cli::resources::model::canonical_json_bytes;
 
 pub(super) fn collect_resource_references(value: &Value, output: &mut BTreeSet<String>) {
     match value {
@@ -81,10 +80,14 @@ pub(super) fn region_from_zone(zone: &str) -> Option<&str> {
     zone.rsplit_once('-').map(|(region, _)| region)
 }
 
-pub(super) fn canonical_revision(value: &Value) -> Option<String> {
-    canonical_json_bytes(value)
-        .ok()
-        .map(|bytes| sha256_hex(&bytes))
+/// A revision for a row whose vendor stamps none: the digest of the row's
+/// JSON text, which changes exactly when the row does. A
+/// `serde_json::Value` serializes without failure, so the digest is
+/// always one.
+pub(super) fn canonical_revision(value: &Value) -> String {
+    let mut bytes = value.to_string().into_bytes();
+    bytes.push(b'\n');
+    sha256_hex(&bytes)
 }
 
 pub(super) fn sha256_hex(bytes: &[u8]) -> String {

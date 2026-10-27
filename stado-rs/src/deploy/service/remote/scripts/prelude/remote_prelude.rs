@@ -31,12 +31,12 @@ say() {
   # the same identity. Search both system LaunchDaemons and this account's
   # LaunchAgents; an unqualified label alone does not select a domain.
   if [ -z \"$unit_path\" ]; then
-    if [ -f \"$HOME/Library/LaunchAgents/$unit.plist\" ]; then
-      unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"
-    elif [ -f \"/Library/LaunchDaemons/$unit.plist\" ]; then
-      unit_path=\"/Library/LaunchDaemons/$unit.plist\"
+    if [ -f \"$HOME/@USER_LAUNCHD_AGENTS@/$unit.plist\" ]; then
+      unit_path=\"$HOME/@USER_LAUNCHD_AGENTS@/$unit.plist\"
+    elif [ -f \"@LAUNCHD_DAEMONS@/$unit.plist\" ]; then
+      unit_path=\"@LAUNCHD_DAEMONS@/$unit.plist\"
     else
-      unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"
+      unit_path=\"$HOME/@USER_LAUNCHD_AGENTS@/$unit.plist\"
     fi
   fi
   if ! stado_domain_of \"$unit_path\"; then
@@ -52,16 +52,16 @@ elif [ \"$os\" = \"Linux\" ]; then
   # behind it.
   if [ -n \"$linux_unit\" ]; then unit=\"$linux_unit\"; fi
   if [ -z \"$unit_path\" ]; then
-    if [ -f \"$HOME/.config/systemd/user/$unit\" ]; then
-      unit_path=\"$HOME/.config/systemd/user/$unit\"
-    elif [ -f \"/etc/systemd/system/$unit\" ]; then
-      unit_path=\"/etc/systemd/system/$unit\"
+    if [ -f \"$HOME/@USER_SYSTEMD_UNITS@/$unit\" ]; then
+      unit_path=\"$HOME/@USER_SYSTEMD_UNITS@/$unit\"
+    elif [ -f \"@SYSTEMD_UNITS@/$unit\" ]; then
+      unit_path=\"@SYSTEMD_UNITS@/$unit\"
     else
-      unit_path=\"$HOME/.config/systemd/user/$unit\"
+      unit_path=\"$HOME/@USER_SYSTEMD_UNITS@/$unit\"
     fi
   fi
   case \"$unit_path\" in
-    /etc/systemd/system/*) scope=system ;;
+    @SYSTEMD_UNITS@/*) scope=system ;;
     *) scope=user ;;
   esac
   domain=\"$scope\"
@@ -71,7 +71,7 @@ elif [ \"$os\" = \"Linux\" ]; then
     systemd_detail='systemd --user'
   fi
   case \"$unit_path\" in
-    */.config/systemd/user/*) owner_path=\"${unit_path%%/.config/systemd/user/*}\" ;;
+    */@USER_SYSTEMD_UNITS@/*) owner_path=\"${unit_path%%/@USER_SYSTEMD_UNITS@/*}\" ;;
     *) owner_path=\"$unit_path\" ;;
   esac
   while [ ! -e \"$owner_path\" ] && [ \"$owner_path\" != \"/\" ]; do
@@ -163,10 +163,10 @@ pub const DOMAIN_RESOLVER: &str = "stado_domain_of() {
   domain_reason=\"\"
   launch=/bin/launchctl
   case \"$1\" in
-    /Library/LaunchDaemons/*)
+    @LAUNCHD_DAEMONS@/*)
       domain='system'
       domain_status='system'
-      domain_reason='a unit in /Library/LaunchDaemons is a system LaunchDaemon, so its job belongs to the system domain and loading it needs root'
+      domain_reason='a unit in @LAUNCHD_DAEMONS@ is a system LaunchDaemon, so its job belongs to the system domain and loading it needs root'
       launch=\"/usr/bin/sudo -n /bin/launchctl\"
       return 0
       ;;

@@ -5,6 +5,7 @@
 //! state document and the reading itself stay there.
 
 use super::super::*;
+use crate::providers::local::host_memory::constants::KIB;
 
 fn usage_json(usage: &DiskUsage) -> Value {
     json!({
@@ -22,8 +23,14 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
     let mut report = host_channel::base_report(target);
     report.insert(
         "usage".to_string(),
-        reading.usage.as_ref().map_or(Value::Null, usage_json),
+        match reading.usage.as_ref() {
+            Some(usage) => usage_json(usage),
+            None => Value::Null,
+        },
     );
+    // Every row whose figures were not numbers, with why: a row the report
+    // dropped would read as a host that printed nothing there.
+    report.insert("unread".to_string(), json!(reading.unread));
     // Where the rest of the host's storage is. `usage` above is the one
     // volume the fleet writes to; a host can hold terabytes on another
     // mount, or on a disk nothing has mounted, and neither shows in `usage`.
@@ -38,6 +45,7 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "devices": reading.block_devices.iter().map(|device| json!({
                 "name": device.name,
                 "size_bytes": device.size_bytes,
+                "size_unread": device.size_unread,
                 "type": device.kind,
                 "fstype": device.fstype,
                 "mountpoint": device.mountpoint,
@@ -51,14 +59,11 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
     // cannot write fail in the same commands and are repaired differently.
     report.insert("memory".to_string(), memory_report(reading));
     // The disk-full rule, judged on the `usage` reading above.
-    let volume = reading.usage.as_ref().and_then(|usage| {
-        Some(
-            crate::providers::local::space_reclaim::rule::VolumeReading {
-                total_bytes: usage.blocks_kb.parse::<i64>().ok()?.checked_mul(1024)?,
-                free_bytes: usage.available_kb.parse::<i64>().ok()?.checked_mul(1024)?,
-            },
-        )
-    });
+    let volume = match reading.usage.as_ref().map(volume_of) {
+        Some(Ok(volume)) => Some(volume),
+        // Named in `unread`, which the fold filled from the same row.
+        Some(Err(_)) | None => None,
+    };
     report.insert(
         "rule".to_string(),
         crate::providers::local::space_reclaim::rule::rule_json(volume),
@@ -135,7 +140,7 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
                 .map(|item| {
                     json!({
                         "path": item.path,
-                        "bytes": item.blocks_kb.saturating_mul(1024),
+                        "bytes": item.blocks_kb.saturating_mul(KIB),
                         "size_gb": gib_from_blocks(item.blocks_kb as f64),
                     })
                 })
@@ -153,7 +158,7 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
                 .map(|item| {
                     json!({
                         "path": item.path,
-                        "bytes": item.blocks_kb.saturating_mul(1024),
+                        "bytes": item.blocks_kb.saturating_mul(KIB),
                     })
                 })
                 .collect(),

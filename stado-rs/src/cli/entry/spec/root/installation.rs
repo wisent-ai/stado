@@ -41,7 +41,7 @@ pub(crate) enum InstallationCommands {
     },
 
     /// Inventory a dependency's live resources, auth, consumers, storage, and DR coverage.
-    #[command(name = "blast-radius")]
+    #[command(name = "impact")]
     BlastRadius(blast_radius::BlastRadiusArgs),
 
     /// Inventory, plan, execute, verify, and restore resource operations.
@@ -82,7 +82,7 @@ pub(crate) enum InstallationCommands {
     /// component the catalog declares under `public_status` once and
     /// publishes state, since when and the last failed check; `show` reads
     /// what was published; `serve` is the public status page that reads it.
-    #[command(name = "public-status", subcommand)]
+    #[command(name = "availability", subcommand)]
     PublicStatus(PublicStatusCommands),
 }
 

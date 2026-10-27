@@ -68,7 +68,7 @@ function success(program, args, cwd, env) {
   assert.ok(exitedCleanly(result), `${program} ${args.join(' ')}: ${result.stderr}`);
   return result.stdout;
 }
-const pin = ['release', 'catalog', 'pin-input', checkout, '--name', 'swiftpm-cache', '--source', source, '--revision', revision, '--swiftpm', '--json'];
+const pin = ['release', 'catalog', 'input', 'pin', checkout, '--name', 'swiftpm-cache', '--source', source, '--revision', revision, '--swiftpm', '--json'];
 function refusal(name, args) {
   const before = readFileSync(manifestPath);
   const result = command(binary, args);
@@ -158,7 +158,7 @@ try {
   assert.ok(refused.stderr.includes('swift package resolve'), refused.stderr);
   assert.ok(refused.stderr.includes(sandboxCause), refused.stderr);
   assert.ok(refused.stderr.includes('no input was published'), refused.stderr);
-  assert.ok(refused.stderr.includes('run pin-input from a shell outside the sandbox, or have the Stado service run it'), refused.stderr);
+  assert.ok(refused.stderr.includes('run input pin from a shell outside the sandbox, or have the Stado service run it'), refused.stderr);
   assert.ok(refused.stderr.includes('POST /api/operator/run'), refused.stderr);
   assert.ok(refused.stderr.includes('"Publish an immutable build input"'), refused.stderr);
   assert.deepEqual(readFileSync(confinedManifest), beforeRefusal);

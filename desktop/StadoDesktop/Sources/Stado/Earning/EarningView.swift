@@ -1,15 +1,17 @@
 import SwiftUI
 import WisentDesignSystem
 
-/// Whether the fleet is earning from its idle GPU, and what is stopping it.
+/// Whether the fleet is earning from its idle capacity, and what is stopping
+/// it.
 ///
-/// The same capability as `stado market --provider vast`: list the box on the
-/// Vast.ai marketplace, take it down when work arrives, and say why it
-/// cannot. Every panel runs the same command a terminal would and shows the
-/// CLI's own sentences.
+/// The same capability as `stado market`: list the box on the Vast.ai
+/// marketplace or lend it to another Stado fleet, take it down when work
+/// arrives, and say why it cannot. Every panel runs the same command a
+/// terminal would and shows the CLI's own sentences.
 struct EarningView: View {
     @ObservedObject var store: VastStore
     let scope: String
+    @StateObject private var peers = PeerFleetsStore()
 
     @State private var priceGPU = EarningConstants.defaultPriceGPU
     @State private var priceDisk = EarningConstants.defaultPriceDisk
@@ -26,7 +28,10 @@ struct EarningView: View {
             actions: [
                 WisentAction("Provider prices", symbol: "list.bullet") { showingPrices = true },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
-                    Task { await store.refresh() }
+                    Task {
+                        await store.refresh()
+                        await peers.refresh()
+                    }
                 }
             ]
         ) {
@@ -38,6 +43,7 @@ struct EarningView: View {
                 snapshotPanel
                 previewPanel
                 marketplacePanel
+                PeerFleetsPanel(store: peers)
             }
         }
         .task { await store.refresh() }
@@ -91,10 +97,16 @@ struct EarningView: View {
                 detail: "stado market readiness --provider vast --json asks the channel, the vault and Vast.ai.",
                 symbol: "dollarsign.circle"
             )
+        } else if let problem = store.problem {
+            WisentEmptyPanel(
+                title: "Readiness could not be read",
+                detail: problem,
+                symbol: "dollarsign.circle"
+            )
         } else {
             WisentEmptyPanel(
-                title: "No readiness answer",
-                detail: store.problem ?? "Refresh to ask whether this fleet can earn.",
+                title: "Readiness not read yet",
+                detail: "Refresh to ask whether this fleet can earn.",
                 symbol: "dollarsign.circle"
             )
         }
@@ -141,7 +153,8 @@ struct EarningView: View {
                 Button("Preview") {
                     Task {
                         await store.previewDecision(
-                            idleWindowSeconds: idleWindowSeconds, priceGPU: priceGPU
+                            idleWindowSeconds: idleWindowSeconds, priceGPU: priceGPU,
+                            priceDisk: priceDisk
                         )
                     }
                 }

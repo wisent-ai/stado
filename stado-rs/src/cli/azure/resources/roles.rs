@@ -82,7 +82,7 @@ pub(super) async fn control_principal_id(args: &RepairRbacArgs) -> Result<String
                 .stating(crate::primitives::failure::FailureCode::Auth),
             crate::remote::azure_token::TokenError::Http(error) => CmdError::from(error),
         })?;
-    jwt_claims(&token)
+    jwt_claims(&token)?
         .get("oid")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())

@@ -34,8 +34,8 @@ struct Run {
 
 impl Run {
     fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("mcp-killed-child")
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/journeys/mcp-killed-child")
             .join(format!("{name}-{}", std::process::id()));
         if root.exists() {
             std::fs::remove_dir_all(&root).unwrap();

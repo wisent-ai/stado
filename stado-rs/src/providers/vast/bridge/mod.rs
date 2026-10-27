@@ -24,34 +24,39 @@ pub enum AutoListAction {
     IdleCountdown { idle_dur_s: i64 },
     /// Work appeared while listed: unlist immediately.
     Unlist,
-    /// Offer gone, work queued, near-zero free VRAM: a Vast rental is on
-    /// the GPU; wisent-compute claims as soon as the renter releases.
-    WaitingForRental { free_vram_gb: f64 },
+    /// Offer gone, work queued, and less free VRAM than the queued job
+    /// declares it needs: something (most likely a Vast rental) holds the
+    /// GPU; wisent-compute claims as soon as it is released.
+    WaitingForRental { free_vram_gb: f64, need_gb: i64 },
     /// Busy and not listed: nothing to do.
     BusyNotListed,
 }
 
-/// The pure idle/unlist decision from `auto_list_loop`.
+/// The pure idle/unlist decision from `auto_list_loop`. `idle_dur_s` is how
+/// long the queue has been idle, and is only read when `state` is idle.
 pub fn decide_action(
     listed: bool,
     state: &BusyState,
-    idle_dur_s: i64,
+    idle_dur_s: Option<i64>,
     idle_window_s: i64,
 ) -> AutoListAction {
-    if state.idle {
-        if idle_dur_s >= idle_window_s && !listed {
+    if let (true, Some(idle_dur_s)) = (state.idle, idle_dur_s) {
+        return if idle_dur_s >= idle_window_s && !listed {
             AutoListAction::List { idle_dur_s }
         } else {
             AutoListAction::IdleCountdown { idle_dur_s }
+        };
+    }
+    if listed {
+        return AutoListAction::Unlist;
+    }
+    // The job at the head of the queue states the memory it needs; a card
+    // with less free than that cannot take it, whoever holds the rest.
+    match (state.queued_need_gb, state.free_vram_gb) {
+        (Some(need_gb), Some(free_vram_gb)) if free_vram_gb < need_gb as f64 => {
+            AutoListAction::WaitingForRental { free_vram_gb, need_gb }
         }
-    } else if listed {
-        AutoListAction::Unlist
-    } else if state.queued > 0 && state.free_vram_gb.is_some_and(|free| free < 10.0) {
-        AutoListAction::WaitingForRental {
-            free_vram_gb: state.free_vram_gb.unwrap_or(0.0),
-        }
-    } else {
-        AutoListAction::BusyNotListed
+        _ => AutoListAction::BusyNotListed,
     }
 }
 
@@ -65,6 +70,8 @@ pub struct AutoListParams {
     pub poll: Option<std::time::Duration>,
     /// Per-GPU-hour rental price USD when we list.
     pub price_gpu: f64,
+    /// Per-GB-month disk price USD when we list; there is no built-in one.
+    pub price_disk: f64,
     /// Caps the maximum length of any rental Vast can hand out from this
     /// offer (PUT /machines/create_asks/ duration field, vast-cli
     /// vast.py:

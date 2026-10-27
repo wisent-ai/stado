@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 use crate::deploy::service::{self, Handoff, ManagedService};
 use crate::deploy::service_catalog::RoleUnit;
 use crate::deploy::Runner;
+use crate::primitives::tally::Tally;
 use crate::queue::StorageError;
 use crate::targets::ComputeTarget;
 
@@ -72,7 +73,7 @@ pub(super) async fn hand_over_listeners(
             }
             Ok(Handoff::Kept(_) | Handoff::Retained(_)) => false,
             Err(error) => {
-                summary.failures += 1;
+                summary.failures.tally();
                 outcomes.push(row(&role.unit, "repair_failed", false, error.to_string()));
                 false
             }
@@ -83,7 +84,7 @@ pub(super) async fn hand_over_listeners(
         let (subject, lease) = match gate.admit(host, &role.unit).await? {
             Ok(admitted) => admitted,
             Err(refusal) => {
-                summary.blocked += 1;
+                summary.blocked.tally();
                 outcomes.push(row(
                     &role.unit,
                     refusal.classification,
@@ -111,13 +112,13 @@ pub(super) async fn hand_over_listeners(
             Ok(step) => {
                 let changed = matches!(step.state.as_str(), "retired" | "handed_over" | "restored");
                 if changed {
-                    summary.changed += 1;
+                    summary.changed.tally();
                     gate.record(None).await?;
                 }
                 outcomes.push(row(&step.unit, &step.state, changed, step.detail));
             }
             Err(error) => {
-                summary.failures += 1;
+                summary.failures.tally();
                 gate.record(Some(&error)).await?;
                 outcomes.push(row(&role.unit, "repair_failed", false, error));
             }

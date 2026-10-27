@@ -1,4 +1,4 @@
-//! `stado public-status check | show | serve` — whether the components people
+//! `stado availability check | show | serve` — whether the components people
 //! rely on work, as the fleet sees them from outside.
 //!
 //! Each catalogued product declares, under `public_status`, the components a
@@ -10,7 +10,7 @@
 //! answer that failed it. `show` reads that document, and `serve` is the
 //! public status page that reads it on every request, run as its own unit on
 //! a host apart from the products it reports on. Whatever schedule runs
-//! `check` (`stado schedule create --cron … 'stado public-status check'`) is
+//! `check` (`stado schedule create --cron … 'stado availability check'`) is
 //! its cadence. Nothing here keeps a list of components: the catalog does.
 
 mod checks;
@@ -60,7 +60,7 @@ pub(crate) async fn dispatch(command: PublicStatusCommands) -> Result<(), CmdErr
         PublicStatusCommands::Show { json } => match document::read(&store).await? {
             Some(published) => emit(&published, json),
             None => Err(CmdError::refused(format!(
-                "no status is published at {} in the object store: no `stado public-status \
+                "no status is published at {} in the object store: no `stado availability \
                  check` has run against it",
                 document::BLOB
             ))),

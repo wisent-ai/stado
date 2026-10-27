@@ -29,16 +29,12 @@ use super::discovery::{load_config_file, load_config_file_fresh};
 /// whose member names are operator data rather than settings —
 /// `storage.<adapter>` and `integration.providers`.
 pub(super) fn get_in<'a>(data: &'a Map<String, Value>, dotted: &str) -> Option<&'a Value> {
-    let mut current: Option<&Value> = None;
-    for (index, part) in dotted.split('.').enumerate() {
-        let map = if index == 0 {
-            data
-        } else {
-            current?.as_object()?
-        };
-        current = map.get(part);
+    let mut parts = dotted.split('.');
+    let mut current = data.get(parts.next()?)?;
+    for part in parts {
+        current = current.as_object()?.get(part)?;
     }
-    current
+    Some(current)
 }
 
 /// Read a dotted key (e.g. `storage.gcs.bucket`) from the loaded file.
@@ -52,21 +48,26 @@ pub fn get(dotted: &str) -> Option<Value> {
 }
 
 /// Read a dotted key from the file as it is on disk now, not from the
-/// process-wide cache; `None` when the file cannot be read or lacks the key.
-pub fn get_fresh(dotted: &str) -> Option<Value> {
-    let data = load_config_file_fresh().ok()?;
-    get_in(&data, dotted).cloned()
+/// process-wide cache: `None` when the file lacks the key, and the error
+/// naming the file when it cannot be read. Read as "no key", an unreadable
+/// file withheld whatever the operator had just written into it.
+pub fn get_fresh(dotted: &str) -> Result<Option<Value>, String> {
+    let data = load_config_file_fresh()
+        .map_err(|error| format!("the stado config file cannot be read again for {dotted}: {error}"))?;
+    Ok(get_in(&data, dotted).cloned())
 }
 
-/// Python truthiness for JSON values (used by `validate`).
-pub(super) fn py_truthy(value: &Value) -> bool {
+/// Whether a document states a value at all: null, empty text, an empty list
+/// and an empty map state nothing. A `false` or a zero is a stated value,
+/// which truthiness read as unset; whether it is the right one is the field
+/// reader's question.
+pub(super) fn stated(value: &Value) -> bool {
     match value {
         Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64() != Some(0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => !fields.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
     }
 }
 
@@ -148,21 +149,23 @@ pub fn resolve_list(env_name: &str, dotted: &str, default: &[&str]) -> Vec<Strin
 /// order once, so no reader can quietly grow a second one.
 fn field_bindings(
     field: &crate::capabilities::ConfigField,
-) -> [(Option<&'static str>, Option<&'static str>); 3] {
+) -> impl Iterator<Item = (Option<&'static str>, Option<&'static str>)> {
     [
         (Some(field.env), Some(field.path)),
         (field.alternate_env, field.alternate_path),
         (field.backup_env, field.backup_path),
     ]
+    .into_iter()
 }
 
 /// Decode an environment override the way the catalog says the key reads: a
 /// scalar verbatim, a list as a trimmed comma split, a document as the JSON its
 /// parser expects. A set-but-empty variable counts as unset, matching
-/// [`resolve`]. A malformed document override yields None rather than a panic;
-/// the parser that owns the key already reports it against the key's own name.
+/// [`resolve`]. An override that is not text, or a document override that is
+/// not JSON, stops like a malformed config file, naming the variable: read as
+/// unset, the config file stood in for the override the operator set.
 fn env_value(name: &str, kind: crate::capabilities::ConfigValueKind) -> Option<Value> {
-    let raw = std::env::var(name).ok().filter(|value| !value.is_empty())?;
+    let raw = override_of(name)?;
     match kind {
         crate::capabilities::ConfigValueKind::Scalar => Some(Value::String(raw)),
         crate::capabilities::ConfigValueKind::List => Some(Value::Array(
@@ -172,7 +175,10 @@ fn env_value(name: &str, kind: crate::capabilities::ConfigValueKind) -> Option<V
                 .map(|part| Value::String(part.to_string()))
                 .collect(),
         )),
-        crate::capabilities::ConfigValueKind::Document => serde_json::from_str(&raw).ok(),
+        crate::capabilities::ConfigValueKind::Document => match serde_json::from_str(&raw) {
+            Ok(document) => Some(document),
+            Err(error) => panic!("{name} is not the JSON document its key reads: {error}"),
+        },
     }
 }
 

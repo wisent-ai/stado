@@ -41,7 +41,9 @@ fn every_binary_system_unit_is_read_with_its_program() {
 
 #[test]
 fn a_unit_in_neither_encoding_is_refused_naming_it() {
-    let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("not-a-plist.plist");
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.build/journeys");
+    std::fs::create_dir_all(&directory).expect("the journeys directory is created");
+    let scratch = directory.join("not-a-plist.plist");
     std::fs::write(&scratch, b"\xff\xfe not a property list").expect("writing the scratch unit");
     let shown = scratch.display().to_string();
     let refusal = match local_unit_file(&shown, KIND_LAUNCHD) {

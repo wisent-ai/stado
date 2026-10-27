@@ -24,7 +24,16 @@ extension ServicesView {
                 ? "The host reported the failure without evidence; stado service status could not read the last exit or the stderr tail."
                 : entry.detail
         }
-        var lines = [failure.lastExit.map { "last launchd exit \($0)" } ?? "last launchd exit unknown"]
+        // The first line is the CLI's own: launchd's last exit, or that the
+        // host did not report one, so the exit cause cannot be inferred.
+        let exit: String
+        switch failure.lastExit {
+        case .some(let code):
+            exit = "last launchd exit \(code)"
+        case .none:
+            exit = "\(entry.host) did not report launchd's last exit for \(entry.name); the exit cause cannot be inferred"
+        }
+        var lines = [exit]
         if let notRead = failure.stderrNotRead(unit: entry.name, host: entry.host) {
             lines.append(notRead)
         }

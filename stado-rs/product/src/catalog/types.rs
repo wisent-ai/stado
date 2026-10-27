@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -16,22 +16,70 @@ impl SurfaceKind {
     }
 }
 
-/// Where a roadmap item stands; any other word fails to deserialize.
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RoadmapStatus {
-    Planned,
-    InProgress,
+/// Declares [`RoadmapStatus`] and [`RoadmapStatus::ALL`] from one list of
+/// variants, so a status added to the enum is in the published list by the
+/// same line: neither can name a status the other lacks.
+macro_rules! roadmap_statuses {
+    ($($variant:ident),+ $(,)?) => {
+        /// Where a roadmap item stands; any other word fails to deserialize.
+        /// An item that was delivered, rejected or replaced keeps its place in
+        /// the roadmap with the decision that ended it, so an idea does not
+        /// vanish between sessions and its history reads back.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum RoadmapStatus {
+            $($variant),+
+        }
+
+        impl RoadmapStatus {
+            /// Every status, in the order they are declared: the order an
+            /// item moves through them.
+            pub const ALL: &[Self] = &[$(Self::$variant),+];
+        }
+    };
+}
+
+roadmap_statuses!(Planned, InProgress, Delivered, Rejected, Superseded);
+
+impl RoadmapStatus {
+    /// Whether the item was ended by a decision it must name. The match
+    /// names every variant, so a status added to the declaration does not
+    /// compile until it says whether it ends an item.
+    pub fn decided(self) -> bool {
+        match self {
+            Self::Planned | Self::InProgress => false,
+            Self::Delivered | Self::Rejected | Self::Superseded => true,
+        }
+    }
+
+    /// Every status with whether it is decided, in the order an item moves
+    /// through them, as `catalog --json` publishes it (`roadmap_statuses`):
+    /// a reader of the roadmap (Probierz keeping its incident items) tells
+    /// open items from ended ones by this declaration instead of a copy of
+    /// the words.
+    pub fn published() -> serde_json::Value {
+        serde_json::Value::Array(
+            Self::ALL
+                .iter()
+                .map(|status| serde_json::json!({ "status": status, "decided": status.decided() }))
+                .collect(),
+        )
+    }
 }
 
 #[derive(Deserialize)]
 pub struct RoadmapItem<'a> {
     pub title: &'a str,
-    /// Validated by deserialization; nothing else reads it.
-    #[allow(dead_code)]
     pub status: RoadmapStatus,
     pub outcome: &'a str,
     pub source: &'a str,
+    /// Where the decision that ended a delivered, rejected or superseded
+    /// item was made: the operator's message, the release, the line.
+    #[serde(borrow, default)]
+    pub decision: Option<&'a str>,
+    /// The title of the item of the same product that replaced this one.
+    #[serde(borrow, default)]
+    pub superseded_by: Option<&'a str>,
 }
 
 /// Where a catalog product stands; any other word fails to deserialize.

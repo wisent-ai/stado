@@ -115,7 +115,7 @@ printf 'STATUS\troutes_present\n'
 cat "$file"
 "#;
     let output = host_channel::run_script(target, script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: the gateway route table could not be read: {}",
             target.name,
@@ -174,7 +174,7 @@ printf 'STATUS\tprobe_ran\n'
 "#
     );
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: the gateway probe could not run: {}",
             target.name,

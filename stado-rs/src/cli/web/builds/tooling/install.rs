@@ -103,7 +103,7 @@ pub(in crate::cli::web::builds) fn install(
     variables: &[(String, String)],
 ) -> Result<(), CmdError> {
     let lockfile = source.join("package-lock.json");
-    if !lockfile.is_file() {
+    if !crate::primitives::presence::present(&lockfile)? || !lockfile.is_file() {
         return Err(CmdError::click(format!(
             "{} is missing: a web release installs only what a lockfile pins, and Stado will not use `npm install` instead because that resolves versions at build time and makes the artifact unreproducible",
             lockfile.display()

@@ -211,7 +211,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
             &staged
         };
         let admission = config_gate::admit(candidate, &name)
-            .and_then(|()| unit_migration::admit(candidate, &name, &home));
+            .and_then(|()| unit_migration::admit(candidate, &destination, &name, &home));
         match admission {
             Ok(host) => host,
             Err(refusal) => {
@@ -231,7 +231,11 @@ pub(in crate::cli::release_cmd) async fn install_archive(
         });
         if let Err(refusal) = refused {
             discard_stages(&staged, release_version_stage.as_deref());
-            return Err(CmdError::refused(format!("{refusal:#}")));
+            let refusal = CmdError::refused(format!("{refusal:#}"));
+            return Err(match resident_host {
+                Some(_) => unit_migration::restored_after(&destination, &name, &home, refusal),
+                None => refusal,
+            });
         }
     }
     // Leave the receipt the fleet's provenance check reads (`attestation`),

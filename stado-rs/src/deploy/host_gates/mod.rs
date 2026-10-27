@@ -52,4 +52,4 @@ pub use words::{
 
 pub const HOST_DIAGNOSTIC_INCOMPLETE: &str = "host_diagnostic_incomplete";
 
-pub(super) use read::resolves_to;
+pub(crate) use read::resolves_to;

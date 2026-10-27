@@ -185,7 +185,7 @@ pub(in crate::deploy::host_storage_reconcile_program) fn checkpoint_tree(
     set_tree_modes(&building)?;
     fs::rename(&building, destination)
         .map_err(|error| format!("cannot move checkpoint to {destination}: {error}"))?;
-    fsync_dir(&parent_of(destination))?;
+    fsync_dir(&parent_of(destination)?)?;
     seal_tree(destination)?;
     validate_sealed_tree(destination)?;
     validate_physical_checkpoint(context, destination, snapshot, "sealed checkpoint")

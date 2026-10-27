@@ -91,19 +91,20 @@ pub(in crate::cli::service_verify) fn endpoint_for(
     if kind != VERIFY_KIND_HTTP {
         return Some(endpoint.url.clone());
     }
-    let health = endpoint
+    // An HTTP endpoint may name the path its health answers on; without one,
+    // or with a blank one, the endpoint's own URL is probed.
+    match endpoint
         .extra
         .get("health")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if health.is_empty() {
-        return Some(endpoint.url.clone());
+        .map(str::trim)
+        .filter(|health| !health.is_empty())
+    {
+        Some(health) => Some(format!(
+            "{}/{}",
+            endpoint.url.trim_end_matches('/'),
+            health.trim_start_matches('/')
+        )),
+        None => Some(endpoint.url.clone()),
     }
-    Some(format!(
-        "{}/{}",
-        endpoint.url.trim_end_matches('/'),
-        health.trim_start_matches('/')
-    ))
 }

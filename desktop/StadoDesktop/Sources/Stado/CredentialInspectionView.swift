@@ -1,69 +1,6 @@
 import SwiftUI
 import WisentDesignSystem
 
-private struct CredentialInspection: Decodable, Sendable {
-    struct Management: Decodable, Sendable {
-        let mode: String?
-        let controller: String?
-        let writer: String?
-        let operation_id: String?
-    }
-
-    struct Item: Decodable, Identifiable, Sendable {
-        let id: String
-        let kind: String?
-        let state: String?
-        let management: Management?
-        let revision: UInt64?
-        let updated_at: String?
-        let tags: [String]?
-        let recipients: [String]?
-        let item_uid: String?
-        let versions: Int?
-        let deleted: Bool?
-
-        private enum CodingKeys: String, CodingKey {
-            case id, name, kind, state, management, revision, updated_at
-            case tags, recipients, item_uid, versions, deleted
-        }
-
-        init(from decoder: Decoder) throws {
-            let fields = try decoder.container(keyedBy: CodingKeys.self)
-            id = try fields.decodeIfPresent(String.self, forKey: .id)
-                ?? fields.decode(String.self, forKey: .name)
-            kind = try fields.decodeIfPresent(String.self, forKey: .kind)
-            state = try fields.decodeIfPresent(String.self, forKey: .state)
-            management = try fields.decodeIfPresent(Management.self, forKey: .management)
-            revision = try fields.decodeIfPresent(UInt64.self, forKey: .revision)
-            updated_at = try fields.decodeIfPresent(String.self, forKey: .updated_at)
-            tags = try fields.decodeIfPresent([String].self, forKey: .tags)
-            recipients = try fields.decodeIfPresent([String].self, forKey: .recipients)
-            item_uid = try fields.decodeIfPresent(String.self, forKey: .item_uid)
-            versions = try fields.decodeIfPresent(Int.self, forKey: .versions)
-            deleted = try fields.decodeIfPresent(Bool.self, forKey: .deleted)
-        }
-    }
-
-    struct Grant: Decodable, Sendable {
-        struct Capability: Decodable, Sendable {
-            let action: String
-            let item: String
-            let field: String?
-        }
-        let consumer: String
-        let audience: String?
-        let expires_at: UInt64?
-        let workload_bound: Bool?
-        let capabilities: [Capability]
-    }
-
-    let host: String?
-    let vault: String
-    let items_total: Int?
-    let items: [Item]
-    let grants: [Grant]?
-}
-
 @MainActor
 private final class CredentialInspectionStore: ObservableObject {
     @Published private(set) var result: CredentialInspection?
@@ -106,10 +43,19 @@ struct CredentialInspectionView: View {
         (source == .host ? host : vaultPath).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The host the answer came from, or that it came from the local client
+    /// when the answer names no host.
+    private var scopeLabel: String {
+        switch store.result?.host {
+        case .some(let host): return host
+        case .none: return "Local Stado client"
+        }
+    }
+
     var body: some View {
         WisentScreen(
             title: "Credential inspection",
-            scope: store.result?.host ?? "Local Stado client",
+            scope: scopeLabel,
             freshness: store.lastUpdated.map { "Read \(ConsoleFormat.relative($0))" },
             actions: [],
             scrolls: true,
@@ -192,7 +138,7 @@ struct CredentialInspectionView: View {
             Text(result.vault)
                 .font(WisentTypeScale.identifier())
                 .textSelection(.enabled)
-            Text("\(result.items.count) matching record(s)\(result.items_total.map { " of \($0)" } ?? "")")
+            Text(Self.countLine(result))
                 .font(WisentTypeScale.caption())
                 .accessibilityIdentifier("credential-inspection-count")
             ForEach(result.items) { item in
@@ -201,7 +147,7 @@ struct CredentialInspectionView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                         Text(item.id).font(WisentTypeScale.bodyStrong())
-                        Text("\(item.kind ?? "Kind not reported") · revision \(item.revision.map(String.init) ?? "not reported") · \(item.management?.mode ?? "ownership not reported")")
+                        Text(Self.itemSummary(item))
                             .font(WisentTypeScale.caption())
                             .foregroundStyle(WisentDesign.muted)
                     }
@@ -220,7 +166,7 @@ struct CredentialInspectionView: View {
                             detail("Workload bound", grant.workload_bound.map(String.init))
                             ForEach(grant.capabilities.indices, id: \.self) { capabilityIndex in
                                 let capability = grant.capabilities[capabilityIndex]
-                                Text("\(capability.action):\(capability.item)\(capability.field.map { "#\($0)" } ?? "")")
+                                Text(Self.capabilityLine(capability))
                                     .font(WisentTypeScale.identifier())
                                     .textSelection(.enabled)
                             }
@@ -250,9 +196,43 @@ struct CredentialInspectionView: View {
         .padding(.vertical, WisentDesign.Space.x2)
     }
 
+    /// A field the answer carried, or that it did not carry it.
     private func detail(_ label: String, _ value: String?) -> some View {
-        LabeledContent(label, value: value ?? "Not reported")
+        LabeledContent(label, value: Self.reported(value))
             .font(WisentTypeScale.caption())
             .textSelection(.enabled)
+    }
+
+    private static func reported(_ value: String?) -> String {
+        switch value {
+        case .some(let value): return value
+        case .none: return "Not reported"
+        }
+    }
+
+    /// `action:item`, with `#field` when the capability is bound to one field.
+    private static func capabilityLine(_ capability: CredentialInspection.Grant.Capability) -> String {
+        switch capability.field {
+        case .some(let field): return "\(capability.action):\(capability.item)#\(field)"
+        case .none: return "\(capability.action):\(capability.item)"
+        }
+    }
+
+    /// The item's kind, revision and ownership as the answer carried them,
+    /// each named as not reported when it did not.
+    private static func itemSummary(_ item: CredentialInspection.Item) -> String {
+        let kind = reported(item.kind)
+        let revision = reported(item.revision.map(String.init))
+        let ownership = reported(item.management?.mode)
+        return "kind \(kind) · revision \(revision) · ownership \(ownership)"
+    }
+
+    /// How many records matched, of how many the vault holds when the
+    /// answer counted them.
+    private static func countLine(_ result: CredentialInspection) -> String {
+        switch result.items_total {
+        case .some(let total): return "\(result.items.count) matching record(s) of \(total)"
+        case .none: return "\(result.items.count) matching record(s)"
+        }
     }
 }

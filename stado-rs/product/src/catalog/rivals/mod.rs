@@ -5,13 +5,19 @@
 //! rival with no benchmark is a promise nothing measures, and a benchmark
 //! with no rival measures the product against nobody. `benchmark.app` is the
 //! Probierz application whose manifest declares the suites, and every rival
-//! id is the id of the contender that runs it there.
+//! id is the id of the contender that runs it there. A rival may carry
+//! `claims`, each statement bound to the page it was read from and its
+//! digest ([`claims`]), so a comparison names its sources and a changed
+//! source invalidates only the claim that rests on it.
 
 use crate::common::slug;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashSet;
+
+mod claims;
+pub use claims::check as check_claims;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +26,8 @@ struct Rival {
     name: String,
     url: String,
     evidence: String,
+    #[serde(default)]
+    claims: Vec<claims::Claim>,
 }
 
 #[derive(Deserialize)]
@@ -33,7 +41,7 @@ pub(super) fn validate(id: &str, product: &Value) -> Result<()> {
     let rivals = match product.get("rivals") {
         None => Vec::new(),
         Some(value) => Vec::<Rival>::deserialize(value).with_context(|| {
-            format!("{id}.rivals: expected a list of {{id, name, url, evidence}}")
+            format!("{id}.rivals: expected a list of {{id, name, url, evidence, claims?}}")
         })?,
     };
     let mut seen = HashSet::new();
@@ -58,6 +66,7 @@ pub(super) fn validate(id: &str, product: &Value) -> Result<()> {
                 rival.url
             );
         }
+        claims::validate(id, &rival.id, &rival.claims)?;
     }
     let benchmark = match product.get("benchmark") {
         None => None,

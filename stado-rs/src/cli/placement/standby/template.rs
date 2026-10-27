@@ -57,15 +57,16 @@ pub(super) fn plan(
     })?;
     let mut services = Vec::with_capacity(profile.services.len());
     for logical in &profile.services {
-        let entry = crate::deploy::service_catalog::lookup(logical)
+        let entry = catalog_entry(logical, placed_template)
             .map_err(|error| {
                 CmdError::click(error).stating(crate::primitives::failure::FailureCode::Config)
             })?
             .ok_or_else(|| {
                 CmdError::click(format!(
                     "the Wisent service catalog this build ships declares no service named \
-                     {logical:?}; {} cannot be rendered on {} from the catalog",
-                    profile.name, target.name
+                     {logical:?}, nor the unit {} declares for it on {}; {} cannot be rendered on \
+                     {} from the catalog",
+                    profile.name, placed.name, profile.name, target.name
                 ))
                 .stating(crate::primitives::failure::FailureCode::Config)
             })?;
@@ -100,6 +101,31 @@ pub(super) fn plan(
     Ok(Plan { services })
 }
 
+/// The catalog entry a profile service runs: the one named like the
+/// directory service, else the one the placed host's unit for it names (by
+/// its name, then its launchd label or systemd unit). A directory service is
+/// often named for what it offers (`stado-object-api`) while the catalog
+/// names the product whose unit serves it (`stado`, `com.wisent.stado`).
+fn catalog_entry(
+    logical: &str,
+    placed: &crate::placement::PlacementHost,
+) -> Result<Option<crate::deploy::service_catalog::CatalogService>, String> {
+    use crate::deploy::service_catalog::lookup;
+    if let Some(entry) = lookup(logical)? {
+        return Ok(Some(entry));
+    }
+    let Some(unit) = placed.units.get(logical) else {
+        return Ok(None);
+    };
+    if let Some(entry) = lookup(&unit.name)? {
+        return Ok(Some(entry));
+    }
+    match unit.managed() {
+        Some(managed) => lookup(&managed.unit),
+        None => Ok(None),
+    }
+}
+
 fn classify(program: &str) -> Option<ProgramKind> {
     if let Some(rest) = program.strip_prefix(MANAGED_PROGRAM_ROOT) {
         let product = rest.split('/').next()?;
@@ -114,52 +140,6 @@ fn classify(program: &str) -> Option<ProgramKind> {
             product: product.to_string(),
         },
     )
-}
-
-/// The port a standby unit of `logical` listens on, from the service
-/// directory: the address it names for `target` (as a standby, or as an
-/// endpoint), else the address of the host the profile is placed on, which a
-/// move keeps. `None` when the directory routes the service nowhere; a
-/// directory address that carries no port is refused by name.
-pub(super) fn standby_port(
-    document: &Value,
-    logical: &str,
-    target: &str,
-    placed_on: &str,
-) -> Result<Option<u16>, CmdError> {
-    let Some(route) = document
-        .get("service_directory")
-        .and_then(|directory| directory.get("services"))
-        .and_then(|services| services.get(logical))
-    else {
-        return Ok(None);
-    };
-    let address = ["standby", "endpoints"]
-        .iter()
-        .find_map(|map| route.get(*map).and_then(|hosts| hosts.get(target)))
-        .or_else(|| {
-            route
-                .get("endpoints")
-                .and_then(|hosts| hosts.get(placed_on))
-        });
-    let Some(address) = address else {
-        return Ok(None);
-    };
-    let url = address.get("url").and_then(Value::as_str).ok_or_else(|| {
-        CmdError::declaration(format!(
-            "directory service {logical} names an address for {target} or {placed_on} without a \
-             url"
-        ))
-    })?;
-    let parsed = url::Url::parse(url).map_err(|error| {
-        CmdError::declaration(format!("directory service {logical} url {url}: {error}"))
-    })?;
-    parsed.port().map(Some).ok_or_else(|| {
-        CmdError::declaration(format!(
-            "directory service {logical} url {url} names no port, so the standby unit has none \
-             to listen on"
-        ))
-    })
 }
 
 /// Write `target` into the profile with the units it now holds staged and
@@ -212,10 +192,9 @@ pub(super) async fn commit_host(
                 CmdError::click("placement profile hosts is not an object")
                     .stating(crate::primitives::failure::FailureCode::Config)
             })?;
-        let probes = hosts
+        let placed_probes = hosts
             .get(&placed_on)
             .and_then(|template| template.get("probes"))
-            .cloned()
             .ok_or_else(|| {
                 CmdError::click(format!(
                     "placement profile {profile_name:?} declares no probes for its placed host \
@@ -223,6 +202,7 @@ pub(super) async fn commit_host(
                 ))
                 .stating(crate::primitives::failure::FailureCode::Config)
             })?;
+        let probes = super::ports::probes_for(current, placed_probes, &target_name, &placed_on)?;
         hosts.insert(
             target_name.clone(),
             json!({ "probes": probes, "units": Value::Object(units.clone()) }),
@@ -248,7 +228,7 @@ pub(super) async fn commit_host(
                     .get("endpoints")
                     .and_then(|endpoints| endpoints.get(&placed_on))
                     .cloned()
-                    .filter(|_| !named)
+                    .filter(|_value| !named)
                 else {
                     continue;
                 };

@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use crate::queue::{JobStorage, StorageError};
 
 pub const UNMET_PREFIX: &str = "state/fleet/unmet/";
+/// The unmet-placement record's version, as the fleet needs page states it:
+/// <https://stado.wisent.com/docs/capabilities/fleet-needs>.
 pub const UNMET_SCHEMA_VERSION: u64 = 1;
 
 /// What the placement asked for. Every field is optional because a request
@@ -108,10 +110,16 @@ impl UnmetPlacement {
         }
     }
 
-    pub fn recorded(&self) -> Option<DateTime<Utc>> {
+    /// When the record was written, or why its stamp is not a time.
+    pub fn recorded(&self) -> Result<DateTime<Utc>, StorageError> {
         DateTime::parse_from_rfc3339(&self.recorded_at)
-            .ok()
             .map(|stamp| stamp.with_timezone(&Utc))
+            .map_err(|error| {
+                StorageError::Other(format!(
+                    "unmet placement record stamp {:?} is not an RFC 3339 time: {error}",
+                    self.recorded_at
+                ))
+            })
     }
 }
 
@@ -128,11 +136,7 @@ pub fn this_requester() -> Result<String, crate::queue::submit::SubmitError> {
 /// Write one record. The day folder keeps a listing over a window cheap:
 /// the advisor lists only the days it asks about.
 pub async fn record_unmet(store: &JobStorage, unmet: &UnmetPlacement) -> Result<(), StorageError> {
-    let day = unmet
-        .recorded()
-        .unwrap_or_else(Utc::now)
-        .format("%Y-%m-%d")
-        .to_string();
+    let day = unmet.recorded()?.format("%Y-%m-%d").to_string();
     let key = format!("{UNMET_PREFIX}{day}/{}.json", uuid::Uuid::new_v4());
     let body = serde_json::to_string(unmet)?;
     store.upload_text(&key, &body).await
@@ -149,17 +153,14 @@ pub async fn read_unmet(
     let directories: Vec<String> = match since {
         None => vec![UNMET_PREFIX.to_string()],
         Some(since) => {
-            let mut days = Vec::new();
-            let mut day = since.date_naive();
-            let last = now.date_naive();
-            loop {
-                days.push(format!("{UNMET_PREFIX}{}/", day.format("%Y-%m-%d")));
-                if day >= last {
-                    break;
-                }
-                day = day.succ_opt().unwrap_or(last);
-            }
-            days
+            // Every day from the window's first to today's; `iter_days`
+            // stops only where the calendar does.
+            since
+                .date_naive()
+                .iter_days()
+                .take_while(|day| *day <= now.date_naive())
+                .map(|day| format!("{UNMET_PREFIX}{}/", day.format("%Y-%m-%d")))
+                .collect()
         }
     };
     let mut records = Vec::new();
@@ -172,7 +173,11 @@ pub async fn read_unmet(
                 continue;
             };
             let record: UnmetPlacement = serde_json::from_str(&raw)?;
-            if since.is_none_or(|since| record.recorded().is_some_and(|stamp| stamp >= since)) {
+            let in_window = match since {
+                None => true,
+                Some(since) => record.recorded()? >= since,
+            };
+            if in_window {
                 records.push(record);
             }
         }

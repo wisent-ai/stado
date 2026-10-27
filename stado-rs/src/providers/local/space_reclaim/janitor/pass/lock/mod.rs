@@ -29,6 +29,13 @@ pub fn secure_home(home: &Path) -> Result<PathBuf, JanitorError> {
     Ok(std::fs::canonicalize(home)?)
 }
 
+/// The account's home as every Stado file is kept under
+/// ([`crate::config_file::home`]): HOME, else the user database; with
+/// neither, the cause, where the janitor used to stop the process.
+pub fn user_home() -> Result<PathBuf, JanitorError> {
+    crate::config_file::home().map_err(|cause| JanitorError::os(&cause))
+}
+
 /// The process effective uid (Python `os.geteuid()`).
 pub(crate) fn euid() -> u32 {
     // SAFETY: geteuid cannot fail.
@@ -45,10 +52,11 @@ pub fn ensure_state_dir(home: &Path) -> Result<PathBuf, JanitorError> {
             Ok(info) => info,
             Err(exc) if exc.kind() == io::ErrorKind::NotFound => {
                 std::fs::create_dir(&current)?;
-                // Match Python's mkdir(mode=0o700) exactly: umask may have
-                // widened nothing, but be explicit like fchmod would be.
+                // Owner-only, explicit like fchmod would be, whatever the
+                // umask allowed.
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&current, std::fs::Permissions::from_mode(0o700))?;
+                let mode = crate::primitives::file_mode::owner_only_directory();
+                std::fs::set_permissions(&current, std::fs::Permissions::from_mode(mode))?;
                 std::fs::symlink_metadata(&current)?
             }
             Err(exc) => return Err(exc.into()),

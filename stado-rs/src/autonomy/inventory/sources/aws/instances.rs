@@ -7,7 +7,7 @@ use crate::autonomy::inventory::values::canonical_revision;
 use crate::autonomy::model::{ResourceKind, ResourceRecord};
 use crate::capabilities::ProviderId;
 
-use super::aws_tags;
+use super::{aws_tags, console_name};
 
 pub(super) async fn aws_instances(
     client: &aws_sdk_ec2::Client,
@@ -20,7 +20,12 @@ pub(super) async fn aws_instances(
     loop {
         let output = crate::wait::sdk(client.describe_instances().set_next_token(token).send())
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                format!(
+                    "EC2 DescribeInstances in {region}: {}",
+                    aws_sdk_ec2::error::DisplayErrorContext(&error)
+                )
+            })?;
         for reservation in output.reservations() {
             if !reservation.instances().is_empty() && reservation.owner_id() != Some(account) {
                 return Err(format!(
@@ -37,7 +42,7 @@ pub(super) async fn aws_instances(
                     ));
                 };
                 let labels = aws_tags(instance.tags());
-                let name = labels.get("Name").map(String::as_str).unwrap_or(native);
+                let name = console_name(&labels, native);
                 let mut resource = ResourceRecord::new(
                     ProviderId::Aws,
                     account,
@@ -85,11 +90,11 @@ pub(super) async fn aws_instances(
                         "delete_on_termination": mapping.ebs().and_then(|ebs| ebs.delete_on_termination()),
                     })).collect::<Vec<Value>>(),
                 });
-                resource.source_revision = canonical_revision(&json!({
+                resource.source_revision = Some(canonical_revision(&json!({
                     "state": &resource.state,
                     "labels": &resource.labels,
                     "evidence": &resource.evidence,
-                }));
+                })));
                 resource.apply_identity_labels();
                 resources.push(resource);
             }

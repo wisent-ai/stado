@@ -36,7 +36,9 @@ pub(crate) async fn bucket_jobs(
     // A job's hourly cap is held against the provider's live quote for the
     // machine it would rent; the book is read once for this pass.
     let prices = stored_price_book(store).await?;
-    let provider: Option<crate::capabilities::ProviderId> = provider_name.parse().ok();
+    // A provider Stado does not price is kept with why, so a capped job it
+    // cannot dispatch is said with that reason.
+    let provider = provider_name.parse::<crate::capabilities::ProviderId>();
     for j in queued {
         if j.pin_to_provider && j.provider != provider_name {
             continue;
@@ -50,14 +52,14 @@ pub(crate) async fn bucket_jobs(
             // this job was sized. Otherwise try the smallest live GPU tier;
             // an out-of-memory result can escalate the job on requeue.
             // With neither a measurement nor live GPU capacity, defer it.
-            let model = crate::sizing::model_of(&j.command);
-            let peak = if model.is_empty() {
-                None
-            } else {
-                if observed.is_none() {
-                    observed = Some(sizing.observed_map(store).await?);
+            let peak = match crate::sizing::model_of(&j.command) {
+                None => None,
+                Some(model) => {
+                    if observed.is_none() {
+                        observed = Some(sizing.observed_map(store).await?);
+                    }
+                    observed.as_ref().and_then(|m| m.get(&model).copied())
                 }
-                observed.as_ref().and_then(|m| m.get(&model).copied())
             };
             if let Some(peak) = peak {
                 if peak > 0 {
@@ -71,10 +73,11 @@ pub(crate) async fn bucket_jobs(
                 gpu_mem = live_small;
             }
         }
-        let (default_mt, default_accel) = config::lookup_instance_type(provider_name, gpu_mem);
-        if default_accel.is_empty() || default_mt.is_empty() {
+        let Some((default_mt, default_accel)) =
+            config::lookup_instance_type(provider_name, gpu_mem)
+        else {
             continue;
-        }
+        };
         // Caller-pinned overrides — use the catalog if either is
         // empty.
         //
@@ -104,16 +107,24 @@ pub(crate) async fn bucket_jobs(
             }
         };
         let cap = j.max_cost_per_hour_usd;
-        if cap > 0.0 && !accel.is_empty() {
-            let quote = prices.as_ref().zip(provider).and_then(|(book, provider)| {
-                book.find_hourly(provider, None, mt, accel, j.preemptible)
-            });
+        // A cap is stated when it is a positive amount; none caps nothing.
+        if cap.is_sign_positive() && cap.is_normal() && !accel.is_empty() {
+            let quote = match (&prices, &provider) {
+                (Some(book), Ok(provider)) => {
+                    book.find_hourly(*provider, None, mt, accel, j.preemptible)
+                }
+                _ => None,
+            };
             match quote {
                 Some(quote) if quote.hourly_usd > cap => continue,
                 Some(_) => {}
                 None => {
+                    let why = match &provider {
+                        Err(error) => error.clone(),
+                        Ok(_) => format!("no live {provider_name} quote for {mt}/{accel}"),
+                    };
                     log(&format!(
-                        "{}: --max-cost-per-hour {cap} cannot be held without a live {provider_name} quote for {mt}/{accel}; not dispatched",
+                        "{}: --max-cost-per-hour {cap} cannot be held: {why}; not dispatched",
                         j.job_id
                     ));
                     continue;

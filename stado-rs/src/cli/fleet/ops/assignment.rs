@@ -91,11 +91,15 @@ pub async fn unassign(target: &str, as_json: bool) -> Result<bool, CmdError> {
     let left = std::sync::Mutex::new(None);
     let generation = commit_document(|document| {
         let (next, fleet) = unassign_target(document, target)?;
-        *left.lock().expect("unassign result lock") = fleet;
+        *crate::primitives::lock::held(&left) = fleet;
         Ok(next)
     })
     .await?;
-    let left = left.into_inner().expect("unassign result lock");
+    // The slot is replaced whole, so a commit attempt that panicked left an answer.
+    let left = match left.into_inner() {
+        Ok(left) => left,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     if as_json {
         let answer = json!({ "target": target, "left": left, "generation": generation });
         crate::cli::print_answer(&answer, true)?;

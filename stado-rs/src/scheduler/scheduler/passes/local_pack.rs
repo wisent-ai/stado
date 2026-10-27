@@ -1,6 +1,6 @@
 //! Pass two: the cost-optimal local pack.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use crate::autonomy::cost::PriceBook;
 use crate::models::Job;
@@ -31,7 +31,7 @@ use crate::scheduler::scheduler::support::reporting::{log, py_pairs_i64};
 pub(crate) fn local_pack(
     queued: &[Job],
     local_vram_pool: &[(String, i64)],
-    wt_table: &BTreeMap<(String, String), f64>,
+    wt_table: &crate::scheduler::cost::WallTimes,
     prices: Option<&PriceBook>,
 ) -> HashMap<String, String> {
     let mut yield_targets: HashMap<String, String> = HashMap::new();

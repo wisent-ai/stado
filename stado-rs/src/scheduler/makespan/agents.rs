@@ -41,11 +41,7 @@ fn estimate(command: &str, stated: Option<f64>, history: &History) -> Option<f64
     if stated.is_some() {
         return stated;
     }
-    let (model, task) = extract_model_task(command);
-    if model.is_empty() || task.is_empty() {
-        return None;
-    }
-    history.get(&(model, task)).copied()
+    history.get(&extract_model_task(command)?).copied()
 }
 
 /// Per-job runtime estimate in seconds. Returns None when neither an

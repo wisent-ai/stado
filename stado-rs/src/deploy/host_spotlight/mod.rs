@@ -170,7 +170,7 @@ pub async fn exclude_on_host(
     match result {
         Ok(output) => {
             report.entries = parse(&output.stdout);
-            if !output.ok() {
+            if !output.succeeded() {
                 report.error = Some(output.detail().trim().to_string());
             }
         }

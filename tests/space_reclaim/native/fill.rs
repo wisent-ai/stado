@@ -8,6 +8,11 @@ use serde_json::{json, Value};
 
 use super::Native;
 
+// The Weles recordings journey fills the volume through this module, so it
+// is compiled beside it.
+#[path = "recordings.rs"]
+mod recordings;
+
 /// One percent is one hundredth, as the SI brochure defines the symbol `%`:
 /// https://www.bipm.org/en/publications/si-brochure
 const PERCENT: u64 = 100;

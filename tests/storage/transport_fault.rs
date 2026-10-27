@@ -26,7 +26,8 @@ struct Run {
 
 impl Run {
     fn new() -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("storage-transport-fault");
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/journeys/storage-transport-fault");
         std::fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(std::process::id().to_string());
         std::fs::create_dir_all(&root).expect("create the run directory");

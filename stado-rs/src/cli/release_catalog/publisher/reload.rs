@@ -1,4 +1,4 @@
-//! Which processes `declare-publisher --reload HOST=SERVICE` may refresh.
+//! Which processes `publisher declare --reload HOST=SERVICE` may refresh.
 //!
 //! A reload refreshes the publisher table inside a running process, and the
 //! release API that reads it runs only in the host Stado process. Any other

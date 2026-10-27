@@ -5,10 +5,7 @@
 //! at `$HOME/.stado/forwards/<service>.local`, so every writer here preserves
 //! that exact path and content shape.
 
-use std::{
-    io::Write,
-    path::{Path, PathBuf},
-};
+use std::path::PathBuf;
 
 use serde::Serialize;
 
@@ -42,16 +39,17 @@ fn checked_service(service: &str) -> Result<(), DeployError> {
     }
 }
 
+/// `~/.stado/forwards` under the home every Stado file is kept under
+/// ([`crate::config_file::home`]): the same directory the resolver's
+/// publication writes, which reads it the same way.
 fn forwards_dir() -> Result<PathBuf, DeployError> {
-    let home = std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .ok_or_else(|| {
-            DeployError(
-                "HOME is not set; set it to the account that owns .stado/forwards".to_string(),
-            )
-            .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
-    Ok(Path::new(&home).join(".stado").join("forwards"))
+    let home = crate::config_file::home().map_err(|cause| {
+        DeployError(format!(
+            "{cause}; set HOME to the account that owns .stado/forwards"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
+    Ok(home.join(".stado").join("forwards"))
 }
 
 pub fn local_path(service: &str) -> Result<PathBuf, DeployError> {
@@ -114,20 +112,11 @@ pub fn open_local(service: &str, url: &str) -> Result<ForwardMarker, DeployError
         std::fs::Permissions::from_mode(crate::primitives::file_mode::owner_only_directory()),
     )
     .map_err(DeployError::from)?;
-    let mut staging = tempfile::NamedTempFile::new_in(directory).map_err(DeployError::from)?;
-    staging
-        .write_all(url.as_bytes())
-        .and_then(|()| staging.write_all(b"\n"))
+    // The marker is written whole and durably, owner-only, through the one
+    // writer Stado replaces its files with; a private copy renamed it into
+    // place without flushing the file or its directory.
+    crate::primitives::document::persist(&marker, format!("{url}\n").as_bytes())
         .map_err(DeployError::from)?;
-    staging
-        .as_file()
-        .set_permissions(std::fs::Permissions::from_mode(
-            crate::primitives::file_mode::owner_read_write(),
-        ))
-        .map_err(DeployError::from)?;
-    staging
-        .persist(&marker)
-        .map_err(|error| DeployError::from(error.error))?;
     Ok(ForwardMarker {
         service: service.to_string(),
         url: url.to_string(),
@@ -163,7 +152,7 @@ pub async fn open_remote(
         "set -eu\npath={quoted_path}\ndirectory=\"${{path%/*}}\"\n/bin/mkdir -p \"$directory\"\n/bin/chmod 700 \"$directory\"\numask 077\nstaging=$(/usr/bin/mktemp \"$path.staging.XXXXXX\")\ntrap '/bin/rm -f \"$staging\"' EXIT HUP INT TERM\nprintf '%s\\n' {quoted_url} > \"$staging\"\n/bin/chmod 600 \"$staging\"\n/bin/mv \"$staging\" \"$path\"\n"
     );
     let output = host_channel::run_script(target, &script, &runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "remote forward marker write failed",
@@ -187,7 +176,7 @@ pub async fn close_remote(target: &ComputeTarget, service: &str) -> Result<bool,
         "set -eu\npath={quoted_path}\nif [ -f \"$path\" ]; then /bin/rm -f \"$path\"; echo STADO_ROUTE_REMOVED; else echo STADO_ROUTE_ABSENT; fi\n"
     );
     let output = host_channel::run_script(target, &script, &runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "remote forward marker removal failed",

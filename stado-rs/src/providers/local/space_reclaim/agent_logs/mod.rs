@@ -6,16 +6,15 @@
 //! product reads again. The roots are fixed here and are each harness's log
 //! directory only; under the disk-full rule every file in them goes.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::janitor::state::report::{CleanerReport, CleanupReport};
+use super::janitor::state::report::{met::Met, CleanupReport};
 
 /// The name this cleaner's report is filed under.
 pub const CLEANER: &str = "agent_logs";
 
 /// Home-relative log directories of the harnesses Jeden and Tama drive.
-pub const LOG_ROOTS: [&str; 5] = [
+pub const LOG_ROOTS: &[&str] = &[
     ".omp/logs",
     ".claude/debug",
     ".codex/log",
@@ -25,24 +24,31 @@ pub const LOG_ROOTS: [&str; 5] = [
 
 /// Remove every log file under every harness log root.
 pub fn scan_agent_logs(home: &Path, enforcing: bool, report: &mut CleanupReport) {
-    let mut record = CleanerReport::default();
     let mut frontier: Vec<PathBuf> = LOG_ROOTS
         .iter()
         .map(|root| home.join(root))
         .filter(|root| root.is_dir())
         .collect();
+    let mut met = Met::default();
     while let Some(directory) = frontier.pop() {
         let Ok(entries) = std::fs::read_dir(&directory) else {
-            bump(&mut record.skipped, "directory_unreadable");
+            met.skipped("directory_unreadable");
             continue;
         };
-        for entry in entries.flatten() {
-            record.scanned_items += 1;
+        let entries: Vec<_> = entries.collect();
+        met.listed(entries.len());
+        for entry in entries {
+            // An entry the directory cannot list is counted as skipped,
+            // never left out of the scan without a trace.
+            let Ok(entry) = entry else {
+                met.skipped("entry_unreadable");
+                continue;
+            };
             let path = entry.path();
             // `entry.metadata` does not follow a symbolic link, so a link
             // out of a log directory is never walked or removed.
             let Ok(info) = entry.metadata() else {
-                bump(&mut record.skipped, "unreadable");
+                met.skipped("unreadable");
                 continue;
             };
             if info.is_dir() {
@@ -50,35 +56,27 @@ pub fn scan_agent_logs(home: &Path, enforcing: bool, report: &mut CleanupReport)
                 continue;
             }
             if !info.is_file() {
-                bump(&mut record.skipped, "not_a_regular_file");
+                met.skipped("not_a_regular_file");
                 continue;
             }
-            record.eligible_items += 1;
-            record.expected_bytes += info.len() as i64;
+            met.eligible(info.len());
             if !enforcing {
                 continue;
             }
             match std::fs::remove_file(&path) {
-                Ok(()) => {
-                    record.deleted_items += 1;
-                    record.actual_free_delta_bytes += info.len() as i64;
-                }
+                Ok(()) => met.removed(Some(info.len())),
                 Err(error) => {
-                    bump(&mut record.skipped, "deletion_refused");
+                    met.skipped("deletion_refused");
                     report.add_error(
                         CLEANER,
-                        &super::JanitorError::os(&format!(
-                            "cannot remove {}: {error}",
-                            path.display()
-                        )),
+                        &super::JanitorError::os(&format!("cannot remove {}: {error}", path.display())),
                     );
                 }
             }
         }
     }
-    report.agent_logs = record;
-}
-
-fn bump(counts: &mut BTreeMap<String, i64>, reason: &str) {
-    *counts.entry(reason.to_string()).or_default() += 1;
+    match met.report() {
+        Ok(record) => report.agent_logs = record,
+        Err(cause) => report.add_error(CLEANER, &super::JanitorError::os(&cause)),
+    }
 }

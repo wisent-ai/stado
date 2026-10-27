@@ -43,15 +43,12 @@ impl Deployment {
 
     /// Where the served store keeps `key` of the namespace.
     pub fn stored(&self, key: &str) -> PathBuf {
-        self.store()
-            .join("ecosystem")
-            .join(&self.namespace)
-            .join(key)
+        self.store().join("ecosystem").join(&self.namespace).join(key)
     }
 
     pub(crate) fn skarbiec(&self) -> Command {
-        let binary =
-            std::env::var("SKARBIEC").expect("SKARBIEC must name the skarbiec binary under test");
+        let binary = std::env::var("SKARBIEC")
+            .expect("SKARBIEC must name the skarbiec binary under test");
         let mut command = Command::new(binary);
         command
             .env("GNUPGHOME", &self.keyring)
@@ -105,10 +102,7 @@ impl Deployment {
             .env("PATH", std::env::var_os("PATH").unwrap())
             .env("HOME", self.root.join("home"))
             .env("AWS_CONFIG_FILE", &config)
-            .env(
-                "AWS_SHARED_CREDENTIALS_FILE",
-                self.root.join("aws/credentials"),
-            )
+            .env("AWS_SHARED_CREDENTIALS_FILE", self.root.join("aws/credentials"))
             .env("AWS_ACCESS_KEY_ID", access_key)
             .env("AWS_SECRET_ACCESS_KEY", secret)
             .args(["--endpoint-url", &endpoint, "--no-cli-pager"])

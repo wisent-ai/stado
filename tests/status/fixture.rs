@@ -5,7 +5,7 @@
 //! case's `report.json` beside the exact source revision and binary digest.
 //!
 //! The store is `WC_STORAGE_BACKEND=local` with `WC_LOCAL_STORAGE_PATH`
-//! under `CARGO_TARGET_TMPDIR`, and `STADO_CONFIG` names a file that does
+//! under the checkout's `.build/journeys`, and `STADO_CONFIG` names a file that does
 //! not exist, so the operator's own configuration, registry and queue are
 //! never read or written. A case that reads a declared real queue instead
 //! takes that queue's configuration file from an environment variable
@@ -66,7 +66,7 @@ impl Store {
     }
 
     fn prepare(case: &str, backend: Backend) -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("reaped-reads");
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/journeys/reaped-reads");
         fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(format!("{case}-{}", std::process::id()));
         fs::create_dir_all(&root).expect("create the case directory");
@@ -81,8 +81,7 @@ impl Store {
     fn identify(&mut self) {
         let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .and_then(Path::parent)
-            .expect("the test package sits two levels below the checkout");
+            .expect("stado-rs, the package these journeys compile in, sits in the checkout");
         let revision = Command::new("git")
             .current_dir(repository)
             .args(["rev-parse", "HEAD"])
@@ -134,11 +133,13 @@ impl Store {
         fs::create_dir_all(self.root.join("home")).expect("create the case home");
         fs::create_dir_all(self.root.join("tmp")).expect("create the case tmp");
         match &self.backend {
+            // The case's own HOME holds no Stado configuration, so stado
+            // reads none: STADO_CONFIG naming a file is a declaration that
+            // the file exists, and one that does not is refused.
             Backend::Local => {
                 command
                     .env("WC_STORAGE_BACKEND", "local")
-                    .env("WC_LOCAL_STORAGE_PATH", self.store())
-                    .env("STADO_CONFIG", self.root.join("no-config.json"));
+                    .env("WC_LOCAL_STORAGE_PATH", self.store());
             }
             Backend::Declared(configuration) => {
                 command.env("STADO_CONFIG", configuration);

@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 // unit still carrying an argv the incoming parser rejects. This uses the real
 // CLI, canonical source checkout, launchd/systemd unit and registry, and leaves
 // the upgraded service running. Never point it at an operator's live account.
+// After the install it rolls the CLI back and checks the restored executable
+// rendered the unit again and parses it, then installs the candidate again.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const binary = process.env.STADO_BIN;
 const source = process.env.STADO_TEST_SOURCE;
@@ -64,7 +66,7 @@ try {
   const install = run(program, ['product', '--workspace', workspace, 'install', 'stado',
     '--surface', 'cli', '--source-commit', commit]);
   succeeded(install);
-  assert.match(install.stderr + install.stdout, /migrated com\.wisent\.stado/);
+  assert.match(install.stderr + install.stdout, /rendered com\.wisent\.stado on \S+ through /);
   const after = run(program, unit);
   succeeded(after);
   const status = JSON.parse(succeeded(run(program, ['product', '--workspace', workspace,
@@ -89,6 +91,29 @@ try {
   assert.equal(runningInode, installedInode,
     'the resident unit still executes the image the install replaced');
   report.cases.push({ case: 'migrated-and-serving', status, serving, service, unit: unitShown, image_inode: runningInode });
+
+  // A rollback puts the predecessor back; the unit the candidate rendered is
+  // rendered again through the restored executable, which must then accept
+  // the unit's actual argv and serve.
+  const rollback = run(program, ['product', '--workspace', workspace, 'rollback', 'stado', '--surface', 'cli']);
+  succeeded(rollback);
+  assert.ok((rollback.stderr + rollback.stdout).includes(`rendered com.wisent.stado on ${host} through ${installed}`),
+    'the rollback did not render the resident unit through the restored executable');
+  assert.equal(digest(readFileSync(installed)), report.before_sha256, 'the rollback did not restore the predecessor bytes');
+  const rolled = JSON.parse(succeeded(run(program, ['product', '--workspace', workspace,
+    'status', 'stado', '--surface', 'cli', '--json'])));
+  assert.equal(rolled.status, 'rolled_back');
+  assert.equal(rolled.resident_unit?.host, host, 'the rolled-back receipt does not record the unit it rendered');
+  // The candidate's verbs read the restored unit: the predecessor may be a
+  // release from before them. --candidate names the parser that must accept it.
+  succeeded(run(program, ['quality', 'units', '--candidate', installed, '--program', 'stado', '--host', host]));
+  const restoredServing = JSON.parse(succeeded(run(program, ['service', 'serving', 'stado', '--host', host, '--wait', '--json'])));
+  assert.ok(Array.isArray(restoredServing) && restoredServing.length && restoredServing.every(row => row.serving === 'serving'),
+    'the restored resident process does not own every declared port');
+  report.cases.push({ case: 'rolled-back-and-rendered', rolled, serving: restoredServing });
+  succeeded(run(program, ['product', '--workspace', workspace, 'install', 'stado',
+    '--surface', 'cli', '--source-commit', commit]));
+  assert.equal(digest(readFileSync(installed)), report.after_sha256, 'the second install did not place the candidate again');
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);

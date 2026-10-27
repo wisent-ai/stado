@@ -1,7 +1,7 @@
 //! The S3 face of a product namespace: the presigned URL of one object
 //! (`stado storage url --presign`), the endpoint, bucket and access key any
 //! S3 client reaches a namespace through, confronted with one signed request
-//! before it is reported (`stado storage s3-endpoint`), and a copy or move of
+//! before it is reported (`stado storage endpoint`), and a copy or move of
 //! one object on the server (`stado storage cp|mv`, [`copy`]).
 //!
 //! All sign with the bearer this client presents for the object API
@@ -146,7 +146,7 @@ pub struct StorageS3EndpointArgs {
     json: bool,
 }
 
-/// `stado storage s3-endpoint`: report how an S3 client reaches one
+/// `stado storage endpoint`: report how an S3 client reaches one
 /// namespace, after one signed HeadBucket proves the endpoint accepts this
 /// client's secret for it.
 pub(in crate::cli::storage) async fn s3_endpoint(

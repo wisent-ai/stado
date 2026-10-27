@@ -116,7 +116,7 @@ fn print(answer: &Value) {
             println!(
                 "{}: {}",
                 field(&product["product"]),
-                product["destinations"]
+                field(&product["destinations"])
             );
         }
     } else {

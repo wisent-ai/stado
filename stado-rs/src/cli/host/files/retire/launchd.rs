@@ -104,28 +104,24 @@ pub(super) async fn retire_system_launchd_file(
             "product must be 1-128 ASCII letters, digits, dots, underscores, or dashes and start with a letter or digit",
         ));
     }
-    let transaction = binding
-        .map(|binding| binding.transaction.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "{}-{}",
-                chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
-                uuid::Uuid::new_v4().simple()
-            )
-        });
+    // An unbound retirement names its own transaction, and passes `-` for
+    // each binding field, which the script reads as "nothing to compare".
+    const UNBOUND: &str = "-";
+    let transaction = match binding {
+        Some(binding) => binding.transaction.clone(),
+        None => format!("{}-{}", chrono::Utc::now().format("%Y%m%dT%H%M%SZ"), uuid::Uuid::new_v4().simple()),
+    };
     let destination = format!("/Library/LaunchDaemons/{name}.stado-retired-{transaction}");
-    let expected_size = binding
-        .map(|binding| binding.expected_size.to_string())
-        .unwrap_or_else(|| "-".to_string());
-    let expected_sha = binding
-        .map(|binding| binding.expected_sha256.as_str())
-        .unwrap_or("-");
-    let expected_mode = binding
-        .map(|binding| binding.expected_mode.as_str())
-        .unwrap_or("-");
-    let password = crate::cli::service::host_sudo_password(target)
-        .await?
-        .unwrap_or_default();
+    let (expected_size, expected_sha, expected_mode) = match binding {
+        Some(binding) => (binding.expected_size.to_string(), binding.expected_sha256.as_str(), binding.expected_mode.as_str()),
+        None => (UNBOUND.to_string(), UNBOUND, UNBOUND),
+    };
+    // A host with no stored sudo password is one whose sudo needs none; sudo
+    // reading an empty line refuses with its own words when it does need one.
+    let password = match crate::cli::service::host_sudo_password(target).await? {
+        Some(password) => password,
+        None => String::new(),
+    };
     let output = crate::deploy::host_channel::run_program_with_stdin(
         target,
         &[
@@ -162,12 +158,12 @@ pub(super) async fn retire_system_launchd_file(
         .find(|line| line.starts_with("STADO_RETIRE_SYSTEM\t"))
         .ok_or_else(|| retire_refused("privileged launchd retirement returned no marker"))?;
     let fields: Vec<&str> = marker.split('\t').collect();
-    if fields.len() != 6 {
-        return Err(retire_refused(
-            "privileged launchd retirement returned a malformed marker",
-        ));
-    }
-    let status = super::RetireStatus::parse(fields[1]).map_err(retire_refused)?;
+    let ["STADO_RETIRE_SYSTEM", status, size, sha256, mode, retired_to] = fields.as_slice() else {
+        return Err(retire_refused(format!(
+            "privileged launchd retirement returned a malformed marker: {marker}"
+        )));
+    };
+    let status = super::RetireStatus::parse(status).map_err(retire_refused)?;
     if status == super::RetireStatus::Absent {
         return Ok(RetireFileOutcome {
             target: target.name.clone(),
@@ -191,23 +187,23 @@ pub(super) async fn retire_system_launchd_file(
             "privileged launchd retirement returned status {status}, expected {expected_status}"
         )));
     }
-    let size = fields[2]
-        .parse::<u64>()
-        .map_err(|_| retire_refused("privileged launchd retirement returned an invalid size"))?;
-    if fields[3].len() != 64 || !fields[3].bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(retire_refused(
-            "privileged launchd retirement returned an invalid SHA-256",
-        ));
+    let size = size.parse::<u64>().map_err(|error| {
+        retire_refused(format!("privileged launchd retirement returned an invalid size {size:?}: {error}"))
+    })?;
+    if !crate::deploy::host_release::is_sha256(sha256) {
+        return Err(retire_refused(format!(
+            "privileged launchd retirement returned an invalid SHA-256 {sha256:?}"
+        )));
     }
     Ok(RetireFileOutcome {
         target: target.name.clone(),
         source: request.path.to_string(),
-        destination: Some(fields[5].to_string()),
+        destination: Some(retired_to.to_string()),
         transaction: Some(transaction),
         status,
         size: Some(size),
-        sha256: Some(fields[3].to_string()),
-        mode: Some(fields[4].to_string()),
+        sha256: Some(sha256.to_string()),
+        mode: Some(mode.to_string()),
         detail: None,
     })
 }

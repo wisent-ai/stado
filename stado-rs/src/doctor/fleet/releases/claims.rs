@@ -196,11 +196,11 @@ pub(super) async fn require_version_claim_agreement(
     let signed_uri = format!("{base}/{}", crate::release_control::RELEASE_MANIFEST_NAME);
     if crate::cli::storage::release_object_present(&signed_uri)
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("whether {signed_uri} exists cannot be read: {error}"))?
     {
         let bytes = crate::cli::storage::fetch_object(&signed_uri)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("{signed_uri} cannot be fetched: {error}"))?;
         let manifest: crate::release_control::ReleaseManifest = serde_json::from_slice(&bytes)
             .map_err(|error| format!("invalid signed manifest {signed_uri}: {error}"))?;
         crate::release_control::validate_manifest(&manifest)?;

@@ -32,14 +32,14 @@ pub(in crate::cli::web::deploy) async fn published_stable_version(
     // Every run of the product is read: "has no published stable release"
     // is only true of the whole history, not of its newest few.
     let runs = crate::cli::release_submit::recent_runs(Some(product), usize::MAX).await?;
-    if runs.is_empty() {
+    let Some(newest) = runs.first() else {
         return Err(CmdError::click(format!(
             "no release run has ever been submitted for {product}; run \
              `stado release submit {product} --channel stable` first, or name an exact \
              `--version`"
         ))
         .stating(crate::primitives::failure::FailureCode::NotFound));
-    }
+    };
     let published = runs.iter().find(|run| {
         run["channel"].as_str() == Some("stable")
             && run["state"]
@@ -48,7 +48,7 @@ pub(in crate::cli::web::deploy) async fn published_stable_version(
                 .is_some_and(|state| state.published())
     });
     let Some(run) = published else {
-        let newest = runs.first().expect("a non-empty run list has a first row");
+        // The newest run, named so the refusal says what the history holds.
         let field = |name: &str| match newest[name].as_str() {
             Some(value) => value.to_string(),
             None => format!("<the run record has no {name}>"),

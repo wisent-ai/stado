@@ -8,13 +8,19 @@ pub(crate) fn default_state_uri() -> String {
     "stado://system/registry".to_string()
 }
 
-/// Tolerate explicit JSON null where Python does `d.get(key) or <default>`.
+/// Read a field that the registry may write as explicit JSON `null`: the
+/// value when one is written, the type's own empty value for `null`, which
+/// is what an absent field reads as under `#[serde(default)]`. A value of
+/// another type is the deserializer's own error, handed on.
 pub(crate) fn de_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Default + Deserialize<'de>,
 {
-    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+    match Option::<T>::deserialize(deserializer)? {
+        Some(value) => Ok(value),
+        None => Ok(T::default()),
+    }
 }
 
 /// Weles worker policy for a local target.
@@ -23,10 +29,12 @@ where
 pub struct WelesPolicy {
     pub enabled: bool,
     pub actions: Vec<String>,
-    /// Where the Weles worker writes run recordings
-    /// (WELES_RECORDINGS_ROOT). Optional; the janitor's `weles_recordings`
-    /// cleaner sweeps this directory, and `~/weles/recordings` when it is
-    /// absent, so the writer and the cleaner never name two places.
+    /// Where the Weles worker writes run recordings (WELES_RECORDINGS_ROOT,
+    /// which the `weles-recordings` workload writes into the Weles
+    /// LaunchAgents). The janitor's `weles_recordings` cleaner sweeps this
+    /// directory only; a host that declares none is skipped as
+    /// `recordings_dir_undeclared`, and the Weles launcher refuses to start
+    /// without it, so the writer and the cleaner never name two places.
     #[serde(default)]
     pub recordings_dir: Option<String>,
 }
@@ -111,7 +119,7 @@ pub struct MobileRuntime {
     #[serde(default, deserialize_with = "de_null_as_default")]
     pub drivers: Vec<String>,
     /// The URL the Appium server listens on, as reached from this host
-    /// (`http://127.0.0.1:4723` when it listens on loopback). A crawl
+    /// (its loopback address and port when it listens on loopback). A crawl
     /// coordinator reads it from here and hands it to the worker; nothing
     /// assumes a port. A host that declares drivers and no address is not a
     /// mobile placement, and the coordinator says so.

@@ -43,20 +43,19 @@ pub fn shadowing(entries: &[EnvEntry]) -> Vec<&'static str> {
 
 /// Every key the file assigns more than once, in first-appearance order.
 pub fn duplicate_keys(entries: &[EnvEntry]) -> Vec<String> {
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    // The first entry of each key, kept so a duplicate is recognised when
+    // the key is seen again; keys are reported in first-appearance order.
+    let mut first_seen: BTreeMap<&str, ()> = BTreeMap::new();
+    let mut duplicates: Vec<String> = Vec::new();
     for entry in entries {
         if entry.form == FORM_UNPARSABLE || entry.key.is_empty() {
             continue;
         }
-        *counts.entry(entry.key.as_str()).or_default() += 1;
-    }
-    let mut seen: Vec<String> = Vec::new();
-    for entry in entries {
-        if counts.get(entry.key.as_str()).copied().unwrap_or_default() > 1
-            && !seen.iter().any(|key| key == &entry.key)
+        if first_seen.insert(entry.key.as_str(), ()).is_some()
+            && !duplicates.iter().any(|key| key == &entry.key)
         {
-            seen.push(entry.key.clone());
+            duplicates.push(entry.key.clone());
         }
     }
-    seen
+    duplicates
 }

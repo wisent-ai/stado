@@ -42,7 +42,20 @@ pub(super) async fn registry_services(
             let Some(path) = unit.path_for(&storage_target.name) else {
                 continue;
             };
-            let kind = unit.kind.as_deref().unwrap_or(service::KIND_LAUNCHD);
+            // A declaration that locates a unit names both its path and its
+            // kind; a path without a kind is a half-declaration, refused by
+            // name rather than read as launchd.
+            let kind = match unit.kind.as_deref() {
+                Some(kind) => kind,
+                None => {
+                    return Err(DeployError(format!(
+                        "product {} declares unit {label} at {path} without its kind (launchd \
+                         or systemd); a located unit names both",
+                        product.name
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Config))
+                }
+            };
             candidates
                 .entry(label.clone())
                 .or_insert_with(|| ServiceCandidate {
@@ -58,11 +71,19 @@ pub(super) async fn registry_services(
     for native in service::loaded_units(storage_target, runner).await? {
         let label = native.label.clone();
         if label == resident_owner_unit {
-            if native.pid.parse::<u32>().ok() != Some(std::process::id()) {
-                return Err(DeployError::unreachable(
-                    "loaded-unit scan did not bind the exact resident owner service to this process"
-                        .to_string(),
-                ));
+            // The resident owner's loaded unit must be this very process;
+            // a pid that is another process, or not a pid, is said as such.
+            let bound_to_this_process = match native.pid.parse::<u32>() {
+                Ok(pid) => pid == std::process::id(),
+                Err(_not_a_pid) => false,
+            };
+            if !bound_to_this_process {
+                return Err(DeployError::unreachable(format!(
+                    "loaded-unit scan did not bind the exact resident owner service to this \
+                     process: {label} reports pid {:?}, this process is {}",
+                    native.pid,
+                    std::process::id()
+                )));
             }
             resident_owner_discovered = true;
             candidates.remove(&label);

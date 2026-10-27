@@ -25,10 +25,18 @@ static REGISTRY_DOWNLOADER: LazyLock<Mutex<Option<RegistryDownloader>>> =
 /// via `testutil::GLOBAL_STATE_LOCK`.
 #[doc(hidden)]
 pub fn set_registry_downloader_for_testing(downloader: Option<RegistryDownloader>) {
-    *REGISTRY_DOWNLOADER
-        .lock()
-        .expect("registry downloader lock") = downloader;
+    // Replaced whole, as the reader below takes it back through poison.
+    let mut slot = match REGISTRY_DOWNLOADER.lock() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *slot = downloader;
 }
+
+#[path = "store/authority.rs"]
+mod authority;
+#[path = "store/local.rs"]
+mod local;
 
 /// Read/write handle on the canonical registry document, backend-aware.
 ///
@@ -54,15 +62,19 @@ pub fn set_registry_downloader_for_testing(downloader: Option<RegistryDownloader
 /// read with it. On that backend every read here — and so every registry
 /// read of this program: `fetch_registry_remote`, `fetch_document`,
 /// `read_local_document`, the host channel, `database resolve`, `service
-/// directory connect`, `registry self` — takes the service directory's
-/// registry authority's own snapshot over native SSH first
-/// (`crate::cli::resolver::authority_snapshot`), which reads the same store
-/// on the authority and does not pass the vault. The store is read only when
-/// no authority is known from this host's last-known-good copy, this host is
-/// the authority, or the snapshot could not be read, which is said on
-/// stderr. Writes go the same way: the compare-and-swap runs on the authority
-/// over SSH against the version the snapshot carried, which is the store's
-/// own, so a host whose resolver is down can still change the registry.
+/// directory connect`, `registry self` — takes the generation this host's
+/// own resolver holds first (`crate::cli::resolver::held_or_authority_snapshot`):
+/// the resolver refreshes it from the registry authority on its declared
+/// interval, so a slow or silent authority does not hold a read here. When
+/// the resolver holds none it may answer from, the authority's own snapshot
+/// is read over native SSH, which reads the same store on the authority and
+/// does not pass the vault. The store is read only when no authority is
+/// known from this host's last-known-good copy, this host is the authority,
+/// or neither could be read, which is said on stderr. Writes go the same
+/// way: the compare-and-swap runs on the authority over SSH against the
+/// version that read carried, which is the store's own, so a host whose
+/// resolver is down can still change the registry, and a version the
+/// authority has moved past is refused as any stale write is.
 pub struct RegistryStore {
     backend: Arc<dyn BlobBackend>,
     blob: String,
@@ -94,7 +106,7 @@ impl RegistryStore {
         }
         if adapter == Some(crate::capabilities::StorageAdapter::StadoObject) {
             let backend = crate::queue::StadoObjectBackend::new(
-                &crate::config::wc_stado_storage_url(),
+                &crate::config::wc_stado_storage_url().map_err(StorageError::Other)?,
                 crate::config::QUEUE_OBJECT_NAMESPACE,
                 crate::config::wc_stado_storage_token_file(),
                 crate::config::wc_stado_storage_ca_file(),
@@ -109,7 +121,7 @@ impl RegistryStore {
         // A local store that an object API serves roots every client, this
         // one included, in the queue namespace's directory, where that API
         // writes the canonical document (JobStorage's StoreRoot::Client).
-        let store = JobStorage::for_primary_reads().await?;
+        let store = local::primary_reads(adapter).await?;
         Ok(Self {
             backend: Arc::clone(store.backend()),
             blob: REGISTRY_BLOB.to_string(),
@@ -118,40 +130,28 @@ impl RegistryStore {
         })
     }
 
+    /// Bind to the registry in the object API at `url` itself, not through
+    /// this host's resolver or the authority: the store a role move just put
+    /// on this host, written before any resolver routes to it.
+    pub fn at_object_api(url: &str) -> Result<Self, StorageError> {
+        let backend = crate::queue::StadoObjectBackend::new(
+            url,
+            crate::config::QUEUE_OBJECT_NAMESPACE,
+            crate::config::wc_stado_storage_token_file(),
+            crate::config::wc_stado_storage_ca_file(),
+        )?;
+        Ok(Self { backend: Arc::new(backend), blob: REGISTRY_BLOB.to_string(), location: format!("{url} {REGISTRY_BLOB}"), served_by_object_api: false })
+    }
+
     /// Operator-facing location of the object this handle addresses, in
     /// the spelling [`RegistryFetchError`] reports.
     pub fn location(&self) -> &str {
         &self.location
     }
 
-    /// The registry authority's snapshot, when this store is an object API
-    /// and this host knows an authority other than itself; `None` sends the
-    /// caller to the store. A snapshot that could not be read is said on
-    /// stderr with the authority's own sentence, and the store is read: the
-    /// one wait that the snapshot exists to avoid is then visible as the
-    /// store read's own `czekam` line.
-    async fn authority_snapshot(&self) -> Option<VersionedText> {
-        if !self.served_by_object_api {
-            return None;
-        }
-        // Boxed: the authority's own read reaches a registry store again, so
-        // the two futures name each other and need a pointer between them.
-        match Box::pin(crate::cli::resolver::authority_snapshot()).await {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                eprintln!(
-                    "stado: the registry authority's snapshot could not be read ({error}); \
-                     reading the registry store at {} instead",
-                    self.location
-                );
-                None
-            }
-        }
-    }
-
     /// Registry text, or `None` when the object does not exist.
     pub async fn read_text(&self) -> Result<Option<String>, StorageError> {
-        if let Some(snapshot) = self.authority_snapshot().await {
+        if let Some(snapshot) = self.authority_snapshot().await? {
             return Ok(Some(snapshot.content));
         }
         self.backend.download_text(&self.blob).await
@@ -159,24 +159,37 @@ impl RegistryStore {
 
     /// Registry text plus the generation/ETag a compare-and-swap needs.
     pub async fn read_versioned(&self) -> Result<Option<VersionedText>, StorageError> {
-        if let Some(snapshot) = self.authority_snapshot().await {
+        if let Some(snapshot) = self.authority_snapshot().await? {
             return Ok(Some(snapshot));
         }
         self.backend.download_text_versioned(&self.blob).await
     }
 
-    /// Create the registry object; `false` when one already exists.
+    /// Create the registry object; `false` when one already exists. A
+    /// created document leaves no snapshot this command recalled standing
+    /// for the registry.
     pub async fn create_if_absent(&self, content: &str) -> Result<bool, StorageError> {
-        self.backend
+        let created = self
+            .backend
             .upload_text_if_absent(&self.blob, content)
-            .await
+            .await?;
+        if created {
+            crate::cli::resolver::forget_recalled_registry();
+        }
+        Ok(created)
     }
 
     /// Replace the registry iff its generation still matches; returns the
     /// new generation. On an object-API store of a host whose registry
     /// authority is another host, the swap runs on that authority over SSH
     /// (`crate::cli::resolver::authority_compare_and_swap`), the channel the
-    /// reads above use, so a write never waits on this host's own resolver.
+    /// reads above use, so the swap itself never stands behind this host's
+    /// resolver. A swap that landed forgets the authority snapshot this
+    /// command recalled and brings this host's resolver to the store version
+    /// written (`crate::cli::resolver::follow_written`): this host's next
+    /// read takes that resolver first, so this is what lets a command read
+    /// what it wrote; on the authority it is also what every other host reads
+    /// next.
     pub async fn compare_and_swap(
         &self,
         expected_version: &str,
@@ -184,14 +197,20 @@ impl RegistryStore {
     ) -> Result<String, StorageError> {
         if self.served_by_object_api {
             let through_authority =
-                crate::cli::resolver::authority_compare_and_swap(expected_version, content);
+                crate::cli::resolver::authority_compare_and_swap(expected_version, content, None);
             if let Some(generation) = Box::pin(through_authority).await? {
+                crate::cli::resolver::forget_recalled_registry();
+                crate::cli::resolver::follow_written(&generation).await;
                 return Ok(generation);
             }
         }
-        self.backend
+        let generation = self
+            .backend
             .compare_and_swap_text(&self.blob, expected_version, content)
-            .await
+            .await?;
+        crate::cli::resolver::forget_recalled_registry();
+        crate::cli::resolver::follow_written(&generation).await;
+        Ok(generation)
     }
 
     /// Create one object beside the registry document, never replacing one.
@@ -249,10 +268,11 @@ async fn download_registry_blob() -> Result<Option<VersionedText>, String> {
 }
 
 pub(crate) async fn download_registry() -> Result<Option<VersionedText>, String> {
-    let downloader = REGISTRY_DOWNLOADER
-        .lock()
-        .expect("registry downloader lock")
-        .clone();
+    // One whole value at every moment, so a poisoned lock is taken over.
+    let downloader = match REGISTRY_DOWNLOADER.lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
     match downloader {
         Some(downloader) => downloader().await,
         None => download_registry_blob().await,

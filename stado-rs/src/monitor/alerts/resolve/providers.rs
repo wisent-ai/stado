@@ -119,10 +119,10 @@ pub(super) async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
 pub(super) async fn gcp_token() -> Result<String, String> {
     let auth = crate::skarbiec::gcp_provider()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| format!("the GCP provider grant cannot be read from Skarbiec: {error}"))?;
     let token = auth
         .token(&[CLOUD_PLATFORM_SCOPE])
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| format!("a GCP token for {CLOUD_PLATFORM_SCOPE} cannot be issued: {error}"))?;
     Ok(token.as_str().to_string())
 }

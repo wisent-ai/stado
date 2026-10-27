@@ -5,6 +5,9 @@ use super::{Deployment, MANIFEST};
 use serde_json::json;
 use std::{fs, path::Path};
 
+#[path = "handoff.rs"]
+mod handoff;
+
 #[test]
 fn the_check_runs_every_gate_the_installation_runs() {
     let mut deployment = Deployment::start();

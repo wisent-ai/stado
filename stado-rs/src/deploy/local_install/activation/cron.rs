@@ -55,7 +55,7 @@ pub(super) async fn install_cron_job(
     ]))
     .await
     .map_err(DeployError::unreachable)?;
-    if !cron.ok() {
+    if !cron.succeeded() {
         return Err(DeployError::unreachable(format!(
             "crontab install failed: {}",
             cron.detail()
@@ -71,7 +71,7 @@ pub(super) async fn install_cron_job(
     ]))
     .await
     .map_err(DeployError::unreachable)?;
-    if !start.ok() {
+    if !start.succeeded() {
         return Err(DeployError::unreachable(format!(
             "agent start failed: {}",
             start.detail()

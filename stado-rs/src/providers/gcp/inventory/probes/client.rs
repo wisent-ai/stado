@@ -58,13 +58,17 @@ impl Client {
             } else {
                 None
             };
-            match &mut merged {
-                Some(existing) => merge_page(existing, value),
-                None => merged = Some(value),
-            }
-            let Some(token) = next_token else {
-                return successful(spec, merged.unwrap_or_else(|| json!({})));
+            let pages = match merged.take() {
+                Some(mut existing) => {
+                    merge_page(&mut existing, value);
+                    existing
+                }
+                None => value,
             };
+            let Some(token) = next_token else {
+                return successful(spec, pages);
+            };
+            merged = Some(pages);
             if !seen_tokens.insert(token.clone()) {
                 return failed_transport(spec, format!("pagination token repeated: {token}"));
             }

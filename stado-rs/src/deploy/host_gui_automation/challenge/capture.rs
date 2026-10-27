@@ -17,7 +17,8 @@ pub async fn capture_apple_challenge(
     let user = session.user;
     let uid = session.uid;
 
-    let work = format!("/Users/{user}/.stado/work/apple-challenge");
+    let home = host_channel::remote_user_home(target, &user, runner).await?;
+    let work = format!("{home}/.stado/work/apple-challenge");
     let output_file = format!("{work}/{capture_id}.code");
     run_in_gui_session(
         target,
@@ -29,11 +30,12 @@ pub async fn capture_apple_challenge(
         runner,
     )
     .await?;
+    let owner_only = format!("{:o}", crate::primitives::file_mode::owner_only_directory());
     run_in_gui_session(
         target,
         &user,
         &uid,
-        &["/bin/chmod", "700", &work],
+        &["/bin/chmod", &owner_only, &work],
         "protect Apple challenge work directory",
         password,
         runner,
@@ -65,7 +67,7 @@ pub async fn capture_apple_challenge(
         runner,
     )
     .await?;
-    if !capture.ok() {
+    if !capture.succeeded() {
         // The partial challenge file stays in the GUI user's home when it cannot
         // be removed, so that is part of the refusal.
         let left = match run_in_gui_session(
@@ -108,7 +110,7 @@ pub async fn capture_apple_challenge(
         runner,
     )
     .await;
-    if !captured.ok() {
+    if !captured.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{} captured an Apple challenge but could not read its protected file",
             target.name

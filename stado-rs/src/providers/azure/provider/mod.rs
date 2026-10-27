@@ -20,15 +20,6 @@ fn log(msg: &str) {
     eprintln!("[azure] {msg}");
 }
 
-/// Python f-string rendering of a bool.
-fn py_bool(value: bool) -> &'static str {
-    if value {
-        "True"
-    } else {
-        "False"
-    }
-}
-
 // --- Provider ---
 
 /// Resolved-at-first-use provider state (see the module deviation note).

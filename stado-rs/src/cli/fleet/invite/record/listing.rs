@@ -1,4 +1,4 @@
-//! `stado fleet invites` and the label it prints, which has to say what an
+//! `stado fleet invite list` and the label it prints, which has to say what an
 //! open offline invite is actually waiting for.
 
 use serde_json::json;
@@ -25,7 +25,7 @@ pub fn status_label(invite: &Invite, status: &str) -> String {
     }
 }
 
-/// `stado fleet invites` — every invite and the state it is actually in.
+/// `stado fleet invite list` — every invite and the state it is actually in.
 pub async fn invites(as_json: bool) -> Result<bool, CmdError> {
     let store = JobStorage::new().await?;
     let found = list_invites(&store).await?;

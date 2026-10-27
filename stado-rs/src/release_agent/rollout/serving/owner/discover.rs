@@ -101,20 +101,33 @@ pub(crate) async fn foreign_stable_bind_holder(
             serving.stable_bind
         )
     })?;
+    // lsof answers "nobody listens" with no output and nothing on stderr. No
+    // output with a complaint on stderr is a lookup that failed (permission,
+    // a bad option), and reading it as "no foreign holder" let a rollout
+    // take a port it never checked.
+    if output.stdout.is_empty() && !output.stderr.is_empty() {
+        return Err(format!(
+            "whether a foreign process holds {} cannot be read: lsof said: {}",
+            serving.stable_bind,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
     let ours = exact_proxy_pid(target, serving, product).await?;
     let mut holder: Option<(i32, String)> = None;
     for field in String::from_utf8_lossy(&output.stdout).lines() {
-        match field.split_at(1) {
-            ("p", pid) => {
-                let pid = pid.trim().parse::<i32>().map_err(|_| {
+        // Each `-F` line is one tag character and its value.
+        let mut characters = field.chars();
+        match (characters.next(), characters.as_str()) {
+            (Some('p'), pid) => {
+                let pid = pid.trim().parse::<i32>().map_err(|error| {
                     format!(
-                        "lsof printed a pid that does not read for {}: {field}",
+                        "lsof printed a pid that does not read for {}: {field}: {error}",
                         serving.stable_bind
                     )
                 })?;
-                holder = (pid > 0 && Some(pid) != ours).then_some((pid, String::new()));
+                holder = (pid.is_positive() && Some(pid) != ours).then_some((pid, String::new()));
             }
-            ("c", command) => {
+            (Some('c'), command) => {
                 if let Some((_, name)) = holder.as_mut() {
                     *name = command.trim().to_string();
                 }

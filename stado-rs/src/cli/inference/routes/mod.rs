@@ -98,11 +98,12 @@ async fn set_once(
         }
         _ => {}
     }
-    let current = registry
-        .routes
-        .get(alias)
-        .map(String::as_str)
-        .unwrap_or(ABSENT);
+    // The compare-and-swap's current value: the route's destination, or the
+    // word `--expected absent` names for a route that does not exist yet.
+    let current = match registry.routes.get(alias) {
+        Some(destination) => destination.as_str(),
+        None => ABSENT,
+    };
     if current != expected {
         return Err(CmdError::refused(format!(
             "route '{alias}' is '{current}', expected '{expected}'"

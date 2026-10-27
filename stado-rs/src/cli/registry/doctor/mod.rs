@@ -20,9 +20,11 @@ use serde_json::{json, Value};
 use crate::cli::registry::beacons::load::load_beacons;
 use crate::cli::registry::doctor::capability::claims::requirement_findings;
 use crate::cli::registry::doctor::checks::dedup::prune_symptoms;
-use crate::cli::registry::doctor::checks::directory::directory_candidate_ports;
+use crate::cli::registry::doctor::checks::directory::{directory_candidate_ports, foreign_install_roots};
 use crate::cli::registry::doctor::checks::target::target_findings;
-use crate::cli::registry::doctor::checks::{declared_release_control, resolver_refusal};
+use crate::cli::registry::doctor::checks::{
+    declared_release_control, profiles_lacking_stores, resolver_refusal, schedules_pinned_nowhere,
+};
 use crate::cli::registry::doctor::declarations::{unread_configuration, unread_declarations};
 use crate::cli::registry::doctor::findings::Finding;
 use crate::cli::registry::echo_json;
@@ -64,6 +66,9 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     resolver_refusal(&document, &mut findings);
     let release_control = declared_release_control(&registry, &mut findings);
     directory_candidate_ports(&registry, release_control.as_ref(), &mut findings);
+    foreign_install_roots(release_control.as_ref(), &mut findings);
+    schedules_pinned_nowhere(&registry, &store, &mut findings).await;
+    profiles_lacking_stores(&document, &mut findings);
 
     // The one host whose unit files this command may open. Everything else
     // here is read from the store, and the environment a unit actually
@@ -134,9 +139,12 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         // consumer_id is "<kind>-<hostname>"
         // (`queue::capacity::publish_capacity`); `scheduler::makespan`
         // splits it exactly this way.
-        let host = consumer_id
-            .split_once('-')
-            .map_or(consumer_id.as_str(), |(_, host)| host);
+        let host = match consumer_id.split_once('-') {
+            Some((_kind, host)) => host,
+            // An id without the separator was published by a build that
+            // did not prefix the kind; the whole id is then the host name.
+            None => consumer_id.as_str(),
+        };
         let declared = registry
             .lookup_self(host)
             .map_err(CmdError::from)?
@@ -156,21 +164,20 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     // document with itself and with the last measurement rather than with a
     // heartbeat, so they run for every target, including the dispatcher pools
     // the liveness checks above skip.
-    let entries: BTreeMap<&str, &Value> = document
-        .get("targets")
-        .and_then(Value::as_array)
-        .map(|targets| {
-            targets
-                .iter()
-                .filter_map(|entry| {
-                    entry
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .map(|name| (name, entry))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let entries: BTreeMap<&str, &Value> = match document.get("targets").and_then(Value::as_array) {
+        Some(targets) => targets
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(|name| (name, entry))
+            })
+            .collect(),
+        // A document without a targets array declares no target, and the
+        // parsed registry below is then empty too.
+        None => BTreeMap::new(),
+    };
     for loop_back in crate::service_resolution::self_referencing_endpoints(&document)
         .map_err(CmdError::declaration)?
     {
@@ -193,8 +200,20 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         requirement_findings(&store, &registry, now, &mut findings).await;
 
     for target in &registry.targets {
-        let empty = Value::Null;
-        let entry = entries.get(target.name.as_str()).copied().unwrap_or(&empty);
+        // The registry's typed targets were parsed from this document, so
+        // every one of them has an entry here; one without is a document
+        // that changed under the doctor, and is named rather than read as
+        // an empty entry.
+        let Some(entry) = entries.get(target.name.as_str()).copied() else {
+            findings.push(Finding::new(
+                "registry-document-drift",
+                &target.name,
+                "the parsed registry names this target and the document read beside it carries \
+                 no entry of that name"
+                    .to_string(),
+            ));
+            continue;
+        };
         findings.extend(unread_declarations(target, entry));
     }
     findings.extend(unread_configuration());

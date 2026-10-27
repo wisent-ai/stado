@@ -102,7 +102,7 @@ pub const ALERT_SKRZYNKA_ORGANIZATION_CONFIG: ConfigField = ConfigField::scalar(
 /// only way past that refusal is `SKARBIEC_VAULT_FILE` in one process's
 /// environment, which answers for that invocation and for nothing else: the
 /// next command, the next agent and every launchd unit each get their own
-/// answer, and real `skarbiec set-json` writes go to a vault the release
+/// answer, and real `skarbiec set` writes go to a vault the release
 /// verifier does not read.
 ///
 /// The environment variable still wins, because it is how a build is

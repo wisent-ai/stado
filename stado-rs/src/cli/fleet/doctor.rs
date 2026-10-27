@@ -75,7 +75,14 @@ pub fn parse_secret_field(entry: &str) -> Option<(&str, &str)> {
 /// `role#field` actually read back.
 async fn agent_grant_checks() -> Vec<Check> {
     // Same URL resolution the runtime uses (providers/local/slots.rs):
-    // an unset agent.skarbiec.url means the shared Stado skarbiec URL.
+    // an unset agent.skarbiec.url means the shared Stado skarbiec URL, and
+    // a named service this host cannot resolve is a failure, not unset.
+    if let Some(cause) = config::agent_skarbiec_url_absent() {
+        return vec![fail(
+            "agent-grant",
+            format!("agent.skarbiec.url names a service this host cannot resolve: {cause}"),
+        )];
+    }
     let configured_url = config::agent_skarbiec_url();
     let url = if configured_url.trim().is_empty() {
         config::skarbiec_url()

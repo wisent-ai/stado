@@ -1,4 +1,4 @@
-//! `identity relay-challenge --provider apple`: capture on the holder, store on the worker.
+//! `identity relay --provider apple`: capture on the holder, store on the worker.
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -48,8 +48,30 @@ pub async fn relay_apple_challenge(
             })
             .collect::<Vec<_>>();
         if observed.is_empty() {
+            // The refusal says what every declaring host answered, so the
+            // operator can tell an account that is absent from a host the
+            // probe could not read.
+            let unconfirmed = rows
+                .iter()
+                .filter_map(|row| {
+                    let host = row.get("host")?.as_str()?;
+                    let answer = match (
+                        row.get("observed").and_then(Value::as_bool),
+                        row.get("observed_reason").and_then(Value::as_str),
+                    ) {
+                        (Some(false), _) => "the account is not signed in".to_string(),
+                        (_, Some(reason)) => reason.to_string(),
+                        (Some(true), None) | (None, None) => "no reason recorded".to_string(),
+                    };
+                    Some(format!("{host}: {answer}"))
+                })
+                .collect::<Vec<_>>();
+            let detail = match unconfirmed.is_empty() {
+                true => "no host declares it".to_string(),
+                false => unconfirmed.join("; "),
+            };
             return Err(CmdError::click(format!(
-                "no verified host holds apple-account {identity}"
+                "no verified host holds apple-account {identity}: {detail}"
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound));
         }

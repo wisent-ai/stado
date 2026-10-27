@@ -48,6 +48,7 @@
 
 mod arm;
 mod builders;
+pub(crate) mod credit;
 pub mod network;
 mod power;
 mod provider;

@@ -26,12 +26,15 @@ pub async fn authorize(store: &JobStorage, token: &str) -> Result<Invite, String
     let (id, secret) = parse_token(token)?;
     let invite = load_invite(store, id)
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("the invite cannot be read from storage: {error}"))?
         .ok_or(REFUSED)?;
     if invite.mode == MODE_OFFLINE {
         return Err(REFUSED.to_string());
     }
-    if !digests_match(&invite.secret_sha256, &secret_digest(secret)) {
+    let Some(stored) = invite.secret_sha256.as_deref() else {
+        return Err(REFUSED.to_string());
+    };
+    if !digests_match(stored, &secret_digest(secret)) {
         return Err(REFUSED.to_string());
     }
     if effective_status(&invite, Utc::now()) != STATUS_OPEN {
@@ -47,7 +50,7 @@ pub async fn spend(store: &JobStorage, invite: &Invite) -> Result<Invite, String
     let spent = with_one_use_spent(invite);
     store_invite(store, &spent)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("the spent use of the invite cannot be stored: {error}"))?;
     Ok(spent)
 }
 

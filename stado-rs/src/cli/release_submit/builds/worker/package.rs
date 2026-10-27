@@ -68,7 +68,7 @@ pub(super) fn package(
         }
     }
     let gz = GzBuilder::new()
-        .mtime(0)
+        .mtime(crate::primitives::archive::gzip_epoch())
         .write(Vec::new(), Compression::best());
     let mut archive = tar::Builder::new(gz);
     for (from, to) in stage {
@@ -76,7 +76,12 @@ pub(super) fn package(
         let mut paths = Vec::new();
         collect(output, base, &mut paths)?;
         for path in paths {
-            let suffix = path.strip_prefix(base).unwrap_or(Path::new(""));
+            let suffix = path.strip_prefix(base).map_err(|error| {
+                CmdError::refused(format!(
+                    "staged file {} was listed under {from} but does not lie under it: {error}",
+                    path.display()
+                ))
+            })?;
             let destination = if suffix.as_os_str().is_empty() {
                 PathBuf::from(to)
             } else {
@@ -86,16 +91,11 @@ pub(super) fn package(
             let metadata = std::fs::metadata(output.join(&path))?;
             let mut header = tar::Header::new_gnu();
             header.set_size(bytes.len() as u64);
-            header.set_uid(0);
-            header.set_gid(0);
-            header.set_mtime(0);
-            #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                header.set_mode(metadata.permissions().mode() & 0o777);
+                let mode = crate::primitives::archive::member_mode(metadata.permissions().mode());
+                crate::primitives::archive::stamp(&mut header, mode);
             }
-            #[cfg(not(unix))]
-            header.set_mode(0o644);
             header.set_cksum();
             archive.append_data(&mut header, destination, bytes.as_slice())?
         }
@@ -124,24 +124,30 @@ pub(super) fn measure_scratch(
         ))
         .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
-    let stat = nix::sys::statvfs::statvfs(root).map_err(|error| {
+    let volume = crate::providers::local::space_reclaim::rule::read_volume(root).map_err(|error| {
         CmdError::click(format!(
             "cannot read the free space of the volume holding {}: {error}",
             root.display()
         ))
-        .stating(crate::cli::entry::error::io_failure_code(
-            std::io::Error::from(error).kind(),
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    let free_bytes = u64::try_from(volume.free_bytes).map_err(|error| {
+        CmdError::click(format!(
+            "the volume holding {} reports {} free bytes, which is not a byte count: {error}",
+            root.display(),
+            volume.free_bytes
         ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     Ok(ScratchReceipt {
-        schema_version: 1,
+        schema_version: crate::release_pipeline::SCHEMA_VERSION,
         run_id: request.run_id.clone(),
         job_id: job_id.to_owned(),
         product: request.product.clone(),
         platform: request.platform.clone(),
         builder: request.builder.clone(),
         bytes,
-        free_bytes: stat.blocks_available() as u64 * stat.fragment_size() as u64,
+        free_bytes,
         build,
         measured_at: chrono::Utc::now().to_rfc3339(),
     })
@@ -161,7 +167,7 @@ pub(super) fn write_scratch(scratch: &ScratchReceipt) -> Result<(), CmdError> {
 /// build log. Whether that free space was too little is read from the build's
 /// own error beside it, not from a line drawn here.
 pub(super) fn disk_sentence(scratch: &ScratchReceipt) -> String {
-    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const GIB: f64 = crate::providers::local::host_memory::constants::GIB as f64;
     format!(
         "the build tree held {:.1} GiB and its volume had {:.1} GiB free",
         scratch.bytes as f64 / GIB,
@@ -188,7 +194,7 @@ pub(super) fn receipt(
     failure: Option<String>,
 ) -> BuildReceipt {
     BuildReceipt {
-        schema_version: 1,
+        schema_version: crate::release_pipeline::SCHEMA_VERSION,
         run_id: request.run_id.clone(),
         job_id: job_id.to_string(),
         product: request.product.clone(),

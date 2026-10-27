@@ -85,11 +85,21 @@ pub async fn read_schedule(
     Ok(Some(Schedule::from_json(&data)?))
 }
 
-/// Every schedule, in listing order.
+/// Every schedule, in listing order, read side by side under the crate's one
+/// bulk budget (`queue::copy::default_concurrency`): read one after another,
+/// a listing took as long as all of its reads together, which a slow store
+/// turned into minutes for every caller that lists schedules.
 pub async fn list_schedules(store: &JobStorage) -> Result<Vec<Schedule>, StorageError> {
-    let mut out = Vec::new();
-    for schedule_id in list_schedule_ids(store).await? {
-        if let Some(sched) = read_schedule(store, &schedule_id).await? {
+    use futures::StreamExt;
+    let ids = list_schedule_ids(store).await?;
+    let read = futures::stream::iter(&ids)
+        .map(|schedule_id| read_schedule(store, schedule_id))
+        .buffered(crate::queue::copy::default_concurrency()?)
+        .collect::<Vec<_>>()
+        .await;
+    let mut out = Vec::with_capacity(read.len());
+    for schedule in read {
+        if let Some(sched) = schedule? {
             if !sched.deleted {
                 out.push(sched);
             }

@@ -43,11 +43,13 @@ struct HostLinkSession: Decodable, Sendable {
         case consoleOwner = "console_owner"
     }
 
+    /// The kind is a word the host wrote: an unrecognised one is carried as
+    /// such, and a block that lacks it is a decoding error naming the key.
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        kind = HostLinkSessionKind(try values.decodeIfPresent(String.self, forKey: .kind) ?? "")
+        kind = HostLinkSessionKind(try values.decode(String.self, forKey: .kind))
         consoleOwner = try values.decodeIfPresent(String.self, forKey: .consoleOwner)
-        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        detail = try values.decode(String.self, forKey: .detail)
     }
 }
 
@@ -119,11 +121,8 @@ struct HostLinkInterfaceChange: Decodable, Identifiable, Sendable {
 
     var id: String { "\(at)|\(detail)" }
 
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        at = try values.decodeIfPresent(String.self, forKey: .at) ?? ""
-        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
-    }
+    /// Both fields are written for every change; one that lacks either is a
+    /// decoding error naming the key, not a change at no time.
 
     enum CodingKeys: String, CodingKey {
         case at, detail

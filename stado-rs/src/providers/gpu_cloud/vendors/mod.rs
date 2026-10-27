@@ -11,6 +11,7 @@ pub mod latitude;
 pub mod nebius;
 pub mod oblivus;
 pub mod oracle;
+pub mod ovhcloud;
 pub mod runpod;
 pub mod salad;
 pub mod scaleway;

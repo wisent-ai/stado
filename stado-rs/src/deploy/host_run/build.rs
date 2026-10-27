@@ -8,12 +8,12 @@ use crate::targets::ComputeTarget;
 
 use super::confined_file_prelude;
 
+
 #[derive(Debug, Serialize)]
 pub struct BuildOutcome {
     pub target: String,
     pub manifest_path: String,
     pub binary: String,
-    pub status: &'static str,
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
@@ -99,13 +99,13 @@ pub async fn build(
     script
         .push_str("export CARGO_TARGET_DIR=\"$HOME/.stado/build-cache/host-build/cargo-target\"\n");
     script.push_str("mkdir -p \"$CARGO_TARGET_DIR\" || exit\n");
+    let binary_word = shlex_quote(binary);
     script.push_str(&format!(
-        "\"$cargo\" build --locked --release --manifest-path \"$path\" --bin {binary} || exit $?\n\
+        "\"$cargo\" build --locked --release --manifest-path \"$path\" --bin {binary_word} || exit $?\n\
          # Only the executable enters the run directory, where run attach\n\
          # accepts it and run remove takes it away again.\n\
          mkdir -p \"${{path%/*}}/target/release\" || exit\n\
-         cp \"$CARGO_TARGET_DIR/release/\"{binary} \"${{path%/*}}/target/release/\"{binary} || exit\n",
-        binary = shlex_quote(binary)
+         cp \"$CARGO_TARGET_DIR/release/\"{binary_word} \"${{path%/*}}/target/release/\"{binary_word} || exit\n"
     ));
 
     let output = host_channel::run_script(target, &script, runner).await?;
@@ -121,11 +121,6 @@ pub async fn build(
         target: target.name.clone(),
         manifest_path: manifest_path.to_string(),
         binary: binary.to_string(),
-        status: if output.succeeded() {
-            "built"
-        } else {
-            "failed"
-        },
         exit_code: output.code,
         stdout: output.stdout,
         stderr: output.stderr,

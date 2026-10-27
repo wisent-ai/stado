@@ -14,6 +14,9 @@ pub(super) async fn dispatch(command: HostCommands) -> Result<(), CmdError> {
     match command {
         HostCommands::State(command) => state(command).await,
         HostCommands::Runs(command) => runs(command).await,
+        HostCommands::Activity(command) => {
+            crate::cli::entry::spec::fleet::host::activity::dispatch(command).await
+        }
     }
 }
 

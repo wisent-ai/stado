@@ -38,27 +38,37 @@ pub struct AcceleratorHolders {
     pub error: Option<String>,
 }
 
-const MIB_PER_GIB: f64 = 1024.0;
+/// Mebibytes in a gibibyte, from the one unit declaration; nvidia-smi reports
+/// used memory in MiB.
+const MIB_PER_GIB: f64 = (crate::providers::local::host_memory::constants::GIB
+    / crate::providers::local::host_memory::constants::MIB) as f64;
+
+/// One driver row: the card's UUID, the pid, the process name, and its used
+/// memory in MiB.
+type ComputeApp = (String, i32, String, i64);
 
 /// Rows of `nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory
 /// --format=csv,noheader,nounits`. The used memory is always the last
 /// field, so a process name carrying a comma is everything between the pid
-/// and it.
-pub fn parse_compute_apps_named(text: &str) -> Vec<(String, i32, String, i64)> {
+/// and it. A row that does not read so is refused naming the row, never
+/// dropped: a dropped row is a holder nobody sees.
+pub fn parse_compute_apps_named(text: &str) -> Result<Vec<ComputeApp>, String> {
     text.lines()
-        .filter_map(|line| {
+        .map(|line| {
             let parts: Vec<&str> = line.split(',').map(str::trim).collect();
-            if parts.len() < 4 {
-                return None;
+            let [device, pid, name @ .., used] = parts.as_slice() else {
+                return Err(format!("nvidia-smi row {line:?} is not gpu_uuid,pid,process_name,used_memory"));
+            };
+            if name.is_empty() {
+                return Err(format!("nvidia-smi row {line:?} names no process"));
             }
-            let used: i64 = parts[parts.len() - 1].parse().ok()?;
-            let pid: i32 = parts[1].parse().ok()?;
-            Some((
-                parts[0].to_string(),
-                pid,
-                parts[2..parts.len() - 1].join(","),
-                used,
-            ))
+            let pid: i32 = pid
+                .parse()
+                .map_err(|error| format!("nvidia-smi row {line:?} has pid {pid:?}: {error}"))?;
+            let used: i64 = used
+                .parse()
+                .map_err(|error| format!("nvidia-smi row {line:?} has used memory {used:?}: {error}"))?;
+            Ok((device.to_string(), pid, name.join(","), used))
         })
         .collect()
 }
@@ -115,7 +125,10 @@ pub async fn measure(slots: &[ActiveSlot]) -> AcceleratorHolders {
         }
         Err(error) => return unreadable(format!("nvidia-smi could not be run: {error}")),
     };
-    let rows = parse_compute_apps_named(&String::from_utf8_lossy(&output.stdout));
+    let rows = match parse_compute_apps_named(&String::from_utf8_lossy(&output.stdout)) {
+        Ok(rows) => rows,
+        Err(error) => return unreadable(error),
+    };
     let mut trees: Vec<(String, HashSet<i32>)> = Vec::new();
     for slot in slots {
         if let Some(pid) = slot.slot.pid {
@@ -153,7 +166,8 @@ pub async fn measure(slots: &[ActiveSlot]) -> AcceleratorHolders {
 impl AcceleratorHolders {
     /// Put the reading into a capacity publication's `diag`, beside the VRAM
     /// figures it explains: `vram_unattributed_gb` is the used memory no
-    /// listed holder accounts for.
+    /// listed holder accounts for, negative when the holders' rounded
+    /// figures add up to more than the driver reports used.
     pub fn insert_into(
         &self,
         diag: &mut Map<String, Value>,
@@ -182,13 +196,10 @@ impl AcceleratorHolders {
                 diag.remove("accelerator_holders_error");
             }
         }
-        if self.memory_model == "discrete" && total_vram_gb > 0 {
-            let used = (total_vram_gb - free_vram_gb).max(0) as f64;
+        if self.memory_model == "discrete" && total_vram_gb.is_positive() {
+            let used = (total_vram_gb - free_vram_gb) as f64;
             let attributed: f64 = self.holders.iter().map(|holder| holder.used_vram_gb).sum();
-            diag.insert(
-                "vram_unattributed_gb".into(),
-                Value::from((used - attributed).max(0.0)),
-            );
+            diag.insert("vram_unattributed_gb".into(), Value::from(used - attributed));
         }
     }
 }
@@ -223,17 +234,18 @@ pub fn accelerator_holders_line(diag: &Map<String, Value>) -> Option<String> {
             Err(error) => return Some(format!("accelerator holders unreadable: {error}")),
         },
     };
+    // Only memory held by no listed process is worth a word; a reading that
+    // states none, or none above zero, adds nothing.
     let unattributed = diag
         .get("vram_unattributed_gb")
         .and_then(Value::as_f64)
-        .unwrap_or(0.0);
+        .filter(|gb| *gb > -*gb);
     if holders.is_empty() {
-        return Some(if unattributed > 0.0 {
-            format!(
-                "no process holds the accelerator through the driver, yet {unattributed:.1} GiB is in use"
-            )
-        } else {
-            "no process holds the accelerator".to_string()
+        return Some(match unattributed {
+            Some(gb) => format!(
+                "no process holds the accelerator through the driver, yet {gb:.1} GiB is in use"
+            ),
+            None => "no process holds the accelerator".to_string(),
         });
     }
     let mut parts: Vec<String> = holders
@@ -253,8 +265,8 @@ pub fn accelerator_holders_line(diag: &Map<String, Value>) -> Option<String> {
             )
         })
         .collect();
-    if unattributed > 0.0 {
-        parts.push(format!("{unattributed:.1} GiB held by no listed process"));
+    if let Some(gb) = unattributed {
+        parts.push(format!("{gb:.1} GiB held by no listed process"));
     }
     Some(format!("held by {}", parts.join("; ")))
 }

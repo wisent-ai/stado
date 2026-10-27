@@ -6,7 +6,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Installs an actual catalogued Cargo CLI twice from the same canonical
-// commit. The isolated home owns every installed file. Products with
+// commit, then once from another commit of the same product
+// (STADO_PRODUCT_TEST_OTHER_COMMIT): every revision shares one Cargo target,
+// so the other commit compiles only its workspace crates, never a
+// dependency. The isolated home owns every installed file. Products with
 // after-install actions or CLI dependencies are refused: this journey must
 // not restart services or install another product into the operator's home.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -116,6 +119,25 @@ try {
     .map(([, crate]) => crate));
   report.second_compiled_crates = compiled;
   assert.deepEqual(compiled, [], 'The second installation must compile no crate, including dependencies');
+  success(await run(installedBinary, ['--help']));
+  // Another revision builds in its own source directory against the target
+  // every revision shares: only crates whose source is that directory compile.
+  const other = required('STADO_PRODUCT_TEST_OTHER_COMMIT');
+  const otherInstall = [...base, 'install', product, '--surface', 'cli', '--source-commit', other, '--json'];
+  const third = JSON.parse(success(await run(binary, otherInstall)));
+  report.third = third;
+  assert.equal(third.cargo_cache.target, first.cargo_cache.target,
+    'Every revision of the product must build in the one shared Cargo target');
+  assert.notEqual(third.cargo_cache.source, first.cargo_cache.source,
+    'Another revision keeps its own source directory');
+  assert.equal(third.cargo_cache.lockfile_sha256, first.cargo_cache.lockfile_sha256,
+    'STADO_PRODUCT_TEST_OTHER_COMMIT must keep the first commit\'s lockfiles, so no dependency changes');
+  const thirdSteps = JSON.parse(readFileSync(join(third.prepared.scratch, 'build-steps.json'), 'utf8'));
+  const recompiled = thirdSteps.flatMap(step => [...`${step.stdout}\n${step.stderr}`.matchAll(/^\s*Compiling\s+(.+)$/gm)]
+    .map(([, crate]) => crate));
+  report.third_compiled_crates = recompiled;
+  assert.ok(recompiled.every(crate => crate.includes(`(${third.cargo_cache.source}`)),
+    `Another revision compiled a dependency again: ${recompiled.join(', ')}`);
   success(await run(installedBinary, ['--help']));
   const [lockfile] = Object.keys(second.cargo_cache.lockfiles);
   assert.ok(lockfile, 'The real source cache must identify its committed lockfile');

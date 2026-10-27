@@ -17,7 +17,7 @@ pub use open::{open_account, settle, Entered};
 pub use teardown::{destroy_row, reap_rows, row_for, Swept};
 
 use chrono::{DateTime, Utc};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 
 use super::remote::{self, HostLease, HostState};
 use crate::deploy::{host_channel, host_users, DeployError, Runner};
@@ -35,7 +35,7 @@ pub async fn host_leases(
     let command = remote::list_command(home);
     let output =
         host_channel::run_program(target, &["/bin/sh", "-c", command.as_str()], runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the host did not answer the lease read",
@@ -58,10 +58,8 @@ pub fn lease_json(row: &HostLease, now: DateTime<Utc>) -> Value {
             "absent"
         }),
     );
-    entry.insert(
-        "home_path".into(),
-        row.home_path.clone().map_or(Value::Null, Value::from),
-    );
+    // Serde writes an absent home path as `null`.
+    entry.insert("home_path".into(), json!(row.home_path));
     match &row.lease {
         Some(held) => {
             entry.insert("username".into(), Value::from(held.username.clone()));
@@ -73,9 +71,10 @@ pub fn lease_json(row: &HostLease, now: DateTime<Utc>) -> Value {
                 Value::from(held.requested_by.clone()),
             );
             entry.insert("expired".into(), Value::from(held.expired(now)));
+            // Serde writes an expired lease's absent remainder as `null`.
             entry.insert(
                 "seconds_remaining".into(),
-                held.seconds_remaining(now).map_or(Value::Null, Value::from),
+                json!(held.seconds_remaining(now)),
             );
         }
         None => {
@@ -125,9 +124,12 @@ pub fn scratch_ssh(parent: &ComputeTarget, username: &str) -> Result<String, Dep
             ))
             .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-    let route = destination
-        .rsplit_once('@')
-        .map_or(destination, |(_, host)| host);
+    // The parent's destination may be `user@host` or a bare host; the
+    // scratch account signs in to the same host under its own name.
+    let route = match destination.rsplit_once('@') {
+        Some((_parent_user, host)) => host,
+        None => destination,
+    };
     let ssh = format!("{username}@{route}");
     host_users::validate_ssh_target(&ssh)?;
     Ok(ssh)

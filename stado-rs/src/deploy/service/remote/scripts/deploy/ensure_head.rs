@@ -66,9 +66,10 @@ stado_loaded_identity() {
 # An install that replaces the program in place (a rename over it) leaves the
 # path, and so `comm`, unchanged while the process keeps the old inode, so a
 # unit goes on running the previous version because this check reads
-# `already_correct`. An image that cannot be read is not evidence of a
-# replacement, so it counts as current.
-stado_image_current() {
+# `already_correct`. Sets `image_state` to current, replaced, or unreadable
+# with the inode that could not be read: an image nobody could read is not
+# evidence the unit runs the installed program, and the answer says so.
+stado_image_state() {
   if [ \"$os\" = Darwin ]; then
     running_inode=$(/usr/sbin/lsof -a -p \"$1\" -d txt -Fi 2>/dev/null | /usr/bin/sed -n 's/^i//p' | /usr/bin/head -n 1)
     installed_inode=$(/usr/bin/stat -L -f %i \"$program\" 2>/dev/null)
@@ -76,16 +77,36 @@ stado_image_current() {
     running_inode=$(/usr/bin/stat -L -c %i \"/proc/$1/exe\" 2>/dev/null)
     installed_inode=$(/usr/bin/stat -L -c %i \"$program\" 2>/dev/null)
   fi
-  [ -z \"$running_inode\" ] || [ -z \"$installed_inode\" ] || [ \"$running_inode\" = \"$installed_inode\" ]
+  if [ -z \"$running_inode\" ]; then image_state=\"unreadable: the running image of pid $1\"
+  elif [ -z \"$installed_inode\" ]; then image_state=\"unreadable: the inode of $program\"
+  elif [ \"$running_inode\" = \"$installed_inode\" ]; then image_state=current
+  else image_state=replaced
+  fi
 }
 stado_process_serves() {
   running=''
   serves=no
   [ -n \"$1\" ] || return 0
   running=$(/bin/ps -p \"$1\" -o comm= 2>/dev/null)
+  # macOS prints `comm` as the bare program name (`stado`, not its path), so
+  # equality with the declared path was false for every unit on a Mac and a
+  # serving unit read as one to reload. The path the kernel executes is the
+  # process's first text mapping, which lsof names with links resolved; one
+  # that is the program's file is the program.
+  if [ \"$os\" = Darwin ]; then
+    image=$(/usr/sbin/lsof -a -p \"$1\" -d txt -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -n 1)
+    if [ -n \"$image\" ]; then
+      if [ \"$image\" -ef \"$program\" ]; then running=\"$program\"; else running=\"$image\"; fi
+    fi
+  fi
   case \"$running\" in
     \"$program\")
-      if stado_image_current \"$1\"; then serves=yes; else running=\"$running (replaced on disk)\"; fi
+      stado_image_state \"$1\"
+      case \"$image_state\" in
+        current) serves=yes ;;
+        replaced) running=\"$running (replaced on disk)\" ;;
+        *) running=\"$running ($image_state)\" ;;
+      esac
       return 0 ;;
   esac
   case \"$program\" in

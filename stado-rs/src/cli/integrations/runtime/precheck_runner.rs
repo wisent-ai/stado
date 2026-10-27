@@ -47,19 +47,16 @@ pub(crate) async fn run(root: PathBuf) -> Result<(), CmdError> {
             ))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?;
-    match child.id() {
-        Some(pid) => eprintln!(
-            "[stado serve precheck-runner] {} (pid {pid})",
-            launcher.display()
-        ),
-        None => eprintln!(
-            "[stado serve precheck-runner] {} (already exited before its pid was read)",
-            launcher.display()
-        ),
-    }
-    let pid = child
-        .id()
-        .map_or_else(|| "an exited child".to_string(), |pid| format!("pid {pid}"));
+    // The pid is read once: a child that exited before the read has none,
+    // and both the log line and the wait description say so.
+    let pid = match child.id() {
+        Some(pid) => format!("pid {pid}"),
+        None => "an exited child".to_string(),
+    };
+    eprintln!(
+        "[stado serve precheck-runner] {} ({pid})",
+        launcher.display()
+    );
     let status = crate::wait::until(
         crate::wait::Kind::Process,
         format!("the pre-check runner launcher {}", launcher.display()),
@@ -86,7 +83,9 @@ pub(crate) async fn run(root: PathBuf) -> Result<(), CmdError> {
 /// The runner root's own name, for a message that has to say which runner
 /// stopped on a host that carries more than one.
 fn runner_name(root: &Path) -> String {
-    root.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| root.display().to_string())
+    // A root such as `/` has no final component; the whole path names it.
+    match root.file_name() {
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => root.display().to_string(),
+    }
 }

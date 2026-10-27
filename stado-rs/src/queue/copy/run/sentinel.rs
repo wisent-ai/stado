@@ -17,8 +17,10 @@ pub(super) struct Sentinel {
     pub(super) bytes: u64,
 }
 
-/// Read the destination sentinel; a missing, empty or unparseable body
-/// starts from scratch (same tolerance as `migrations::read_sentinel`).
+/// Read the destination sentinel; a missing or empty body starts from
+/// scratch, a body that is not JSON or holds a member of the wrong type is
+/// refused naming the member, since resuming from it would miscount or
+/// restart a copy that was far along.
 pub(super) async fn read_sentinel(
     destination: &Arc<dyn BlobBackend>,
 ) -> Result<Sentinel, StorageError> {
@@ -29,24 +31,38 @@ pub(super) async fn read_sentinel(
         return Ok(Sentinel::default());
     }
     let value: serde_json::Value = serde_json::from_str(&raw)?;
-    let number = |key: &str| {
-        value
-            .get(key)
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default()
+    // The sentinel is what a previous copy wrote: a member it did not write
+    // (an older sentinel) stays as a fresh sentinel has it, but a member of
+    // another type is a sentinel nobody wrote and is refused, never read as
+    // a cursor at the start or a count of nothing.
+    let fresh = Sentinel::default();
+    let number = |key: &str, fresh: u64| -> Result<u64, StorageError> {
+        match value.get(key) {
+            None | Some(serde_json::Value::Null) => Ok(fresh),
+            Some(member) => member.as_u64().ok_or_else(|| {
+                StorageError::Other(format!(
+                    "the copy sentinel at {SENTINEL_PATH} holds {key} = {member}, not a count"
+                ))
+            }),
+        }
+    };
+    let cursor = match value.get("cursor") {
+        None | Some(serde_json::Value::Null) => fresh.cursor.clone(),
+        Some(serde_json::Value::String(cursor)) => cursor.clone(),
+        Some(other) => {
+            return Err(StorageError::Other(format!(
+                "the copy sentinel at {SENTINEL_PATH} holds cursor = {other}, not an object name"
+            )))
+        }
     };
     Ok(Sentinel {
-        cursor: value
-            .get("cursor")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        copied: number("copied"),
-        repaired: number("repaired"),
-        skipped: number("skipped"),
-        vanished: number("vanished"),
-        failed: number("failed"),
-        bytes: number("bytes"),
+        cursor,
+        copied: number("copied", fresh.copied)?,
+        repaired: number("repaired", fresh.repaired)?,
+        skipped: number("skipped", fresh.skipped)?,
+        vanished: number("vanished", fresh.vanished)?,
+        failed: number("failed", fresh.failed)?,
+        bytes: number("bytes", fresh.bytes)?,
     })
 }
 

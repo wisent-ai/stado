@@ -27,10 +27,7 @@ struct CredentialsHostSection: View {
                     )
                 } else if let authority = store.authority {
                     WisentField(label: "Authority", value: authority.state.humanizedIdentifier)
-                    WisentField(
-                        label: "Declared vault",
-                        value: authority.path ?? "No vault authority declared"
-                    )
+                    WisentField(label: "Declared vault", value: authority.resolvedVault)
                     if let detail = authority.detail, !detail.isEmpty {
                         Text(detail)
                             .font(WisentTypeScale.caption())

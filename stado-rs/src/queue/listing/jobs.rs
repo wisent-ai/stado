@@ -54,7 +54,7 @@ pub async fn list_jobs(
     let workers = crate::queue::migrations::bulk_workers()?;
     for paths in paths.chunks(workers) {
         let texts: Vec<Option<String>> = futures::stream::iter(paths)
-            .map(|path| store.download_text(path))
+            .map(move |path| store.download_text(path))
             .buffered(workers)
             .collect::<Vec<Result<Option<String>, StorageError>>>()
             .await

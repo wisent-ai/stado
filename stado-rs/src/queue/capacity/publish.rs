@@ -13,14 +13,24 @@ use super::{CapacitySnapshot, PublishedReservations, Reservation, CAPACITY_PREFI
 /// never declares one publishes rows without `next_by`, which no reader
 /// counts as live.
 static PUBLISHER_CADENCE: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
-/// How long this process's last capacity publication took to write, in
-/// milliseconds: the part of the promise the period alone does not cover.
-static LAST_PUBLISH_MILLIS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// How long this process's last capacity publication took to write: the part
+/// of the promise the period alone does not cover. `None` until one has been
+/// written and measured.
+static LAST_PUBLISH: std::sync::Mutex<Option<std::time::Duration>> = std::sync::Mutex::new(None);
 
 /// Declare the period at which this process republishes its capacity. The
 /// agent calls this with its own poll period before its first publication.
 pub fn declare_publisher_cadence(period: std::time::Duration) {
     let _ = PUBLISHER_CADENCE.set(period);
+}
+
+/// The last measured write, refused when another publication panicked while
+/// holding it.
+fn last_publish() -> Result<Option<std::time::Duration>, StorageError> {
+    LAST_PUBLISH
+        .lock()
+        .map(|last| *last)
+        .map_err(|error| StorageError::Other(format!("the last capacity write time cannot be read: {error}")))
 }
 
 /// Write this worker's current measured resource snapshot.
@@ -35,7 +45,9 @@ pub fn declare_publisher_cadence(period: std::time::Duration) {
 /// Live reservations are subtracted here because a capacity document has two
 /// writers on every host — the agent tick and the heartbeat republisher — and
 /// both pass through this function, so neither can publish a host as free while
-/// a Jeden session or a browser task holds it. The measured numbers stay in
+/// a Jeden session or a browser task holds it. A reservation subtracts at most
+/// what was measured, so a host held beyond its measurement publishes nothing
+/// left rather than a negative amount. The measured numbers stay in
 /// `diag.measured_*` so an operator can see what the host has and what is
 /// held, not only the difference.
 pub async fn publish_capacity(
@@ -49,55 +61,79 @@ pub async fn publish_capacity(
         &crate::providers::local::host_memory::read_host_memory(),
     ));
     let now = Utc::now();
+    // Holds that could not be read are not taken for no holds: the host stops
+    // admitting work, says why, and publishes its measured figures with the
+    // reservations unknown rather than as free.
     let held = match PublishedReservations::read(store, consumer_id, now).await {
-        Ok(held) => held,
+        Ok(held) => Some(held),
         Err(error) => {
             diag.insert(
                 "reservations_error".into(),
                 Value::String(error.to_string()),
             );
-            PublishedReservations::default()
+            None
         }
     };
-    let net_cpu = (snapshot.available_cpu_cores - held.reserved.cpu_cores).max(0);
-    let net_ram = snapshot
-        .free_ram_gb
-        .map(|free| (free - held.reserved.ram_gb).max(0.0));
-    let net_vram = (snapshot.free_vram_gb - held.reserved.vram_gb).max(0);
+    let measured_cpu = snapshot.available_cpu_cores;
+    let reserved = held.as_ref().map(|held| held.reserved);
+    // An unmeasured CPU stays unmeasured after netting: null, not zero.
+    let net_cpu = measured_cpu.map(|measured| match &reserved {
+        Some(reserved) => measured - reserved.cpu_cores.min(measured),
+        None => measured,
+    });
+    let net_ram = snapshot.free_ram_gb.map(|free| match &reserved {
+        Some(reserved) => free - reserved.ram_gb.min(free),
+        None => free,
+    });
+    // VRAM the pass did not read stays unread after netting: null, not zero.
+    let net_vram = snapshot.free_vram_gb.map(|free| match &reserved {
+        Some(reserved) => free - reserved.vram_gb.min(free),
+        None => free,
+    });
     // Exhausted means the reservations leave nothing: no whole core or no
     // RAM. What a job needs beyond that is the job's own declaration, which
     // the claim checks against these same net numbers.
-    let reservations_exhausted =
-        !held.live.is_empty() && (net_cpu <= 0 || net_ram.is_some_and(|free| free <= 0.0));
+    let reservations_exhausted = held.as_ref().is_some_and(|held| {
+        !held.live.is_empty()
+            && (measured_cpu.is_some_and(|measured| held.reserved.cpu_cores >= measured)
+                || snapshot.free_ram_gb.is_some_and(|free| held.reserved.ram_gb >= free))
+    });
     let mut accepting = snapshot.accepting_jobs;
-    if accepting && reservations_exhausted {
+    if accepting && held.is_none() {
+        accepting = false;
+        diag.insert("admission_reason".into(), Value::from("reservations_unread"));
+    } else if accepting && reservations_exhausted {
         accepting = false;
         diag.insert(
             "admission_reason".into(),
             Value::from("reservations_exhausted"),
         );
     }
-    diag.insert(
-        "measured_available_cpu_cores".into(),
-        Value::from(snapshot.available_cpu_cores),
-    );
+    if let Some(measured) = measured_cpu {
+        diag.insert("measured_available_cpu_cores".into(), Value::from(measured));
+    }
     if let Some(free) = snapshot.free_ram_gb {
         diag.insert("measured_free_ram_gb".into(), Value::from(free));
     }
-    diag.insert(
-        "measured_free_vram_gb".into(),
-        Value::from(snapshot.free_vram_gb),
-    );
+    if let Some(free) = snapshot.free_vram_gb {
+        diag.insert("measured_free_vram_gb".into(), Value::from(free));
+    }
     let mut payload = Map::new();
     payload.insert("consumer_id".into(), Value::String(consumer_id.to_string()));
     payload.insert("kind".into(), Value::String(kind.to_string()));
     payload.insert("published_at".into(), Value::String(now.to_rfc3339()));
     if let Some(period) = PUBLISHER_CADENCE.get() {
-        let write = std::time::Duration::from_millis(
-            LAST_PUBLISH_MILLIS.load(std::sync::atomic::Ordering::Relaxed),
-        );
-        let next_by = now + Duration::from_std(*period + write).unwrap_or(Duration::MAX);
-        payload.insert("next_by".into(), Value::String(next_by.to_rfc3339()));
+        // Before the first write is measured, the promise is the period alone.
+        let promised = match last_publish()? {
+            Some(write) => *period + write,
+            None => *period,
+        };
+        let promised = Duration::from_std(promised).map_err(|error| {
+            StorageError::Other(format!(
+                "the capacity publisher's next promise of {promised:?} is not a time span: {error}"
+            ))
+        })?;
+        payload.insert("next_by".into(), Value::String((now + promised).to_rfc3339()));
     }
     payload.insert("accepting_jobs".into(), Value::from(accepting));
     payload.insert(
@@ -106,7 +142,7 @@ pub async fn publish_capacity(
     );
     payload.insert(
         "running_workloads".into(),
-        Value::from(held.live.len() as i64),
+        Value::from(held.as_ref().map(|held| held.live.len())),
     );
     payload.insert(
         "total_cpu_cores".into(),
@@ -131,18 +167,22 @@ pub async fn publish_capacity(
     if let Some(value) = snapshot.total_ram_gb {
         payload.insert("total_ram_gb".into(), Value::from(value));
     }
-    payload.insert("reserved".into(), serde_json::to_value(held.reserved)?);
+    // Unread reservations are published as unknown (null), never as none.
+    payload.insert("reserved".into(), serde_json::to_value(&reserved)?);
     payload.insert(
         "reservations".into(),
-        Value::Array(held.live.iter().map(Reservation::published).collect()),
+        Value::from(held.as_ref().map(|held| {
+            held.live.iter().map(Reservation::published).collect::<Vec<Value>>()
+        })),
     );
     // Names only, never values: the `item#field` references a job may project
     // here, so a coordinator does not pin a job this agent cannot resolve. Read
     // as the config holds them now, so a secret enrolled after this agent
-    // started is offered without a restart.
+    // started is offered without a restart; a config file that cannot be read
+    // stops the publication with its cause.
     payload.insert(
         "secret_fields".into(),
-        Value::from(crate::config::agent_skarbiec_secret_fields_now()),
+        Value::from(crate::config::agent_skarbiec_secret_fields_now().map_err(StorageError::Other)?),
     );
     payload.insert("diag".into(), Value::Object(diag));
     payload.insert(
@@ -151,14 +191,12 @@ pub async fn publish_capacity(
     );
     let body = super::super::python_json_dumps(&Value::Object(payload))?;
     let started = std::time::Instant::now();
-    let written = store
+    store
         .upload_text(&format!("{CAPACITY_PREFIX}{consumer_id}.json"), &body)
-        .await;
-    if written.is_ok() {
-        LAST_PUBLISH_MILLIS.store(
-            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-    }
-    written
+        .await?;
+    let mut last = LAST_PUBLISH
+        .lock()
+        .map_err(|error| StorageError::Other(format!("the last capacity write time cannot be kept: {error}")))?;
+    *last = Some(started.elapsed());
+    Ok(())
 }

@@ -67,10 +67,9 @@ pub async fn reboot_host(target_name: &str, runner: &Runner) -> Result<Value, De
 
     let mut report = Map::new();
     report.insert("target".to_string(), json!(target.name));
-    report.insert(
-        "ssh".to_string(),
-        target.ssh.as_ref().map_or(Value::Null, |ssh| json!(ssh)),
-    );
+    // The declared channel, `null` for a target that declares none; serde
+    // writes an absent option as exactly that.
+    report.insert("ssh".to_string(), json!(target.ssh));
     report.insert(
         "connection_path".to_string(),
         json!(match connection {
@@ -81,13 +80,13 @@ pub async fn reboot_host(target_name: &str, runner: &Runner) -> Result<Value, De
     report.insert("exit_code".to_string(), json!(output.code));
     report.insert(
         "status".to_string(),
-        json!(if output.ok() {
+        json!(if output.succeeded() {
             "reboot_requested"
         } else {
             "failed"
         }),
     );
-    if !output.ok() {
+    if !output.succeeded() {
         let detail = output.detail().trim();
         let last = match detail.lines().next_back() {
             Some(line) => line.to_string(),

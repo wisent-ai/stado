@@ -8,6 +8,10 @@ use crate::{
 };
 use anyhow::{bail, Result};
 
+/// The GitHub organization Wisent's repositories live in, which the markdown policy
+/// reads unless `--org` names another.
+const WISENT_ORGANIZATION: &str = "wisent-ai";
+
 pub fn run(operation: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     let arguments = Arguments::from_matches(arguments);
     let report = match operation {
@@ -24,10 +28,11 @@ pub fn run(operation: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> R
             if !arguments.positional.is_empty() {
                 bail!("documentation markdown-policy does not take positional arguments");
             }
-            markdown::report(
-                arguments.optional("--org")?.unwrap_or("wisent-ai"),
-                arguments.has("--include-archived"),
-            )?
+            let organization = match arguments.optional("--org")? {
+                Some(organization) => organization,
+                None => WISENT_ORGANIZATION,
+            };
+            markdown::report(organization, arguments.has("--include-archived"))?
         }
         "index" => {
             if !arguments.positional.is_empty() {

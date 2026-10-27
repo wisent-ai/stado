@@ -150,12 +150,16 @@ fn storage_root<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<
                 execution.target
             ))),
             Some(state) => {
-                let detail = status
+                // The worker names its failure under the operation owner's
+                // `error`; a status that ended without one is said as such.
+                let detail = match status
                     .report
                     .pointer("/operation_owner/error")
                     .and_then(Value::as_str)
-                    .unwrap_or("the resident worker supplied no failure detail")
-                    .trim_end_matches('.');
+                {
+                    Some(error) => error.trim_end_matches('.').to_string(),
+                    None => "the resident worker supplied no failure detail".to_string(),
+                };
                 Err(CmdError::unreachable(format!(
                     "{} storage-root repair ended {state}; {detail}.",
                     execution.target

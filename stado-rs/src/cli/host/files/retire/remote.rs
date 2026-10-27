@@ -51,16 +51,14 @@ async fn retire_file_document(
         if dry_run {
             words.push("--dry-run");
         }
-        if let Some(binding) = binding {
+        if let (Some(binding), Some(expected_size)) = (binding, expected_size.as_deref()) {
             words.extend([
                 "--transaction",
                 binding.transaction.as_str(),
                 "--expected-sha256",
                 binding.expected_sha256.as_str(),
                 "--expected-size",
-                expected_size
-                    .as_deref()
-                    .expect("binding supplies expected size"),
+                expected_size,
                 "--expected-mode",
                 binding.expected_mode.as_str(),
             ]);

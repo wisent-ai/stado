@@ -36,6 +36,18 @@ pub fn augment(command: Command) -> Command {
             )
             .global(true),
         )
+        .arg(
+            Arg::new("purpose")
+                .long("purpose")
+                .value_name("DEFECT")
+                .help(
+                    "An open Oko defect this operation serves, named to Oko's admission \
+                     (`oko admit build --purpose DEFECT`) before anything compiles, so a consent \
+                     the operator limited to that defect admits it; repeat for each defect",
+                )
+                .action(ArgAction::Append)
+                .global(true),
+        )
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(catalog::command())

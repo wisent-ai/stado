@@ -108,7 +108,7 @@ async fn forward_signal(
     })
     .await
     .map_err(DeployError::unreachable)?;
-    if output.ok() {
+    if output.succeeded() {
         Ok(())
     } else {
         Err(DeployError::unreachable(host_channel::last_error_line(
@@ -136,8 +136,13 @@ pub async fn run_attached(
     } else {
         let connection = host_channel::select_ssh_connection(target, &runner).await?;
         let key = ssh_key::materialize(target.channel_key()).await?;
-        let mut argv = host_channel::ssh_options(connection.destination);
-        argv.insert(1, "-T".to_string());
+        let options = host_channel::ssh_options(connection.destination);
+        let Some((ssh, rest)) = options.split_first() else {
+            return Err(DeployError("the ssh channel options are empty".to_string())
+                .stating(crate::primitives::failure::FailureCode::Config));
+        };
+        let mut argv = vec![ssh.clone(), "-T".to_string()];
+        argv.extend_from_slice(rest);
         // One quoted word for the login shell, and the script itself under the
         // same interpreter the local branch above uses. Pushing the script
         // bare made the account's login shell the interpreter, and this is the

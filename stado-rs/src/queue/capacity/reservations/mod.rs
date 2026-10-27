@@ -62,10 +62,13 @@ impl Reservation {
         reservation_key(&self.consumer_id, &self.reservation_id)
     }
 
+    /// The last heartbeat as an instant, or `None` for a stamp in another
+    /// spelling, which [`Self::is_live`] reads as a row that cannot claim.
     fn heartbeat(&self) -> Option<DateTime<Utc>> {
-        DateTime::parse_from_rfc3339(&self.heartbeat_at)
-            .ok()
-            .map(|stamp| stamp.with_timezone(&Utc))
+        match DateTime::parse_from_rfc3339(&self.heartbeat_at) {
+            Ok(stamp) => Some(stamp.with_timezone(&Utc)),
+            Err(_not_rfc3339) => None,
+        }
     }
 
     /// The instant this reservation stops counting unless heartbeated.
@@ -199,7 +202,7 @@ pub async fn sweep_for_consumer(
             sweep.live.push(reservation);
         } else {
             store.delete_blob(&blob.name).await?;
-            sweep.retired += 1;
+            crate::primitives::tally::Tally::tally(&mut sweep.retired);
         }
     }
     sweep

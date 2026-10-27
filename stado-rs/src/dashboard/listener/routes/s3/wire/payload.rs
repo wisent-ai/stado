@@ -17,6 +17,13 @@ use super::super::auth::{Payload, Signer};
 use super::checksum::digest;
 use super::xml::S3Error;
 
+const LINE_END: &[u8] = b"\r\n";
+// AWS declares hexadecimal chunk sizes:
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity-upload.html#trailing-checksums-object-body-chunks-format
+const CHUNK_RADIX: u32 = 16;
+
+type TrailerHeaders = Vec<(String, String)>;
+
 fn malformed(message: impl Into<String>) -> S3Error {
     S3Error::new(StatusCode::BAD_REQUEST, "IncompleteBody", message)
 }
@@ -29,8 +36,8 @@ fn forged(message: impl Into<String>) -> S3Error {
 fn line(body: &[u8], at: usize) -> Result<(&str, usize), S3Error> {
     let rest = &body[at.min(body.len())..];
     let end = rest
-        .windows(2)
-        .position(|window| window == b"\r\n")
+        .windows(LINE_END.len())
+        .position(|window| window == LINE_END)
         .ok_or_else(|| {
             malformed(format!(
                 "the aws-chunked body ends at byte {at} inside a line"
@@ -41,7 +48,7 @@ fn line(body: &[u8], at: usize) -> Result<(&str, usize), S3Error> {
             "the aws-chunked line at byte {at} is not UTF-8: {error}"
         ))
     })?;
-    Ok((text, at + end + 2))
+    Ok((text, at + end + LINE_END.len()))
 }
 
 /// Unframe an aws-chunked body, verifying chunk and trailer signatures when
@@ -51,10 +58,12 @@ fn dechunk(
     signer: &Signer,
     signed: bool,
     trailer: bool,
-) -> Result<(Vec<u8>, Vec<(String, String)>), S3Error> {
+) -> Result<(Vec<u8>, TrailerHeaders), S3Error> {
     let scope = signer.scope.render();
     let mut data = Vec::with_capacity(body.len());
     let mut previous = signer.seed.clone();
+    // Slice offsets are zero-based:
+    // https://doc.rust-lang.org/reference/expressions/array-expr.html#r-expr.array.index.zero-index
     let mut at = 0;
     loop {
         let (header, next) = line(body, at)?;
@@ -62,7 +71,7 @@ fn dechunk(
             Some((size, extension)) => (size, extension),
             None => (header, ""),
         };
-        let size = usize::from_str_radix(size.trim(), 16).map_err(|error| {
+        let size = usize::from_str_radix(size.trim(), CHUNK_RADIX).map_err(|error| {
             malformed(format!(
                 "the chunk size {size:?} at byte {at} is not hexadecimal: {error}"
             ))
@@ -98,21 +107,21 @@ fn dechunk(
             previous = provided.to_string();
         }
         data.extend_from_slice(chunk);
-        if size == 0 {
+        if chunk.is_empty() {
             at = next;
             break;
         }
         at = end;
-        if body.get(at..at + 2) != Some(b"\r\n".as_slice()) {
+        if body.get(at..at + LINE_END.len()) != Some(LINE_END) {
             return Err(malformed(format!(
                 "the chunk ending at byte {at} is not followed by CRLF"
             )));
         }
-        at += 2;
+        at += LINE_END.len();
     }
     let mut trailers = Vec::new();
     if !trailer {
-        if body.get(at..) != Some(b"\r\n".as_slice()) {
+        if body.get(at..) != Some(LINE_END) {
             return Err(malformed(format!(
                 "the aws-chunked body continues past its final chunk at byte {at}"
             )));

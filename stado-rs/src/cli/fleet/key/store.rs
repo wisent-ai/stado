@@ -51,7 +51,7 @@ pub(crate) async fn run_checked(
     let output = runner(spec)
         .await
         .map_err(|exc| CmdError::unreachable(format!("{what} could not be started: {exc}")))?;
-    if output.ok() {
+    if output.succeeded() {
         Ok(output.stdout)
     } else {
         Err(CmdError::click(format!("{what} failed: {}", output.detail())).stating(failure))
@@ -110,7 +110,12 @@ pub(crate) async fn settle_readable(
     // A file store answers its owner directly and has no grants to widen; the
     // read-back there goes through the store, not through a broker that may not
     // exist on that deployment.
-    let brokered = crate::credential_store::skarbiec_url().is_some();
+    let brokered = crate::credential_store::skarbiec_url()
+        .map_err(|error| {
+            CmdError::click(error.to_string())
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })?
+        .is_some();
     if brokered {
         let credentials = crate::credential_store::admin_credentials()?;
         let outcome = crate::credential_store::grant::grant_field_reads(
@@ -126,7 +131,7 @@ pub(crate) async fn settle_readable(
             ))
         })?;
         if outcome.wrote() {
-            // Progress, not output: `fleet invite --json` mints a channel key on
+            // Progress, not output: `fleet invite create --json` mints a channel key on
             // its way to printing one JSON document, and a widened grant is not
             // part of that document. stderr keeps the operator informed without
             // making every JSON consumer parse around it.

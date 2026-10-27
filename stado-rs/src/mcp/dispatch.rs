@@ -37,7 +37,7 @@ fn run(cli_tokens: &[&str], extra: &[String]) -> Result<String, ToolError> {
             cli_tokens.join(" ")
         ))
     })?;
-    if rc != 0 {
+    if std::num::NonZeroI32::new(rc).is_some() {
         let detail = if stderr.trim().is_empty() {
             stdout.trim()
         } else {
@@ -57,27 +57,18 @@ fn text_result(text: String) -> Value {
     json!({"content": [{"type": "text", "text": text}]})
 }
 
-/// Python's truthiness for a JSON argument value (used for the
-/// `not value` checks in `call_tool`).
-fn python_falsy(value: &Value) -> bool {
+/// A tool argument as its schema declares every one: text. Absent, null or
+/// empty text gives none; any other type is refused naming the argument.
+/// Python truthiness read `false` and `0` as no argument and `str()` passed
+/// `True` or `None` to the command line as if the caller had written them.
+fn argument_text(name: &str, value: Option<&Value>) -> Result<Option<String>, ToolError> {
     match value {
-        Value::Null => true,
-        Value::Bool(b) => !b,
-        Value::Number(n) => n.as_f64() == Some(0.0),
-        Value::String(s) => s.is_empty(),
-        Value::Array(a) => a.is_empty(),
-        Value::Object(o) => o.is_empty(),
-    }
-}
-
-/// Python `str(value)` for a JSON argument value.
-fn python_str(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Null => "None".to_string(),
-        Value::Bool(true) => "True".to_string(),
-        Value::Bool(false) => "False".to_string(),
-        other => other.to_string(),
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) if text.is_empty() => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(other) => Err(ToolError::internal(format!(
+            "argument {name} must be a string, as the tool's schema declares; it was {other}"
+        ))),
     }
 }
 
@@ -92,21 +83,20 @@ pub fn call_tool(name: &str, args: &Map<String, Value>) -> Result<Value, ToolErr
     };
     let mut extra: Vec<String> = Vec::new();
     if let Some(arg) = &tool.arg {
-        let value = args.get(arg.name);
-        let falsy = value.map(python_falsy).unwrap_or(true);
-        if arg.required && falsy {
-            return Err(ToolError::internal(format!(
-                "missing required argument: {}",
-                arg.name
-            )));
-        }
-        if let Some(value) = value {
-            if !falsy {
+        match argument_text(arg.name, args.get(arg.name))? {
+            Some(text) => {
                 if let Some(flag) = arg.flag {
                     extra.push(flag.to_string());
                 }
-                extra.push(python_str(value));
+                extra.push(text);
             }
+            None if arg.required => {
+                return Err(ToolError::internal(format!(
+                    "missing required argument: {}",
+                    arg.name
+                )));
+            }
+            None => {}
         }
     }
     Ok(text_result(run(tool.cli, &extra)?))
@@ -148,11 +138,14 @@ pub fn handle(request: &Value) -> Option<Value> {
             json!({"jsonrpc": JSONRPC_VERSION, "id": rid, "result": {"tools": Value::Array(TOOLS.clone())}})
         }
         Some("tools/call") => {
-            let params = obj.get("params").and_then(Value::as_object);
-            let empty = Map::new();
-            let params = params.unwrap_or(&empty);
-            let name = params.get("name");
-            let name = match name.and_then(Value::as_str) {
+            let Some(params) = obj.get("params").and_then(Value::as_object) else {
+                return Some(error_response(
+                    &rid,
+                    CODE_INTERNAL_ERROR,
+                    "params must be an object naming the tool",
+                ));
+            };
+            let name = match params.get("name").and_then(Value::as_str) {
                 Some(name) => name,
                 None => {
                     return Some(error_response(
@@ -162,11 +155,19 @@ pub fn handle(request: &Value) -> Option<Value> {
                     ));
                 }
             };
-            let args = params
-                .get("arguments")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
+            // A call may pass no arguments at all; arguments of another
+            // shape are refused rather than read as none.
+            let args = match params.get("arguments") {
+                None | Some(Value::Null) => Map::new(),
+                Some(Value::Object(arguments)) => arguments.clone(),
+                Some(other) => {
+                    return Some(error_response(
+                        &rid,
+                        CODE_INTERNAL_ERROR,
+                        &format!("params.arguments must be an object, not {other}"),
+                    ));
+                }
+            };
             match call_tool(name, &args) {
                 Ok(result) => json!({"jsonrpc": JSONRPC_VERSION, "id": rid, "result": result}),
                 Err(err) => error_response(&rid, err.code, &err.message),

@@ -2,6 +2,7 @@
 
 pub(crate) mod build;
 pub(crate) mod canonical;
+pub(crate) mod met;
 pub(crate) mod sanitize;
 
 use std::collections::BTreeMap;
@@ -43,7 +44,8 @@ pub struct CleanupReport {
     /// `None` for a single pass. The next pass is promised from it.
     pub every_seconds: Option<u64>,
     pub started_at: String,
-    pub duration_ms: i64,
+    /// How long the pass took; `None` until the pass has finished.
+    pub duration_ms: Option<i64>,
     /// Of `duration_ms`, how much was spent waiting on the queue store before
     /// the pass had decided anything — the canonical-registry read and the
     /// workdir keep-list read, both of which happen before the run lock.
@@ -58,7 +60,8 @@ pub struct CleanupReport {
     /// says a pass reached no cleaner; this says where such a pass spent its
     /// time, so `healthy_noop` can never again hide a wait inside a word that
     /// means "nothing needed doing".
-    pub store_wait_ms: i64,
+    /// `None` when the pass waited on the store for nothing yet.
+    pub store_wait_ms: Option<i64>,
     pub outcome: String,
     pub free_bytes_before: Option<i64>,
     pub free_bytes_after: Option<i64>,

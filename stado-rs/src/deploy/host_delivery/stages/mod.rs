@@ -30,7 +30,10 @@ pub(super) async fn preflight(
             DeployError("destination has no parent directory".to_string())
                 .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
-    let name = components.last().copied().unwrap_or_default();
+    let [.., name] = components.as_slice() else {
+        return Err(DeployError(format!("destination {:?} has no components", plan.destination))
+            .stating(crate::primitives::failure::FailureCode::Refused));
+    };
     let stage = format!("{parent}/.{name}.stado-delivery");
     let backup = format!("{parent}/.{name}.stado-previous");
     let stage_q = shlex_quote(&stage);
@@ -136,7 +139,7 @@ pub(super) async fn transfer(
             .await
             .map_err(DeployError::unreachable)?;
         drop(key);
-        if !output.ok() {
+        if !output.succeeded() {
             return Err(DeployError::unreachable(format!(
                 "{}: delivery transfer failed: {}",
                 target.name,
@@ -148,7 +151,7 @@ pub(super) async fn transfer(
     let output = runner(CommandSpec { argv, stdin })
         .await
         .map_err(DeployError::unreachable)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: delivery transfer failed: {}",
             target.name,
@@ -174,7 +177,10 @@ pub(super) async fn commit(
             DeployError("destination has no parent directory".to_string())
                 .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
-    let name = components.last().copied().unwrap_or_default();
+    let [.., name] = components.as_slice() else {
+        return Err(DeployError(format!("destination {:?} has no components", plan.destination))
+            .stating(crate::primitives::failure::FailureCode::Refused));
+    };
     let backup = format!("{parent}/.{name}.stado-previous");
     let expected_test = match plan.kind {
         SourceKind::File => "-f",

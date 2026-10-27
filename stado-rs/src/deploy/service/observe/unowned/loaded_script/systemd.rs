@@ -14,9 +14,9 @@
 pub(crate) const SYSTEMD_UNITS_SCRIPT: &str = r##"set -u
 if [ "$(/usr/bin/uname -s)" = Linux ] && [ "$details" = full ]; then
   uid=$(/usr/bin/id -u)
-  for dir in /etc/systemd/system "$HOME/.config/systemd/user"; do
+  for dir in @SYSTEMD_UNITS@ "$HOME/@USER_SYSTEMD_UNITS@"; do
     [ -d "$dir" ] || continue
-    if [ "$dir" = /etc/systemd/system ]; then scope=system; else scope=user; fi
+    if [ "$dir" = @SYSTEMD_UNITS@ ]; then scope=system; else scope=user; fi
     for file in "$dir"/*.service; do
       # A symlink here is a masked unit or an alias of a distribution unit,
       # not a unit file this fleet wrote.

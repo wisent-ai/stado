@@ -33,7 +33,7 @@ pub async fn verify(
 ) -> Result<RuntimeReport, DeployError> {
     let script = with_candidates(REMOTE_VERIFY_BODY);
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: {}",
             target.name,
@@ -113,13 +113,14 @@ pub async fn verify(
             name: format!("driver:{driver}"),
             declared: "required".to_string(),
             path: "appium driver list --installed".to_string(),
-            observed: installed_version.unwrap_or_else(|| {
-                if present {
-                    "installed".to_string()
-                } else {
-                    String::new()
-                }
-            }),
+            // The version when the listing prints one; the bare word when
+            // the listing names the driver without a version; nothing when
+            // it is absent.
+            observed: match (installed_version, present) {
+                (Some(version), _listed) => version,
+                (None, true) => "installed".to_string(),
+                (None, false) => String::new(),
+            },
             state: if present {
                 COMPONENT_PRESENT.to_string()
             } else {
@@ -159,8 +160,13 @@ pub async fn verify(
         if declared.drivers.contains(&driver) {
             continue;
         }
-        let version = installed_driver_version(&installed_drivers, &driver)
-            .unwrap_or_else(|| "installed".to_string());
+        // The listing names the driver's version when it prints one; a
+        // driver the server warns about but lists without a version is
+        // installed, version unknown.
+        let version = match installed_driver_version(&installed_drivers, &driver) {
+            Some(version) => version,
+            None => "installed".to_string(),
+        };
         components.push(ComponentState {
             name: format!("driver:{driver}"),
             declared: "undeclared".to_string(),

@@ -88,13 +88,24 @@ async fn inventory_with_live(
         };
         fleet.clients.insert(name.clone(), client);
         for (reference, age_seconds) in refs {
-            let vm_name = reference.split('@').next().unwrap_or_default().to_string();
+            // A reference is `<vm>@<zone or region>`; one without the `@` is
+            // the VM name alone.
+            let vm_name = match reference.split_once('@') {
+                Some((vm, _location)) => vm.to_string(),
+                None => reference.clone(),
+            };
             let held_by = holders.holders_for(&reference, &vm_name);
-            let accel = holders
+            // The accelerator is read from the holder, the live broadcast or
+            // the name's tag; an instance none of them describes is listed
+            // with the UNKNOWN marker so it still appears in the table.
+            let accel = match holders
                 .gpu_type_for(&reference, &vm_name)
                 .or_else(|| broadcast_accel(live, name, &vm_name))
                 .or_else(|| name_tag_accel(&agent_prefix, &vm_name))
-                .unwrap_or_else(|| UNKNOWN.to_string());
+            {
+                Some(accel) => accel,
+                None => UNKNOWN.to_string(),
+            };
             fleet.rows.push(InstanceRow {
                 reference,
                 provider: name.clone(),

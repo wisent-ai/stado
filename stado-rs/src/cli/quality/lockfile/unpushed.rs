@@ -67,13 +67,18 @@ fn manifest_sources(workspace: &Path) -> Result<Vec<String>, String> {
             workspace.display()
         )
     })?;
-    Ok(packages
-        .iter()
-        .flat_map(|package| package["dependencies"].as_array().into_iter().flatten())
-        .filter_map(|dependency| dependency["source"].as_str())
-        .filter_map(|source| source.strip_prefix("git+"))
-        .map(str::to_owned)
-        .collect())
+    // A dependency list in another shape is refused: read as empty, its git
+    // sources went unchecked against the lock.
+    let mut sources = Vec::new();
+    for package in packages {
+        let what = format!("the dependencies cargo metadata lists for {}", crate::cli::reporting::field(&package["name"]));
+        for dependency in crate::primitives::presence::listed(&package["dependencies"], &what)? {
+            if let Some(source) = dependency["source"].as_str().and_then(|source| source.strip_prefix("git+")) {
+                sources.push(source.to_owned());
+            }
+        }
+    }
+    Ok(sources)
 }
 
 /// The git sources the committed `lock` pins (`git+<url>?…#<commit>`).
@@ -139,7 +144,8 @@ pub(super) fn unpushed(
         let sibling = siblings.join(&repository);
         // No sibling checkout, or one that does not hold the commit, has
         // nothing local to say about it.
-        if !sibling.is_dir() {
+        let present = crate::primitives::presence::present(&sibling).map_err(|error| error.to_string())?;
+        if !present || !sibling.is_dir() {
             continue;
         }
         let object = format!("{commit}^{{commit}}");

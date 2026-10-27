@@ -11,11 +11,18 @@ mod secrets;
 pub(crate) fn declared_actions(api: &str) -> Vec<String> {
     let document: serde_json::Value = serde_json::from_str(include_str!("api-actions.json"))
         .expect("api-actions.json beside this module is valid JSON");
-    document[api]
-        .as_array()
-        .unwrap_or_else(|| panic!("api-actions.json declares no {api} actions"))
+    // The document is compiled in, so a key it lacks or an entry that is
+    // not a word is a defect of this build, not of any host's configuration.
+    let actions = match document.get(api).and_then(serde_json::Value::as_array) {
+        Some(actions) => actions,
+        None => panic!("api-actions.json declares no {api} actions"),
+    };
+    actions
         .iter()
-        .filter_map(|action| action.as_str().map(str::to_owned))
+        .map(|action| match action.as_str() {
+            Some(word) => word.to_owned(),
+            None => panic!("api-actions.json names a {api} action that is not a word: {action}"),
+        })
         .collect()
 }
 

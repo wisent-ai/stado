@@ -13,6 +13,8 @@
 /// `headers` leaves the trailing columns empty; trailing padding is
 /// trimmed so no line carries invisible whitespace.
 pub fn print(headers: &[&str], rows: &[Vec<String>]) {
+    // The header is always in the set, so the widest cell is the header's
+    // width when no row fills the column.
     let widths: Vec<usize> = headers
         .iter()
         .enumerate()
@@ -20,9 +22,7 @@ pub fn print(headers: &[&str], rows: &[Vec<String>]) {
             rows.iter()
                 .filter_map(|row| row.get(column))
                 .map(String::len)
-                .chain(std::iter::once(header.len()))
-                .max()
-                .unwrap_or_default()
+                .fold(header.len(), usize::max)
         })
         .collect();
     let render = |cells: Vec<&str>| {

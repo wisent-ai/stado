@@ -7,8 +7,6 @@ use nix::sys::stat::Mode;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 pub(in crate::machine) mod archive;
 pub(crate) mod limits;
 pub(in crate::machine) mod staging;
@@ -55,10 +53,13 @@ impl Drop for OwnedMachineFile {
 }
 
 fn machine_source_work_root() -> Result<PathBuf, std::io::Error> {
-    let home = std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"))?;
-    let root = PathBuf::from(home)
+    let home = crate::config_file::home().map_err(|cause| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("the machine source work root has no home: {cause}"),
+        )
+    })?;
+    let root = home
         .join(".stado")
         .join("work")
         .join("stado")
@@ -100,8 +101,5 @@ fn create_owned_machine_file(
 }
 
 pub(in crate::machine) fn sha256_path(path: &Path) -> Result<String, std::io::Error> {
-    let mut file = std::fs::File::open(path)?;
-    let mut digest = Sha256::new();
-    std::io::copy(&mut file, &mut digest)?;
-    Ok(hex::encode(digest.finalize()))
+    Ok(crate::primitives::digest::sha256_file(path)?.sha256)
 }

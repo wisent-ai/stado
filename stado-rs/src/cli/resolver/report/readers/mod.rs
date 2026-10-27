@@ -111,12 +111,17 @@ pub(crate) fn unserved_marker(service: &str, url: &str) -> Option<String> {
 /// `None` when no resolver has published.
 pub(crate) fn readiness_marker() -> Option<String> {
     let state = published_state()?;
-    let written = chrono::DateTime::parse_from_rfc3339(&state.updated_at).ok()?;
+    // A published time that is not RFC 3339 is printed as it was written:
+    // the host-side reader refuses a line whose write time is not a number,
+    // with the line, instead of judging a handoff as if no resolver published.
+    let written = match chrono::DateTime::parse_from_rfc3339(&state.updated_at) {
+        Ok(written) => written.timestamp().to_string(),
+        Err(_not_rfc3339) => state.updated_at.clone(),
+    };
     Some(format!(
-        "STADO_RESOLVER_STATE\t{}\t{}\t{}\t{}",
+        "STADO_RESOLVER_STATE\t{}\t{}\t{written}\t{}",
         state.state,
         state.pid,
-        written.timestamp(),
         u8::from(state.listening)
     ))
 }

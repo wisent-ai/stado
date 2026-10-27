@@ -10,10 +10,19 @@ enum StadoCLIError: LocalizedError, Sendable {
         switch self {
         case .unconfigured:
             "No Stado API endpoint is selected. Choose a source before running this operation."
-        case let .failed(exitCode, message):
-            message.isEmpty ? exitCode.map { "stado exited \($0)." } ?? "Stado returned no exit code." : message
-        case let .response(exitCode, _, _, message):
-            message.isEmpty ? exitCode.map { "stado exited \($0)." } ?? "Stado returned no exit code." : message
+        case let .failed(exitCode, message), let .response(exitCode, _, _, message):
+            Self.sentence(exitCode: exitCode, message: message)
+        }
+    }
+
+    /// The refusal's own message when it has one; otherwise the exit code,
+    /// or that the process ended by a signal, which is the one way it ends
+    /// without a code.
+    private static func sentence(exitCode: Int?, message: String) -> String {
+        if !message.isEmpty { return message }
+        switch exitCode {
+        case .some(let code): return "stado exited \(code)."
+        case .none: return "stado ended by a signal, without an exit code."
         }
     }
 }

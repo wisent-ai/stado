@@ -6,12 +6,13 @@
 //! so a consumer reaches a fleet database the way it reaches any other.
 
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use crate::cli::CmdError;
 
 use super::owner_vault::Owner;
+use crate::cli::database::dump::tools::program;
 
 mod tls;
 
@@ -23,6 +24,7 @@ pub(super) async fn place(
     here: &str,
     directory: &Path,
     port: Option<u16>,
+    version: Option<&str>,
     owner: &Owner,
 ) -> Result<Value, CmdError> {
     let data = directory.join("data");
@@ -31,7 +33,10 @@ pub(super) async fn place(
     let unit_installed = crate::deploy::service::declared_services(&target)
         .iter()
         .any(|service| service.matches(&unit));
-    if data.join("PG_VERSION").is_file() {
+    // A PG_VERSION that cannot be examined is refused: read as absent, an
+    // initialised cluster would be treated as empty and initialised again.
+    let version_file = data.join("PG_VERSION");
+    if crate::primitives::presence::present(&version_file)? && version_file.is_file() {
         if !unit_installed {
             return Err(CmdError::click(format!(
                 "{} holds an initialised database but {here} manages no unit {unit}: install it with \
@@ -50,8 +55,8 @@ pub(super) async fn place(
         }));
     }
     let policy = crate::config::database_tls::PostgresTls::read().map_err(CmdError::declaration)?;
-    let initdb = program("initdb")?;
-    let postgres = program("postgres")?;
+    let initdb = program("initdb", version)?;
+    let postgres = program("postgres", version)?;
     let address = crate::cli::directory::routable_address(&target).ok_or_else(|| {
         CmdError::click(format!(
             "{here} declares no routable address (its ssh connection), so no consumer could reach a database placed on it"
@@ -173,22 +178,6 @@ pub(super) async fn place(
         "item_vault": owner.name(),
         "tls_policy": policy,
     }))
-}
-
-/// `name` where Stado resolves every program it starts on a host
-/// ([`stado_product::common::step_program`]: its own installs, the toolchain
-/// homes and Homebrew's, then this process's PATH), or a refusal naming where
-/// it looked. `stado database place` runs over the host channel and inside the
-/// host agent, whose PATH is minimal, so a lookup on that PATH alone refused a
-/// host that has the server programs.
-fn program(name: &str) -> Result<PathBuf, CmdError> {
-    let path = std::env::var_os("PATH");
-    stado_product::common::step_program(name, path.as_deref()).map_err(|error| {
-        CmdError::click(format!(
-            "{error:#}; install the engine's server programs here or place the database on a host that has them"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Config)
-    })
 }
 
 fn run(command: &mut Command, step: &str) -> Result<(), CmdError> {

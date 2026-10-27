@@ -45,10 +45,15 @@ fn quote(value: &str, safe_slash: bool) -> String {
 
 /// Python `_next_link`: pull `rel="next"` out of an RFC 5988 Link header.
 fn next_link(header: &str) -> String {
+    // Each comma-separated part is `<url>; rel="…"[; …]`; the part whose
+    // parameters name `rel="next"` carries the next page's URL.
     for part in header.split(',') {
-        let bits: Vec<&str> = part.trim().split(';').collect();
-        if bits.len() > 1 && bits[1..].iter().any(|bit| bit.trim() == "rel=\"next\"") {
-            return bits[0]
+        let mut bits = part.trim().split(';');
+        let Some(target) = bits.next() else {
+            continue;
+        };
+        if bits.any(|bit| bit.trim() == "rel=\"next\"") {
+            return target
                 .trim()
                 .trim_matches(|c| c == '<' || c == '>')
                 .to_string();
@@ -74,13 +79,18 @@ pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, Tr
             kind: "RequestError",
             message: exc.to_string(),
         })?;
-    let token = crate::skarbiec::read_string("huggingface", "token")
+    // An anonymous read is allowed for public datasets: a vault without the
+    // Hugging Face token sends no Authorization header, and a private
+    // dataset then answers with its own refusal.
+    let token = match crate::skarbiec::read_string("huggingface", "token")
         .await
         .map_err(|exc| TreeFetchError {
             kind: "AuthenticationError",
             message: exc.to_string(),
-        })?
-        .unwrap_or_default();
+        })? {
+        Some(token) => token,
+        None => String::new(),
+    };
 
     let mut paths: Vec<String> = Vec::new();
     while !url.is_empty() {
@@ -99,12 +109,20 @@ pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, Tr
                 },
                 message: exc.to_string(),
             })?;
-        let link = response
-            .headers()
-            .get(reqwest::header::LINK)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("")
-            .to_string();
+        // A page without a Link header is the last page; one whose Link
+        // header is not text cannot name the next page and is refused.
+        let link = match response.headers().get(reqwest::header::LINK) {
+            None => String::new(),
+            Some(value) => match value.to_str() {
+                Ok(text) => text.to_string(),
+                Err(error) => {
+                    return Err(TreeFetchError {
+                        kind: "RuntimeError",
+                        message: format!("Hugging Face Link header is not text: {error}"),
+                    })
+                }
+            },
+        };
         let page: Value = response.json().await.map_err(|exc| TreeFetchError {
             kind: "RequestError",
             message: exc.to_string(),

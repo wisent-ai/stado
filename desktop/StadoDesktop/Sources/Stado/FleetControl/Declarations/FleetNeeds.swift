@@ -21,11 +21,12 @@ struct FleetNeed: Decodable, Sendable, Identifiable, Equatable {
     let evidence: [FleetNeedEvidence]
     let suggestion: String
 
-    var id: String { "\(need):\(target ?? platform ?? "fleet"):\(summary)" }
+    /// The subject the CLI prints in parentheses — the host, the platform,
+    /// or the fleet as a whole — written by the CLI into the report, so this
+    /// screen derives nothing.
+    let subject: String
 
-    /// The subject the CLI prints in parentheses: the host, the platform, or
-    /// the fleet as a whole.
-    var subject: String { target ?? platform ?? "fleet" }
+    var id: String { "\(need):\(subject):\(summary)" }
 }
 
 /// `{"schema_version", "generated_at", "window_days", "needs": [...]}`.
@@ -51,11 +52,15 @@ extension FleetGroupStore {
     /// the bridge classifies the whole `fleet` family as mutating, so it
     /// carries the confirmation like `fleet list` does; it changes nothing.
     func refreshNeeds(days: Int) async {
-        guard let address else {
-            needs = nil
-            needsFailure = nil
+        if let address {
+            await readNeeds(days: days, at: address)
             return
         }
+        needs = nil
+        needsFailure = "the fleet's needs were not read: this console points at no Stado endpoint"
+    }
+
+    private func readNeeds(days: Int, at address: OperationsDashboardAddress) async {
         isReadingNeeds = true
         defer { isReadingNeeds = false }
         do {
@@ -65,13 +70,16 @@ extension FleetGroupStore {
                 at: address,
                 authorizationToken: authorizationToken
             )
-            guard result.ok, let report: FleetNeedsReport = Self.decode(from: result.standardOutput)
-            else {
+            if !result.ok {
                 needsFailure = result.message
                 return
             }
-            needs = report
-            needsFailure = nil
+            if let report: FleetNeedsReport = Self.decode(from: result.standardOutput) {
+                needs = report
+                needsFailure = nil
+                return
+            }
+            needsFailure = "stado fleet needs answered, but its output did not decode as a needs report: \(result.standardOutput)"
         } catch {
             needsFailure = Self.describe(error)
         }

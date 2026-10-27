@@ -57,9 +57,16 @@ days="${STADO_CACHE_MIN_AGE_DAYS:-}"
 apply="${STADO_CACHE_APPLY:-}"
 force="${STADO_CACHE_FORCE:-}"
 signature='Signature: 8a477f597d28d172789f06886806bc55'
-snapshot=$(/bin/ps -Ao args= 2>/dev/null || true)
+# A process table that cannot be read is not an empty one: every cache is then
+# liveness-unavailable rather than idle.
+if snapshot=$(/bin/ps -Ao args= 2>&1); then
+  snapshot_read=yes
+else
+  snapshot_read=no
+fi
 
 process_absent() {
+  [ "$snapshot_read" = yes ] || return 2
   case "$snapshot" in
     *"$1"*) return 1 ;;
   esac

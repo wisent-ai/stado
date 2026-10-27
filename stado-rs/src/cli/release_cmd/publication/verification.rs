@@ -54,8 +54,8 @@ pub(crate) async fn verified_artifact(
     release_control::verify_manifest(
         public,
         &manifest,
-        std::str::from_utf8(&signature).map_err(|_| {
-            CmdError::click("release signature is not UTF-8")
+        std::str::from_utf8(&signature).map_err(|error| {
+            CmdError::click(format!("release signature is not UTF-8: {error}"))
                 .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?,
     )

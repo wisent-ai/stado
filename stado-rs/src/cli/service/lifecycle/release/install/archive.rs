@@ -5,7 +5,10 @@ use super::*;
 
 /// Extract beside the immutable version and confirm the declared executable
 /// before atomically replacing `current`. Never remove an installed version
-/// while extracting its replacement.
+/// while extracting its replacement. The archive is laid out below the
+/// target's own platform directory ([`service_catalog::platform_directory`]),
+/// the directory the catalog's `$STADO_PLATFORM` names, so `required` is
+/// relative to the version directory and starts with it.
 pub(crate) async fn install_from_archive(
     target: &crate::targets::ComputeTarget,
     directory: &str,
@@ -20,8 +23,11 @@ pub(crate) async fn install_from_archive(
         hasher.update(&bytes);
         hex::encode(hasher.finalize())
     };
-    let version = format!("sha256-{}", &digest[..usize::from(12u8)]);
+    // The version directory is named for the archive's whole digest, so two
+    // archives can never share one.
+    let version = format!("sha256-{digest}");
     let staged = format!(".stado/.{directory}-{version}.tar.gz");
+    let platform_dir = crate::deploy::service_catalog::platform_directory(&target.release_platform);
 
     if crate::deploy::host_channel::target_is_this_host(target) {
         let home = crate::config_file::home().map_err(|cause| {
@@ -40,7 +46,7 @@ pub(crate) async fn install_from_archive(
         let ssh_target = connection.destination;
         let prepare = host_channel::run_script(
             target,
-            "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado\"\n/bin/chmod 700 \"$HOME/.stado\"\n",
+            "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado\"\n/bin/chmod u=rwx,go= \"$HOME/.stado\"\n",
             runner,
         )
         .await
@@ -85,12 +91,13 @@ pub(crate) async fn install_from_archive(
     }
 
     let script = format!(
-        "set -euo pipefail\nname={}\nversion={}\nexpected={}\nstaged={}\nrequired={}\n{ARCHIVE_INSTALL_BODY}",
+        "set -euo pipefail\nname={}\nversion={}\nexpected={}\nstaged={}\nrequired={}\nplatform_dir={}\n{ARCHIVE_INSTALL_BODY}",
         crate::deploy::shlex_quote(directory),
         crate::deploy::shlex_quote(&version),
         crate::deploy::shlex_quote(&digest),
         crate::deploy::shlex_quote(&staged),
         crate::deploy::shlex_quote(required),
+        crate::deploy::shlex_quote(platform_dir),
     );
     let output = host_channel::run_script(target, &script, runner)
         .await
@@ -125,27 +132,29 @@ incoming="$root/.$version.incoming.$$"
 link="$root/.current.new.$$"
 trap 'rm -f "$archive" "$link"; rm -rf "$incoming"' EXIT
 
-[ -s "$archive" ] || { printf '%s\n' 'delivered archive is missing or empty' >&2; exit 1; }
-actual="$(/usr/bin/shasum -a 256 "$archive" | /usr/bin/awk '{print $1}')"
+[ -s "$archive" ] || { printf '%s\n' 'delivered archive is missing or empty' >&2; false; }
+# The digest is SHA-256 (https://csrc.nist.gov/pubs/fips/180-4/upd1/final),
+# the one Stado computed over the archive it sent.
+read -r actual _ < <(/usr/bin/shasum -a 256 "$archive")
 if [ "$actual" != "$expected" ]; then
   printf '%s\n' "digest mismatch: expected $expected, delivered $actual" >&2
-  exit 1
+  false
 fi
 
-/bin/mkdir -p "$incoming/darwin-arm"
-/usr/bin/tar -xzf "$archive" -C "$incoming/darwin-arm"
+/bin/mkdir -p "$incoming/$platform_dir"
+/usr/bin/tar -xzf "$archive" -C "$incoming/$platform_dir"
 if [ ! -f "$incoming/$required" ] || [ ! -x "$incoming/$required" ]; then
   printf '%s\n' "archive does not carry the declared executable $required; current is unchanged" >&2
-  exit 1
+  false
 fi
 if [ -e "$version_dir" ]; then
   if ! /usr/bin/diff -qr "$incoming" "$version_dir" >/dev/null; then
     printf '%s\n' "existing immutable version $version differs from its archive; current is unchanged" >&2
-    exit 1
+    false
   fi
   [ -x "$version_dir/$required" ] || {
     printf '%s\n' "existing immutable version $version has no executable $required; current is unchanged" >&2
-    exit 1
+    false
   }
   rm -rf "$incoming"
 else
@@ -158,7 +167,7 @@ if [ -L "$root/current" ] &&
   trap - EXIT
   rm -f "$archive"
   printf '%s\n' 'STADO_SERVICE_ARCHIVE already_active'
-  exit 0
+  exit
 fi
 
 # `current` is a directory here on some hosts and a symlink on others; either
@@ -179,7 +188,7 @@ printf '%s\n' "$version_dir"
 pub(crate) const ROLLBACK_BODY: &str = r#"
 root="$HOME/.stado/services/$name"
 target="$root/$version"
-[ -d "$target" ] || { printf '%s\n' "no version directory $version on this host" >&2; exit 1; }
+[ -d "$target" ] || { printf '%s\n' "no version directory $version on this host" >&2; false; }
 if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
   /bin/mv "$root/current" "$root/current.replaced-$(/bin/date -u +%Y%m%dT%H%M%SZ)"
 else

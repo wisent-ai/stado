@@ -20,6 +20,11 @@ use crate::providers::ProviderError;
 
 use super::Ec2Client;
 
+/// RunInstances launches between MinCount and MaxCount instances; each call
+/// here asks for exactly one machine
+/// (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RunInstances.html).
+const ONE_INSTANCE: i32 = 1;
+
 #[async_trait]
 impl Ec2Api for Ec2Client {
     async fn instance_removed(
@@ -48,7 +53,12 @@ impl Ec2Api for Ec2Client {
                 "EC2 describe_security_groups failed: no security group {group_id}"
             ))
         })?;
-        Ok(group.vpc_id().unwrap_or_default().to_string())
+        let vpc_id = group.vpc_id().ok_or_else(|| {
+            ProviderError::Aws(format!(
+                "EC2 describe_security_groups answered security group {group_id} without its VpcId"
+            ))
+        })?;
+        Ok(vpc_id.to_string())
     }
 
     async fn subnet_in_az(&self, az: &str, vpc_id: &str) -> Result<Option<String>, ProviderError> {
@@ -96,7 +106,12 @@ impl Ec2Api for Ec2Client {
                         .device_name("/dev/sda1")
                         .ebs(
                             EbsBlockDevice::builder()
-                                .volume_size(args.boot_disk_gb as i32)
+                                .volume_size(i32::try_from(args.boot_disk_gb).map_err(|error| {
+                                    ProviderError::Value(format!(
+                                        "boot disk of {} GiB is beyond what EC2 VolumeSize takes: {error}",
+                                        args.boot_disk_gb
+                                    ))
+                                })?)
                                 .volume_type(VolumeType::Gp3)
                                 .delete_on_termination(true)
                                 .build(),
@@ -109,18 +124,25 @@ impl Ec2Api for Ec2Client {
                         .tags(Tag::builder().key("Name").value(&args.name).build())
                         .build(),
                 )
-                .min_count(1)
-                .max_count(1)
+                .min_count(ONE_INSTANCE)
+                .max_count(ONE_INSTANCE)
                 .send(),
         )
         .await
         .map_err(|err| ec2_error("run_instances", &err))?;
-        Ok(out
+        // A launch EC2 accepted without naming its instance cannot be
+        // watched, stopped or terminated, so it is not reported as launched.
+        let instance_id = out
             .instances()
             .first()
             .and_then(|instance| instance.instance_id())
-            .unwrap_or_default()
-            .to_string())
+            .ok_or_else(|| {
+                ProviderError::Aws(format!(
+                    "EC2 run_instances accepted {} but answered no instance id",
+                    args.name
+                ))
+            })?;
+        Ok(instance_id.to_string())
     }
 
     async fn terminate_instance(&self, instance_id: &str) -> Result<(), ProviderError> {

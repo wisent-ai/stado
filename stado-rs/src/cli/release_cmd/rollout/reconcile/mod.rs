@@ -49,7 +49,12 @@ pub(in crate::cli::release_cmd) async fn active_binary(
             CmdError::click(format!("host {hostname} is not in the target registry"))
                 .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    let target_name = args.target.as_deref().unwrap_or(&local.name);
+    // `--target` names the entry to reconcile; without it the entry is this
+    // host's own, the one the check below requires anyway.
+    let target_name = match args.target.as_deref() {
+        Some(target) => target,
+        None => local.name.as_str(),
+    };
     let target_entry = registry
         .targets
         .iter()
@@ -108,37 +113,30 @@ pub(in crate::cli::release_cmd) async fn rollback(
         CmdError::click("registry.release_control is not configured")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    if !control.products.contains_key(&args.product) {
+    let Some(policy) = control.products.get_mut(&args.product) else {
         return Err(crate::cli::release_cmd::unknown_release_product(
             &control,
             &args.product,
         ));
-    }
-    let policy = control
-        .products
-        .get_mut(&args.product)
-        .expect("presence checked above");
-    let previous = policy
+    };
+    let restored = policy
         .previous
         .take()
         .ok_or_else(|| CmdError::refused("release has no previous desired version to restore"))?;
-    let current = policy.desired.replace(previous);
-    policy.previous = current;
-    let desired = policy.desired.as_mut().expect("previous installed above");
-    desired.rollout_generation =
-        policy
-            .previous
-            .as_ref()
-            .map_or(desired.rollout_generation.saturating_add(1), |release| {
-                release
-                    .rollout_generation
-                    .max(desired.rollout_generation)
-                    .saturating_add(1)
-            });
+    policy.previous = policy.desired.take();
+    let desired = policy.desired.insert(restored);
+    // The restored release gets a rollout generation past both the one it
+    // had and the one it replaces, so every host sees a new rollout; the
+    // registry's own generation counts this commit.
+    let mut rollout_generation = match policy.previous.as_ref() {
+        Some(release) => release.rollout_generation.max(desired.rollout_generation),
+        None => desired.rollout_generation,
+    };
+    crate::primitives::tally::Tally::tally(&mut rollout_generation);
+    desired.rollout_generation = rollout_generation;
     desired.promoted_at = Utc::now().to_rfc3339();
     let version = desired.version.clone();
-    let rollout_generation = desired.rollout_generation;
-    control.generation = control.generation.saturating_add(1);
+    crate::primitives::tally::Tally::tally(&mut control.generation);
     let mut updated = document;
     updated[release_control::RELEASE_CONTROL_KEY] = serde_json::to_value(&control)?;
     let stored_generation =

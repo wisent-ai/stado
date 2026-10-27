@@ -42,23 +42,30 @@ impl Finding {
     }
 }
 
-pub(in crate::cli::service_verify) fn emit(findings: &[Finding], json_output: bool) {
+/// Print `findings`: the JSON rows with `--json`, otherwise a table whose
+/// columns are as wide as their content. A report that cannot be written as
+/// JSON is refused with its cause, never printed as an empty list.
+pub(in crate::cli::service_verify) fn emit(
+    findings: &[Finding],
+    json_output: bool,
+) -> Result<(), crate::cli::CmdError> {
     if json_output {
         let rows: Vec<Value> = findings.iter().map(Finding::to_json).collect();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string())
-        );
-        return;
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
     }
-    println!(
-        "{:<22} {:<20} {:<34} {:<12} DETAIL",
-        "SERVICE", "HOST", "ENDPOINT", "STATE"
-    );
-    for finding in findings {
-        println!(
-            "{:<22} {:<20} {:<34} {:<12} {}",
-            finding.service, finding.host, finding.endpoint, finding.state, finding.detail
-        );
-    }
+    let rows: Vec<Vec<String>> = findings
+        .iter()
+        .map(|finding| {
+            vec![
+                finding.service.clone(),
+                finding.host.clone(),
+                finding.endpoint.clone(),
+                finding.state.to_string(),
+                finding.detail.clone(),
+            ]
+        })
+        .collect();
+    crate::cli::reporting::table::print(&["SERVICE", "HOST", "ENDPOINT", "STATE", "DETAIL"], &rows);
+    Ok(())
 }

@@ -3,7 +3,9 @@
 //! id and by the first characters of its id, as text and as `--json`, from
 //! the outcome its run retained; an id no job holds is refused by name. The
 //! store is inspected after each step: the job's own document is gone once
-//! reaped and the index names its run.
+//! reaped and the index names its run. The first lookup of a whole id the
+//! index does not name walks every run once and marks the walk done; a
+//! lookup after it reads that mark and no run manifest.
 use crate::fixture::Store;
 use serde_json::{json, Value};
 
@@ -113,5 +115,18 @@ fn a_reaped_job_is_read_by_its_whole_id_and_by_its_start_and_an_unknown_id_is_re
             "{said}"
         );
     }
+
+    assert!(
+        store.store().join("runs/retained-jobs-indexed").is_file(),
+        "the walk over every run is marked done once an unindexed id was looked up"
+    );
+    let unknown = format!("job-{reversed}");
+    let output = store.run(&["status", &unknown]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let read = crate::fixture::manifest_reads(&stderr);
+    assert!(
+        read.is_empty(),
+        "a lookup after the walk read run manifests {read:?}: {stderr}"
+    );
     store.pass();
 }

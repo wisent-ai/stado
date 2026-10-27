@@ -30,9 +30,11 @@ pub(super) async fn attach(
                 Some(name) => Some(place(declaration, Some(name), None).await?.name),
                 None => None,
             };
-            let workspace = workspace
-                .map(str::to_string)
-                .unwrap_or_else(current_workspace);
+            // No --workspace names the workspace the caller stands in.
+            let workspace = match workspace {
+                Some(named) => named.to_string(),
+                None => current_workspace(),
+            };
             connect_jeden(declaration, &workspace, target.as_deref(), resume).await
         }
         _ => Err(CmdError::click(format!(
@@ -40,12 +42,6 @@ pub(super) async fn attach(
         ))
         .stating(crate::primitives::failure::FailureCode::Config)),
     }
-}
-
-/// How far a detached session may run before the harness stops it. High
-/// enough for real work, bounded because nobody is watching it.
-pub(super) fn default_max_steps() -> u32 {
-    64
 }
 
 pub(super) struct StartArguments<'a> {
@@ -69,11 +65,15 @@ pub(super) async fn start(arguments: StartArguments<'_>) -> Result<(), CmdError>
         Some(name) => Some(place(declaration, Some(name), None).await?.name),
         None => None,
     };
-    let workspace = arguments
-        .workspace
-        .map(str::to_string)
-        .unwrap_or_else(current_workspace);
-    let task = arguments.task.unwrap_or_default();
+    let workspace = match arguments.workspace {
+        Some(named) => named.to_string(),
+        None => current_workspace(),
+    };
+    let Some(task) = arguments.task else {
+        return Err(CmdError::usage(format!(
+            "{kind} requires --task TEXT for a detached session"
+        )));
+    };
     start_detached(DetachedRequest {
         kind: declaration,
         workspace: &workspace,

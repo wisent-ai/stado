@@ -1,4 +1,4 @@
-//! `stado fleet invite`: probe, mint, record, and print exactly one of the two
+//! `stado fleet invite create`: probe, mint, record, and print exactly one of the two
 //! things the machine's owner can act on.
 
 use chrono::Utc;
@@ -16,6 +16,7 @@ use crate::cli::fleet::invite::record::{
 };
 use crate::cli::CmdError;
 use crate::primitives::failure::FailureCode;
+use crate::primitives::tally::Tally;
 use crate::queue::JobStorage;
 
 use super::offline::offline_snippet;
@@ -24,7 +25,7 @@ use super::{
     derived_target_name, discard_minted_key, join_command, mint_id, mint_secret, parse_expiry,
 };
 
-/// `stado fleet invite [--name NAME] [--expires 24h] [--uses 1] [--offline]` —
+/// `stado fleet invite create --expires DURATION [--name NAME] [--uses N] [--offline]` —
 /// mint the channel key for a machine nobody has touched yet, plus the thing
 /// its owner has to run.
 ///
@@ -49,8 +50,8 @@ pub async fn invite(
     offline: bool,
     as_json: bool,
 ) -> Result<bool, CmdError> {
-    if uses == 0 {
-        return Err(CmdError::usage("--uses must be at least 1"));
+    if uses.counts_nothing() {
+        return Err(CmdError::usage("--uses must allow at least one use"));
     }
     let lifetime = parse_expiry(expires).map_err(CmdError::usage)?;
     let document = crate::cli::registry::fetch_document().await?;
@@ -130,12 +131,13 @@ pub async fn invite(
     let created_at = Utc::now();
     let invite = Invite {
         id: id.clone(),
-        secret_sha256: secret.as_deref().map(secret_digest).unwrap_or_default(),
+        secret_sha256: secret.as_deref().map(secret_digest),
         target_name: target_name.clone(),
         created_at: created_at.to_rfc3339(),
         expires_at: (created_at + lifetime).to_rfc3339(),
         uses_allowed: uses,
-        uses_spent: 0,
+        // A fresh invite has spent nothing: the count a new Tally starts at.
+        uses_spent: Default::default(),
         status: STATUS_OPEN.to_string(),
         created_by: crate::providers::vast::system_hostname(),
         mode: mode.to_string(),

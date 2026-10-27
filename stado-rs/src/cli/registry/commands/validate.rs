@@ -22,15 +22,11 @@ fn import_names(values: &[String]) -> String {
 }
 
 fn render_import_receipt(receipt: &crate::registry_import::RegistryImportReceipt) {
-    println!(
-        "registry import: {}{}",
-        receipt.state,
-        receipt
-            .generation
-            .as_deref()
-            .map(|generation| format!(" (generation {generation})"))
-            .unwrap_or_default()
-    );
+    let generation = match receipt.generation.as_deref() {
+        Some(generation) => format!(" (generation {generation})"),
+        None => String::new(),
+    };
+    println!("registry import: {}{generation}", receipt.state);
     println!(
         "  imported hosts: {}",
         import_names(&receipt.imported_targets)
@@ -87,17 +83,17 @@ pub async fn import(path: String, json_output: bool) -> Result<(), CmdError> {
         crate::cli::setup::onboarding::record_registry_import_accepted(&receipt);
         return Ok(());
     }
-    let detail = receipt
-        .rejected
-        .first()
-        .cloned()
-        .or_else(|| {
-            receipt
-                .conflicts
-                .first()
-                .map(|conflict| format!("{}: {}", conflict.path, conflict.reason))
-        })
-        .unwrap_or_else(|| "the source was not accepted".to_string());
+    // The refusal quotes what the receipt names first: a rejected entry, a
+    // conflict, or, for a receipt that names neither, its state alone.
+    let detail = match (receipt.rejected.first(), receipt.conflicts.first()) {
+        (Some(rejected), _) => rejected.clone(),
+        (None, Some(conflict)) => format!("{}: {}", conflict.path, conflict.reason),
+        (None, None) => format!(
+            "the source was not accepted and the receipt names no rejected entry or conflict \
+             (state {})",
+            receipt.state
+        ),
+    };
     Err(CmdError {
         message: Some(format!("registry import {}: {detail}", receipt.state)),
         code: if receipt.state == crate::registry_import::ImportState::Conflict {

@@ -21,8 +21,9 @@ pub struct Plan {
 /// file that does not hold the plan its name promises is a damaged plan.
 #[derive(Debug)]
 pub enum PlanError {
-    /// `HOME` is not set, so the plan directory is unknown.
-    NoHome,
+    /// Neither HOME nor the user database names a home, so the plan
+    /// directory is unknown; the cause [`crate::config_file::home`] gave.
+    NoHome(String),
     /// The id is not one `stado inference plan` prints.
     InvalidId(String),
     /// The plan could not be encoded to compute its digest or body.
@@ -40,10 +41,7 @@ pub enum PlanError {
 impl std::fmt::Display for PlanError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoHome => write!(
-                f,
-                "HOME is not set, so the inference plan directory is unknown"
-            ),
+            Self::NoHome(cause) => write!(f, "the inference plan directory is unknown: {cause}"),
             Self::InvalidId(id) => write!(
                 f,
                 "invalid inference plan id {id:?}; use the id `stado inference plan` printed"
@@ -80,8 +78,8 @@ fn plan_id(expected: &str, deployment: &Deployment) -> Result<String, PlanError>
 }
 
 fn root() -> Result<PathBuf, PlanError> {
-    let home = std::env::var_os("HOME").ok_or(PlanError::NoHome)?;
-    Ok(PathBuf::from(home).join(".stado").join("inference-plans"))
+    let home = crate::config_file::home().map_err(PlanError::NoHome)?;
+    Ok(home.join(".stado").join("inference-plans"))
 }
 
 fn path(id: &str) -> Result<PathBuf, PlanError> {
@@ -105,17 +103,17 @@ pub fn create(document: &Value, deployment: Deployment) -> Result<Plan, PlanErro
     })
 }
 
+/// Keep `plan` whole and flushed with its directory
+/// ([`crate::primitives::document::persist`]); two saves of one plan no
+/// longer share one `.tmp` sibling.
 pub fn save(plan: &Plan) -> Result<PathBuf, PlanError> {
     let path = path(&plan.id)?;
-    let directory = root()?;
-    std::fs::create_dir_all(&directory).map_err(|error| PlanError::Write(directory, error))?;
-    let temporary = path.with_extension("json.tmp");
     let body = format!(
         "{}\n",
         serde_json::to_string_pretty(plan).map_err(PlanError::Encode)?
     );
-    std::fs::write(&temporary, body).map_err(|error| PlanError::Write(temporary.clone(), error))?;
-    std::fs::rename(&temporary, &path).map_err(|error| PlanError::Write(path.clone(), error))?;
+    crate::primitives::document::persist(&path, body.as_bytes())
+        .map_err(|error| PlanError::Write(path.clone(), error))?;
     Ok(path)
 }
 

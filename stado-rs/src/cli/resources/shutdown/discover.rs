@@ -10,6 +10,7 @@ use crate::cli::blast_radius;
 use crate::cli::resources::model::{InventorySnapshot, SourceCoverage, SourceSnapshot};
 use crate::cli::resources::ShutdownArgs;
 use crate::cli::CmdError;
+use crate::primitives::tally::Tally;
 use crate::providers::gcp::inventory::{self as gcp_inventory, ProbeState};
 use crate::queue::copy::Endpoint;
 
@@ -21,7 +22,7 @@ pub(super) async fn discover_owned(
     let mut options = blast_radius::gcp_inventory_options(&primary, backup.as_ref());
     options.project = args.project.clone();
     let report = gcp_inventory::inspect(options).await;
-    if report.summary.critical_failures != 0 {
+    if !report.summary.critical_failures.counts_nothing() {
         return Err(CmdError::click(format!(
             "cannot prove complete Stado ownership: GCP inventory has {} critical failure(s)",
             report.summary.critical_failures
@@ -122,6 +123,11 @@ fn probe_items<'a>(
         .as_array()
 }
 
+/// The last `/`-separated segment of a GCP resource path: `rsplit` yields
+/// at least the whole value, so the first item always exists.
 fn tail(value: &str) -> &str {
-    value.rsplit('/').next().unwrap_or(value)
+    match value.rsplit('/').next() {
+        Some(segment) => segment,
+        None => value,
+    }
 }

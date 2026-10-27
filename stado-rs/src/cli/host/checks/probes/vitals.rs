@@ -71,7 +71,7 @@ pub async fn ping(target: &str, json: bool) -> Result<(), CmdError> {
     let ssh = report.get("ssh_check");
     let beacon = report.get("beacon");
     let part = |section: Option<&Value>, key: &str| cell(section.and_then(|v| v.get(key)));
-    let rows = vec![
+    let mut rows = vec![
         vec![
             "ssh".to_string(),
             part(ssh, "status"),
@@ -90,6 +90,20 @@ pub async fn ping(target: &str, json: bool) -> Result<(), CmdError> {
             },
         ],
     ];
+    // A host the local tailnet lists: whether its node key expired, which is
+    // why SSH to it only times out, and when a valid key ends.
+    if let Some(key) = ssh.and_then(|value| value.get("tailnet_key")) {
+        let state = match key.get("expired") {
+            Some(Value::Bool(true)) => "expired",
+            Some(Value::Bool(false)) => "valid",
+            _ => crate::cli::reporting::NOT_REPORTED,
+        };
+        let detail = match key.get("key_expiry") {
+            Some(Value::String(at)) => format!("key expiry {at}"),
+            _ => "the tailnet states no key expiry for this node".to_string(),
+        };
+        rows.push(vec!["tailnet key".to_string(), state.to_string(), detail]);
+    }
     crate::cli::reporting::table::print(&["SIGNAL", "STATE", "DETAIL"], &rows);
     println!(
         "\nverdict: {} (the worse of the two signals)",
@@ -107,7 +121,14 @@ pub async fn ping(target: &str, json: bool) -> Result<(), CmdError> {
 /// approved spellings as help beside it, and — when `--json` was asked
 /// for — as a document rather than as prose the caller cannot parse.
 pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), CmdError> {
-    let runner = crate::deploy::production_runner();
+    // Text mode passes the host's own output through as it arrives, so a long
+    // command is seen working after its wait line instead of standing silent
+    // until it exits; --json keeps stdout for the one receipt document.
+    let runner = if json {
+        crate::deploy::production_runner()
+    } else {
+        crate::deploy::relaying_runner()
+    };
     let report = crate::deploy::host_exec::exec_host(target, &words, &runner)
         .await
         .map_err(|exc| {
@@ -123,14 +144,8 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
     let expected = crate::deploy::host_exec::OK_STATUS;
     if json {
         print_json(&report);
-        return report_outcome(&report, expected);
     }
-    // The point of the command is the host's own output, so it is passed
-    // through untouched rather than folded into a table.
-    print!("{}", cell(report.get("stdout")));
-    let stderr = cell(report.get("stderr"));
-    if !stderr.is_empty() && stderr != "-" {
-        eprint!("{stderr}");
-    }
+    // In text mode the host's stdout and stderr were already written through
+    // as they arrived; the outcome alone remains to be said.
     report_outcome(&report, expected)
 }

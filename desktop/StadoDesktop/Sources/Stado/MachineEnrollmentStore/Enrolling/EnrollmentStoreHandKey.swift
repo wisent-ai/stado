@@ -113,23 +113,22 @@ extension MachineEnrollmentStore {
     private func mintKey() async {
         let machine = draft.machineName
         failure = nil
-        outcome = .working("Minting an ed25519 pair for \(machine) in the credential store.")
+        outcome = .working("Minting the fleet's key pair for \(machine) in the credential store.")
         do {
-            let result = try await run(["fleet", "key", "generate", machine])
-            guard result.ok else {
+            let result = try await run(["fleet", "key", "generate", machine, "--json"])
+            if !result.ok {
                 failure = .keyGeneration(result.message, machine: machine)
                 outcome = .failed(result.message)
                 return
             }
-            guard let publicKey = MachineEnrollmentOutput.publicKey(in: result.standardOutput) else {
-                failure = .missingPublicKey(machine: machine)
-                outcome = .failed(result.message)
-                return
-            }
-            let credential = MachineEnrollmentOutput.credential(in: result.standardOutput)
-            draft.publicKey = publicKey
-            draft.credentialItem = credential?.item ?? "stado-ssh-\(machine)"
-            draft.keyFingerprint = credential?.fingerprint ?? ""
+            let minted = try Self.document(
+                MintedFleetKey.self,
+                of: "stado fleet key generate \(machine) --json",
+                from: result.standardOutput
+            )
+            draft.publicKey = minted.publicKey
+            draft.credentialItem = minted.item
+            draft.keyFingerprint = minted.fingerprint
             draft.keyMintedAt = Date()
             persistDraft()
             outcome = .succeeded("Stored \(draft.credentialItem). The public half is below; nothing else about this pair leaves the credential store.")

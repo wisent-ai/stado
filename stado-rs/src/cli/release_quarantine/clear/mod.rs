@@ -28,7 +28,7 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
         ));
     }
     let digest = args.digest.trim().to_ascii_lowercase();
-    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !crate::deploy::host_release::is_sha256(&digest) {
         return Err(CmdError::usage(
             "--digest must be the 64-character sha256 hex digest quarantine list prints",
         ));
@@ -106,7 +106,7 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
     let output = host_channel::run_script(&host, &script, &runner)
         .await
         .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{target_name}: rollout state was not changed: {}",
             host_channel::last_error_line(&output, "remote quarantine clear failed")
@@ -116,7 +116,7 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
     let committed = output
         .stdout
         .lines()
-        .any(|line| host_channel::marker_fields(line).get(1) == Some(&"committed"));
+        .any(|line| matches!(host_channel::marker_fields(line).as_slice(), [_, "committed", ..]));
     if !committed {
         return Err(CmdError::click(format!(
             "{target_name}: host exited clean without confirming the rewrite of {path}"
@@ -139,7 +139,10 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
             "cleared {digest} for {} on {target_name}\n  it was quarantined at {} because: {}\n  previous state backed up to {backup}\n  audited in {audit}\n  nothing was started, stopped or restarted; the release agent rolls this digest out on its next tick",
             args.product,
             record.quarantined_at.to_rfc3339(),
-            record.reason.lines().next().unwrap_or(&record.reason),
+            match record.reason.lines().next() {
+                Some(first_line) => first_line,
+                None => "no reason was recorded",
+            },
         );
     }
     Ok(())

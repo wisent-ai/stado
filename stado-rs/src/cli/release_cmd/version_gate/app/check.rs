@@ -9,6 +9,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::primitives::presence::listed;
+
 use super::super::{conformance, rule};
 use super::baseline::{newest, store, version_of};
 use super::surface::{self, Read};
@@ -36,8 +38,9 @@ fn verified_record(root: &Path, marker: &str) -> Read<Value> {
             .map(str::to_string)
             .ok_or_else(|| format!("{VERIFIED_BASELINE}: has no {name}"))
     };
-    let source = std::env::var("WISENT_SOURCE_COMMIT")
-        .map_err(|_| "WISENT_SOURCE_COMMIT is not set, so the provenance record cannot be bound to the source being built".to_string())?;
+    let Some(source) = crate::primitives::environment::declared("WISENT_SOURCE_COMMIT")? else {
+        return Err("WISENT_SOURCE_COMMIT is not set, so the provenance record cannot be bound to the source being built".to_string());
+    };
     if field("source_commit")? != source {
         return Err(format!(
             "{VERIFIED_BASELINE} was recorded for {}, but this build is {source}",
@@ -73,21 +76,24 @@ fn verified_record(root: &Path, marker: &str) -> Read<Value> {
 
 fn provenance(root: &Path, marker: &str, released: &str) -> Read<()> {
     let record = verified_record(root, marker)?;
-    let newest_tag = newest(
-        record["origin_tags"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str),
-    );
+    // Read as empty, tags in another shape made origin serve no version
+    // tag, and a head baseline passed as if nothing were released.
+    let origin_tags = listed(&record["origin_tags"], &format!("{VERIFIED_BASELINE} origin_tags"))?;
+    let newest_tag = newest(origin_tags.iter().filter_map(Value::as_str));
     if let Some(tag) = marker.strip_prefix("git-archive:") {
         if version_of(tag).as_deref() != Some(released) {
             return Err(format!(
                 "{BASELINE} claims {released} but was recovered from tag {tag}. {REGENERATE}"
             ));
         }
-        if newest_tag.as_deref() != Some(tag) {
-            return Err(format!("{BASELINE} is tag {tag}, but the newest version tag origin serves is {}. {REGENERATE}", newest_tag.unwrap_or_default()));
+        match newest_tag.as_deref() {
+            Some(newest) if newest == tag => {}
+            Some(newest) => {
+                return Err(format!("{BASELINE} is tag {tag}, but the newest version tag origin serves is {newest}. {REGENERATE}"));
+            }
+            None => {
+                return Err(format!("{BASELINE} is tag {tag}, but origin serves no version tag. {REGENERATE}"));
+            }
         }
         return Ok(());
     }
@@ -115,10 +121,12 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
     let released = committed["version"]
         .as_str()
         .ok_or_else(|| format!("{BASELINE} has no version"))?;
-    let marker = committed["source"]
+    let Some(marker) = committed["source"]
         .as_str()
         .and_then(|source| source.split_whitespace().next())
-        .unwrap_or_default();
+    else {
+        return Err(format!("{BASELINE} has no source marker. {REGENERATE}"));
+    };
     // An app sold on the App Store is measured against its appstore/* tag
     // and the version the store serves; any other against its version tag.
     let live = match &sources.app_store_tags {
@@ -131,7 +139,7 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
                 released,
                 &declared,
                 &live,
-                sources.version_source(),
+                sources.version_source()?,
             )?;
             Some(live)
         }
@@ -140,16 +148,24 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
             None
         }
     };
-    let published = committed["surface"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    // Every published name counts: one dropped for its shape was a name the
+    // gate no longer saw removed.
+    let published = listed(&committed["surface"], &format!("{BASELINE} surface"))?
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| format!("{BASELINE} publishes a surface name that is not text: {name}. {REGENERATE}"))
+        })
+        .collect::<Read<Vec<_>>>()?;
     let mut sorted = published.clone();
     sorted.sort();
-    let shrunk = sorted.get(1..).unwrap_or_default().to_vec();
+    // The gate proves it can refuse by dropping one released name; a baseline
+    // that publishes none leaves it nothing to drop.
+    let Some((_, rest)) = sorted.split_first() else {
+        return Err(format!("{BASELINE} publishes no surface, so this gate cannot prove it refuses a removal. {REGENERATE}"));
+    };
+    let shrunk = rest.to_vec();
     let proof = rule::decide(released, &published, &shrunk, false)
         .map_err(|refusal| refusal.to_string())?;
     if proof.change.name() != "breaking" {
@@ -160,13 +176,13 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
     let (change, required) = (verdict.change.name(), verdict.next);
     println!("{change} since {released} requires {required}; declared {declared}; removed {:?}; added {:?}", verdict.removed, verdict.added);
     if let Some(live) = &live {
-        if store::order(&required, live) != std::cmp::Ordering::Greater {
+        if store::order(&required, live)? != std::cmp::Ordering::Greater {
             return Err(format!("a {change} change since {released} requires {required}, but the App Store already serves {live}. Tag the published version and run `stado release gate app baseline`; nothing below can be trusted until then."));
         }
     }
     if declared == released {
         if change != "internal" {
-            return Err(format!("what a user of the app holds changed ({change}) but {} still declares {released}; declare {required}", sources.version_source()));
+            return Err(format!("what a user of the app holds changed ({change}) but {} still declares {released}; declare {required}", sources.version_source()?));
         }
     } else if !rule::semver_at_least(&declared, &required)? {
         // A declared version may run ahead of the required one: builds that
@@ -176,7 +192,7 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
         // Stado's own version check applies.
         return Err(format!(
             "{} declares {declared}, but a {change} change since {released} requires at least {required}",
-            sources.version_source()
+            sources.version_source()?
         ));
     }
     Ok(())

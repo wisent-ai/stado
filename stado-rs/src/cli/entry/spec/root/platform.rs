@@ -233,9 +233,9 @@ pub(crate) enum CiCommands {
         #[arg(long)]
         json: bool,
     },
-    /// One pass of the delivery routine, which Stado's scheduler runs on the
-    /// cadence the operator declares (`stado schedule create --cron …
-    /// 'stado ci run'`): check every new commit of each step's `main` with the
+    /// One pass of the delivery routine, which the coordinator of a host that
+    /// declares a delivery plan fires beside every tick, at the tick's declared
+    /// interval: check every new commit of each step's `main` with the
     /// product's declared gates, recording each green or red (a red one in
     /// Oko, found in that commit), then install each step's last green commit,
     /// never `main` HEAD, in order, then — with `--push` declared — push

@@ -8,14 +8,14 @@
 //!
 //! 1. the new owner is registered on the vault (its public key exported from
 //!    the destination's keyring), unless the vault already registers it;
-//! 2. the owner host rotates the vault to the new owner (`skarbiec
-//!    rotate-owner`, every current and saved version, recovery kept);
+//! 2. the owner host rotates the vault to the new owner (`skarbiec owner
+//!    rotate`, every current and saved version, recovery kept);
 //! 3. `stado placement move` carries the profile — the service, the vault and
 //!    its journal — to the destination;
 //! 4. the destination declares the vault as its own
 //!    (`secrets.skarbiec.vault_file`) and the former owner host stops
 //!    declaring one, so every credential verb reaches the moved vault;
-//! 5. the destination's key-doctor reads the vault and its live items are
+//! 5. the destination's `keys check` reads the vault and its live items are
 //!    exactly the ones the owner host held.
 //!
 //! A placement move that fails after the rotation gives the vault back to
@@ -23,7 +23,7 @@
 //! Once the move has carried the vault, it is not moved back: a later step
 //! that fails (a declaration, the read on the destination) is refused naming
 //! what stands then — the vault rotated to the new owner and on the
-//! destination, which host declares the vault file, and whether key-doctor
+//! destination, which host declares the vault file, and whether `keys check`
 //! read it — so the step can be finished from there. Without `--apply`
 //! nothing changes: every reading the move depends on is made and reported.
 
@@ -35,13 +35,16 @@ use serde_json::{json, Value};
 
 use crate::cli::host::{remote_config_output, RemoteConfigAction};
 use crate::cli::CmdError;
-use crate::deploy::{CommandSpec, Runner};
+use crate::deploy::Runner;
 use plan::Plan;
-use remote::live_items;
+/// The directory service whose vault this module moves, which a plain
+/// placement move must not carry before the owner rotates.
+pub(crate) use plan::SERVICE as VAULT_SERVICE;
+use remote::{live_items, placement_move, register};
 
 /// The declaration a host's credential verbs read its own vault from.
 const VAULT_FILE_KEY: &str = "secrets.skarbiec.vault_file";
-/// The vault status key-doctor gives when a key on that host opens it.
+/// The vault status `keys check` gives when a key on that host opens it.
 const READABLE: &str = "readable";
 
 pub(crate) async fn move_owner(
@@ -53,7 +56,27 @@ pub(crate) async fn move_owner(
     let runner = crate::deploy::production_runner();
     let plan = Plan::read(to, owner_uid, &runner).await?;
     let mut report = plan.report();
+    // A destination whose units were never staged is refused as such first,
+    // naming the standby that stages them.
     if apply {
+        plan.check_destination(&runner).await?;
+    }
+    // The preflight the placement move will make, asked before anything
+    // changes: a move it refuses would otherwise be found only after the
+    // vault was rotated, and rotated back.
+    let checked = placement_move(&plan, &runner, true).await;
+    report["placement_check"] = match &checked {
+        Ok(check) => check.clone(),
+        Err(cause) => json!({ "refused": cause }),
+    };
+    if apply {
+        if let Err(cause) = &checked {
+            return Err(CmdError::refused(format!(
+                "the placement move of {} to {} would be refused, so nothing was registered or \
+                 rotated: {cause}",
+                plan.profile.name, plan.destination.target.name
+            )));
+        }
         report["moved"] = apply_move(&plan, &runner).await?;
     }
     report["applied"] = Value::from(apply);
@@ -81,8 +104,10 @@ pub(crate) async fn move_owner(
             plan.destination.target.name
         ),
         Some(cause) => println!(
-            "{}'s keyring holds no secret half for {}: {cause}",
-            plan.destination.target.name, plan.owner_uid
+            "{}'s keyring holds no secret half for {}: {cause}; {}",
+            plan.destination.target.name,
+            plan.owner_uid,
+            plan.mint_hint()
         ),
     }
     if plan.registered.is_none() {
@@ -91,29 +116,62 @@ pub(crate) async fn move_owner(
             plan.owner_uid
         );
     }
+    match &checked {
+        Ok(_) => println!(
+            "the placement move of {} to {} passes its preflight",
+            plan.profile.name, plan.destination.target.name
+        ),
+        Err(cause) => println!(
+            "the placement move of {} to {} would be refused: {cause}",
+            plan.profile.name, plan.destination.target.name
+        ),
+    }
     Ok(())
 }
 
 /// Steps 1-5, each one's answer kept in the returned report.
 async fn apply_move(plan: &Plan, runner: &Runner) -> Result<Value, CmdError> {
-    if let Some(cause) = &plan.missing_secret {
-        return Err(CmdError::refused(format!(
-            "{}'s keyring holds no secret half for {}, so after the rotation no key there would open the vault: {cause}",
-            plan.destination.target.name, plan.owner_uid
-        )));
-    }
+    // A destination whose keyring holds no secret half for the new owner gets
+    // one made there, with the parameters Skarbiec's init uses; a uid that
+    // names a key without its secret half is refused by Skarbiec naming it.
+    let minted = match &plan.missing_secret {
+        None => json!({ "already": plan.owner_uid }),
+        Some(cause) => plan
+            .destination
+            .skarbiec(&["owner", "key", "mint", &plan.owner_uid], None, runner)
+            .await
+            .map_err(|minting| {
+                CmdError::refused(format!(
+                    "{}'s keyring holds no secret half for {} ({cause}), and making one there \
+                     failed, so no key there would open the vault after the rotation: {minting}",
+                    plan.destination.target.name, plan.owner_uid
+                ))
+            })?,
+    };
+    // `move_owner` checked the destination's unit files before the placement
+    // check, so their refusal keeps its own kind and the standby it names.
     let registered = match &plan.registered {
         Some(recipient) => json!({ "already": recipient.fingerprint }),
         None => register(plan, runner).await.map_err(CmdError::refused)?,
     };
-    let rotation = plan
-        .source
-        .skarbiec(&["rotate-owner", &plan.owner_uid], None, runner)
-        .await
-        .map_err(CmdError::refused)?;
-    let moved = match placement_move(plan, runner).await {
+    let rotation = if plan.previous.uid == plan.owner_uid {
+        json!({ "already": plan.owner_uid })
+    } else {
+        plan.source
+            .skarbiec(&["owner", "rotate", &plan.owner_uid], None, runner)
+            .await
+            .map_err(CmdError::refused)?
+    };
+    let moved = match placement_move(plan, runner, false).await {
         Ok(moved) => moved,
         Err(cause) => {
+            if plan.previous.uid == plan.owner_uid {
+                return Err(CmdError::refused(format!(
+                    "the placement move of {} to {} failed: {cause}; it started from {} with vault owner {}; no owner rotation was performed; inspect stado placement profile show {} for the current placement",
+                    plan.profile.name, plan.destination.target.name,
+                    plan.source.target.name, plan.owner_uid, plan.profile.name
+                )));
+            }
             let restored = match rollback::restore_owner(plan, runner).await {
                 Ok(_) => format!(
                     "the vault was rotated back to {} and {} reads it again",
@@ -193,6 +251,7 @@ async fn apply_move(plan: &Plan, runner: &Runner) -> Result<Value, CmdError> {
         )
     })?;
     Ok(json!({
+        "owner_key": minted,
         "registered": registered,
         "rotation": rotation,
         "placement": moved,
@@ -201,70 +260,16 @@ async fn apply_move(plan: &Plan, runner: &Runner) -> Result<Value, CmdError> {
     }))
 }
 
-/// Register the new owner on the vault with the public key the
-/// destination's keyring exports for it.
-async fn register(plan: &Plan, runner: &Runner) -> Result<Value, String> {
-    let public = plan
-        .destination
-        .gpg(
-            &["--armor", "--export", "--", &plan.owner_uid],
-            None,
-            runner,
-        )
-        .await?;
-    if public.trim().is_empty() {
-        return Err(format!(
-            "{}'s keyring exported no public key for {}",
-            plan.destination.target.name, plan.owner_uid
-        ));
-    }
-    plan.source
-        .skarbiec(
-            &["add-user", &plan.owner_uid, "--import", "/dev/stdin"],
-            Some(&public),
-            runner,
-        )
-        .await
-}
-
-/// `stado placement move <profile's services> --to-host <destination>` by
-/// this same Stado, through the runner that says what it waits for; its
-/// committed report.
-async fn placement_move(plan: &Plan, runner: &Runner) -> Result<Value, String> {
-    let program = std::env::current_exe()
-        .map_err(|error| format!("this Stado's own executable cannot be named: {error}"))?;
-    let mut argv: Vec<String> = vec![
-        program.display().to_string(),
-        "placement".into(),
-        "move".into(),
-    ];
-    argv.extend(plan.profile.services.iter().cloned());
-    argv.extend([
-        "--to-host".into(),
-        plan.destination.target.name.clone(),
-        "--json".into(),
-    ]);
-    let shown = argv.join(" ");
-    let output = runner(CommandSpec { argv, stdin: None })
-        .await
-        .map_err(|error| format!("{shown} did not run: {error}"))?;
-    if !output.succeeded() {
-        return Err(format!("{shown} failed: {}", output.stderr.trim()));
-    }
-    serde_json::from_str(output.stdout.trim())
-        .map_err(|error| format!("{shown} printed no readable report: {error}"))
-}
-
 /// The destination opens the moved vault and holds every live item the
 /// owner host held, no more and no fewer.
 async fn verify(plan: &Plan, runner: &Runner) -> Result<Value, String> {
     let doctor = plan
         .destination
-        .skarbiec(&["key-doctor"], None, runner)
+        .skarbiec(&["keys", "check"], None, runner)
         .await?;
     if doctor.get("status").and_then(Value::as_str) != Some(READABLE) {
         return Err(format!(
-            "{}'s key-doctor does not read the moved vault: {doctor}",
+            "{}'s keys check does not read the moved vault: {doctor}",
             plan.destination.target.name
         ));
     }

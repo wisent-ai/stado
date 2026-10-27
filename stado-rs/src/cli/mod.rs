@@ -97,7 +97,7 @@ pub(crate) use entry::spec::jobs::{
 pub(crate) use entry::spec::schedules::ScheduleCommands;
 pub(crate) use entry::spec::spend::billing::BillingCommands;
 pub(crate) use entry::spec::spend::cost::CostCommands;
-pub(crate) use entry::spec::spend::market::{MarketCommands, MarketProvider};
+pub(crate) use entry::spec::spend::market::{MarketCommands, MarketProvider, PeerCommands};
 pub(crate) use entry::spec::spend::quota::QuotaCommands;
 
 /// One answer in the two forms cli.md rule 13 asks for, from the same value:

@@ -70,6 +70,9 @@ pub enum GpuCloudVendor {
     Nebius,
     Oblivus,
     Oracle,
+    /// OVHcloud Public Cloud GPU instances; OVHcloud Object Storage is the
+    /// same provider's storage side.
+    Ovhcloud,
     Runpod,
     Salad,
     Scaleway,
@@ -92,6 +95,7 @@ impl GpuCloudVendor {
         Self::Nebius,
         Self::Oblivus,
         Self::Oracle,
+        Self::Ovhcloud,
         Self::Runpod,
         Self::Salad,
         Self::Scaleway,
@@ -111,6 +115,7 @@ impl GpuCloudVendor {
             Self::Nebius => ProviderId::Nebius,
             Self::Oblivus => ProviderId::Oblivus,
             Self::Oracle => ProviderId::Oracle,
+            Self::Ovhcloud => ProviderId::Ovhcloud,
             Self::Runpod => ProviderId::Runpod,
             Self::Salad => ProviderId::Salad,
             Self::Scaleway => ProviderId::Scaleway,
@@ -132,6 +137,7 @@ impl GpuCloudVendor {
             Self::Nebius => "Nebius AI Cloud",
             Self::Oblivus => "Oblivus Cloud",
             Self::Oracle => "Oracle Cloud Infrastructure",
+            Self::Ovhcloud => "OVHcloud",
             Self::Runpod => "RunPod",
             Self::Salad => "SaladCloud",
             Self::Scaleway => "Scaleway",

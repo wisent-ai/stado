@@ -26,23 +26,24 @@ pub async fn install(
     let endpoint_host = shlex_quote(&deployment.endpoint.host);
     let port = deployment.endpoint.port;
     let max_model_len = deployment.resources.max_model_len;
-    let kv_cache_argument = deployment
-        .resources
-        .kv_cache_memory_gb
-        .map(|gib| format!(" --kv-cache-memory {}", gib * 1024 * 1024 * 1024))
-        .unwrap_or_default();
-    let cache_dir = deployment
-        .resources
-        .cache_dir
-        .as_deref()
-        .map(shlex_quote)
-        .unwrap_or_else(|| "\"$root/cache\"".to_string());
-    let cache_mount = deployment
-        .resources
-        .cache_dir
-        .as_deref()
-        .map(|path| format!("{path}:/data/huggingface"))
-        .unwrap_or_else(|| "\"$root/cache:/data/huggingface\"".to_string());
+    // A deployment that states no KV-cache budget passes none, and the engine
+    // sizes its own; one that states it in GiB is handed bytes.
+    let kv_cache_argument = match deployment.resources.kv_cache_memory_gb {
+        Some(gib) => format!(
+            " --kv-cache-memory {}",
+            u128::from(gib) * crate::providers::local::host_memory::constants::GIB as u128
+        ),
+        None => String::new(),
+    };
+    // A deployment that names no cache directory keeps its cache under the
+    // deployment's own root on the host.
+    let (cache_dir, cache_mount) = match deployment.resources.cache_dir.as_deref() {
+        Some(path) => (shlex_quote(path), format!("{path}:/data/huggingface")),
+        None => (
+            "\"$root/cache\"".to_string(),
+            "\"$root/cache:/data/huggingface\"".to_string(),
+        ),
+    };
     let secret = shlex_quote(&STANDARD.encode(api_key));
     let unit = shlex_quote(&unit_name(&deployment.name));
     let reservation = Reservation {

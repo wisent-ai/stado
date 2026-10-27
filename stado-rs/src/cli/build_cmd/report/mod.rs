@@ -164,21 +164,17 @@ fn print_build(build: &BuildRun, progress: &BTreeMap<String, Progress>) {
             PlatformRunState::Failed => "failed",
             PlatformRunState::Published => "published",
         };
-        println!(
-            "  {name}: builder={} job={} state={state}{}{}",
-            platform.builder,
-            platform.job_id,
-            platform
-                .artifact_sha256
-                .as_deref()
-                .map(|sha| format!(" artifact_sha256={sha}"))
-                .unwrap_or_default(),
-            platform
-                .failure
-                .as_deref()
-                .map(|failure| format!(" failure: {failure}"))
-                .unwrap_or_default()
+        let mut line = format!(
+            "  {name}: builder={} job={} state={state}",
+            platform.builder, platform.job_id
         );
+        if let Some(sha) = platform.artifact_sha256.as_deref() {
+            line.push_str(&format!(" artifact_sha256={sha}"));
+        }
+        if let Some(failure) = platform.failure.as_deref() {
+            line.push_str(&format!(" failure: {failure}"));
+        }
+        println!("{line}");
         if let Some(progress) = progress.get(name) {
             for line in progress.lines(platform.state == PlatformRunState::Submitted) {
                 println!("    {line}");

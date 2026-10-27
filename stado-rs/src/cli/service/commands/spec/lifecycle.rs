@@ -201,7 +201,7 @@ pub enum LifecycleCommands {
     ///
     /// Catalog `acquisition_scopes` are copied from the installed release to
     /// `$HOME/.stado/files/` and registered with the host vault before retirement
-    /// or startup, as with `stado credentials acquisition-scopes sync`.
+    /// or startup, as with `stado credentials scopes sync`.
     /// A missing scope file or refused registration leaves the host unchanged.
     Ensure {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.

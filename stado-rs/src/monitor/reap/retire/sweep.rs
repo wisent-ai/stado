@@ -1,11 +1,10 @@
 //! The deletion pass of a retained run: every lifecycle blob and status
 //! entry goes, and only a fully successful pass records that it finished.
 
-use chrono::Utc;
 use serde_json::Value;
 
 use crate::monitor::reap::manifest::{
-    has_complete_retained_outcomes, py_truthy, CLEANUP_COMPLETED_AT,
+    has_complete_retained_outcomes, marked, stamp, CLEANUP_COMPLETED_AT,
 };
 use crate::queue::runs::{RUN_PREFIX, TERMINAL_PREFIXES};
 use crate::queue::{JobStorage, StorageError};
@@ -105,15 +104,15 @@ pub(super) async fn sweep_retained_run(
             return count(&deleted);
         };
         let mut manifest: Value = serde_json::from_str(&versioned.content)?;
+        if marked(&manifest, CLEANUP_COMPLETED_AT, run_id)? {
+            return count(&deleted);
+        }
         let object = manifest.as_object_mut().ok_or_else(|| {
             StorageError::Other(format!("run manifest {run_id} is not a JSON object"))
         })?;
-        if object.get(CLEANUP_COMPLETED_AT).is_some_and(py_truthy) {
-            return count(&deleted);
-        }
         object.insert(
             CLEANUP_COMPLETED_AT.into(),
-            Value::from(Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string()),
+            Value::from(stamp()),
         );
         match store
             .compare_and_swap_text(

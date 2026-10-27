@@ -123,13 +123,14 @@ async fn answer<T: DeserializeOwned>(
     })
 }
 
-/// A value answered as a JSON string, as `{"value": …}`, or as text.
+/// A value answered as a JSON string, as `{"value": …}`, or as text that is
+/// not JSON at all. A JSON document of another shape answers nothing.
 fn decoded(output: &str) -> Option<String> {
     let value = match serde_json::from_str::<Value>(output) {
         Ok(Value::String(value)) => value,
         Ok(Value::Object(object)) => object.get("value")?.as_str()?.to_owned(),
-        Ok(_) => return None,
-        Err(_) => output.to_owned(),
+        Ok(_other_shape) => return None,
+        Err(_not_json) => output.to_owned(),
     };
     let value = value.trim().to_owned();
     (!value.is_empty()).then_some(value)

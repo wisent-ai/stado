@@ -68,10 +68,15 @@ pub(super) async fn handle_deny_assignments(
         } else if selected && system_protected.is_none() {
             report["outcome"] = Value::String("protection_unreported".into());
         } else if selected {
-            let scope = assignment
+            // An assignment is removed at the scope it names; one that names
+            // none is a subscription-wide assignment.
+            let scope = match assignment
                 .pointer("/properties/scope")
                 .and_then(Value::as_str)
-                .unwrap_or(subscription_scope);
+            {
+                Some(scope) => scope,
+                None => subscription_scope,
+            };
             let delete = crate::wait::request(http
                 .delete(format!(
                     "{ARM_RESOURCE}{scope}/providers/Microsoft.Authorization/denyAssignments/{name}?api-version={ROLE_API_VERSION}"

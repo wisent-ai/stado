@@ -9,6 +9,21 @@ import WisentDesignSystem
 extension EnrollmentInviteView {
     @ViewBuilder
     func code(_ invite: MachineInvite) -> some View {
+        switch invite.delivery {
+        case .online(let token, let joinCommand):
+            onlineCode(invite, token: token, joinCommand: joinCommand)
+        case .offline:
+            // An offline invitation has no code; the waiting stage shows
+            // its fragment. This stage is entered only for the online mode.
+            EnrollmentNote(
+                title: "This invitation has no code",
+                detail: "It was minted as an offline invitation, which carries a fragment rather than a code. The fragment is shown on the waiting stage."
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func onlineCode(_ invite: MachineInvite, token: String, joinCommand: String) -> some View {
         WisentAlertPanel(
             tone: .warning,
             title: "This code is shown once",
@@ -21,20 +36,20 @@ extension EnrollmentInviteView {
             trailing: "uses \(invite.usesAllowed)"
         ) {
             EnrollmentCopyBlock(
-                text: invite.joinCommand,
+                text: joinCommand,
                 caption: probedCaption(invite),
                 isSecret: true
             )
         }
 
-        if invite.baseIsTemporary, !invite.baseWarning.isEmpty {
+        if invite.baseIsTemporary, let warning = invite.baseWarning {
             // The control plane's own sentence, verbatim: it names the exact
             // address and the exact way the line dies. A paraphrase would
             // drift the moment the CLI wording changes.
             WisentAlertPanel(
                 tone: .warning,
                 title: "This line stands on a temporary entrance (address source: \(invite.baseSource))",
-                detail: invite.baseWarning
+                detail: warning
             )
         }
 
@@ -42,7 +57,7 @@ extension EnrollmentInviteView {
             title: "The code on its own",
             detail: "For a person who would rather paste the code into a prompt than run a line they did not write."
         ) {
-            EnrollmentCopyBlock(text: invite.token, isSecret: true)
+            EnrollmentCopyBlock(text: token, isSecret: true)
         }
 
         if !invite.authorizedKeysLine.isEmpty {
@@ -60,7 +75,8 @@ extension EnrollmentInviteView {
     /// than in a panel of its own: a green alert box with a warning triangle
     /// over good news is how operators learn to stop reading alert boxes.
     private func probedCaption(_ invite: MachineInvite) -> String {
-        guard let checkpoint = invite.checkpoint, !checkpoint.url.isEmpty else {
+        let checkpoint = invite.checkpoint
+        if checkpoint.url.isEmpty {
             return "Assembled by the control plane against its own configured address, not by this app, and only after that address served the join script."
         }
         return "Assembled by the control plane against \(checkpoint.url), which served /join.sh when this was minted. This app did not build the line and does not know that address."

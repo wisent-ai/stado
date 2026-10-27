@@ -34,7 +34,12 @@ pub(super) async fn reconcile_schedules(
     configuration_fingerprint: &str,
 ) -> Result<Vec<String>, StorageError> {
     let now = Utc::now();
-    let lookback = chrono::Duration::seconds(policy.limits.decision_ttl_seconds as i64);
+    let window_start = crate::autonomy::time::lookback_start(
+        now,
+        policy.limits.decision_ttl_seconds,
+        "limits.decision_ttl_seconds",
+    )
+    .map_err(StorageError::Other)?;
     let mut executed: Vec<String> = Vec::new();
     let mut provider_actions: BTreeMap<crate::capabilities::ProviderId, Vec<String>> =
         BTreeMap::new();
@@ -80,8 +85,16 @@ pub(super) async fn reconcile_schedules(
         let Some((kind, expression)) = scheduled else {
             continue;
         };
-        let timezone = rule.timezone.as_deref().unwrap_or("UTC");
-        let occurrence = crate::schedules::compute_next_due(expression, now - lookback, timezone)
+        // The validator refuses a scheduling rule without a timezone, so a
+        // rule that reaches here with none is a policy that bypassed it.
+        let Some(timezone) = rule.timezone.as_deref() else {
+            return Err(StorageError::Other(format!(
+                "autonomy rule {} schedules {kind:?} but names no timezone; the policy was \
+                 not validated",
+                rule.policy_ref
+            )));
+        };
+        let occurrence = crate::schedules::compute_next_due(expression, window_start, timezone)
             .map_err(|error| StorageError::Other(error.to_string()))?;
         if occurrence > now {
             continue;

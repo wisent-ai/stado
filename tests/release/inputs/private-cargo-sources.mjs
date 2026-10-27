@@ -55,7 +55,7 @@ function success(program, args, env, cwd) {
   assert.ok(exitedCleanly(result), `${program} ${args.join(' ')}: ${result.stderr}`);
   return result;
 }
-const pin = ['release', 'catalog', 'pin-input', checkout, '--name', 'private-cargo-sources', '--source', source, '--revision', revision, '--cargo', '--json'];
+const pin = ['release', 'catalog', 'input', 'pin', checkout, '--name', 'private-cargo-sources', '--source', source, '--revision', revision, '--cargo', '--json'];
 const lockPath = join(source, 'Cargo.lock');
 const lockDigest = digest(readFileSync(lockPath));
 function refusal(name, args, env = environment) {

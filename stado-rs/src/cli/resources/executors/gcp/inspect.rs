@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use crate::cli::resources::model::Action;
 use crate::cli::CmdError;
 
-use super::paths::{address_path, disk_path, json_u64, location, mig_path, reservation_path};
+use super::paths::{address_path, disk_path, json_count, location, mig_path, reservation_path};
 use super::GcpRest;
 
 impl GcpRest {
@@ -133,7 +133,7 @@ impl GcpRest {
             "in_use_count": value
                 .as_ref()
                 .and_then(|item| item.pointer("/specificReservation/inUseCount"))
-                .and_then(json_u64),
+                .map(json_count),
             "creation_timestamp": value.as_ref().and_then(|item| item.get("creationTimestamp")),
         }))
     }

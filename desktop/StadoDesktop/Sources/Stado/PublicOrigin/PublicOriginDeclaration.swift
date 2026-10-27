@@ -17,19 +17,9 @@ struct FleetPublicOrigin: Decodable, Identifiable, Sendable {
 
     var id: String { name }
 
-    enum CodingKeys: String, CodingKey {
-        case name, hostname, target, publication, upstream, paths
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        name = try values.decode(String.self, forKey: .name)
-        hostname = try values.decodeIfPresent(String.self, forKey: .hostname) ?? ""
-        target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
-        publication = try values.decodeIfPresent(String.self, forKey: .publication) ?? ""
-        upstream = try values.decodeIfPresent(String.self, forKey: .upstream) ?? ""
-        paths = try values.decodeIfPresent([String].self, forKey: .paths) ?? []
-    }
+    /// Every field is decoded as the registry projects it; the registry
+    /// refuses a declaration that lacks one, so a row that lacks one here is
+    /// a decoding error naming the key, not an origin with no hostname.
 
     /// The origin URL this declaration implies. Composed here only to say
     /// what the declaration means; the report's own `origin` is what the

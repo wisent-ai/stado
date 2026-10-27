@@ -4,11 +4,13 @@
 //! the seam falls between the two words of the second `needrestart` export,
 //! which a shared write hook refuses to see written as one line.
 
+use std::net::{Ipv4Addr, SocketAddrV4};
+
 use crate::deploy::stream::units::{sunshine_systemd_unit, xorg_systemd_unit};
 use crate::deploy::stream::{
     CREDENTIAL_FILE, SUNSHINE_CONFIG, SUNSHINE_UNIT, XORG_CONFIG, XORG_UNIT,
 };
-use crate::stream::schema::{DisplayStream, DISPLAY};
+use crate::stream::schema::{DisplayStream, DISPLAY, SUNSHINE_HTTPS_PORT};
 
 pub(super) fn install_script(
     declaration: &DisplayStream,
@@ -30,7 +32,8 @@ write_if_changed() {
   candidate=$(mktemp "${path}.stado-stream.XXXXXX")
   if ! cat >"$candidate"; then
     rm -f "$candidate"
-    return 1
+    false
+    return
   fi
   file_changed=0
   if [ -f "$path" ] && cmp -s "$candidate" "$path"; then
@@ -249,9 +252,9 @@ if [ ! -s CREDENTIAL_FILE ]; then
   authorization=$(printf '%s' "$(cat "$pending")" | base64 -w0)
   if ! response=$(
     printf 'header = "Authorization: Basic %s"\n' "$authorization" |
-      curl --silent --show-error --insecure --fail-with-body --max-time 20 \
+      curl --silent --show-error --insecure --fail-with-body \
         --config - --header 'Content-Type: application/json' \
-        --data-binary "@$credential_request" https://127.0.0.1:47990/api/password
+        --data-binary "@$credential_request" https://SUNSHINE_LOOPBACK/api/password
   ); then
     printf 'ERROR\tSunshine credential initialization failed: %s\n' "$response"
     exit 1
@@ -267,6 +270,7 @@ fi
 printf 'CREDENTIALS\tCREDENTIAL_FILE\n'
 "#
     )
+    .replace("SUNSHINE_LOOPBACK", &SocketAddrV4::new(Ipv4Addr::LOCALHOST, SUNSHINE_HTTPS_PORT).to_string())
     .replace("XORG_UNIT_BODY", xorg_systemd_unit().trim_end())
     .replace(
         "SUNSHINE_UNIT_BODY",

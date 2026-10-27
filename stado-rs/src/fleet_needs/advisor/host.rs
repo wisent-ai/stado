@@ -23,15 +23,14 @@ pub(super) fn host_needs(
         return needs;
     }
     let payload = &publication.payload;
-    let age = publication
-        .age_seconds(now)
-        .map(|age| format!("{age}s ago"))
-        .unwrap_or_else(|| "at an unknown time".to_string());
+    let age = match publication.age_seconds(now) {
+        Some(age) => format!("{age}s ago"),
+        None => "with no publication time".to_string(),
+    };
     let reason = payload
         .get("diag")
         .and_then(|diag| diag.get("admission_reason"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
+        .and_then(Value::as_str);
     needs.extend(storage_need(target, payload, &age));
     needs.extend(room_need(target, payload, &age, reason, unmet));
     needs
@@ -49,10 +48,22 @@ fn storage_need(target: &ComputeTarget, payload: &Value, age: &str) -> Option<Ne
     let free = diag_number(payload, "free_disk_gb");
     let used = diag_number(payload, "disk_used_percent");
     let threshold = crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT;
-    let fmt = |value: Option<f64>| match value {
+    // A figure the agent could not measure is published null with its cause
+    // beside it as `<name>_unread`; the cause is the evidence, not a blank.
+    let fmt = |value: Option<f64>, name: &str| match value {
         Some(value) => format!("{value:.1}"),
-        None => "not published".to_string(),
+        None => match payload
+            .get("diag")
+            .and_then(|diag| diag.get(format!("{name}_unread")))
+            .and_then(Value::as_str)
+        {
+            Some(cause) => format!("unmeasured ({cause})"),
+            None => "not published".to_string(),
+        },
     };
+    // The volume reading's cause is published as `disk_unread`.
+    let used = fmt(used, "disk");
+    let free = fmt(free, "free_disk_gb");
     Some(Need {
         need: NeedKind::Storage,
         target: Some(target.name.clone()),
@@ -61,16 +72,16 @@ fn storage_need(target: &ComputeTarget, payload: &Value, age: &str) -> Option<Ne
         summary: format!(
             "{} is at the {threshold}% disk-full threshold: {}% used, {} GiB free",
             target.name,
-            fmt(used),
-            fmt(free)
+            used,
+            free
         ),
         evidence: vec![Evidence::new(
             "capacity",
             format!(
                 "{} published {age}: disk_pressure_active true, disk_used_percent {}, free_disk_gb {}",
                 target.name,
-                fmt(used),
-                fmt(free)
+                used,
+                free
             ),
         )],
         suggestion: format!(
@@ -85,10 +96,10 @@ fn room_need(
     target: &ComputeTarget,
     payload: &Value,
     age: &str,
-    reason: &str,
+    reason: Option<&str>,
     unmet: &[UnmetPlacement],
 ) -> Option<Need> {
-    let refused_full = unmet
+    let refused_full: Vec<&UnmetPlacement> = unmet
         .iter()
         .filter(|record| {
             matches!(
@@ -96,18 +107,22 @@ fn room_need(
                 UnmetReason::ReservationsExhausted | UnmetReason::CapacityExhausted
             ) && record.candidates.iter().any(|c| c.target == target.name)
         })
-        .count();
-    if reason != "reservations_exhausted" && refused_full == 0 {
+        .collect();
+    if reason != Some("reservations_exhausted") && refused_full.is_empty() {
         return None;
     }
-    let running_workloads = payload
-        .get("running_workloads")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let cores = payload
-        .get("available_cpu_cores")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    let refused_full = refused_full.len();
+    // A count the host's capacity row does not publish is said so, never zero.
+    let published = |field: &str| match payload.get(field).and_then(Value::as_i64) {
+        Some(count) => count.to_string(),
+        None => "not published".to_string(),
+    };
+    let running_workloads = published("running_workloads");
+    let cores = published("available_cpu_cores");
+    let reason = match reason {
+        Some(reason) => reason,
+        None => "none recorded",
+    };
     Some(Need {
         need: NeedKind::Cpu,
         target: Some(target.name.clone()),
@@ -121,9 +136,8 @@ fn room_need(
             Evidence::new(
                 "capacity",
                 format!(
-                    "{} published {age}: available_cpu_cores {cores}, running_workloads {running_workloads}, admission_reason {}",
+                    "{} published {age}: available_cpu_cores {cores}, running_workloads {running_workloads}, admission_reason {reason}",
                     target.name,
-                    if reason.is_empty() { "none" } else { reason }
                 ),
             ),
             Evidence::new(

@@ -51,9 +51,11 @@ final class HostPrivacyGrantStore: ObservableObject {
     }
 
     /// The grants as declared now: what `host privacy` reported, without the
-    /// measured path and state.
-    nonisolated static func declared(_ answer: HostPrivacy?) -> [PrivacyGrantDeclaration] {
-        (answer?.grants ?? []).map {
+    /// measured path and state; `nil` while the report was not read, since
+    /// an unread report is not an empty declaration and a write built on it
+    /// would replace every grant the host holds.
+    nonisolated static func declared(_ answer: HostPrivacy?) -> [PrivacyGrantDeclaration]? {
+        answer?.grants.map {
             PrivacyGrantDeclaration(program: $0.program, folder: $0.folder, reason: $0.reason)
         }
     }

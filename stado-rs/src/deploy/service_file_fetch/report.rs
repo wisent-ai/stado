@@ -71,7 +71,7 @@ pub struct FetchedFile {
 impl FetchedFile {
     /// True only when the file came back whole and both ends agree on its
     /// bytes.
-    pub fn ok(&self) -> bool {
+    pub fn whole(&self) -> bool {
         self.report.file_state == FILE_READ && self.integrity == INTEGRITY_VERIFIED
     }
 

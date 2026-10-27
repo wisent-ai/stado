@@ -39,22 +39,23 @@ pub enum QuarantineCause {
     /// Separate from [`Self::CredentialCannotServe`]: redemption requires an
     /// authority decision, not a repair to the stored credential.
     CapabilityRedemptionRefused,
-    /// The candidate's readiness endpoint answered nothing at all before the
-    /// probe's deadline — not an unhealthy answer, no answer.
+    /// The candidate's readiness endpoint answered nothing at all — not an
+    /// unhealthy answer, no answer. Kept for quarantines recorded while the
+    /// readiness probe had a deadline; the probe now waits for the
+    /// candidate's own answer, so new records name a refused connection, an
+    /// HTTP status or a vanished process instead.
     ///
-    /// Its own class because the repair is never in the release: Brama's
-    /// `/readyz` returns a report computed on a timer, so a probe it cannot
-    /// answer within three seconds is a host that could not run the process,
-    /// not a candidate that is broken. Recorded as `unclassified`, such a
-    /// quarantine — taken while the host carries heavy swap and load — blames
-    /// the candidate, and the host's own numbers are never looked at.
+    /// Its own class because the repair is never in the release: a host that
+    /// could not run the process is not a candidate that is broken, and such
+    /// a quarantine — taken while the host carries heavy swap and load —
+    /// must send the operator to the host's own numbers.
     ReadinessProbeUnanswered,
     /// The release process the agent started is simply gone: it bound its
     /// port, printed that it was listening, and then vanished.
     ///
     /// Its own class, and host-caused like the unanswered probe, because the
     /// bytes demonstrably ran: `active release lost readiness: pid <pid> is
-    /// gone; stderr … API listening on http://127.0.0.1:<port>` while the
+    /// gone; stderr … API listening on http://<loopback>:<port>` while the
     /// host has almost no memory available and most of its swap in use —
     /// the operating system reaped the process. Recorded as `unclassified`,
     /// the agent never retires it, the vault stays dead, and with it every
@@ -109,9 +110,9 @@ impl QuarantineCause {
     /// process already holds — and a second candidate walks into the same
     /// wall, which is why a run of them holds the next promotion.
     /// [`Self::ReadinessProbeUnanswered`] is not that: a host that could not
-    /// answer a three-second probe said nothing about the release, and
-    /// walling the product off after three such records keeps a recovered
-    /// host on the old binary forever. The record, the class and the remedy
+    /// answer the probe said nothing about the release, and walling the
+    /// product off after a run of such records keeps a recovered host on the
+    /// old binary forever. The record, the class and the remedy
     /// stay; only the hold is dropped. It is also the one cause the agent
     /// retires by itself, in
     /// [`crate::release_agent::retire_host_caused_quarantine`].

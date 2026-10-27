@@ -73,7 +73,7 @@ pub async fn record_audit(
         .replace("@AUDIT_LOG@", AUDIT_LOG)
         .replace("@RECORD@", &shlex_quote(&record.to_string()));
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the audit record could not be written",
@@ -154,8 +154,8 @@ pub async fn reclaim_host(
             .map_err(DeployError::io("cannot identify current Stado".to_string()))?
             .into_os_string()
             .into_string()
-            .map_err(|_| {
-                DeployError("current Stado path is not valid UTF-8".to_string())
+            .map_err(|path| {
+                DeployError(format!("current Stado path {path:?} is not valid UTF-8"))
                     .stating(crate::primitives::failure::FailureCode::Config)
             })?;
         remote_script_with_stado(
@@ -165,7 +165,7 @@ pub async fn reclaim_host(
             &work_roots,
             &build_cache_roots,
             Some(&current_stado),
-        )
+        )?
     } else {
         remote_script(
             apply,
@@ -173,10 +173,10 @@ pub async fn reclaim_host(
             live_jobs.as_deref(),
             &work_roots,
             &build_cache_roots,
-        )
+        )?
     };
     let output = host_channel::run_script(&target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the reclamation did not run",

@@ -1,7 +1,6 @@
 //! The retirement pass itself: retain each terminal outcome, mark the run
 //! reaped, then delete what that committed snapshot permits.
 
-use chrono::Utc;
 use serde_json::{Map, Value};
 
 use crate::queue::runs::{
@@ -11,7 +10,7 @@ use crate::queue::runs::{
 use crate::queue::{JobStorage, StorageError};
 
 use super::manifest::{
-    has_complete_retained_outcomes, manifest_job_ids, py_truthy, CLEANUP_COMPLETED_AT, REAPED_AT,
+    has_complete_retained_outcomes, manifest_job_ids, marked, stamp, CLEANUP_COMPLETED_AT, REAPED_AT,
 };
 use super::{ReapRefusal, ReapSummary};
 
@@ -26,6 +25,9 @@ use sweep::sweep_retained_run;
 /// here. Returns a summary.
 pub async fn reap_terminal_runs(store: &JobStorage) -> Result<ReapSummary, StorageError> {
     let mut summary = ReapSummary::default();
+    // The runs this pass examined and reaped, counted once the pass ends.
+    let mut examined: Vec<String> = Vec::new();
+    let mut reaped: Vec<String> = Vec::new();
     let cleanup_residue = cleanup_residue_job_ids(store).await?;
     for run_id in list_runs(store).await? {
         let path = format!("{RUN_PREFIX}/{run_id}.json");
@@ -43,10 +45,7 @@ pub async fn reap_terminal_runs(store: &JobStorage) -> Result<ReapSummary, Stora
         }
         crate::queue::submit::validate_stored_run_manifest(&initial_manifest, &run_id)
             .map_err(|error| StorageError::Other(error.to_string()))?;
-        if initial_manifest
-            .get(CLEANUP_COMPLETED_AT)
-            .is_some_and(py_truthy)
-        {
+        if marked(&initial_manifest, CLEANUP_COMPLETED_AT, &run_id)? {
             if !has_complete_retained_outcomes(&initial_manifest) {
                 summary.refused_runs.push(ReapRefusal {
                     run_id,
@@ -61,7 +60,7 @@ pub async fn reap_terminal_runs(store: &JobStorage) -> Result<ReapSummary, Stora
             summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
             continue;
         }
-        if initial_manifest.get(REAPED_AT).is_some_and(py_truthy) {
+        if marked(&initial_manifest, REAPED_AT, &run_id)? {
             if !has_complete_retained_outcomes(&initial_manifest) {
                 summary.refused_runs.push(ReapRefusal {
                     run_id,
@@ -77,7 +76,7 @@ pub async fn reap_terminal_runs(store: &JobStorage) -> Result<ReapSummary, Stora
             summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
             continue;
         }
-        summary.examined_runs += 1;
+        examined.push(run_id.clone());
         let Some(status) = run_status(store, &run_id).await? else {
             continue;
         };
@@ -126,7 +125,7 @@ pub async fn reap_terminal_runs(store: &JobStorage) -> Result<ReapSummary, Stora
                 StorageError::Other(format!("run manifest {run_id} missing durable entries"))
             })?;
         let mut job_ids = Vec::with_capacity(entries.len());
-        let reaped_at = Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string();
+        let reaped_at = stamp();
         for entry in entries {
             if !entry.get("outcome").is_some_and(Value::is_object) {
                 return Err(StorageError::Other(format!(
@@ -141,21 +140,16 @@ pub async fn reap_terminal_runs(store: &JobStorage) -> Result<ReapSummary, Stora
                 })?
                 .to_string();
             job_ids.push(job_id);
-            let entry = entry
-                .as_object_mut()
-                .expect("validated durable entry object");
-            entry.insert("state".into(), Value::from("reaped"));
-            entry.insert(REAPED_AT.into(), Value::from(reaped_at.as_str()));
+            // The entry held an outcome object, so it is an object itself.
+            entry["state"] = Value::from("reaped");
+            entry[REAPED_AT] = Value::from(reaped_at.as_str());
         }
-        let manifest_object = manifest
-            .as_object_mut()
-            .expect("validated run manifest object");
-        manifest_object.insert(REAPED_AT.into(), Value::from(reaped_at));
+        manifest[REAPED_AT] = Value::from(reaped_at);
         let counts: Map<String, Value> = ALL_PREFIXES
             .iter()
             .map(|prefix| (prefix.to_string(), Value::from(status.counts[*prefix])))
             .collect();
-        manifest_object.insert("final_counts".into(), Value::Object(counts));
+        manifest["final_counts"] = Value::Object(counts);
         match store
             .compare_and_swap_text(
                 &path,
@@ -181,7 +175,12 @@ pub async fn reap_terminal_runs(store: &JobStorage) -> Result<ReapSummary, Stora
             .map_err(|error| StorageError::Other(error.to_string()))?;
 
         summary.deleted_jobs += sweep_retained_run(store, &run_id, &job_ids).await?;
-        summary.reaped_runs += 1;
+        reaped.push(run_id);
     }
+    let count = |runs: &[String]| {
+        i64::try_from(runs.len()).map_err(|error| StorageError::Other(format!("{} runs cannot be counted: {error}", runs.len())))
+    };
+    summary.examined_runs = count(&examined)?;
+    summary.reaped_runs = count(&reaped)?;
     Ok(summary)
 }

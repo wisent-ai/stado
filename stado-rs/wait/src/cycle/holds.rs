@@ -132,7 +132,10 @@ fn pid_of(name: &str, file: &Path) -> Result<u32, String> {
 }
 
 /// Every holding of a running process; the holdings of processes that no
-/// longer run are removed by this reading.
+/// longer run are removed by this reading. A holding's process is the one
+/// that held its pid when the holding was written: a process born after it
+/// was handed the pid later, so the holding's own process has ended
+/// ([`crate::open::birth_seconds`]).
 pub fn held() -> Result<Vec<Held>, String> {
     let directory = directory()?;
     let entries = match std::fs::read_dir(&directory) {
@@ -146,7 +149,19 @@ pub fn held() -> Result<Vec<Held>, String> {
         let file = entry.path();
         let id = entry.file_name().to_string_lossy().into_owned();
         let pid = pid_of(&id, &file)?;
-        if !crate::open::running(pid) {
+        let written = match std::fs::metadata(&file).and_then(|metadata| metadata.modified()) {
+            Ok(written) => written,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "reading when {} was written: {error}",
+                    file.display()
+                ))
+            }
+        };
+        let stands = crate::open::writer_stands(pid, written)
+            .map_err(|cause| format!("whether the process of holding {id} still runs: {cause}"))?;
+        if !stands {
             match std::fs::remove_file(&file) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

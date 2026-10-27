@@ -28,24 +28,39 @@ pub fn enrich_inventory(snapshot: &mut InventorySnapshot, prices: &PriceBook) {
     }
 }
 
+/// The bucket a resource with no owner or workload is reported under, so
+/// what nobody claims is still totalled and visible.
+const UNALLOCATED_BUCKET: &str = "unallocated";
+
 fn enrich_resource(resource: &mut ResourceRecord, prices: &PriceBook) {
-    let machine_type = resource
+    // The price book is matched on the coordinates the provider's evidence
+    // names; a resource whose evidence names no machine type, or no
+    // accelerator, is priced with an empty coordinate, which the book
+    // matches to nothing, and the resource stays unpriced. A preemptible
+    // flag the evidence does not carry reads as on-demand pricing.
+    let machine_type = match resource
         .evidence
         .get("machine_type")
         .or_else(|| resource.evidence.get("instance_type"))
         .or_else(|| resource.evidence.pointer("/sku/name"))
         .and_then(Value::as_str)
-        .unwrap_or("");
-    let accelerator = resource
+    {
+        Some(machine_type) => machine_type,
+        None => "",
+    };
+    let accelerator = match resource
         .evidence
         .get("accelerator_type")
         .and_then(Value::as_str)
-        .unwrap_or("");
+    {
+        Some(accelerator) => accelerator,
+        None => "",
+    };
     let preemptible = resource
         .evidence
         .get("preemptible")
         .and_then(Value::as_bool)
-        .unwrap_or(false);
+        == Some(true);
     if let Some(quote) = prices.find_hourly(
         resource.provider,
         resource.region.as_deref(),
@@ -135,8 +150,10 @@ fn resource_cost_entry(resource: &ResourceRecord, hourly: f64) -> CostEntry {
         region: resource.region.clone(),
         usage_started_at: None,
         usage_ended_at: None,
+        // A live hourly price is the gross and the net at once: a provider's
+        // credits are applied on its bill, not on a price quoted per hour.
         gross_cost_usd: hourly,
-        credits_usd: 0.0,
+        credits_usd: hourly - hourly,
         net_cost_usd: hourly,
         source: "live hourly price".to_string(),
         allocated: resource.owner.is_some() || resource.workload.is_some(),
@@ -164,24 +181,20 @@ fn aggregate_allocation(entries: Vec<CostEntry>) -> AllocationReport {
         add_bucket(
             report
                 .by_owner
-                .entry(
-                    entry
-                        .owner
-                        .clone()
-                        .unwrap_or_else(|| "unallocated".to_string()),
-                )
+                .entry(match entry.owner.clone() {
+                    Some(owner) => owner,
+                    None => UNALLOCATED_BUCKET.to_string(),
+                })
                 .or_default(),
             entry,
         );
         add_bucket(
             report
                 .by_workload
-                .entry(
-                    entry
-                        .workload
-                        .clone()
-                        .unwrap_or_else(|| "unallocated".to_string()),
-                )
+                .entry(match entry.workload.clone() {
+                    Some(workload) => workload,
+                    None => UNALLOCATED_BUCKET.to_string(),
+                })
                 .or_default(),
             entry,
         );

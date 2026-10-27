@@ -34,11 +34,11 @@ pub struct Journal {
 impl Journal {
     pub async fn open() -> Result<Self, CmdError> {
         let store = JobStorage::new().await?;
-        let home = std::env::var_os("HOME").ok_or_else(|| {
-            CmdError::click("HOME is not set")
+        let home = crate::config_file::home().map_err(|cause| {
+            CmdError::click(format!("the operations journal has no local root: {cause}"))
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
-        let local_root = PathBuf::from(home).join(".stado").join("operations");
+        let local_root = home.join(".stado").join("operations");
         Ok(Self { store, local_root })
     }
 

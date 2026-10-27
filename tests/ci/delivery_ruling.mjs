@@ -8,8 +8,9 @@
 // one the operator's consent covers (CI/CD's repair), the second one it does
 // not.
 //
-// Oko's own answers (`oko admit build|install --product P --purpose D`) are
-// the expectation for each purpose; the purpose is admitted when both are:
+// Oko's own answers (`oko admit build|install|compile|test --product P
+// --purpose D`) are the expectation for each purpose; the purpose is admitted
+// when all four are:
 // - refused: `stado ci plan set` is refused quoting the refusal and writes no
 //   plan, and `stado ci run` over a plan already on disk is refused the same
 //   way, before anything is built, and writes no state;
@@ -68,8 +69,10 @@ function journey(purpose) {
   };
   const build = answer('build');
   const install = answer('install');
-  const allowed = build.allowed && install.allowed;
-  report.answers[purpose] = { build, install, allowed };
+  const compile = answer('compile');
+  const test = answer('test');
+  const allowed = [build, install, compile, test].every(answered => answered.allowed);
+  report.answers[purpose] = { build, install, compile, test, allowed };
   const declare = ['ci', 'plan', 'set', '--purpose', purpose, '--step', step, '--json'];
   if (allowed) {
     const declared = spawn(stadoBinary, declare);
@@ -86,7 +89,7 @@ function journey(purpose) {
     assert.ok(exitedCleanly(cleared), cleared.stderr);
     return;
   }
-  const ruling = [build, install].find(answered => !answered.allowed).said;
+  const ruling = [build, install, compile, test].find(answered => !answered.allowed).said;
   assert.ok(ruling, 'Oko refused without saying why');
   const declared = spawn(stadoBinary, declare);
   assert.ok(!exitedCleanly(declared), `a plan the rulings forbid for ${purpose} was declared`);

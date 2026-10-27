@@ -24,20 +24,20 @@ impl RevisitReport {
                 self.host
             );
         }
-        let acted = self.acted.as_ref().map_or_else(
-            || "unit=- outcome=none".to_string(),
-            |(pick, outcome)| {
-                format!(
-                    "unit={} product={} kind={} outcome={} running={} declared={}",
-                    pick.unit,
-                    pick.product,
-                    pick.kind,
-                    outcome.word(),
-                    pick.running.describe(),
-                    pick.declared.describe()
-                )
-            },
-        );
+        // The pass acts on at most one unit per tick; a tick that found none
+        // to act on says so.
+        let acted = match &self.acted {
+            Some((pick, outcome)) => format!(
+                "unit={} product={} kind={} outcome={} running={} declared={}",
+                pick.unit,
+                pick.product,
+                pick.kind,
+                outcome.word(),
+                pick.running.describe(),
+                pick.declared.describe()
+            ),
+            None => "unit=- outcome=none".to_string(),
+        };
         let skipped = self
             .skipped
             .iter()

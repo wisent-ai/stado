@@ -24,6 +24,16 @@ struct HostVaultAuthority: Decodable, Sendable {
     let state: String
     let path: String?
     let detail: String?
+
+    /// The vault file the host's credential operations resolve to, or the
+    /// state's own name for why there is none to show: a client that reads
+    /// the owner, an ambiguous or absent declaration, or an older release.
+    var resolvedVault: String {
+        if let path, !path.isEmpty {
+            return path
+        }
+        return "none (\(state.humanizedIdentifier))"
+    }
 }
 
 /// Why a reachable host stopped publishing beacons, read from the managed

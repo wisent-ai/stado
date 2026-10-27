@@ -71,27 +71,22 @@ if [ "$changed" = changed ] || [ "$(stado_systemctl show -p NeedDaemonReload --v
 fi
 say '@ACTION@' "$changed; systemd definition refreshed without restarting the unit"
 "###;
+    // A value sets the key and travels base64-encoded on stdin; no value
+    // unsets it, and the script receives no payload.
+    let (value_arg, value_b64, action) = match value {
+        Some(value) => (
+            "--value-stdin",
+            STANDARD.encode(value.as_bytes()),
+            "env_set",
+        ),
+        None => ("", String::new(), "env_unset"),
+    };
     let body = body
         .replace("@ENV_PATH_B64@", &STANDARD.encode(env_path.as_bytes()))
         .replace("@KEY_B64@", &STANDARD.encode(key.as_bytes()))
-        .replace(
-            "@VALUE_ARG@",
-            if value.is_some() { "--value-stdin" } else { "" },
-        )
-        .replace(
-            "@VALUE_B64@",
-            &value
-                .map(|value| STANDARD.encode(value.as_bytes()))
-                .unwrap_or_default(),
-        )
-        .replace(
-            "@ACTION@",
-            if value.is_some() {
-                "env_set"
-            } else {
-                "env_unset"
-            },
-        );
+        .replace("@VALUE_ARG@", value_arg)
+        .replace("@VALUE_B64@", &value_b64)
+        .replace("@ACTION@", action);
     let script = remote_script(service.unit_id(), "", &service.path, &body)?;
     run_remote(target, script, runner).await
 }

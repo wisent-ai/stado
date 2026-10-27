@@ -136,7 +136,9 @@ pub(super) fn change_consumers(
                     changed.push(consumer);
                 }
             } else {
-                if list.len() == 1 && list[0] == entry {
+                // A list whose only member is this consumer would be left
+                // empty: a declared database nobody may read.
+                if matches!(list.as_slice(), [only] if *only == entry) {
                     return Err(format!(
                         "cannot revoke the last consumer of {name:?}; remove the declaration instead"
                     ));
@@ -190,13 +192,21 @@ pub(super) fn change_consumers(
 }
 
 /// Widen each consumer's Skarbiec grant to read `item`, with the consumer's
-/// own bearer file `~/.stado/<consumer>-skarbiec-token`.
+/// own bearer file `~/.stado/<consumer>-skarbiec-token`. A home neither HOME
+/// nor the user database names is each consumer's error, where this process
+/// used to stop.
 fn settle_reads(item: &str, consumers: &[String]) -> Vec<Value> {
-    let home = crate::config_file::home_dir();
+    let home = crate::config_file::home();
     consumers
         .iter()
         .map(|consumer| {
             let consumer = consumer.trim();
+            let home = match &home {
+                Ok(home) => home,
+                Err(cause) => {
+                    return json!({ "consumer": consumer, "item": item, "error": format!("{consumer}: {cause}") })
+                }
+            };
             let token_file = home.join(".stado").join(format!("{consumer}-skarbiec-token"));
             match crate::credential_store::grant::grant_field_reads(consumer, &token_file, item, &[]) {
                 Ok(outcome) => json!({ "consumer": consumer, "item": item, "added": outcome.added }),

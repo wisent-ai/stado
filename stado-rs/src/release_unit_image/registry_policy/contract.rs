@@ -7,6 +7,11 @@ use serde_json::Value;
 
 use super::{policy, REVISIT_POLICY_KEY};
 
+/// The one revisit-policy shape this build reads, as Stado's documentation
+/// states it:
+/// https://stado.wisent.com/docs/channels/host-channel-repairs#letting-the-release-agent-do-it-one-unit-at-a-time
+const REVISIT_POLICY_SCHEMA: u32 = 1;
+
 /// Every product a shipped declaration or an adopted service says owns
 /// `label` on `target_name`.
 ///
@@ -80,31 +85,38 @@ pub(crate) fn validate_registry_contract(document: &Value) -> Result<(), String>
         return Ok(());
     };
     let location = format!("registry.{REVISIT_POLICY_KEY}");
-    if policy.schema_version != 1 {
-        return Err(format!("{location}.schema_version must be 1"));
+    if policy.schema_version != REVISIT_POLICY_SCHEMA {
+        return Err(format!(
+            "{location}.schema_version must be {REVISIT_POLICY_SCHEMA}"
+        ));
     }
-    let platforms: BTreeMap<&str, &str> = document
+    // A registry that lists no targets knows none, so every policy target is
+    // then refused as unknown below; a target without a release_platform is
+    // named as such, never read as an empty platform.
+    let platforms: BTreeMap<&str, Option<&str>> = match document
         .get("targets")
         .and_then(Value::as_array)
-        .map(|targets| {
-            targets
-                .iter()
-                .filter_map(|target| {
-                    Some((
-                        target.get("name")?.as_str()?,
-                        target
-                            .get("release_platform")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default(),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    {
+        Some(targets) => targets
+            .iter()
+            .filter_map(|target| {
+                Some((
+                    target.get("name")?.as_str()?,
+                    target.get("release_platform").and_then(Value::as_str),
+                ))
+            })
+            .collect(),
+        None => BTreeMap::new(),
+    };
     for (target_name, target_policy) in &policy.targets {
         let at = format!("{location}.targets.{target_name}");
-        let Some(platform) = platforms.get(target_name.as_str()) else {
+        let Some(declared) = platforms.get(target_name.as_str()) else {
             return Err(format!("{at}: unknown target"));
+        };
+        let Some(platform) = declared else {
+            return Err(format!(
+                "{at}: the registry target declares no release_platform, so whether it runs launchd cannot be read"
+            ));
         };
         // launchd-only. The restart runs `launchctl kickstart -k`, which
         // exists only on Darwin, so every authorised label on a Linux target

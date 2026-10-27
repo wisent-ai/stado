@@ -16,8 +16,7 @@ extension FleetPosture {
                     symbol: "wifi.slash",
                     tone: .danger,
                     title: "\(entry.link.host) has been silent for \(StadoFormat.duration(entry.silence.elapsedSeconds))",
-                    detail: entry.silence.firstReaderError
-                        ?? (entry.link.blockers.first ?? "No beacon has arrived since \(entry.silence.startedAt)."),
+                    detail: silenceDetail(link: entry.link, silence: entry.silence),
                     meta: entry.link.sshReachable ? "ssh answers" : "ssh silent too",
                     destination: .hosts,
                     host: entry.link.host
@@ -70,8 +69,8 @@ extension FleetPosture {
                     symbol: "exclamationmark.triangle.fill",
                     tone: .danger,
                     title: "Job \(job.jobID)",
-                    detail: job.error ?? "The dashboard published this failure without a sanitized reason.",
-                    meta: job.model ?? "No model",
+                    detail: failureDetail(job),
+                    meta: failureMeta(job),
                     destination: .queue
                 )
             )
@@ -93,4 +92,33 @@ extension FleetPosture {
     }
 
     var decisionCount: Int { decisions.count }
+
+    /// Why a host is silent, from the first account that exists: the first
+    /// reader's error, else the link's first blocker, else the plain fact
+    /// that nothing has arrived since the silence began.
+    private func silenceDetail(link: HostLink, silence: HostSilenceRecord) -> String {
+        if let readerError = silence.firstReaderError {
+            return readerError
+        }
+        if let blocker = link.blockers.first {
+            return blocker
+        }
+        return "No beacon has arrived since \(silence.startedAt), and the link reports no blocker."
+    }
+
+    /// The failure's own sentence, or that the dashboard published none.
+    private func failureDetail(_ job: FailedJob) -> String {
+        if let error = job.error {
+            return error
+        }
+        return "The dashboard published this failure without a sanitized reason."
+    }
+
+    /// The model the job ran, or that the job named none.
+    private func failureMeta(_ job: FailedJob) -> String {
+        if let model = job.model {
+            return model
+        }
+        return "No model named"
+    }
 }

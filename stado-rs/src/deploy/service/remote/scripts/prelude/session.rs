@@ -50,7 +50,7 @@ uid=$(/usr/bin/id -u)
 gui=\"gui/$uid\"
 user_domain=\"user/$uid\"
 console=''
-@DOMAIN_RESOLVER@stado_domain_of \"$HOME/Library/LaunchAgents\"
+@DOMAIN_RESOLVER@stado_domain_of \"$HOME/@USER_LAUNCHD_AGENTS@\"
 printf 'STADO_SESSION\\t%s\\t%s\\t%s\\n' \"$domain_status\" \"$console\" \"$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ')\"
 ";
 
@@ -151,9 +151,9 @@ impl HostSession {
 /// words. A caller diagnosing a sick host must never lose the facts it
 /// already has because one more optional read did not land.
 pub async fn read_session(target: &ComputeTarget, runner: &Runner) -> HostSession {
-    let probe = SESSION_PROBE.replace("@DOMAIN_RESOLVER@", DOMAIN_RESOLVER);
+    let probe = with_unit_directories(&SESSION_PROBE.replace("@DOMAIN_RESOLVER@", DOMAIN_RESOLVER));
     match host_channel::run_script(target, &probe, runner).await {
-        Ok(output) if output.ok() => HostSession::parse(&output.stdout),
+        Ok(output) if output.succeeded() => HostSession::parse(&output.stdout),
         Ok(output) => HostSession::unknown(host_channel::last_error_line(
             &output,
             "this host refused the session read and said nothing about why",

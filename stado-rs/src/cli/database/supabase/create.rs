@@ -20,11 +20,11 @@ use crate::cli::CmdError;
 use super::owner_vault;
 use super::{call, field, item_fields, pooler, provider, text, token, TOKEN_ROLE};
 
-const RUNNING: &str = "ACTIVE_HEALTHY";
+pub(super) const RUNNING: &str = "ACTIVE_HEALTHY";
 
 /// A whole-dollar price of the provider declaration, refused by name when
 /// the declaration does not carry it as a whole number.
-fn price(key: &str) -> Result<u64, CmdError> {
+pub(super) fn price(key: &str) -> Result<u64, CmdError> {
     match provider()[key].as_u64() {
         Some(value) => Ok(value),
         None => Err(CmdError::click(format!(
@@ -35,7 +35,7 @@ fn price(key: &str) -> Result<u64, CmdError> {
     }
 }
 
-fn organization_of(project: &Value) -> Option<String> {
+pub(super) fn organization_of(project: &Value) -> Option<String> {
     project
         .get("organization_slug")
         .or_else(|| project.get("organization_id"))
@@ -245,7 +245,17 @@ pub(in crate::cli::database) async fn create(
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?
         .to_string();
-    let pooler = pooler(&reference, &token).await;
+    // The project now exists and the generated password lives only in this
+    // process, so a pooler that cannot be read yet must not stop the item
+    // from being stored: the item carries `pooler_unreported`, the cause is
+    // said here, and `stado database adopt` writes the pooler once it reads.
+    let pooler = match pooler(&reference, &token).await {
+        Ok(pooler) => pooler,
+        Err(error) => {
+            eprintln!("{name}: the pooler of {reference} could not be read, so {item} is stored without pooler_url and session_url: {error}");
+            None
+        }
+    };
     let fields = item_fields(name, &project, pooler.as_ref(), password.as_deref())?;
     let context = json!({
         "engine": "postgres",

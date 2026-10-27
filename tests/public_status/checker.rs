@@ -3,7 +3,7 @@
 //!
 //! Machine-name readers once ran the `hostname` program, answered an empty
 //! name when it failed, and preferred `$HOSTNAME` over the kernel's name, so
-//! a host read as another. `stado public-status check` writes `checked_by`
+//! a host read as another. `stado availability check` writes `checked_by`
 //! through the one reader that asks the kernel; run here with `HOSTNAME`
 //! naming another machine and with no `hostname` program on its `PATH`, it
 //! must still publish the name `uname -n` reads from the same kernel.
@@ -27,13 +27,13 @@ fn the_checker_is_named_by_the_kernel_not_the_environment() {
     command
         .env("HOSTNAME", &elsewhere)
         .env("PATH", deployment.root.join("no-programs"))
-        .args(["public-status", "check", "--json"]);
+        .args(["availability", "check", "--json"]);
     let output = command.output().unwrap();
     deployment.report["commands"]
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({
-            "args": ["public-status", "check", "--json"],
+            "args": ["availability", "check", "--json"],
             "environment": {"HOSTNAME": elsewhere, "PATH": deployment.root.join("no-programs")},
             "exit_status": output.status.code(),
             "stdout": String::from_utf8_lossy(&output.stdout),
@@ -46,7 +46,7 @@ fn the_checker_is_named_by_the_kernel_not_the_environment() {
         published["checked_by"], kernel,
         "the checker is not the kernel's name for this machine: {published}"
     );
-    let shown = deployment.json(&["public-status", "show", "--json"]);
+    let shown = deployment.json(&["availability", "show", "--json"]);
     assert_eq!(shown["checked_by"], kernel, "{shown}");
     deployment.passed();
 }

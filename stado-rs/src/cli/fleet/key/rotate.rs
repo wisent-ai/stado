@@ -54,7 +54,7 @@ async fn store_pair(
 /// Mint and store a fresh pair for `target`, returning its public key and
 /// fingerprint.
 ///
-/// The whole of `key generate` except the printing: `fleet invite --json` mints
+/// The whole of `key generate` except the printing: `fleet invite create --json` mints
 /// a channel key too and must put exactly one JSON document on stdout, so it
 /// needs this path without the two report lines — not a second copy of it.
 pub(crate) async fn generate_stored(
@@ -101,7 +101,7 @@ async fn store_on_owner(
         .await
         .map_err(|error| error.within(format!("{id} was not stored in {owner}'s vault")))?;
     // The same consumer the channel reads with, granted on the owner; progress
-    // on stderr, because `fleet invite --json` prints one document on stdout.
+    // on stderr, because `fleet invite create --json` prints one document on stdout.
     crate::cli::host::settle_consumer_reads(&id, CHANNEL_FIELDS)
         .await
         .map_err(|error| {

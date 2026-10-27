@@ -1,15 +1,18 @@
-//! Diagnostics collection: the host/rounding/tail helpers, the byte-exact
-//! diagnostic command set, one fault-isolated command result, the statvfs
-//! disk report, and the assembled payload.
+//! Diagnostics collection: the diagnostic command set, one fault-isolated
+//! command result, each volume as the disk-full rule reads it, and the
+//! assembled payload.
 
 use std::path::Path;
 
 use serde_json::{json, Map, Value};
 
 use super::runner::{CommandRunner, RunOutcome};
-use crate::models::{isoformat_utc, py_str_repr};
+use crate::models::isoformat_utc;
 
-const STDOUT_TAIL_CHARS: usize = 12000;
+/// The payload's shape. Version 2 carries whole command output, volumes in
+/// bytes with the disk-full rule's verdict, and the fleet's capacity read
+/// through Stado rather than a cloud CLI.
+const SCHEMA: &str = "wisent-box-diagnostics-v2";
 
 /// `platform.node()`: the kernel's hostname, read where every Stado reader
 /// reads it.
@@ -17,192 +20,105 @@ pub(crate) fn hostname() -> String {
     crate::providers::vast::system_hostname()
 }
 
-/// Python `round(x, 2)` — round-half-even on the binary value, which is
-/// exactly what Rust's `{:.2}` float formatting does.
-fn round2(x: f64) -> f64 {
-    format!("{x:.2}")
-        .parse()
-        .expect("{:.2} of a finite f64 parses")
-}
-
-/// Python `round(x, 3)`.
-fn round3(x: f64) -> f64 {
-    format!("{x:.3}")
-        .parse()
-        .expect("{:.3} of a finite f64 parses")
-}
-
-/// Python `s[-n:]` on a `str` (character-based, not byte-based).
-fn tail_chars(s: &str, n: usize) -> String {
-    let count = s.chars().count();
-    if count <= n {
-        s.to_string()
-    } else {
-        s.chars().skip(count - n).collect()
-    }
-}
-
-/// The diagnostic command set, byte-exact argvs from `cli.py::_collect`.
-/// (name, argv)
-fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>)> {
-    let argv = |parts: &[&str]| parts.iter().map(|s| s.to_string()).collect();
+/// The host's own diagnostic commands: its service managers, process table,
+/// accelerators, volumes and memory.
+fn commands() -> Vec<(&'static str, Vec<String>)> {
+    let argv = |parts: &[&str]| parts.iter().map(|part| part.to_string()).collect();
     vec![
-        (
-            "systemctl-agent",
-            argv(&[
-                "systemctl",
-                "status",
-                "wisent-agent.service",
-                "--no-pager",
-                "-l",
-            ]),
-        ),
-        (
-            "systemctl-health",
-            argv(&[
-                "systemctl",
-                "status",
-                "wisent-host-health.timer",
-                "--no-pager",
-                "-l",
-            ]),
-        ),
-        (
-            "journal-agent",
-            argv(&[
-                "journalctl",
-                "-u",
-                "wisent-agent.service",
-                "-n",
-                "240",
-                "--no-pager",
-            ]),
-        ),
-        (
-            "journal-health",
-            argv(&[
-                "journalctl",
-                "-u",
-                "wisent-host-health.service",
-                "-n",
-                "120",
-                "--no-pager",
-            ]),
-        ),
-        (
-            "ps",
-            argv(&[
-                "ps",
-                "-eo",
-                "pid,ppid,stat,pcpu,pmem,comm,args",
-                "--sort=-%cpu",
-            ]),
-        ),
+        ("systemctl-agent", argv(&["systemctl", "status", "wisent-agent.service", "--no-pager", "-l"])),
+        ("systemctl-health", argv(&["systemctl", "status", "wisent-host-health.timer", "--no-pager", "-l"])),
+        ("journal-agent", argv(&["journalctl", "-u", "wisent-agent.service", "-n", "240", "--no-pager"])),
+        ("journal-health", argv(&["journalctl", "-u", "wisent-host-health.service", "-n", "120", "--no-pager"])),
+        ("ps", argv(&["ps", "-eo", "pid,ppid,stat,pcpu,pmem,comm,args", "--sort=-%cpu"])),
         ("nvidia-smi", argv(&["nvidia-smi"])),
         ("df", argv(&["df", "-h"])),
         ("memory", argv(&["free", "-h"])),
-        (
-            "capacity-list",
-            vec![
-                "gcloud".into(),
-                "--quiet".into(),
-                "storage".into(),
-                "ls".into(),
-                format!("gs://{bucket}/capacity/"),
-            ],
-        ),
     ]
 }
 
-/// Python `_run`: one fault-isolated command result as a JSON dict. Key
-/// insertion order matches the Python dict literals (the upload is
-/// `sort_keys=True`, so this only matters for readability).
+/// The command that reads the fleet's published capacity as this Stado reads
+/// it: `stado capacity list --json`, run as the binary that is collecting, so
+/// no `PATH` decides which Stado answers.
+const CAPACITY_LIST: &str = "capacity-list";
+
+/// One fault-isolated command result. A command this host does not have, or
+/// one that could not be started, is a result saying so, never a gap.
 fn run_one(name: &str, argv: &[String], runner: &dyn CommandRunner) -> Value {
     let started = std::time::Instant::now();
-    let elapsed = || round3(started.elapsed().as_secs_f64());
-    let argv_json = Value::Array(argv.iter().map(|a| Value::from(a.as_str())).collect());
+    let argv_json = Value::Array(argv.iter().map(|part| Value::from(part.as_str())).collect());
     match runner.run(argv) {
         Ok(RunOutcome { rc, stdout, stderr }) => json!({
             "name": name,
             "cmd": argv_json,
             "rc": rc,
-            "elapsed_s": elapsed(),
-            "stdout_tail": tail_chars(&stdout, STDOUT_TAIL_CHARS),
-            "stderr_tail": tail_chars(&stderr, STDOUT_TAIL_CHARS),
+            "elapsed_s": started.elapsed().as_secs_f64(),
+            "stdout": stdout,
+            "stderr": stderr,
         }),
-        Err(err) => {
-            // Python: f"{type(exc).__name__}: {exc}" — for the common case
-            // (binary missing on the box) reproduce the FileNotFoundError
-            // text; anything else degrades to a generic OSError label.
-            let message = if err.kind() == std::io::ErrorKind::NotFound {
-                format!(
-                    "FileNotFoundError: [Errno 2] No such file or directory: {}",
-                    py_str_repr(&argv[0])
-                )
-            } else {
-                format!("OSError: {err}")
+        Err(error) => {
+            let program = argv.first().map(String::as_str).ok_or("no program");
+            let message = match (program, error.kind()) {
+                (Ok(program), std::io::ErrorKind::NotFound) => {
+                    format!("{program} is not installed on this host: {error}")
+                }
+                (Ok(program), _) => format!("{program} could not be run: {error}"),
+                (Err(missing), _) => format!("{name} names {missing}: {error}"),
             };
             json!({
                 "name": name,
                 "cmd": argv_json,
                 "rc": Value::Null,
-                "elapsed_s": elapsed(),
+                "elapsed_s": started.elapsed().as_secs_f64(),
                 "error": message,
             })
         }
     }
 }
 
-/// Python `_disk`: `shutil.disk_usage(path)` in GiB. statvfs semantics:
-/// total = f_blocks * f_frsize, used = (f_blocks - f_bfree) * f_frsize,
-/// free = f_bavail * f_frsize.
+/// The volume holding `path` as the disk-full rule reads it: its size, what
+/// an unprivileged writer may still take, the percent in use, and whether the
+/// rule would delete on it; or why it could not be read.
 fn disk(path: &str) -> Value {
-    match nix::sys::statvfs::statvfs(Path::new(path)) {
-        Ok(st) => {
-            const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
-            let frsize = st.fragment_size() as f64;
-            let total = st.blocks() as f64 * frsize;
-            let used = (st.blocks() - st.blocks_free()) as f64 * frsize;
-            let free = st.blocks_available() as f64 * frsize;
-            let used_pct = if st.blocks() > 0 {
-                round2(used / total * 100.0)
-            } else {
-                0.0
-            };
-            json!({
-                "path": path,
-                "total_gb": round2(total / GIB),
-                "used_gb": round2(used / GIB),
-                "free_gb": round2(free / GIB),
-                "used_pct": used_pct,
-            })
-        }
-        Err(err) => {
-            let message = if err == nix::errno::Errno::ENOENT {
-                format!(
-                    "FileNotFoundError: [Errno 2] No such file or directory: {}",
-                    py_str_repr(path)
-                )
-            } else {
-                format!("OSError: {err}")
-            };
-            json!({"path": path, "error": message})
-        }
+    match crate::providers::local::space_reclaim::rule::read_volume(Path::new(path)) {
+        Ok(volume) => json!({
+            "path": path,
+            "total_bytes": volume.total_bytes,
+            "free_bytes": volume.free_bytes,
+            "used_percent": volume.used_percent(),
+            "headroom_bytes": volume.headroom_bytes(),
+            "full": volume.full(),
+        }),
+        Err(error) => json!({"path": path, "error": format!("cannot read the volume holding {path}: {error}")}),
     }
 }
 
-/// Python `_collect`: assemble the full diagnostics payload.
+/// Assemble the full diagnostics payload.
 pub fn collect(bucket: &str, runner: &dyn CommandRunner) -> Value {
     let host = hostname();
     let home = crate::config_file::home_dir()
         .to_string_lossy()
         .into_owned();
     let mut command_results = Map::new();
-    for (name, argv) in commands(bucket) {
+    for (name, argv) in commands() {
         command_results.insert(name.to_string(), run_one(name, &argv, runner));
     }
+    let capacity = match std::env::current_exe() {
+        Ok(stado) => {
+            let argv: Vec<String> = [stado.to_string_lossy().as_ref(), "capacity", "list", "--json"]
+                .iter()
+                .map(|part| part.to_string())
+                .collect();
+            run_one(CAPACITY_LIST, &argv, runner)
+        }
+        Err(error) => json!({
+            "name": CAPACITY_LIST,
+            "rc": Value::Null,
+            "error": format!("this process cannot name its own binary to read the fleet's capacity: {error}"),
+        }),
+    };
+    command_results.insert(CAPACITY_LIST.to_string(), capacity);
     json!({
-        "schema": "wisent-box-diagnostics-v1",
+        "schema": SCHEMA,
         "reported_at": isoformat_utc(chrono::Utc::now()),
         "host": host,
         "bucket": bucket,

@@ -92,17 +92,24 @@ pub(super) async fn disk_policy(
     // stops claiming must still say why, so capacity is published every loop
     // with `disk_pressure_active` in the diagnostics, and `host gates`
     // reports the numbers.
-    let reading =
-        space_reclaim::rule::read_volume(&crate::providers::local::work_base::measured_volume())
-            .ok();
+    let volume = crate::providers::local::work_base::measured_volume();
+    // The cause is published with the capacity diagnostics, which carry no
+    // local path, so it names the fleet volume rather than where it is.
+    let (reading, unread) = match space_reclaim::rule::read_volume(&volume) {
+        Ok(reading) => (Some(reading), None),
+        Err(error) => (None, Some(format!("the fleet volume could not be read: {error}"))),
+    };
     let current_free_bytes = reading.map(|reading| reading.free_bytes);
     *disk_low_bytes =
         reading.map(|reading| space_reclaim::rule::reserve_bytes(reading.total_bytes));
     let pressure_active = reading.is_some_and(|reading| reading.full());
-    agent_diag.insert(
-        "disk_used_percent".into(),
-        reading.map_or(Value::Null, |reading| Value::from(reading.used_percent())),
-    );
+    // The volume as measured, null with the cause beside it when it was not,
+    // so a reader judges a build's need against the bytes themselves rather
+    // than rebuilding them from a rounded percentage.
+    agent_diag.insert("disk_used_percent".into(), Value::from(reading.map(|reading| reading.used_percent())));
+    agent_diag.insert("disk_total_bytes".into(), Value::from(reading.map(|reading| reading.total_bytes)));
+    agent_diag.insert("disk_free_bytes".into(), Value::from(reading.map(|reading| reading.free_bytes)));
+    agent_diag.insert("disk_unread".into(), Value::from(unread));
     // The key keeps its published name: `host gates` reads it to say the
     // agent is refusing to claim because it cannot read its volume.
     agent_diag.insert(
@@ -116,7 +123,7 @@ pub(super) async fn disk_policy(
             false,
             Some("disk_unreadable"),
             BTreeMap::new(),
-            0,
+            None,
             total_vram_gb,
             agent_diag.clone(),
         );

@@ -39,8 +39,9 @@ struct ReadBack {
     /// The value the file actually holds now, when the host was willing to
     /// show it. `None` for a withheld value, whose length is still reported.
     effective: Option<String>,
-    /// How long that value is, shown or withheld.
-    chars: u32,
+    /// How long that value is, shown or withheld; `None` when the file holds
+    /// no value for the key, which is not a value of no characters.
+    chars: Option<u32>,
     /// `name (path)` of the forward marker that holds exactly the value which
     /// replaced ours, when one does. This is the declaration to correct.
     marker: Option<String>,
@@ -49,10 +50,11 @@ struct ReadBack {
 impl ReadBack {
     /// The `EFFECTIVE` column: the value, or its length when it is withheld.
     fn effective_cell(&self) -> String {
-        match &self.effective {
-            Some(value) => value.clone(),
-            None if self.state == service_env_file::EXPECT_MATCHED => "-".to_string(),
-            None => format!("<withheld, {} chars>", self.chars),
+        match (&self.effective, self.chars) {
+            (Some(value), _) => value.clone(),
+            (None, _) if self.state == service_env_file::EXPECT_MATCHED => "-".to_string(),
+            (None, Some(chars)) => format!("<withheld, {chars} chars>"),
+            (None, None) => "<no value>".to_string(),
         }
     }
 
@@ -64,9 +66,10 @@ impl ReadBack {
     /// existed. With no marker to name it points at the command that
     /// enumerates every unit that could be the writer, rather than shrugging.
     fn failure(&self, host: &str, key: &str) -> Option<String> {
-        let observed = match &self.effective {
-            Some(value) => format!("{value:?}"),
-            None => format!("a withheld {}-character value", self.chars),
+        let observed = match (&self.effective, self.chars) {
+            (Some(value), _) => format!("{value:?}"),
+            (None, Some(chars)) => format!("a withheld {chars}-character value"),
+            (None, None) => "no value".to_string(),
         };
         match self.state {
             service_env_file::EXPECT_MATCHED => None,

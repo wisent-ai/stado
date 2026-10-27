@@ -43,7 +43,7 @@ impl Hasher {
                 host_channel::run_program(target, &[program.as_str(), path], runner).await?
             }
         };
-        if !output.ok() {
+        if !output.succeeded() {
             return Ok(None);
         }
         Ok(output.stdout.split_whitespace().next().map(str::to_string))

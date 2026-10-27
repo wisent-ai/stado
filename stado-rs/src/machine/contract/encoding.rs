@@ -10,16 +10,11 @@ pub(crate) fn utcnow() -> String {
     crate::models::isoformat_utc(chrono::Utc::now())
 }
 
-/// Python `repr()` of a simple string: single quotes, switching to double
-/// quotes when the string contains a single quote (job ids are hex, so the
-/// escape corner cases of repr never trigger).
-pub(in crate::machine) fn py_repr(s: &str) -> String {
-    if s.contains('\'') {
-        format!("\"{s}\"")
-    } else {
-        format!("'{s}'")
-    }
-}
+/// Python `repr()` of a string, as the machine interface quotes a job id, an
+/// artifact path or an archive entry: the one copy in `models::python_compat`.
+/// The copy kept here never escaped, and archive entries and artifact paths
+/// are written by whoever packed them, quotes and newlines included.
+pub(in crate::machine) use crate::models::py_str_repr as py_repr;
 
 /// Python `json.dumps(value, ensure_ascii=False, sort_keys=True,
 /// separators=(",", ":"))`: compact separators, keys sorted recursively,

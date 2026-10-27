@@ -4,12 +4,10 @@
 # Usage: sh enable-gcp.sh
 set -eu
 
-SB=${SKARBIEC_BIN:-skarbiec}
-
 # 1. service account into YOUR skarbiec, tagged with the role Stado reads it by
 #    (field per the scoped GCP identity contract); the item id is yours to choose
 jq -n --arg json "$GCP_SERVICE_ACCOUNT_JSON" '{service_account_json: $json}' |
-  "$SB" set-json gcp-service-account --type env --tags stado:role:cloud-gcp
+  skarbiec set gcp-service-account --type env --tags stado:role:cloud-gcp
 
 # 2. enable the provider in the stado config
 jq '.providers = ((.providers + ["gcp"]) | unique) | .providers_disabled -= ["gcp"]' \

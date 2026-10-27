@@ -2,7 +2,7 @@
 //! incoming Stado's own migrations.
 //!
 //! A release that renames a configuration key ships the migration with it
-//! (`stado config migrate-identities`). Validating the host's file with the
+//! (`stado config migrate`). Validating the host's file with the
 //! incoming rules but not its migrations refused every host that still held
 //! the old key — `agent.skarbiec.items` became `agent.skarbiec.roles`, and
 //! every delivery of the release that made the change was refused on every
@@ -23,7 +23,7 @@ pub(super) fn admit(staged: &Path, name: &str) -> Result<(), CmdError> {
     if first.status.success() {
         return Ok(());
     }
-    let migration = run(staged, &["config", "migrate-identities"], name)?;
+    let migration = run(staged, &["config", "migrate"], name)?;
     let second = run(staged, &["config", "validate"], name)?;
     if second.status.success() {
         eprintln!(
@@ -34,7 +34,7 @@ pub(super) fn admit(staged: &Path, name: &str) -> Result<(), CmdError> {
     }
     Err(CmdError::click(format!(
         "the incoming {name} refuses this host's configuration, so the installed {name} was \
-         left in place: {}{}Its own migration (`{name} config migrate-identities`) answered: \
+         left in place: {}{}Its own migration (`{name} config migrate`) answered: \
          {}{}Migrate what it names and deliver again.",
         String::from_utf8_lossy(&second.stdout),
         String::from_utf8_lossy(&second.stderr),

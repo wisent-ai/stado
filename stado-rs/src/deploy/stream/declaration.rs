@@ -116,10 +116,9 @@ pub fn pinned_sunshine_for(
 /// answer so a reader sees both halves of the comparison.
 pub fn with_declaration(mut report: Value, declaration: &DisplayStream) -> Value {
     if let Some(map) = report.as_object_mut() {
-        map.insert(
-            "declaration".to_string(),
-            serde_json::to_value(declaration).unwrap_or(json!(null)),
-        );
+        // `DisplayStream` derives its serialization from plain fields, so
+        // `json!` renders it without a failure path.
+        map.insert("declaration".to_string(), json!(declaration));
     }
     report
 }

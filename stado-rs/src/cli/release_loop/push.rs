@@ -73,16 +73,19 @@ pub async fn unpushed(root: &Path) -> Result<Vec<Unpushed>, CmdError> {
     })?;
     let mut checkouts = Vec::new();
     for entry in listed {
-        let path = entry
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "cannot list the workspace {}: {error}",
-                    root.display()
-                ))
-            })?
-            .path();
-        // A workspace entry whose .git cannot be examined is refused naming
-        // it, never left out of the push as if it were no checkout.
+        let entry = entry.map_err(|error| {
+            CmdError::click(format!(
+                "cannot list the workspace {}: {error}",
+                root.display()
+            ))
+        })?;
+        let kind = entry.file_type().map_err(|error| {
+            CmdError::from(error).within(&format!("cannot inspect {}", entry.path().display()))
+        })?;
+        if !kind.is_dir() {
+            continue;
+        }
+        let path = entry.path();
         if crate::primitives::presence::present(&path.join(".git"))
             .map_err(|error| CmdError::click(format!("cannot list the workspace: {error}")))?
         {

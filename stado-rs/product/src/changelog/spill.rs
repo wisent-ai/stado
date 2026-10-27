@@ -4,19 +4,20 @@
 //! Entries are only moved out of `CHANGELOG.md` at a version bump, so a
 //! release that gathers many repairs grows its Unreleased section past the
 //! file length limit, and from then on no repair can add its entry. The spill
-//! moves the entries written so far into `changelog/unreleased-part-N.md`
-//! files, each within the limit, linked under `## Unreleased`; the section
+//! moves the entries written so far into `changelog/unreleased/part-N.md`
+//! files (a folder of their own, so the range folder does not grow), each
+//! within the limit, linked under `## Unreleased`; the section
 //! keeps only the links and takes new entries again. The version bump gathers
 //! the spilled parts with the section, so a spill never changes what a
 //! release says.
 
 use super::{
-    section_end, sections, spilled_part, CHANGELOG, FIRST_PART, PART_MARK, RANGE_DIRECTORY,
+    record_part, section_end, sections, spilled_part, CHANGELOG, FIRST_PART, PART_MARK, RANGE_DIRECTORY,
     SPILLED, UNRELEASED,
 };
 use anyhow::{bail, Context, Result};
 use serde_json::json;
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 const SPILL_PREAMBLE: &str = "Entries of the release being prepared, moved out of `CHANGELOG.md` so that file stays editable.\nThe version bump gathers them into the release's own file and removes this one.\n";
 
@@ -26,6 +27,7 @@ fn part_body(title: &str, entries: &str) -> String {
 }
 
 pub fn run(root: &Path, line_limit: usize) -> Result<i32> {
+    let _writer = super::writer::take(root)?;
     let path = root.join(CHANGELOG);
     let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let marker = format!("\n{UNRELEASED}\n");
@@ -41,9 +43,11 @@ pub fn run(root: &Path, line_limit: usize) -> Result<i32> {
     let mut links = Vec::new();
     let mut last = None;
     let mut lines = Vec::new();
+    let mut seen = BTreeMap::new();
     for line in rest[..end].lines() {
         match spilled_part(line)? {
-            Some((number, _)) => {
+            Some((number, name)) => {
+                record_part(&mut seen, number, name)?;
                 links.push(line.to_owned());
                 last = last.max(Some(number));
             }
@@ -56,21 +60,34 @@ pub fn run(root: &Path, line_limit: usize) -> Result<i32> {
         .filter(|line| line.starts_with("- "))
         .count();
     let mut written = Vec::new();
-    if entries.is_empty() {
+    if !sections::has_entries(&entries) {
         crate::common::emit(&json!({"changelog": path, "spilled": spilled, "parts": written}))?;
         return Ok(libc::EXIT_SUCCESS);
     }
     let first = match last {
-        Some(last) => last + FIRST_PART,
+        Some(last) => last.checked_add(FIRST_PART).with_context(|| {
+            format!(
+                "cannot spill after changelog part {last}: increment by {FIRST_PART} exceeds the supported part-number range"
+            )
+        })?,
         None => FIRST_PART,
     };
     let title = |number: usize| format!("Unreleased (part {number})");
     let parts = sections::split(&entries, &part_body(&title(first), ""), line_limit)?;
     let directory = root.join(RANGE_DIRECTORY);
-    let named: Vec<(usize, String, String)> = (first..)
-        .zip(parts)
-        .map(|(number, part)| (number, format!("{SPILLED}{PART_MARK}{number}.md"), part))
-        .collect();
+    let named: Vec<(usize, String, String)> = parts
+        .into_iter()
+        .enumerate()
+        .map(|(offset, part)| {
+            let number = first.checked_add(offset).with_context(|| {
+                format!(
+                    "cannot number spilled changelog part: first={first}, offset={offset}, sum exceeds the supported part-number range"
+                )
+            })?;
+            let name = format!("{SPILLED}/{}{number}.md", PART_MARK.trim_start_matches('-'));
+            Ok((number, name, part))
+        })
+        .collect::<Result<_>>()?;
     if let Some((_, name, _)) = named
         .iter()
         .find(|(_, name, _)| directory.join(name).exists())
@@ -81,7 +98,8 @@ pub fn run(root: &Path, line_limit: usize) -> Result<i32> {
             path.display()
         );
     }
-    fs::create_dir_all(&directory).with_context(|| format!("creating {}", directory.display()))?;
+    let folder = directory.join(SPILLED);
+    fs::create_dir_all(&folder).with_context(|| format!("creating {}", folder.display()))?;
     for (number, name, part) in named {
         let file = directory.join(&name);
         crate::common::atomic_write(&file, part_body(&title(number), &part).as_bytes())?;

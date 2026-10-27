@@ -90,7 +90,7 @@ pub(crate) async fn remote_config_output(
         ),
     };
     let output = configuration_command(target, &command, &operation, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(command_refusal(target, &operation, &output));
     }
     // Mutations run once. Their acknowledgement is not part of the JSON document.
@@ -146,11 +146,13 @@ async fn read_configuration(target: &ComputeTarget, runner: &Runner) -> Result<S
         runner,
     )
     .await?;
-    if explicit.ok() {
+    if explicit.succeeded() {
         return Ok(explicit.stdout);
     }
     let explicit_error = command_refusal(target, "config show --json", &explicit);
-    if explicit.code != 2 {
+    // The status clap gives a usage refusal, as this client's own parse
+    // failures exit with it: an older host Stado refusing `--json` this way.
+    if explicit.code != clap::Error::new(clap::error::ErrorKind::UnknownArgument).exit_code() {
         return Err(explicit_error);
     }
     // Earlier installed CLIs emit the same machine document without the flag.
@@ -162,7 +164,7 @@ async fn read_configuration(target: &ComputeTarget, runner: &Runner) -> Result<S
             wrapped.failure = error.failure;
             wrapped
         })?;
-    if !implicit.ok() {
+    if !implicit.succeeded() {
         return Err(CmdError::click(format!(
             "{explicit_error}; {}",
             command_refusal(target, "config show", &implicit)
@@ -202,7 +204,7 @@ async fn read_configuration(target: &ComputeTarget, runner: &Runner) -> Result<S
 ///
 /// A release client that holds no vault cannot reconcile a verifier: the
 /// reconciliation reads the authoritative publisher items from the vault on
-/// the machine it runs on. `declare-publisher` therefore runs it on the vault
+/// the machine it runs on. `publisher declare` therefore runs it on the vault
 /// owner through this, with the owner's own binary and configuration.
 pub(crate) async fn remote_stado_output(
     target: &str,
@@ -259,19 +261,31 @@ async fn remote_stado(target: &str, prelude: &str, arguments: &[&str]) -> Result
     )
     .await
     .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         let detail = output.detail().trim().to_string();
+        let detail = if detail.is_empty() { "no output".to_string() } else { detail };
+        // A host Stado older or newer than this client fails on a word it
+        // does not know; the refusal says which Stado each side runs.
+        let host_version = host_stado_version(&resolved, prelude).await;
         return Err(CmdError::click(format!(
-            "stado {} on {} failed (exit {}): {}",
+            "stado {} on {} failed (exit {}): {detail}; this client is stado {}, the host runs {host_version}",
             arguments.join(" "),
             resolved.name,
             output.code,
-            if detail.is_empty() {
-                "no output"
-            } else {
-                &detail
-            }
+            env!("CARGO_PKG_VERSION"),
         )));
     }
     Ok(output.stdout)
+}
+
+/// What `stado --version` on the host answers, or why it could not be read:
+/// only ever said beside a refusal, so its own failure is named, not raised.
+async fn host_stado_version(resolved: &ComputeTarget, prelude: &str) -> String {
+    let script = format!("{CONFIG_SCRIPT_PREFIX}{prelude}\"$binary\" --version\n");
+    let runner = crate::deploy::production_runner();
+    match crate::deploy::host_channel::run_script_to_completion(resolved, &script, &runner).await {
+        Ok(answer) if answer.succeeded() => answer.stdout.trim().to_string(),
+        Ok(answer) => format!("a stado whose --version failed (exit {}): {}", answer.code, answer.detail().trim()),
+        Err(error) => format!("a stado whose version could not be asked: {error}"),
+    }
 }

@@ -62,13 +62,6 @@ pub(crate) fn log(msg: &str) {
     eprintln!("[monitor] {msg}");
 }
 
-/// Python repr of a list of strings (`['a', 'b']`) for log-line parity
-/// with the Cloud Function logs operators grep.
-fn py_str_list(items: &[String]) -> String {
-    let inner: Vec<String> = items.iter().map(|s| format!("'{s}'")).collect();
-    format!("[{}]", inner.join(", "))
-}
-
 /// Python `list(dict.fromkeys(items))`: dedup preserving first-seen order.
 fn dedup_preserve_order(items: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();

@@ -16,7 +16,7 @@ pub enum CredentialCommands {
         command: ServiceGrantCommands,
     },
     /// The owner-only raw bearer file a host binds to the fleet object store.
-    TokenFile {
+    Bearer {
         #[command(subcommand)]
         command: ServiceTokenFileCommands,
     },

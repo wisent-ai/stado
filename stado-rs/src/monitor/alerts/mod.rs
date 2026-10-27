@@ -1,4 +1,4 @@
-//! Optional Slack, Telegram, SendGrid, Skrzynka (email), most (SMS), and GCP Pub/Sub
+//! Optional Slack, Telegram, Skrzynka (email), most (SMS), and GCP Pub/Sub
 //! alert delivery. The operator's choice in the registry (`operator_contact`,
 //! see [`contact`]) is the explicit enablement fence: with no
 //! enabled channels, dispatch performs no credential or network lookup, and
@@ -19,9 +19,7 @@ mod dispatch;
 mod resolve;
 mod send;
 
-pub use channels::{
-    AlertChannels, MostChannel, PubSubChannel, SendgridChannel, SkrzynkaChannel, TelegramChannel,
-};
+pub use channels::{AlertChannels, MostChannel, PubSubChannel, SkrzynkaChannel, TelegramChannel};
 pub use dispatch::{send_alert, send_alert_with, AlertDelivery, AlertReport};
 pub(crate) use send::{skrzynka_mailbox_problem, SkrzynkaMailboxProblem};
 
@@ -29,14 +27,10 @@ pub(crate) use send::{skrzynka_mailbox_problem, SkrzynkaMailboxProblem};
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 /// Telegram Bot API base (overridable per-channel for tests).
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
-/// SendGrid mail-send endpoint.
-const SENDGRID_URL: &str = "https://api.sendgrid.com/v3/mail/send";
 /// Pub/Sub REST base.
 const PUBSUB_BASE: &str = "https://pubsub.googleapis.com";
 /// Twilio REST base for the most (SMS) channel.
 const TWILIO_API_BASE: &str = "https://api.twilio.com";
-/// Python `WC_EMAIL_FROM` default.
-const DEFAULT_EMAIL_FROM: &str = "compute@example.com";
 
 fn log(msg: &str) {
     eprintln!("[alert] {msg}");

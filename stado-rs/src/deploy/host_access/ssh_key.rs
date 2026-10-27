@@ -220,8 +220,9 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
             Some(held) => return write_key(&held),
             None => {
                 let store = match crate::credential_store::skarbiec_url() {
-                    Some(url) => format!("the credential store at {url}"),
-                    None => "the selected credential store".to_string(),
+                    Ok(Some(url)) => format!("the credential store at {url}"),
+                    Ok(None) => "the selected file credential store".to_string(),
+                    Err(selector) => format!("a credential store whose selector could not be read ({selector})"),
                 };
                 return Err(unreachable_store(
                     &id,

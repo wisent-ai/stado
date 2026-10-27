@@ -21,8 +21,16 @@ use crate::cli::release_cmd::undeclared_files;
 use crate::cli::CmdError;
 
 /// Every directory under `directory` holding a `Cargo.toml` beside a `src/`.
+/// A path that cannot be examined is refused naming it: skipped, the crate
+/// behind it was never checked and the gate passed a tree it had not read.
 fn crates(directory: &Path, into: &mut Vec<PathBuf>) -> Result<(), CmdError> {
-    if directory.join("Cargo.toml").is_file() && directory.join("src").is_dir() {
+    let manifest = directory.join("Cargo.toml");
+    let sources = directory.join("src");
+    if crate::primitives::presence::present(&manifest)?
+        && manifest.is_file()
+        && crate::primitives::presence::present(&sources)?
+        && sources.is_dir()
+    {
         into.push(directory.to_path_buf());
     }
     let entries = std::fs::read_dir(directory).map_err(|error| {
@@ -33,7 +41,10 @@ fn crates(directory: &Path, into: &mut Vec<PathBuf>) -> Result<(), CmdError> {
             CmdError::click(format!("cannot list {}: {error}", directory.display()))
         })?;
         let path = entry.path();
-        if path.is_dir() && !path.is_symlink() {
+        // The entry itself, not what a link points at: a link is not walked.
+        let kind = std::fs::symlink_metadata(&path)
+            .map_err(|error| CmdError::click(format!("cannot examine {}: {error}", path.display())))?;
+        if kind.is_dir() {
             crates(&path, into)?;
         }
     }

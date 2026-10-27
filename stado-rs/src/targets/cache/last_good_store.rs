@@ -20,7 +20,33 @@ use crate::targets::*;
 /// document dated by the older sidecar, which OVERSTATES the age; the other
 /// order understates it, and a registry that reads fresher than it is, is
 /// the exact lie this cache exists to prevent.
+///
+/// A document whose service directory generation is below the recorded
+/// copy's is refused ([`directory_not_rolled_back`]); the one generation the
+/// operator accepted below it is recorded through [`store_adopted_last_good`].
 pub fn store_last_good(text: &str, generation: &str) -> Result<(), LastGoodRefusal> {
+    store_last_good_as(text, generation, DirectoryAdvance::Required)
+}
+
+/// [`store_last_good`] for the generation `stado resolver accept` let this
+/// host's resolver adopt below the one it held: the operator judged the
+/// recorded generation the false one, so the copy follows him down.
+pub(crate) fn store_adopted_last_good(text: &str, generation: &str) -> Result<(), LastGoodRefusal> {
+    store_last_good_as(text, generation, DirectoryAdvance::AcceptedRollback)
+}
+
+/// Whether a lower service directory generation may replace the copy.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DirectoryAdvance {
+    Required,
+    AcceptedRollback,
+}
+
+fn store_last_good_as(
+    text: &str,
+    generation: &str,
+    advance: DirectoryAdvance,
+) -> Result<(), LastGoodRefusal> {
     let (Some(document), Some(meta)) = (registry_last_good_path(), registry_last_good_meta_path())
     else {
         // Nothing to name in a sentence, so nothing is printed — the caller
@@ -64,7 +90,17 @@ pub fn store_last_good(text: &str, generation: &str) -> Result<(), LastGoodRefus
             // `load_last_good` skips anyway), holds no hosts to lose. One
             // that cannot be read may hold any number, so it is not replaced.
             let recorded = match std::fs::read_to_string(&document) {
-                Ok(held) => serde_json::from_str::<Value>(&held).ok(),
+                Ok(held) => match serde_json::from_str::<Value>(&held) {
+                    Ok(recorded) => Some(recorded),
+                    Err(error) => {
+                        eprintln!(
+                            "stado: the recorded last-known-good copy {} does not parse, so it \
+                             holds no hosts to lose and is replaced: {error}",
+                            document.display()
+                        );
+                        None
+                    }
+                },
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => {
                     return refuse(LastGoodRefusal::NotWritten {
@@ -76,9 +112,18 @@ pub fn store_last_good(text: &str, generation: &str) -> Result<(), LastGoodRefus
             };
             if let Err(error) = may_replace_last_good(&data, recorded.as_ref()) {
                 return refuse(LastGoodRefusal::WouldLoseRecordedHosts {
-                    held: recorded.as_ref().map_or(0, declared_target_count),
+                    // The hosts the recorded copy declares; a host with no
+                    // copy recorded holds none.
+                    held: recorded.iter().map(|copy| declared_targets(copy).len()).sum(),
                     detail: error,
                 });
+            }
+            if advance == DirectoryAdvance::Required {
+                if let Some(recorded) = recorded.as_ref() {
+                    if let Err(detail) = directory_not_rolled_back(&data, recorded) {
+                        return refuse(LastGoodRefusal::DirectoryRollback { detail });
+                    }
+                }
             }
         }
         Err(error) => {
@@ -156,7 +201,14 @@ fn read_last_good() -> Result<Option<(Registry, RegistryCacheMeta, i64)>, String
         .with_timezone(&Utc);
     let mut registry = load_registry_from_str(&text)
         .map_err(|error| format!("{} is not a registry: {error}", document_path.display()))?;
-    let age = (Utc::now() - read_at).num_seconds().max(0);
+    let age = (Utc::now() - read_at).num_seconds();
+    if age.is_negative() {
+        return Err(format!(
+            "{} read_at {} is later than this host's clock",
+            meta_path.display(),
+            meta.read_at
+        ));
+    }
     registry.staleness_seconds = Some(age);
     Ok(Some((registry, meta, age)))
 }
@@ -172,5 +224,32 @@ static REGISTRY_NOTICE_REPORTED: AtomicBool = AtomicBool::new(false);
 pub fn report_registry_notice(notice: &str) {
     if !REGISTRY_NOTICE_REPORTED.swap(true, Ordering::Relaxed) {
         eprintln!("{notice}");
+    }
+}
+
+/// The longest the last-known-good copy may stand in for the authority: the
+/// max-stale this host's resolver declares in that copy, the same bound past
+/// which the resolver stops answering from the generation it holds. A host
+/// that declares no resolver of its own is measured by the authority's
+/// resolver declaration, as its read of the authority is. A copy that
+/// declares neither, or cannot be read, answers why.
+pub(crate) fn last_good_max_stale() -> Result<u64, String> {
+    use crate::service_resolution::{declared_resolver_config, directory};
+    let copy = crate::cli::resolver::kept_last_good_document()?
+        .ok_or_else(|| "no last-known-good copy is kept".to_string())?;
+    let target = crate::cli::resolver::current_target(&copy)?;
+    if let Some(own) = declared_resolver_config(&copy, &target)? {
+        return Ok(own.max_stale_seconds);
+    }
+    let authority = directory(&copy)?
+        .ok_or_else(|| format!("{target} declares no resolver and the copy no service directory"))?
+        .authority
+        .target;
+    match declared_resolver_config(&copy, &authority)? {
+        Some(declared) => Ok(declared.max_stale_seconds),
+        None => Err(format!(
+            "neither {target} nor the registry authority {authority} declares a resolver in \
+             the copy"
+        )),
     }
 }

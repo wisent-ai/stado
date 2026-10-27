@@ -9,7 +9,7 @@ use crate::models::Job;
 use crate::queue::{JobStorage, StorageError};
 
 use super::agents::{estimate_runtime, live_agents, seed_running_jobs};
-use super::history::{self, extract_model_task, History};
+use super::history::{self, History};
 use super::matcher::assign_one;
 
 /// One pass of makespan-minimizing assignment, reading the clock and the
@@ -90,7 +90,7 @@ pub async fn assign_jobs_at(
     let mut schedulable: Vec<(i64, f64, Job)> = Vec::new();
     // Insertion-ordered (model, task) -> the jobs skipped for it; ties keep
     // first-seen order.
-    let mut skip_by_key: Vec<((String, String), Vec<String>)> = Vec::new();
+    let mut skip_by_key: Vec<((Option<String>, Option<String>), Vec<String>)> = Vec::new();
     for mut job in store.list_jobs("queue").await? {
         // Host-pinned jobs route outside the makespan model. The coordinator
         // repairs contradictory derived assignments before routing begins.
@@ -100,7 +100,7 @@ pub async fn assign_jobs_at(
         let rt = match estimate_runtime(&job.command, job.runtime_seconds_estimate, history) {
             Some(rt) => rt,
             None => {
-                let mt = extract_model_task(&job.command);
+                let mt = (crate::sizing::model_of(&job.command), history::task_of(&job.command));
                 match skip_by_key.iter_mut().find(|(k, _)| *k == mt) {
                     Some((_, skipped)) => skipped.push(job.job_id.clone()),
                     None => skip_by_key.push((mt, vec![job.job_id.clone()])),
@@ -162,7 +162,7 @@ pub async fn assign_jobs_at(
         skip_by_key.sort_by_key(|entry| std::cmp::Reverse(entry.1.len()));
         let groups: Vec<String> = skip_by_key
             .into_iter()
-            .map(|((m, t), jobs)| format!("({m},{t}):{}", jobs.len()))
+            .map(|((m, t), jobs)| format!("({m:?},{t:?}):{}", jobs.len()))
             .collect();
         log_fn(&format!(
             "makespan: {skipped} skipped; by model/task: {}",

@@ -20,8 +20,11 @@ pub fn update_targets(
         return Err(SelfUpdateError::UnknownBinary(exe_name.to_string()));
     }
     let mut targets = vec![exe_name.to_string()];
+    // A sibling that cannot be examined fails the update before anything is
+    // replaced: skipped, it stayed at the old release beside a new one.
     for &name in RELEASE_BINARIES {
-        if name != exe_name && install_dir.join(name).is_file() {
+        let sibling = install_dir.join(name);
+        if name != exe_name && crate::primitives::presence::present(&sibling)? && sibling.is_file() {
             targets.push(name.to_string());
         }
     }

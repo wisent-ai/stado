@@ -3,6 +3,10 @@
 
 use super::*;
 
+/// The onboarding catalog's document version:
+/// <https://stado.wisent.com/docs/channels/host-channel-repairs>.
+const ONBOARDING_CATALOG_SCHEMA_VERSION: u32 = 1;
+
 pub(crate) async fn onboarding_catalog() -> Result<(), CmdError> {
     let store = beacon_store().await?;
     let rows = service::list_services(&store).await.map_err(click)?;
@@ -11,7 +15,7 @@ pub(crate) async fn onboarding_catalog() -> Result<(), CmdError> {
         .filter(|row| row.service.source == SOURCE_REGISTRY && row.service.onboarding.is_some())
         .map(ServiceStatus::to_json)
         .collect();
-    print_json(&json!({"schema_version": 1, "services": services}))
+    print_json(&json!({"schema_version": ONBOARDING_CATALOG_SCHEMA_VERSION, "services": services}))
 }
 
 pub(crate) async fn show(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {

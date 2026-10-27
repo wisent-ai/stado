@@ -68,16 +68,25 @@ pub(super) fn build_environment(
     // `--target-dir` keeps it; the stage map relies on that. The cache sits
     // under the host's declared work root when it has one — the agent hands
     // the declaration to every job — and under `~/.stado` otherwise.
-    if let Some(home) = std::env::var_os("HOME") {
-        environment.insert(
-            "CARGO_TARGET_DIR".into(),
-            crate::providers::local::work_base::build_cache_root(Path::new(&home))
-                .join(&request.product)
-                .join(&request.platform)
-                .join("cargo-target")
-                .display()
-                .to_string(),
-        );
+    // The home is the one every Stado file is kept under; a worker without
+    // one says that its build compiles every dependency again.
+    match crate::config_file::home() {
+        Ok(home) => {
+            environment.insert(
+                "CARGO_TARGET_DIR".into(),
+                crate::providers::local::work_base::build_cache_root(&home)
+                    .join(&request.product)
+                    .join(&request.platform)
+                    .join("cargo-target")
+                    .display()
+                    .to_string(),
+            );
+        }
+        Err(cause) => eprintln!(
+            "[release-worker] no build cache directory, so every dependency of {} is compiled \
+             again: {cause}",
+            request.product
+        ),
     }
     // Build steps sign and build through `stado product`. The first `stado`
     // on their PATH is this worker's own executable, so a step can never
@@ -152,9 +161,9 @@ pub(super) fn ensure_node(source: &Path) -> Result<(), CmdError> {
     if !source.join("package.json").is_file() {
         return Ok(());
     }
-    let home = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| CmdError::refused("HOME is not set; Node.js is installed under it"))?;
+    let home = crate::config_file::home().map_err(|cause| {
+        CmdError::refused(format!("Node.js has no home to be installed under: {cause}"))
+    })?;
     let report = stado_product::node_runtime::ensure(&home).map_err(|error| {
         CmdError::click(format!("{error:#}"))
             .stating(crate::primitives::failure::FailureCode::InfraDown)
@@ -179,11 +188,11 @@ pub(super) fn add_compiler_cache(
     if !cargo_source(source)? {
         return Ok(());
     }
-    let home = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| {
-            CmdError::refused("HOME is not set; the compiler cache is installed under it")
-        })?;
+    let home = crate::config_file::home().map_err(|cause| {
+        CmdError::refused(format!(
+            "the compiler cache has no home to be installed under: {cause}"
+        ))
+    })?;
     let wrapper = stado_product::compiler_cache::ensure(&home).map_err(|error| {
         CmdError::click(format!("{error:#}"))
             .stating(crate::primitives::failure::FailureCode::InfraDown)

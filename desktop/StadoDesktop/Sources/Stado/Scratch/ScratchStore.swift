@@ -31,11 +31,21 @@ final class ScratchStore: ObservableObject {
         self.cli = cli
     }
 
-    var profiles: [ScratchProfile] { catalog?.profiles ?? [] }
+    /// The declared profiles, once the catalog has been read; empty until
+    /// then, which the section shows as "no profile was read" with the
+    /// command that answers.
+    var profiles: [ScratchProfile] {
+        guard let catalog else { return [] }
+        return catalog.profiles
+    }
 
     var selectedProfile: ScratchProfile? { profiles.first { $0.name == form.profile } }
 
-    var leases: [ScratchLease] { listing?.leases ?? [] }
+    /// The host's leases, once a listing has been read; empty until then.
+    var leases: [ScratchLease] {
+        guard let listing else { return [] }
+        return listing.leases
+    }
 
     var expiredLeases: [ScratchLease] { leases.filter(\.expired) }
 
@@ -88,8 +98,11 @@ final class ScratchStore: ObservableObject {
         form.arguments(host: host)
     }
 
+    /// A form field with text in it, or `nil` for one left blank or absent:
+    /// a blank field sends no flag, and the CLI then reads the declaration.
     private nonisolated static func present(_ value: String?) -> String? {
-        let text = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let value else { return nil }
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? nil : text
     }
 
@@ -241,12 +254,5 @@ final class ScratchStore: ObservableObject {
     /// this console's opinion about a declaration it does not own.
     nonisolated static func message(_ error: Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-    }
-
-    /// A `--json` command prints one document and nothing else.
-    nonisolated static func decode<T: Decodable>(_ type: T.Type, from output: String) -> T? {
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(type, from: data)
     }
 }

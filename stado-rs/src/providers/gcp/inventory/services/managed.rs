@@ -2,17 +2,28 @@
 //! it, the plain named lists, the service accounts it runs as, and the builds
 //! that produced its image.
 
+use serde::Deserialize;
 use serde_json::{json, Value};
+
+/// The Cloud Build statuses of a build that has not failed: finished well or
+/// still on its way. Every other status the API reports is a failed build.
+#[derive(Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum Unfailed {
+    Success,
+    Queued,
+    Pending,
+    Working,
+}
 
 use crate::providers::gcp::inventory::{Detail, ProbeState};
 
 pub(in crate::providers::gcp::inventory) fn scheduler_detail(value: &Value) -> Detail {
-    let state = value
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or("UNKNOWN");
+    // A scheduler is healthy only while GCP states it enabled; a state it
+    // does not state is reported as absent, and the job counts as degraded.
+    let state = value.get("state");
     (
-        if state == "ENABLED" {
+        if state.and_then(Value::as_str) == Some("ENABLED") {
             ProbeState::Ok
         } else {
             ProbeState::Degraded
@@ -101,13 +112,8 @@ pub(in crate::providers::gcp::inventory) fn builds_detail(value: &Value) -> Deta
     let latest_failed = builds
         .first()
         .and_then(|build| build.get("status"))
-        .and_then(Value::as_str)
-        .is_some_and(|status| {
-            matches!(
-                status,
-                "FAILURE" | "INTERNAL_ERROR" | "TIMEOUT" | "CANCELLED" | "EXPIRED"
-            )
-        });
+        .filter(|status| !status.is_null())
+        .is_some_and(|status| serde_json::from_value::<Unfailed>(status.clone()).is_err());
     let count = builds.len();
     (
         if latest_failed {

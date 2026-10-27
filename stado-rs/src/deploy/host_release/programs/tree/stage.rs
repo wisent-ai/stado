@@ -30,7 +30,8 @@ for required in /usr/bin/curl /usr/bin/openssl /usr/bin/tar /usr/bin/awk /usr/bi
 done
 
 /bin/mkdir -p "$staged_dir"
-/bin/rm -f "$archive_path" "$payload_path"
+hold_stage_lock "$staged_dir"
+/bin/rm -f "$archive_path" "$archive_path.head" "$archive_path.part" "$payload_path"
 /bin/rm -rf "$incoming"
 if ! fetch_release_object \
   "stado://releases/$product/$version/$platform/$archive_name" \

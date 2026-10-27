@@ -14,14 +14,12 @@ use serde_json::Value;
 use super::{POLICY_KEY, PUBLICATIONS, WEB_EDGE};
 use crate::targets::{ssh_hostname, ComputeTarget};
 
+mod shape;
+
+use shape::{is_loopback_origin, is_origin_name, is_public_hostname, is_published_path};
+
 /// Suffix of a tailnet MagicDNS name, matching [`crate::remote::tailnet`].
 const MAGICDNS_SUFFIX: &str = ".ts.net";
-
-/// Loopback origins a publication may forward to. A public origin's upstream
-/// is on the target's own loopback by construction: the publication is what
-/// crosses the boundary, and an upstream reachable from anywhere else would be
-/// a second, undeclared entrance.
-const LOOPBACK_HOSTS: &[&str] = &["127.0.0.1", "localhost", "[::1]"];
 
 fn refuse(location: &str, message: &str) -> String {
     format!("{location} {message}")
@@ -153,7 +151,7 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
         if !is_loopback_origin(upstream) {
             return Err(refuse(
                 &format!("{location}.upstream"),
-                "must be a loopback origin like \"http://127.0.0.1:8765\", with no path or trailing slash",
+                "must be a plain-HTTP origin on this host's loopback (a loopback address or localhost) with an explicit port, and no path or trailing slash",
             ));
         }
 
@@ -236,62 +234,4 @@ fn control_route_hosts(document: &Value) -> BTreeSet<String> {
         }
     }
     hosts
-}
-
-fn is_origin_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 64
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-        && !name.contains("--")
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
-/// A bare public DNS name: lowercase, at least two labels, no scheme, port,
-/// path or userinfo, and not an address literal. An address literal is refused
-/// because a certificate for a public origin is issued for a NAME.
-fn is_public_hostname(hostname: &str) -> bool {
-    if hostname.len() > 253 || hostname.ends_with('.') {
-        return false;
-    }
-    if hostname.parse::<std::net::IpAddr>().is_ok() {
-        return false;
-    }
-    let labels: Vec<&str> = hostname.split('.').collect();
-    labels.len() >= 2
-        && labels.iter().all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        })
-}
-
-fn is_loopback_origin(upstream: &str) -> bool {
-    let Some(authority) = upstream.strip_prefix("http://") else {
-        return false;
-    };
-    if authority.contains('/') {
-        return false;
-    }
-    let Some((host, port)) = authority.rsplit_once(':') else {
-        return false;
-    };
-    LOOPBACK_HOSTS.contains(&host) && port.parse::<u16>().is_ok_and(|port| port > 0)
-}
-
-fn is_published_path(path: &str) -> bool {
-    path.starts_with('/')
-        && path.len() > 1
-        && !path.ends_with('/')
-        && !path.contains("//")
-        && !path.split('/').any(|segment| segment == "..")
-        && !path.contains('?')
-        && !path.contains('#')
-        && path.is_ascii()
 }

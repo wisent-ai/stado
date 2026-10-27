@@ -187,14 +187,11 @@ pub(super) fn require_node_toolchain(
     Ok(())
 }
 
-/// Free space of the volume holding `path`, in GiB, from the file system's
-/// own `statvfs` answer: blocks available to an unprivileged writer times the
-/// block size. The two figures are widened to `u128` because their width
-/// differs between platforms, and the product is read back as `f64`.
-fn free_gibibytes(path: &Path) -> Result<f64, nix::Error> {
-    let stats = nix::sys::statvfs::statvfs(path)?;
-    let bytes = u128::from(stats.blocks_available()) * u128::from(stats.fragment_size());
-    Ok(bytes as f64 / crate::providers::local::space_reclaim::GIB as f64)
+/// Free space of the volume holding `path`, in GiB, as the disk-full rule
+/// reads a volume: the bytes an unprivileged writer may still take.
+fn free_gibibytes(path: &Path) -> Result<f64, crate::providers::local::space_reclaim::JanitorError> {
+    let volume = crate::providers::local::space_reclaim::rule::read_volume(path)?;
+    Ok(volume.free_bytes as f64 / crate::providers::local::space_reclaim::GIB as f64)
 }
 
 /// Whether the unpacked source is a Cargo one: a `Cargo.toml` at its root or

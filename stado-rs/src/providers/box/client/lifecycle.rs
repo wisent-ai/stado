@@ -40,11 +40,11 @@ impl BoxClient {
             .request_json("GET", "/limits", None, &[], &["limits.info"])
             .await?;
         Ok(BoxLimits {
-            can_start: jbool(value.get("canStart")),
+            can_start: jbool(value.get("canStart"), "canStart", "GET /limits")?,
             active_boxes: required_integer(&value, "activeSandboxes", "GET /limits")?,
             max_active_boxes: required_integer(&value, "maxActiveSandboxes", "GET /limits")?,
-            billing_status: jstr(value.get("billingStatus")),
-            blocked_reason: super::super::types::first_truthy_str(
+            billing_status: jstr(value.get("billingStatus"), "billingStatus", "GET /limits")?,
+            blocked_reason: super::super::types::first_stated(
                 &[value.get("startBlockedReason"), value.get("blockedReason")],
                 "",
             ),
@@ -132,10 +132,10 @@ impl BoxClient {
             let Some(page) = value.get("pageInfo").and_then(Value::as_object) else {
                 return Ok(sandboxes);
             };
-            if !jbool(page.get("hasMore")) {
+            if !jbool(page.get("hasMore"), "pageInfo.hasMore", "GET /sandboxes")? {
                 return Ok(sandboxes);
             }
-            cursor = jstr(page.get("nextCursor"));
+            cursor = jstr(page.get("nextCursor"), "pageInfo.nextCursor", "GET /sandboxes")?;
             if cursor.is_empty() {
                 return Err(BoxError::transport(
                     "Boat answered GET /sandboxes with more pages and no next cursor",

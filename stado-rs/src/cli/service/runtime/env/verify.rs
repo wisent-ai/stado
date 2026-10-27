@@ -5,7 +5,7 @@ use super::*;
 /// Read one key back through the channel that just wrote it.
 ///
 /// The comparison happens on the host against the same unquoting a shell would
-/// apply, so `KEY='http://127.0.0.1:8895'` and `KEY=http://127.0.0.1:8895`
+/// apply, so `KEY='https://service.example'` and `KEY=https://service.example`
 /// are one value and a secret is verified exactly without its value returning.
 /// The forward markers are collected only when the write did not survive.
 pub(super) async fn verify_env_write(
@@ -50,7 +50,7 @@ pub(super) async fn verify_env_write(
     Ok(ReadBack {
         state,
         effective,
-        chars: entry.map(|entry| entry.chars).unwrap_or_default(),
+        chars: entry.map(|entry| entry.chars),
         marker,
     })
 }
@@ -79,9 +79,12 @@ pub(super) async fn verify_unit_env_write(
     };
     Ok(ReadBack {
         state,
-        chars: observed
-            .as_ref()
-            .map_or(0, |value| value.chars().count() as u32),
+        chars: match observed.as_deref() {
+            Some(value) => Some(u32::try_from(value.chars().count()).map_err(|error| {
+                CmdError::click(format!("the value {key} holds is too long to count: {error}"))
+            })?),
+            None => None,
+        },
         effective: observed.and_then(|value| {
             (service::redact_secret_value(key, &value) != service::REDACTED).then_some(value)
         }),

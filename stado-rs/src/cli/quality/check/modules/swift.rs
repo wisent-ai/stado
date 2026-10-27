@@ -19,6 +19,12 @@ const MANIFEST: &str = "Package.swift";
 const TARGETS_ROOT: &str = "Sources";
 const SWIFT_EXTENSION: &str = "swift";
 
+/// The entry `path` itself, not what a link points at; one that cannot be
+/// examined is refused naming it, so the gate never passes a tree it skipped.
+fn kind(path: &Path) -> Result<std::fs::Metadata, String> {
+    std::fs::symlink_metadata(path).map_err(|error| format!("cannot examine {}: {error}", path.display()))
+}
+
 /// The directories under `directory`, symbolic links excluded.
 fn subdirectories(directory: &Path) -> Result<Vec<PathBuf>, String> {
     let entries = std::fs::read_dir(directory)
@@ -28,7 +34,7 @@ fn subdirectories(directory: &Path) -> Result<Vec<PathBuf>, String> {
         let path = entry
             .map_err(|error| format!("cannot list {}: {error}", directory.display()))?
             .path();
-        if path.is_dir() && !path.is_symlink() {
+        if kind(&path)?.is_dir() {
             found.push(path);
         }
     }
@@ -37,8 +43,12 @@ fn subdirectories(directory: &Path) -> Result<Vec<PathBuf>, String> {
 
 /// Every directory under `directory` holding a Swift package manifest.
 fn packages(directory: &Path, into: &mut Vec<PathBuf>) -> Result<(), String> {
-    if directory.join(MANIFEST).is_file() {
-        into.push(directory.to_path_buf());
+    let manifest = directory.join(MANIFEST);
+    match std::fs::metadata(&manifest) {
+        Ok(metadata) if metadata.is_file() => into.push(directory.to_path_buf()),
+        Ok(_not_file) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("cannot examine {}: {error}", manifest.display())),
     }
     for child in subdirectories(directory)? {
         packages(&child, into)?;
@@ -54,10 +64,11 @@ fn swift_sources(directory: &Path, into: &mut Vec<PathBuf>) -> Result<(), String
         let path = entry
             .map_err(|error| format!("cannot list {}: {error}", directory.display()))?
             .path();
-        if path.is_symlink() {
+        let entry_kind = kind(&path)?;
+        if entry_kind.is_symlink() {
             continue;
         }
-        if path.is_dir() {
+        if entry_kind.is_dir() {
             swift_sources(&path, into)?;
         } else if path.extension() == Some(OsStr::new(SWIFT_EXTENSION)) {
             into.push(path);

@@ -48,7 +48,7 @@ pub fn begin_on(
     if let Some(cycle) = refused(&what, resource) {
         return Err(cycle);
     }
-    Ok(start(kind, what, place, Some(resource)))
+    Ok(start(kind, what, place, Some(resource), None))
 }
 
 /// [`crate::blocking`] for a wait on `resource`, refused as [`begin_on`]

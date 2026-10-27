@@ -22,12 +22,13 @@ pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
         print_json(&report);
         return report_outcome(&report, expected);
     }
-    let section = |key: &str| {
-        report
-            .get(key)
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
+    // A section the inventory did not write lists nothing; its table is
+    // printed with headings alone, which is what the host answered.
+    let section = |key: &str| -> Vec<Value> {
+        match report.get(key).and_then(Value::as_array) {
+            Some(rows) => rows.clone(),
+            None => Vec::new(),
+        }
     };
 
     println!("target:   {}", cell(report.get("target")));

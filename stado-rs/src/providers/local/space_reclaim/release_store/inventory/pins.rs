@@ -79,7 +79,11 @@ pub(in crate::providers::local::space_reclaim::release_store) fn host_pinned_ver
         };
         let state = serde_json::from_str::<PinnedSlots>(&text)
             .map_err(|error| unknown(&path, format!("does not parse as release slots: {error}")))?;
-        let product = state.product.clone().map_or(stem.to_string(), |name| name);
+        // Older pin files name no product; the file is named after it.
+        let product = match state.product.clone() {
+            Some(name) => name,
+            None => stem.to_string(),
+        };
         let versions = pinned.entry(product).or_default();
         for slot in [state.active, state.previous, state.candidate]
             .into_iter()

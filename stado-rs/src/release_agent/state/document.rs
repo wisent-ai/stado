@@ -3,7 +3,6 @@
 //! it carries.
 
 use std::fs::{File, OpenOptions};
-use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
@@ -126,34 +125,17 @@ pub fn state_document_bytes(state: &HostReleaseState) -> Result<Vec<u8>, String>
     document_bytes(state)
 }
 
+/// Keep `value` at `path` whole and flushed with its directory, readable as
+/// the state file always was ([`crate::primitives::document::persist_with_mode`]).
+/// A staging file a failed write leaves is removed with it.
 pub(crate) fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("state path has no parent: {}", path.display()))?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        format!(
-            "cannot create state directory {}: {error}",
-            parent.display()
-        )
-    })?;
-    let staging = parent.join(format!(".state-{}", uuid::Uuid::new_v4().simple()));
     let bytes = document_bytes(value)?;
-    {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staging)
-            .map_err(|error| {
-                format!("cannot create state staging {}: {error}", staging.display())
-            })?;
-        file.write_all(&bytes)
-            .and_then(|()| file.sync_all())
-            .map_err(|error| {
-                format!("cannot write state staging {}: {error}", staging.display())
-            })?;
-    }
-    std::fs::rename(&staging, path)
-        .map_err(|error| format!("cannot commit release state {}: {error}", path.display()))
+    crate::primitives::document::persist_with_mode(
+        path,
+        &bytes,
+        crate::primitives::file_mode::shared_read(),
+    )
+    .map_err(|error| format!("cannot commit release state {}: {error}", path.display()))
 }
 
 /// Decode one rollout state document and refuse it unless it is the one that

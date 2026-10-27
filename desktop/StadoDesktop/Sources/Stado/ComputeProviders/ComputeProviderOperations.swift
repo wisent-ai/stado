@@ -20,6 +20,8 @@ enum NativeComputeProviderOperations {
             path: ["doctor"], hostPlacement: .none, mutates: false),
         .init(id: "quota", title: "Read quota and reservations per provider",
             path: ["quota", "show"], hostPlacement: .none, mutates: false, jsonOutput: false),
+        .init(id: "billing", title: "Read provider credit, and whether the Azure credit gate admits a VM create or start (the floor is the operator's ruling capability:cloud@credits-floor:azure:<amount>:<currency>)",
+            path: ["billing", "show"], hostPlacement: .none, mutates: false, jsonOutput: false),
         .init(id: "quota-catalog", title: "List each provider's GPU catalog",
             path: ["quota", "catalog"], hostPlacement: .none, fields: [
                 .init(id: "provider", label: "Providers, comma-separated (blank: providers)", option: "--provider"),

@@ -55,6 +55,9 @@ pub(crate) async fn recorded_runs(
         .filter(|blob| blob.name.ends_with(RUN_STATE_LEAF))
         .collect::<Vec<_>>();
     blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
+    // The newest run object this walk reads: what the index covers once it
+    // files every run read here.
+    let newest = blobs.iter().filter_map(|blob| blob.updated).max();
     let bodies = futures::stream::iter(blobs.into_iter().map(|blob| {
         let store = &store;
         async move { (load_run_value(store, &blob.name).await, blob.name) }
@@ -96,7 +99,7 @@ pub(crate) async fn recorded_runs(
     // saved before product markers existed (`index`). The answer stands on
     // the bodies already read; an index that cannot be written is said, and
     // product questions keep reading every run object until a walk writes it.
-    if let Err(error) = index::mark_complete(&store, &filed).await {
+    if let Err(error) = index::mark_complete(&store, &filed, newest).await {
         eprintln!("[release runs] runs could not be indexed by product: {error}");
     }
     Ok(recorded)

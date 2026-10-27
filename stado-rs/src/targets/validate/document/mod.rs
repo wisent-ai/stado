@@ -3,6 +3,7 @@
 
 mod coordinators;
 mod registry;
+mod services;
 mod write;
 
 pub use registry::*;

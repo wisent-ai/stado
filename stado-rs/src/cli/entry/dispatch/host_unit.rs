@@ -28,13 +28,14 @@ pub(super) async fn failing() -> Option<String> {
 
 async fn read() -> Result<Option<String>, String> {
     let label = crate::deploy::service_catalog::host_unit()?;
-    let target = crate::deploy::service::local_target().map_err(|error| error.to_string())?;
-    let scope =
-        crate::deploy::service::BootoutScope::parse(None).map_err(|error| error.to_string())?;
+    let target = crate::deploy::service::local_target()
+        .map_err(|error| format!("this host's target cannot be read: {error}"))?;
+    let scope = crate::deploy::service::BootoutScope::parse(None)
+        .map_err(|error| format!("the service scope of this host cannot be read: {error}"))?;
     let runner = crate::deploy::production_runner();
     let state: LabelState = inspect_label_state(&target, &label, scope, &runner)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("the host unit {label} on {} cannot be inspected: {error}", target.name))?;
     let Some(failing) = state.failing() else {
         return Ok(None);
     };

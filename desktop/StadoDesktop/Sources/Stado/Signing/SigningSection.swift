@@ -1,22 +1,46 @@
 import SwiftUI
 import WisentDesignSystem
 
+/// One finished `stado product signing` call: what was asked, where, and
+/// what came back. Kept as one value so no field of a result can be shown
+/// beside another result's endpoint.
+struct SigningRun {
+    let product: String
+    let endpoint: String
+    let receipt: OperatorCommandResult
+
+    /// The exit code as the API reported it, or that it reported none.
+    var exitCodeText: String {
+        if let code = receipt.exitCode {
+            return String(code)
+        }
+        return "Not reported"
+    }
+}
+
 struct SigningSection: View {
     @ObservedObject var fleetStore: FleetControlStore
     @State private var product = ""
     @State private var surface = "cli"
     @State private var working = false
     @State private var reviewing = false
-    @State private var receipt: OperatorCommandResult?
+    @State private var run: SigningRun?
     @State private var problem: String?
-    @State private var endpoint: String?
-    @State private var requestedProduct: String?
+
+    /// The Stado API host the signatures are read on, or that none is
+    /// selected; the buttons below stay disabled in that case.
+    private var endpointText: String {
+        if let address = fleetStore.address {
+            return address.displayString
+        }
+        return "No Stado API selected"
+    }
 
     var body: some View {
         Section("Native code signatures on the Stado API host") {
             Text("Checks the installed executable identities, not macOS privacy grants. Repair signs recorded native files without resetting permissions or restarting services.")
                 .font(WisentTypeScale.caption())
-            Text(fleetStore.address?.displayString ?? "No Stado API selected")
+            Text(endpointText)
                 .textSelection(.enabled)
             TextField("Product", text: $product)
                 .disabled(working)
@@ -31,14 +55,14 @@ struct SigningSection: View {
                 .disabled(working || product.trimmingCharacters(in: .whitespaces).isEmpty || !fleetStore.isConfigured)
             if working { ProgressView("Waiting for Stado…") }
             if let problem { Text(problem).foregroundStyle(WisentDesign.danger).textSelection(.enabled) }
-            if let receipt {
-                LabeledContent("Result for", value: requestedProduct ?? "")
-                LabeledContent("Endpoint", value: endpoint ?? "")
-                LabeledContent("Exit code", value: receipt.exitCode.map(String.init) ?? "Not reported")
+            if let run {
+                LabeledContent("Result for", value: run.product)
+                LabeledContent("Endpoint", value: run.endpoint)
+                LabeledContent("Exit code", value: run.exitCodeText)
                 DisclosureGroup("Signature report and command receipt") {
-                    Text(receipt.standardOutput).font(WisentTypeScale.identifier()).textSelection(.enabled)
-                    Text(receipt.standardError).font(WisentTypeScale.identifier()).textSelection(.enabled)
-                    if receipt.standardOutputTruncated || receipt.standardErrorTruncated {
+                    Text(run.receipt.standardOutput).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                    Text(run.receipt.standardError).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                    if run.receipt.standardOutputTruncated || run.receipt.standardErrorTruncated {
                         Text("The API truncated this output; this is not a complete receipt.")
                     }
                 }
@@ -48,7 +72,7 @@ struct SigningSection: View {
             Button("Repair signatures") { Task { await run(apply: true) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Signs \(product) (\(surface)) on \(fleetStore.address?.displayString ?? "no endpoint") using an available Apple identity. The first migration from ad-hoc signing can require one new macOS consent; future updates retain the signed identity.")
+            Text("Signs \(product) (\(surface)) on \(endpointText) using an available Apple identity. The first migration from ad-hoc signing can require one new macOS consent; future updates retain the signed identity.")
         }
     }
 
@@ -68,9 +92,7 @@ struct SigningSection: View {
                 authorizationToken: fleetStore.authorizationToken
             )
             guard generation == fleetStore.requestGeneration else { return }
-            receipt = result
-            endpoint = address.displayString
-            requestedProduct = selectedProduct
+            run = SigningRun(product: selectedProduct, endpoint: address.displayString, receipt: result)
             if !result.ok { problem = result.message }
         } catch {
             guard generation == fleetStore.requestGeneration else { return }

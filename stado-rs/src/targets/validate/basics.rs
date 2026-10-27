@@ -14,16 +14,23 @@ pub fn normalize_hostname(value: &str) -> String {
 }
 
 /// Extract and normalize a hostname from a legacy SSH destination
-/// (`[user@]host[:port]`, bracketed IPv6 supported).
+/// (`[user@]host[:port]`, bracketed IPv6 supported). A bracket that never
+/// closes leaves the destination as written, which then matches no host.
 pub fn ssh_hostname(value: &str) -> String {
-    let host_and_port = value.trim().rsplit('@').next().unwrap_or("");
-    let host = if host_and_port.starts_with('[') {
-        match host_and_port.find(']') {
-            Some(closing) if closing > 1 => &host_and_port[1..closing],
-            _ => "",
-        }
-    } else {
-        host_and_port.split(':').next().unwrap_or("")
+    let destination = value.trim();
+    let host_and_port = match destination.rsplit_once('@') {
+        Some((_, host)) => host,
+        None => destination,
+    };
+    let host = match host_and_port.strip_prefix('[') {
+        Some(bracketed) => match bracketed.split_once(']') {
+            Some((inner, _)) => inner,
+            None => host_and_port,
+        },
+        None => match host_and_port.split_once(':') {
+            Some((host, _)) => host,
+            None => host_and_port,
+        },
     };
     normalize_hostname(host)
 }
@@ -32,11 +39,21 @@ pub fn ssh_hostname(value: &str) -> String {
 // validation.py — registry-v2 contract
 // ---------------------------------------------------------------------------
 
-/// Schema version required of registry documents (Python
-/// `_REGISTRY_VERSION`).
-pub const REGISTRY_SCHEMA_VERSION: i64 = 2;
+/// Schema version required of registry documents: the one the bundled empty
+/// registry (`data/fleet/registry.json`) declares, so the version is written
+/// in one place and the document Stado ships always satisfies it.
+pub fn registry_schema_version() -> i64 {
+    static VERSION: std::sync::LazyLock<i64> = std::sync::LazyLock::new(|| {
+        let bundled: Value = serde_json::from_str(include_str!("../../../data/fleet/registry.json"))
+            .expect("the bundled registry is the JSON this build was compiled with");
+        bundled["schema_version"]
+            .as_i64()
+            .expect("the bundled registry declares its schema_version")
+    });
+    *VERSION
+}
 
-/// Raised when a registry does not satisfy the version 2 contract.
+/// Raised when a registry does not satisfy the version contract.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct RegistryValidationError(pub String);
@@ -45,22 +62,19 @@ pub(crate) fn verr(location: &str, message: &str) -> RegistryValidationError {
     RegistryValidationError(format!("{location}: {message}"))
 }
 
-/// Python `repr()` of a sorted string list: `['a', 'b']`.
-pub(crate) fn py_list_repr(items: &[&str]) -> String {
-    let quoted: Vec<String> = items.iter().map(|i| format!("'{i}'")).collect();
-    format!("[{}]", quoted.join(", "))
-}
+/// Python `repr()` of a string list, for the registry refusals that quote
+/// the words a field accepts: the one copy in `models::python_compat`.
+pub(crate) use crate::models::py_list_repr;
 
 /// `^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$` hand-rolled (no regex dependency).
 pub(crate) fn is_target_name(value: &str) -> bool {
     let bytes = value.as_bytes();
-    let alnum = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
-    !bytes.is_empty()
-        && alnum(bytes[0])
-        && alnum(bytes[bytes.len() - 1])
+    let alnum = |b: &u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+    bytes.first().is_some_and(alnum)
+        && bytes.last().is_some_and(alnum)
         && bytes
             .iter()
-            .all(|&b| alnum(b) || matches!(b, b'.' | b'_' | b'-'))
+            .all(|b| alnum(b) || matches!(b, b'.' | b'_' | b'-'))
 }
 
 /// `^[a-z0-9_]+$` hand-rolled.

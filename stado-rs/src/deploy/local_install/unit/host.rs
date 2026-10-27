@@ -70,7 +70,9 @@ pub(super) fn skarbiec_identity(name: &str) -> bool {
 pub(super) fn resident_role(plan: &InstallPlan) -> bool {
     match command(plan) {
         Ok(parsed) => matches!(parsed, Commands::Planes(PlaneCommands::Serve(_))),
-        Err(_) => true,
+        // The merge names the unit, so the unparseable argv reaches the
+        // operator there with the plan's label.
+        Err(_argv_this_build_cannot_parse) => true,
     }
 }
 

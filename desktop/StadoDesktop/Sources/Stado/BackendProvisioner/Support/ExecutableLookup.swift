@@ -3,27 +3,44 @@ import Foundation
 // MARK: - Executable lookup
 
 extension BackendProvisioner {
-    func locateExecutable(named name: String, fixed: [String]) throws -> URL {
-        let environment = ProcessInfo.processInfo.environment
-        let candidates = (environment["PATH"] ?? "")
-            .split(separator: ":")
-            .map(String.init)
-            .map { URL(fileURLWithPath: $0).appendingPathComponent(name) }
-            + fixed.map { URL(fileURLWithPath: $0) }
-        guard let executable = candidates.first(where: {
-            fileManager.isExecutableFile(atPath: $0.path)
-        }) else {
-            throw BackendProvisioningError.commandFailed("\(name) is not installed or is not executable.")
+    /// The directories `PATH` names, in order; a process started without a
+    /// `PATH` searches no directory, and the fixed places are searched after.
+    private var searchPathDirectories: [URL] {
+        switch ProcessInfo.processInfo.environment["PATH"] {
+        case .some(let path):
+            return path.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
+        case .none:
+            return []
         }
-        return executable
+    }
+
+    /// No executable was found; every place that was looked in.
+    private struct ExecutableMissing: Error {
+        let searched: [URL]
+    }
+
+    /// The first executable file named `name` in the search path, then in
+    /// `fixed`; a refusal names every place that was looked in.
+    private func executable(named name: String, after fixed: [URL]) -> Result<URL, ExecutableMissing> {
+        let candidates = searchPathDirectories.map { $0.appendingPathComponent(name) } + fixed
+        switch candidates.first(where: { fileManager.isExecutableFile(atPath: $0.path) }) {
+        case .some(let found): return .success(found)
+        case .none: return .failure(ExecutableMissing(searched: candidates))
+        }
+    }
+
+    func locateExecutable(named name: String, fixed: [String]) throws -> URL {
+        switch executable(named: name, after: fixed.map { URL(fileURLWithPath: $0) }) {
+        case .success(let found):
+            return found
+        case .failure(let missing):
+            throw BackendProvisioningError.commandFailed(
+                "\(name) is not installed or is not executable; looked in \(missing.searched.map(\.path).joined(separator: ", "))."
+            )
+        }
     }
 
     func locateStadoCLI() throws -> URL {
-        let environment = ProcessInfo.processInfo.environment
-        let pathCandidates = (environment["PATH"] ?? "")
-            .split(separator: ":")
-            .map(String.init)
-            .map { URL(fileURLWithPath: $0).appendingPathComponent("stado") }
         let fixedCandidates = [
             fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".stado/bin/stado"),
             fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/stado"),
@@ -31,11 +48,9 @@ extension BackendProvisioner {
             URL(fileURLWithPath: "/usr/local/bin/stado"),
             URL(fileURLWithPath: "/opt/homebrew/Caskroom/miniforge/base/bin/stado"),
         ]
-        guard let executable = (pathCandidates + fixedCandidates).first(where: {
-            fileManager.isExecutableFile(atPath: $0.path)
-        }) else {
-            throw BackendProvisioningError.cliUnavailable
+        switch executable(named: "stado", after: fixedCandidates) {
+        case .success(let found): return found
+        case .failure: throw BackendProvisioningError.cliUnavailable
         }
-        return executable
     }
 }

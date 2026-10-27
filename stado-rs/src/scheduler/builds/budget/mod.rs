@@ -18,6 +18,8 @@
 
 use serde_json::{json, Map, Value};
 
+use crate::primitives::tally::Tally;
+
 mod day;
 
 use day::{next_day, runs_submitted_on};
@@ -25,7 +27,8 @@ use day::{next_day, runs_submitted_on};
 /// Registry key holding the budget document.
 pub const BUILD_BUDGET_KEY: &str = "build_budget";
 /// Builds the fleet may submit in one UTC day when the registry declares no
-/// other ceiling. Three is the workshop's standing rule.
+/// other ceiling, as Stado's documentation states the default:
+/// https://stado.wisent.com/docs/builds/building#the-fleets-daily-build-budget
 pub const DEFAULT_DAILY_BUILD_LIMIT: u64 = 3;
 /// A ceiling of zero stops every build; there is no "unlimited" value,
 /// because an unlimited budget is what this module exists to end.
@@ -56,33 +59,36 @@ impl BuildBudget {
     pub fn read(document: &Value, now: chrono::DateTime<chrono::Utc>) -> Self {
         let today = now.format(DAY_FORMAT).to_string();
         let entry = document.get(BUILD_BUDGET_KEY);
-        let limit = entry
-            .and_then(|budget| budget.get("limit"))
-            .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_DAILY_BUILD_LIMIT);
-        let counted = entry
-            .filter(|budget| budget.get("day").and_then(Value::as_str) == Some(today.as_str()))
-            .and_then(|budget| budget.get("used"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+        // A registry that declares no ceiling holds the documented default.
+        let limit = match entry.and_then(|budget| budget.get("limit")).and_then(Value::as_u64) {
+            Some(limit) => limit,
+            None => DEFAULT_DAILY_BUILD_LIMIT,
+        };
+        // Only today's entry counts; an entry of another day is spent history.
+        let today_entry =
+            entry.filter(|budget| budget.get("day").and_then(Value::as_str) == Some(today.as_str()));
         // A counter that begins the day it ships forgives every build the
         // fleet already made, and a lost write forgives the ones it lost.
         // The recipes carry their own runs with the instant each was
         // submitted, so the day's floor is observable: whichever is higher
         // is the truth, and the count can only ever be understated by runs
         // the registry itself no longer holds.
-        let used = counted.max(runs_submitted_on(document, &today));
-        let charged = entry
-            .filter(|budget| budget.get("day").and_then(Value::as_str) == Some(today.as_str()))
+        let submitted = runs_submitted_on(document, &today);
+        let used = match today_entry.and_then(|budget| budget.get("used")).and_then(Value::as_u64) {
+            Some(counted) => counted.max(submitted),
+            None => submitted,
+        };
+        let charged = match today_entry
             .and_then(|budget| budget.get("charged"))
             .and_then(Value::as_array)
-            .map(|keys| {
-                keys.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+        {
+            Some(keys) => keys
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect(),
+            None => Vec::new(),
+        };
         Self {
             day: today,
             used,
@@ -129,7 +135,7 @@ impl BuildBudget {
     /// submissions this charge belongs to, kept so the same build reaching a
     /// second charging path is not charged twice.
     pub fn record(&self, document: &mut Value, submitted: usize, keys: &[String]) {
-        if submitted == 0 {
+        if submitted.counts_nothing() {
             return;
         }
         let Some(object) = document.as_object_mut() else {

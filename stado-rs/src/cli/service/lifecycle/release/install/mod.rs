@@ -9,7 +9,8 @@ pub(super) mod current;
 /// A declared program read against the service's install root: the path up
 /// to and including `services/<directory>/`, and where the program sits
 /// below `current` once the archive installer has laid a release out
-/// (`current/darwin-arm/<member>`).
+/// (`current/<platform_dir>/<member>`, `platform_dir` being the target's
+/// [`service_catalog::platform_directory`]).
 ///
 /// Two layouts name the program. The archive installer's own is
 /// `services/<directory>/<version or current>/<path>`. The release agent's
@@ -21,14 +22,19 @@ pub(super) mod current;
 /// release with "archive does not carry the declared executable". Both are
 /// read here, so `update` asks for the member the archive carries and
 /// `follow_current` repoints the unit at it.
-pub(crate) fn program_under_current(program: &str, directory: &str) -> Option<(String, String)> {
+pub(crate) fn program_under_current(
+    program: &str,
+    directory: &str,
+    platform_dir: &str,
+) -> Option<(String, String)> {
     let marker = format!("/services/{directory}/");
     let (root, rest) = program.split_once(&marker)?;
     let below = match rest.strip_prefix("releases/") {
         Some(release) => {
-            let mut parts = release.splitn(3, '/');
-            let (_version, _platform, member) = (parts.next()?, parts.next()?, parts.next()?);
-            format!("darwin-arm/{member}")
+            // `<version>/<platform>/<member>`: the member keeps its own slashes.
+            let (_version, below_version) = release.split_once('/')?;
+            let (_platform, member) = below_version.split_once('/')?;
+            format!("{platform_dir}/{member}")
         }
         None => rest.split_once('/')?.1.to_string(),
     };
@@ -103,18 +109,19 @@ fn normalize_member(raw: &str) -> String {
 }
 
 /// Refuse an archive that does not carry the file the unit executes after the
-/// installer adds its fixed `darwin-arm/` platform directory.
+/// installer adds the target's platform directory.
 ///
 /// The unit's program is an absolute path through `current`, while
-/// [`ARCHIVE_INSTALL_BODY`] extracts the archive inside
-/// `version_dir/darwin-arm`. A unit running
-/// `.../current/darwin-arm/stado` therefore needs a root archive member
-/// `stado`, not a second `darwin-arm/stado` nesting. Both sides are named in
-/// the refusal, because the useful sentence is the mismatch, not the fact of
-/// one.
+/// the archive installer extracts the archive inside
+/// `version_dir/<platform_dir>`. A unit running
+/// `.../current/<platform_dir>/stado` therefore needs a root archive member
+/// `stado`, not a second `<platform_dir>/stado` nesting. Both sides are named
+/// in the refusal, because the useful sentence is the mismatch, not the fact
+/// of one.
 pub(super) fn refuse_archive_without_program(
     program: &str,
     members: &[String],
+    platform_dir: &str,
 ) -> Result<(), String> {
     let Some((_, relative)) = program.split_once("/current/") else {
         // A unit pinned to a version directory rather than `current` is a
@@ -123,10 +130,10 @@ pub(super) fn refuse_archive_without_program(
         return Ok(());
     };
     let relative = normalize_member(relative);
-    let Some(archive_relative) = relative.strip_prefix("darwin-arm/") else {
+    let Some(archive_relative) = relative.strip_prefix(&format!("{platform_dir}/")) else {
         return Err(format!(
             "refusing to relink `current`: the archive installer writes below \
-             current/darwin-arm, but the unit runs current/{relative}"
+             current/{platform_dir}, but the unit runs current/{relative}"
         ));
     };
     if archive_relative.is_empty() || members.iter().any(|member| member == archive_relative) {

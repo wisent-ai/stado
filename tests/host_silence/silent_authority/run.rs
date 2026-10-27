@@ -25,7 +25,8 @@ impl Run {
     /// A run of its own, named so two journeys of one test binary never
     /// share a home.
     pub(crate) fn new(name: &str) -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("host-silence-silent-authority");
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/journeys/host-silence-silent-authority");
         std::fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(format!("{name}-{}", std::process::id()));
         std::fs::create_dir_all(root.join(".stado/cache")).expect("create the run directory");
@@ -133,16 +134,21 @@ impl Run {
             serde_json::to_vec_pretty(&document).unwrap(),
         )
         .unwrap();
+        self.date_copy(&chrono::Utc::now().to_rfc3339());
+        refresh_seconds
+    }
+
+    /// Date the last-known-good copy as read at `read_at`.
+    pub(crate) fn date_copy(&self, read_at: &str) {
         std::fs::write(
             self.root.join(".stado/cache/registry-last-good.meta.json"),
             serde_json::to_vec(&json!({
-                "read_at": "1970-01-01T00:00:00Z",
+                "read_at": read_at,
                 "generation": "example",
             }))
             .unwrap(),
         )
         .unwrap();
-        refresh_seconds
     }
 
     /// `stado registry self --name-only`, its stderr kept beside the run as

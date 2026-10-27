@@ -2,7 +2,8 @@
 
 use serde_json::{Map, Value};
 
-use crate::artifacts_models::error::{py_str, ArtifactError};
+use super::{recorded_text, required_text};
+use crate::artifacts_models::error::ArtifactError;
 
 /// Where the artifact bytes live.
 #[derive(Debug, Clone, PartialEq)]
@@ -17,31 +18,37 @@ pub struct ArtifactLocation {
 }
 
 impl ArtifactLocation {
-    /// Tolerant dict read: only known keys are picked up, missing optional
-    /// fields take the dataclass defaults (Python `from_dict`).
+    /// A location names its `role` and `uri`; one missing either is not a
+    /// location and is refused by the member it lacks. `storage`,
+    /// `immutable_revision` and `sha256` are blank when the writer recorded
+    /// none, and a count is a number or absent: one in another shape is
+    /// refused by name rather than read as absent.
     pub(in crate::artifacts_models) fn from_value(value: &Value) -> Result<Self, ArtifactError> {
         let map = value
             .as_object()
             .ok_or_else(|| ArtifactError::invalid_manifest("location must be an object"))?;
-        let get_str = |key: &str, default: &str| {
-            map.get(key)
-                .map(py_str)
-                .unwrap_or_else(|| default.to_string())
-        };
-        let get_opt_int = |key: &str| match map.get(key) {
-            None | Some(Value::Null) => None,
-            Some(Value::Number(n)) => n.as_i64(),
-            // Python would crash on a non-int here; keep it tolerant.
-            Some(_) => None,
+        let count = |key: &str| -> Result<Option<i64>, ArtifactError> {
+            match map.get(key) {
+                None | Some(Value::Null) => Ok(None),
+                Some(Value::Number(n)) => match n.as_i64() {
+                    Some(count) => Ok(Some(count)),
+                    None => Err(ArtifactError::invalid_manifest(format!(
+                        "location {key} {n} is not a whole number"
+                    ))),
+                },
+                Some(other) => Err(ArtifactError::invalid_manifest(format!(
+                    "location {key} must be a number, found {other}"
+                ))),
+            }
         };
         Ok(Self {
-            role: get_str("role", ""),
-            uri: get_str("uri", ""),
-            storage: get_str("storage", ""),
-            immutable_revision: get_str("immutable_revision", ""),
-            sha256: get_str("sha256", ""),
-            size_bytes: get_opt_int("size_bytes"),
-            file_count: get_opt_int("file_count"),
+            role: required_text("location", map, "role")?,
+            uri: required_text("location", map, "uri")?,
+            storage: recorded_text("location", map, "storage")?,
+            immutable_revision: recorded_text("location", map, "immutable_revision")?,
+            sha256: recorded_text("location", map, "sha256")?,
+            size_bytes: count("size_bytes")?,
+            file_count: count("file_count")?,
         })
     }
 
@@ -55,16 +62,9 @@ impl ArtifactLocation {
             Value::String(self.immutable_revision.clone()),
         );
         map.insert("sha256".into(), Value::String(self.sha256.clone()));
-        map.insert(
-            "size_bytes".into(),
-            self.size_bytes
-                .map_or(Value::Null, |n| Value::Number(n.into())),
-        );
-        map.insert(
-            "file_count".into(),
-            self.file_count
-                .map_or(Value::Null, |n| Value::Number(n.into())),
-        );
+        // Serde writes an absent count as `null`.
+        map.insert("size_bytes".into(), serde_json::json!(self.size_bytes));
+        map.insert("file_count".into(), serde_json::json!(self.file_count));
         Value::Object(map)
     }
 }

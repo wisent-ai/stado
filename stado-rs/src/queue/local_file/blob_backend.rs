@@ -11,21 +11,21 @@ use chrono::{DateTime, Utc};
 
 use crate::queue::{json_str, BlobBackend, BlobInfo, Listing, StorageError, VersionedText};
 
-use super::paths::{off_thread, read_range, read_sidecar, remove_missing_ok};
+use super::atomic::publish_replacing;
+use super::paths::{modified, off_thread, read_range, read_sidecar, remove_missing_ok};
 use super::LocalBackend;
 
 #[async_trait]
 impl BlobBackend for LocalBackend {
     async fn upload_text(&self, path: &str, content: &str) -> Result<(), StorageError> {
         let target = self.path(path)?;
-        self.atomic_write_off_thread(path, target, content.as_bytes().to_vec())
+        self.atomic_write(path, target, content.as_bytes().to_vec())
             .await
     }
 
     async fn upload_bytes(&self, path: &str, content: &[u8]) -> Result<(), StorageError> {
         let target = self.path(path)?;
-        self.atomic_write_off_thread(path, target, content.to_vec())
-            .await
+        self.atomic_write(path, target, content.to_vec()).await
     }
 
     async fn download_text(&self, path: &str) -> Result<Option<String>, StorageError> {
@@ -95,19 +95,10 @@ impl BlobBackend for LocalBackend {
         &self,
         path: &str,
     ) -> Result<Option<VersionedText>, StorageError> {
-        let target = self.path(path)?;
-        self.with_lock(path, || {
-            if !target.is_file() {
-                return Ok(None);
-            }
-            let data = fs::read(&target)?;
-            let content = String::from_utf8(data)
-                .map_err(|err| StorageError::Other(format!("invalid UTF-8 in {path}: {err}")))?;
-            Ok(Some(VersionedText {
-                version: Self::version(content.as_bytes()),
-                content,
-            }))
-        })
+        Ok(self
+            .read_versioned(path)
+            .await?
+            .map(|(content, version)| VersionedText { version, content }))
     }
 
     async fn compare_and_swap_text(
@@ -116,32 +107,29 @@ impl BlobBackend for LocalBackend {
         expected_version: &str,
         content: &str,
     ) -> Result<String, StorageError> {
-        let target = self.path(path)?;
-        self.with_lock(path, || {
-            if !target.is_file() {
-                // Python raises FileNotFoundError here.
-                return Err(StorageError::NotFound(path.to_string()));
-            }
-            let current = fs::read(&target)?;
-            if Self::version(&current) != expected_version {
-                return Err(StorageError::StorageConflict(format!(
-                    "local storage version changed for {path}"
-                )));
-            }
-            let data = content.as_bytes();
-            self.atomic_write(&target, data)?;
-            Ok(Self::version(data))
-        })
+        self.swap_if_version(
+            path,
+            expected_version.to_owned(),
+            content.as_bytes().to_vec(),
+        )
+        .await
     }
 
     async fn delete(&self, path: &str) -> Result<(), StorageError> {
-        let _write_guard = self.mutation_guard()?;
-        remove_missing_ok(&self.path(path)?)?;
-        remove_missing_ok(&self.metadata_path(path))
+        let write_guard = self.mutation_guard()?;
+        let target = self.path(path)?;
+        let metadata = self.metadata_path(path);
+        off_thread(path, move || {
+            let _write_guard = write_guard;
+            remove_missing_ok(&target)?;
+            remove_missing_ok(&metadata)
+        })
+        .await
     }
 
     async fn exists(&self, path: &str) -> Result<bool, StorageError> {
-        Ok(self.path(path)?.is_file())
+        let target = self.path(path)?;
+        off_thread(path, move || Ok(target.is_file())).await
     }
 
     async fn list_paths(
@@ -155,18 +143,22 @@ impl BlobBackend for LocalBackend {
                 // Oldest by inode change time, names breaking ties. A name
                 // removed since the walk saw it is no longer under the
                 // prefix; any other metadata failure is refused.
-                let mut dated = Vec::with_capacity(paths.len());
-                for name in paths {
+                let root = self.root.clone();
+                off_thread(prefix, move || {
                     use std::os::unix::fs::MetadataExt;
-                    match self.root.join(&name).metadata() {
-                        Ok(found) => dated.push(((found.ctime(), found.ctime_nsec()), name)),
-                        Err(error) if error.kind() == ErrorKind::NotFound => {}
-                        Err(error) => return Err(error.into()),
+                    let mut dated = Vec::with_capacity(paths.len());
+                    for name in paths {
+                        match root.join(&name).metadata() {
+                            Ok(found) => dated.push(((found.ctime(), found.ctime_nsec()), name)),
+                            Err(error) if error.kind() == ErrorKind::NotFound => {}
+                            Err(error) => return Err(error.into()),
+                        }
                     }
-                }
-                dated.sort();
-                dated.truncate(count.get());
-                Ok(dated.into_iter().map(|(_, name)| name).collect())
+                    dated.sort();
+                    dated.truncate(count.get());
+                    Ok(dated.into_iter().map(|(_, name)| name).collect())
+                })
+                .await
             }
             Listing::Every => {
                 paths.sort();
@@ -201,30 +193,33 @@ impl BlobBackend for LocalBackend {
     }
 
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {
-        match self.path(path)?.metadata() {
-            Ok(md) => Ok(Some(DateTime::<Utc>::from(md.modified()?))),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err.into()),
-        }
+        let target = self.path(path)?;
+        off_thread(path, move || modified(&target)).await
     }
 
-    /// One blob's sidecar metadata, size and modification time, from one
-    /// `stat` of its file, or `None` when no file has that name.
+    /// One blob's sidecar metadata, size and modification time, read on the
+    /// blocking pool from one `stat`, or `None` when no file has that name.
     async fn stat(&self, path: &str) -> Result<Option<BlobInfo>, StorageError> {
-        let entry = match self.path(path)?.metadata() {
-            Ok(entry) => entry,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err.into()),
-        };
-        if !entry.is_file() {
-            return Ok(None);
-        }
-        Ok(Some(BlobInfo {
-            metadata: read_sidecar(&self.metadata_path(path))?,
-            updated: Some(DateTime::<Utc>::from(entry.modified()?)),
-            size: Some(entry.len()),
-            name: path.to_string(),
-        }))
+        let target = self.path(path)?;
+        let sidecar = self.metadata_path(path);
+        let name = path.to_string();
+        off_thread(path, move || {
+            let entry = match fs::metadata(&target) {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            if !entry.is_file() {
+                return Ok(None);
+            }
+            Ok(Some(BlobInfo {
+                metadata: read_sidecar(&sidecar)?,
+                updated: Some(DateTime::<Utc>::from(entry.modified()?)),
+                size: Some(entry.len()),
+                name,
+            }))
+        })
+        .await
     }
 
     async fn set_metadata(
@@ -232,47 +227,66 @@ impl BlobBackend for LocalBackend {
         path: &str,
         kv: &BTreeMap<String, String>,
     ) -> Result<(), StorageError> {
-        if !self.path(path)?.is_file() {
-            return Ok(());
-        }
+        let write_guard = self.mutation_guard()?;
+        let target = self.path(path)?;
         let metadata_path = self.metadata_path(path);
-        let mut current = read_sidecar(&metadata_path)?;
         // Python skips None and empty-string values.
-        current.extend(
-            kv.iter()
-                .filter(|(_, value)| !value.is_empty())
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
-        // Python `json.dumps(current, sort_keys=True)` with default
-        // separators (", " / ": "). BTreeMap iterates in sorted key order.
-        let body = current
+        let stated: Vec<(String, String)> = kv
             .iter()
-            .map(|(k, v)| format!("{}: {}", json_str(k), json_str(v)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.atomic_write_off_thread(path, metadata_path, format!("{{{body}}}").into_bytes())
-            .await
+            .filter(|(_, value)| !value.is_empty())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        off_thread(path, move || {
+            let _write_guard = write_guard;
+            if !target.is_file() {
+                return Ok(());
+            }
+            let mut current = read_sidecar(&metadata_path)?;
+            current.extend(stated);
+            // Python `json.dumps(current, sort_keys=True)` with default
+            // separators (", " / ": "). BTreeMap iterates in sorted key order.
+            let body = current
+                .iter()
+                .map(|(k, v)| format!("{}: {}", json_str(k), json_str(v)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            publish_replacing(&metadata_path, format!("{{{body}}}").as_bytes())
+        })
+        .await
     }
 
+    /// Each blob under `prefix` with its sidecar metadata, size and
+    /// modification time, read on the blocking pool from one `stat` per blob.
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
-        let mut out = Vec::new();
-        for path in self.list_paths(prefix, Listing::Every).await? {
-            let metadata = read_sidecar(&self.metadata_path(&path))?;
-            // A blob removed since the listing has no size; any other failure
-            // to read it is refused.
-            let size = match fs::metadata(self.path(&path)?) {
-                Ok(entry) => Some(entry.len()),
-                Err(error) if error.kind() == ErrorKind::NotFound => None,
-                Err(error) => return Err(error.into()),
-            };
-            out.push(BlobInfo {
-                updated: self.updated_at(&path).await?,
-                name: path,
-                size,
-                metadata,
-            });
+        let names = self.list_paths(prefix, Listing::Every).await?;
+        let mut located = Vec::with_capacity(names.len());
+        for name in names {
+            located.push((self.path(&name)?, self.metadata_path(&name), name));
         }
-        Ok(out)
+        off_thread(prefix, move || {
+            let mut out = Vec::with_capacity(located.len());
+            for (target, sidecar, name) in located {
+                let metadata = read_sidecar(&sidecar)?;
+                // A blob removed since the listing has neither size nor change
+                // time; any other failure to read it is refused.
+                let (size, updated) = match fs::metadata(&target) {
+                    Ok(entry) => (
+                        Some(entry.len()),
+                        Some(DateTime::<Utc>::from(entry.modified()?)),
+                    ),
+                    Err(error) if error.kind() == ErrorKind::NotFound => (None, None),
+                    Err(error) => return Err(error.into()),
+                };
+                out.push(BlobInfo {
+                    updated,
+                    name,
+                    size,
+                    metadata,
+                });
+            }
+            Ok(out)
+        })
+        .await
     }
 
     fn watch_prefixes(

@@ -8,6 +8,22 @@ use crate::cli::resources::journal::{ActionPhase, Journal, Phase};
 use crate::cli::resources::model::{Action, Plan};
 use crate::cli::CmdError;
 
+/// Preserve the action failure when recording it fails too.
+pub(super) fn preserve_failure(
+    error: CmdError,
+    recorded: Result<(), CmdError>,
+    plan: &Plan,
+    action: &Action,
+) -> CmdError {
+    match recorded {
+        Ok(()) => error,
+        Err(recording) => error.also(format!(
+            "recording failure of action {} in operation {} failed: {recording}",
+            action.id, plan.operation_id,
+        )),
+    }
+}
+
 pub(super) async fn fail_preflight(
     journal: &Journal,
     plan: &Plan,

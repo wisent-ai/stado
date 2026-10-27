@@ -51,7 +51,7 @@ pub enum JobCommands {
         json: bool,
     },
     /// Change a queued job's scheduling priority without resubmitting it.
-    SetPriority {
+    Prioritize {
         job_id: String,
         /// New priority; higher jobs are claimed first, then FIFO.
         priority: i64,
@@ -79,7 +79,7 @@ pub async fn dispatch(command: JobCommands) -> Result<(), CmdError> {
             retry_token,
             json,
         } => rerun(&job_id, &retry_token, json).await,
-        JobCommands::SetPriority {
+        JobCommands::Prioritize {
             job_id,
             priority,
             json,

@@ -2,7 +2,11 @@
 // What the resolver publishes about itself
 // ---------------------------------------------------------------------------
 
+mod file;
 mod lifetime;
+
+pub(crate) use file::{publish, publisher_running};
+pub(in crate::cli::resolver) use file::{published_state, state_path};
 
 use std::time::Duration;
 
@@ -64,6 +68,10 @@ pub(crate) struct PublishedState {
     /// Registry store version that generation came from -- the value the
     /// adapter refusal quotes as `store generation <version>`.
     pub(super) store_version: Option<String>,
+    /// The registry authority that generation was read from; absent when it
+    /// was read from this host's own registry store. A refused rollback
+    /// names this source, so a reader can tell which host delivered it.
+    pub(super) read_from: Option<String>,
     /// When that snapshot was loaded.
     pub(super) loaded_at: Option<String>,
     /// Why the process is not serving, in the upstream's own words.
@@ -194,108 +202,11 @@ impl PublishedState {
         self.api_bind = Some(bind.to_string());
         self
     }
-}
 
-pub(in crate::cli::resolver) fn state_path() -> Option<std::path::PathBuf> {
-    if let Some(explicit) = std::env::var_os(STATE_FILE_ENV) {
-        let path = std::path::PathBuf::from(explicit);
-        if !path.as_os_str().is_empty() {
-            return Some(path);
-        }
-    }
-    std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .map(|home| home.join(".stado").join(STATE_FILE))
-}
-
-/// Publish the state, atomically, best effort.
-///
-/// Best effort on purpose: a resolver that cannot write its own diagnostic
-/// file is still one that can serve traffic, and refusing to start over it
-/// would make this file the outage. Written to a sibling and renamed rather
-/// than in place, because [`status`] reads it while `serve` writes it and a
-/// half-written document reads as a resolver that has never run.
-pub(crate) fn publish(state: &PublishedState) {
-    let Some(path) = state_path() else { return };
-    let Some(parent) = path.parent() else { return };
-    // The lifetime lock is held from the first publication on, so a reader
-    // can tell a running publisher from a pid that outlived it.
-    if let Err(error) = std::fs::create_dir_all(parent) {
-        eprintln!(
-            "stado resolver could not create {}: {error}",
-            parent.display()
-        );
-    }
-    lifetime::hold(&path);
-    let body = match serde_json::to_vec_pretty(state) {
-        Ok(body) => body,
-        Err(error) => {
-            eprintln!("stado resolver could not serialize its state: {error}");
-            return;
-        }
-    };
-    let temp = path.with_extension(format!("{}.tmp", std::process::id()));
-    let written = std::fs::create_dir_all(parent)
-        .and_then(|()| std::fs::write(&temp, &body))
-        .and_then(|()| std::fs::rename(&temp, &path));
-    if let Err(error) = written {
-        eprintln!(
-            "{}",
-            crate::primitives::staging::failed_with(
-                format!(
-                    "stado resolver could not publish its state to {}: {error}",
-                    path.display()
-                ),
-                &temp,
-            )
-        );
-    }
-}
-
-/// The state the last `serve` process published, when there is one. A state
-/// file that exists but cannot be read or parsed is named on stderr with its
-/// cause: answered as none, status reported that no resolver had published
-/// while one had, and every adapter lookup through it looked unserved.
-pub(in crate::cli::resolver) fn published_state() -> Option<PublishedState> {
-    let path = state_path()?;
-    let body = match std::fs::read_to_string(&path) {
-        Ok(body) => body,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(error) => {
-            eprintln!(
-                "stado resolver state {} cannot be read: {error}",
-                path.display()
-            );
-            return None;
-        }
-    };
-    match serde_json::from_str(&body) {
-        Ok(state) => Some(state),
-        Err(error) => {
-            eprintln!(
-                "stado resolver state {} is not a published state this build reads: {error}",
-                path.display()
-            );
-            None
-        }
-    }
-}
-
-/// Whether the process that published `state` is still running: a state
-/// file outlives the resolver that wrote it, and a reader that trusts a
-/// dead resolver's `listening: true` sends traffic to ports nobody holds.
-/// Read from the lifetime lock the publisher holds ([`lifetime`]), never
-/// from its pid alone, which the system hands on once it exits. A lock that
-/// cannot be read is said on stderr and answers that no publisher runs.
-pub(crate) fn publisher_running(state: &PublishedState) -> bool {
-    let Some(path) = state_path() else {
-        return false;
-    };
-    match lifetime::held_by(&path, state.pid) {
-        Ok(held) => held,
-        Err(cause) => {
-            eprintln!("stado resolver state: whether its publisher runs cannot be read: {cause}");
-            false
-        }
+    /// The same state, holding a generation read from `authority`'s
+    /// snapshot, or from this host's own registry store when `None`.
+    pub(crate) fn read_from(mut self, authority: Option<String>) -> Self {
+        self.read_from = authority;
+        self
     }
 }

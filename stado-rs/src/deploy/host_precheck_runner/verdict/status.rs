@@ -16,8 +16,21 @@ use crate::deploy::host_precheck_runner::verdict::report::{
 use crate::deploy::{host_channel, production_runner, DeployError};
 
 /// The shape of [`fleet_report`], which a reader checks before trusting the
-/// fields below it.
+/// fields below it, as
+/// <https://stado.wisent.com/docs/capabilities/runner> states it.
 const FLEET_REPORT_SCHEMA_VERSION: u64 = 1;
+
+/// One profile's status, or the row that says why its host could not be read:
+/// a host that could not be asked is a row in the report, never a gap in it.
+async fn status_or_unavailable(
+    target: &crate::targets::ComputeTarget,
+    profile: &RunnerProfile,
+) -> Value {
+    match status_profile(&target.name, profile).await {
+        Ok(status) => status,
+        Err(error) => unavailable_status(target, profile, error),
+    }
+}
 
 async fn status_profile(target_name: &str, profile: &RunnerProfile) -> Result<Value, DeployError> {
     let target = runner_target(target_name).await?;
@@ -76,10 +89,9 @@ async fn brama_route_verdict(target_name: &str, stdout: &str) -> Result<Value, D
         .filter_map(|line| line.trim().strip_prefix("brama route:"))
         .map(str::trim)
         .next_back()
-        .unwrap_or_default()
-        .to_string();
+        .filter(|route| !route.is_empty());
     let (declared, _) = private_brama_route(target_name).await?;
-    if published.is_empty() {
+    let Some(published) = published else {
         return Ok(json!({
             "published": Value::Null,
             "declared": declared,
@@ -90,8 +102,8 @@ async fn brama_route_verdict(target_name: &str, stdout: &str) -> Result<Value, D
                  --profile precheck"
             ),
         }));
-    }
-    if published != declared {
+    };
+    if published != declared.as_str() {
         return Ok(json!({
             "published": published,
             "declared": declared,
@@ -120,11 +132,7 @@ pub async fn status_all(target_name: &str) -> Result<Value, DeployError> {
     let target = runner_target(target_name).await?;
     let mut profiles = Vec::new();
     for profile in &runner_declaration()?.profiles {
-        profiles.push(
-            status_profile(target_name, profile)
-                .await
-                .unwrap_or_else(|error| unavailable_status(&target, profile, error)),
-        );
+        profiles.push(status_or_unavailable(&target, profile).await);
     }
     Ok(json!({
         "target": target.name,
@@ -144,11 +152,7 @@ pub async fn fleet_report() -> Result<Value, DeployError> {
     {
         let mut profiles = Vec::new();
         for profile in &declaration.profiles {
-            profiles.push(
-                status_profile(&target.name, profile)
-                    .await
-                    .unwrap_or_else(|error| unavailable_status(target, profile, error)),
-            );
+            profiles.push(status_or_unavailable(target, profile).await);
         }
         hosts.push(json!({
             "target": target.name,

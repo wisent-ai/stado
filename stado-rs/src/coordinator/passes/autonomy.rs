@@ -81,7 +81,17 @@ pub(crate) async fn run_autonomy_once(
     let budget_billing = crate::autonomy::cost::load_billing_snapshot(store).await?;
     let budget_forecast =
         crate::autonomy::cost::forecast(&budget_allocation, &policy, budget_billing.as_ref(), now);
-    let new_cloud_allowed = !budget_forecast.budget_exceeded;
+    // A monthly budget is judged against the month's billed spend; while the
+    // billing snapshot does not give it, the month-end projection is unknown
+    // and the budget cannot be shown to hold, so no new cloud is placed.
+    let monthly_unverified = match (
+        policy.budgets.monthly_usd,
+        &budget_forecast.month_spent_unknown,
+    ) {
+        (Some(_declared), Some(cause)) => Some(cause.clone()),
+        _ => None,
+    };
+    let new_cloud_allowed = !budget_forecast.budget_exceeded && monthly_unverified.is_none();
     let hours_per_day = (crate::monitor::billing::SECONDS_PER_DAY
         / crate::monitor::billing::SECONDS_PER_HOUR) as f64;
     let daily_hourly_limit = policy.budgets.daily_usd.map(|limit| limit / hours_per_day);
@@ -91,22 +101,35 @@ pub(crate) async fn run_autonomy_once(
         (None, Some(daily)) => Some(daily),
         (None, None) => None,
     };
+    // While placement is allowed no budget is exceeded, so each remainder
+    // below is what is left of its limit.
     let mut new_cloud_hourly_budget_usd =
-        hourly_limit.map(|limit| (limit - budget_forecast.current_hourly_usd).max(0.0));
+        hourly_limit.map(|limit| limit - budget_forecast.current_hourly_usd);
     let mut new_cloud_cost_budget_usd = policy
         .budgets
         .monthly_usd
-        .map(|limit| (limit - budget_forecast.end_of_month_usd).max(0.0));
+        .zip(budget_forecast.end_of_month_usd)
+        .map(|(limit, projected)| limit - projected);
     if !new_cloud_allowed || policy.mode != crate::autonomy::AutonomyMode::EnforceOwned {
-        new_cloud_hourly_budget_usd = Some(0.0);
-        new_cloud_cost_budget_usd = Some(0.0);
+        // No remainder admits a new cloud offer at any price.
+        new_cloud_hourly_budget_usd = Some(f64::NEG_INFINITY);
+        new_cloud_cost_budget_usd = Some(f64::NEG_INFINITY);
     }
-    if !new_cloud_allowed {
+    let overrun = |figure: Option<f64>| match figure {
+        Some(overrun) => format!("${overrun:.2}"),
+        None => "none".to_string(),
+    };
+    if budget_forecast.budget_exceeded {
         log(&format!(
-            "autonomy budget guard: hourly overrun ${:.2}, daily overrun ${:.2}, monthly overrun ${:.2}; new cloud placement blocked",
-            budget_forecast.hourly_overrun_usd,
-            budget_forecast.daily_overrun_usd,
-            budget_forecast.projected_overrun_usd,
+            "autonomy budget guard: hourly overrun {}, daily overrun {}, monthly overrun {}; new cloud placement blocked",
+            overrun(budget_forecast.hourly_overrun_usd),
+            overrun(budget_forecast.daily_overrun_usd),
+            overrun(budget_forecast.projected_overrun_usd),
+        ));
+    }
+    if let Some(cause) = monthly_unverified {
+        log(&format!(
+            "autonomy budget guard: budgets.monthly_usd is declared but this month's billed spend is unknown ({cause}); new cloud placement blocked"
         ));
     }
 
@@ -166,6 +189,9 @@ pub(crate) async fn run_autonomy_once(
             advice.commitments
         ));
     }
+    for why in &advice.unjudged {
+        log(&format!("autonomy advice unjudged: {why}"));
+    }
 
     let allocation = crate::autonomy::cost::build_allocation(store, &inventory).await?;
     let billing = crate::autonomy::cost::load_billing_snapshot(store).await?;
@@ -191,23 +217,21 @@ pub(crate) async fn run_autonomy_once(
         false,
     )
     .await?;
-    let lifecycle = crate::autonomy::lifecycle::enforce(store, &policy, now).await?;
-    if !lifecycle.deleted.is_empty() {
-        log(&format!(
-            "autonomy lifecycle: deleted={} bytes={} capped={}",
-            lifecycle.deleted.len(),
-            lifecycle.deleted_bytes,
-            lifecycle.capped
-        ));
+    let lifecycle = crate::autonomy::lifecycle::enforce(store, &policy, now, log).await?;
+    if lifecycle != crate::autonomy::lifecycle::LifecycleSummary::default() {
+        log(&format!("autonomy lifecycle: {lifecycle:?}"));
     }
     Ok(())
 }
 
 fn timestamp_fresh(raw: &str, max_age_seconds: u64, now: chrono::DateTime<Utc>) -> bool {
-    DateTime::parse_from_rfc3339(raw)
-        .map(|stamp| {
-            now.signed_duration_since(stamp.with_timezone(&Utc))
-                .num_seconds()
-        })
-        .is_ok_and(|age| age >= 0 && age <= i64::try_from(max_age_seconds).unwrap_or(i64::MAX))
+    let Ok(stamp) = DateTime::parse_from_rfc3339(raw) else {
+        return false;
+    };
+    // A stamp from the future has no age to call fresh.
+    u64::try_from(
+        now.signed_duration_since(stamp.with_timezone(&Utc))
+            .num_seconds(),
+    )
+    .is_ok_and(|age| age <= max_age_seconds)
 }

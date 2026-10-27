@@ -89,14 +89,22 @@ pub(super) fn failed_api(spec: ProbeSpec, status: StatusCode, body: &str) -> Pro
     }
 }
 
+/// The Google API error as the body states it: `<status>: <message>` when
+/// the body is the documented error envelope, the whole body otherwise. An
+/// envelope without a status word is quoted under the word it lacks, and
+/// one without a message is quoted whole, so nothing is read as a message
+/// the API did not write.
 fn api_error(body: &str) -> String {
     if let Ok(value) = serde_json::from_str::<Value>(body) {
         if let Some(error) = value.get("error") {
-            let code = error
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("API_ERROR");
-            let message = error.get("message").and_then(Value::as_str).unwrap_or(body);
+            let code = match error.get("status").and_then(Value::as_str) {
+                Some(code) => code,
+                None => "(error without a status)",
+            };
+            let message = match error.get("message").and_then(Value::as_str) {
+                Some(message) => message,
+                None => body,
+            };
             return format!("{code}: {}", bounded_error(message));
         }
     }

@@ -85,9 +85,8 @@ fn parse_fields(stdout: &str) -> Map<String, Value> {
 /// declares none: the scripts then report it undeclared and measure or
 /// unmount no path, since no library path is assumed.
 fn library_dir(target: &ComputeTarget) -> String {
-    target
-        .display_stream
-        .as_ref()
-        .map(|declaration| declaration.library_dir.clone())
-        .unwrap_or_default()
+    match &target.display_stream {
+        Some(declaration) => declaration.library_dir.clone(),
+        None => String::new(),
+    }
 }

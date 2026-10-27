@@ -2,11 +2,13 @@
 //! per bucket, and stockout-aware tier escalation.
 
 use std::collections::BTreeMap;
+use std::ops::Bound;
 
 use crate::catalog::GPU_SIZING;
 use crate::config;
 use crate::providers::{Provider, ProviderError};
 use crate::queue::JobStorage;
+use crate::primitives::tally::Tally;
 use crate::scheduler::scheduler::{log, SchedulerError};
 use crate::sizing::Sizing;
 
@@ -62,25 +64,41 @@ pub async fn dispatch_agent_vms_with_template(
     } else {
         None
     };
+    // A clock before the epoch names no tick: instances tagged with it would
+    // collide with every other tick's names, so the tick is refused instead.
     let tick_tag = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
+        .map_err(|error| {
+            ProviderError::Value(format!(
+                "refusing to name agent instances: the coordinator's clock reads before the Unix epoch ({error})"
+            ))
+        })?
         .as_secs();
-    let mut created: i64 = 0;
     let mut scheduled = scheduled_so_far;
     'buckets: for ((accel, mt), jobs) in &buckets {
         if scheduled >= per_tick_cap {
             break;
         }
-        let quota_left = available.get(accel).copied().unwrap_or(0);
-        if quota_left <= 0 {
+        // A quota nobody read is not an empty one: the bucket waits for the
+        // next read, and the log says which it was.
+        let Some(&quota_left) = available.get(accel) else {
             log(&format!(
-                "Skip bucket accel={accel} machine={mt}: 0 quota slots"
+                "Skip bucket accel={accel} machine={mt}: its quota was not read this tick"
+            ));
+            continue;
+        };
+        if !quota_left.is_positive() {
+            log(&format!(
+                "Skip bucket accel={accel} machine={mt}: {quota_left} quota slots left"
             ));
             continue;
         }
-        let share_left = per_accel_share - accel_dispatched.get(accel).copied().unwrap_or(0);
-        if share_left <= 0 {
+        let share_left = match accel_dispatched.get(accel) {
+            Some(dispatched) => per_accel_share - dispatched,
+            // Nothing was dispatched on this accelerator yet this tick.
+            None => per_accel_share,
+        };
+        if !share_left.is_positive() {
             continue;
         }
         let n_to_dispatch = (jobs.len() as i64)
@@ -141,12 +159,17 @@ pub async fn dispatch_agent_vms_with_template(
             )
             .into());
         }
-        for i in 0..n_to_dispatch {
-            let instance_name = format!(
-                "{}-agent-{}-{tick_tag}-{i}",
-                config::INSTANCE_PREFIX,
-                accel.rsplit('-').next().unwrap_or(accel)
-            );
+        let count = usize::try_from(n_to_dispatch).map_err(|error| {
+            ProviderError::Value(format!(
+                "the {n_to_dispatch} agent instances bucket accel={accel} machine={mt} may create is not a count: {error}"
+            ))
+        })?;
+        let tier = match accel.rsplit_once('-') {
+            Some((_, tier)) => tier,
+            None => accel.as_str(),
+        };
+        for (i, _) in jobs.iter().take(count).enumerate() {
+            let instance_name = format!("{}-agent-{tier}-{tick_tag}-{i}", config::INSTANCE_PREFIX);
             let mut effective_accel = accel.clone();
             let mut ref_opt = provider
                 .create_agent_instance(
@@ -174,11 +197,17 @@ pub async fn dispatch_agent_vms_with_template(
                 let pmem = biggest.gpu_mem_gb;
                 let mut escalated = false;
                 if let Some(sizing_map) = GPU_SIZING.get(provider_name) {
-                    for (next_mem, (next_mt, next_accel)) in sizing_map.range(pmem + 1..) {
+                    for (next_mem, (next_mt, next_accel)) in
+                        sizing_map.range((Bound::Excluded(pmem), Bound::Unbounded))
+                    {
                         if next_accel == &accel.as_str() && next_mt == &mt.as_str() {
                             continue;
                         }
-                        if available.get(*next_accel).copied().unwrap_or(0) <= 0 {
+                        // A tier whose quota was not read is not escalated to.
+                        if !available
+                            .get(*next_accel)
+                            .is_some_and(|left| left.is_positive())
+                        {
                             continue;
                         }
                         log(&format!(
@@ -210,10 +239,12 @@ pub async fn dispatch_agent_vms_with_template(
                 }
             }
             let instance_ref = ref_opt.expect("escalated or initial create returned a ref");
-            *available.entry(effective_accel.clone()).or_insert(0) -= 1;
-            *accel_dispatched.entry(effective_accel.clone()).or_insert(0) += 1;
-            scheduled += 1;
-            created += 1;
+            available
+                .get_mut(&effective_accel)
+                .expect("a tier is dispatched on only after its quota was read")
+                .retract();
+            accel_dispatched.entry(effective_accel.clone()).or_default().tally();
+            scheduled.tally();
             log(&format!(
                 "Dispatched agent VM {instance_ref} accel={effective_accel} machine={mt} \
                  preemptible={preemptible_for_call}"
@@ -223,5 +254,5 @@ pub async fn dispatch_agent_vms_with_template(
             }
         }
     }
-    Ok(created)
+    Ok(scheduled - scheduled_so_far)
 }

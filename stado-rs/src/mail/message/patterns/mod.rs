@@ -13,10 +13,16 @@ use regex::Regex;
 fn declared(name: &str) -> Regex {
     let document: serde_json::Value = serde_json::from_str(include_str!("patterns.json"))
         .expect("patterns.json beside this file is valid JSON");
-    let source = document[name]
-        .as_str()
-        .unwrap_or_else(|| panic!("patterns.json declares no {name}"));
-    Regex::new(source).unwrap_or_else(|error| panic!("declared {name} pattern: {error}"))
+    // The declaration ships with the binary, so a missing or malformed
+    // pattern is a build defect: it stops here by name.
+    let source = match document[name].as_str() {
+        Some(source) => source,
+        None => panic!("patterns.json declares no {name}"),
+    };
+    match Regex::new(source) {
+        Ok(pattern) => pattern,
+        Err(error) => panic!("declared {name} pattern: {error}"),
+    }
 }
 
 pub(super) static URL_RE: LazyLock<Regex> = LazyLock::new(|| declared("url"));

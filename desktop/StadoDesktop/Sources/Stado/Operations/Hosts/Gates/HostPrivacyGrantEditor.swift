@@ -8,13 +8,15 @@ import WisentDesignSystem
 /// writer moved, is shown as the command wrote it.
 struct HostPrivacyGrantEditor: View {
     let host: String
-    let declared: [PrivacyGrantDeclaration]
+    /// The grants `host privacy` reported for the host; `nil` while the
+    /// report was not read, which is not an empty declaration.
+    let declared: [PrivacyGrantDeclaration]?
     let refresh: () async -> Void
 
     @StateObject private var store = HostPrivacyGrantStore()
     @State private var editing: PrivacyGrantDeclaration?
     @State private var program = ""
-    @State private var folder = HostPrivacy.folders.first?.key ?? ""
+    @State private var folder = HostPrivacy.documents.key
     @State private var reason = ""
 
     private var draft: PrivacyGrantDeclaration {
@@ -25,8 +27,11 @@ struct HostPrivacyGrantEditor: View {
         )
     }
 
-    /// The list the write would send, for the command shown before it runs.
-    private var proposed: [PrivacyGrantDeclaration] {
+    /// The list the write would send, for the command shown before it runs;
+    /// `nil` while the host's declared grants were not read, since the write
+    /// replaces the whole list and would drop every grant it did not know.
+    private var proposed: [PrivacyGrantDeclaration]? {
+        guard let declared else { return nil }
         if let editing {
             return declared.map { $0.id == editing.id ? draft : $0 }
         }
@@ -34,12 +39,24 @@ struct HostPrivacyGrantEditor: View {
     }
 
     private var canWrite: Bool {
-        !draft.program.isEmpty && !draft.reason.isEmpty && !store.mutation.isWorking
+        declared != nil && !draft.program.isEmpty && !draft.reason.isEmpty && !store.mutation.isWorking
+    }
+
+    static let unreadDeclarations =
+        "The host's declared grants were not read, so nothing is written: a write replaces the whole list."
+
+    /// The rows the host reported; none while the report was not read, and
+    /// the command line below says so.
+    private var rows: [PrivacyGrantDeclaration] {
+        switch declared {
+        case .some(let declared): return declared
+        case .none: return []
+        }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-            ForEach(declared) { grant in
+            ForEach(rows) { grant in
                 HStack(spacing: WisentDesign.Space.x2) {
                     Text("\(grant.program) — \(HostPrivacy.name(of: grant.folder)) — \(grant.reason)")
                         .font(WisentTypeScale.identifier())
@@ -49,7 +66,7 @@ struct HostPrivacyGrantEditor: View {
                         .disabled(store.mutation.isWorking)
                     Button("Remove", role: .destructive) {
                         Task {
-                            if await store.remove(host: host, from: declared, grant: grant) { await refresh() }
+                            if await store.remove(host: host, from: rows, grant: grant) { await refresh() }
                         }
                     }
                     .disabled(store.mutation.isWorking)
@@ -66,11 +83,22 @@ struct HostPrivacyGrantEditor: View {
             TextField("why the program reads that folder", text: $reason)
                 .textFieldStyle(.roundedBorder)
                 .font(WisentTypeScale.body())
-            if let arguments = try? HostPrivacyGrantStore.setArguments(host: host, grants: proposed) {
+            // The command the write would run, why its argument list cannot
+            // be written from the draft, or why no write may run yet.
+            switch proposed.map({ list in Result(catching: { try HostPrivacyGrantStore.setArguments(host: host, grants: list) }) }) {
+            case .some(.success(let arguments)):
                 Text(StadoCLI.commandLine(arguments))
                     .font(WisentTypeScale.identifier())
                     .textSelection(.enabled)
                     .foregroundStyle(WisentDesign.ink)
+            case .some(.failure(let error)):
+                Text(error.localizedDescription)
+                    .font(WisentTypeScale.identifier())
+                    .foregroundStyle(WisentDesign.danger)
+            case .none:
+                Text(Self.unreadDeclarations)
+                    .font(WisentTypeScale.identifier())
+                    .foregroundStyle(WisentDesign.danger)
             }
             HStack(spacing: WisentDesign.Space.x2) {
                 WisentActionButton(
@@ -105,6 +133,7 @@ struct HostPrivacyGrantEditor: View {
     }
 
     private func submit() async {
+        guard let declared else { return }
         let written: Bool
         if let editing {
             written = await store.change(host: host, in: declared, replacing: editing, with: draft)

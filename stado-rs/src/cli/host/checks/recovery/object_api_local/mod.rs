@@ -76,7 +76,9 @@ pub enum PlistCommands {
         #[arg(long)]
         config: String,
     },
-    /// Succeed when both definitions parse and are equal.
+    /// Succeed when both definitions exist and are equal; fail silently when
+    /// either is absent or they differ. A definition that exists but cannot
+    /// be read or parsed is refused with its path and cause.
     Equal { left: PathBuf, right: PathBuf },
 }
 
@@ -170,8 +172,12 @@ pub async fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
             };
             definition::render(&installed, &staged, &wanted).map_err(refused)
         }
-        C::Plist(PlistCommands::Equal { left, right }) => verdict(definition::same(&left, &right)),
-        C::Boundary(BoundaryCommands::Ready { state }) => verdict(config::boundary_ready(&state)),
+        C::Plist(PlistCommands::Equal { left, right }) => {
+            verdict(definition::same(&left, &right).map_err(refused)?)
+        }
+        C::Boundary(BoundaryCommands::Ready { state }) => {
+            verdict(config::boundary_ready(&state).map_err(refused)?)
+        }
         C::Route {
             mode,
             source,

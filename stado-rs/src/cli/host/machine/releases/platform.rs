@@ -3,7 +3,8 @@ use crate::cli::CmdError;
 use crate::cli::host::checks::probes::print_json;
 
 /// `stado host run build TARGET --manifest-path PATH --bin NAME [--json]` —
-/// execute the one Cargo build Stado declares for a delivered source tree.
+/// execute the release build Stado declares for a delivered source tree.
+/// Source-only checking belongs to `stado product cargo check`.
 ///
 /// The variable inputs select a manifest and one binary; they never select a
 /// shell command, Cargo flags, toolchain path, or working directory. Both the

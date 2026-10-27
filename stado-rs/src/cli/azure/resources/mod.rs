@@ -19,34 +19,38 @@ use denies::handle_deny_assignments;
 use discovery::{agent_principal_id, discover_storage_account};
 use roles::{control_principal_id, ensure_role};
 
+/// The value a flag states, else the configured one; empty when neither does.
+fn flag_or_configured(flag: Option<&str>, configured: &str) -> String {
+    match flag.filter(|value| !value.is_empty()) {
+        Some(value) => value.to_string(),
+        None => configured.to_string(),
+    }
+}
+
 pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(), CmdError> {
-    let subscription = args
-        .subscription
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| crate::config::azure_subscription_id().to_string());
+    let subscription = flag_or_configured(
+        args.subscription.as_deref(),
+        crate::config::azure_subscription_id(),
+    );
     if subscription.is_empty() {
         return Err(CmdError::usage(
             "--subscription or AZURE_SUBSCRIPTION_ID is required",
         ));
     }
-    let resource_group = args
-        .resource_group
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| crate::config::azure_resource_group().to_string());
-    let configured_storage_account = args
-        .storage_account
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| crate::config::wc_azure_storage_account().to_string());
+    let resource_group = flag_or_configured(
+        args.resource_group.as_deref(),
+        crate::config::azure_resource_group(),
+    );
+    let configured_storage_account = flag_or_configured(
+        args.storage_account.as_deref(),
+        crate::config::wc_azure_storage_account(),
+    );
     let operator = refresh_operator_token(&args.operator_role).await?;
     let control_principal = control_principal_id(&args).await?;
     let http = reqwest::Client::new();
-    let storage_account = if configured_storage_account.is_empty() {
+    // The storage account named, else the one discovery finds in the group;
+    // none when the group holds none, and the storage role is then not asked for.
+    let storage_account: Option<String> = if configured_storage_account.is_empty() {
         discover_storage_account(
             &http,
             &operator.access_token,
@@ -54,9 +58,8 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
             &resource_group,
         )
         .await?
-        .unwrap_or_default()
     } else {
-        configured_storage_account
+        Some(configured_storage_account)
     };
     let agent_principal = agent_principal_id(
         &http,
@@ -68,7 +71,7 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
     .await?;
     let subscription_scope = format!("/subscriptions/{subscription}");
     let group_scope = format!("{subscription_scope}/resourceGroups/{resource_group}");
-    let storage_scope = (!storage_account.is_empty()).then(|| {
+    let storage_scope = storage_account.as_ref().map(|storage_account| {
         format!("{group_scope}/providers/Microsoft.Storage/storageAccounts/{storage_account}")
     });
 
@@ -154,10 +157,9 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
         args.remove_deny_name.as_deref(),
     )
     .await?;
-    let failed = roles
-        .iter()
-        .filter(|role| role.get("ok").and_then(Value::as_bool) != Some(true))
-        .count();
+    let assigned = |role: &Value| role.get("ok").and_then(Value::as_bool) == Some(true);
+    let all_assigned = roles.iter().all(assigned);
+    let failed = roles.iter().filter(|role| !assigned(role)).count();
     crate::cli::print_answer(
         &json!({
             "operator": {
@@ -167,7 +169,7 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
             },
             "subscription_id": subscription,
             "resource_group": resource_group,
-            "storage_account": if storage_account.is_empty() { Value::Null } else { Value::String(storage_account.to_string()) },
+            "storage_account": storage_account,
             "control_principal_id": control_principal,
             "agent_principal_id": agent_principal,
             "roles": roles,
@@ -176,7 +178,7 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
         }),
         args.json,
     )?;
-    if failed == 0 {
+    if all_assigned {
         Ok(())
     } else {
         Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE))

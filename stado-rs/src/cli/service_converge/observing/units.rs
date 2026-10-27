@@ -16,25 +16,32 @@ pub(super) fn declared_service_records(target: &ComputeTarget) -> Vec<(String, S
         Some(Value::String(value)) => value.clone(),
         _ => String::new(),
     };
-    target
+    // A target without a services list declares no records. A record is
+    // labelled by the first name key it carries; one with none is kept
+    // with an empty label, which `unit_for_root` skips.
+    let records = match target
         .extra
         .get(service::SERVICES_KEY)
         .and_then(Value::as_array)
-        .map(|records| {
-            records
+    {
+        Some(records) => records.as_slice(),
+        None => &[],
+    };
+    records
+        .iter()
+        .filter_map(Value::as_object)
+        .map(|record| {
+            let label = match service::NAME_KEYS
                 .iter()
-                .filter_map(Value::as_object)
-                .map(|record| {
-                    let label = service::NAME_KEYS
-                        .iter()
-                        .map(|key| text(record, key))
-                        .find(|value| !value.is_empty())
-                        .unwrap_or_default();
-                    (label, text(record, "path"), text(record, "kind"))
-                })
-                .collect()
+                .map(|key| text(record, key))
+                .find(|value| !value.is_empty())
+            {
+                Some(label) => label,
+                None => String::new(),
+            };
+            (label, text(record, "path"), text(record, "kind"))
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// The program one declared unit runs, read out of the unit file itself.
@@ -85,7 +92,7 @@ async fn unit_program(
     )
     .await?;
     let program = extracted.stdout.trim();
-    Ok((extracted.ok() && !program.is_empty()).then(|| program.to_string()))
+    Ok((extracted.succeeded() && !program.is_empty()).then(|| program.to_string()))
 }
 
 /// The declared unit whose program lives under this artefact, or nothing.
@@ -107,9 +114,11 @@ pub(super) async fn unit_for_root(
         if label.is_empty() {
             continue;
         }
-        let path = path
-            .strip_prefix("$HOME/")
-            .map_or_else(|| path.clone(), |rest| format!("{home}/{rest}"));
+        // A `$HOME`-relative unit path is resolved under the host's home.
+        let path = match path.strip_prefix("$HOME/") {
+            Some(rest) => format!("{home}/{rest}"),
+            None => path.clone(),
+        };
         let Some(program) = unit_program(target, runner, &path, kind).await? else {
             continue;
         };
@@ -135,35 +144,37 @@ async fn launchd_state(
         runner,
     )
     .await?;
-    let value = if printed.ok() {
-        printed
-            .stdout
-            .lines()
-            .find_map(|line| {
-                let (key, value) = line.split_once('=')?;
-                (key.trim() == "state").then(|| value.trim_start().to_string())
-            })
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "loaded".to_string())
+    let value = if printed.succeeded() {
+        // `launchctl print` names the state on its own line; a unit it
+        // prints without one is loaded, which is what print answering at
+        // all proves.
+        match printed.stdout.lines().find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key.trim() == "state").then(|| value.trim_start().to_string())
+        }) {
+            Some(state) if !state.is_empty() => state,
+            Some(_) | None => "loaded".to_string(),
+        }
     } else {
+        // `print` refuses a unit that is not loaded; `list` then says whether
+        // it is loaded without a process, running, or absent.
         let listed = host_channel::run_program(target, &["/bin/launchctl", "list"], runner).await?;
-        listed
-            .stdout
-            .lines()
-            .find_map(|line| {
-                let mut fields = line.split_whitespace();
-                let pid = fields.next()?;
-                fields.next()?;
-                let name = fields.next()?;
-                (name == label).then(|| {
-                    if pid == "-" {
-                        "loaded-not-running".to_string()
-                    } else {
-                        format!("running-pid-{pid}")
-                    }
-                })
+        match listed.stdout.lines().find_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?;
+            fields.next()?;
+            let name = fields.next()?;
+            (name == label).then(|| {
+                if pid == "-" {
+                    "loaded-not-running".to_string()
+                } else {
+                    format!("running-pid-{pid}")
+                }
             })
-            .unwrap_or_else(|| "not-loaded".to_string())
+        }) {
+            Some(state) => state,
+            None => "not-loaded".to_string(),
+        }
     };
     Ok(value.replace(' ', "-"))
 }
@@ -186,7 +197,7 @@ async fn systemd_state(
     if found.stdout.trim().is_empty() {
         return Ok("no-systemctl".to_string());
     }
-    let asked = if path.starts_with("/etc/systemd/system/") {
+    let asked = if std::path::Path::new(path).starts_with(service::SYSTEMD_UNITS) {
         host_channel::run_program(target, &["systemctl", "is-active", label], runner).await?
     } else {
         host_channel::run_command(
@@ -218,18 +229,27 @@ pub(super) async fn unit_state(
     if kind == "systemd" {
         return systemd_state(target, runner, label, path).await;
     }
-    if path.starts_with("/Library/LaunchDaemons/") {
+    if std::path::Path::new(path).starts_with(service::LAUNCHD_DAEMONS) {
         return launchd_state(target, runner, label, "system").await;
     }
-    if uid.is_none() {
-        let answered = host_channel::run_program(target, &["/usr/bin/id", "-u"], runner).await?;
-        *uid = Some(answered.stdout.trim().to_string());
-    }
-    launchd_state(
-        target,
-        runner,
-        label,
-        &format!("gui/{}", uid.as_deref().unwrap_or_default()),
-    )
-    .await
+    // An `id -u` that printed nothing names no GUI domain; asking `gui/`
+    // would read every unit there as absent.
+    let login_uid = match uid.as_deref() {
+        Some(known) => known.to_string(),
+        None => {
+            let answered =
+                host_channel::run_program(target, &["/usr/bin/id", "-u"], runner).await?;
+            let read = answered.stdout.trim().to_string();
+            if read.is_empty() {
+                return Err(format!(
+                    "the login user's uid on {} was not read: `/usr/bin/id -u` printed nothing, so {label}'s GUI domain is unknown",
+                    target.name
+                )
+                .into());
+            }
+            *uid = Some(read.clone());
+            read
+        }
+    };
+    launchd_state(target, runner, label, &format!("gui/{login_uid}")).await
 }

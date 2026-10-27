@@ -48,7 +48,11 @@ root pfctl -a com.wisent.stado-precheck -sr >/dev/null 2>&1 ||
 # the wrong process: a host can run several, one of which may run as the same
 # account, so the check would report a healthy listener while the pre-check
 # runner's own listener is dead and every job for these labels queues.
-listener_owner=$(/bin/ps -Ao user=,comm= |
+# The listener's path is read from its argument vector (`args`, whose first
+# word is the path RunnerService.js started it by): macOS prints `comm` as the
+# bare name `Runner.Listener`, which no runner root prefixes, so the check
+# reported a dead listener on every Mac.
+listener_owner=$(/bin/ps -Ao user=,args= |
   /usr/bin/awk -v root="$runner_root/" \
     '$2 ~ /Runner\.Listener$/ && index($2, root) == 1 && !seen++ { owner = $1 } END { print owner }') ||
   fail 'the process table could not be read'
@@ -90,7 +94,7 @@ if [ -n "$listener_problem" ]; then listener_state=$listener_problem; fi
 # Every runner listener this host runs, with its owner and its path. A host
 # carries several runners, and "a Runner.Listener is running" says nothing
 # about which one: an operator reading a queued job needs the distinction.
-listeners=$(/bin/ps -Ao user=,comm= |
+listeners=$(/bin/ps -Ao user=,args= |
   /usr/bin/awk '$2 ~ /Runner\.Listener$/ { printf "%s %s; ", $1, $2 }')
 scope=$(root sed -n '3p' "$runner_root/.stado/registered-runner" 2>/dev/null || true)
 job_holder=none
@@ -118,7 +122,7 @@ if [ -f "$runner_root/.runner" ] && dscl . -read /Users/$runner_user >/dev/null 
   chmod 600 "$token_file"
   root chown "$runner_user:$runner_user" "$token_file"
   root sudo -u "$runner_user" -H -- /usr/bin/env \
-    HOME="$runner_root" PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin TOKEN_FILE="$token_file" \
+    HOME="$runner_root" PATH=__TOOL_PATH__ TOKEN_FILE="$token_file" \
     /bin/bash -c 'cd "$HOME"; read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; exec ./config.sh remove --unattended'
   token=
 fi

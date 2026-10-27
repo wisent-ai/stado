@@ -7,7 +7,7 @@ use std::fs;
 use serde_json::{json, Value};
 
 use crate::deploy::host_storage_reconcile_program::json::{
-    canonical, immutable_json_file, now, object, read_json, truthy,
+    canonical, immutable_json_file, now, read_json, time_recorded,
 };
 use crate::deploy::host_storage_reconcile_program::{Context, Step, SCHEMA};
 
@@ -18,9 +18,9 @@ const FINAL_ENGINE: &str = "stado.typed-lifecycle-final.v1";
 
 /// The receipt summary line the worker parses.
 pub(super) fn emit(context: &Context, receipt: &Value) {
-    let decisions = object(receipt, "lifecycle_decision_counts");
-    let count = |key: &str| receipt.get(key).cloned().unwrap_or(json!(0));
-    let decided = |key: &str| decisions.get(key).cloned().unwrap_or(json!(0));
+    // Every member is reported as the receipt carries it; one the receipt
+    // lacks reads as null through the index, never as a count of zero or an
+    // empty list the receipt did not write.
     let summary = json!({
         "schema": receipt.get("schema"),
         "transaction": receipt.get("transaction"),
@@ -28,16 +28,15 @@ pub(super) fn emit(context: &Context, receipt: &Value) {
         "receipt_path": context.receipt_path,
         "backup_checkpoint": receipt.get("backup_checkpoint"),
         "primary_checkpoint": receipt.get("primary_checkpoint"),
-        "backup_objects": count("backup_objects"),
-        "primary_objects": count("primary_objects"),
-        "verified_objects": count("verified_objects"),
-        "backup_physical_files": count("backup_physical_files"),
-        "primary_physical_files": count("primary_physical_files"),
-        "physical_snapshot_exclusions":
-            receipt.get("physical_snapshot_exclusions").cloned().unwrap_or(json!([])),
+        "backup_objects": receipt["backup_objects"],
+        "primary_objects": receipt["primary_objects"],
+        "verified_objects": receipt["verified_objects"],
+        "backup_physical_files": receipt["backup_physical_files"],
+        "primary_physical_files": receipt["primary_physical_files"],
+        "physical_snapshot_exclusions": receipt["physical_snapshot_exclusions"],
         "lifecycle_decisions": {
-            "queued_cancellation": decided("queued_cancellation"),
-            "retained_outcome_cleanup": decided("retained_outcome_cleanup"),
+            "queued_cancellation": receipt["lifecycle_decision_counts"]["queued_cancellation"],
+            "retained_outcome_cleanup": receipt["lifecycle_decision_counts"]["retained_outcome_cleanup"],
         },
     });
     println!("STADO_STORAGE_RECONCILE\t{}", canonical(&summary));
@@ -262,7 +261,7 @@ pub(super) fn finalize(context: &Context, mut receipt: Value) -> Step<()> {
         FINAL_ENGINE,
     )?;
     set(&mut receipt, "status", json!(ReceiptStatus::Complete));
-    if !truthy(receipt.get("completed_at")) {
+    if !time_recorded(receipt.get("completed_at"), "completed_at")? {
         set(&mut receipt, "completed_at", now()?);
     }
     set(&mut receipt, "canonical_recovery_verified", json!(true));

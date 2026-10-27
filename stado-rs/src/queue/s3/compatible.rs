@@ -111,10 +111,10 @@ impl S3Backend {
                 let addressing = <Addressing as serde::Deserialize>::deserialize(
                     serde_json::Value::String(addressing.to_string()),
                 )
-                .map_err(|_| {
+                .map_err(|error| {
                     StorageError::Other(format!(
                         "{} is {addressing:?}; use \"path\" (the bucket in the path) or \
-                         \"virtual-hosted\" (the bucket in the host name)",
+                         \"virtual-hosted\" (the bucket in the host name): {error}",
                         binding("addressing")
                     ))
                 })?;

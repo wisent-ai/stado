@@ -56,9 +56,11 @@ pub(crate) async fn refuse_unheld_secret_items(
     let unheld: Vec<String> = secret_env
         .iter()
         .filter_map(|(env, reference)| {
-            let role = reference
-                .split_once('#')
-                .map_or(reference.as_str(), |(role, _)| role);
+            // A reference is `role#field`, or a bare role naming the whole item.
+            let role = match reference.split_once('#') {
+                Some((role, _field)) => role,
+                None => reference.as_str(),
+            };
             crate::skarbiec::roles::item_for_role(&visible, role)
                 .err()
                 .map(|refusal| format!("{env}: {refusal}"))

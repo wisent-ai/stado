@@ -10,7 +10,7 @@ struct Isolated {
 
 impl Isolated {
     fn new(case: &str) -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("config-init");
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/journeys/config-init");
         std::fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(format!("{case}-{}", std::process::id()));
         std::fs::create_dir(&root).expect("create a new isolated case directory");

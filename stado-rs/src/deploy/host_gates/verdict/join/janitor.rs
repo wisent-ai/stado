@@ -24,10 +24,16 @@ pub(super) struct JanitorHealth {
     pub(super) prevented_age_seconds: Option<i64>,
 }
 
-fn parsed(stamp: Option<&str>) -> Option<DateTime<Utc>> {
-    stamp
-        .and_then(|stamp| DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok())
-        .map(|stamp| stamp.with_timezone(&Utc))
+/// A janitor stamp as a time. `Z` is RFC 3339's own spelling of UTC and is
+/// read as such. A stamp that is not a time is judged as none: the verdict
+/// this feeds treats a missing promise as stalled, which is the safe reading
+/// of a corrupt one, and the raw stamp travels in the reading beside it.
+pub(super) fn parsed(stamp: Option<&str>) -> Option<DateTime<Utc>> {
+    let stamp = stamp?;
+    match DateTime::parse_from_rfc3339(stamp) {
+        Ok(stamp) => Some(stamp.with_timezone(&Utc)),
+        Err(_not_a_time) => None,
+    }
 }
 
 impl JanitorHealth {

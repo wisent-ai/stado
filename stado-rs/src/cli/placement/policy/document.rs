@@ -154,19 +154,26 @@ pub(crate) fn policy_document(
 /// that name what was written. Read back out rather than kept beside the
 /// document, so a report cannot describe a list the file does not carry.
 pub(crate) fn policy_actions(policy: &Value) -> Vec<String> {
+    // A document without a host entry, or whose entry lists no actions,
+    // permits none: the worker acts on the list the file carries.
+    match first_host(policy)
+        .and_then(|host| host.get("actions"))
+        .and_then(Value::as_array)
+    {
+        Some(actions) => actions
+            .iter()
+            .filter_map(|action| action.as_str().map(str::to_string))
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// The entry the policy document carries for the host it was written for.
+fn first_host(policy: &Value) -> Option<&Value> {
     policy
         .get("hosts")
         .and_then(Value::as_array)
         .and_then(|hosts| hosts.first())
-        .and_then(|host| host.get("actions"))
-        .and_then(Value::as_array)
-        .map(|actions| {
-            actions
-                .iter()
-                .filter_map(|action| action.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// The two facts a host-side writer compares before it rewrites the file: the
@@ -175,13 +182,12 @@ pub(crate) fn policy_actions(policy: &Value) -> Vec<String> {
 /// `_source` carries a fresh timestamp on every build, so comparing whole
 /// documents would rewrite the file on every pass and republish a policy the
 /// worker is already running. What the worker acts on is exactly this pair.
+/// An entry that does not state `enabled` is not enabled: the worker reads
+/// the flag the same way.
 pub(crate) fn policy_effect(policy: &Value) -> (bool, Vec<String>) {
-    let enabled = policy
-        .get("hosts")
-        .and_then(Value::as_array)
-        .and_then(|hosts| hosts.first())
+    let enabled = first_host(policy)
         .and_then(|host| host.get("enabled"))
         .and_then(Value::as_bool)
-        .unwrap_or(false);
+        == Some(true);
     (enabled, policy_actions(policy))
 }

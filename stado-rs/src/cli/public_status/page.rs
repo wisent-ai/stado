@@ -4,19 +4,10 @@
 
 use serde_json::Value;
 
-/// `text` safe inside HTML element content and attribute values.
+/// `text` safe inside HTML element content and attribute values: the XML
+/// escaper quick-xml defines, the one the S3 and Azure readers use.
 fn escaped(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for letter in text.chars() {
-        match letter {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            other => out.push(other),
-        }
-    }
-    out
+    quick_xml::escape::escape(text).into_owned()
 }
 
 /// A field as it reads on the page: a string as it is, anything else as JSON.

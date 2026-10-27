@@ -21,6 +21,7 @@
 //! workdir cleaner reads an absent source the same as its cleaned sentinel.
 
 use crate::models::Job;
+use crate::primitives::tally::Tally;
 use crate::queue::runs::TERMINAL_PREFIXES;
 use crate::queue::storage::records::{cleaned_transition_id, transition_path, JobTransition};
 use crate::queue::storage::{transition_is_retired, JobStorage};
@@ -59,7 +60,7 @@ impl JobStorage {
         old.sort_by_key(|blob| blob.updated);
         let mut sweep = SettledSentinelSweep::default();
         for blob in old {
-            sweep.inspected += 1;
+            sweep.inspected.tally();
             let Some(body) = self.download_text(&blob.name).await? else {
                 continue;
             };
@@ -71,14 +72,14 @@ impl JobStorage {
                 }
             };
             if cleaned_transition_id(&job.state).is_none() {
-                sweep.kept += 1;
+                sweep.kept.tally();
                 continue;
             }
             if self.job_is_settled_terminal(&job.job_id).await? {
                 self.delete_blob(&blob.name).await?;
-                sweep.retired += 1;
+                sweep.retired.tally();
             } else {
-                sweep.kept += 1;
+                sweep.kept.tally();
             }
         }
         Ok(sweep)

@@ -133,8 +133,10 @@ pub async fn dispatch(command: HostCommands) -> Result<(), String> {
     }
 }
 
+/// The home every Stado file is kept under, as the text the transaction's
+/// paths are written with ([`crate::config_file::home_text`]).
 fn home() -> Result<String, String> {
-    std::env::var("HOME").map_err(|_| "HOME is not set".to_string())
+    crate::config_file::home_text()
 }
 
 /// A path as the transaction writes it (`~/…`, `$HOME/…` or `${HOME}/…`)
@@ -172,10 +174,14 @@ fn checked(argv: &[&str], accepted: &[i32]) -> Result<Output, String> {
     } else {
         stderr
     };
-    Err(detail
-        .trim()
-        .lines()
-        .last()
-        .unwrap_or("native service command failed")
-        .to_string())
+    // The command's last printed line is its reason; one that printed
+    // nothing is said to have failed silently, with its exit status.
+    Err(match detail.trim().lines().last() {
+        Some(last_line) => last_line.to_string(),
+        None => format!(
+            "native service command {} failed with {} and printed nothing",
+            argv.join(" "),
+            output.status
+        ),
+    })
 }

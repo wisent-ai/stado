@@ -50,9 +50,9 @@ pub fn fixed_root(
     Ok(Some(resolved))
 }
 
-/// Python `_free_bytes` (`shutil.disk_usage(home).free`).
+/// The bytes an unprivileged writer may still take on the volume holding
+/// `home`, as the disk-full rule reads that volume (saturating where the
+/// plain product overflowed).
 pub fn free_bytes(home: &Path) -> Result<i64, JanitorError> {
-    let stat = nix::sys::statvfs::statvfs(home)
-        .map_err(|e| JanitorError::from(io::Error::from_raw_os_error(e as i32)))?;
-    Ok((stat.blocks_available() as i64) * (stat.fragment_size() as i64))
+    Ok(crate::providers::local::space_reclaim::rule::read_volume(home)?.free_bytes)
 }

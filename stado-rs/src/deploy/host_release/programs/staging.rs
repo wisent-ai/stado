@@ -39,7 +39,7 @@ pub async fn ensure_stado_reader_archive(
     );
     if host_channel::run_script(target, &cached_script, runner)
         .await?
-        .ok()
+        .succeeded()
     {
         return Ok(());
     }
@@ -50,7 +50,7 @@ pub async fn ensure_stado_reader_archive(
     );
     let output = host_channel::run_script(target, &script, runner).await?;
     let output_markers = markers(&output.stdout);
-    if !output.ok() || marker(&output_markers, "step") != "retain_reader_archive" {
+    if !output.succeeded() || marker(&output_markers, "step") != "retain_reader_archive" {
         return Err(DeployError::unreachable(format!(
             "cannot retain the verified Stado reader archive: {}",
             step_failure(&output_markers, &output)
@@ -84,7 +84,7 @@ pub async fn stage_declared_release(
     let plan = plan(&target, &request, self_store)?;
     let probe = host_channel::run_script(&target, &probe_script(&plan), runner).await?;
     let probe_markers = markers(&probe.stdout);
-    if !probe.ok()
+    if !probe.succeeded()
         || marker(&probe_markers, "step") != "probe"
         || marker(&probe_markers, "sanitizer") != "ok"
         || marker(&probe_markers, "platform") != plan.platform
@@ -96,7 +96,7 @@ pub async fn stage_declared_release(
     }
     let stage = host_channel::run_script(&target, &stage_script(&plan), runner).await?;
     let stage_markers = markers(&stage.stdout);
-    if !stage.ok() || marker(&stage_markers, "step") != "stage" {
+    if !stage.succeeded() || marker(&stage_markers, "step") != "stage" {
         return Err(DeployError::unreachable(step_failure(
             &stage_markers,
             &stage,

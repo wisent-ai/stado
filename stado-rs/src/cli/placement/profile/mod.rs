@@ -1,8 +1,10 @@
-//! `stado placement profile`: list, show, declare and remove the placement
-//! profiles the registry holds, the declarations `placement standby` adds a
-//! host to and `placement move` moves.
+//! `stado placement profile`: list, show, declare, remove and draft the
+//! placement profiles the registry holds, the declarations `placement
+//! standby` adds a host to and `placement move` moves.
 
 mod document;
+mod draft;
+pub(in crate::cli::placement) mod stores;
 
 use std::io::Read;
 use std::path::Path;
@@ -42,6 +44,42 @@ pub enum ProfileCommands {
         name: String,
         #[arg(long)]
         json: bool,
+    },
+    /// Add to a placement profile every store the catalog declares for its
+    /// products that it does not carry, so a move takes what the services
+    /// keep; a profile that carries them all is left alone. With --all,
+    /// every profile the registry declares, one commit each.
+    Sync {
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        name: Option<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the placement profile that would move fixed directory routes
+    /// active on one host, with each unit's file, kind and label read from
+    /// the host's declared services; nothing is written. Pipe it to
+    /// `declare --file -` to give the services that profile.
+    Draft {
+        /// The profile's name.
+        name: String,
+        /// A fixed directory route to include; repeat for each, in start
+        /// order (they stop in the reverse).
+        #[arg(long = "service", required = true)]
+        services: Vec<String>,
+        /// SERVICE=URL: the loopback HTTP URL that answers when SERVICE is
+        /// healthy; needed for a service whose product the catalog declares
+        /// no GET answering request for, which is asked at its directory
+        /// address otherwise.
+        #[arg(long = "probe")]
+        probes: Vec<String>,
+        /// A file under the host's home that moves with the services.
+        #[arg(long = "state")]
+        state: Vec<String>,
+        /// A directory under the host's home that moves whole.
+        #[arg(long = "tree-state")]
+        tree_state: Vec<String>,
     },
 }
 
@@ -134,6 +172,30 @@ fn receipt(action: &str, name: &str, generation: &str, json_output: bool) -> Res
     Ok(())
 }
 
+/// The profile `draft` prints for one fixed route, named after the service,
+/// with nothing but what the registry and the catalog hold (the catalog's
+/// probe and stores); with `declare`, also declared in one registry commit,
+/// linking the route to it. The drafted profile, or the draft's refusal.
+pub(in crate::cli::placement) async fn profile_fixed_route(
+    service: &str,
+    declare: bool,
+) -> Result<Value, CmdError> {
+    let document = registry::fetch_document().await?;
+    let services = [service.to_string()];
+    let inputs = draft::DraftInputs {
+        name: service,
+        services: &services,
+        probes: &[],
+        state: &[],
+        tree_state: &[],
+    };
+    let profile = draft::draft(&document, &inputs)?;
+    if declare {
+        registry::commit_document(|current| document::declare(current, &profile)).await?;
+    }
+    Ok(profile)
+}
+
 pub async fn dispatch(command: ProfileCommands) -> Result<(), CmdError> {
     match command {
         ProfileCommands::List { json } => list(json).await,
@@ -145,10 +207,31 @@ pub async fn dispatch(command: ProfileCommands) -> Result<(), CmdError> {
                 registry::commit_document(|current| document::declare(current, &candidate)).await?;
             receipt("declared", &name, &generation, json)
         }
+        ProfileCommands::Sync { name: Some(name), json, .. } => stores::sync_state(&name, json).await,
+        ProfileCommands::Sync { name: None, json, .. } => stores::sync_every_state(json).await,
         ProfileCommands::Remove { name, json } => {
             let generation =
                 registry::commit_document(|current| document::remove(current, &name)).await?;
             receipt("removed", &name, &generation, json)
+        }
+        ProfileCommands::Draft {
+            name,
+            services,
+            probes,
+            state,
+            tree_state,
+        } => {
+            let document = registry::fetch_document().await?;
+            let inputs = draft::DraftInputs {
+                name: &name,
+                services: &services,
+                probes: &probes,
+                state: &state,
+                tree_state: &tree_state,
+            };
+            let profile = draft::draft(&document, &inputs)?;
+            println!("{}", serde_json::to_string_pretty(&profile)?);
+            Ok(())
         }
     }
 }

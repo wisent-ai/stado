@@ -6,7 +6,7 @@
 //! request's body (UploadPart) or from an object the signer may read
 //! (UploadPartCopy, [`copied`]). The parts stay invisible to object
 //! listings; ListMultipartUploads and ListParts read them ([`listed`]),
-//! `stado storage abort-upload` discards an upload a client abandoned, and
+//! `stado storage abort` discards an upload a client abandoned, and
 //! completion writes the one object and removes every part.
 
 mod copied;
@@ -26,7 +26,9 @@ use crate::remote::sigv4::hex_sha256;
 use super::auth::Signer;
 use super::listing::S3_NAMESPACE;
 use super::objects::{user_metadata, write_metadata};
-use super::wire::{allow, body, document, element, elements, escape, invalid, object, storage};
+use super::wire::{
+    allow, body, document, escape, invalid, object, read, storage, CompleteDocument,
+};
 use super::wire::{Query, S3Error, XML};
 use staged::{invalid_part, manifest_path, no_upload, part_number, part_path, upload_id};
 use staged::{upload_prefix, Manifest, PART_SHA256};
@@ -179,9 +181,10 @@ impl Dashboard {
         })?;
         let mut composed = Vec::new();
         let mut previous: Option<u32> = None;
-        for part in elements(text, "Part") {
-            let number = match element(part, "PartNumber").map_err(invalid)? {
-                Some(raw) => part_number(&raw)?,
+        let asked: CompleteDocument = read(text, "CompleteMultipartUpload").map_err(invalid)?;
+        for part in asked.parts {
+            let number = match &part.number {
+                Some(raw) => part_number(raw)?,
                 None => return Err(invalid_part("a Part names no PartNumber".to_string())),
             };
             if let Some(previous) = previous.filter(|previous| number <= *previous) {
@@ -192,8 +195,8 @@ impl Dashboard {
                 ));
             }
             previous = Some(number);
-            let stated = element(part, "ETag")
-                .map_err(invalid)?
+            let stated = part
+                .etag
                 .ok_or_else(|| invalid_part(format!("part {number} names no ETag")))?;
             let bytes = self
                 .store

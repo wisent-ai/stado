@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::queue::submit::{submit_batch, SubmitOptions};
+use crate::queue::submit::SubmitOptions;
 use crate::queue::{JobStorage, StorageError};
 use crate::schedules::{
     abandon_pending_occurrence, accept_pending_occurrence, begin_pending_occurrence,
@@ -86,10 +86,12 @@ pub(super) async fn enqueue_pending_occurrence(
     else {
         return Ok(None);
     };
-    let pending = sched
-        .pending_occurrence
-        .clone()
-        .expect("begin preserves pending occurrence");
+    let pending = sched.pending_occurrence.clone().ok_or_else(|| {
+        StorageError::Other(format!(
+            "schedule {} lost its pending occurrence when it was begun",
+            sched.schedule_id
+        ))
+    })?;
     let options = SubmitOptions {
         bucket: store.bucket_name().to_string(),
         run_id: pending.run_id.clone(),
@@ -97,7 +99,7 @@ pub(super) async fn enqueue_pending_occurrence(
         ..sched.submit_options()
     };
     let commands = [sched.command.clone()];
-    let mut jobs = match submit_batch(&commands, &options).await {
+    let mut jobs = match store.submit_batch(&commands, &options).await {
         Ok(jobs) => jobs,
         Err(error) => {
             // A validation rejection is a property of this exact request, so

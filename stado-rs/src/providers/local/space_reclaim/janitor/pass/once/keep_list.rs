@@ -35,15 +35,13 @@ async fn listed_live_job_ids(
 /// Build the conservative listing-only keep set.
 ///
 /// Public as the existing seam that proves no queue document is downloaded.
-/// A read that fails leaves the keep-list unavailable and the cleaner
-/// deletes nothing; a read that is slow is still a read, and waiting for it
-/// deletes nothing either.
-pub async fn live_job_ids_within(store: &crate::queue::JobStorage) -> Option<Vec<String>> {
-    listed_live_job_ids(store)
-        .await
-        .ok()
-        .map(BTreeSet::into_iter)
-        .map(Iterator::collect)
+/// A read that fails leaves the keep-list unavailable, with the read that
+/// failed and why, and the cleaner deletes nothing; a read that is slow is
+/// still a read, and waiting for it deletes nothing either.
+pub async fn live_job_ids_within(
+    store: &crate::queue::JobStorage,
+) -> Result<Vec<String>, JanitorError> {
+    Ok(listed_live_job_ids(store).await?.into_iter().collect())
 }
 
 /// Refine the listing-only keep set for the bounded workdir population.

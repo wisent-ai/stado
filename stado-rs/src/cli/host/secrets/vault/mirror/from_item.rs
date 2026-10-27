@@ -18,11 +18,16 @@ use serde_json::Value;
 
 use crate::cli::CmdError;
 
-const OWNER_ONLY_FILE: u32 = 0o600;
-const OWNER_ONLY_DIRECTORY: u32 = 0o700;
+/// Read and write by the owner alone, as POSIX names the bits. `mode_t` is
+/// narrower than `u32` on macOS, so the widening is lossless.
+const OWNER_ONLY_FILE: u32 = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
+/// Read, write and search by the owner alone.
+const OWNER_ONLY_DIRECTORY: u32 = nix::libc::S_IRWXU as u32;
 
 fn invoke(skarbiec: &str, arguments: &[String]) -> Result<Value, CmdError> {
-    let verb = arguments.first().map(String::as_str).unwrap_or("");
+    // The whole line is named in every error: a caller passing no verb is
+    // then visible as `skarbiec ` rather than hidden behind a blank word.
+    let verb = arguments.join(" ");
     let output = crate::wait::output(Command::new(skarbiec).args(arguments)).map_err(|error| {
         CmdError::click(format!("skarbiec {verb} could not start: {error}"))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
@@ -128,7 +133,8 @@ fn register(
     field: &str,
     arguments: &[String],
 ) -> Result<Value, CmdError> {
-    if arguments.get(..2) != Some(&["grant".to_string(), "issue".to_string()]) {
+    let issues_grant = matches!(arguments, [verb, noun, ..] if verb == "grant" && noun == "issue");
+    if !issues_grant {
         return Err(CmdError::usage(
             "an existing vault field can only supply grant issue",
         ));

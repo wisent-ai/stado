@@ -14,7 +14,7 @@
 //! a bucket other than the signer's namespace is `AccessDenied`, and
 //! turning versioning on is `NotImplemented` while reading it answers the
 //! empty configuration of a never-versioned bucket. Then
-//! the real `stado` legs run ([`clients`]): `stado storage s3-endpoint`,
+//! the real `stado` legs run ([`clients`]): `stado storage endpoint`,
 //! presigned URLs, `stado storage cp|mv`, a queue kept on the endpoint, and
 //! `stado storage stat` of one key through that queue's S3 backend.
 //!
@@ -68,11 +68,7 @@ fn holds(deployment: &Deployment, key: &str, file: &std::path::Path) -> bool {
 /// Put, list, read back, copy, upload in parts and delete with the AWS CLI.
 fn objects(deployment: &mut Deployment, part: usize) {
     let body = deployment.root.join("small.txt");
-    fs::write(
-        &body,
-        format!("written through s3 {}", uuid::Uuid::new_v4()),
-    )
-    .unwrap();
+    fs::write(&body, format!("written through s3 {}", uuid::Uuid::new_v4())).unwrap();
     let body_path = body.to_string_lossy().into_owned();
     let mut put = aws(deployment, part);
     put.args(["s3api", "put-object", "--bucket", NAMESPACE]);
@@ -85,10 +81,7 @@ fn objects(deployment: &mut Deployment, part: usize) {
     list.args(["--prefix", "probe/"]);
     let listed = json_of(&deployment.must("aws s3api list-objects-v2", list));
     let contents = listed["Contents"].as_array().unwrap();
-    let keys: Vec<&str> = contents
-        .iter()
-        .map(|entry| entry["Key"].as_str().unwrap())
-        .collect();
+    let keys: Vec<&str> = contents.iter().map(|entry| entry["Key"].as_str().unwrap()).collect();
     assert_eq!(keys, vec!["probe/a.txt"], "{listed}");
 
     let back = deployment.root.join("back.txt");
@@ -128,10 +121,7 @@ fn objects(deployment: &mut Deployment, part: usize) {
     server_copy.args(["s3", "cp", &target, &copied]);
     deployment.must("aws s3 cp (server-side, in parts)", server_copy);
     let assembled = fs::read(deployment.stored(copy_key)).unwrap();
-    assert!(
-        assembled == bytes,
-        "the copied parts do not hold the source's bytes in order"
-    );
+    assert!(assembled == bytes, "the copied parts do not hold the source's bytes in order");
 
     let mut written: Vec<&str> = Vec::new();
     written.push("probe/a.txt");
@@ -140,19 +130,9 @@ fn objects(deployment: &mut Deployment, part: usize) {
     written.push(copy_key);
     for key in written {
         let mut delete = aws(deployment, part);
-        delete.args([
-            "s3api",
-            "delete-object",
-            "--bucket",
-            NAMESPACE,
-            "--key",
-            key,
-        ]);
+        delete.args(["s3api", "delete-object", "--bucket", NAMESPACE, "--key", key]);
         deployment.must("aws s3api delete-object", delete);
-        assert!(
-            !deployment.stored(key).exists(),
-            "{key} is still in the store after DeleteObject"
-        );
+        assert!(!deployment.stored(key).exists(), "{key} is still in the store after DeleteObject");
     }
 }
 
@@ -162,32 +142,20 @@ fn refusals(deployment: &mut Deployment, part: usize) {
     let mut forged = deployment.aws(NAMESPACE, "not-the-bearer", part);
     forged.args(["s3api", "list-objects-v2", "--bucket", NAMESPACE]);
     let refusal = deployment.refused("aws s3api list-objects-v2 (wrong secret)", forged);
-    assert!(
-        refusal.contains("SignatureDoesNotMatch"),
-        "a wrong secret: {refusal}"
-    );
+    assert!(refusal.contains("SignatureDoesNotMatch"), "a wrong secret: {refusal}");
 
     let bearer = deployment.bearer.clone();
     let mut stranger = deployment.aws("no-such-namespace", &bearer, part);
     stranger.args(["s3api", "list-objects-v2", "--bucket", "no-such-namespace"]);
     let refusal = deployment.refused("aws s3api list-objects-v2 (unknown access key)", stranger);
-    assert!(
-        refusal.contains("InvalidAccessKeyId"),
-        "an unknown access key id: {refusal}"
-    );
+    assert!(refusal.contains("InvalidAccessKeyId"), "an unknown access key id: {refusal}");
     let named = refusal.contains(NAMESPACE);
-    assert!(
-        !named,
-        "the refusal named a served namespace to an unsigned caller: {refusal}"
-    );
+    assert!(!named, "the refusal named a served namespace to an unsigned caller: {refusal}");
 
     let mut other = aws(deployment, part);
     other.args(["s3api", "list-objects-v2", "--bucket", "another-bucket"]);
     let refusal = deployment.refused("aws s3api list-objects-v2 (another bucket)", other);
-    assert!(
-        refusal.contains("AccessDenied"),
-        "another bucket: {refusal}"
-    );
+    assert!(refusal.contains("AccessDenied"), "another bucket: {refusal}");
 
     // Objects keep no versions: the bucket reads as never versioned (the
     // AWS CLI prints nothing for that empty configuration), and turning
@@ -195,18 +163,12 @@ fn refusals(deployment: &mut Deployment, part: usize) {
     let mut read = aws(deployment, part);
     read.args(["s3api", "get-bucket-versioning", "--bucket", NAMESPACE]);
     let answer = deployment.must("aws s3api get-bucket-versioning", read);
-    assert!(
-        answer.trim().is_empty(),
-        "a bucket that keeps no versions: {answer}"
-    );
+    assert!(answer.trim().is_empty(), "a bucket that keeps no versions: {answer}");
     let mut enable = aws(deployment, part);
     enable.args(["s3api", "put-bucket-versioning", "--bucket", NAMESPACE]);
     enable.args(["--versioning-configuration", "Status=Enabled"]);
     let refusal = deployment.refused("aws s3api put-bucket-versioning", enable);
-    assert!(
-        refusal.contains("NotImplemented"),
-        "turning versioning on: {refusal}"
-    );
+    assert!(refusal.contains("NotImplemented"), "turning versioning on: {refusal}");
 }
 
 #[tokio::test]

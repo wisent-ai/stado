@@ -38,7 +38,7 @@ final class MachineEnrollmentStore: ObservableObject {
     @Published var mintedInvite: MachineInvite?
     @Published var outcome: WisentMutationOutcome = .idle
     /// How long the next invitation stays usable, as `stado fleet invite
-    /// --expires` takes it (a number plus s, m, h or d). The operator states
+    /// create --expires` takes it (a number plus s, m, h or d). The operator states
     /// it before minting; it starts empty because Stado assumes no lifetime.
     @Published var inviteLifetime = ""
     @Published var failure: MachineEnrollmentFailure?
@@ -74,10 +74,26 @@ final class MachineEnrollmentStore: ObservableObject {
     init(defaults: UserDefaults = .standard, client: FleetControlClient = FleetControlClient()) {
         self.defaults = defaults
         self.client = client
-        draft = Self.load(MachineEnrollmentDraft.self, key: Self.draftKey, from: defaults)
-            ?? MachineEnrollmentDraft()
-        plan = Self.load(MachineEnrollmentPlan.self, key: Self.planKey, from: defaults)
-            ?? MachineEnrollmentPlan()
+        var unreadable: MachineEnrollmentFailure?
+        switch Self.load(MachineEnrollmentDraft.self, key: Self.draftKey, from: defaults) {
+        case .none:
+            draft = MachineEnrollmentDraft()
+        case .saved(let saved):
+            draft = saved
+        case .unreadable(let reason):
+            draft = MachineEnrollmentDraft()
+            unreadable = .savedState(reason, document: "enrollment draft")
+        }
+        switch Self.load(MachineEnrollmentPlan.self, key: Self.planKey, from: defaults) {
+        case .none:
+            plan = MachineEnrollmentPlan()
+        case .saved(let saved):
+            plan = saved
+        case .unreadable(let reason):
+            plan = MachineEnrollmentPlan()
+            unreadable = .savedState(reason, document: "enrollment plan")
+        }
+        failure = unreadable
         if let previousRecovery = draft.agentRecovery {
             recoverySteps = Self.finishedRecoverySteps(
                 succeeded: previousRecovery.ok,
@@ -86,8 +102,26 @@ final class MachineEnrollmentStore: ObservableObject {
         }
     }
 
+    /// The dashboard address the console is pointed at, parsed, or the
+    /// parser's refusal of what was typed; an empty address is refused too,
+    /// since nothing is configured.
+    var addressReading: Result<OperationsDashboardAddress, Error> {
+        Result { try OperationsDashboardAddress(addressString) }
+    }
+
     var address: OperationsDashboardAddress? {
-        try? OperationsDashboardAddress(addressString)
+        switch addressReading {
+        case .success(let address): return address
+        case .failure: return nil
+        }
+    }
+
+    /// Why the console is not configured, in the address parser's words.
+    var configurationProblem: String? {
+        switch addressReading {
+        case .success: return nil
+        case .failure(let error): return "\(addressString.isEmpty ? "no Stado endpoint is selected" : "\(addressString) is not a Stado endpoint"): \(error)"
+        }
     }
 
     var isConfigured: Bool { address != nil }
@@ -130,20 +164,43 @@ final class MachineEnrollmentStore: ObservableObject {
     /// this console at a different Stado therefore starts over rather than
     /// carrying half of the previous attempt across.
     func configureEndpoint(_ endpoint: String?) {
-        let normalized = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let endpoint else {
+            clearEndpoint()
+            return
+        }
+        pointAt(endpoint.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Forget the endpoint and every attempt made against it.
+    func clearEndpoint() {
+        guard !addressString.isEmpty else { return }
+        addressString = ""
+        forgetAttempt()
+        draft = MachineEnrollmentDraft()
+        plan = MachineEnrollmentPlan()
+        resetRecoverySelection()
+        persistDraft()
+        persistPlan()
+    }
+
+    private func pointAt(_ normalized: String) {
         guard normalized != addressString else { return }
         addressString = normalized
-        outcome = .idle
-        failure = nil
-        navigationBlock = nil
-        methods = []
-        mintedInvite = nil
+        forgetAttempt()
         guard draft.endpoint != normalized || plan.endpoint != normalized else { return }
         draft = MachineEnrollmentDraft(endpoint: normalized)
         plan = MachineEnrollmentPlan(endpoint: normalized)
         resetRecoverySelection()
         persistDraft()
         persistPlan()
+    }
+
+    private func forgetAttempt() {
+        outcome = .idle
+        failure = nil
+        navigationBlock = nil
+        methods = []
+        mintedInvite = nil
     }
 
     // MARK: Internals

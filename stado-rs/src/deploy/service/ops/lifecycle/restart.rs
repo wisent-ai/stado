@@ -90,14 +90,7 @@ pub async fn reload_service_with_password(
         )
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
-    privileged_restart_system_daemon(
-        target,
-        service,
-        sudo_password.unwrap_or_default(),
-        true,
-        runner,
-    )
-    .await
+    privileged_restart_system_daemon(target, service, sudo_password, true, runner).await
 }
 
 /// The system-domain half of [`restart_service`]: probe, then either end the
@@ -131,22 +124,16 @@ async fn restart_system_daemon(
             ))
         })?;
         if cached_argv != daemon.argv {
-            return privileged_restart_system_daemon(
-                target,
-                service,
-                sudo_password.unwrap_or_default(),
-                true,
-                runner,
-            )
-            .await;
+            return privileged_restart_system_daemon(target, service, sudo_password, true, runner)
+                .await;
         }
     }
     if !daemon.restartable_unprivileged() {
-        if let Some(password) = sudo_password {
-            return privileged_restart_system_daemon(target, service, password, false, runner)
+        if sudo_password.is_some() {
+            return privileged_restart_system_daemon(target, service, sudo_password, false, runner)
                 .await;
         }
-        return privileged_restart_system_daemon(target, service, "", false, runner)
+        return privileged_restart_system_daemon(target, service, None, false, runner)
             .await
             .map_err(|error| {
                 error.within(format!(
@@ -185,7 +172,8 @@ async fn restart_system_daemon(
         return Ok(report);
     }
     if let Some(password) = sudo_password {
-        return privileged_restart_system_daemon(target, service, password, false, runner).await;
+        return privileged_restart_system_daemon(target, service, Some(password), false, runner)
+            .await;
     }
     Ok(report)
 }

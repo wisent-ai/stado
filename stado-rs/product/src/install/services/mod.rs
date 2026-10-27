@@ -1,5 +1,9 @@
 mod activation;
+mod resident;
 pub(super) use activation::Activation;
+pub use resident::{
+    admit_units, installed_binary, migrate_host_unit, restore_host_unit, restored_after,
+};
 
 use crate::{
     catalog::text,
@@ -14,108 +18,6 @@ use serde_json::{json, Value};
 /// service directory recorded during `service ensure`, so the address is read
 /// from the directory after that, never written in the catalog.
 const SERVICE_URL_PLACEHOLDER: &str = "$STADO_SERVICE_URL";
-
-/// Reconcile a resident product's native unit through the prepared candidate
-/// while the predecessor still occupies its installed path. The candidate's
-/// own catalog, rather than the installed binary's old catalog, owns argv.
-/// Only the product this installation runs as owns such a unit: the candidate
-/// is asked `registry self` and `service ensure`, verbs only that program has,
-/// so a product whose id is not the running program's name has none.
-pub fn migrate_host_unit(
-    product: &Value,
-    home: &std::path::Path,
-    plan: &crate::install::plan::Prepared,
-) -> Result<Option<String>> {
-    let id = text(product, "id")?;
-    let running = std::env::current_exe().context("reading the running program's path")?;
-    if running.file_name() != Some(std::ffi::OsStr::new(id)) {
-        return Ok(None);
-    }
-    let label = text(&product["service"], "unit")?;
-    let native = [
-        home.join("Library/LaunchAgents")
-            .join(format!("{label}.plist")),
-        std::path::PathBuf::from("/Library/LaunchDaemons").join(format!("{label}.plist")),
-        home.join(".config/systemd/user")
-            .join(format!("{label}.service")),
-        std::path::PathBuf::from("/etc/systemd/system").join(format!("{label}.service")),
-    ];
-    let mut present = false;
-    for path in native {
-        present |= path
-            .try_exists()
-            .with_context(|| format!("checking native unit {}", path.display()))?;
-    }
-    if !present {
-        return Ok(None);
-    }
-    let candidate = prepared_binary(plan, id)?;
-    let self_host = checked(std::process::Command::new(candidate).args([
-        "registry",
-        "self",
-        "--local",
-        "--name-only",
-    ]))?;
-    let host = String::from_utf8(self_host.stdout)?;
-    let host = host.trim();
-    if host.is_empty() {
-        bail!("the installed {label} unit cannot be migrated: registry self --local named no host");
-    }
-    let outcome = checked(std::process::Command::new(candidate).args([
-        "service",
-        "ensure",
-        id,
-        "--host",
-        host,
-        "--reason",
-        "converge the product unit to the candidate release command line",
-        "--json",
-    ]))?;
-    eprintln!(
-        "{id}: migrated {label} on {host} before replacing its executable: {}",
-        String::from_utf8_lossy(&outcome.stdout).trim()
-    );
-    Ok(Some(host.to_owned()))
-}
-
-fn prepared_binary<'a>(
-    plan: &'a crate::install::plan::Prepared,
-    product: &str,
-) -> Result<&'a std::path::Path> {
-    plan.placements
-        .iter()
-        .find(|placed| {
-            !placed.symbolic
-                && placed
-                    .destination
-                    .file_name()
-                    .is_some_and(|name| name == product)
-        })
-        .map(|placed| placed.source.as_path())
-        .with_context(|| {
-            format!(
-                "{product}: prepared installation has no executable to check against managed units"
-            )
-        })
-}
-
-/// Parse the native unit's actual arguments with the prepared executable
-/// before any installed bytes are replaced. Migration above has already
-/// rewritten a catalog-owned unit while the old executable still answers.
-pub fn admit_units(plan: &crate::install::plan::Prepared, product: &str, host: &str) -> Result<()> {
-    let candidate = prepared_binary(plan, product)?;
-    let output = checked(
-        std::process::Command::new(candidate)
-            .args(["quality", "units", "--candidate"])
-            .arg(candidate)
-            .args(["--program", product, "--host", host]),
-    )?;
-    eprintln!(
-        "{product}: {}",
-        String::from_utf8_lossy(&output.stdout).trim()
-    );
-    Ok(())
-}
 
 pub fn ensure(product: &Value, recipe: &Value, host: &str) -> Result<Value> {
     if product["service"]["installable"] != true {

@@ -24,10 +24,19 @@ use crate::config::WebApiProduct;
 /// again asks again.
 pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> {
     let url = verify_url(declared);
-    let registrar = crate::config::web_api_edge()
-        .ok()
-        .and_then(|edge| edge.registrar_credential())
-        .unwrap_or("<registrar item>");
+    // The hint names the registrar credential the edge declares; an edge
+    // that declares none leaves the placeholder, and one that is refused
+    // says so inside it.
+    let registrar = match crate::config::web_api_edge() {
+        Ok(edge) => match edge.registrar_credential() {
+            Some(item) => item.to_string(),
+            None => "<registrar item>".to_string(),
+        },
+        Err(problems) => format!(
+            "<registrar item; web_api.edge is refused: {}>",
+            problems.join("; ")
+        ),
+    };
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
@@ -42,18 +51,21 @@ pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> 
             ))
         })?;
     let status = response.status();
-    let header = |name: &str| {
+    // A header is quoted as the answer carried it; one that is not visible
+    // ASCII is quoted in its escaped form, and one absent is shown absent.
+    let header = |name: &str| -> Option<String> {
         response
             .headers()
             .get(name)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_string()
+            .map(|value| match value.to_str() {
+                Ok(text) => text.to_string(),
+                Err(_not_visible_ascii) => format!("{value:?}"),
+            })
     };
     let server = header("server");
     let vercel = header(VERCEL_HEADER);
     let location = header("location");
-    if status.is_success() && vercel.is_empty() {
+    if status.is_success() && vercel.is_none() {
         return Ok(json!({
             "url": url,
             "status": status.as_u16(),
@@ -61,7 +73,7 @@ pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> 
             VERCEL_HEADER: Value::Null,
         }));
     }
-    if !vercel.is_empty() {
+    if let Some(vercel) = &vercel {
         return Err(CmdError::click(format!(
             "{url} answers from Vercel — HTTP {status}, server {server:?}, {VERCEL_HEADER} \
              {vercel:?} — so {} is not published by the fleet. The record was written; either the \

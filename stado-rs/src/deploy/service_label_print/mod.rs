@@ -126,15 +126,10 @@ pub async fn inspect_label_carrying(
     runner: &Runner,
 ) -> Result<LabelState, DeployError> {
     let key = (target.name.clone(), label.to_string());
-    let previous = CARRIED
-        .lock()
-        .map_err(|poisoned| {
-            DeployError(format!(
-                "the carried unit events are poisoned: a read ended while recording ({poisoned})"
-            ))
-        })?
-        .get(&key)
-        .cloned();
+    // One get or insert per read: a read that panicked while recording left
+    // the map whole, so it is taken back instead of refusing every later
+    // inspection of every unit.
+    let previous = crate::primitives::lock::held(&CARRIED).get(&key).cloned();
     // Nothing to carry: the first read of this unit reads the log whatever
     // the load, since an unread unit has no events at all, so the ceiling
     // is not asked and no skip is recorded for a read that happened.
@@ -170,15 +165,7 @@ pub async fn inspect_label_carrying(
             }
         }
     } else if let Some(key_now) = state.event_key.clone() {
-        CARRIED
-            .lock()
-            .map_err(|poisoned| {
-                DeployError(format!(
-                    "the carried unit events are poisoned: a read ended while recording \
-                     ({poisoned})"
-                ))
-            })?
-            .insert(
+        crate::primitives::lock::held(&CARRIED).insert(
                 key,
                 Carried {
                     key: key_now,

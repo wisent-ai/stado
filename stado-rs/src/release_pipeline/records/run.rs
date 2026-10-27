@@ -34,7 +34,13 @@ impl ReleaseRunState {
     /// the desktop — and a spelling nobody compiles is a spelling nobody
     /// renames.
     pub fn named(state: &str) -> Option<Self> {
-        serde_json::from_value(serde_json::Value::String(state.to_owned())).ok()
+        // The enum declares every state the product writes; a word it does
+        // not deserialize is by that declaration not one, and the caller
+        // reports the word it read.
+        match serde_json::from_value(serde_json::Value::String(state.to_owned())) {
+            Ok(named) => Some(named),
+            Err(_not_a_declared_state) => None,
+        }
     }
 
     /// The channel pointer has moved, so these bytes are installable.

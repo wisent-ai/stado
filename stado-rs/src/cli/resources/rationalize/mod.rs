@@ -83,7 +83,12 @@ struct RationalizationReport {
 pub async fn run(args: &RationalizeArgs) -> Result<(), CmdError> {
     let age = planner::parse_age(&args.min_age)?;
     let min_age = u64::try_from(age.num_seconds())
-        .map_err(|_| CmdError::usage("--min-age is outside the supported range"))?;
+        .map_err(|error| {
+            CmdError::usage(format!(
+                "--min-age of {} seconds is outside the supported range: {error}",
+                age.num_seconds()
+            ))
+        })?;
     let report = build_report(&AuditArgs { min_age }).await?;
     let plan = compile_plan(&report, args.provider.as_deref())?;
     let hash = planner::write_plan(&plan, &args.output)?;

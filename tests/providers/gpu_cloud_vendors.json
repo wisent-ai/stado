@@ -8,6 +8,7 @@
   "nebius": "nebius.project_id",
   "oblivus": "oblivus.location",
   "oracle": "oracle.region",
+  "ovhcloud": "ovhcloud.api",
   "runpod": "runpod.image",
   "salad": "salad.organization",
   "scaleway": "scaleway.zone",

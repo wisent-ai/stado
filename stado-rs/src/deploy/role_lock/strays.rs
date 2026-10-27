@@ -68,10 +68,14 @@ fn processes() -> Result<Vec<Process>, CmdError> {
     Ok(text.lines().filter_map(parse_line).collect())
 }
 
-/// `pid etime program [role-word …]`.
+/// `pid etime program [role-word …]`. The listing's header line, whose first
+/// word is `PID` and not a number, is the one line that is no process.
 fn parse_line(line: &str) -> Option<Process> {
     let mut words = line.split_whitespace();
-    let pid = words.next()?.parse().ok()?;
+    let pid = match words.next()?.parse() {
+        Ok(pid) => pid,
+        Err(_header_or_not_a_pid) => return None,
+    };
     let running_for = words.next()?.to_string();
     let program = PathBuf::from(words.next()?);
     let rest: Vec<&str> = words.collect();
@@ -113,7 +117,20 @@ pub fn strays(home: &Path) -> Result<Vec<Stray>, CmdError> {
             // Not a role: a one-shot command somebody is running.
             continue;
         }
-        let reason = if !process.program.is_file() {
+        // A program that cannot be examined refuses the scan: called gone,
+        // a live role was reported a stray and stopped for it.
+        let program_gone = match std::fs::metadata(&process.program) {
+            Ok(metadata) => !metadata.is_file(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(error) => {
+                return Err(CmdError::from(error).within(format!(
+                    "examine {}, the program of pid {}",
+                    process.program.display(),
+                    process.pid
+                )))
+            }
+        };
+        let reason = if program_gone {
             Some((
                 StrayReason::ProgramGone,
                 format!("{} no longer exists", process.program.display()),
@@ -189,10 +206,11 @@ pub fn end_strays(strays: &[Stray]) -> Result<Vec<Stray>, CmdError> {
 }
 
 /// Block until `pid` no longer exists: a killed process is reaped by its
-/// own parent, so this asks the kernel whether it is still there, yielding
-/// between asks, and never guesses a duration.
+/// own parent, so this asks whether it is still there — primitives::procutil's
+/// one answer, which reaps this process's own exited child and reads EPERM as
+/// a live process — yielding between asks, and never guesses a duration.
 fn gone(pid: nix::unistd::Pid) -> Result<(), CmdError> {
-    while nix::sys::signal::kill(pid, None).is_ok() {
+    while crate::primitives::procutil::pid_alive(pid.as_raw()) {
         std::thread::yield_now();
     }
     Ok(())

@@ -188,6 +188,7 @@ impl CatalogIdentity {
 pub fn declared_units(
     target: &ComputeTarget,
     product: &Product,
+    home: &str,
 ) -> Result<Vec<service::ManagedService>, DeployError> {
     let registry_units = service::declared_services(target);
     let mut resolved = Vec::new();
@@ -232,7 +233,7 @@ pub fn declared_units(
         // A unit whose owner cannot be read is not a unit of another
         // product: read that way, a delivery would leave a unit running the
         // old release unrestarted. The delivery refuses naming it instead.
-        let runs_product = service::declared_owner(target, &declared)
+        let runs_product = service::declared_owner(target, &declared, home)
             .map_err(|error| {
                 DeployError(format!(
                     "{}: whether {} runs {} cannot be read, so the delivery cannot say which units it restarts: {error}",

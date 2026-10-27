@@ -64,9 +64,14 @@ pub(crate) async fn claim_release_coordinate(
     .await
     {
         Ok(_) => Ok(CoordinateClaim::Claimed),
+        // A refused create-only write is either a claim that landed first
+        // or a store that refused; the re-read tells them apart, and a
+        // re-read that fails too is named beside the write's refusal.
         Err(error) => match crate::cli::storage::fetch_object_from_writer(&uri).await {
             Ok(existing) => judge_existing_claim(&claim, &existing, &uri),
-            Err(_) => Err(error),
+            Err(unread) => Err(error.also(format!(
+                "and {uri} could not be read back to tell a lost race from a refusal: {unread}"
+            ))),
         },
     }
 }
@@ -94,9 +99,14 @@ async fn claim_release_version(
     .await
     {
         Ok(_) => Ok(CoordinateClaim::Claimed),
+        // A refused create-only write is either a claim that landed first
+        // or a store that refused; the re-read tells them apart, and a
+        // re-read that fails too is named beside the write's refusal.
         Err(error) => match crate::cli::storage::fetch_object_from_writer(&uri).await {
             Ok(existing) => judge_existing_version_claim(claim, &existing, &uri),
-            Err(_) => Err(error),
+            Err(unread) => Err(error.also(format!(
+                "and {uri} could not be read back to tell a lost race from a refusal: {unread}"
+            ))),
         },
     }
 }

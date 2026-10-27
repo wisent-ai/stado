@@ -186,7 +186,9 @@ pub(crate) fn workspace(requested: Option<PathBuf>) -> Result<PathBuf, CmdError>
             .map_err(|error| CmdError::usage(format!("--root {}: {error}", root.display())));
     }
     let here = std::env::current_dir()?;
-    let checkout = crate::binary::provenance::checkout_root(&here).ok_or_else(|| {
+    let checkout = crate::binary::provenance::checkout_root(&here)
+        .map_err(CmdError::click)?
+        .ok_or_else(|| {
         CmdError::click(format!(
             "{} is not inside a product checkout, so the workspace holding the \
              checkouts cannot be read from it; name it with --root <DIR>",

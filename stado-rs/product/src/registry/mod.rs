@@ -12,7 +12,22 @@ use std::{
 };
 
 pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
-    emit(&mutate(action, Arguments::from_matches(args), runtime)?)?;
+    let args = Arguments::from_matches(args);
+    if action == "check-claims" {
+        // Reads and fetches only: a claim whose source changed or cannot be
+        // fetched fails the command after every claim was checked.
+        let [id] = args.positional.as_slice() else {
+            bail!("registry check-claims requires one product ID");
+        };
+        let (answer, current) = catalog::check_claims(runtime, id)?;
+        emit(&answer)?;
+        return Ok(if current {
+            libc::EXIT_SUCCESS
+        } else {
+            libc::EXIT_FAILURE
+        });
+    }
+    emit(&mutate(action, args, runtime)?)?;
     Ok(libc::EXIT_SUCCESS)
 }
 

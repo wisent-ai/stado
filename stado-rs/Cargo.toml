@@ -47,7 +47,18 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 regex = "1"
+# Release tag order by SemVer precedence (https://semver.org), pre-release identifiers included.
+semver = "1"
+# The module-reachability gate parses each source file and the crate manifest
+# rather than scanning their text.
+syn = { version = "2", features = ["full"] }
+toml = "0.8"
 base64 = "0.22"
+# The S3 body checksums by the crates that define them: the CRC catalogue and MD5.
+crc = "3"
+md5 = "0.8"
+# The S3 request documents (Delete, CompleteMultipartUpload) and XML escaping.
+quick-xml = { version = "0.41", features = ["serialize"] }
 url = "2"
 futures = "0.3"
 gcp_auth = "0.12"
@@ -125,6 +136,10 @@ name = "wait-registered"
 path = "../tests/wait/registered.rs"
 
 [[test]]
+name = "wait-measured"
+path = "../tests/wait/measured.rs"
+
+[[test]]
 name = "release-destinations-journey"
 path = "../tests/release_destinations/journey.rs"
 
@@ -198,6 +213,10 @@ name = "capability-garbled-requirement"
 path = "../tests/capability/garbled_requirement.rs"
 
 [[test]]
+name = "capability-schedule-pin"
+path = "../tests/capability/schedule_pin.rs"
+
+[[test]]
 name = "scheduler"
 path = "../tests/scheduler/main.rs"
 
@@ -230,16 +249,20 @@ name = "storage-replica"
 path = "../tests/storage/replica.rs"
 
 [[test]]
+name = "storage-fence"
+path = "../tests/storage/fence.rs"
+
+[[test]]
+name = "storage-archive-reproducible"
+path = "../tests/storage/archive/reproducible.rs"
+
+[[test]]
 name = "storage-served-objects"
 path = "../tests/storage/served_objects.rs"
 
 [[test]]
 name = "storage-bearer-rotation"
 path = "../tests/storage/bearer_rotation.rs"
-
-[[test]]
-name = "storage-stat"
-path = "../tests/storage/stat/main.rs"
 
 [[test]]
 name = "storage-refusal-closed-port"
@@ -294,14 +317,6 @@ name = "storage-transport-fault"
 path = "../tests/storage/transport_fault.rs"
 
 [[test]]
-name = "storage-s3-endpoint"
-path = "../tests/storage/s3_endpoint/main.rs"
-
-[[test]]
-name = "storage-buckets"
-path = "../tests/storage/buckets/main.rs"
-
-[[test]]
 name = "quality-release-inputs"
 path = "../tests/quality/release_inputs.rs"
 
@@ -334,12 +349,20 @@ name = "quality-lock-steps"
 path = "../tests/quality/lock_steps.rs"
 
 [[test]]
+name = "release-module-reachability"
+path = "../tests/release/module_reachability.rs"
+
+[[test]]
 name = "release-install-converge-preflight"
 path = "../tests/release_install/converge_preflight.rs"
 
 [[test]]
 name = "cli-surface-object-verbs"
 path = "../tests/cli_surface/object_verbs.rs"
+
+[[test]]
+name = "cli-surface-desktop-paths"
+path = "../tests/cli_surface/desktop_paths.rs"
 
 [[test]]
 name = "config-deployers"
@@ -352,6 +375,10 @@ path = "../tests/release_install/caller_records.rs"
 [[test]]
 name = "fleet-lifecycle"
 path = "../tests/fleet/lifecycle.rs"
+
+[[test]]
+name = "fleet-ingress-machine"
+path = "../tests/fleet/ingress_machine.rs"
 
 [[test]]
 name = "host-silence-lost-refusal"
@@ -399,6 +426,10 @@ path = "../tests/vault_authority/host_unreadable.rs"
 [[test]]
 name = "service-serving-unreadable-directory"
 path = "../tests/service_serving/unreadable_directory.rs"
+
+[[test]]
+name = "web-declared-override"
+path = "../tests/web/declared_override.rs"
 
 [[test]]
 name = "directory-connect-not-serving"
@@ -457,6 +488,10 @@ path = "../tests/host_exec/pool_entries.rs"
 [[test]]
 name = "schedule-declaration"
 path = "../tests/schedule/declaration.rs"
+
+[[test]]
+name = "schedule-listing"
+path = "../tests/schedule/listing.rs"
 
 [[test]]
 name = "service-answering-stands"

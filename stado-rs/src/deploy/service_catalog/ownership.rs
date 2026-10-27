@@ -139,10 +139,11 @@ pub fn owner_of(
 
 /// The `stado serve` roles a command line of `entry`'s program does the work
 /// of: the words after the program, read by Stado's own command definitions.
-/// Empty when the line runs neither or runs no role.
-pub fn host_roles(entry: &CatalogService, line: &str) -> Vec<&'static str> {
+/// Empty when the line runs neither or runs no role; a serve line this build
+/// cannot read is an error naming it.
+pub fn host_roles(entry: &CatalogService, line: &str) -> Result<Vec<&'static str>, String> {
     let Some(executable) = executable_name(&entry.program) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let words: Vec<&str> = line.split_whitespace().collect();
     let mut rest = words.as_slice();
@@ -152,7 +153,7 @@ pub fn host_roles(entry: &CatalogService, line: &str) -> Vec<&'static str> {
         }
         rest = after;
     }
-    Vec::new()
+    Ok(Vec::new())
 }
 
 /// Whether the program's root command still exists in this release. Removed

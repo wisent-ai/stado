@@ -33,10 +33,12 @@ pub(super) fn request_command(product: &WebApiProduct, schedule: &WebApiSchedule
     match schedule.secret() {
         None => curl,
         Some(secret) => {
-            let prefix = secret
-                .scheme()
-                .map(|scheme| format!("{scheme} "))
-                .unwrap_or_default();
+            // A secret declared with a scheme (`Bearer`) is sent as
+            // `<scheme> <value>`; one declared without is sent bare.
+            let prefix = match secret.scheme() {
+                Some(scheme) => format!("{scheme} "),
+                None => String::new(),
+            };
             format!(
                 "printf '%s: {prefix}%s\\n' '{}' \"${SECRET_VARIABLE}\" | {curl} --header @-",
                 secret.header()
@@ -48,8 +50,8 @@ pub(super) fn request_command(product: &WebApiProduct, schedule: &WebApiSchedule
 /// `ENV=role#field` for the job's secret environment, when the request
 /// carries a secret.
 pub(super) fn secret_env(schedule: &WebApiSchedule) -> Vec<String> {
-    schedule
-        .secret()
-        .map(|secret| vec![format!("{SECRET_VARIABLE}={}", secret.reference())])
-        .unwrap_or_default()
+    match schedule.secret() {
+        Some(secret) => vec![format!("{SECRET_VARIABLE}={}", secret.reference())],
+        None => Vec::new(),
+    }
 }

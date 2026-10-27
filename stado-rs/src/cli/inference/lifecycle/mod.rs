@@ -90,7 +90,7 @@ pub(super) async fn restore_after_failed_apply(
         .map_err(CmdError::from)?;
     wait_ready(&previous_target, previous, &bearer)
         .await
-        .map(|_| ())
+        .map(|_readiness| ())
 }
 pub(super) async fn activate(
     deployment: &schema::Deployment,
@@ -107,7 +107,7 @@ pub(super) async fn activate(
                 .stating(crate::primitives::failure::FailureCode::InfraDown),
         );
     }
-    wait_ready(&target, deployment, &bearer).await.map(|_| ())
+    wait_ready(&target, deployment, &bearer).await.map(|_readiness| ())
 }
 
 mod plan;

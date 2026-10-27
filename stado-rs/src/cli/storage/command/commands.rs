@@ -39,7 +39,7 @@ pub enum StorageCommands {
     /// is true of published objects and false of staged parts. The object API
     /// already authorizes a part's DELETE against its TARGET's publisher, so
     /// the boundary for this was in place and only the command was missing.
-    AbortUpload(StorageAbortUploadArgs),
+    Abort(StorageAbortUploadArgs),
     /// Delete a product object through the provider-neutral Stado namespace.
     /// Release objects are immutable and cannot be deleted.
     Rm(StorageRmArgs),
@@ -51,7 +51,7 @@ pub enum StorageCommands {
     /// client (endpoint, bucket, access key id, region, addressing, where the
     /// secret comes from) after one signed request proves it accepts this
     /// client's secret.
-    S3Endpoint(StorageS3EndpointArgs),
+    Endpoint(StorageS3EndpointArgs),
     /// Copy one product object to another key of its namespace on the
     /// server, through the S3 endpoint's CopyObject; its bytes never come to
     /// this machine, and the target gets the source's metadata.
@@ -63,6 +63,11 @@ pub enum StorageCommands {
     /// self-hosted Stado serves: a namespace on the host and its vault key.
     #[command(subcommand)]
     Bucket(BucketCommands),
+    /// Arm, lift and read the write fence of this host's local object store:
+    /// while armed for a transaction, every write is refused, so a copy of
+    /// the store taken then holds every write it accepted.
+    #[command(subcommand)]
+    Fence(FenceCommands),
 }
 
 pub async fn dispatch(command: StorageCommands) -> Result<(), CmdError> {
@@ -77,12 +82,13 @@ pub async fn dispatch(command: StorageCommands) -> Result<(), CmdError> {
         StorageCommands::Put(args) => put(&args).await,
         StorageCommands::Get(args) => get(&args).await,
         StorageCommands::Objects(args) => objects(&args).await,
-        StorageCommands::AbortUpload(args) => abort_upload(&args).await,
+        StorageCommands::Abort(args) => abort_upload(&args).await,
         StorageCommands::Rm(args) => rm(&args).await,
         StorageCommands::Url(args) => object_url(&args).await,
-        StorageCommands::S3Endpoint(args) => s3_endpoint(&args).await,
+        StorageCommands::Endpoint(args) => s3_endpoint(&args).await,
         StorageCommands::Cp(args) => copy_object(&args, false).await,
         StorageCommands::Mv(args) => copy_object(&args, true).await,
         StorageCommands::Bucket(command) => bucket_dispatch(command).await,
+        StorageCommands::Fence(command) => fence_dispatch(command).await,
     }
 }

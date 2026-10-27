@@ -10,22 +10,19 @@
 
 mod channel;
 
-use std::cmp::Ordering;
 use std::path::Path;
 use std::process::Command;
 use std::sync::LazyLock;
 
 use regex::Regex;
+use semver::Version;
 
 pub(super) use channel::Refusal;
 use channel::{release_base, state, surface_from_release, ObjectState};
 
-static TAG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$")
-        .expect("static")
+static CARGO_VERSION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^version\s*=\s*"(?P<version>[^"]+)"\s*$"#).expect("static")
 });
-static CARGO_VERSION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?m)^version\s*=\s*"([^"]+)"\s*$"#).expect("static"));
 
 /// Byte-exact: the version gate asserts this source string literally.
 const BOOTSTRAP_SOURCE: &str = "bootstrap from the candidate binary; release channel was empty";
@@ -44,41 +41,39 @@ fn git(args: &[&str]) -> Result<String, Refusal> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Release order of `vMAJOR.MINOR.PATCH[-PRE]`: a release above its own
-/// pre-releases, pre-releases ordered by their text.
-fn version_order(left: &str, right: &str) -> Ordering {
-    let key = |tag: &str| {
-        let found = TAG.captures(tag)?;
-        let number = |index: usize| found[index].parse::<u64>().ok();
-        let pre = found.get(4).map(|m| m.as_str().to_string());
-        Some((
-            number(1)?,
-            number(2)?,
-            number(3)?,
-            pre.is_none(),
-            pre.unwrap_or_default(),
-        ))
-    };
-    key(left).cmp(&key(right))
+/// The release a `vMAJOR.MINOR.PATCH[-PRE]` tag names, or none for any other
+/// tag (build metadata included: a release tag carries none).
+fn release(tag: &str) -> Option<Version> {
+    let version = Version::parse(tag.strip_prefix('v')?);
+    match version {
+        Ok(version) if version.build.is_empty() => Some(version),
+        Ok(_with_build_metadata) => None,
+        Err(_not_a_release) => None,
+    }
 }
 
 fn tag_of(reference: &str) -> &str {
-    let reference = reference.strip_prefix("refs/tags/").unwrap_or(reference);
-    reference.strip_suffix("^{}").unwrap_or(reference)
+    let reference = match reference.strip_prefix("refs/tags/") {
+        Some(tag) => tag,
+        None => reference,
+    };
+    match reference.strip_suffix("^{}") {
+        Some(tag) => tag,
+        None => reference,
+    }
 }
 
 /// Every release tag, refusing a clone where some are not visible: a tier
 /// ranked blind could pick a baseline that is not the newest.
-fn visible_versions() -> Result<Vec<String>, Refusal> {
+fn visible_versions() -> Result<Vec<Version>, Refusal> {
     if git(&["rev-parse", "--is-shallow-repository"])?.trim() == "true" {
         return Err("repository is shallow; release tags are not fully visible"
             .to_string()
             .into());
     }
-    let local: std::collections::BTreeSet<String> = git(&["tag", "--list", "v*"])?
+    let local: std::collections::BTreeMap<String, Version> = git(&["tag", "--list", "v*"])?
         .lines()
-        .filter(|tag| TAG.is_match(tag))
-        .map(str::to_string)
+        .filter_map(|tag| release(tag).map(|version| (tag.to_string(), version)))
         .collect();
     let remote_listing = git(&["ls-remote", "--tags", "origin"])?;
     let mut missing: Vec<&str> = remote_listing
@@ -87,27 +82,27 @@ fn visible_versions() -> Result<Vec<String>, Refusal> {
             line.split_once('\t')
                 .map(|(_, reference)| tag_of(reference))
         })
-        .filter(|tag| TAG.is_match(tag) && !local.contains(*tag))
+        .filter(|tag| release(tag).is_some() && !local.contains_key(*tag))
         .collect();
     missing.sort();
     missing.dedup();
     if !missing.is_empty() {
         return Err(format!("release tags are not fully visible: missing {missing:?}").into());
     }
-    Ok(local.iter().map(|tag| tag[1..].to_string()).collect())
+    Ok(local.into_values().collect())
 }
 
 /// The version `stado-rs/Cargo.toml` declares, when it declares a release
 /// version. A manifest that cannot be read is refused naming it: read as no
 /// declared version, the baseline was chosen without the release being made.
-fn declared_version() -> Result<Option<String>, Refusal> {
+fn declared_version() -> Result<Option<Version>, Refusal> {
     let manifest = "stado-rs/Cargo.toml";
     let text = std::fs::read_to_string(manifest)
         .map_err(|error| Refusal::from(format!("cannot read {manifest}: {error}")))?;
     Ok(CARGO_VERSION
         .captures(&text)
-        .map(|captures| captures[1].to_string())
-        .filter(|version| TAG.is_match(&format!("v{version}"))))
+        .and_then(|captures| captures.name("version"))
+        .and_then(|version| release(&format!("v{}", version.as_str()))))
 }
 
 fn native_platform() -> Result<&'static str, Refusal> {
@@ -121,11 +116,15 @@ fn native_platform() -> Result<&'static str, Refusal> {
 /// `stado:VERSION` for the newest whole release, or `bootstrap:VERSION` on
 /// an empty channel; with `output`, also the baseline document.
 pub(super) fn best(stado: &Path, output: Option<&Path>) -> Result<String, Refusal> {
-    let mut versions = visible_versions()?;
+    let mut releases = visible_versions()?;
     let current = declared_version()?;
-    versions.extend(current.clone());
-    versions.sort_by(|a, b| version_order(&format!("v{b}"), &format!("v{a}")));
-    versions.dedup();
+    releases.extend(current.clone());
+    // Newest first, by SemVer precedence: a release above its own
+    // pre-releases, pre-release identifiers compared field by field.
+    releases.sort_by(|left, right| right.cmp_precedence(left));
+    releases.dedup_by(|left, right| left.cmp_precedence(right).is_eq());
+    let versions: Vec<String> = releases.iter().map(Version::to_string).collect();
+    let current = current.map(|version| version.to_string());
     // The surface is architecture-independent: verify and run the release
     // matching this runner only.
     let platform = native_platform()?;

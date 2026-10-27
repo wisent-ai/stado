@@ -28,39 +28,30 @@ pub fn routed_item(routes: &Value, resource: &str) -> Result<RoutedField, Deploy
             ))
             .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
-    let item = row
-        .get("item")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let field = row
-        .get("field")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    if item.is_empty() || field.is_empty() {
-        return Err(DeployError(format!(
-            "capability route for {resource} must name an item and a field"
+    // The route names its item and field as text; a row missing either, or
+    // carrying it in another shape, is a route that cannot be redeemed.
+    let text = |member: &str| match row.get(member).and_then(Value::as_str) {
+        Some(value) if !value.is_empty() => Ok(value.to_string()),
+        _absent_blank_or_not_text => Err(DeployError(format!(
+            "capability route for {resource} must name an item and a field; its {member} is {}",
+            row[member]
         ))
-        .stating(crate::primitives::failure::FailureCode::Config));
-    }
+        .stating(crate::primitives::failure::FailureCode::Config)),
+    };
+    let item = text("item")?;
+    let field = text("field")?;
+    // Advisory, NOT a gate. `routes list` answers these as the process
+    // that asked, and over a host channel that process has no gpg: every
+    // route reports `does not open: spawn gpg` while the broker service
+    // on that same host reads those items fine.
+    // Refusing on them would refuse every real sign-in for the wrong
+    // reason, and redemption is where the item is actually read. A flag the
+    // row does not carry is read as not shown readable.
+    let present = |member: &str| matches!(row.get(member), Some(Value::Bool(true)));
     Ok(RoutedField {
         item,
         field,
-        // Advisory, NOT a gate. `routes list` answers these as the process
-        // that asked, and over a host channel that process has no gpg: every
-        // route reports `does not open: spawn gpg` while the broker service
-        // on that same host reads those items fine.
-        // Refusing on them would refuse every real sign-in for the wrong
-        // reason, and redemption is where the item is actually read.
-        readable: row
-            .get("item_present")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-            && row
-                .get("field_present")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+        readable: present("item_present") && present("field_present"),
     })
 }
 

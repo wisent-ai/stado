@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 /// The one document declaring every connection network the product names.
 pub const CONNECTION_DECLARATION_PATH: &str = "stado-rs/data/fleet/connections.json";
 const DECLARATION: &str = include_str!("../../../../data/fleet/connections.json");
-/// The shape of the declaration this build reads.
+/// The shape of the declaration this build reads:
+/// <https://stado.wisent.com/docs/capabilities/host-connections>.
 const DECLARATION_SCHEMA_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

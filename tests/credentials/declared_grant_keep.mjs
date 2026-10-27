@@ -98,7 +98,7 @@ try {
   report.skarbiec = { path: skarbiec, sha256: digest(readFileSync(skarbiec)) };
 
   success(run(skarbiec, ['init', `declared-keep-owner-${suffix}`]));
-  success(run(skarbiec, ['set-json', item, '--type', 'api-key'], {
+  success(run(skarbiec, ['set', item, '--type', 'api-key'], {
     input: JSON.stringify({ schema: 'skarbiec.item.v2', kind: 'api-key', fields: { api_key: 'not-a-secret' }, context: {} }),
   }));
   // The agent's own grant already lives until revoked, so renew has nothing

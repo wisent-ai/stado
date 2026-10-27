@@ -76,7 +76,10 @@ impl Evidence {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// One thing the fleet lacks. Its JSON carries every field below and
+/// `subject`, the word the text report prints in parentheses, so a reader
+/// (Stado Desktop, a terminal) shows the same subject without deriving it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Need {
     pub need: NeedKind,
     pub target: Option<String>,
@@ -85,6 +88,34 @@ pub struct Need {
     pub summary: String,
     pub evidence: Vec<Evidence>,
     pub suggestion: String,
+}
+
+impl Need {
+    /// What the need is about: the host when it names one, else the
+    /// platform, else the fleet as a whole.
+    pub fn subject(&self) -> &str {
+        match (&self.target, &self.platform) {
+            (Some(target), _) => target,
+            (None, Some(platform)) => platform,
+            (None, None) => "fleet",
+        }
+    }
+}
+
+impl Serialize for Need {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut row = serializer.serialize_map(None)?;
+        row.serialize_entry("need", &self.need)?;
+        row.serialize_entry("target", &self.target)?;
+        row.serialize_entry("platform", &self.platform)?;
+        row.serialize_entry("subject", self.subject())?;
+        row.serialize_entry("severity", &self.severity)?;
+        row.serialize_entry("summary", &self.summary)?;
+        row.serialize_entry("evidence", &self.evidence)?;
+        row.serialize_entry("suggestion", &self.suggestion)?;
+        row.end()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -42,14 +42,16 @@ pub(super) fn resolve(
     home: &Path,
 ) -> Result<ServedRoot, String> {
     let declared = |key: &str| variable(key).filter(|value| !value.is_empty());
-    let home = declared("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.to_path_buf());
-    let expand = |value: &str| {
-        value
-            .strip_prefix("~/")
-            .map(|rest| home.join(rest))
-            .unwrap_or_else(|| PathBuf::from(value))
+    // The unit's own `HOME` when it declares one, else the account home the
+    // caller resolved for it.
+    let home = match declared("HOME") {
+        Some(declared_home) => PathBuf::from(declared_home),
+        None => home.to_path_buf(),
+    };
+    // `~/` is the unit's home; any other spelling is the path as written.
+    let expand = |value: &str| match value.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(value),
     };
     if let (Some(backend), Some(root)) = (
         declared("WC_STORAGE_BACKEND"),
@@ -70,9 +72,12 @@ pub(super) fn resolve(
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     };
-    let backend = declared("WC_STORAGE_BACKEND")
-        .or_else(|| configured("/storage/backend"))
-        .unwrap_or_else(|| LOCAL_BACKEND.to_string());
+    // The backend the unit declares in its environment, else in its config
+    // file, else the product's own local backend.
+    let backend = match declared("WC_STORAGE_BACKEND").or_else(|| configured("/storage/backend")) {
+        Some(backend) => backend,
+        None => LOCAL_BACKEND.to_string(),
+    };
     // The environment, then the config, then the product's declared default
     // root (`config_file::LOCAL_STORAGE_ROOT`).
     let root = match declared("WC_LOCAL_STORAGE_PATH").or_else(|| configured("/storage/local/path"))
@@ -125,10 +130,11 @@ fn configuration(explicit: Option<&str>, home: &Path) -> Result<Option<Value>, S
     Ok(None)
 }
 
-/// The canonical form of a path that exists, else the path as written.
+/// The canonical form of a path that exists, else the path as written: a
+/// root not yet created is compared by the spelling the unit declares.
 pub(super) fn canonical(path: &Path) -> String {
-    std::fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf())
-        .display()
-        .to_string()
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => canonical.display().to_string(),
+        Err(_not_yet_created_or_unreadable) => path.display().to_string(),
+    }
 }

@@ -58,5 +58,5 @@ pub(crate) fn validate_stored_run_manifest(
         .get("request")
         .ok_or_else(|| SubmitError::Validation("run manifest request is missing".into()))?;
     let request_digest = digest_value(request);
-    validate_run_manifest(manifest, run_id, request, &request_digest).map(|_| ())
+    validate_run_manifest(manifest, run_id, request, &request_digest).map(|_validated_entries| ())
 }

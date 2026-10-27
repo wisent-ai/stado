@@ -77,7 +77,7 @@ pub async fn run_on_host(
             .map_err(|error| error.message)
     };
     match result {
-        Ok(output) if output.ok() => report.entries = parse_report(&output.stdout),
+        Ok(output) if output.succeeded() => report.entries = parse_report(&output.stdout),
         Ok(output) => {
             report.entries = parse_report(&output.stdout);
             report.error = Some(output.detail().trim().to_string());

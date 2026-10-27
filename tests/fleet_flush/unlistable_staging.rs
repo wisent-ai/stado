@@ -31,7 +31,8 @@ struct Staging {
 
 impl Staging {
     fn new(name: &str) -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fleet-flush-unlistable");
+        let parent =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/journeys/fleet-flush-unlistable");
         fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(format!("{}-{name}", std::process::id()));
         let dir = root.join("fleet_staging");
@@ -73,7 +74,12 @@ impl Drop for Staging {
     fn drop(&mut self) {
         let mut permissions = match fs::metadata(&self.dir) {
             Ok(metadata) => metadata.permissions(),
-            Err(_) => return,
+            // A directory already gone has no permissions left to restore.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!(
+                "{} cannot be read to restore its permissions: {error}",
+                self.dir.display()
+            ),
         };
         permissions.set_mode((permissions.mode() & !permission_bits()) | self.readable);
         let _ = fs::set_permissions(&self.dir, permissions);

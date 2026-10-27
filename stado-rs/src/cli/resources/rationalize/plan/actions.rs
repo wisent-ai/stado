@@ -115,7 +115,7 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
             json!({"scope": resource_scope}),
             stable_preconditions(
                 finding,
-                vec![planner::condition("target_size", json!(usize::default()))],
+                vec![planner::condition("target_size", json!(planner::NO_INSTANCES))],
             ),
         )],
         ResourceType::ComputeReservation => vec![irreversible_action(
@@ -128,7 +128,7 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
                 finding,
                 vec![
                     planner::condition("exists", json!(true)),
-                    planner::condition("in_use_count", json!(usize::default())),
+                    planner::condition("in_use_count", json!(planner::NONE_IN_USE)),
                 ],
             ),
         )],
@@ -165,17 +165,18 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
         _ => Vec::new(),
     }
 }
+
+/// Where a GCP resource lives: a region it names, else a static address is
+/// global and anything else zonal.
 fn gcp_scope(finding: &Finding) -> &'static str {
     let region = finding
         .evidence
         .get("region")
         .and_then(Value::as_str)
-        .unwrap_or_default();
-    if finding.resource_type == ResourceType::StaticAddress && region.is_empty() {
-        "global"
-    } else if !region.is_empty() {
-        "region"
-    } else {
-        "zone"
+        .filter(|region| !region.is_empty());
+    match region {
+        Some(_) => "region",
+        None if finding.resource_type == ResourceType::StaticAddress => "global",
+        None => "zone",
     }
 }

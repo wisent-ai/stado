@@ -5,7 +5,7 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use super::format::{error_section, py_repr};
 use crate::config;
@@ -22,17 +22,13 @@ const BIGQUERY_BASE: &str = "https://bigquery.googleapis.com";
 async fn gcp_token() -> Result<String, String> {
     let auth = crate::skarbiec::gcp_provider()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| format!("the GCP credential for BigQuery cannot be read: {error}"))?;
     let token = auth
         .token(&[CLOUD_PLATFORM_SCOPE])
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| format!("a BigQuery access token cannot be minted: {error}"))?;
     Ok(token.as_str().to_string())
 }
-
-// ---------------------------------------------------------------------------
-// GCP section — BigQuery billing export
-// ---------------------------------------------------------------------------
 
 /// Spend/credits/burn from the BigQuery billing export. Fails into a section
 /// error only on a genuine client/permission fault; the caller records that
@@ -57,72 +53,160 @@ pub(super) async fn gcp_section() -> Value {
             ),
         });
     }
+    if config::project().is_empty() {
+        return json!({
+            "status": "config_error",
+            "detail": "the GCP project the billing export lives in is not declared: set GCP_PROJECT",
+        });
+    }
     let token = match gcp_token().await {
         Ok(token) => token,
         Err(err) => return error_section(err),
     };
     let client = reqwest::Client::new();
-    gcp_section_with(&client, BIGQUERY_BASE, config::project(), &token).await
+    match gcp_section_with(&client, BIGQUERY_BASE, config::project(), &token).await {
+        Ok(section) => section,
+        Err(err) => error_section(err),
+    }
 }
 
-/// POST one query job; the rows array (possibly absent) on success. A
-/// non-2xx response is an error whose detail carries the exact upstream
-/// body.
-async fn run_bq_query(
-    client: &reqwest::Client,
-    url: &str,
-    token: &str,
-    sql: &str,
-) -> Result<Vec<Value>, String> {
-    let response = crate::wait::request(
-        client
-            .post(url)
-            .bearer_auth(token)
-            .json(&json!({"query": sql, "useLegacySql": false})),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+/// One BigQuery REST answer, as JSON, or the refusal with the upstream body.
+async fn answer(request: reqwest::RequestBuilder, what: &str) -> Result<Value, String> {
+    let response = crate::wait::request(request)
+        .await
+        .map_err(|error| format!("BigQuery {what} could not be sent: {error}"))?;
     let status = response.status();
     if !status.is_success() {
         let body = crate::primitives::http::refused_body(response).await;
-        return Err(format!("HTTP {status}: {body}"));
+        return Err(format!("BigQuery {what} answered HTTP {status}: {body}"));
     }
-    let body: Value = response.json().await.map_err(|e| e.to_string())?;
-    Ok(body
-        .get("rows")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default())
+    response.json().await.map_err(|error| {
+        format!("BigQuery {what} answered {status} with a body that is not JSON: {error}")
+    })
 }
 
-/// The `v` values of one REST row (`rows[].f[].v`). BigQuery REST returns
-/// every value as a string regardless of column type.
-fn bq_cols(row: &Value) -> Vec<Value> {
-    row.get("f")
-        .and_then(Value::as_array)
-        .map(|cols| {
-            cols.iter()
-                .map(|c| c.get("v").cloned().unwrap_or(Value::Null))
-                .collect()
+/// Run one query to its end and answer every row, by column name. A job still
+/// running when `jobs.query` answers comes back `jobComplete: false` with no
+/// rows; read as empty, an unfinished billing scan was a month that billed
+/// nothing. It is asked again through `jobs.getQueryResults` (BigQuery holds
+/// each call until the job ends or its window closes) until complete, and
+/// every page of a split result is read.
+async fn run_bq_query(
+    client: &reqwest::Client,
+    base_url: &str,
+    project: &str,
+    token: &str,
+    sql: &str,
+) -> Result<Vec<Map<String, Value>>, String> {
+    let queries = format!("{base_url}/bigquery/v2/projects/{project}/queries");
+    let mut body = answer(
+        client
+            .post(&queries)
+            .bearer_auth(token)
+            .json(&json!({"query": sql, "useLegacySql": false})),
+        "jobs.query",
+    )
+    .await?;
+    let mut rows = Vec::new();
+    loop {
+        let complete = match body.get("jobComplete") {
+            Some(Value::Bool(complete)) => *complete,
+            other => {
+                return Err(format!(
+                    "BigQuery answered jobComplete {other:?}, not true or false"
+                ))
+            }
+        };
+        if complete {
+            rows.extend(named_rows(&body)?);
+        }
+        let page = body.get("pageToken").and_then(Value::as_str);
+        if complete && page.is_none() {
+            return Ok(rows);
+        }
+        let reference = &body["jobReference"];
+        let Some(job) = reference.get("jobId").and_then(Value::as_str) else {
+            return Err(format!(
+                "BigQuery left the billing query unfinished without a job to ask again: {reference}"
+            ));
+        };
+        let mut query = Vec::new();
+        if let Some(location) = reference.get("location").and_then(Value::as_str) {
+            query.push(("location", location.to_string()));
+        }
+        if let (true, Some(page)) = (complete, page) {
+            query.push(("pageToken", page.to_string()));
+        }
+        body = answer(
+            client.get(format!("{queries}/{job}")).bearer_auth(token).query(&query),
+            &format!("jobs.getQueryResults for {job}"),
+        )
+        .await?;
+    }
+}
+
+/// The rows of a complete answer, each as its schema's column names to the
+/// values BigQuery REST returns (every value a string or null). A complete
+/// answer with no `rows` holds none; one whose rows do not match its schema
+/// is refused.
+fn named_rows(body: &Value) -> Result<Vec<Map<String, Value>>, String> {
+    let rows = match body.get("rows") {
+        None => return Ok(Vec::new()),
+        Some(Value::Array(rows)) => rows,
+        Some(other) => {
+            return Err(format!("BigQuery answered rows that are not a list: {other}"))
+        }
+    };
+    let names: Vec<&str> = body["schema"]["fields"]
+        .as_array()
+        .ok_or_else(|| format!("BigQuery answered rows without a schema: {}", body["schema"]))?
+        .iter()
+        .map(|field| {
+            field["name"]
+                .as_str()
+                .ok_or_else(|| format!("BigQuery schema field without a name: {field}"))
         })
-        .unwrap_or_default()
+        .collect::<Result<_, _>>()?;
+    rows.iter()
+        .map(|row| {
+            let cells = row["f"]
+                .as_array()
+                .filter(|cells| cells.len() == names.len())
+                .ok_or_else(|| format!("BigQuery row does not match its schema {names:?}: {row}"))?;
+            Ok(names
+                .iter()
+                .zip(cells)
+                .map(|(name, cell)| (name.to_string(), cell["v"].clone()))
+                .collect())
+        })
+        .collect()
 }
 
-/// Parse a REST string value into a JSON number (or null when absent /
-/// unparseable) — the REST equivalent of the library's typed Row fields.
-fn bq_num(value: Option<&Value>) -> Value {
-    match value {
-        Some(Value::Number(n)) => json!(n),
-        Some(Value::String(s)) => s.parse::<f64>().ok().map_or(Value::Null, |n| json!(n)),
-        _ => Value::Null,
+/// A numeric column as a JSON number; SQL NULL stays null. A value that is
+/// not a number is refused with its column, not read as null.
+fn bq_num(row: &Map<String, Value>, column: &str) -> Result<Value, String> {
+    match row.get(column) {
+        Some(Value::Null) => Ok(Value::Null),
+        Some(Value::Number(n)) => Ok(json!(n)),
+        Some(Value::String(s)) => s
+            .parse::<f64>()
+            .map(|n| json!(n))
+            .map_err(|error| {
+                format!("BigQuery column {column} holds {s:?}, not a number: {error}")
+            }),
+        Some(other) => Err(format!("BigQuery column {column} holds {other}, not a number")),
+        None => Err(format!("BigQuery answered no column {column}")),
     }
 }
 
-fn bq_str(value: Option<&Value>) -> Value {
-    match value {
-        Some(Value::String(s)) => json!(s),
-        Some(Value::Number(n)) => json!(n.to_string()),
-        _ => Value::Null,
+/// A text column; SQL NULL stays null.
+fn bq_str(row: &Map<String, Value>, column: &str) -> Result<Value, String> {
+    match row.get(column) {
+        Some(Value::Null) => Ok(Value::Null),
+        Some(Value::String(s)) => Ok(json!(s)),
+        Some(Value::Number(n)) => Ok(json!(n.to_string())),
+        Some(other) => Err(format!("BigQuery column {column} holds {other}, not text")),
+        None => Err(format!("BigQuery answered no column {column}")),
     }
 }
 
@@ -147,76 +231,68 @@ fn billing_sql(project: &str) -> (String, String, String) {
     (monthly_sql, credit_sql, burn_sql)
 }
 
-/// Injectable twin of [`gcp_section`] (base URL + token explicit) so tests
-/// can point BigQuery at the loopback mock.
+/// The section from one base URL and token, or the first query's refusal.
 async fn gcp_section_with(
     client: &reqwest::Client,
     base_url: &str,
     project: &str,
     token: &str,
-) -> Value {
-    let url = format!("{base_url}/bigquery/v2/projects/{project}/queries");
+) -> Result<Value, String> {
     let (monthly_sql, credit_sql, burn_sql) = billing_sql(project);
-
-    let monthly_rows = match run_bq_query(client, &url, token, &monthly_sql).await {
-        Ok(rows) => rows,
-        Err(err) => return error_section(err),
-    };
-    let credit_rows = match run_bq_query(client, &url, token, &credit_sql).await {
-        Ok(rows) => rows,
-        Err(err) => return error_section(err),
-    };
-    let burn_rows = match run_bq_query(client, &url, token, &burn_sql).await {
-        Ok(rows) => rows,
-        Err(err) => return error_section(err),
-    };
+    let monthly_rows = run_bq_query(client, base_url, project, token, &monthly_sql).await?;
+    let credit_rows = run_bq_query(client, base_url, project, token, &credit_sql).await?;
+    let burn_rows = run_bq_query(client, base_url, project, token, &burn_sql).await?;
 
     let monthly: Vec<Value> = monthly_rows
         .iter()
         .map(|row| {
-            let cols = bq_cols(row);
-            json!({
-                "month": bq_str(cols.first()),
-                "gross": bq_num(cols.get(1)),
-                "credits": bq_num(cols.get(2)),
-                "net": bq_num(cols.get(3)),
-                "currency": bq_str(cols.get(4)),
-            })
+            Ok(json!({
+                "month": bq_str(row, "month")?,
+                "gross": bq_num(row, "gross")?,
+                "credits": bq_num(row, "credits")?,
+                "net": bq_num(row, "net")?,
+                "currency": bq_str(row, "currency")?,
+            }))
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     let credits: Vec<Value> = credit_rows
         .iter()
         .map(|row| {
-            let cols = bq_cols(row);
-            json!({
-                "name": bq_str(cols.first()),
-                "type": bq_str(cols.get(1)),
-                "cumulative": bq_num(cols.get(2)),
-                "currency": bq_str(cols.get(3)),
-            })
+            Ok(json!({
+                "name": bq_str(row, "name")?,
+                "type": bq_str(row, "type")?,
+                "cumulative": bq_num(row, "cumulative")?,
+                "currency": bq_str(row, "currency")?,
+            }))
         })
-        .collect();
-    let burn = burn_rows
-        .first()
-        .map_or(Value::Null, |row| bq_num(bq_cols(row).first()));
-
-    let threshold = config::billing_net_alert_usd();
-    let latest_net = monthly.last().map_or(Value::Null, |m| {
-        m.get("net").cloned().unwrap_or(Value::Null)
-    });
-    let depleted = match threshold {
-        Ok(threshold) => json!(latest_net.as_f64().is_some_and(|net| net > threshold)),
-        Err(_) => Value::Null,
+        .collect::<Result<_, String>>()?;
+    // AVG over no day is SQL NULL; a burn query that answered no row at all
+    // has no average either.
+    let burn = match burn_rows.first() {
+        Some(row) => bq_num(row, "avg_daily_credit_7d")?,
+        None => Value::Null,
+    };
+    let latest_net = match monthly.last() {
+        Some(month) => month["net"].clone(),
+        None => Value::Null,
+    };
+    let (threshold, detail, depleted) = match config::billing_net_alert_usd() {
+        Ok(threshold) => (
+            json!(threshold),
+            Value::Null,
+            json!(latest_net.as_f64().is_some_and(|net| net > threshold)),
+        ),
+        Err(detail) => (Value::Null, json!(detail), Value::Null),
     };
 
-    json!({
+    Ok(json!({
         "status": "ok",
         "monthly": monthly,
         "credits": credits,
         "avg_daily_credit_applied_7d": burn,
         "latest_month_net_usd": latest_net,
-        "net_alert_threshold_usd": threshold.ok(),
-        "net_alert_detail": threshold.err(),
+        "net_alert_threshold_usd": threshold,
+        "net_alert_detail": detail,
         "credit_depleted": depleted,
-    })
+    }))
 }

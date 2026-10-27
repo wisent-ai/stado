@@ -25,8 +25,7 @@ pub(super) fn validate(id: &str, service: &Value, kinds: &HashSet<&str>) -> Resu
             .context("service.args must be a list")?;
         if let Some(env) = service.get("env") {
             for (key, value) in env.as_object().context("service.env must be an object")? {
-                if key.is_empty()
-                    || key.as_bytes()[0].is_ascii_digit()
+                if key.bytes().next().is_none_or(|first| first.is_ascii_digit())
                     || !key
                         .bytes()
                         .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
@@ -108,6 +107,31 @@ pub(super) fn validate(id: &str, service: &Value, kinds: &HashSet<&str>) -> Resu
             {
                 if !["method", "path", "body", "repair"].contains(&key.as_str()) {
                     bail!("{id}: service.answering.{key} is not a field; the fields are method, path, body, repair");
+                }
+            }
+        }
+        // The stores that move with the service between hosts: each a path
+        // relative to the account's home, a file or a whole directory
+        // (`tree`), `required` when a move must find it on the source.
+        if let Some(state) = service.get("state") {
+            let stores = state
+                .as_array()
+                .with_context(|| format!("{id}: service.state must be a list of stores"))?;
+            for store in stores {
+                let path =
+                    text(store, "path").with_context(|| format!("{id}: service.state[].path"))?;
+                if path.starts_with('/')
+                    || path.starts_with('$')
+                    || path.contains('\n')
+                    || path.split('/').any(|part| part.is_empty() || part == "..")
+                {
+                    bail!("{id}: service.state path {path:?} is not a path relative to the account's home");
+                }
+                if store.get("tree").is_some_and(|tree| !tree.is_boolean()) {
+                    bail!("{id}: service.state {path:?}: tree must be true or false");
+                }
+                if store.get("required").is_some_and(|required| !required.is_boolean()) {
+                    bail!("{id}: service.state {path:?}: required must be true or false");
                 }
             }
         }

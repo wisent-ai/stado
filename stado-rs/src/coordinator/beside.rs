@@ -6,6 +6,7 @@
 //! next, and never waits for one.
 
 use super::log;
+use crate::primitives::tally::Tally;
 
 type ShapeOutcome = Result<crate::fleet_shape::Sweep, String>;
 
@@ -36,7 +37,7 @@ impl ShapeSweep {
                     let runner = crate::deploy::production_runner();
                     let mut shape = crate::fleet_shape::sweep(&runner).await;
                     if let Some(finding) = crate::fleet_shape::health_disagreement().await {
-                        shape.measured += 1;
+                        shape.measured.tally();
                         shape.findings.push(finding);
                     }
                     shape
@@ -61,7 +62,27 @@ fn report_shape(outcome: std::thread::Result<ShapeOutcome>) {
             }
         }
         Ok(Err(exc)) => log(&format!("fleet shape sweep failed: {exc}")),
-        Err(_) => log("fleet shape sweep panicked"),
+        Err(payload) => log(&format!(
+            "fleet shape sweep panicked: {}",
+            panic_text(payload)
+        )),
+    }
+}
+
+/// What a pass panicked with: a `String` (from `panic!` with arguments) or
+/// a `&str` (a literal); any other payload is named by its type id, which
+/// is all it offers.
+fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+    match (
+        payload.downcast_ref::<String>(),
+        payload.downcast_ref::<&str>(),
+    ) {
+        (Some(text), _) => text.clone(),
+        (None, Some(text)) => (*text).to_string(),
+        (None, None) => format!(
+            "non-text panic payload {:?}",
+            std::any::Any::type_id(&*payload)
+        ),
     }
 }
 
@@ -116,6 +137,9 @@ fn report(outcome: std::thread::Result<ReplicationOutcome>) {
         )),
         Ok(Ok(None)) => {}
         Ok(Err(exc)) => log(&format!("disaster-recovery replication failed: {exc}")),
-        Err(_) => log("disaster-recovery replication panicked"),
+        Err(payload) => log(&format!(
+            "disaster-recovery replication panicked: {}",
+            panic_text(payload)
+        )),
     }
 }

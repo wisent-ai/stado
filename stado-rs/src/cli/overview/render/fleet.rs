@@ -11,9 +11,9 @@ pub(super) fn print_fleet(document: &Value, claim: &FleetClaim) {
     let fleet = &document["fleet"];
     println!(
         "fleet: {} of {} local hosts publishing capacity | {} registered targets",
-        fleet["publishing_capacity"],
-        fleet["registered_local_workers"],
-        fleet["registered_targets"]
+        field(&fleet["publishing_capacity"]),
+        field(&fleet["registered_local_workers"]),
+        field(&fleet["registered_targets"])
     );
     // Nothing when the queue is moving, or when it is empty: a report that
     // prints a verdict every time is a report whose verdict stops being read.

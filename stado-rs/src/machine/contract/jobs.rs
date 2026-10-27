@@ -12,7 +12,7 @@ use crate::queue::JobStorage;
 /// and running destinations precede queue so a crash-retained source fence
 /// cannot mask the newer lifecycle state. The order is this facade's; the
 /// names are the queue's.
-pub const JOB_PREFIXES: [&str; 6] = [
+pub const JOB_PREFIXES: &[&str] = &[
     runs::CANCELLED,
     runs::FAILED,
     runs::UPLOADED,
@@ -78,31 +78,11 @@ pub fn normalize_job(job: &Job) -> Value {
     );
     out.insert("last_restart".into(), serde_json::json!(job.last_restart));
     out.insert("created_at".into(), Value::from(job.created_at.as_str()));
-    out.insert(
-        "started_at".into(),
-        job.started_at
-            .as_deref()
-            .map(Value::from)
-            .unwrap_or(Value::Null),
-    );
-    out.insert(
-        "completed_at".into(),
-        job.completed_at
-            .as_deref()
-            .map(Value::from)
-            .unwrap_or(Value::Null),
-    );
-    out.insert(
-        "failed_at".into(),
-        job.failed_at
-            .as_deref()
-            .map(Value::from)
-            .unwrap_or(Value::Null),
-    );
-    out.insert(
-        "error".into(),
-        job.error.as_deref().map(Value::from).unwrap_or(Value::Null),
-    );
+    // Each optional field is written as serde writes an absent option: null.
+    out.insert("started_at".into(), serde_json::json!(job.started_at));
+    out.insert("completed_at".into(), serde_json::json!(job.completed_at));
+    out.insert("failed_at".into(), serde_json::json!(job.failed_at));
+    out.insert("error".into(), serde_json::json!(job.error));
     out.insert("output_uri".into(), Value::from(job.output_uri.as_str()));
     Value::Object(out)
 }
@@ -157,7 +137,7 @@ pub async fn recorded_instance(
     if let Some(worker) = job
         .worker_allocation
         .as_ref()
-        .filter(|_| job.started_at.is_some())
+        .filter(|_worker| job.started_at.is_some())
     {
         if !worker.host.is_empty() {
             return Ok(Some(RecordedInstance {

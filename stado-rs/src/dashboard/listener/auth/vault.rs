@@ -79,10 +79,9 @@ impl Drop for Claim<'_> {
 
 impl Dashboard {
     fn vault_release(&self, key: &str) {
-        let mut consultations = self
-            .vault
-            .write()
-            .expect("dashboard vault consultation lock");
+        // A panic while a consultation was recorded must not turn every later
+        // dashboard request into a panic: the map is taken back.
+        let mut consultations = crate::primitives::lock::written(&self.vault);
         let consultation = consultations.entry(key);
         consultation.open = None;
         consultation.open_since = None;
@@ -106,10 +105,7 @@ impl Dashboard {
     {
         let waiting = crate::wait::begin(crate::wait::Kind::Network, what, "Skarbiec");
         let claimed = {
-            let mut consultations = self
-                .vault
-                .write()
-                .expect("dashboard vault consultation lock");
+            let mut consultations = crate::primitives::lock::written(&self.vault);
             let consultation = consultations.entry(key);
             if let Some(open) = &consultation.open {
                 let cause = open.clone();
@@ -132,10 +128,7 @@ impl Dashboard {
             settled: false,
         });
         let outcome = work.await;
-        let mut consultations = self
-            .vault
-            .write()
-            .expect("dashboard vault consultation lock");
+        let mut consultations = crate::primitives::lock::written(&self.vault);
         let consultation = consultations.entry(key);
         if let Some(claim) = claim.as_mut() {
             consultation.open = None;
@@ -168,7 +161,7 @@ impl Dashboard {
 
     /// A consultation's failure named the process holding the vault's keyring
     /// lock. On the host that declares the vault, run the declared crypto
-    /// repair (`skarbiec recover-daemons`, the same payload `stado repair
+    /// repair (`skarbiec keyring recover`, the same payload `stado repair
     /// skarbiec --step crypto` runs) once for this holder, in the background,
     /// and keep its outcome for `/api/state.json`; one repair runs at a time,
     /// and the same holder is not acted on twice, so a repair that could not
@@ -180,16 +173,13 @@ impl Dashboard {
                 "[dashboard] the vault at {} names a held keyring lock ({holder}); this host \
                  declares no vault, so the repair runs on the vault host: `stado repair skarbiec \
                  --step crypto --target <vault host> --apply` or `stado host exec <vault host> \
-                 -- skarbiec recover-daemons`",
+                 -- skarbiec keyring recover`",
                 crate::config::skarbiec_url()
             );
             return;
         }
         {
-            let mut consultations = self
-                .vault
-                .write()
-                .expect("dashboard vault consultation lock");
+            let mut consultations = crate::primitives::lock::written(&self.vault);
             if let Some(repair) = &consultations.repair {
                 match &repair.outcome {
                     None => {
@@ -223,7 +213,7 @@ impl Dashboard {
         tokio::spawn(async move {
             let outcome = crypto_repair_outcome().await;
             eprintln!("[dashboard] skarbiec crypto repair for {holder}: {outcome}");
-            let mut consultations = vault.write().expect("dashboard vault consultation lock");
+            let mut consultations = crate::primitives::lock::written(&vault);
             if let Some(repair) = consultations.repair.as_mut() {
                 repair.outcome = Some(outcome);
             }
@@ -273,7 +263,7 @@ async fn crypto_repair_outcome() -> String {
     }
     let output = crate::wait::child_output_async(
         child,
-        "the declared skarbiec crypto repair (skarbiec recover-daemons) on this host",
+        "the declared skarbiec crypto repair (skarbiec keyring recover) on this host",
     )
     .await;
     match output {

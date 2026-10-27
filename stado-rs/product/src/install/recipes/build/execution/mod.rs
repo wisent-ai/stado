@@ -51,10 +51,12 @@ pub(super) fn step(
     Ok(())
 }
 
-/// A stable source and target for this revision, under its exact lockfile set.
-/// Other revisions never hold the same Cargo build-directory lock. Kache
-/// shares compiler outputs across their isolated targets; Cargo itself keeps
-/// the same revision fresh across installations, including workspace crates.
+/// A stable source for this revision, under its exact lockfile set, and one
+/// Cargo target directory for every revision of the checkout on this
+/// platform. A revision's own source directory keeps its workspace crates
+/// apart; the shared target keeps every dependency compiled once, so a new
+/// revision compiles only what changed instead of every crate from nothing.
+/// Cargo holds its own lock on the target while a build runs in it.
 pub(super) fn cache(
     runtime: &Runtime,
     area: &Path,
@@ -97,16 +99,18 @@ pub(super) fn cache(
     std::os::unix::fs::symlink(&source, exported)?;
     #[cfg(not(unix))]
     anyhow::bail!("installation Cargo caches require symbolic links on this platform");
-    let target = directory.join("target");
+    let target = area.join("cargo").join(platform).join("target");
     let wrapper = crate::compiler_cache::ensure(&runtime.home)?;
     let report = json!({"lockfiles": locks, "lockfile_sha256": digest,
         "platform": platform, "source_revision": revision, "target": target,
         "source": source, "reused": reused, "compiler_cache": wrapper.path});
     atomic_json(&evidence.join("cargo-cache.json"), &report)?;
     crate::common::tag_cache(&directory, "stado installation Cargo cache")?;
+    crate::common::tag_cache(&target, "stado installation Cargo target")?;
     eprintln!(
-        "Cargo cache: {} at {}; lockfiles {digest}; revision {revision}",
+        "Cargo cache: {} the source of revision {revision} at {}; lockfiles {digest}; target shared by every revision at {}",
         if reused { "reusing" } else { "creating" },
+        source.display(),
         target.display()
     );
     Ok(Some(held))
@@ -120,14 +124,16 @@ pub(super) fn resume(evidence: &Path) -> Result<Option<runs::Run>> {
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
     };
     let report: Value = serde_json::from_slice(&bytes)?;
-    let target = Path::new(
-        report["target"]
+    // The revision's directory holds its source; the target beside it is
+    // shared by every revision and is not this run's to hold.
+    let source = Path::new(
+        report["source"]
             .as_str()
-            .context("Cargo cache receipt has no target")?,
+            .context("Cargo cache receipt has no source")?,
     );
-    let directory = target
+    let directory = source
         .parent()
-        .context("Cargo cache target has no parent")?;
+        .context("Cargo cache source has no parent")?;
     Ok(Some(runs::hold(directory)?))
 }
 

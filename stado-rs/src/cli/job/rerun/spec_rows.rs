@@ -8,6 +8,10 @@ use crate::models::Job;
 /// resubmitted verbatim, and a long one would pad every other row.
 pub(super) fn spec_rows(original: &Job, fresh: &Job) -> Vec<Vec<String>> {
     let row = |field: &str, was: String, now: String| vec![field.to_string(), was, now];
+    let deadline = |job: &Job| match &job.deadline_at {
+        Some(deadline) => deadline.clone(),
+        None => "none".to_string(),
+    };
     vec![
         row("state", original.state.clone(), fresh.state.clone()),
         row(
@@ -52,8 +56,8 @@ pub(super) fn spec_rows(original: &Job, fresh: &Job) -> Vec<Vec<String>> {
         ),
         row(
             "deadline_at",
-            original.deadline_at.clone().unwrap_or_default(),
-            fresh.deadline_at.clone().unwrap_or_default(),
+            deadline(original),
+            deadline(fresh),
         ),
         row(
             "platform_os",

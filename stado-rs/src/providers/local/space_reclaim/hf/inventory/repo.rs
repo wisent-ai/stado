@@ -19,6 +19,14 @@ use crate::providers::local::space_reclaim::{
     ifmt, safefs, CleanupReport, JanitorError, ScanCount, IFDIR, IFREG,
 };
 
+/// stat(2): `st_blocks` counts 512-byte units, whatever the filesystem's
+/// own block size (https://man7.org/linux/man-pages/man3/stat.3type.html).
+const STAT_BLOCK_BYTES: i64 = 512;
+/// stat(2): a file with exactly one directory entry has a link count of
+/// one, so deleting that entry frees it
+/// (https://man7.org/linux/man-pages/man3/stat.3type.html).
+const SOLE_LINK: u64 = 1;
+
 /// Python `_hf_scan_repo`. `repo_parts` is empty for the direct layout.
 pub(super) fn scan_repo(
     root_fd: RawFd,
@@ -48,7 +56,7 @@ pub(super) fn scan_repo(
             if name.as_bytes() == b".work" || name.to_string_lossy().ends_with(".incomplete") {
                 return Err(os_error("reserved repository data"));
             }
-            if repo_parts.is_empty() && (name == ".locks" || name == "version.txt") {
+            if repo_parts.is_empty() && matches!(name.to_str(), Some(".locks" | "version.txt")) {
                 continue;
             }
             if name == ".no_exist" {
@@ -59,7 +67,7 @@ pub(super) fn scan_repo(
                 continue;
             }
             names.insert(name.clone());
-            if !(name == "blobs" || name == "refs" || name == "snapshots") {
+            if !matches!(name.to_str(), Some("blobs" | "refs" | "snapshots")) {
                 return Err(os_error("unknown repository data"));
             }
             if ifmt(info.st_mode as u32) != IFDIR {
@@ -73,8 +81,10 @@ pub(super) fn scan_repo(
         metadata_parts.push(OsString::from(".no_exist"));
         scan_reserved_metadata(root_fd, root_info, &metadata_parts, budget, report)?;
     }
+    // This repository, counted once in the skip tally.
+    let this_repository = std::iter::once(repo_parts).count() as i64;
     if !(names.contains(OsStr::new("blobs")) && names.contains(OsStr::new("snapshots"))) {
-        report.skip_hf("incomplete_repository", 1);
+        report.skip_hf("incomplete_repository", this_repository);
         return Ok(empty);
     }
     let mut blobs_parts = repo_parts.to_vec();
@@ -107,12 +117,12 @@ pub(super) fn scan_repo(
             let mut blob_parts = blobs_parts.clone();
             blob_parts.push(name.clone());
             blobs.insert(blob_parts.clone(), identity(&info));
-            blob_sizes.insert(blob_parts, info.st_size.max(info.st_blocks * 512));
+            blob_sizes.insert(blob_parts, info.st_size.max(info.st_blocks * STAT_BLOCK_BYTES));
         }
     }
     drop(blobs_fd);
     if has_incomplete_blob {
-        report.skip_hf("incomplete_repository", 1);
+        report.skip_hf("incomplete_repository", this_repository);
         return Ok(empty);
     }
     let refs = scan_refs(root_fd, root_info, repo_parts, budget, report)?;
@@ -142,23 +152,25 @@ pub(super) fn scan_repo(
                 expected: snapshot_expected,
                 referenced_blobs,
                 delete_blobs: Vec::new(),
-                refs: refs.get(&commit_key).cloned().unwrap_or_default(),
+                // A snapshot no ref names has no refs to recheck.
+                refs: match refs.get(&commit_key) {
+                    Some(named) => named.clone(),
+                    None => Vec::new(),
+                },
                 deleted: false,
             });
         }
     }
     drop(snapshots_fd);
-    for index in 0..candidates.len() {
-        let retained_references: BTreeSet<Parts> = if candidates.len() > 1 {
-            candidates
-                .iter()
-                .enumerate()
-                .filter(|(other, _)| *other != index)
-                .flat_map(|(_, other)| other.referenced_blobs.iter().cloned())
-                .collect()
-        } else {
-            BTreeSet::new()
-        };
+    let indices: Vec<usize> = candidates.iter().enumerate().map(|(index, _)| index).collect();
+    for index in indices {
+        // Every blob another candidate still references stays.
+        let retained_references: BTreeSet<Parts> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(other, _)| *other != index)
+            .flat_map(|(_, other)| other.referenced_blobs.iter().cloned())
+            .collect();
         let exclusive: BTreeSet<Parts> = candidates[index]
             .referenced_blobs
             .difference(&retained_references)
@@ -166,7 +178,7 @@ pub(super) fn scan_repo(
             .collect();
         let unique: BTreeSet<Parts> = exclusive
             .iter()
-            .filter(|path| blobs[*path].nlink == 1)
+            .filter(|path| blobs[*path].nlink == SOLE_LINK)
             .cloned()
             .collect();
         if unique.len() != exclusive.len() {

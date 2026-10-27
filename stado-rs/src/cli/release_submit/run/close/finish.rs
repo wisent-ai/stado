@@ -30,13 +30,15 @@ pub async fn finish_ready_runs() -> Result<Vec<String>, String> {
     if !crate::config::stado_api_url().is_empty() {
         return Ok(Vec::new());
     }
-    let store = JobStorage::new().await.map_err(|error| error.to_string())?;
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| format!("the job storage cannot be opened: {error}"))?;
     let mut finished = Vec::new();
     let mut refused = Vec::new();
     let markers = store
         .list_blobs_with_meta(UNFINISHED_RUN_PREFIX)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("the unfinished run markers under {UNFINISHED_RUN_PREFIX} cannot be listed: {error}"))?;
     for marker in markers {
         let id = &marker.name[UNFINISHED_RUN_PREFIX.len().min(marker.name.len())..];
         if id.is_empty() {

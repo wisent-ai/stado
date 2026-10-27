@@ -109,16 +109,18 @@ pub(super) fn measured(root: &str, occupants: &[Occupant]) -> Option<i64> {
         .filter(|row| within(&row.path, root))
         .collect();
     rows.sort_by(|left, right| left.path.cmp(&right.path));
-    let mut total: Option<i64> = None;
+    // Rows nested under an already-counted row are inside its measurement.
     let mut previous: Option<&str> = None;
+    let mut counted: Vec<i64> = Vec::new();
     for row in rows {
         if previous.is_some_and(|parent| within(&row.path, parent)) {
             continue;
         }
         previous = Some(&row.path);
-        total = Some(total.unwrap_or_default().saturating_add(row.bytes));
+        counted.push(row.bytes);
     }
-    total
+    // No measured row within the scope is no measurement, not zero bytes.
+    counted.into_iter().reduce(i64::saturating_add)
 }
 
 /// Every declared root this platform's stages sweep, expanded against the
@@ -216,11 +218,17 @@ fn partition_node(
         });
         return;
     }
+    // The bytes the parent holds outside every child; only a positive
+    // remainder is an exclusive occupant.
     let child_bytes = children[index]
         .iter()
-        .fold(0_i64, |sum, child| sum.saturating_add(rows[*child].bytes));
-    let remainder = row.bytes.saturating_sub(child_bytes).max(0);
-    if remainder > 0 {
+        .map(|child| rows[*child].bytes)
+        .reduce(i64::saturating_add);
+    let remainder = match child_bytes {
+        Some(child_bytes) => row.bytes.saturating_sub(child_bytes),
+        None => row.bytes,
+    };
+    if remainder.is_positive() {
         output.push(Occupant {
             path: row.path.clone(),
             bytes: remainder,

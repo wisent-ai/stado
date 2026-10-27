@@ -36,11 +36,17 @@ pub fn parse_channels(document: &Value) -> Result<ChannelsCatalog, String> {
             control_plane.push(channel.to_string());
         }
     }
-    let notes = section
-        .get("notes")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    // `notes` is the operator's free text and may be absent; a value of
+    // another type is a registry mistake, not empty notes.
+    let notes = match section.get("notes") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(notes)) => notes.clone(),
+        Some(other) => {
+            return Err(format!(
+                "registry.channels.notes: must be a string, not {other}"
+            ))
+        }
+    };
     Ok(ChannelsCatalog {
         declared: true,
         control_plane,

@@ -58,13 +58,17 @@ pub async fn run_cleanup_once(
 /// The same lock and the same scanners as [`run_cleanup_once`] — the
 /// returned report's `eligible_items` and `expected_bytes` per cleaner are
 /// what a pass would remove if the volume were at the threshold now — and no
-/// state is written. The preview carries zero running jobs because it is not
-/// the worker.
+/// state is written. It carries the workloads running now, as a pass would,
+/// so a preview on a busy host shows the caches a pass would keep for them
+/// rather than promising to remove them.
 ///
 /// `stado space reclaim --local --dry-run` runs this locally; the
 /// `registry_cleanup` stage of a fleet preview runs it on its target.
-pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
+pub async fn preview_cleanup_once(
+    active_job_count: i64,
+    log_fn: &mut dyn FnMut(&str),
+) -> Value {
     // A preview persists nothing, so its writer identity never reaches the
     // file; it is recorded anyway so the returned report is self-describing.
-    cleanup_once(0, true, CleanupWriter::Cli { every: None }, log_fn).await
+    cleanup_once(active_job_count, true, CleanupWriter::Cli { every: None }, log_fn).await
 }

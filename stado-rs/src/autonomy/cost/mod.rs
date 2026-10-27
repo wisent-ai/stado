@@ -4,12 +4,15 @@
 //! the price records and the per-provider reads that fill them, [`allocation`]
 //! puts an hourly price on every inventory resource and folds the result into
 //! buckets, [`forecast`] projects the burn against the policy budgets and
-//! reports the anomalies, and [`ledger`] measures decision outcomes,
+//! reports the anomalies, [`billed`] reads the month's billed spend and the
+//! credit balance from the billing snapshot the projection starts from, and
+//! [`ledger`] measures decision outcomes,
 //! summarizes savings and persists the reports. Every name a caller outside
 //! this module uses is re-exported here, so `crate::autonomy::cost::<item>`
 //! resolves exactly as before.
 
 mod allocation;
+mod billed;
 mod forecast;
 mod ledger;
 mod prices;
@@ -24,6 +27,7 @@ pub use forecast::{detect_anomalies, forecast};
 pub use ledger::outcomes::measure_outcomes;
 pub use ledger::reports::{load_billing_snapshot, persist_reports};
 pub use ledger::savings::{summarize_savings, summarize_savings_with_measurements};
+pub(crate) use prices::azure_vm_prices;
 pub use prices::{refresh_prices, PriceBook, PriceQuote};
 pub use quote::{quote_jobs, AllocationQuote, AllocationQuotes};
 

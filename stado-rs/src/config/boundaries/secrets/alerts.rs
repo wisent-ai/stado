@@ -5,23 +5,34 @@ use std::sync::LazyLock;
 use crate::config::project;
 use crate::config_file::resolve as cfg;
 
+/// The Pub/Sub topic alerts go to: `WC_ALERTS_TOPIC` when set and not
+/// blank, else `alerts.topic` from the config file, else the project's
+/// topic named after this product when a project is declared; empty when
+/// none is.
 static ALERTS_TOPIC: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("WC_ALERTS_TOPIC")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| {
-            let default = if project().is_empty() {
-                String::new()
-            } else {
-                format!("projects/{}/topics/stado-alerts", project())
-            };
-            cfg("", "alerts.topic", &default)
-        })
+    let from_file_or_project = || {
+        let default = if project().is_empty() {
+            String::new()
+        } else {
+            format!(
+                "projects/{}/topics/{}-alerts",
+                project(),
+                env!("CARGO_PKG_NAME")
+            )
+        };
+        cfg("", "alerts.topic", &default)
+    };
+    match std::env::var("WC_ALERTS_TOPIC") {
+        Ok(topic) if !topic.is_empty() => topic,
+        Ok(_) | Err(std::env::VarError::NotPresent) => from_file_or_project(),
+        // A topic name that is not Unicode is not a topic: the file and the
+        // project decide, and `config validate` names the variable.
+        Err(std::env::VarError::NotUnicode(_raw)) => from_file_or_project(),
+    }
 });
 
 /// Where email alerts go. The destination is not a secret, so it belongs in
-/// the config document rather than the vault; the env name matches the one
-/// the SendGrid channel has always read.
+/// the config document rather than the vault; the Skrzynka channel sends to it.
 static ALERT_EMAIL_TO: LazyLock<String> =
     LazyLock::new(|| cfg("WC_EMAIL_TO", "alerts.email_to", ""));
 

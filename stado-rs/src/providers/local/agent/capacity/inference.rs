@@ -58,9 +58,10 @@ pub(crate) async fn queued_gpu_job_for_inference(
             .then_with(|| left.created_at.cmp(&right.created_at))
     });
     for job in queued {
-        let need = job
-            .gpu_mem_gb
-            .max(estimate_gpu_memory(&job.command, sizing, store).await?);
+        let need = estimate_gpu_memory(&job.command, sizing, store)
+            .await?
+            .into_iter()
+            .fold(job.gpu_mem_gb, i64::max);
         if need <= 0
             || !helpers::job_eligible(
                 &job,

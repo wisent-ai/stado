@@ -26,24 +26,31 @@ pub(in crate::queue::submit) enum EntryClaim {
 
 /// The process holding a claimed entry, when it still holds it: None when
 /// the holder is gone (or the entry's stated expiry from an older Stado has
-/// passed), so the entry may be taken over.
+/// passed), so the entry may be taken over. An entry written by a Stado
+/// with process owners names `owner_pid` and `owner_host`; one from before
+/// names `lease_expires_at` alone. A record whose owner fields are not what
+/// either wrote is held as unreadable, never taken over on a guess.
 fn live_holder(entry: &Map<String, Value>) -> Option<String> {
-    let pid = entry.get("owner_pid").and_then(Value::as_u64).unwrap_or(0);
-    if pid == 0 {
-        return entry
-            .get("lease_expires_at")
-            .and_then(Value::as_str)
-            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-            .filter(|expires| *expires > chrono::Utc::now())
-            .map(|expires| format!("a submission whose lease runs to {expires}"));
-    }
+    let Some(pid) = entry.get("owner_pid").and_then(Value::as_u64) else {
+        // No process owner: the lease expiry decides.
+        let Some(stamp) = entry.get("lease_expires_at").and_then(Value::as_str) else {
+            return None;
+        };
+        return match chrono::DateTime::parse_from_rfc3339(stamp) {
+            Ok(expires) if expires > chrono::Utc::now() => Some(format!("a submission whose lease runs to {expires}")),
+            Ok(_expired) => None,
+            Err(error) => Some(format!("a submission whose lease_expires_at {stamp:?} is not a time ({error}); it is not taken over on a guess")),
+        };
+    };
+    let Ok(pid) = u32::try_from(pid) else {
+        return Some(format!("a submission whose owner_pid {pid} is not a process id; it is not taken over on a guess"));
+    };
+    let Some(host) = entry.get("owner_host").and_then(Value::as_str) else {
+        return Some(format!("a submission by process {pid} on a host the record does not name; it is not taken over on a guess"));
+    };
     let holder = ProcessOwner {
-        host: entry
-            .get("owner_host")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        pid: u32::try_from(pid).unwrap_or_default(),
+        host: host.to_string(),
+        pid,
     };
     match holder.state() {
         OwnerState::Gone => None,
@@ -97,9 +104,10 @@ pub(in crate::queue::submit) async fn claim_entry(
             return Ok(EntryClaim::Accepted(current.planned_job.clone()));
         }
         if current.state.ended() {
-            return Ok(EntryClaim::Terminal(
-                current.outcome_job.clone().expect("validated outcome"),
-            ));
+            let job = current.outcome_job.clone().ok_or_else(|| {
+                SubmitError::Validation("an ended run checkpoint entry names no outcome job".into())
+            })?;
+            return Ok(EntryClaim::Terminal(job));
         }
         let entry = manifest
             .get_mut("entries")
@@ -107,14 +115,16 @@ pub(in crate::queue::submit) async fn claim_entry(
             .and_then(|entries| entries.get_mut(index))
             .and_then(Value::as_object_mut)
             .ok_or_else(|| SubmitError::Validation("run checkpoint entry is missing".into()))?;
-        let held_by = entry
+        // An entry claimed by another owner is held while its process lives;
+        // an entry with no owner is nobody's and may be claimed.
+        let held_by_another = entry
             .get("owner")
             .and_then(Value::as_str)
-            .unwrap_or_default();
+            .is_some_and(|held_by| held_by != owner);
         if matches!(
             entry.get("state").and_then(Value::as_str),
             Some("claimed" | "enqueuing")
-        ) && held_by != owner
+        ) && held_by_another
         {
             if let Some(holder) = live_holder(entry) {
                 return Err(SubmitError::Validation(format!(
@@ -146,7 +156,7 @@ pub(in crate::queue::submit) async fn claim_entry(
             .and_then(Value::as_array_mut)
             .and_then(|entries| entries.get_mut(index))
             .and_then(Value::as_object_mut)
-            .expect("validated entry");
+            .ok_or_else(|| SubmitError::Validation("run checkpoint entry is missing".into()))?;
         entry.insert("state".into(), Value::from("enqueuing"));
         match store
             .compare_and_swap_text(

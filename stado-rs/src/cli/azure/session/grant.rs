@@ -94,14 +94,12 @@ pub(super) async fn receive_authorization_code(
         Err(CmdError::click("Azure OAuth callback state mismatch")
             .stating(crate::primitives::failure::FailureCode::Auth))
     } else if let Some(error) = params.get("error") {
-        Err(CmdError::click(format!(
-            "Azure login failed: {error}: {}",
-            params
-                .get("error_description")
-                .map(String::as_str)
-                .unwrap_or("")
-        ))
-        .stating(crate::primitives::failure::FailureCode::Auth))
+        let description = match params.get("error_description") {
+            Some(description) => description.as_str(),
+            None => "Azure gave no error_description",
+        };
+        Err(CmdError::click(format!("Azure login failed: {error}: {description}"))
+            .stating(crate::primitives::failure::FailureCode::Auth))
     } else {
         params
             .get("code")

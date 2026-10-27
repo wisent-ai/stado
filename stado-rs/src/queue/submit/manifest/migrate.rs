@@ -159,7 +159,7 @@ pub(crate) async fn migrate_v2_run_manifest(
         let migrated_entries = object
             .get_mut("entries")
             .and_then(Value::as_array_mut)
-            .expect("validated entries");
+            .ok_or_else(|| SubmitError::Validation("v2 run manifest has no entries list".into()))?;
         for (index, entry) in migrated_entries.iter_mut().enumerate() {
             let entry = entry
                 .as_object_mut()

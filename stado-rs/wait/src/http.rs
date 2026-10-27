@@ -1,8 +1,58 @@
-//! Waits on an HTTP answer or an AWS SDK call.
+//! Waits on an HTTP answer or an AWS SDK call. A request's wait is measured
+//! under its kind, method and origin (`siec GET https://…`), so every call
+//! to one service is one operation whatever its path and query.
 
 use std::future::Future;
 
-use crate::{until, Kind};
+use crate::Kind;
+
+/// The waits these functions make, spelled as every product spells its
+/// mechanism.
+mod wait {
+    use std::future::Future;
+
+    use crate::Kind;
+
+    /// The operation a request of `method` to `origin` is measured under.
+    fn operation(kind: Kind, method: &reqwest::Method, origin: &str) -> String {
+        format!("{} {method} {}", kind.word(), crate::line::field(origin))
+    }
+
+    /// [`crate::until`] for a request of `method` to `origin`.
+    pub(super) async fn until<T, E, F>(
+        kind: Kind,
+        method: &reqwest::Method,
+        origin: &str,
+        what: String,
+        place: String,
+        work: F,
+    ) -> Result<T, E>
+    where
+        E: std::error::Error,
+        F: Future<Output = Result<T, E>>,
+    {
+        let operation = operation(kind, method, origin);
+        let waiting = crate::start(kind, what, place, None, Some(operation));
+        waiting.settle(work.await)
+    }
+
+    /// [`crate::blocking`] for a request of `method` to `origin`.
+    pub(super) fn blocking<T, E: std::error::Error>(
+        kind: Kind,
+        method: &reqwest::Method,
+        origin: &str,
+        what: String,
+        place: String,
+        work: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
+        let operation = operation(kind, method, origin);
+        let waiting = crate::start(kind, what, place, None, Some(operation));
+        waiting.settle(work())
+    }
+
+    /// [`crate::until`] for a wait its caller names.
+    pub(super) use crate::until as named;
+}
 
 /// Send one HTTP request and wait for its answer to begin, saying so at
 /// both ends. What is waited for is the request's method, path and decoded
@@ -32,8 +82,10 @@ pub async fn send_built(
         .map(|(key, value)| format!("{key}={value}"))
         .collect();
     let what = format!("{} {} {}", request.method(), url.path(), query.join(" "));
-    let place = format!("{service} {}", url.origin().ascii_serialization());
-    until(kind, what, place, client.execute(request)).await
+    let origin = url.origin().ascii_serialization();
+    let place = format!("{service} {origin}");
+    let method = request.method().clone();
+    wait::until(kind, &method, &origin, what, place, client.execute(request)).await
 }
 
 /// The cause, when a request's error says the dependency refused it before
@@ -57,7 +109,9 @@ pub async fn request(builder: reqwest::RequestBuilder) -> reqwest::Result<reqwes
     let request = request?;
     let what = format!("{} {}", request.method(), request.url().path());
     let place = request.url().origin().ascii_serialization();
-    until(Kind::Network, what, place, client.execute(request)).await
+    let method = request.method().clone();
+    let execute = client.execute(request);
+    wait::until(Kind::Network, &method, &place.clone(), what, place, execute).await
 }
 
 /// [`request`] for a blocking client: send one HTTP request and wait on this
@@ -70,17 +124,21 @@ pub fn request_blocking(
     let request = request?;
     let what = format!("{} {}", request.method(), request.url().path());
     let place = request.url().origin().ascii_serialization();
-    crate::blocking(Kind::Network, what, place, || client.execute(request))
+    let method = request.method().clone();
+    wait::blocking(Kind::Network, &method, &place.clone(), what, place, || {
+        client.execute(request)
+    })
 }
 
 /// Wait for one AWS SDK call — the future its fluent builder's `send`
 /// returns — saying so at both ends. What is waited for is the operation's
-/// builder as the SDK names it (`aws_sdk_s3::operation::get_object::…`).
+/// builder as the SDK names it (`aws_sdk_s3::operation::get_object::…`),
+/// and it is measured under that name.
 pub async fn sdk<T, E, F>(call: F) -> Result<T, E>
 where
     E: std::error::Error,
     F: Future<Output = Result<T, E>>,
 {
     let what = std::any::type_name::<F>().trim_end_matches("::send::{{closure}}");
-    until(Kind::Network, what, "the AWS API", call).await
+    wait::named(Kind::Network, what, "the AWS API", call).await
 }

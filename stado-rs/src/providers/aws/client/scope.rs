@@ -9,7 +9,12 @@ pub(crate) async fn observed_account(
     // https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html
     let response = crate::wait::sdk(client.get_caller_identity().send())
         .await
-        .map_err(|error| ProviderError::Aws(format!("STS GetCallerIdentity: {error:?}")))?;
+        .map_err(|error| {
+            ProviderError::Aws(format!(
+                "STS GetCallerIdentity: {}",
+                aws_sdk_sts::error::DisplayErrorContext(&error)
+            ))
+        })?;
     response
         .account()
         .filter(|account| !account.is_empty())

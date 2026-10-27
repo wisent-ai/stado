@@ -17,9 +17,20 @@ pub(super) fn unit_name(name: &str) -> String {
     format!("stado-inference-{name}.service")
 }
 
+/// The model cache directory as a shell word for the deployment's scripts:
+/// the declared `resources.cache_dir`, quoted, or `cache` under the
+/// deployment's own root (`$root`, which the scripts set first) when the
+/// deployment declares none.
+pub(super) fn cache_dir_word(deployment: &Deployment) -> String {
+    match deployment.resources.cache_dir.as_deref() {
+        Some(declared) => crate::deploy::shlex_quote(declared),
+        None => "\"$root/cache\"".to_string(),
+    }
+}
+
 pub(super) fn safe_runtime(deployment: &Deployment) -> Result<(), DeployError> {
     crate::inference::schema::validate(&json!({
-        "schema_version": crate::targets::REGISTRY_SCHEMA_VERSION,
+        "schema_version": crate::targets::registry_schema_version(),
         "targets": [{
             "name": deployment.target,
             "kind": "local",

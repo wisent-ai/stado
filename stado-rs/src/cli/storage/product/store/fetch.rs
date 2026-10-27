@@ -79,7 +79,7 @@ pub(crate) async fn compare_and_swap_object(
             .await;
     }
     let text = std::str::from_utf8(content)
-        .map_err(|_| CmdError::usage("conditional object content must be UTF-8"))?;
+        .map_err(|error| CmdError::usage(format!("conditional object content must be UTF-8: {error}")))?;
     let store = JobStorage::for_object_uris().await?;
     store
         .compare_and_swap_text(&object.storage_path(), expected_version, text)

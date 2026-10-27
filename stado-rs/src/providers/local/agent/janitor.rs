@@ -49,10 +49,6 @@ use serde_json::Value;
 #[derive(Clone, Default)]
 pub struct JanitorReports {
     latest: Arc<Mutex<Option<Value>>>,
-    /// How many passes have completed. The tick logs the first one so an
-    /// operator can tell "no pass has finished yet" from "the janitor is
-    /// wedged".
-    completed: Arc<AtomicI64>,
     /// The active job count the next pass should be told about, written by the
     /// tick and read by the janitor. Shared as a number rather than passed in,
     /// because the pass outlives the tick that started it.
@@ -64,23 +60,27 @@ impl JanitorReports {
         Self::default()
     }
 
-    /// The most recently COMPLETED cleanup report, or `None` when no pass has
-    /// finished yet.
+    /// What the tick publishes as `space_reclaim`: the most recently COMPLETED
+    /// cleanup report, `{"outcome": "no_pass_completed_yet"}` before the first
+    /// one, so a missing pass never reads like a wedged janitor, or
+    /// `{"outcome": "unreadable"}` with the cause when a panic in a pass
+    /// poisoned the report.
     ///
     /// This never awaits, and MUST never be made to: waiting here is exactly
     /// the defect. A tick that blocks on an in-flight pass stops publishing
     /// capacity, and a host that stops publishing capacity stops being a
     /// release builder anywhere in the fleet.
-    pub fn latest(&self) -> Option<Value> {
-        self.latest
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-
-    /// How many passes have completed since this agent started.
-    pub fn completed_passes(&self) -> i64 {
-        self.completed.load(Ordering::Relaxed)
+    pub fn latest(&self) -> Value {
+        match self.latest.lock() {
+            Ok(latest) => match latest.as_ref() {
+                Some(report) => report.clone(),
+                None => serde_json::json!({"outcome": "no_pass_completed_yet"}),
+            },
+            Err(poisoned) => serde_json::json!({
+                "outcome": "unreadable",
+                "error": format!("a janitor pass panicked while recording its report: {poisoned}"),
+            }),
+        }
     }
 
     /// Tell the janitor how many jobs are active for the next pass it starts.
@@ -95,15 +95,19 @@ impl JanitorReports {
     }
 
     fn record(&self, report: Value) {
-        *self
-            .latest
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(report);
-        self.completed.fetch_add(1, Ordering::Relaxed);
+        match self.latest.lock() {
+            Ok(mut latest) => *latest = Some(report),
+            // The tick reads the poisoned lock as `unreadable` with its cause;
+            // this pass's report is said in the agent log so it is not lost.
+            Err(poisoned) => crate::providers::local::agent::agent_log(&format!(
+                "janitor: a pass report was not recorded, the report lock is poisoned \
+                 ({poisoned}); report: {report}"
+            )),
+        }
     }
 
     /// Run `pass` forever on a thread of its own, recording each completed
-    /// report, and waiting `interval` between passes.
+    /// report: one pass at once, then one every `interval`.
     ///
     /// A thread with its own current-thread runtime rather than
     /// `tokio::spawn`, for a concrete reason: `space_reclaim::run_cleanup_once`
@@ -125,7 +129,7 @@ impl JanitorReports {
         let reports = self.clone();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop_signal = Arc::clone(&stop);
-        let handle = std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("stado-agent-janitor".to_string())
             .spawn(move || {
                 let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -145,14 +149,28 @@ impl JanitorReports {
                     }
                 };
                 runtime.block_on(async move {
+                    // A pass that runs past its slot delays only the next one.
+                    let mut schedule = tokio::time::interval(interval);
+                    schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     while !stop_signal.load(Ordering::Relaxed) {
+                        schedule.tick().await;
                         let report = pass(reports.active_jobs()).await;
                         reports.record(report);
-                        tokio::time::sleep(interval).await;
                     }
                 });
-            })
-            .ok();
+            });
+        // A thread the system refuses is no janitor; the agent goes on
+        // publishing and says why cleanup will not run.
+        let handle = match spawned {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                crate::providers::local::agent::agent_log(&format!(
+                    "janitor: its thread was not started, disk cleanup will not run this \
+                     process: {error}"
+                ));
+                None
+            }
+        };
         JanitorTask { stop, handle }
     }
 }

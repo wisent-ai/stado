@@ -9,11 +9,11 @@ use serde_json::json;
 use crate::cli::resources::engine::report::print_summary;
 use crate::cli::resources::executors::{conditions_match, explain_mismatch, Context};
 use crate::cli::resources::journal::{ActionPhase, Journal, OperationState, Phase};
-use crate::cli::resources::model::{Action, Plan, Reversibility};
+use crate::cli::resources::model::{Action, Plan, Reversibility, Rollback};
 use crate::cli::resources::planner;
 use crate::cli::CmdError;
 
-use super::failure::fail_restore;
+use super::failure::{fail_restore, preserve_failure};
 
 pub(in crate::cli::resources::engine) async fn restore_locked(
     journal: &Journal,
@@ -23,16 +23,19 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let ordered = planner::topological_order(plan)?;
-    let reversible: Vec<&Action> = ordered
+    // Each reversible action travels with the rollback and the journalled
+    // phase it was selected by, so no later step looks either up again.
+    let reversible: Vec<(&Action, &Rollback, ActionPhase)> = ordered
         .into_iter()
         .rev()
-        .filter(|action| {
-            state.actions.get(&action.id).is_some_and(|item| {
-                matches!(
-                    item.phase,
-                    ActionPhase::Applied | ActionPhase::Restoring | ActionPhase::Failed
-                )
-            }) && action.rollback.is_some()
+        .filter_map(|action| {
+            let item = state.actions.get(&action.id)?;
+            let rollback = action.rollback.as_ref()?;
+            matches!(
+                item.phase,
+                ActionPhase::Applied | ActionPhase::Restoring | ActionPhase::Failed
+            )
+            .then_some((action, rollback, item.phase))
         })
         .collect();
     let has_irreversible = state.actions.values().any(|item| {
@@ -47,7 +50,7 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
         ));
     }
     let reversible_owned: Vec<Action> =
-        reversible.iter().map(|action| (**action).clone()).collect();
+        reversible.iter().map(|(action, _, _)| (*action).clone()).collect();
     let context = Context::new(&reversible_owned).await?;
     let irreversible: Vec<String> = state
         .actions
@@ -63,8 +66,7 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
         .collect();
 
     let mut preflight = Vec::new();
-    for action in &reversible {
-        let rollback = action.rollback.as_ref().expect("filtered rollback");
+    for (action, rollback, prior_phase) in &reversible {
         let observed = context.inspect(action).await?;
         let already_restored = conditions_match(&rollback.postconditions, &observed);
         if !already_restored && !conditions_match(&rollback.preconditions, &observed) {
@@ -74,8 +76,7 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
                 explain_mismatch(&rollback.preconditions, &observed)
             )));
         }
-        let prior_phase = state.actions[&action.id].phase;
-        preflight.push((action.id.as_str(), already_restored, prior_phase, observed));
+        preflight.push((action.id.as_str(), already_restored, *prior_phase, observed));
     }
     journal.renew(&plan.operation_id, owner).await?;
     journal
@@ -85,8 +86,7 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
             Ok(())
         })
         .await?;
-    for action in reversible {
-        let rollback = action.rollback.as_ref().expect("filtered rollback");
+    for (action, rollback, _) in reversible {
         let Some((_, already_restored, prior_phase, observed_before)) =
             preflight.iter().find(|(id, _, _, _)| *id == action.id)
         else {
@@ -123,8 +123,8 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
         let immediate = match context.inspect(action).await {
             Ok(observed) => observed,
             Err(error) => {
-                fail_restore(journal, plan, action, &error.to_string()).await?;
-                return Err(error);
+                let recorded = fail_restore(journal, plan, action, &error.to_string()).await;
+                return Err(preserve_failure(error, recorded, plan, action));
             }
         };
         if conditions_match(&rollback.postconditions, &immediate) {
@@ -154,8 +154,8 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
                 action.id,
                 explain_mismatch(&rollback.preconditions, &immediate)
             );
-            fail_restore(journal, plan, action, &message).await?;
-            return Err(CmdError::refused(message));
+            let recorded = fail_restore(journal, plan, action, &message).await;
+            return Err(preserve_failure(CmdError::refused(message), recorded, plan, action));
         }
         journal
             .update(&plan.operation_id, |state| {
@@ -185,8 +185,8 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
         let observed = match restore_result {
             Ok(observed) => observed,
             Err(error) => {
-                fail_restore(journal, plan, action, &error.to_string()).await?;
-                return Err(error);
+                let recorded = fail_restore(journal, plan, action, &error.to_string()).await;
+                return Err(preserve_failure(error, recorded, plan, action));
             }
         };
         journal

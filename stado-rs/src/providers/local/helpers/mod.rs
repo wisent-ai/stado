@@ -16,8 +16,6 @@
 //! and memory it can offer, [`claims`] the rules that decide what
 //! it may take, and [`running_slot`] what a job it already took is holding.
 
-use std::sync::LazyLock;
-
 pub mod claims;
 pub mod gpu;
 pub mod host;
@@ -33,9 +31,5 @@ pub use host::job_request::{requested_cpu_cores, requested_memory_gb};
 pub use host::ram::memory_gb;
 pub use running_slot::{slot_is_exclusive, slot_vram, slot_waiting_for_vram};
 
-pub(crate) use running_slot::{group_alive, pid_alive};
-
-// Read by both [`claims::eligibility`] and [`running_slot`], which is why it
-// stays here rather than in either of them.
-static MODEL_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"--model\s+(\S+)").expect("static regex compiles"));
+pub(crate) use crate::primitives::procutil::pid_alive;
+pub(crate) use running_slot::group_alive;

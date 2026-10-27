@@ -28,7 +28,15 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
     if json_output {
         let rows: Vec<Value> = bindings
             .iter()
-            .map(|(target, binding)| binding_row(target, binding, None, &unasked))
+            .map(|(target, binding)| {
+                binding_row(
+                    target,
+                    binding,
+                    None,
+                    Some("list prints the declaration and asks no host".to_string()),
+                    &unasked,
+                )
+            })
             .collect();
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());

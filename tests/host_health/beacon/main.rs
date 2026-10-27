@@ -5,6 +5,8 @@
 mod beacon;
 mod deployment;
 mod own_channel;
+#[path = "../../host_gates/disk.rs"]
+mod gates_disk;
 #[path = "../privacy.rs"]
 mod privacy;
 mod roles;

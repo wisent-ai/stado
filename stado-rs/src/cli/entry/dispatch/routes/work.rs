@@ -39,6 +39,7 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                 if_declared,
                 revision,
                 pre_push,
+                purposes,
                 json,
             } => {
                 crate::cli::quality::check(
@@ -46,16 +47,24 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                     if_declared,
                     revision.as_deref(),
                     pre_push,
+                    &purposes,
                     json,
                 )
                 .await
             }
-            QualityCommands::CommandTree {
+            QualityCommands::Tree {
                 root,
                 revision,
+                purposes,
                 json,
             } => {
-                crate::cli::quality::command_tree(root.as_deref(), revision.as_deref(), json).await
+                crate::cli::quality::command_tree(
+                    root.as_deref(),
+                    revision.as_deref(),
+                    &purposes,
+                    json,
+                )
+                .await
             }
         },
         WorkCommands::Mcp => tokio::task::spawn_blocking(|| {

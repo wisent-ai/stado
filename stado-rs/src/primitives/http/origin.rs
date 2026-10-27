@@ -14,12 +14,16 @@ pub enum WebScheme {
 }
 
 impl WebScheme {
-    /// The URL's web scheme, or `None` for any other scheme.
+    /// The URL's web scheme, or `None` for any other scheme: the enum
+    /// declares the two web schemes, so a scheme it does not deserialize is
+    /// by that declaration not a web scheme, and nothing is lost in saying so.
     pub fn of(url: &url::Url) -> Option<Self> {
-        <Self as serde::Deserialize>::deserialize(serde_json::Value::String(
+        match <Self as serde::Deserialize>::deserialize(serde_json::Value::String(
             url.scheme().to_string(),
-        ))
-        .ok()
+        )) {
+            Ok(scheme) => Some(scheme),
+            Err(_not_a_web_scheme) => None,
+        }
     }
 }
 
@@ -52,4 +56,15 @@ pub fn is_loopback_host(url: &url::Url) -> bool {
         Some(url::Host::Ipv6(address)) => address.is_loopback(),
         None => false,
     }
+}
+
+/// The socket address of `port` on this machine's IPv4 loopback interface.
+pub fn loopback_address(port: u16) -> std::net::SocketAddrV4 {
+    std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, port)
+}
+
+/// The plain-HTTP origin of a listener on this machine's loopback interface
+/// at `port`, the one place a loopback URL is spelled.
+pub fn loopback_origin(port: u16) -> String {
+    format!("http://{}", loopback_address(port))
 }

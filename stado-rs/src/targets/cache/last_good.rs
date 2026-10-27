@@ -20,15 +20,13 @@ pub struct RegistryCacheMeta {
     pub generation: String,
 }
 
-/// `~/.stado/cache`, or `None` when `HOME` is unset — a daemon started with
-/// no environment still reads the registry, it just gets no cache rather
-/// than a cache in whatever directory it happened to start in.
+/// `~/.stado/cache` under the home [`crate::config_file::home`] finds (HOME,
+/// else the user database), or `None` when neither names one — a daemon
+/// started with no environment still reads the registry, it just gets no
+/// cache rather than a cache in whatever directory it happened to start in.
 fn registry_cache_dir() -> Option<PathBuf> {
-    Some(
-        Path::new(&std::env::var_os("HOME")?)
-            .join(".stado")
-            .join("cache"),
-    )
+    let home = std::env::home_dir().filter(|home| !home.as_os_str().is_empty())?;
+    Some(home.join(".stado").join("cache"))
 }
 
 /// Path of the last-known-good registry document.
@@ -41,33 +39,22 @@ pub fn registry_last_good_meta_path() -> Option<PathBuf> {
     Some(registry_cache_dir()?.join(REGISTRY_LAST_GOOD_META_FILE))
 }
 
-/// Write `content` through a per-process temp file and one rename, so a
-/// crash leaves the previous file rather than half of the next one.
+/// Write `content` whole and durably ([`crate::primitives::document::persist`]):
+/// a crash leaves the previous copy rather than half of the next one, and a
+/// copy written just before a power loss is still the one read after it.
+/// Every writer stages into its own fresh file, so two invocations
+/// refreshing the cache at once never interleave their bytes.
 pub(crate) fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
-    let mut temp = path.to_path_buf();
-    // Per-process, because two stado invocations refreshing the cache in the
-    // same second must not interleave their bytes in one temp file. The
-    // rename can still be lost by the other writer — both wrote the same
-    // document, so losing it costs nothing.
-    temp.set_extension(format!("{}.tmp", std::process::id()));
-    // A failed write or rename removes the staging file; one that stays is
-    // said with the error, since the next refresh writes the same name.
-    std::fs::write(&temp, content)
-        .and_then(|()| std::fs::rename(&temp, path))
-        .map_err(|error| {
-            std::io::Error::new(
-                error.kind(),
-                crate::primitives::staging::failed_with(error.to_string(), &temp),
-            )
-        })
+    crate::primitives::document::persist(path, content.as_bytes())
 }
 
-/// How many hosts a registry document declares.
-pub(crate) fn declared_target_count(document: &Value) -> usize {
-    document
-        .get("targets")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len)
+/// The hosts a registry document declares; a document without a `targets`
+/// list declares none.
+pub(crate) fn declared_targets(document: &Value) -> &[Value] {
+    match document.get("targets").and_then(Value::as_array) {
+        Some(targets) => targets,
+        None => &[],
+    }
 }
 
 /// Whether an incoming document may replace the recorded one.
@@ -83,13 +70,63 @@ pub(crate) fn may_replace_last_good(
     incoming: &Value,
     recorded: Option<&Value>,
 ) -> Result<(), String> {
-    let arriving = declared_target_count(incoming);
-    let held = recorded.map_or(0, declared_target_count);
-    if arriving == 0 && held > 0 {
+    let arriving = declared_targets(incoming);
+    let held = match recorded {
+        Some(recorded) => declared_targets(recorded),
+        None => &[],
+    };
+    if arriving.is_empty() && !held.is_empty() {
+        let held = held.len();
         return Err(format!(
             "the authority served a registry naming no hosts and the recorded copy names {held}; \
              keeping the recorded copy, because an empty fleet is what an outage looks like from \
              here and the fallback exists for outages"
+        ));
+    }
+    Ok(())
+}
+
+/// Whether an incoming document would roll the recorded copy's service
+/// directory back to a lower generation.
+///
+/// Every directory change committed at the registry authority advances the
+/// generation by one, and an authority takeover writes this host's copy at
+/// the next generation before any store holds it. A store read that still
+/// answers the old authority's lower generation replaced that copy, so the
+/// next registry read went back to the old authority and the takeover was
+/// undone by the host that made it. The resolver refuses such a generation
+/// in memory; this keeps the copy every one-shot command reads from taking
+/// it either. A document without a directory has no generation to compare
+/// and is left to the other rules. An incoming directory that cannot be read
+/// is the refusal; a recorded one that cannot be read holds no generation to
+/// lose, as a recorded copy that does not parse holds no hosts to lose, and
+/// is said.
+pub(crate) fn directory_not_rolled_back(incoming: &Value, recorded: &Value) -> Result<(), String> {
+    let arriving = crate::service_resolution::directory(incoming)
+        .map_err(|error| {
+            format!("the registry read's service directory cannot be read, so whether it rolls the recorded copy back is unknown: {error}")
+        })?
+        .map(|directory| directory.generation);
+    let held = match crate::service_resolution::directory(recorded) {
+        Ok(directory) => directory.map(|directory| directory.generation),
+        Err(error) => {
+            eprintln!(
+                "stado: the recorded last-known-good copy's service directory cannot be read, so \
+                 it holds no generation to lose and is replaced: {error}"
+            );
+            None
+        }
+    };
+    let (Some(arriving), Some(held)) = (arriving, held) else {
+        return Ok(());
+    };
+    if arriving < held {
+        return Err(format!(
+            "the registry read names service directory generation {arriving}, below generation \
+             {held} this host's last-known-good copy holds; keeping the copy, because a directory \
+             generation only advances and a lower one is an authority answering after its role \
+             moved; if the copy's generation is the false one, `stado resolver accept \
+             --generation {arriving}` on this host adopts the lower one once"
         ));
     }
     Ok(())
@@ -132,6 +169,10 @@ pub enum LastGoodRefusal {
     /// exact reason: the authority is publishing something the fallback will
     /// not take.
     WouldLoseRecordedHosts { held: usize, detail: String },
+    /// Valid, and older: its service directory generation is below the one
+    /// the recorded copy holds ([`directory_not_rolled_back`]). Taken, it
+    /// undoes an authority takeover on the host that made it.
+    DirectoryRollback { detail: String },
     /// Nothing judged the document; the filesystem refused the write.
     NotWritten { detail: String },
 }
@@ -146,6 +187,7 @@ impl LastGoodRefusal {
             Self::Unparseable { .. } => "unparseable-document",
             Self::RejectedByThisBuild { .. } => "rejected-by-this-build",
             Self::WouldLoseRecordedHosts { .. } => "would-lose-recorded-hosts",
+            Self::DirectoryRollback { .. } => "directory-rollback",
             Self::NotWritten { .. } => "not-written",
         }
     }
@@ -157,7 +199,8 @@ impl LastGoodRefusal {
             Self::NoCacheLocation => "no HOME, so this process has no registry cache location",
             Self::Unparseable { detail }
             | Self::RejectedByThisBuild { detail }
-            | Self::NotWritten { detail } => detail,
+            | Self::NotWritten { detail }
+            | Self::DirectoryRollback { detail } => detail,
             Self::WouldLoseRecordedHosts { detail, .. } => detail,
         }
     }
@@ -181,17 +224,22 @@ impl std::fmt::Display for LastGoodRefusal {
 /// of the authority.
 static LAST_GOOD_REFUSAL: Mutex<Option<LastGoodRefusal>> = Mutex::new(None);
 
+/// The record, taken over when a thread panicked holding it: it holds one
+/// whole value at every moment, so a panic cannot leave it half written, and
+/// a poisoned lock stopped every later registry read of this process.
+fn refusal_record() -> std::sync::MutexGuard<'static, Option<LastGoodRefusal>> {
+    match LAST_GOOD_REFUSAL.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 /// Record a refusal for this process.
 pub(crate) fn note_last_good_refusal(refusal: &LastGoodRefusal) {
-    *LAST_GOOD_REFUSAL
-        .lock()
-        .expect("last-known-good refusal lock") = Some(refusal.clone());
+    *refusal_record() = Some(refusal.clone());
 }
 
 /// The last refusal this process saw, if any.
 pub fn last_good_refusal() -> Option<LastGoodRefusal> {
-    LAST_GOOD_REFUSAL
-        .lock()
-        .expect("last-known-good refusal lock")
-        .clone()
+    refusal_record().clone()
 }

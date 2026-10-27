@@ -42,7 +42,16 @@ fn validate(root: &str, expected: &[String]) -> Step<()> {
                     "effective lifecycle snapshot contains a non-regular file: {path}"
                 ));
             }
-            let inside = path.strip_prefix(root).unwrap_or(&path);
+            // The walk started at the root, so every path is beneath it; one
+            // that is not is a walk defect, said as such.
+            let inside = match path.strip_prefix(root) {
+                Some(inside) => inside,
+                None => {
+                    return Err(format!(
+                        "effective lifecycle snapshot walk left its root {root}: {path}"
+                    ))
+                }
+            };
             actual.push(inside.trim_start_matches('/').to_string());
         }
     }
@@ -94,8 +103,11 @@ pub(super) fn checkpoint_effective_lifecycle(
     let snapshot = &context.effective_lifecycle_snapshot;
     let selected = select(context, primary_objects, backup_objects, conflict_winner)?;
     let expected: Vec<String> = selected.keys().cloned().collect();
-    let metadata_of = |item: &Value| item.get("metadata").cloned().unwrap_or(Value::Null);
-    let body_of = |item: &Value| item.get("body").cloned().unwrap_or(Value::Null);
+    // An item without a body or metadata member is one whose file must be
+    // absent; indexing answers null for the missing member, as
+    // `regular_identity` answers null for the missing file.
+    let metadata_of = |item: &Value| item["metadata"].clone();
+    let body_of = |item: &Value| item["body"].clone();
     if fs::metadata(snapshot).is_ok_and(|info| info.is_dir()) {
         validate_sealed_tree(snapshot)?;
         validate(snapshot, &expected)?;
@@ -146,7 +158,7 @@ pub(super) fn checkpoint_effective_lifecycle(
     set_tree_modes(&building)?;
     fs::rename(&building, snapshot)
         .map_err(|error| format!("cannot move lifecycle snapshot to {snapshot}: {error}"))?;
-    fsync_dir(&parent_of(snapshot))?;
+    fsync_dir(&parent_of(snapshot)?)?;
     seal_tree(snapshot)?;
     validate_sealed_tree(snapshot)?;
     validate(snapshot, &expected)

@@ -37,45 +37,24 @@ fn listed_uploads(deployment: &mut Deployment, part: usize) -> Vec<String> {
 
 pub(super) fn abandoned(deployment: &mut Deployment, part: usize) {
     let mut create = aws(deployment, part);
-    create.args([
-        "s3api",
-        "create-multipart-upload",
-        "--bucket",
-        NAMESPACE,
-        "--key",
-        KEY,
-    ]);
+    create.args(["s3api", "create-multipart-upload", "--bucket", NAMESPACE, "--key", KEY]);
     let created = json_of(&deployment.must("aws s3api create-multipart-upload", create));
     let upload = created["UploadId"].as_str().unwrap().to_string();
 
     // The first part number the S3 API admits.
     let first = NonZeroU32::MIN.to_string();
     let body = deployment.root.join("abandoned-part.bin");
-    let bytes = format!(
-        "one part of an upload nobody completes {}",
-        uuid::Uuid::new_v4()
-    );
+    let bytes = format!("one part of an upload nobody completes {}", uuid::Uuid::new_v4());
     fs::write(&body, &bytes).unwrap();
     let body_path = body.to_string_lossy().into_owned();
     let mut upload_part = aws(deployment, part);
     upload_part.args(["s3api", "upload-part", "--bucket", NAMESPACE, "--key", KEY]);
-    upload_part.args([
-        "--upload-id",
-        &upload,
-        "--part-number",
-        &first,
-        "--body",
-        &body_path,
-    ]);
+    upload_part.args(["--upload-id", &upload, "--part-number", &first, "--body", &body_path]);
     let uploaded = json_of(&deployment.must("aws s3api upload-part", upload_part));
     let etag = uploaded["ETag"].clone();
 
     let listed = listed_uploads(deployment, part);
-    assert_eq!(
-        listed,
-        vec![upload.clone()],
-        "ListMultipartUploads does not name the upload"
-    );
+    assert_eq!(listed, vec![upload.clone()], "ListMultipartUploads does not name the upload");
 
     let mut parts = aws(deployment, part);
     parts.args(["s3api", "list-parts", "--bucket", NAMESPACE, "--key", KEY]);
@@ -86,28 +65,15 @@ pub(super) fn abandoned(deployment: &mut Deployment, part: usize) {
         other => panic!("ListParts answers other than the one part: {other:?}"),
     };
     assert_eq!(only["PartNumber"].to_string(), first, "{answer}");
-    assert_eq!(
-        only["ETag"], etag,
-        "ListParts answers another ETag than UploadPart"
-    );
+    assert_eq!(only["ETag"], etag, "ListParts answers another ETag than UploadPart");
     assert_eq!(only["Size"], Value::from(bytes.len()), "{answer}");
 
     let mut abort = aws(deployment, part);
-    abort.args([
-        "s3api",
-        "abort-multipart-upload",
-        "--bucket",
-        NAMESPACE,
-        "--key",
-        KEY,
-    ]);
+    abort.args(["s3api", "abort-multipart-upload", "--bucket", NAMESPACE, "--key", KEY]);
     abort.args(["--upload-id", &upload]);
     deployment.must("aws s3api abort-multipart-upload", abort);
     let after = listed_uploads(deployment, part);
-    assert!(
-        after.is_empty(),
-        "an aborted upload is still listed: {after:?}"
-    );
+    assert!(after.is_empty(), "an aborted upload is still listed: {after:?}");
     let mut gone = aws(deployment, part);
     gone.args(["s3api", "list-parts", "--bucket", NAMESPACE, "--key", KEY]);
     gone.args(["--upload-id", &upload]);

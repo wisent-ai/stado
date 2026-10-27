@@ -16,11 +16,7 @@ pub(in crate::monitor::billing) fn emit_alerts(document: &Value) {
             match variant.adapter {
                 crate::capabilities::RuntimeAdapter::Billing(
                     crate::capabilities::BillingAdapter::Gcp,
-                ) if section
-                    .get("credit_depleted")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false) =>
-                {
+                ) if matches!(section.get("credit_depleted"), Some(Value::Bool(true))) => {
                     log(&format!(
                         "BILLING ALERT: GCP latest-month net ${} exceeds ${} — promotion credit exhausted or rate-capped",
                         py_value(section.get("latest_month_net_usd")),
@@ -73,10 +69,15 @@ pub(in crate::monitor::billing) fn emit_alerts(document: &Value) {
     if let Some(providers) = provider_health {
         for (provider, health) in providers {
             if health.get("degraded").and_then(Value::as_bool) == Some(true) {
+                // A degraded record without its failing time says so; zero
+                // would read as a failure that just began.
+                let failing = match health.get("failing_seconds").and_then(Value::as_i64) {
+                    Some(seconds) => humanize(seconds),
+                    None => "an unreported time".to_string(),
+                };
                 log(&format!(
-                    "BILLING ALERT: {provider} account unhealthy — status {} for {}, last good report {}",
+                    "BILLING ALERT: {provider} account unhealthy — status {} for {failing}, last good report {}",
                     py_value(health.get("status")),
-                    humanize(health.get("failing_seconds").and_then(Value::as_i64).unwrap_or_default()),
                     py_value(health.get("last_ok")),
                 ));
             }

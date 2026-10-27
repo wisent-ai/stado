@@ -73,7 +73,13 @@ pub(super) async fn ensure_rollout_policy(
         Some(_) => None,
         None => Some(directory_route(product, runtime, &host, port)?),
     };
-    let policy = policy_for(&document, product, runtime, &host, port, one_unit.is_some())?;
+    // The policy's paths live under the home the host's own shell states,
+    // never one derived from its SSH user name.
+    let resolved = crate::cli::canonical_host(&host).await?;
+    let home = crate::deploy::host_channel::remote_home(&resolved, &crate::deploy::production_runner())
+        .await
+        .map_err(CmdError::from)?;
+    let policy = policy_for(&document, product, runtime, &host, &home, port, one_unit.is_some())?;
     let written = policy.clone();
     let written_route = route.clone();
     let route_host = host.clone();
@@ -90,21 +96,17 @@ pub(super) async fn ensure_rollout_policy(
             return Ok(next);
         }
         products.insert(product.to_string(), written.clone());
-        let generation = next
-            .pointer("/release_control/generation")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                CmdError::click("registry.release_control.generation is not an integer")
-                    .stating(crate::primitives::failure::FailureCode::Config)
-            })?;
-        next["release_control"]["generation"] = Value::from(generation.saturating_add(1));
+        advance_release_generation(&mut next)?;
         if let Some(route) = &written_route {
             declare_route(&mut next, product, &route_host, route.clone())?;
         }
         Ok(next)
     })
     .await?;
-    eprintln!("{product}: rollout policy created with target {host} on 127.0.0.1:{port}");
+    eprintln!(
+        "{product}: rollout policy created with target {host} on {}",
+        std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port))
+    );
     Ok(json!({
         "step": "rollout-policy",
         "product": product,
@@ -138,14 +140,7 @@ async fn convert_to_replace(product: &str, unit: &str) -> Result<Value, CmdError
                 target["candidate_ports"] = Value::Null;
             }
         }
-        let generation = next
-            .pointer("/release_control/generation")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                CmdError::click("registry.release_control.generation is not an integer")
-                    .stating(crate::primitives::failure::FailureCode::Config)
-            })?;
-        next["release_control"]["generation"] = Value::from(generation.saturating_add(1));
+        advance_release_generation(&mut next)?;
         Ok(next)
     })
     .await?;
@@ -160,4 +155,11 @@ async fn convert_to_replace(product: &str, unit: &str) -> Result<Value, CmdError
         "unit": unit,
         "registry_generation": generation,
     }))
+}
+
+/// Advance registry.release_control.generation by the registry's declared step.
+fn advance_release_generation(next: &mut Value) -> Result<u64, CmdError> {
+    crate::service_resolution::advance_block_generation(next, "release_control").map_err(|cause| {
+        CmdError::click(cause).stating(crate::primitives::failure::FailureCode::Config)
+    })
 }

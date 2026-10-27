@@ -89,8 +89,7 @@ impl Context {
 
 /// Run one phase on this host and print its marker line.
 pub fn run(phase: &str, transaction: &str) {
-    let outcome = std::env::var("HOME")
-        .map_err(|_| "HOME is not set".to_string())
+    let outcome = crate::config_file::home_text()
         .and_then(|home| Context::new(phase, transaction, &home))
         .and_then(|mut context| phases::run(&mut context));
     if let Err(reason) = outcome {

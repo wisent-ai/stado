@@ -74,16 +74,23 @@ impl<'a> EnvFileRequest<'a> {
 /// argument vector, for the same reason `env set` encodes its value: the
 /// script text is the only thing that reaches the host.
 pub fn remote_env_file_script(request: &EnvFileRequest<'_>) -> String {
-    let (expect_key, expect_value) = request.expect.unwrap_or_default();
+    // An operand the request does not make travels as the empty word, which
+    // the script reads as "not asked": no key is revealed, nothing is
+    // compared.
+    let (expect_key, expect_value) = match request.expect {
+        Some((key, value)) => (key, value),
+        None => ("", ""),
+    };
+    let reveal = match request.reveal {
+        Some(key) => key,
+        None => "",
+    };
     remote_env_file_body()
         .replace(
             "@ENV_PATH_B64@",
             &STANDARD.encode(request.env_path.as_bytes()),
         )
-        .replace(
-            "@REVEAL_B64@",
-            &STANDARD.encode(request.reveal.unwrap_or_default().as_bytes()),
-        )
+        .replace("@REVEAL_B64@", &STANDARD.encode(reveal.as_bytes()))
         .replace("@EXPECT_KEY_B64@", &STANDARD.encode(expect_key.as_bytes()))
         .replace(
             "@EXPECT_VALUE_B64@",

@@ -38,7 +38,12 @@ pub(in crate::cli::database) async fn destroy(
     let engine = declared.engine().to_string();
     let item = declared.item().to_string();
     let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
-    let host = host.map(str::to_string).unwrap_or_else(|| owner.clone());
+    // The database is placed on the vault owner unless `create --host` named
+    // another, so destroy looks there unless told otherwise.
+    let host = match host {
+        Some(host) => host.to_string(),
+        None => owner.clone(),
+    };
     let mut steps: Vec<Value> = Vec::new();
     let provider = provider_of(&item, owner == here).await?;
     if provider == Some(DatabaseProvider::External) {
@@ -70,28 +75,36 @@ pub(in crate::cli::database) async fn destroy(
         && crate::config::DatabaseEngine::parse(&engine)
             == Some(crate::config::DatabaseEngine::Postgres)
     {
-        let unit = format!("{name}-database");
+        // The REST API placed beside the database (`<name>-rest`) serves
+        // nothing once the database is gone, so it goes first; then the
+        // database's own unit.
         let target = crate::cli::canonical_host(&host).await?;
-        let still_declared = crate::deploy::service::declared_services(&target)
-            .iter()
-            .any(|service| service.matches(&unit));
-        if still_declared {
-            if let Err(error) =
-                crate::cli::service::lifecycle::adopt::removal::remove(&unit, &host, false).await
-            {
-                return Err(partial(
-                    name,
-                    &steps,
-                    format!("the unit {unit} on {host} was not removed: {error}"),
-                ));
+        for unit in [
+            format!("{name}{}", crate::cli::database::rest::UNIT_SUFFIX),
+            format!("{name}-database"),
+        ] {
+            let still_declared = crate::deploy::service::declared_services(&target)
+                .iter()
+                .any(|service| service.matches(&unit));
+            if still_declared {
+                if let Err(error) =
+                    crate::cli::service::lifecycle::adopt::removal::remove(&unit, &host, false)
+                        .await
+                {
+                    return Err(partial(
+                        name,
+                        &steps,
+                        format!("the unit {unit} on {host} was not removed: {error}"),
+                    ));
+                }
             }
+            steps.push(json!({
+                "step": "unit",
+                "unit": unit,
+                "host": host,
+                "status": if still_declared { "removed" } else { "already absent" },
+            }));
         }
-        steps.push(json!({
-            "step": "unit",
-            "unit": unit,
-            "host": host,
-            "status": if still_declared { "removed" } else { "already absent" },
-        }));
     }
 
     let deleted = if owner == here {
@@ -139,9 +152,10 @@ pub(in crate::cli::database) async fn destroy(
         format!("left in place at ~/.stado/databases/{name}/ on {host}")
     };
     // An item an earlier run already deleted no longer records who ran it.
-    let provider = provider.map_or(String::from("already destroyed"), |provider| {
-        provider.to_string()
-    });
+    let provider = match provider {
+        Some(provider) => provider.to_string(),
+        None => String::from("already destroyed"),
+    };
     let outcome = json!({
         "destroyed": name,
         "provider": provider,
@@ -222,10 +236,10 @@ async fn provider_of(item: &str, local_owner: bool) -> Result<Option<DatabasePro
     if let Some(provider) = read("provider").await? {
         return serde_json::from_value(Value::String(provider.clone()))
             .map(Some)
-            .map_err(|_| {
+            .map_err(|error| {
                 CmdError::click(format!(
                     "{item}.provider is {provider:?}, not fleet, supabase or external, so destroy \
-                     cannot tell what to take back"
+                     cannot tell what to take back: {error}"
                 ))
                 .stating(crate::primitives::failure::FailureCode::Config)
             });

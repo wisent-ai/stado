@@ -40,7 +40,7 @@ pub(crate) async fn before_admission(
 ) -> anyhow::Result<Step<(i64, Vec<helpers::GpuCard>)>> {
     // Cleanup already ran before the immutable release check. This gate is
     // admission/diagnostics-only and has no destructive side effects.
-    let (_pre_refuse, pre_diag) = gate::gate_and_maybe_evict(log_fn);
+    let (_pre_refuse, pre_diag) = gate::measure_admission(log_fn);
     agent_diag.extend(diag_map(&pre_diag));
     log_fn("loop: pre-drain release drift check");
     match version_check::maybe_drain_or_upgrade(!slots.is_empty(), log_fn, kind).await {
@@ -64,7 +64,7 @@ pub(crate) async fn before_admission(
             false,
             Some("vast_renter_active"),
             BTreeMap::new(),
-            0,
+            None,
             total_vram_gb,
             agent_diag.clone(),
         );
@@ -81,10 +81,11 @@ pub(crate) async fn before_admission(
         return Ok(Step::Done);
     }
 
-    let mut used_vram = 0i64;
+    let mut slot_vram = Vec::new();
     for s in slots {
-        used_vram += helpers::slot_vram(&s.slot, sizing, store).await?;
+        slot_vram.push(helpers::slot_vram(&s.slot, sizing, store).await?);
     }
+    let mut used_vram: i64 = slot_vram.iter().sum();
     if slots.iter().any(|s| helpers::slot_is_exclusive(&s.slot)) {
         used_vram = total_vram_gb;
     }
@@ -123,18 +124,12 @@ pub(crate) async fn before_admission(
             Vec::new()
         }
     };
-    let mut free_vram_gb = (total_vram_gb - used_vram).max(0);
     cards.sort_by_key(|card| std::cmp::Reverse(card.free_vram_gb));
-    if let Some(smi_free) = cards.iter().map(|card| card.free_vram_gb).max() {
-        if smi_free >= 0 && smi_free < free_vram_gb {
-            free_vram_gb = smi_free;
-        }
-    }
     // Who holds the cards, published beside the free/total figures so a
     // `0/95 GiB free` line can name the process behind it.
     crate::providers::local::accelerators::holders::measure(slots)
         .await
-        .insert_into(agent_diag, total_vram_gb, free_vram_gb);
+        .insert_into(agent_diag, total_vram_gb, free_for_one_job(total_vram_gb, used_vram, &cards));
     if let Some(reservation) = &inference_reservation {
         agent_diag.insert(
             "inference_reservation".into(),
@@ -145,7 +140,7 @@ pub(crate) async fn before_admission(
             Value::String(reservation.gpu_mode.to_string()),
         );
         if reservation.gpu_mode == crate::inference::schema::GpuMode::Exclusive {
-            free_vram_gb = 0;
+            used_vram = total_vram_gb;
             log_fn(&format!(
                 "exclusive inference reservation '{}': GPU claims disabled; CPU-only claims remain eligible",
                 reservation.deployment
@@ -162,14 +157,14 @@ pub(crate) async fn before_admission(
                 pinned_only,
             )
             .await?;
-            let gpu_work_active = used_vram > 0;
+            let gpu_work_active = used_vram.is_positive();
             let should_yield = gpu_work_active || queued_job.is_some();
             match inference_container_running(&reservation.deployment).await {
                 Ok(true) if should_yield => {
-                    let reason = queued_job
-                        .as_ref()
-                        .map(|(job_id, need)| format!("queued job {job_id} needs {need} GiB"))
-                        .unwrap_or_else(|| "an admitted GPU job is active".to_string());
+                    let reason = match &queued_job {
+                        Some((job_id, need)) => format!("queued job {job_id} needs {need} GiB"),
+                        None => "an admitted GPU job is active".to_string(),
+                    };
                     log_fn(&format!(
                         "yieldable inference '{}': pausing because {reason}",
                         reservation.deployment
@@ -181,12 +176,12 @@ pub(crate) async fn before_admission(
                                 "yieldable inference '{}': pause failed safely: {error}",
                                 reservation.deployment
                             ));
-                            free_vram_gb = 0;
+                            used_vram = total_vram_gb;
                         }
                     }
                 }
                 Ok(true) => {
-                    free_vram_gb = 0;
+                    used_vram = total_vram_gb;
                     agent_diag.insert("inference_runtime_state".into(), Value::from("serving"));
                 }
                 Ok(false) if !should_yield && slots.is_empty() => {
@@ -196,7 +191,7 @@ pub(crate) async fn before_admission(
                         false,
                         Some("inference_resuming"),
                         BTreeMap::new(),
-                        0,
+                        None,
                         total_vram_gb,
                         agent_diag.clone(),
                     );
@@ -232,7 +227,7 @@ pub(crate) async fn before_admission(
                     }
                 }
                 Err(error) => {
-                    free_vram_gb = 0;
+                    used_vram = total_vram_gb;
                     agent_diag.insert("inference_runtime_state".into(), Value::from("unknown"));
                     log_fn(&format!(
                         "yieldable inference '{}': runtime state unavailable; GPU claims disabled: {error}",
@@ -242,5 +237,16 @@ pub(crate) async fn before_admission(
             }
         }
     }
-    Ok(Step::Go((free_vram_gb, cards)))
+    Ok(Step::Go((free_for_one_job(total_vram_gb, used_vram, &cards), cards)))
+}
+
+/// The free VRAM one job can use: what the bookkeeping leaves of the total
+/// (a hold counts as the whole total used), and no more than the emptiest
+/// board the driver reports when it reports one.
+fn free_for_one_job(total_vram_gb: i64, used_vram: i64, cards: &[helpers::GpuCard]) -> i64 {
+    let booked = total_vram_gb - used_vram.min(total_vram_gb);
+    match cards.iter().map(|card| card.free_vram_gb).filter(|free| !free.is_negative()).max() {
+        Some(emptiest) => booked.min(emptiest),
+        None => booked,
+    }
 }

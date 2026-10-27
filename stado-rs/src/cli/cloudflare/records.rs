@@ -18,12 +18,15 @@ impl TunnelConnections {
     }
 }
 
+/// The tunnel's remote configuration. Cloudflare answers a tunnel that has
+/// never been configured with no `config` member, which is an empty
+/// configuration the route writers then fill.
 pub(super) async fn tunnel_configuration(access: &TunnelAccess) -> Result<Value, CmdError> {
     let current = access.client.get(&access.configuration_path(), &[]).await?;
-    Ok(current
-        .pointer("/result/config")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Map::new())))
+    Ok(match current.pointer("/result/config") {
+        Some(config) => config.clone(),
+        None => Value::Object(Map::new()),
+    })
 }
 
 pub(super) async fn active_zone_id(access: &TunnelAccess, zone: &str) -> Result<String, CmdError> {

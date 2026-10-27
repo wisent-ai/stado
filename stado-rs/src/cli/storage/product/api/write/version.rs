@@ -3,6 +3,14 @@
 use crate::cli::storage::*;
 
 impl RemoteObjectApi {
+    /// The refusal for a versioned answer whose version cannot be read.
+    fn unversioned() -> CmdError {
+        CmdError::click(
+            "Stado object API answered a versioned GET without a readable x-stado-version header",
+        )
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    }
+
     pub(in crate::cli::storage) async fn get_versioned(
         &self,
         uri: &str,
@@ -17,18 +25,17 @@ impl RemoteObjectApi {
         if !response.status().is_success() {
             return Err(self.response_error(response, bearer.as_deref()).await);
         }
-        let version = response
-            .headers()
-            .get("x-stado-version")
-            .and_then(|value| value.to_str().ok())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                CmdError::click(
-                    "Stado object API answered a versioned GET without its x-stado-version header",
-                )
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-            })?
-            .to_string();
+        // The versioned answer carries its version in a header the API
+        // documents as ASCII; one missing, blank or not text is an answer
+        // this command cannot fence a write against.
+        let version = match response.headers().get("x-stado-version") {
+            Some(value) => match value.to_str() {
+                Ok(text) if !text.is_empty() => text.to_string(),
+                Ok(_blank) => return Err(Self::unversioned()),
+                Err(_not_text) => return Err(Self::unversioned()),
+            },
+            None => return Err(Self::unversioned()),
+        };
         let bytes = self
             .success_body(response, "versioned object GET", bearer.as_deref())
             .await?;
@@ -54,27 +61,32 @@ impl RemoteObjectApi {
         )
         .await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            let presented = crate::remote::object_store::ObjectRef::parse(uri)
-                .ok()
-                .and_then(|object| {
-                    crate::remote::object_store::release_policy_key(
-                        object.namespace(),
-                        object.key(),
-                    )
-                })
-                .and_then(|key| {
-                    crate::config::release_client_publisher_for_key(&key)
-                        .ok()
-                        .flatten()
-                })
-                .map(|publisher| format!("publisher item {}", publisher.item()))
-                .unwrap_or_else(|| {
-                    if bearer.is_some() {
-                        "a resolved release credential".to_string()
-                    } else {
-                        "the coordinator storage token".to_string()
-                    }
-                });
+            // The refusal names what was presented: the publisher item the
+            // release policy maps this key to, when the URI is an object
+            // reference under a release-governed key and a publisher is
+            // declared for it; otherwise the credential class that was sent.
+            let credential_class = if bearer.is_some() {
+                "a resolved release credential".to_string()
+            } else {
+                "the coordinator storage token".to_string()
+            };
+            let publisher = match crate::remote::object_store::ObjectRef::parse(uri) {
+                Ok(object) => match crate::remote::object_store::release_policy_key(
+                    object.namespace(),
+                    object.key(),
+                ) {
+                    Some(key) => match crate::config::release_client_publisher_for_key(&key) {
+                        Ok(publisher) => publisher,
+                        Err(_declaration_refused_elsewhere) => None,
+                    },
+                    None => None,
+                },
+                Err(_not_an_object_reference) => None,
+            };
+            let presented = match publisher {
+                Some(publisher) => format!("publisher item {}", publisher.item()),
+                None => credential_class,
+            };
             let refusal = self.response_error(response, bearer.as_deref()).await;
             let mut wrapped = CmdError::click(format!(
                 "{refusal}; conditional PUT {uri} with if_version={expected_version:?} presented \

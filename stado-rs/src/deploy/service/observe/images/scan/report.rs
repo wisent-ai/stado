@@ -48,7 +48,7 @@ pub async fn restart_local_unit(
     observed_domain: Option<&str>,
 ) -> Result<String, DeployError> {
     use crate::primitives::failure::FailureCode;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
     let refused = |message: String| DeployError(message).stating(FailureCode::Refused);
     if !host_channel::target_is_this_host(target) {
         return Err(refused(
@@ -66,15 +66,9 @@ pub async fn restart_local_unit(
     let mut candidates: Vec<String> = if unit_domain.requires_privileged_bootstrap() {
         vec!["system".to_string()]
     } else {
-        let home = std::env::var_os("HOME").ok_or_else(|| {
-            DeployError("this process has no HOME".to_string()).stating(FailureCode::Config)
-        })?;
-        let uid = std::fs::metadata(&home)
-            .map_err(|error| {
-                DeployError(format!("this account's uid is unreadable: {error}"))
-                    .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-            })?
-            .uid();
+        // The account this process runs as is the one whose launchd domains
+        // a user unit lives in; asked of the kernel, not of whoever owns HOME.
+        let uid = nix::unistd::geteuid().as_raw();
         vec![format!("gui/{uid}"), format!("user/{uid}")]
     };
     if let Some(observed) = observed_domain {
@@ -124,7 +118,9 @@ pub async fn restart_local_unit(
         DeployError(format!("cannot read the replacement {program}: {error}"))
             .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+    if !metadata.is_file()
+        || !crate::primitives::file_mode::executable_by_anyone(metadata.permissions().mode())
+    {
         return Err(refused(format!("{program} is not an executable file")));
     }
     let scope = if unit_domain.requires_privileged_bootstrap() {

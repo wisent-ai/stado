@@ -29,10 +29,12 @@ pub(super) fn prefilter_candidates_with_routing(
 ) -> (Vec<String>, usize) {
     let in_quota: BTreeSet<&str> = available
         .iter()
-        .filter(|(_, available)| **available > 0)
+        .filter(|(_, available)| available.is_positive())
         .map(|(accelerator, _)| accelerator.as_str())
         .collect();
-    let mut cand: Vec<(i64, i64, String)> = Vec::new();
+    // Ordered by priority, highest first (a job that states none after every
+    // job that does), then by when it was written (one with no time first).
+    let mut cand: Vec<(std::cmp::Reverse<Option<i64>>, Option<i64>, String)> = Vec::new();
     let mut skipped_no_quota: Vec<&str> = Vec::new();
     for info in blobs {
         if !info.name.ends_with(".json") {
@@ -45,16 +47,26 @@ pub(super) fn prefilter_candidates_with_routing(
         {
             continue;
         }
-        let gm: i64 = meta
-            .get("gpu_mem_gb")
-            .and_then(|value| value.parse().ok())
-            .unwrap_or_default();
-        let explicit_accel = meta.get("gpu_type").map(|value| value.trim()).unwrap_or("");
-        let derived = if gm > 0 {
-            let (_, accelerator) = config::lookup_instance_type(provider_name, gm);
-            accelerator
-        } else {
-            ""
+        // The metadata stamps are a copy of the job body, read here only to
+        // order and filter without downloading bodies. A stamp that is absent
+        // or does not parse states nothing: the job is kept in the window and
+        // its body, read next, decides.
+        let stamped = |key: &str| -> Option<i64> {
+            meta.get(key).and_then(|value| match value.parse::<i64>() {
+                Ok(number) => Some(number),
+                Err(_unparsed) => None,
+            })
+        };
+        let explicit_accel = match meta.get("gpu_type") {
+            Some(value) => value.trim(),
+            None => "",
+        };
+        let derived = match stamped("gpu_mem_gb") {
+            Some(gm) if gm.is_positive() => match config::lookup_instance_type(provider_name, gm) {
+                Some((_, accel)) => accel,
+                None => "",
+            },
+            Some(_) | None => "",
         };
         let accel_for_filter = if explicit_accel.is_empty() {
             derived
@@ -65,22 +77,15 @@ pub(super) fn prefilter_candidates_with_routing(
             skipped_no_quota.push(&info.name);
             continue;
         }
-        let prio: i64 = meta
-            .get("priority")
-            .and_then(|value| value.parse().ok())
-            .unwrap_or_default();
-        let ts = info
-            .updated
-            .map(|updated| updated.timestamp())
-            .unwrap_or_default();
-        let jid = info
-            .name
-            .rsplit('/')
-            .next()
-            .unwrap_or("")
-            .trim_end_matches(".json")
-            .to_string();
-        cand.push((-prio, ts, jid));
+        let Some(file) = info.name.rsplit('/').next() else {
+            continue;
+        };
+        let jid = file.trim_end_matches(".json").to_string();
+        cand.push((
+            std::cmp::Reverse(stamped("priority")),
+            info.updated.map(|updated| updated.timestamp()),
+            jid,
+        ));
     }
     cand.sort_by_key(|left| (left.0, left.1));
     cand.truncate(window_budget);

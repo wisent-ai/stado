@@ -14,7 +14,7 @@ mod observation;
 mod sources;
 pub(crate) use observation::observe;
 pub use observation::{DiagnosticRead, ReadState};
-pub(in crate::deploy) use sources::resolves_to;
+pub(crate) use sources::resolves_to;
 use sources::{publication, waiting_jobs};
 
 pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, DeployError> {
@@ -31,11 +31,19 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
     .await;
     // The authority read failed; retain a readable last-known-good copy as
     // explicitly historical evidence rather than a current authority read.
-    let registry = registry.or_else(|| {
-        let cause = registry_read.detail.clone().unwrap_or_default();
-        crate::targets::last_good_after(&cause)
-            .map(|(registry, copy)| (registry, copy.map(|copy| copy.notice)))
-    });
+    // An observation without a value carries the error's words as its
+    // detail; a read with neither is itself named as the cause.
+    let registry = match registry {
+        Some(registry) => Some(registry),
+        None => {
+            let cause = match registry_read.detail.clone() {
+                Some(cause) => cause,
+                None => "the registry read answered neither a document nor a cause".to_string(),
+            };
+            crate::targets::last_good_after(&cause)
+                .map(|(registry, copy)| (registry, copy.map(|copy| copy.notice)))
+        }
+    };
     let Some((registry, notice)) = registry else {
         let mut observations = vec![registry_read];
         for (operation, source) in [
@@ -114,7 +122,12 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         }),
     );
     let state_observed = state.0.is_some();
-    let mut reading = state.0.unwrap_or_default();
+    // A state read that failed leaves an empty reading; its failure is in
+    // the observations below and `state_observed` says it was not read.
+    let mut reading = match state.0 {
+        Some(read) => read,
+        None => Default::default(),
+    };
     if let Some(usage) = usage.0 {
         reading.usage = usage.usage;
         reading.volumes = usage.volumes;
@@ -226,7 +239,7 @@ async fn disk_read(
 ) -> Result<host_disk::DiskReading, DeployError> {
     let script = host_disk::remote_script_for(scope, target.work_root.as_deref());
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError(format!(
             "host read exited {}: {} {}",
             output.code, output.stderr, output.stdout

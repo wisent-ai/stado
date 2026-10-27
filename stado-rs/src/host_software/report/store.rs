@@ -13,13 +13,14 @@ use super::Report;
 // ---------------------------------------------------------------------------
 
 /// The roster row's detail: what the newest report listed, so a later read can
-/// tell the report apart from every row ever written for this host.
-fn roster_detail(names: &[&str], scripts: usize) -> String {
-    format!(
-        "reported={} scripts={scripts} names={}",
-        names.len(),
-        names.join(",")
-    )
+/// tell the report apart from every row ever written for this host. A script
+/// total nobody counted is left out rather than written as none.
+fn roster_detail(names: &[&str], scripts: Option<usize>) -> String {
+    let scripts = match scripts {
+        Some(scripts) => format!(" scripts={scripts}"),
+        None => String::new(),
+    };
+    format!("reported={}{scripts} names={}", names.len(), names.join(","))
 }
 
 /// Persist one host's report, replacing whatever was on file for it.
@@ -45,7 +46,7 @@ pub fn record(host: &str, rows: &[HostSoftware], scripts: usize) -> io::Result<(
         report_fact(host),
         host,
         OBSERVED,
-        roster_detail(&names, scripts),
+        roster_detail(&names, Some(scripts)),
     ));
     observations::record(&written)
 }
@@ -67,7 +68,7 @@ pub fn record_refusal(host: &str, detail: &str) -> io::Result<()> {
 
 /// The roster row for one host: its freshness, the program names it listed, and
 /// the script count beside them.
-fn roster(records: &[Observation], host: &str) -> Option<(Freshness, BTreeSet<String>, usize)> {
+fn roster(records: &[Observation], host: &str) -> Option<(Freshness, BTreeSet<String>, Option<usize>)> {
     let fact = report_fact(host);
     let freshness = observations::freshness_in(records, &fact);
     let row = match &freshness {
@@ -75,7 +76,7 @@ fn roster(records: &[Observation], host: &str) -> Option<(Freshness, BTreeSet<St
         Freshness::Never => return None,
     };
     let mut names: BTreeSet<String> = BTreeSet::new();
-    let mut scripts = 0;
+    let mut scripts = None;
     for token in row.detail.split_whitespace() {
         if let Some(value) = token.strip_prefix("names=") {
             names.extend(
@@ -85,7 +86,13 @@ fn roster(records: &[Observation], host: &str) -> Option<(Freshness, BTreeSet<St
                     .map(str::to_string),
             );
         } else if let Some(value) = token.strip_prefix("scripts=") {
-            scripts = value.parse().unwrap_or_default();
+            scripts = match value.parse::<usize>() {
+                Ok(count) => Some(count),
+                Err(error) => {
+                    eprintln!("host software roster for {host}: scripts={value:?} is not a count ({error}); shown as not counted");
+                    None
+                }
+            };
         }
     }
     Some((freshness, names, scripts))

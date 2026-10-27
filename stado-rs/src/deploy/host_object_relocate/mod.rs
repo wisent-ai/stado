@@ -29,7 +29,7 @@
 //! - **It refuses to overwrite.** A destination that already exists is never
 //!   written. When its content hashes equal the source's, the pair is a
 //!   half-finished earlier move and the source is dropped; when they differ,
-//!   the object is reported [`DESTINATION_DIFFERS`] and BOTH copies are kept.
+//!   the object is reported as a destination conflict and BOTH copies are kept.
 //! - **It verifies before it removes.** The destination is hard-linked into
 //!   place, hashed from disk, and compared against the source's hash. Only
 //!   then is the source unlinked. A mismatch unlinks the destination and keeps
@@ -61,10 +61,7 @@ mod report;
 
 pub use plan::{validate_prefix, RelocatePlan};
 pub use program::remote_script;
-pub use receipts::{
-    is_refusal, parse_output, MetadataMove, RelocateReading, Relocation, CONVERGED,
-    DESTINATION_DIFFERS, LINK_FAILED, MOVED, VERIFY_FAILED, WOULD_MOVE,
-};
+pub use receipts::{parse_output, MetadataMove, RelocateReading, Relocation};
 pub use report::to_report;
 
 /// `status` for a run whose every object reached a decided outcome.

@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use super::{safe_component, Plan, PLAN_SCHEMA};
 use crate::deploy::DeployError;
+use crate::primitives::tally::Tally;
 use entry::parse_capture;
 
 /// Read and validate a capture plan.
@@ -32,26 +33,18 @@ pub fn parse_plan(path: &str, target: &str, batch: Option<&str>) -> Result<Plan,
 
     let batch = batch
         .or_else(|| document.get("batch").and_then(Value::as_str))
-        .unwrap_or_default()
-        .trim()
+        .map(str::trim)
+        .filter(|batch| !batch.is_empty())
+        .ok_or_else(|| refused("capture plan must name a batch id, or --batch must supply one"))?
         .to_string();
-    if batch.is_empty() {
-        return Err(refused(
-            "capture plan must name a batch id, or --batch must supply one",
-        ));
-    }
     safe_component("capture batch id", &batch)?;
 
     let declared = document
         .get("target")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim();
-    if declared.is_empty() {
-        return Err(refused(
-            "capture plan must name the target host it was written for",
-        ));
-    }
+        .map(str::trim)
+        .filter(|declared| !declared.is_empty())
+        .ok_or_else(|| refused("capture plan must name the target host it was written for"))?;
     if declared != target {
         return Err(refused(format!(
             "capture plan was written for target {declared}, not {target}"
@@ -69,7 +62,10 @@ pub fn parse_plan(path: &str, target: &str, batch: Option<&str>) -> Result<Plan,
     }
     let mut captures = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
-        captures.push(parse_capture(index + 1, entry, &batch)?);
+        // Captures are numbered for people, from the first.
+        let mut position = index;
+        position.tally();
+        captures.push(parse_capture(position, entry, &batch)?);
     }
     Ok(Plan {
         batch,

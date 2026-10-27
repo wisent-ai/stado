@@ -45,22 +45,25 @@ pub struct CausePredicate {
 /// scoping to it would drag in every sibling subscription.
 fn resource_in(evidence: &str) -> Option<&str> {
     let exact = |token: &str| !token.is_empty() && !token.contains(char::is_whitespace);
-    if let Some(rest) = evidence.split("no value at ").nth(1) {
-        let token = rest
-            .split(['#', ' '])
-            .next()
-            .unwrap_or_default()
-            .trim_end_matches([',', ';', '.']);
+    // The coordinate is the first token after the wording; `split` always
+    // yields a first piece, empty when the wording ends the sentence, and an
+    // empty piece is not exact.
+    if let Some((_, rest)) = evidence.split_once("no value at ") {
+        let token = match rest.split(['#', ' ']).next() {
+            Some(token) => token,
+            None => "",
+        }
+        .trim_end_matches([',', ';', '.']);
         if exact(token) {
             return Some(token);
         }
     }
-    if let Some(rest) = evidence.split("refused for ").nth(1) {
-        let token = rest
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .trim_end_matches([':', ',', ';', '.']);
+    if let Some((_, rest)) = evidence.split_once("refused for ") {
+        let token = match rest.split_whitespace().next() {
+            Some(token) => token,
+            None => "",
+        }
+        .trim_end_matches([':', ',', ';', '.']);
         if exact(token) {
             return Some(token);
         }

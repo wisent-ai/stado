@@ -43,10 +43,28 @@ pub(crate) fn get_cleanup() -> Response {
 ///
 /// One pass through the janitor's own entry point, so the rule and the lock
 /// are the same as the timer's — a run asked for from the GUI is the same
-/// pass the timer would have made, not a second implementation of it.
+/// pass the timer would have made, not a second implementation of it. It
+/// reports the workloads running on this host, so its cleaners skip what a
+/// running job reads; a count that cannot be read runs no pass and says why.
 pub(crate) async fn run_cleanup() -> Response {
+    let running = match crate::providers::local::space_reclaim::live_workload_count() {
+        Ok(running) => running,
+        Err(error) => {
+            return send_json(
+                http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
+                &json!({
+                    "ok": false,
+                    "service": "space-reclaim",
+                    "error": format!(
+                        "the workloads running on this host cannot be counted, so no reclaim \
+                         pass runs: {error}"
+                    ),
+                }),
+            )
+        }
+    };
     let report = crate::providers::local::space_reclaim::run_cleanup_once(
-        0,
+        running,
         crate::providers::local::space_reclaim::CleanupWriter::Cli { every: None },
         &mut |_message| {},
     )

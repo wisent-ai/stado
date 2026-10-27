@@ -51,6 +51,9 @@ pub fn services(document: &Value) -> Result<Value> {
         if let Some(answering) = service.get("answering") {
             row["answering"] = answering.clone();
         }
+        if let Some(state) = service.get("state") {
+            row["state"] = state.clone();
+        }
         services.push(row);
     }
     Ok(json!({"services": services}))
@@ -90,14 +93,14 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
                 runtime.catalog.display()
             );
         }
-        return Ok(0);
+        return Ok(libc::EXIT_SUCCESS);
     }
     if args.has("--unapproved") {
         emit(
             &json!({"products": document["products"].as_array().context("products must be a list")?.iter()
             .filter(|p| p.get("approved_by").is_none()).collect::<Vec<_>>()}),
         )?;
-        return Ok(0);
+        return Ok(libc::EXIT_SUCCESS);
     }
     if let Some(org) = args.optional("--names")? {
         let register = super::names::register(&document, org)?;
@@ -112,7 +115,7 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         } else {
             print!("{register}");
         }
-        return Ok(0);
+        return Ok(libc::EXIT_SUCCESS);
     }
     if let Some(org) = args.optional("--unclaimed")? {
         let output = checked(Command::new("gh").args([
@@ -136,7 +139,7 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
             })
             .collect();
         emit(&json!({"organization": org, "unclaimed": unclaimed}))?;
-        return Ok(0);
+        return Ok(libc::EXIT_SUCCESS);
     }
     if args.has("--check-repositories") {
         let mut problems = Vec::new();
@@ -194,5 +197,5 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
             );
         }
     }
-    Ok(0)
+    Ok(libc::EXIT_SUCCESS)
 }

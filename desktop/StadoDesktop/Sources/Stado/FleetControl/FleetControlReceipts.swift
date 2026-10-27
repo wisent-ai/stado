@@ -75,7 +75,17 @@ struct RegistryImportReceipt: Decodable, Sendable {
 /// Bounded output of one allowlisted Stado command executed by the dashboard.
 struct OperatorCommandResult: Decodable, Sendable {
     let ok: Bool
+    /// The process's exit code; `null` when the dashboard saw it end by a
+    /// signal, which is the one way a process ends without one.
     let exitCode: Int?
+
+    /// The exit code line a screen prints under the command's output.
+    var exitCodeLine: String {
+        switch exitCode {
+        case .some(let code): return "Exit code: \(code)"
+        case .none: return "Exit code: none; the process ended by a signal"
+        }
+    }
     let readOnly: Bool
     let arguments: [String]
     let standardOutput: String

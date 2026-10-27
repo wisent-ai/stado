@@ -46,7 +46,8 @@ impl WriteFencePaths {
             .write(true)
             .create(true)
             .truncate(false)
-            .mode(0o600)
+            // Read and write by the owner alone, as POSIX names the bits.
+            .mode(u32::from(libc::S_IRUSR | libc::S_IWUSR))
             .custom_flags(libc::O_NOFOLLOW)
             .open(&self.lock)
             .map_err(|error| local_io("open write-fence lock", &self.lock, error))?;
@@ -92,15 +93,34 @@ impl WriteFencePaths {
     }
 
     fn refused(&self, intent: Option<&serde_json::Value>) -> StorageError {
-        let owner = intent
+        // The intent names the transaction that fenced the store, and the
+        // command that armed it when that was not the storage-root
+        // reconcile; a fence whose intent names none is said as such, with
+        // the intent's path, rather than attributed to a transaction nobody
+        // recorded.
+        let transaction = intent
             .and_then(|value| value.get("transaction"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("an active storage handoff");
+            .and_then(serde_json::Value::as_str);
+        let armed_by = intent
+            .and_then(|value| value.get("owner"))
+            .and_then(serde_json::Value::as_str);
+        let owner = match (transaction, armed_by) {
+            (Some(transaction), Some(armed_by)) => format!(
+                "{armed_by} transaction {transaction}; stado storage fence status names it and \
+                 stado storage fence disarm --transaction {transaction} lifts it"
+            ),
+            (Some(transaction), None) => format!(
+                "storage-root-reconcile transaction {transaction}; inspect the recorded \
+                 storage-root-reconcile transaction"
+            ),
+            (None, _) => format!(
+                "a storage handoff whose intent at {} names no transaction",
+                self.intent.display()
+            ),
+        };
         std::io::Error::new(
             std::io::ErrorKind::WouldBlock,
-            format!(
-                "local storage writes are fenced by {owner}; inspect the recorded storage-root-reconcile transaction"
-            ),
+            format!("local storage writes are fenced by {owner}"),
         )
         .into()
     }
@@ -119,14 +139,35 @@ impl WriteFencePaths {
         // The durable intent also refuses writes after an interrupted owner
         // has lost its descriptor. An in-flight writer holding this shared
         // lock must finish before the owner can acquire its exclusive hold.
+        // The one writer it admits is the transaction that fenced the store:
+        // a role move carrying the registry authority commits its registry
+        // through the store it fenced.
         if let Some(intent) = self.read_intent()? {
-            return Err(self.refused(Some(&intent)));
+            if intent["transaction"].as_str() != ADMITTED.get().map(String::as_str) {
+                return Err(self.refused(Some(&intent)));
+            }
         }
         Ok(file)
     }
 }
 
+/// The fence transaction this process writes for, from an explicit
+/// command-line input (`stado registry push --fence-transaction`).
+static ADMITTED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 impl LocalBackend {
+    /// Admit this process's writes through a store fenced by `transaction`;
+    /// a second, different transaction is refused.
+    pub(crate) fn admit_fence_transaction(transaction: &str) -> Result<(), StorageError> {
+        let held = ADMITTED.get_or_init(|| transaction.to_string());
+        if held != transaction {
+            return Err(StorageError::Other(format!(
+                "this process already writes for fence transaction {held}, not {transaction}"
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) const WRITE_FENCE_PROTOCOL: &'static str = "stado.storage-root-write-fence.v1";
 
     pub(crate) fn write_fence_paths(root: &Path) -> Option<(PathBuf, PathBuf)> {

@@ -32,78 +32,11 @@ const DIRECTORY_KEY: &str = "service_directory";
 /// itself when it does not, so `--value 8789` is a number, `--value '"8789"'`
 /// a string, and `--value /Users/<user>/.stado` the path it looks like.
 fn parsed(value: &str) -> Value {
-    serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
-}
-
-/// The consumer field only a Stado that knows it can read.
-///
-/// A host's resolver parses the service directory strictly: a consumer
-/// carrying a field its build has never heard of makes the whole document
-/// invalid for that host, and it resolves nothing at all. `grants` arrived in
-/// 0.21.35; declaring one while the host every service resolves through
-/// still runs an older Stado would take the fleet's resolution down, so this
-/// refuses the write until the hosts can read it.
-const GRANTS_FIELD: &str = "grants";
-const GRANTS_SINCE: &str = "0.21.35";
-const MANAGED_VERSIONS: &str = "managed_versions";
-const STADO_BINARY: &str = "stado";
-
-/// Hosts whose declared Stado is older than `GRANTS_SINCE`, or declares none.
-///
-/// A registry without a targets list, or a target naming no name, is a host
-/// whose Stado nobody can read: read as none, a document missing its targets
-/// passed as one where every host already reads `grants`.
-fn hosts_behind(document: &Value) -> Result<Vec<String>, CmdError> {
-    let targets = document
-        .get("targets")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            CmdError::refused(
-                "the registry carries no targets list, so which hosts can read the service \
-                 directory is not known; the registry was not changed",
-            )
-        })?;
-    let mut out = Vec::new();
-    for target in targets {
-        let Some(name) = target.get("name").and_then(Value::as_str) else {
-            out.push(format!("a target naming no name ({target})"));
-            continue;
-        };
-        let declared = target
-            .get(MANAGED_VERSIONS)
-            .and_then(|versions| versions.get(STADO_BINARY))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !version_at_least(declared, GRANTS_SINCE) {
-            out.push(match declared.is_empty() {
-                true => format!("{name} (declares no stado version)"),
-                false => format!("{name} ({declared})"),
-            });
-        }
+    match serde_json::from_str(value) {
+        Ok(json) => json,
+        // Not JSON: the argument is the text it spells, as documented above.
+        Err(_not_json) => Value::String(value.to_string()),
     }
-    Ok(out)
-}
-
-/// Whether `installed` is at least `required`, comparing `X.Y.Z` numerically.
-/// An unreadable or absent version answers false, so a host that declares
-/// nothing is listed as behind rather than assumed current.
-fn version_at_least(installed: &str, required: &str) -> bool {
-    let parse = |value: &str| -> Option<(u64, u64, u64)> {
-        let bare = value.trim().trim_start_matches('v');
-        let bare = bare.split('-').next().unwrap_or_default();
-        let mut parts = bare.split('.').map(|part| part.parse::<u64>().ok());
-        let version = (parts.next()??, parts.next()??, parts.next()??);
-        parts.next().is_none().then_some(version)
-    };
-    match (parse(installed), parse(required)) {
-        (Some(installed), Some(required)) => installed >= required,
-        _ => false,
-    }
-}
-
-/// Whether this path writes a consumer's declared grants.
-fn declares_grants(path: &str) -> bool {
-    path.split('.').any(|segment| segment == GRANTS_FIELD) && path.contains("consumers")
 }
 
 /// `stado registry set --path P --value V [--json]`.
@@ -119,24 +52,6 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
         .await?
         .ok_or_else(|| crate::cli::registry::registry_absent(store.location()))?;
     let mut document: Value = serde_json::from_str(&blob.content)?;
-    if declares_grants(path) {
-        let behind = hosts_behind(&document)?;
-        if !behind.is_empty() {
-            return Err(CmdError::refused(format!(
-                "declaring `{GRANTS_FIELD}` would make this registry unreadable for {} host(s) \
-                 whose Stado is older than {GRANTS_SINCE}: {}. Their resolvers parse the service \
-                 directory strictly and reject a consumer field they do not know, so they would \
-                 resolve nothing at all. Bring them forward first — \
-                 `stado release version promote --host <HOST> --binary stado --version <version>` \
-                 then `stado release version converge --host <HOST> --binary stado` — and check \
-                 what each one actually runs with `stado release version show --host <HOST> \
-                 --binary stado`, because an installed binary can lag the version its registry entry \
-                 declares.",
-                behind.len(),
-                behind.join(", ")
-            )));
-        }
-    }
     // Read the field first, so a path that does not resolve is refused
     // before anything is serialised, with the reader's own sentence. A last
     // segment the document does not carry yet is not such a path: its
@@ -245,9 +160,10 @@ fn report(
     Ok(())
 }
 
+/// A value as the receipt line shows it: text bare, anything else as its JSON.
 fn compact(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
-        other => serde_json::to_string(other).unwrap_or_default(),
+        other => other.to_string(),
     }
 }

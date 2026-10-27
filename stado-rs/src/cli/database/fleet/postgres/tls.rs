@@ -16,7 +16,7 @@ pub(super) fn certificates(
     address: &str,
     policy: &PostgresTls,
 ) -> Result<String, CmdError> {
-    let openssl = program("openssl")?;
+    let openssl = program("openssl", None)?;
     let days = policy.certificate_days.to_string();
     let key = format!("rsa:{}", policy.rsa_bits);
     let authority_key = directory.join("ca.key");
@@ -54,7 +54,8 @@ pub(super) fn certificates(
     write_private(
         &extensions,
         &format!(
-            "basicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName={subject},IP:127.0.0.1,DNS:localhost\n"
+            "basicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName={subject},IP:{},DNS:localhost\n",
+            std::net::Ipv4Addr::LOCALHOST
         ),
     )?;
     run(

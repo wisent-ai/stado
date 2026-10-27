@@ -9,7 +9,7 @@ use crate::cli::secrets::store::resolve::skarbiec_binary;
 
 /// Test every unlock phrase the transcripts still hold against the vault.
 ///
-/// The oracle is Skarbiec's own `key-doctor`, run once per candidate with the
+/// The oracle is Skarbiec's own `keys check`, run once per candidate with the
 /// phrase in its environment: if the canary item opens, that phrase is the one.
 /// Reusing the existing verdict means no second decryption path and no crypto
 /// written here.
@@ -44,22 +44,22 @@ fn try_unlock_local(candidates: &[(String, String)]) -> Result<(), CmdError> {
     for (name, phrase) in candidates {
         let output = crate::wait::output(
             std::process::Command::new(&binary)
-                .arg("key-doctor")
+                .args(["keys", "check"])
                 .env("SKARBIEC_UNLOCK", phrase),
         )?;
         // An answer that is not a report says nothing about the phrase:
-        // skipping it ended in "no phrase opens the vault" when key-doctor
+        // skipping it ended in "no phrase opens the vault" when keys check
         // itself had failed for every candidate.
         let report: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
             CmdError::unreachable(format!(
-                "skarbiec key-doctor answered {} without a JSON report ({error}) while testing the phrase recorded under {name}: {}",
+                "skarbiec keys check answered {} without a JSON report ({error}) while testing the phrase recorded under {name}: {}",
                 output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
             ))
         })?;
         if let Some("readable") = report.get("status").and_then(Value::as_str) {
             println!("the vault OPENS with the phrase recorded under {name}");
-            println!("set it as SKARBIEC_UNLOCK, then rotate-owner onto a key you control");
+            println!("set it as SKARBIEC_UNLOCK, then run skarbiec owner rotate onto a key you control");
             return Ok(());
         }
     }
@@ -98,7 +98,7 @@ case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
 binary="$HOME/.stado/bin/skarbiec"
 vault="$HOME/.stado/skarbiec.vault.json"
 unlock="$HOME/.stado/skarbiec-unlock"
-# What key-doctor and security said on stderr, kept to be quoted when they
+# What keys check and security said on stderr, kept to be quoted when they
 # fail instead of being thrown away.
 errors="$(/usr/bin/mktemp "$HOME/.stado/unlock-errors.XXXXXX")"
 trap '/bin/rm -f "$errors"' EXIT
@@ -106,10 +106,10 @@ try_phrase() {{
   source_b64="$1"
   phrase="$2"
   set +e
-  report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$vault" SKARBIEC_UNLOCK="$phrase" "$binary" key-doctor 2>"$errors")"
+  report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$vault" SKARBIEC_UNLOCK="$phrase" "$binary" keys check 2>"$errors")"
   status=$?
   set -e
-  # An answer that is not a report says nothing about the phrase: key-doctor
+  # An answer that is not a report says nothing about the phrase: keys check
   # itself failed, and every later phrase would fail the same way.
   if ! printf '%s' "$report" | /usr/bin/grep -q '"status"'; then
     printf 'STADO_DOCTOR_FAILED\t%s\t%s\t%s\n' "$status" "$(printf '%s' "$report" | /usr/bin/tr '\n\t' '  ')" "$(/usr/bin/tr '\n\t' '  ' < "$errors")"
@@ -127,7 +127,7 @@ try_phrase() {{
 while IFS= read -r candidate; do
   [ "$candidate" != "$vault" ] || continue
   set +e
-  report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$candidate" "$binary" key-doctor 2>"$errors")"
+  report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$candidate" "$binary" keys check 2>"$errors")"
   status=$?
   set -e
   if [ "$status" -eq 0 ] && printf '%s' "$report" | /usr/bin/grep -q '"status"[[:space:]]*:[[:space:]]*"readable"'; then
@@ -221,7 +221,7 @@ exit 2
         .find_map(|line| line.strip_prefix("STADO_DOCTOR_FAILED\t"))
     {
         return Err(CmdError::unreachable(format!(
-            "skarbiec key-doctor on {host} answered without a report (exit status, its output, then its errors): {answer}; no phrase was judged"
+            "skarbiec keys check on {host} answered without a report (exit status, its output, then its errors): {answer}; no phrase was judged"
         )));
     }
     if let Some(path) = output

@@ -35,17 +35,14 @@ pub(super) async fn update_gcp_billing(project: &str, account: &str) -> Result<(
         Some(json!({"billingAccountName": account})),
     )
     .await?;
-    let enabled = value
-        .get("billingEnabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let landed = value
-        .get("billingAccountName")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !enabled || landed != account {
+    // The response confirms the change only when it states both facts:
+    // billing enabled, and the account that was asked for. A response
+    // missing either is quoted whole as the refusal.
+    let confirmed = value.get("billingEnabled").and_then(Value::as_bool) == Some(true)
+        && value.get("billingAccountName").and_then(Value::as_str) == Some(account);
+    if !confirmed {
         return Err(CmdError::click(format!(
-            "Cloud Billing did not confirm the requested account: {value}"
+            "Cloud Billing did not confirm the requested account {account}: {value}"
         ))
         .stating(FailureCode::InfraDown));
     }

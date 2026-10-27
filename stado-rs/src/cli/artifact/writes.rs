@@ -48,12 +48,14 @@ pub(super) async fn import_activations(
         alias_refs.push(alias_ref.to_string());
     }
     if as_json {
-        let mut value = published.to_dict();
-        value
-            .as_object_mut()
-            .expect("to_dict is an object")
-            .insert("aliases_created".into(), Value::from(alias_refs));
-        println!("{}", json_pretty_sorted(&value));
+        let Value::Object(mut map) = published.to_dict() else {
+            return Err(CmdError::click(format!(
+                "the manifest of {} did not serialize as a JSON object",
+                published.ref_
+            )));
+        };
+        map.insert("aliases_created".into(), Value::from(alias_refs));
+        println!("{}", json_pretty_sorted(&Value::Object(map)));
     } else {
         println!("{}", published.ref_);
         for alias_ref in &alias_refs {
@@ -109,16 +111,13 @@ pub(super) async fn publish(
     full: bool,
     as_json: bool,
 ) -> Result<(), CmdError> {
-    // click.Path(exists=True, dir_okay=False): usage error, exit 2.
+    // click.Path(exists=True, dir_okay=False): a usage error, with clap's
+    // exit status for an invalid value.
     let path = Path::new(manifest_path);
     if !path.is_file() {
-        return Err(CmdError {
-            message: Some(format!(
-                "Invalid value for 'MANIFEST_PATH': File '{manifest_path}' does not exist."
-            )),
-            code: 2,
-            ..CmdError::default()
-        });
+        return Err(CmdError::usage(format!(
+            "Invalid value for 'MANIFEST_PATH': File '{manifest_path}' does not exist."
+        )));
     }
     let manifest = ArtifactManifest::from_json(&std::fs::read_to_string(path)?)?;
     fleet_visible(&manifest)?;

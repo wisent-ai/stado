@@ -16,7 +16,9 @@ mod install;
 mod publisher;
 mod validation;
 
-pub use documents::manifest::{QualificationStatus, ReleaseManifest, ReleaseQualification};
+pub use documents::manifest::{
+    QualificationStatus, ReleaseManifest, ReleaseQualification, RELEASE_MANIFEST_SCHEMA_VERSION,
+};
 pub use documents::policy::{
     BlueGreenServing, DesiredRelease, ProductReleasePolicy, ReleaseArtifactRef, ReleaseChannel,
     ReleaseControl, ReleaseTargetPolicy, RolloutStrategy, StrategyKind,
@@ -32,6 +34,7 @@ pub use publisher::{
     sha256_bytes, sha256_file, sign_manifest, signing_public_key, verify_manifest,
     ArtifactDigestError,
 };
+pub use validation::home::{foreign_targets, ForeignTarget, HOME_PLACEHOLDER};
 pub use validation::manifest::validate_manifest;
 pub use validation::registry::validate_registry_contract;
 pub(crate) use validation::shape::{identifier, safe_absolute};

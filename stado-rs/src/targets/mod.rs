@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::models::Job;
-use crate::queue::{BlobBackend, JobStorage, StorageError, VersionedText};
+use crate::queue::{BlobBackend, StorageError, VersionedText};
 
 // One module, kept in parts small enough to read, grouped by what each part
 // is about. Every leaf opens with `use crate::targets::*;`, so the imports

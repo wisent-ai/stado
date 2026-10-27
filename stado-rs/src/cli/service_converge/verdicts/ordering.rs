@@ -12,22 +12,30 @@ use std::cmp::Ordering;
 /// cannot fail; the `Option` is the parse's own honesty, not a third answer.
 pub(in crate::cli::service_converge) fn version_order(left: &str, right: &str) -> Option<Ordering> {
     fn core(version: &str) -> Option<(u64, u64, u64)> {
-        let core = version.split_once('-').map_or(version, |(core, _)| core);
+        let core = match version.split_once('-') {
+            Some((core, _prerelease)) => core,
+            None => version,
+        };
         let mut parts = core.split('.');
-        let triple = (
-            parts.next()?.parse().ok()?,
-            parts.next()?.parse().ok()?,
-            parts.next()?.parse().ok()?,
-        );
+        // Each part is digits by the exact-semver check; a part wider than
+        // u64 is the one parse that can still fail, and answers `None`.
+        let mut part = || -> Option<u64> {
+            match parts.next()?.parse::<u64>() {
+                Ok(number) => Some(number),
+                Err(_wider_than_u64) => None,
+            }
+        };
+        let triple = (part()?, part()?, part()?);
         if parts.next().is_some() {
             return None;
         }
         Some(triple)
     }
     fn prerelease(version: &str) -> &str {
-        version
-            .split_once('-')
-            .map_or("", |(_, prerelease)| prerelease)
+        match version.split_once('-') {
+            Some((_core, prerelease)) => prerelease,
+            None => "",
+        }
     }
     fn prerelease_order(left: &str, right: &str) -> Ordering {
         match (left.is_empty(), right.is_empty()) {
@@ -47,10 +55,16 @@ pub(in crate::cli::service_converge) fn version_order(left: &str, right: &str) -
                 (Some(left), Some(right)) => {
                     let numeric = |identifier: &str| identifier.bytes().all(|b| b.is_ascii_digit());
                     match (numeric(left), numeric(right)) {
-                        (true, true) => left
-                            .parse::<u64>()
-                            .unwrap_or(u64::MAX)
-                            .cmp(&right.parse::<u64>().unwrap_or(u64::MAX)),
+                        // Both passed the digit check above, so a parse
+                        // fails only when an identifier is wider than u64;
+                        // such identifiers compare by length, then by text,
+                        // which is numeric order for digit strings.
+                        (true, true) => match (left.parse::<u64>(), right.parse::<u64>()) {
+                            (Ok(left), Ok(right)) => left.cmp(&right),
+                            (_left_wide, _right_wide) => {
+                                left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+                            }
+                        },
                         // Numeric identifiers order below alphanumeric ones.
                         (true, false) => Ordering::Less,
                         (false, true) => Ordering::Greater,

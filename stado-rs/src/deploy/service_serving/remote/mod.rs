@@ -37,7 +37,7 @@ pub async fn read_serving(
 ) -> Result<ServingReport, DeployError> {
     let script = service::serving_script(unit, unit_path, &remote_serving_script(ports))?;
     let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: {}",
             target.name,

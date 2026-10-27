@@ -17,11 +17,14 @@ fn scope(mail_days: u32, organization: &str) -> String {
     )
 }
 
-/// The address part of a sender such as `Azure <no-reply@azure.microsoft.com>`.
-fn sender_domain(sender: &str) -> Option<String> {
-    let address = sender
-        .rsplit_once('<')
-        .map_or(sender, |(_, rest)| rest.trim_end_matches('>'));
+/// The address part of a sender: written bare, or in angle brackets after a
+/// display name (`Provider <billing@provider.example>`). Both are the mail
+/// header's own two shapes, so each is read as itself.
+pub(super) fn sender_domain(sender: &str) -> Option<String> {
+    let address = match sender.rsplit_once('<') {
+        Some((_display_name, bracketed)) => bracketed.trim_end_matches('>'),
+        None => sender,
+    };
     address
         .rsplit_once('@')
         .map(|(_, domain)| domain.trim().to_ascii_lowercase())

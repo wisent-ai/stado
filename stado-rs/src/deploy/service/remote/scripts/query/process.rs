@@ -55,6 +55,18 @@ if [ -n \"$pid\" ]; then
   running=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
   lstart=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null)
   if [ \"$os\" = \"Darwin\" ]; then
+    # macOS prints `comm` as the bare program name (`stado`), which equals no
+    # declaration, so every Mac unit read as running another artefact. The
+    # path the kernel executes is the process's first text mapping, which
+    # lsof names with links resolved; the file that is the declaration's (or
+    # its link's target's) is named by that spelling.
+    image=$(/usr/sbin/lsof -a -p \"$pid\" -d txt -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -n 1)
+    if [ -n \"$image\" ]; then
+      if [ -n \"$resolved\" ] && [ \"$image\" -ef \"$resolved\" ]; then running=\"$resolved\"
+      elif [ -n \"$declared\" ] && [ \"$image\" -ef \"$declared\" ]; then running=\"$declared\"
+      else running=\"$image\"
+      fi
+    fi
     started=$(/bin/date -j -f '%a %b %d %T %Y' \"$lstart\" +%s 2>/dev/null)
     if [ -f \"$resolved\" ]; then declared_written=$(/usr/bin/stat -f %m \"$resolved\" 2>/dev/null); fi
     if [ -f \"$running\" ]; then running_written=$(/usr/bin/stat -f %m \"$running\" 2>/dev/null); fi

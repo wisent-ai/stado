@@ -23,7 +23,10 @@ const UNDELIVERED: &str = "# No hostname has been delivered to this edge yet. `s
                            and `stado web edge hostnames` replace this file.\n";
 
 pub(crate) async fn run(caddy: PathBuf, caddyfile: PathBuf) -> Result<(), CmdError> {
-    if !caddyfile.is_file() {
+    // A delivered configuration that cannot be examined is refused: read as
+    // absent, it was overwritten with the undelivered placeholder and every
+    // hostname it served went dark.
+    if !crate::primitives::presence::present(&caddyfile)? {
         if let Some(directory) = caddyfile.parent() {
             std::fs::create_dir_all(directory).map_err(|error| {
                 CmdError::click(format!(

@@ -82,6 +82,10 @@ async fn pass(
         CmdError::click(error).stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let canonical_unit = program::canonical_unit(options.name, &target, catalog_entry.as_ref())?;
+    // Every program the host declares, and the unit this ensure renders,
+    // resolve `$HOME` under the home the host's own shell states.
+    let runner = production_runner();
+    let home = crate::deploy::host_channel::remote_home(&target, &runner).await.map_err(click)?;
     // A unit that runs a catalog product's program under a label that is not
     // that product's unit runs beside the process that replaced it the moment
     // it is loaded again, so no declaration may bring one back.
@@ -91,7 +95,7 @@ async fn pass(
             .find(|candidate| candidate.matches(options.name));
         if let Some(existing) = named {
             if let Some(owner) =
-                service::declared_owner(&target, existing).map_err(CmdError::declaration)?
+                service::declared_owner(&target, existing, &home).map_err(CmdError::declaration)?
             {
                 return Err(CmdError::refused(
                     crate::deploy::service_catalog::retired_sentence(existing.unit_id(), &owner),
@@ -113,7 +117,7 @@ async fn pass(
     {
         for candidate in &declared {
             let owner =
-                service::declared_owner(&target, candidate).map_err(CmdError::declaration)?;
+                service::declared_owner(&target, candidate, &home).map_err(CmdError::declaration)?;
             if owner.is_some_and(|owner| owner.name == entry.name) {
                 replaced.push(candidate.unit_id().to_string());
             }
@@ -129,18 +133,11 @@ async fn pass(
     // rendered, so the unit and every consumer's marker name the same number.
     let listen_port = match (catalog_entry.as_ref(), standby.as_ref()) {
         (_, Some(standby)) => standby.listen_port,
-        (Some(entry), None) => {
-            crate::cli::directory::listen_port_for(entry, &target, &production_runner()).await?
-        }
+        (Some(entry), None) => crate::cli::directory::listen_port_for(entry, &target, &runner).await?,
         (None, None) => None,
     };
-    let (mut unit, unit_env) = program::ensured_unit(
-        &target,
-        &options,
-        existing,
-        catalog_entry.as_ref(),
-        listen_port,
-    )?;
+    let (mut unit, unit_env) =
+        program::ensured_unit(&target, &home, &options, existing, catalog_entry.as_ref(), listen_port)?;
     // A canonical declaration wins, then the identity carried by the resolved
     // program, then the unit already declared on this host. The canonical
     // identity must win even when the registry supplies the program: otherwise

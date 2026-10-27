@@ -170,7 +170,7 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
 /// impossible, whoever consumes it.
 fn public_document(text: &str) -> Result<(), String> {
     serde_json::from_str::<Value>(text)
-        .map_err(|_| "the renderer did not emit one JSON document")?;
+        .map_err(|error| format!("the renderer did not emit one JSON document: {error}"))?;
     if text.contains("PRIVATE KEY") {
         return Err("the rendered document carries private key material".to_string());
     }

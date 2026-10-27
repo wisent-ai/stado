@@ -193,11 +193,12 @@ pub(in crate::cli::placement::transfer) async fn await_healthy(
                 ))
                 .stating(FailureCode::InfraDown));
             }
-            if process.is_some() && sockets.pid != process {
-                println!(
-                    "  {}: unit {} restarted: process {:?} is now {:?}",
-                    target.name, managed.unit, process, sockets.pid
-                );
+            if let Some(was) = process.filter(|_| sockets.pid != process) {
+                let now = match sockets.pid {
+                    Some(pid) => format!("process {pid}"),
+                    None => "no process".to_string(),
+                };
+                println!("  {}: unit {} restarted: process {was} is now {now}", target.name, managed.unit);
             }
             process = sockets.pid;
             previous = Some(answer);

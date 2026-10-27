@@ -16,7 +16,7 @@ mod script;
 
 pub use remote::{
     extract_semver, remote_home, remote_json_member, remote_program_version, remote_read_file,
-    remote_test, run_command,
+    remote_test, remote_user_home, run_command,
 };
 pub use script::{run_script, run_script_to_completion, run_script_with_connection};
 

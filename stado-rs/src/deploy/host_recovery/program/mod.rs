@@ -93,8 +93,11 @@ pub fn remote_script_with_stable_binds(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    REMOTE_SCRIPT_TEMPLATE
-        .replace("@DOMAIN_RESOLVER@", crate::deploy::service::DOMAIN_RESOLVER)
+    // The declared unit directories go in before any registry-supplied row,
+    // so no row text is read as a placeholder.
+    crate::deploy::service::with_unit_directories(
+        &REMOTE_SCRIPT_TEMPLATE.replace("@DOMAIN_RESOLVER@", crate::deploy::service::DOMAIN_RESOLVER),
+    )
         .replace("@STABLE_BIND_ROWS@", &stable_bind_rows)
         .replace("@IDENTITY_WORDS@", &identity_words)
         .replace("@WC_WORDS@", &wc_words)

@@ -24,12 +24,23 @@ use std::path::Path;
 /// receipt that cannot be written is named on stdout, prefixed with `verb`,
 /// and the delivery continues.
 pub(super) fn stage(verb: &str, name: &str, stado_version: Option<&str>, source: &Path) {
+    // The delivered version is the Stado version when one is given, else
+    // what `WISENT_VERSION` states; unset, blank or not Unicode, nothing was
+    // delivered under a version and the receipt below says so.
     let delivered = match stado_version {
         Some(version) => Some(version.to_string()),
-        None => std::env::var("WISENT_VERSION")
-            .ok()
-            .map(|version| version.trim().to_string())
-            .filter(|version| !version.is_empty()),
+        None => match std::env::var("WISENT_VERSION") {
+            Ok(version) if !version.trim().is_empty() => Some(version.trim().to_string()),
+            Ok(_blank) => None,
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(raw)) => {
+                println!(
+                    "{verb}: WISENT_VERSION is not Unicode ({raw:?}), so no attestation copy \
+                     was staged and `stado release version show` will read {name} as unattested"
+                );
+                return;
+            }
+        },
     };
     match (delivered, crate::self_update::platform_triple_short()) {
         (Some(version), Ok(platform)) => {

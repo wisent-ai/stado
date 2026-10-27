@@ -125,7 +125,13 @@ pub(crate) use crate::cli::host::files::forwarding::deliver_file;
 pub(crate) use crate::cli::host::files::forwarding::install_secret_value_at_home;
 pub(crate) use crate::cli::host::machine::config::remote::remote_config_output;
 pub(crate) use crate::cli::host::machine::config::remote::RemoteConfigAction;
-pub(crate) use crate::cli::host::machine::users::credentials::credential_host;
 pub(crate) use crate::cli::host::machine::users::credentials::gnupg_home;
-pub(crate) use crate::cli::host::machine::users::credentials::release_managed_skarbiec;
-pub(crate) use crate::cli::host::secrets::vault::mirror::{owner_item_document, owner_item_ids};
+pub(crate) use crate::cli::host::machine::users::credentials::{
+    credential_host, credential_host_at,
+};
+pub(crate) use crate::cli::host::machine::users::credentials::{
+    release_managed_skarbiec, release_managed_skarbiec_in,
+};
+pub(crate) use crate::cli::host::secrets::vault::mirror::{
+    owner_item_delete, owner_item_document, owner_item_ids,
+};

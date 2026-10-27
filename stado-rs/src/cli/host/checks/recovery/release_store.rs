@@ -21,8 +21,15 @@ fn refuse(detail: String) -> CmdError {
     CmdError::refused(detail)
 }
 
-fn env(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|value| !value.is_empty())
+/// A non-empty environment value, `None` when the variable is unset or
+/// empty, and a refusal naming it when it is set to something not UTF-8.
+fn env(name: &str) -> Result<Option<String>, CmdError> {
+    match std::env::var(name) {
+        Ok(value) if value.is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(refuse(format!("{name} cannot be read: {error}"))),
+    }
 }
 
 /// `~` expansion and lexical normalisation, as `os.path.abspath(expanduser())`.
@@ -49,25 +56,44 @@ fn store_paths(config: &Path) -> Result<Vec<String>, CmdError> {
     let document: Value = std::fs::read_to_string(config)
         .map_err(|error| refuse(format!("{}: {error}", config.display())))
         .and_then(|text| serde_json::from_str(&text).map_err(|error| refuse(error.to_string())))?;
-    let storage = document.get("storage").cloned().unwrap_or(Value::Null);
-    let text = |value: Option<&Value>| {
-        value
+    // A document without a `storage` block declares no store path; the
+    // pointers below then find nothing and each refusal names where it looked.
+    let storage = document.get("storage");
+    let declared = |path: &str| {
+        storage
+            .and_then(|storage| storage.pointer(path))
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     };
-    let primary = env("WC_LOCAL_STORAGE_PATH")
-        .or_else(|| text(storage.pointer("/local/path")))
-        .ok_or_else(|| refuse("store_root unresolved; nothing repaired".into()))?;
+    let primary = match env("WC_LOCAL_STORAGE_PATH")? {
+        Some(path) => path,
+        None => declared("/local/path").ok_or_else(|| {
+            refuse(format!(
+                "store_root unresolved: neither WC_LOCAL_STORAGE_PATH nor storage.local.path in {} \
+                 names it; nothing repaired",
+                config.display()
+            ))
+        })?,
+    };
     let mut paths = vec![primary];
-    let backend =
-        env("WC_BACKUP_STORAGE_BACKEND").or_else(|| text(storage.pointer("/backup/backend")));
+    let backend = match env("WC_BACKUP_STORAGE_BACKEND")? {
+        Some(backend) => Some(backend),
+        None => declared("/backup/backend"),
+    };
     if backend.as_deref() == Some("local") {
-        paths.push(
-            env("WC_BACKUP_LOCAL_STORAGE_PATH")
-                .or_else(|| text(storage.pointer("/backup/local/path")))
-                .ok_or_else(|| refuse("backup_store_root unresolved; nothing repaired".into()))?,
-        );
+        let backup = match env("WC_BACKUP_LOCAL_STORAGE_PATH")? {
+            Some(path) => path,
+            None => declared("/backup/local/path").ok_or_else(|| {
+                refuse(format!(
+                    "backup_store_root unresolved: the backup backend is local and neither \
+                     WC_BACKUP_LOCAL_STORAGE_PATH nor storage.backup.local.path in {} names it; \
+                     nothing repaired",
+                    config.display()
+                ))
+            })?,
+        };
+        paths.push(backup);
     }
     Ok(paths)
 }
@@ -86,7 +112,7 @@ fn inspect(path: &Path, directory: bool, uid: u32) -> Result<Option<std::fs::Met
     if (directory && !observed.is_dir()) || (!directory && !observed.is_file()) {
         return Err(refuse(format!("refused_wrong_type {}", path.display())));
     }
-    if observed.uid() != 0 && observed.uid() != uid {
+    if !nix::unistd::Uid::from_raw(observed.uid()).is_root() && observed.uid() != uid {
         return Err(refuse(format!(
             "refused_foreign_owner uid={} {}",
             observed.uid(),
@@ -111,7 +137,7 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
         return Err(refuse(format!("invalid_product {product}")));
     }
     let paths = store_paths(Path::new(config))?;
-    let home = PathBuf::from(env("HOME").ok_or_else(|| refuse("HOME is not set".into()))?);
+    let home = PathBuf::from(env("HOME")?.ok_or_else(|| refuse("HOME is not set".into()))?);
     let uid = nix::unistd::geteuid().as_raw();
     let account = name_of("/usr/bin/id", "-un")?;
     let group = name_of("/usr/bin/id", "-gn")?;
@@ -138,11 +164,16 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
                 root.display()
             )));
         }
-        if std::fs::canonicalize(&root).ok().as_deref() != Some(root.as_path()) && root.exists() {
-            return Err(refuse(format!(
-                "store_root has a symlinked component: {}; nothing repaired",
-                root.display()
-            )));
+        if root.exists() {
+            let canonical = std::fs::canonicalize(&root).map_err(|error| {
+                refuse(format!("cannot resolve store_root {}: {error}; nothing repaired", root.display()))
+            })?;
+            if canonical != root {
+                return Err(refuse(format!(
+                    "store_root has a symlinked component: {}; nothing repaired",
+                    root.display()
+                )));
+            }
         }
         if !root.is_dir() {
             return Err(refuse(format!(
@@ -159,24 +190,26 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
         for (label, relative) in files {
             println!("{label} {}", root.join(&relative).display());
             remember(&mut nodes, root.clone(), true);
-            let components: Vec<&str> = relative.split('/').collect();
-            for index in 1..=components.len() {
-                let path = components[..index]
-                    .iter()
-                    .fold(root.clone(), |path, part| path.join(part));
-                remember(&mut nodes, path, index < components.len());
+            // Every prefix of the relative path is a node; all but the last
+            // are directories.
+            let mut parts = relative.split('/').peekable();
+            let mut path = root.clone();
+            while let Some(part) = parts.next() {
+                path = path.join(part);
+                remember(&mut nodes, path.clone(), parts.peek().is_some());
             }
         }
     }
     // No mutation until the complete, bounded set in both stores is known.
     for path in &order {
         let observed = inspect(path, nodes[path], uid)?;
-        let owner = observed.map_or("absent".to_string(), |meta| {
-            format!("uid={} gid={}", meta.uid(), meta.gid())
-        });
+        let owner = match observed {
+            Some(meta) => format!("uid={} gid={}", meta.uid(), meta.gid()),
+            None => "absent".to_string(),
+        };
         println!("observed {owner} {}", path.display());
     }
-    let mut repaired = 0;
+    let mut repaired: Vec<&PathBuf> = Vec::new();
     for path in &order {
         let Some(observed) = inspect(path, nodes[path], uid)? else {
             continue;
@@ -194,7 +227,7 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
             return Err(refuse(format!("chown failed {}", path.display())));
         }
         println!("repaired root -> {account}:{group} {}", path.display());
-        repaired += 1;
+        repaired.push(path);
     }
     for path in &order {
         let directory = nodes[path];
@@ -215,7 +248,8 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
         }
     }
     println!(
-        "release_store_repaired product={product} account={account} changed={repaired} stores={} bounded_paths={}",
+        "release_store_repaired product={product} account={account} changed={} stores={} bounded_paths={}",
+        repaired.len(),
         roots.len(),
         nodes.len()
     );

@@ -117,15 +117,24 @@ pub(crate) fn parse_clients(
 }
 
 static CLIENTS: LazyLock<Result<BTreeMap<String, RateLimitClient>, String>> = LazyLock::new(|| {
-    let configured = match std::env::var("WC_RATE_LIMIT_CLIENTS")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
-        Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
-            Ok(value) => Some(value),
-            Err(error) => return Err(format!("WC_RATE_LIMIT_CLIENTS must be JSON: {error}")),
-        },
-        None => crate::config_file::get("rate_limit.clients"),
+    // The environment declaration wins over the configuration file; unset
+    // or blank, the file's `rate_limit.clients` is read. A value that is
+    // not Unicode cannot be JSON and is refused as such.
+    let configured = match std::env::var("WC_RATE_LIMIT_CLIENTS") {
+        Ok(encoded) if !encoded.trim().is_empty() => {
+            match serde_json::from_str::<Value>(&encoded) {
+                Ok(value) => Some(value),
+                Err(error) => return Err(format!("WC_RATE_LIMIT_CLIENTS must be JSON: {error}")),
+            }
+        }
+        Ok(_) | Err(std::env::VarError::NotPresent) => {
+            crate::config_file::get("rate_limit.clients")
+        }
+        Err(std::env::VarError::NotUnicode(raw)) => {
+            return Err(format!(
+                "WC_RATE_LIMIT_CLIENTS must be JSON, and is not Unicode: {raw:?}"
+            ))
+        }
     };
     parse_clients(configured)
 });

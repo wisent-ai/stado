@@ -65,13 +65,19 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
                 break;
             }
         };
-        for item in document
+        // Azure Retail Prices always answers its page under Items, an empty
+        // list included; a page without that list is a partial catalog, not
+        // a page of no prices.
+        let Some(items) = document
             .get("Items")
             .or_else(|| document.get("items"))
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
+        else {
+            source.state = PriceState::Partial;
+            source.error = Some(format!("Azure Retail Prices answered a page without Items: {url}"));
+            break;
+        };
+        for item in items {
             // A price row is only usable with what it prices, the kind of
             // price it is, the meter it bills, the unit it is quoted per and
             // its currency. One without them would be priced as meter

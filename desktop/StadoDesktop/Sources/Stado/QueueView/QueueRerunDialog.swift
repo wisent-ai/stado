@@ -18,9 +18,7 @@ extension QueueView {
                 "The failed record stays in the dashboard's recent-failure list; a rerun does not clear it.",
             ],
             reasonCode: record.kind == .failed ? "job_failed" : nil,
-            listing: (record.error ?? "The dashboard published this failure without a sanitized reason.")
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .map(String.init),
+            listing: failureListing(record),
             footnote: "Runs stado job rerun \(record.jobID) through the dashboard's allowlisted command bridge, with the mutation confirmation it requires.",
             actions: [
                 WisentAction("Keep the failure only", kind: .primary) { rerunCandidate = nil },
@@ -31,5 +29,14 @@ extension QueueView {
                 },
             ]
         )
+    }
+
+    /// The failure's own sentence, line by line, or that the dashboard
+    /// published none.
+    private func failureListing(_ record: QueueRecord) -> [String] {
+        guard let error = record.error else {
+            return ["The dashboard published this failure without a sanitized reason."]
+        }
+        return error.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     }
 }

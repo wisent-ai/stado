@@ -46,7 +46,7 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
               file is. The fixed verb takes no item, no field and no path",
     },
     ApprovedCommand {
-        argv: &[SKARBIEC_CLI, "recover-daemons"],
+        argv: &[SKARBIEC_CLI, "keyring", "recover"],
         why: "runs Skarbiec's own GnuPG daemon repair on the vault host: it replaces the \
               account's keyboxd, gpg-agent and scdaemon through gpgconf and releases a \
               keyring lock whose holder can no longer let go (a dead, reused or wedged \

@@ -173,11 +173,21 @@ impl Supervisor {
                         failure,
                     ),
                     Err(payload) => {
-                        let panic = payload
-                            .downcast_ref::<String>()
-                            .map(String::as_str)
-                            .or_else(|| payload.downcast_ref::<&str>().copied())
-                            .unwrap_or("non-text panic payload");
+                        // A panic carries a `String` (from `panic!` with
+                        // arguments) or a `&str` (a literal); any other
+                        // payload is named by its type id, which is all it
+                        // offers.
+                        let panic = match (
+                            payload.downcast_ref::<String>(),
+                            payload.downcast_ref::<&str>(),
+                        ) {
+                            (Some(text), _) => text.clone(),
+                            (None, Some(text)) => (*text).to_string(),
+                            (None, None) => format!(
+                                "non-text panic payload {:?}",
+                                std::any::Any::type_id(&*payload)
+                            ),
+                        };
                         Ended::Stopped(
                             format!(
                                 "stado serve component={name} pid={pid} stopped: component \

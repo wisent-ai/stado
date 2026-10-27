@@ -8,7 +8,7 @@ final class HostSpaceReportStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var receipt: OperatorCommandResult?
 
-    private var generation = 0
+    private var generation = UUID()
 
 
     nonisolated static func arguments(host: String) -> [String] {
@@ -23,8 +23,8 @@ final class HostSpaceReportStore: ObservableObject {
         let sourceGeneration = fleet.requestGeneration
         report = nil
         receipt = nil
-        generation += 1
-        let requestedGeneration = generation
+        let requestedGeneration = UUID()
+        generation = requestedGeneration
         isLoading = true
         errorMessage = nil
         defer {
@@ -89,20 +89,27 @@ struct SpaceSection: View {
                         detail: "\(detail)\nMissing paths were not checked; the list is not a complete disk inventory."
                     )
                 }
-                WisentField(
-                    label: "Free disk",
-                    value: report.usage.map { "\($0.availableKB) KiB" } ?? "Not reported",
-                    tone: report.rule.triggered ? .danger : .neutral
-                )
+                if let usage = report.usage {
+                    WisentField(
+                        label: "Free disk",
+                        value: "\(usage.availableKB) KiB",
+                        tone: report.rule.triggered ? .danger : .neutral
+                    )
+                    WisentField(
+                        label: "Filesystem",
+                        value: "\(usage.filesystem) at \(usage.mountedOn) · \(usage.capacity)"
+                    )
+                } else {
+                    WisentAlertPanel(
+                        tone: .warning,
+                        title: "Disk measurement unavailable",
+                        detail: "The space report for \(report.target) supplied no usage observation or read cause. Free space and the filesystem are unknown; the report is not proof that the disk is safe."
+                    )
+                }
                 WisentField(
                     label: "Disk-full rule",
                     value: report.rule.summary,
                     tone: report.rule.triggered ? .warning : .neutral
-                )
-                WisentField(
-                    label: "Filesystem",
-                    value: report.usage.map { "\($0.filesystem) at \($0.mountedOn) · \($0.capacity)" }
-                        ?? "Not reported"
                 )
                 WisentField(label: "Memory", value: memoryLine(report.memory))
                 WisentField(
@@ -126,6 +133,13 @@ struct SpaceSection: View {
                     value: "\(coverage.verdict) — \(coverage.detail)",
                     tone: coverage.tone
                 )
+                if report.inventoryIncomplete != nil, let measured = coverage.measuredBytes {
+                    WisentField(
+                        label: "Measured paths only — totals unknown",
+                        value: "Stage roots \(bytes(measured.covered)); cleaner areas \(bytes(measured.cleaner)); unswept measured paths \(bytes(measured.unswept)). Missing paths were not measured.",
+                        tone: .warning
+                    )
+                }
                 WisentField(
                     label: "Janitor",
                     value: "\(coverage.janitor.outcome) — \(coverage.janitor.detail)"
@@ -146,7 +160,7 @@ struct SpaceSection: View {
                             if let result = cleaners[name] {
                                 WisentField(label: name,
                                     value: "Scanned \(result.scannedItems), eligible \(result.eligibleItems), deleted \(result.deletedItems).\n"
-                                        + result.skipped.keys.sorted().map { "\($0): \(result.skipped[$0] ?? 0)" }.joined(separator: ", "))
+                                        + result.skipped.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", "))
                             }
                         }
                     }

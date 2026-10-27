@@ -19,7 +19,7 @@ use crate::providers::local::space_reclaim::{
 // ---------------------------------------------------------------------------
 
 /// The outcomes a pass can report.
-const PUBLIC_OUTCOMES: [&str; 13] = [
+const PUBLIC_OUTCOMES: &[&str] = &[
     "never_run",
     "volume_unreadable",
     "lock_busy",
@@ -37,7 +37,7 @@ const PUBLIC_OUTCOMES: [&str; 13] = [
 
 /// Public beacon reason codes. Private operator reports retain the complete
 /// recorded pass, including reasons absent from this projection.
-const PUBLIC_SKIP_REASONS: [&str; 15] = [
+const PUBLIC_SKIP_REASONS: &[&str] = &[
     "active_jobs",
     "blob_link_count_uncertain",
     "cache_locked",
@@ -55,12 +55,11 @@ const PUBLIC_SKIP_REASONS: [&str; 15] = [
     "absent_from_primary",
 ];
 
-/// Python `_public_nonnegative`: ints only (never bools), floored at 0.
+/// A JSON whole number that is not negative. Anything else (a bool, a
+/// fraction, a negative count) is absent, published as null, rather than
+/// forced to a number nobody measured.
 fn public_nonnegative(value: Option<&Value>) -> Option<i64> {
-    match value {
-        Some(Value::Number(n)) => n.as_i64().map(|v| v.max(0)),
-        _ => None,
-    }
+    value.and_then(Value::as_i64).filter(|v| !v.is_negative())
 }
 
 fn public_cleaner(value: Option<&Value>) -> Value {
@@ -68,32 +67,33 @@ fn public_cleaner(value: Option<&Value>) -> Value {
     let get = |key: &str| source.and_then(|map| map.get(key));
     let mut skipped = Map::new();
     if let Some(skipped_source) = get("skipped").and_then(Value::as_object) {
-        for reason in PUBLIC_SKIP_REASONS {
+        for &reason in PUBLIC_SKIP_REASONS {
             if let Some(count) = public_nonnegative(skipped_source.get(reason)) {
-                if count != 0 {
+                if count.is_positive() {
                     skipped.insert(reason.to_string(), Value::from(count));
                 }
             }
         }
     }
     serde_json::json!({
-        "scanned_items": public_nonnegative(get("scanned_items")).unwrap_or(0),
-        "eligible_items": public_nonnegative(get("eligible_items")).unwrap_or(0),
-        "deleted_items": public_nonnegative(get("deleted_items")).unwrap_or(0),
-        "expected_bytes": public_nonnegative(get("expected_bytes")).unwrap_or(0),
-        "actual_free_delta_bytes": public_nonnegative(get("actual_free_delta_bytes")).unwrap_or(0),
+        "scanned_items": public_nonnegative(get("scanned_items")),
+        "eligible_items": public_nonnegative(get("eligible_items")),
+        "deleted_items": public_nonnegative(get("deleted_items")),
+        "expected_bytes": public_nonnegative(get("expected_bytes")),
+        "actual_free_delta_bytes": public_nonnegative(get("actual_free_delta_bytes")),
         "skipped": Value::Object(skipped),
     })
 }
 
-/// Python `_public_timestamp`: bounded ISO-8601 strings only; returns the
+/// Python `_public_timestamp`: ISO-8601 strings only; returns the
 /// re-serialized parse (or None).
 fn public_timestamp(value: Option<&Value>) -> Option<String> {
-    let text = match value {
-        Some(Value::String(s)) if s.len() <= 48 => s,
-        _ => return None,
-    };
-    parse_isoformat(text)
+    value.and_then(Value::as_str).and_then(parse_isoformat)
+}
+
+/// Whether a timestamp's sub-second part is nothing, so it prints without one.
+fn whole_second(micros: u32) -> bool {
+    std::time::Duration::from_micros(u64::from(micros)).is_zero()
 }
 
 /// Python `datetime.fromisoformat(value.replace("Z", "+00:00"))` followed
@@ -103,7 +103,7 @@ fn parse_isoformat(text: &str) -> Option<String> {
     let replaced = text.replace('Z', "+00:00");
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&replaced) {
         let micros = dt.timestamp_subsec_micros();
-        if micros == 0 {
+        if whole_second(micros) {
             return Some(dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string());
         }
         return Some(dt.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string());
@@ -116,7 +116,7 @@ fn parse_isoformat(text: &str) -> Option<String> {
     ] {
         if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(text, fmt) {
             let micros = dt.and_utc().timestamp_subsec_micros();
-            if micros == 0 {
+            if whole_second(micros) {
                 return Some(dt.format("%Y-%m-%dT%H:%M:%S").to_string());
             }
             return Some(dt.format("%Y-%m-%dT%H:%M:%S%.6f").to_string());
@@ -126,9 +126,10 @@ fn parse_isoformat(text: &str) -> Option<String> {
 }
 
 /// Return the stable public report without host, path, or registry identity
-/// data. Python `_sanitize_report`.
-pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
-    let source = value.as_object();
+/// data. Python `_sanitize_report`. `value` is the recorded report, None
+/// when no pass has recorded one.
+pub fn sanitize_report(value: Option<&Value>, lock_busy: bool) -> Value {
+    let source = value.and_then(Value::as_object);
     let get = |key: &str| source.and_then(|map| map.get(key));
     let cleaners = get("cleaners").and_then(Value::as_object);
     let mut safe_errors = Vec::new();
@@ -141,19 +142,21 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             }
         }
     }
-    let outcome_raw = get("outcome").and_then(Value::as_str).unwrap_or("");
+    // A report that names no outcome is a pass that never ran; an outcome
+    // outside the public set is not published (null), never relabelled.
     let outcome = if lock_busy {
-        "lock_busy"
-    } else if PUBLIC_OUTCOMES.contains(&outcome_raw) {
-        outcome_raw
+        Some("lock_busy")
     } else {
-        "never_run"
+        match get("outcome").and_then(Value::as_str) {
+            None => Some("never_run"),
+            Some(recorded) => PUBLIC_OUTCOMES.contains(&recorded).then_some(recorded),
+        }
     };
     // A pass that did not reach its cleaners carries no table
     // ([`CleanupReport::scanned`]), and the public form has to keep saying so:
     // filling the sections with zeros here would rebuild, one layer out,
     // exactly the "did not run" that reads as "nothing needed doing".
-    let public_cleaners = cleaners.map_or(Value::Null, |cleaners| {
+    let public_cleaners = cleaners.map(|cleaners| {
         let names = [
             "huggingface_cache",
             weles::CLEANER,
@@ -190,8 +193,8 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
         "version": STATE_VERSION,
         "rule": rule::rule_json(reading),
         "started_at": public_timestamp(get("started_at")),
-        "duration_ms": public_nonnegative(get("duration_ms")).unwrap_or(0),
-        "store_wait_ms": public_nonnegative(get("store_wait_ms")).unwrap_or(0),
+        "duration_ms": public_nonnegative(get("duration_ms")),
+        "store_wait_ms": public_nonnegative(get("store_wait_ms")),
         "outcome": outcome,
         "total_bytes": public_nonnegative(get("total_bytes")),
         "free_bytes_before": public_nonnegative(get("free_bytes_before")),
@@ -199,7 +202,7 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
         "pressure_active": get("pressure_active").and_then(Value::as_bool),
         "cleaners": public_cleaners,
         "lock_busy": lock_busy || get("lock_busy") == Some(&Value::Bool(true)),
-        "active_job_count": public_nonnegative(get("active_job_count")).unwrap_or(0),
+        "active_job_count": public_nonnegative(get("active_job_count")),
         "last_success_at": public_timestamp(get("last_success_at")),
         "errors": safe_errors,
     })
@@ -221,7 +224,7 @@ fn is_safe_error(item: &str) -> bool {
 /// Return the path- and identity-free public form of a cleanup report.
 /// Python `sanitize_cleanup_report`.
 pub fn sanitize_cleanup_report(report: &Value) -> Value {
-    sanitize_report(report, false)
+    sanitize_report(Some(report), false)
 }
 
 /// Read the owner-controlled state under a shared, no-follow-safe lock.
@@ -233,13 +236,12 @@ pub fn read_cleanup_state_in(home: &Path) -> Result<Value, JanitorError> {
     match lock.try_lock_shared() {
         Ok(()) => {}
         Err(std::fs::TryLockError::WouldBlock) => {
-            return Ok(sanitize_report(&Value::Object(Map::new()), true));
+            return Ok(sanitize_report(None, true));
         }
         Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
     }
     let state = read_state(&state_dir)?;
-    let report = state.get("report").cloned().unwrap_or(Value::Null);
-    Ok(sanitize_report(&report, false))
+    Ok(sanitize_report(state.get("report"), false))
 }
 
 /// Python `read_cleanup_state` at the real home.

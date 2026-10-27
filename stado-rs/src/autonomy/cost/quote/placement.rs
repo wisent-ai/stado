@@ -215,13 +215,18 @@ pub(super) fn matches(
     machine: &str,
     purchase: Purchase,
 ) -> bool {
+    // A purchase option the book cannot decode is not this purchase.
+    let same_purchase = match Purchase::decode(&quote.purchase_option) {
+        Ok(decoded) => decoded == purchase,
+        Err(_not_a_purchase_option) => false,
+    };
     if quote.provider != resource.provider
         || quote.machine_type.as_deref() != Some(machine)
-        || Purchase::decode(&quote.purchase_option).ok() != Some(purchase)
+        || !same_purchase
         || !HourUnit::accepts(&quote.unit)
         || quote.currency != "USD"
         || !quote.hourly_usd.is_finite()
-        || quote.hourly_usd < 0.0
+        || quote.hourly_usd.is_sign_negative()
         || quote.source.is_empty()
     {
         return false;

@@ -50,12 +50,12 @@ pub async fn api_reassign(target: &str, json_output: bool) -> Result<(), CmdErro
                 ))
                 .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
-        *previous.lock().map_err(|_| poisoned())? = resolver.get("api_bind").cloned();
+        *previous.lock().map_err(|_poisoned| poisoned())? = resolver.get("api_bind").cloned();
         resolver.insert("api_bind".to_string(), json!(bind));
         Ok(document)
     })
     .await?;
-    let previous = previous.into_inner().map_err(|_| poisoned())?;
+    let previous = previous.into_inner().map_err(|_poisoned| poisoned())?;
     if json_output {
         println!(
             "{}",

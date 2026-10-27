@@ -156,7 +156,7 @@ pub(super) async fn plan_redelivery(
         target_consumer(target).await?
     };
     let transaction = RedeliveryTransaction {
-        schema_version: 1,
+        schema_version: crate::release_pipeline::SCHEMA_VERSION,
         retry_token_sha256: token_sha.to_owned(),
         delivery: args.delivery.clone(),
         previous_run_state: run.state.clone(),

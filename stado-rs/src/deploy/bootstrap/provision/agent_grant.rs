@@ -82,10 +82,19 @@ pub(super) async fn provision_agent_grant(
     let grant_path = crate::config::agent_skarbiec_token_file();
     let agent_consumer = crate::config::agent_skarbiec_consumer();
     let agent_url = crate::config::agent_skarbiec_url();
-    let same_path = std::fs::canonicalize(grant_path)
-        .ok()
-        .zip(std::fs::canonicalize(crate::config::skarbiec_token_file()).ok())
-        .is_some_and(|(agent, control)| agent == control);
+    let control_path = crate::config::skarbiec_token_file();
+    // Two declarations name the same file when both resolve to one path. A
+    // path that does not resolve on this host (an agent host receives its
+    // grant by platform handoff) names no file the other could be, so the
+    // declared spellings are compared instead: a declaration that repeats
+    // the control plane's own path is still refused.
+    let same_path = match (
+        std::fs::canonicalize(grant_path),
+        std::fs::canonicalize(control_path),
+    ) {
+        (Ok(agent), Ok(control)) => agent == control,
+        (_agent_unresolved, _control_unresolved) => grant_path == control_path,
+    };
     if grant_path.is_empty()
         || same_path
         || agent_consumer != "stado-local-agent"
@@ -95,6 +104,13 @@ pub(super) async fn provision_agent_grant(
             "remote bootstrap requires consumer stado-local-agent and a distinct agent token_file"
                 .to_string(),
         )
+        .stating(crate::primitives::failure::FailureCode::Config));
+    }
+    if let Some(cause) = crate::config::agent_skarbiec_url_absent() {
+        return Err(DeployError(format!(
+            "remote bootstrap needs agent.skarbiec.url, which names a service this host cannot \
+             resolve: {cause}"
+        ))
         .stating(crate::primitives::failure::FailureCode::Config));
     }
     if !agent_url.starts_with("https://") {
@@ -135,7 +151,7 @@ pub(super) async fn provision_agent_grant(
     )))
     .await
     .map_err(DeployError::unreachable)?;
-    if !prepare.ok() {
+    if !prepare.succeeded() {
         return Err(DeployError::unreachable(format!(
             "cannot prepare remote agent grant directory: {}",
             prepare.detail()
@@ -149,7 +165,7 @@ pub(super) async fn provision_agent_grant(
     ]))
     .await
     .map_err(DeployError::unreachable)?;
-    if !copy.ok() {
+    if !copy.succeeded() {
         return Err(DeployError::unreachable(format!(
             "cannot provision dedicated remote agent grant: {}",
             copy.detail()
@@ -161,7 +177,7 @@ pub(super) async fn provision_agent_grant(
     )))
     .await
     .map_err(DeployError::unreachable)?;
-    if !secure.ok() {
+    if !secure.succeeded() {
         return Err(DeployError::unreachable(format!(
             "cannot secure dedicated remote agent grant: {}",
             secure.detail()

@@ -25,10 +25,14 @@ pub(super) async fn bind_listening(bind: &str) -> bool {
     .is_ok()
 }
 
-/// Seconds since an ISO 8601 stamp, `None` when it does not parse.
+/// Seconds since an RFC 3339 stamp; `None` for a stamp in another shape,
+/// which each reader reports as an age it could not take rather than one
+/// derived from a stamp nobody wrote.
 pub(super) fn age_seconds(stamp: &str) -> Option<i64> {
-    let then = chrono::DateTime::parse_from_rfc3339(stamp).ok()?;
-    Some((chrono::Utc::now() - then.with_timezone(&chrono::Utc)).num_seconds())
+    match chrono::DateTime::parse_from_rfc3339(stamp) {
+        Ok(then) => Some((chrono::Utc::now() - then.with_timezone(&chrono::Utc)).num_seconds()),
+        Err(_not_rfc3339) => None,
+    }
 }
 
 /// Where the authority's document came from, and whether it answered.

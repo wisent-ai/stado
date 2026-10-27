@@ -2,6 +2,7 @@
 //! install would build, exported beside the checkout, so the checkout is not
 //! written and a refusal names the gate.
 
+mod admitted;
 mod command;
 mod commands;
 mod modules;
@@ -10,7 +11,6 @@ mod paths;
 mod secrets;
 pub(crate) use modules::check_source;
 use std::path::Path;
-use std::process::Command;
 
 use super::{
     declared_gates, inputs, lockfile, run, web, Declaration, Diagnostics, Report, Selection,
@@ -21,14 +21,26 @@ use crate::release_pipeline::GateKind;
 /// Run the lock and the selected gates over `revision` of `checkout`,
 /// exported beside it, writing nothing to the checkout, with every release
 /// input the manifest pins staged beside the export as the release worker
-/// stages it.
+/// stages it, serving no named defect (`check_revision_for`).
 pub(crate) async fn check_revision(
     checkout: &Path,
     revision: &str,
     report: Report,
     selection: Selection,
 ) -> Result<(), CmdError> {
-    export_check(checkout, revision, report, selection, false).await
+    check_revision_for(checkout, revision, report, selection, &[]).await
+}
+
+/// [`check_revision`] serving `purposes`, the open defects named to Oko's
+/// admission before a compile or test gate runs.
+pub(crate) async fn check_revision_for(
+    checkout: &Path,
+    revision: &str,
+    report: Report,
+    selection: Selection,
+    purposes: &[&str],
+) -> Result<(), CmdError> {
+    export_check(checkout, revision, report, selection, false, purposes).await
 }
 
 async fn export_check(
@@ -37,6 +49,7 @@ async fn export_check(
     report: Report,
     selection: Selection,
     if_declared: bool,
+    purposes: &[&str],
 ) -> Result<(), CmdError> {
     // The gates run in the exported tree with that tree as their working
     // directory, and a gate such as `stado web quality` reads the tree from
@@ -70,7 +83,7 @@ async fn export_check(
         "stado quality check: reclaiming abandoned quality runs for {revision} in {}",
         runs.display()
     ));
-    paths::remove_abandoned(&runs, revision);
+    stado_product::common::runs::reclaim_abandoned(&runs, revision, "stado quality check");
     let run_area = runs.join(format!("{}-{revision}", std::process::id()));
     let scratch = run_area.join("source");
     report.say(&format!(
@@ -88,6 +101,7 @@ async fn export_check(
         &Exported {
             revision,
             sha256: &sha256,
+            purposes,
         },
         report,
         selection,
@@ -118,10 +132,12 @@ async fn export_check(
 /// The committed revision a check runs over and the SHA-256 of the archive it
 /// was exported from: the release worker states both to a build
 /// (`WISENT_SOURCE_COMMIT`, `WISENT_SOURCE_SHA256`), and a product's build
-/// reads them together.
+/// reads them together. `purposes` are the open defects the check serves,
+/// named to Oko's admission before a compile or test gate runs.
 struct Exported<'a> {
     revision: &'a str,
     sha256: &'a str,
+    purposes: &'a [&'a str],
 }
 
 /// The gates of the tree at `tree`, with its pinned inputs staged under
@@ -164,9 +180,17 @@ async fn check_tree(
     // product has since moved past, is refused here, while the session that
     // pushed it can still repair it, instead of by the build that fetches it;
     // a gate that reads an input finds it where the worker would put it.
+    report.say(&format!(
+        "stado quality check: staging the pinned release inputs of {revision} into {}",
+        inputs_area.display()
+    ));
     let staged = inputs::stage(&declared, inputs_area, report).await?;
     // A gate reads the secrets the worker would put in its environment, such
     // as a web install's GITHUB_TOKEN for private dependencies.
+    report.say(&format!(
+        "stado quality check: resolving the secrets the gates of {} read",
+        declared.product
+    ));
     let secret = secrets::resolved(&declared.secret_env).await?;
     let contract = match &declared.contract_version {
         Some(version) => web::worker_contract(tree, inputs_area, version, &declared.platform)?,
@@ -195,11 +219,18 @@ async fn check_tree(
     .collect();
     for gate in &declared.gates {
         report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
-        // A format gate compiles nothing; every other kind compiles the tree.
+        // A format gate compiles nothing; every other kind compiles the tree,
+        // and runs only as work the operator's rulings admit (`admitted`).
         let diagnostics = match gate.kind {
             GateKind::Format => Diagnostics::Text,
             _ => Diagnostics::Compiled,
         };
+        let product = &declared.product;
+        report.say(&format!(
+            "stado quality check: asking Oko to admit gate {:?} ({}) of {product} at {revision}",
+            gate.name, gate.kind
+        ));
+        admitted::gate(gate.kind, &gate.name, product, revision, exported.purposes).await?;
         run(&gate.argv, tree, &contract, report, diagnostics).map_err(|error| {
             let refused = error.within(format!(
                 "stado quality check: gate {:?} ({}) of {} refuses {revision} of {}",
@@ -228,6 +259,11 @@ async fn check_tree(
                 tree.display()
             ))
         })?;
+        report.say(&format!(
+            "stado quality check: asking Oko to admit the build of {} at {revision}",
+            declared.product
+        ));
+        admitted::build(&declared.product, revision, exported.purposes).await?;
         if matches!(selection, Selection::CommandTree) {
             commands::inventory(&declared, tree, area, &contract, revision, report)?;
         } else {
@@ -235,45 +271,4 @@ async fn check_tree(
         }
     }
     Ok(Some(declared.product))
-}
-
-/// The revision an install of `checkout` builds: `origin/main` after a fetch
-/// when the tracked tree is clean and `HEAD` is contained in it, else `HEAD`.
-fn built_revision(checkout: &Path) -> Result<String, CmdError> {
-    let head = git(checkout, &["rev-parse", "HEAD"])?;
-    let dirty = !git(checkout, &["status", "--porcelain", "--untracked-files=no"])?.is_empty();
-    if dirty {
-        return Ok(head);
-    }
-    git(checkout, &["fetch", "--quiet", "origin", "main"])?;
-    let main = git(checkout, &["rev-parse", "origin/main"])?;
-    let contained = crate::wait::status(
-        Command::new("git")
-            .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
-            .current_dir(checkout),
-    )
-    .map_err(|error| {
-        CmdError::click(format!("cannot run git merge-base: {error}"))
-            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-    })?
-    .success();
-    Ok(if contained { main } else { head })
-}
-
-fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
-    let output = crate::wait::output(Command::new("git").args(args).current_dir(checkout))
-        .map_err(|error| {
-            CmdError::click(format!("cannot run git {}: {error}", args.join(" ")))
-                .stating(crate::cli::entry::error::io_failure_code(error.kind()))
-        })?;
-    if !output.status.success() {
-        return Err(CmdError::click(format!(
-            "git {} in {} failed: {}",
-            args.join(" "),
-            checkout.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-        .stating(crate::primitives::failure::FailureCode::Config));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }

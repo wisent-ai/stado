@@ -76,30 +76,34 @@ pub(super) async fn commit_routes(
             let registry_rollback =
                 crate::cli::registry::push_document_if(&rollback, &generation).await;
             let old_transaction = routes::transaction(previous_registry).map_err(CmdError::from)?;
+            // The old transaction is staged and committed again; whichever
+            // step failed is named, so a route left half-restored says why.
             let runtime_rollback =
-                if routes::stage(target, previous_registry, &old_transaction, &runner)
-                    .await
-                    .is_ok()
-                {
-                    routes::commit(target, &old_transaction, &runner)
-                        .await
-                        .is_ok()
-                } else {
-                    false
+                match routes::stage(target, previous_registry, &old_transaction, &runner).await {
+                    Ok(_staged) => match routes::commit(target, &old_transaction, &runner).await {
+                        Ok(_committed) => Ok(()),
+                        Err(error) => Err(format!(
+                            "committing the previous routes again failed: {error}"
+                        )),
+                    },
+                    Err(error) => Err(format!("staging the previous routes again failed: {error}")),
                 };
-            let detail = result
-                .err()
-                .map(|error| error.to_string())
-                .unwrap_or_else(|| "remote commit was refused".to_string());
+            // The commit's own answer: its error, or the document the gateway
+            // returned without `routes_committed`, quoted so the refusal is
+            // the gateway's and not a sentence of ours.
+            let detail = match result {
+                Err(error) => error.to_string(),
+                Ok(answer) => format!("the gateway answered without routes_committed: {answer}"),
+            };
             if let Err(rollback_error) = registry_rollback {
                 return Err(CmdError::click(format!(
                     "route commit failed ({detail}); registry rollback also failed: {rollback_error}"
                 ))
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
-            if !runtime_rollback {
+            if let Err(restoration) = runtime_rollback {
                 return Err(CmdError::click(format!(
-                    "route commit failed ({detail}); registry rolled back but gateway route restoration failed"
+                    "route commit failed ({detail}); registry rolled back but gateway route restoration failed: {restoration}"
                 ))
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
             }

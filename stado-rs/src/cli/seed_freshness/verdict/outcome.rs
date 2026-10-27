@@ -98,7 +98,7 @@ impl Verdict {
                 "the vault could not open this row; repair vault access before judging its seed",
             ),
             Self::VaultReadUnsupported => String::from(
-                "this host's Skarbiec has no `totp-seed-state`, so only the sign-in history \
+                "this host's Skarbiec has no `totp seed`, so only the sign-in history \
                  half of the verdict is available; release a Skarbiec carrying it to complete it",
             ),
             Self::LastKnownGood { .. } | Self::PresentUntested => String::new(),

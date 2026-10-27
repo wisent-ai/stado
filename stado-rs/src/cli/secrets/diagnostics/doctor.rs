@@ -137,15 +137,15 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
 /// One reader for Skarbiec's verdict, shared by `doctor` and the `harvest`
 /// restore guard so the two can never disagree about whether the vault opens.
 ///
-/// It runs Skarbiec's own `key-doctor` rather than reimplementing the check.
+/// It runs Skarbiec's own `keys check` rather than reimplementing the check.
 /// The vault and the keyring belong to Skarbiec; a second opinion computed here
 /// could disagree with the program that actually performs the decryption, and
 /// during an outage two answers are worse than none.
 pub(crate) fn key_doctor_report(binary: &std::path::Path) -> Result<Value, CmdError> {
-    let output = crate::wait::output(std::process::Command::new(binary).arg("key-doctor"))?;
+    let output = crate::wait::output(std::process::Command::new(binary).args(["keys", "check"]))?;
     serde_json::from_slice(&output.stdout).map_err(|error| {
         CmdError::click(format!(
-            "{} key-doctor produced no report ({error}): {}",
+            "{} keys check produced no report ({error}): {}",
             binary.display(),
             String::from_utf8_lossy(&output.stderr).trim()
         ))

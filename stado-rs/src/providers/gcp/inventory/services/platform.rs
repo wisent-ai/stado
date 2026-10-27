@@ -12,10 +12,12 @@ use crate::providers::gcp::inventory::probes::requirements::{
 };
 
 pub(in crate::providers::gcp::inventory) fn project_detail(value: &Value) -> Detail {
-    let state = value
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or("UNKNOWN");
+    // A project without a state word is reported as such, not as a state
+    // GCP never wrote; it fails the probe either way.
+    let state = match value.get("state").and_then(Value::as_str) {
+        Some(state) => state,
+        None => "(state not reported by the API)",
+    };
     (
         if state == "ACTIVE" {
             ProbeState::Ok
@@ -34,10 +36,9 @@ pub(in crate::providers::gcp::inventory) fn project_detail(value: &Value) -> Det
 }
 
 pub(in crate::providers::gcp::inventory) fn billing_detail(value: &Value) -> Detail {
-    let enabled = value
-        .get("billingEnabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    // Billing is enabled only when the API says so; a missing or non-boolean
+    // flag is reported as what it was, and the probe fails either way.
+    let enabled = matches!(value.get("billingEnabled"), Some(Value::Bool(true)));
     (
         if enabled {
             ProbeState::Ok
@@ -46,7 +47,7 @@ pub(in crate::providers::gcp::inventory) fn billing_detail(value: &Value) -> Det
         },
         None,
         json!({
-            "billing_enabled": enabled,
+            "billing_enabled": value.get("billingEnabled"),
             "billing_account": value.get("billingAccountName"),
         }),
     )

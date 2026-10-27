@@ -1,7 +1,11 @@
 //! The image half of one run's browser network recording, summarized without
 //! carrying a signed query string or a response body off the worker.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde_json::{json, Value};
+
+use crate::primitives::tally::Tally;
 
 use super::super::channel::Channel;
 use super::diagnostic_run_id;
@@ -10,6 +14,25 @@ use super::resources::{
     response_content_type,
 };
 use crate::deploy::DeployError;
+
+/// The address a recorded network event names; an event that names none
+/// is counted apart, never read as an address.
+fn url_of(event: &Value) -> Option<&str> {
+    event
+        .get("url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty())
+}
+
+/// Whether a response status means the image arrived: a success, or a
+/// redirect the browser followed (RFC 9110 §15.3, §15.4). A number that is
+/// not an HTTP status did not deliver an image.
+fn delivered(status: u64) -> bool {
+    match u16::try_from(status).map(reqwest::StatusCode::from_u16) {
+        Ok(Ok(code)) => code.is_success() || code.is_redirection(),
+        _ => false,
+    }
+}
 
 /// Summarize only image request metadata from one completed Weles browser run.
 ///
@@ -25,6 +48,8 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
         .ok_or_else(|| {
             DeployError::unreachable("Weles diagnostics returned no file inventory".to_string())
         })?;
+    // A file that states no size cannot be checked once downloaded, so only
+    // sized recordings are candidates; the largest is the full one.
     let recording = files
         .iter()
         .filter(|file| {
@@ -32,11 +57,9 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
                 .and_then(Value::as_str)
                 .is_some_and(|path| path.ends_with(".inst.json"))
         })
-        .max_by_key(|file| {
-            file.get("bytes")
-                .and_then(Value::as_u64)
-                .unwrap_or_default()
-        })
+        .filter_map(|file| file.get("bytes").and_then(Value::as_u64).map(|bytes| (bytes, file)))
+        .max_by_key(|(bytes, _)| *bytes)
+        .map(|(_, file)| file)
         .ok_or_else(|| {
             DeployError("Weles diagnostics contain no browser network recording".to_string())
                 .stating(crate::primitives::failure::FailureCode::NotFound)
@@ -73,15 +96,16 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
             DeployError::unreachable("Weles browser recording has no request events".to_string())
         })?;
 
-    let mut image_urls = std::collections::BTreeSet::new();
+    let unaddressed_events = events.iter().filter(|event| url_of(event).is_none()).count();
+    let mut image_urls = BTreeSet::new();
     for event in events {
-        let url = event.get("url").and_then(Value::as_str).unwrap_or_default();
-        if url.is_empty() {
+        let Some(url) = url_of(event) else {
             continue;
-        }
-        let requested_image = event.get("phase").and_then(Value::as_str) == Some("req")
+        };
+        let phase = event.get("phase").and_then(Value::as_str);
+        let requested_image = phase == Some("req")
             && event.get("resourceType").and_then(Value::as_str) == Some("image");
-        let returned_image = event.get("phase").and_then(Value::as_str) == Some("res")
+        let returned_image = phase == Some("res")
             && response_content_type(event)
                 .to_ascii_lowercase()
                 .starts_with("image/");
@@ -90,13 +114,14 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
         }
     }
 
-    let mut response_statuses = std::collections::BTreeMap::new();
-    let mut request_failures = std::collections::BTreeMap::new();
+    let mut response_statuses = BTreeMap::new();
+    // A failure Weles recorded without its error text is reported as null:
+    // the request failed, and the recording does not say why.
+    let mut request_failures: BTreeMap<String, Option<String>> = BTreeMap::new();
     for event in events {
-        let url = event.get("url").and_then(Value::as_str).unwrap_or_default();
-        if !image_urls.contains(url) {
+        let Some(url) = url_of(event).filter(|url| image_urls.contains(*url)) else {
             continue;
-        }
+        };
         match event.get("phase").and_then(Value::as_str) {
             Some("res") => {
                 if let Some(status) = event.get("status").and_then(Value::as_u64) {
@@ -112,32 +137,24 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
                             .or_else(|| failure.get("error_text"))
                     })
                     .and_then(Value::as_str)
-                    .unwrap_or("request failed");
-                request_failures.insert(url.to_string(), reason.to_string());
+                    .map(str::to_string);
+                request_failures.insert(url.to_string(), reason);
             }
             _ => {}
         }
     }
 
-    let mut hosts = std::collections::BTreeMap::<String, u64>::new();
-    let mut statuses = std::collections::BTreeMap::<String, u64>::new();
-    let mut stado_statuses = std::collections::BTreeMap::<String, u64>::new();
+    let mut hosts = BTreeMap::<String, u64>::new();
+    let mut statuses = BTreeMap::<String, u64>::new();
+    let mut stado_statuses = BTreeMap::<String, u64>::new();
     let mut failed_resources = Vec::new();
-    let mut loaded_images = 0_u64;
-    let mut unresolved_images = 0_u64;
-    let mut stado_object_images = 0_u64;
-    let mut legacy_cloud_images = 0_u64;
+    let mut loaded_images = Vec::new();
+    let mut unresolved_images = Vec::new();
     for url in &image_urls {
         if let Some(host) = resource_host(url) {
-            *hosts.entry(host).or_default() += 1;
+            hosts.entry(host).or_default().tally();
         }
         let stado_object = is_stado_object_url(url);
-        if stado_object {
-            stado_object_images += 1;
-        }
-        if is_legacy_cloud_image_url(url) {
-            legacy_cloud_images += 1;
-        }
         if let Some(reason) = request_failures.get(url) {
             failed_resources.push(json!({
                 "url": public_resource_url(url),
@@ -147,12 +164,12 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
         }
         match response_statuses.get(url).copied() {
             Some(status) => {
-                *statuses.entry(status.to_string()).or_default() += 1;
+                statuses.entry(status.to_string()).or_default().tally();
                 if stado_object {
-                    *stado_statuses.entry(status.to_string()).or_default() += 1;
+                    stado_statuses.entry(status.to_string()).or_default().tally();
                 }
-                if (200..400).contains(&status) {
-                    loaded_images += 1;
+                if delivered(status) {
+                    loaded_images.push(url);
                 } else {
                     failed_resources.push(json!({
                         "url": public_resource_url(url),
@@ -160,7 +177,7 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
                     }));
                 }
             }
-            None => unresolved_images += 1,
+            None => unresolved_images.push(url),
         }
     }
 
@@ -168,19 +185,21 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
         "run_id": run_id,
         "recording_file": recording_path,
         "network_events": events.len(),
+        "events_without_url": unaddressed_events,
         "image_requests": image_urls.len(),
-        "loaded_images": loaded_images,
+        "loaded_images": loaded_images.len(),
         "failed_images": failed_resources.len(),
-        "unresolved_images": unresolved_images,
-        "stado_object_images": stado_object_images,
-        "legacy_cloud_images": legacy_cloud_images,
+        "unresolved_images": unresolved_images.len(),
+        "stado_object_images": image_urls.iter().filter(|url| is_stado_object_url(url)).count(),
+        "legacy_cloud_images": image_urls.iter().filter(|url| is_legacy_cloud_image_url(url)).count(),
         "image_hosts": hosts,
         "status_counts": statuses,
         "stado_status_counts": stado_statuses,
         "failed_resources": failed_resources,
+        // A recording that states no page errors list reports null, not none.
         "page_errors": document
             .get("pageerrors")
             .and_then(Value::as_array)
-            .map_or(0, Vec::len),
+            .map(Vec::len),
     }))
 }

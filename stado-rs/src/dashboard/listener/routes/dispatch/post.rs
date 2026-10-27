@@ -45,17 +45,17 @@ impl Dashboard {
             "/api/service/restart" => &[Boundary::Service],
             _ => &[],
         };
-        let unavailable = !self.boundaries_available(required).await;
-        if unavailable {
+        if !self.boundaries_available(required).await {
+            let closed = self.closed_boundary(required);
             if matches!(path, "/api/machine/submit" | "/api/machine/cancel") {
                 return machine_result_response(Err(MachineError::retryable(
                     "AUTH_UNAVAILABLE",
-                    "machine authorization unavailable",
+                    format!("machine authorization unavailable: {}", closed.cause),
                 )));
             }
             return send_json(
                 http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
-                &json!({"error": "authorization boundary unavailable"}),
+                &closed.body("authorization boundary"),
             );
         }
         if path == "/api/rate-limit/consume" {

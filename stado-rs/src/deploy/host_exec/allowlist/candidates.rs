@@ -178,21 +178,27 @@ pub fn installed_program(program: &str) -> Result<std::path::PathBuf, String> {
     let Some((_, candidates)) = declared else {
         return Ok(PathBuf::from(program));
     };
-    let home = std::env::var_os("HOME");
+    // The home every Stado file is kept under, so a unit started without
+    // HOME finds the same installed programs as the operator's shell.
+    let home = crate::config_file::home();
     let mut tried = Vec::new();
     for candidate in *candidates {
         let path = match (candidate.strip_prefix("~/"), &home) {
-            (Some(relative), Some(home)) => Path::new(home).join(relative),
-            (Some(_), None) => {
-                tried.push(format!("{candidate} (HOME is unset)"));
+            (Some(relative), Ok(home)) => home.join(relative),
+            (Some(_), Err(cause)) => {
+                tried.push(format!("{candidate} ({cause})"));
                 continue;
             }
             (None, _) => PathBuf::from(candidate),
         };
-        if path.is_file() {
-            return Ok(path);
+        // A candidate that cannot be examined is named with its cause in the
+        // refusal, never listed as if nothing were there.
+        match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => return Ok(path),
+            Ok(_not_file) => tried.push(path.display().to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => tried.push(path.display().to_string()),
+            Err(error) => tried.push(format!("{} ({error})", path.display())),
         }
-        tried.push(path.display().to_string());
     }
     Err(format!(
         "{program} is installed at none of its declared paths: {}",

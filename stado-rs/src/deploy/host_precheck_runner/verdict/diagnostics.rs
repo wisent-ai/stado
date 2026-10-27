@@ -18,6 +18,7 @@
 
 use serde_json::{json, Value};
 
+use crate::deploy::host_disk::{memory_from_output, memory_json, MEMORY_SECTION};
 use crate::deploy::host_precheck_runner::declaration::{runner_profile, runner_target};
 use crate::deploy::host_precheck_runner::platform::{profile_template, Platform};
 use crate::deploy::{host_channel, production_runner, DeployError};
@@ -42,9 +43,6 @@ runner_user=stado-precheck
 # service of the account that runs it; its state is that unit's state.
 systemctl --user show -p ActiveState -p SubState -p Result -p NRestarts -p ExecMainStatus -p StandardOutput -p StandardError com.wisent.stado.service || true
 printf 'UnitLimits=%s\n' "$(systemctl --user show -p MemoryMax -p MemoryHigh -p MemorySwapMax -p LimitAS -p TasksMax com.wisent.stado.service 2>/dev/null | tr '\n' ' ')"
-printf 'MemoryAvailableKB=%s\n' "$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)"
-printf 'MemoryTotalKB=%s\n' "$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
-printf 'SwapUsage=%s\n' "$(awk '/^Swap(Total|Free):/ {printf "%s=%s ", $1, $2}' /proc/meminfo)"
 printf 'RunnerAccount=%s\n' "$(id -un "$runner_user" 2>/dev/null || printf 'absent')"
 printf 'RunnerRoot=%s\n' "$runner_root"
 newest=$(root sh -c "ls -t \"$runner_root\"/_diag/*.log 2>/dev/null | head -n 1" || true)
@@ -76,9 +74,6 @@ printf 'ExecMainStatus=%s\n' "$(printf '%s' "$state" | sed -n 's/.*last exit cod
 printf 'UnitLimits=%s\n' "$(printf '%s' "$state" | grep -iE 'limit|resource|jetsam|memory' | tr -s ' \n' ' ')"
 printf 'StandardOutput=%s\n' "$(printf '%s' "$state" | sed -n 's/.*stdout path = \(.*\)$/\1/p' | head -n 1)"
 printf 'StandardError=%s\n' "$(printf '%s' "$state" | sed -n 's/.*stderr path = \(.*\)$/\1/p' | head -n 1)"
-printf 'MemoryAvailableKB=%s\n' "$(( $(sysctl -n hw.memsize) / 100 * $(sysctl -n kern.memorystatus_level) / 1024 ))"
-printf 'MemoryTotalKB=%s\n' "$(( $(sysctl -n hw.memsize) / 1024 ))"
-printf 'SwapUsage=%s\n' "$(sysctl -n vm.swapusage | tr -s ' ')"
 printf 'RunnerAccount=%s\n' "$(id -un "$runner_user" 2>/dev/null || printf 'absent')"
 printf 'RunnerRoot=%s\n' "$runner_root"
 newest=$(root sh -c "ls -t \"$runner_root\"/_diag/*.log 2>/dev/null | head -n 1" || true)
@@ -108,44 +103,43 @@ printf '%s\n' '--- tail ---'
 if [ -n "$newest" ]; then root tail -n 120 "$newest"; fi
 "#;
 
-/// One `Key=value` line from the program's header half.
-fn field(head: &str, key: &str) -> String {
+/// One `Key=value` line from the program's header half, or `None` when the
+/// program printed no such line: a field the host did not report is null in
+/// the report, never a placeholder that reads like a value.
+fn field<'a>(head: &'a str, key: &str) -> Option<&'a str> {
     let prefix = format!("{key}=");
-    head.lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix(&prefix))
-        .unwrap_or("-")
-        .to_string()
+    head.lines().map(str::trim).find_map(|line| line.strip_prefix(&prefix))
 }
 
 /// A metadata command can fail while the log remains readable. Keep its
-/// actual exit status and combined output instead of calling that read healthy.
+/// actual exit status and combined output instead of calling that read
+/// healthy; a status that is not a number is named in `exit_status_unread`.
 fn runtime_probe(head: &str, key: &str) -> Value {
+    let status = field(head, &format!("{key}Status"));
+    let (exit_status, unread) = match status.map(|text| (text, text.parse::<i32>())) {
+        Some((_, Ok(code))) => (Some(code), None),
+        Some((text, Err(error))) => (None, Some(format!("{text:?} is not an exit status: {error}"))),
+        None => (None, Some("the probe printed no status".to_string())),
+    };
     json!({
         "command": field(head, &format!("{key}Command")),
-        "exit_status": field(head, &format!("{key}Status")).parse::<i32>().ok(),
+        "exit_status": exit_status,
+        "exit_status_unread": unread,
         "output": field(head, &format!("{key}Output")),
     })
 }
 
-/// Current host memory and unit limits.
+/// Current host memory, read by the same section and fold `stado space
+/// report` uses (printed first, so it is in the head and never confused with
+/// a log line), beside the unit's limits.
 fn memory(head: &str) -> Value {
-    let kib = |key: &str| -> Option<i64> {
-        field(head, key)
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .map(|value| value as i64)
-    };
-    json!({
-        "available_mb": kib("MemoryAvailableKB").map(|value| value / 1024),
-        "total_mb": kib("MemoryTotalKB").map(|value| value / 1024),
-        "swap": field(head, "SwapUsage").trim(),
-        "unit_limits": field(head, "UnitLimits").trim(),
-        "detail": "these are current host memory readings and unit limits, not measurements \
-                   taken at the logged failure; the runtime log alone does not establish \
-                   a memory shortage",
-    })
+    let mut reading = memory_json(&memory_from_output(head));
+    reading["unit_limits"] = json!(field(head, "UnitLimits").map(str::trim));
+    reading["detail"] = json!(
+        "these are current host memory readings and unit limits, not measurements taken at the \
+         logged failure; the runtime log alone does not establish a memory shortage"
+    );
+    reading
 }
 
 pub async fn diagnostics_declared(
@@ -155,21 +149,25 @@ pub async fn diagnostics_declared(
     let profile = runner_profile(profile_name)?;
     let target = runner_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
-    let script = profile_template(
-        match platform {
-            Platform::LinuxAmd64 => LINUX_DIAGNOSTICS,
-            Platform::DarwinArm64 => MACOS_DIAGNOSTICS,
-        },
-        profile,
+    let script = format!(
+        "{MEMORY_SECTION}{}",
+        profile_template(
+            match platform {
+                Platform::LinuxAmd64 => LINUX_DIAGNOSTICS,
+                Platform::DarwinArm64 => MACOS_DIAGNOSTICS,
+            },
+            profile,
+        )
     );
     let output = host_channel::run_script(&target, &script, &production_runner()).await?;
     // The tail is reported even when the read failed: a program that could not
     // reach the unit still printed whatever it did reach, and discarding that
-    // is the defect this command exists to end.
-    let (head, tail) = output
-        .stdout
-        .split_once("--- tail ---\n")
-        .unwrap_or((output.stdout.as_str(), ""));
+    // is the defect this command exists to end. A program that never reached
+    // the tail marker printed a head and no tail.
+    let (head, tail) = match output.stdout.split_once("--- tail ---\n") {
+        Some((head, tail)) => (head, tail),
+        None => (output.stdout.as_str(), ""),
+    };
     let platform_probes = if matches!(platform, Platform::DarwinArm64) {
         json!({
             "coreclr_architectures": runtime_probe(head, "CoreclrArchitectures"),

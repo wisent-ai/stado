@@ -10,12 +10,29 @@ struct EnrollmentRequestPanel: View {
     let request: FleetPendingRequest
     let refresh: () async -> Void
 
+    /// The address the machine reported, or that it reported none.
+    private var reportedAddress: String {
+        if request.isReachable {
+            return request.probedAddress
+        }
+        return "none"
+    }
+
+    /// The fingerprint of the key the machine installed, or that its request
+    /// did not record one.
+    private var installedKey: String {
+        if let fingerprint = request.installedKeyFingerprint {
+            return fingerprint
+        }
+        return "not reported"
+    }
+
     var body: some View {
         WisentPanel {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
                 HStack(alignment: .firstTextBaseline, spacing: WisentDesign.Space.x3) {
                     Text(request.registryName)
-                        .font(WisentTypography.heading(14))
+                        .font(WisentTypeScale.section())
                         .foregroundStyle(WisentDesign.ink)
                         .textSelection(.enabled)
                     WisentStatusChip(
@@ -35,7 +52,7 @@ struct EnrollmentRequestPanel: View {
                     )
                     WisentField(
                         label: "Address it reported",
-                        value: request.isReachable ? (request.destination ?? "") : "none",
+                        value: reportedAddress,
                         tone: request.isReachable ? .neutral : .warning
                     )
                 }
@@ -44,7 +61,7 @@ struct EnrollmentRequestPanel: View {
                     WisentField(label: "Platform", value: request.platform)
                     WisentField(
                         label: "Key it installed",
-                        value: request.installedKeyFingerprint ?? "not reported"
+                        value: installedKey
                     )
                 }
 

@@ -8,7 +8,6 @@
 use crate::config;
 use crate::models::Job;
 use crate::providers::local::helpers::gpu::capacity::compat_accel_types;
-use crate::providers::local::helpers::MODEL_RE;
 
 /// The build cache a release build job compiles into: its product and
 /// platform, read from the output coordinate the build enqueue gives it
@@ -55,8 +54,14 @@ fn names_this_consumer(identity: &str, consumer_id: &str, kind: &str) -> bool {
     let identity = identity.to_lowercase();
     let cid = consumer_id.to_lowercase();
     let kind_prefix = format!("{}-", kind.to_lowercase());
-    let machine = cid.strip_prefix(&kind_prefix).unwrap_or(&cid);
-    let bare = machine.strip_suffix(".local").unwrap_or(machine);
+    let machine = match cid.strip_prefix(&kind_prefix) {
+        Some(machine) => machine,
+        None => cid.as_str(),
+    };
+    let bare = match machine.strip_suffix(".local") {
+        Some(bare) => bare,
+        None => machine,
+    };
     identity == cid || identity == machine || identity == bare
 }
 
@@ -152,20 +157,24 @@ pub fn eligibility_refusal(
     // build learns it — the same word the registry records as the target's
     // `release_platform`. Alias-tolerant on the way in: the fleet spells this
     // machine "darwin"/"macos" and "arm64"/"aarch64", "amd64"/"x86_64".
-    if !crate::targets::platform_accepts_job(
-        crate::self_update::platform_triple_short().unwrap_or_default(),
-        &job.platform_os,
-        &job.architecture,
-    ) {
+    // A machine outside the platforms the release pipeline publishes accepts
+    // only a job that names no platform.
+    let platform_accepted = match crate::self_update::platform_triple_short() {
+        Ok(platform) => {
+            crate::targets::platform_accepts_job(platform, &job.platform_os, &job.architecture)
+        }
+        Err(_unsupported) => job.platform_os.is_empty() && job.architecture.is_empty(),
+    };
+    if !platform_accepted {
         return Some("platform_os/architecture is not this machine");
     }
     if crate::capabilities::execution_adapter(kind)
         != Some(crate::capabilities::ExecutionAdapter::Local)
     {
-        if let Some(caps) = MODEL_RE.captures(&job.command) {
-            if config::is_local_only_model(caps[1].trim_matches(['\'', '"'])) {
-                return Some("command names a local-only model on a non-local executor");
-            }
+        if crate::sizing::model_of(&job.command)
+            .is_some_and(|model| config::is_local_only_model(&model))
+        {
+            return Some("command names a local-only model on a non-local executor");
         }
     }
     if job.pin_to_provider

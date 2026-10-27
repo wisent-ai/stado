@@ -18,9 +18,13 @@ fn unlink_checked(
     expected: &Identity,
     directory: bool,
 ) -> Result<(), JanitorError> {
-    let parent_fd = safefs::open_path(root_fd, &path_parts[..path_parts.len() - 1])?;
+    // The leaf is removed from its parent directory; a candidate path with
+    // no leaf names nothing to remove and is refused rather than indexed.
+    let Some((leaf, parent_parts)) = path_parts.split_last() else {
+        return Err(os_error("cache candidate path names no leaf to remove"));
+    };
+    let parent_fd = safefs::open_path(root_fd, parent_parts)?;
     let result = (|parent_fd: &OwnedFd| {
-        let leaf = &path_parts[path_parts.len() - 1];
         let info = safefs::fstatat_nofollow(parent_fd.as_raw_fd(), leaf)?;
         let current = identity(&info);
         if current != *expected && !(directory && current.stable() == expected.stable()) {

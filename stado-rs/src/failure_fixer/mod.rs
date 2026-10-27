@@ -1,14 +1,17 @@
-//! Autonomous failure-fixer: failure -> local Claude Code CLI -> ship fix -> retry,
-//! run as the `stado serve --failure-fixer-interval-seconds` role:
+//! Autonomous failure-fixer: failure -> detached Jeden session -> ship fix ->
+//! retry, run as the `stado serve --failure-fixer-interval-seconds` role:
 //!   1. A job fails (lands in `failed/<jid>.json`)
 //!   2. [`scan_new_failures`] picks it up
-//!   3. [`dispatch_fix`] exec's the local `claude` CLI with the fix prompt
-//!   4. Claude Code diagnoses, ships the fix, resubmits
-//!   5. Per-job state at `failure_fixes/<jid>.json` so the same failure is
-//!      not dispatched on a later scan
+//!   3. [`dispatch_fix`] starts a `jeden-session` workload in the workspace
+//!      `--failure-fixer-workspace` names, with the fix prompt as its task
+//!   4. The session diagnoses, ships the fix, resubmits
+//!   5. Per-job state at `failure_fixes/<jid>.json` lists every session
+//!      started for the job, so the same failure is not dispatched on a later
+//!      scan
 //!
-//! Authentication is resolved from `stado-anthropic/api_key` through the
-//! control-plane Skarbiec grant and injected only into the Claude child.
+//! The session reaches its model through Brama with the fleet's own grant,
+//! as every Jeden session Stado places does; this module reads no model
+//! credential and runs no model CLI of its own.
 //!
 //! A failure is dispatched once. The job's state file records the
 //! `failed_at` of the failure its last session was given, and a scan that
@@ -23,19 +26,16 @@ use crate::config;
 use crate::models::json_dumps_pretty_sorted;
 use crate::queue::{JobStorage, StorageError};
 
-/// Python `DISPATCHED` — `claude -p` exited 0.
+/// A fix session was started and queued for this failure.
 pub const DISPATCHED: &str = "dispatched";
-/// Python `DISPATCH_FAILED` — `claude -p` exited nonzero.
-pub const DISPATCH_FAILED: &str = "dispatch_failed";
-/// Python `DRY_RUN` — no `--execute`; payload returned without exec'ing.
-pub const DRY_RUN: &str = "dry_run";
 /// The failure in hand already had its session: the job's state records
 /// this same `failed_at`.
 pub const ALREADY_DISPATCHED: &str = "already_dispatched";
-/// Python `CLAUDE_NOT_FOUND` — `claude` CLI not on PATH.
-pub const CLAUDE_NOT_FOUND: &str = "claude_cli_not_found";
+/// No session could be started for this job, or its state could not be
+/// read; the record carries the cause.
+pub const REFUSED: &str = "refused";
 
-/// Fixer-layer error (storage + the JSON state files).
+/// Fixer-layer error (storage, the JSON state files, and the session start).
 #[derive(Debug, thiserror::Error)]
 pub enum FixError {
     #[error(transparent)]
@@ -44,8 +44,10 @@ pub enum FixError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Skarbiec(#[from] crate::skarbiec::SkarbiecError),
+    /// A fix session that could not be started, or a job state that says
+    /// nothing about the sessions started for it.
+    #[error("{0}")]
+    Session(String),
 }
 
 /// One failed job's relevant fields, parsed from `failed/<jid>.json`
@@ -158,5 +160,5 @@ pub async fn state_save(store: &JobStorage, job_id: &str, state: &Value) -> Resu
 mod dispatch;
 mod resident;
 
-pub use dispatch::{claude_bin, dispatch_fix, format_fix_prompt, scan_and_dispatch};
+pub use dispatch::{dispatch_fix, format_fix_prompt, scan_and_dispatch, FixSession};
 pub(crate) use resident::run_resident;

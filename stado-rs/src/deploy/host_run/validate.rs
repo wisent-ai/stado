@@ -9,11 +9,15 @@ use super::{PATH_REFUSAL, RUN_AREA};
 /// area before registry or network access. The host still binds the candidate
 /// to its own `$HOME`; this lexical check does not guess that home locally.
 pub fn validate_run_descendant(path: &str) -> Result<(), String> {
+    use std::path::Component;
+    // The root, then only ordinary names: no `.`, `..` or prefix anywhere.
     let components = std::path::Path::new(path).components().collect::<Vec<_>>();
-    let ordinary = components
-        .iter()
-        .skip(1)
-        .all(|component| matches!(component, std::path::Component::Normal(_)));
+    let ordinary = match components.split_first() {
+        Some((Component::RootDir, rest)) => {
+            rest.iter().all(|component| matches!(component, Component::Normal(_)))
+        }
+        _ => false,
+    };
     let managed = path
         .split_once(&format!("/{RUN_AREA}/"))
         .is_some_and(|(home, relative)| !home.is_empty() && !relative.is_empty());
@@ -28,15 +32,17 @@ pub fn validate_run_descendant(path: &str) -> Result<(), String> {
 /// one nested subtree. Build and execution accept deeper descendants.
 pub fn validate_run_directory(path: &str) -> Result<(), String> {
     validate_run_descendant(path)?;
+    // A path outside the run area names no run at all.
     let relative = path
         .split_once(&format!("/{RUN_AREA}/"))
-        .map(|(_, relative)| relative)
-        .unwrap_or_default();
-    let safe_name = !relative.is_empty()
-        && !relative.contains('/')
-        && relative
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+        .map(|(_, relative)| relative);
+    let safe_name = relative.is_some_and(|relative| {
+        !relative.is_empty()
+            && !relative.contains('/')
+            && relative
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    });
     if safe_name {
         Ok(())
     } else {

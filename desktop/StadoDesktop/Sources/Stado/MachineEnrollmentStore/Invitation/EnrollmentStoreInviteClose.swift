@@ -56,12 +56,12 @@ extension MachineEnrollmentStore {
             // to two stores, and the command reports the second one failing on
             // its error stream while still succeeding. The machine is in
             // either way; what differs is whether an operator reading
-            // `fleet invites` tomorrow will see this one still open.
+            // `fleet invite list` tomorrow will see this one still open.
             let closed = !result.standardError.localizedCaseInsensitiveContains("could not be closed")
             outcome = .succeeded(
                 closed
                     ? "\(machine) answered on the key the fragment installed and is in the canonical registry. The invitation is spent."
-                    : "\(machine) answered on the key the fragment installed and is in the canonical registry. The invitation could not be closed in the store, so it may still read as open in stado fleet invites — nothing can be redeemed against it, and stado fleet revoke-invite \(record.id) settles the record."
+                    : "\(machine) answered on the key the fragment installed and is in the canonical registry. The invitation could not be closed in the store, so it may still read as open in stado fleet invite list — nothing can be redeemed against it, and stado fleet invite revoke \(record.id) settles the record."
             )
         } catch {
             let message = Self.describe(error)
@@ -70,7 +70,7 @@ extension MachineEnrollmentStore {
         }
     }
 
-    /// `stado fleet revoke-invite ID` — close an invitation that went to the
+    /// `stado fleet invite revoke ID` — close an invitation that went to the
     /// wrong person, or whose code was lost.
     ///
     /// The two modes are revoked the same way and mean different things
@@ -88,7 +88,7 @@ extension MachineEnrollmentStore {
                 : "Closing invitation \(invite.id) so the code can no longer be spent."
         )
         do {
-            let result = try await run(["fleet", "revoke-invite", invite.id])
+            let result = try await run(["fleet", "invite", "revoke", invite.id])
             guard result.ok else {
                 failure = .invite(result.message, machine: invite.targetName)
                 outcome = .failed(result.message)

@@ -25,22 +25,30 @@ const CARGO_MANIFEST: &str = "Cargo.toml";
 const CARGO_LOCK: &str = "Cargo.lock";
 
 /// The lock nearest above `manifest` inside `checkout`, as a path relative
-/// to the checkout, when there is one.
+/// to the checkout, when there is one. A lock that cannot be examined is
+/// refused naming it: skipped, the version step bumped against a farther
+/// lock, or against none.
 fn lock_of(checkout: &Path, manifest: &Path) -> Result<Option<String>, CmdError> {
-    let found = manifest
+    let candidates = manifest
         .ancestors()
         .skip_while(|directory| directory == &manifest)
         .take_while(|directory| directory.starts_with(checkout))
-        .map(|directory| directory.join(CARGO_LOCK))
-        .find(|lock| lock.is_file());
+        .map(|directory| directory.join(CARGO_LOCK));
+    let mut found = None;
+    for lock in candidates {
+        if crate::primitives::presence::present(&lock)? && lock.is_file() {
+            found = Some(lock);
+            break;
+        }
+    }
     let Some(lock) = found else {
         return Ok(None);
     };
     let relative: PathBuf = lock
         .strip_prefix(checkout)
-        .map_err(|_| {
+        .map_err(|outside| {
             CmdError::click(format!(
-                "{} is not inside {}",
+                "{} is not inside {}: {outside}",
                 lock.display(),
                 checkout.display()
             ))

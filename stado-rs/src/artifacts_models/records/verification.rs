@@ -2,7 +2,8 @@
 
 use serde_json::{Map, Value};
 
-use crate::artifacts_models::error::{py_str, ArtifactError};
+use super::{as_text, required_text, text_list};
+use crate::artifacts_models::error::ArtifactError;
 
 /// Outcome of the last verification pass.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,21 +32,19 @@ impl ArtifactVerification {
         let map = value
             .as_object()
             .ok_or_else(|| ArtifactError::invalid_manifest("verification must be an object"))?;
-        let get_str = |key: &str| map.get(key).map(py_str).unwrap_or_default();
-        let issues = match map.get("issues") {
-            None | Some(Value::Null) => Vec::new(),
-            Some(Value::Array(items)) => items.iter().map(py_str).collect(),
-            Some(other) => vec![py_str(other)],
-        };
+        // A verification names when it ran, what it found and which
+        // manifest it hashed; one missing any of them is not a verification
+        // and is refused by the member it lacks. The adapter alone has a
+        // declared default, the one `Default` names.
         Ok(Self {
-            adapter: map
-                .get("adapter")
-                .map(py_str)
-                .unwrap_or_else(|| "generic-v1".into()),
-            verified_at: get_str("verified_at"),
-            result: get_str("result"),
-            manifest_sha256: get_str("manifest_sha256"),
-            issues,
+            adapter: match map.get("adapter") {
+                None | Some(Value::Null) => Self::default().adapter,
+                Some(adapter) => as_text("verification", "adapter", adapter)?,
+            },
+            verified_at: required_text("verification", map, "verified_at")?,
+            result: required_text("verification", map, "result")?,
+            manifest_sha256: required_text("verification", map, "manifest_sha256")?,
+            issues: text_list("verification", map, "issues")?,
         })
     }
 

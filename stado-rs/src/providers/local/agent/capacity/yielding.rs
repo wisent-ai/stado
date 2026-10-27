@@ -151,9 +151,10 @@ pub async fn maybe_yield_for_priority(
         {
             continue;
         }
-        let need_j = j
-            .gpu_mem_gb
-            .max(estimate_gpu_memory(&j.command, sizing, store).await?);
+        let need_j = estimate_gpu_memory(&j.command, sizing, store)
+            .await?
+            .into_iter()
+            .fold(j.gpu_mem_gb, i64::max);
         if need_j <= free_vram_gb {
             continue; // already fits — not a VRAM-eviction case
         }

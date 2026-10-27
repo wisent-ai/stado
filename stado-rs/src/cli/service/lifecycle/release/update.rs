@@ -39,7 +39,7 @@ pub(crate) async fn update(
             eprintln!("stado: {notice}");
         }
         let target = crate::cli::resolved_host(&registry, host)?.clone();
-        let services = crate::cli::service::declared_in(&registry, name, Some(host))?;
+        let services = crate::cli::service::declared_in(&registry, name, Some(host)).await?;
         (target, services)
     } else {
         // The service must already be managed here: this moves a unit forward,
@@ -55,17 +55,16 @@ pub(crate) async fn update(
             "{host}: service update was requested by a local release converge, but this registry target is not this machine; no remote command was started"
         )));
     }
-    if services.is_empty() {
+    let [declared, ..] = services.as_slice() else {
         return Err(CmdError::refused(format!(
             "{host} does not manage {name}; deploy it first"
         )));
-    }
+    };
     // The registry name is the unit label; the artifact directory is whatever
     // the unit's own program path reads from. Deriving it from the unit means
     // the new version lands where the running one is actually read, instead of
     // beside it under a directory that only matches the name.
     let runner = production_runner();
-    let declared = &services[0];
     // Archive membership follows the actual executable vector in the unit.
     // `service show` is deliberately human presentation and may contain
     // spaces in paths and arguments plus a resolved-link annotation.
@@ -83,12 +82,18 @@ pub(crate) async fn update(
             .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let program = observed.as_str();
-    let directory = program
+    // A program under `services/<directory>/` names its directory; a program
+    // read from anywhere else (a release-controlled binary) gets the
+    // registry name's directory, which the archive branch below installs
+    // beside it and the unit is then pointed at.
+    let under_services = program
         .split_once("/services/")
         .and_then(|(_, rest)| rest.split('/').next())
-        .filter(|segment| !segment.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| declared.name.clone());
+        .filter(|segment| !segment.is_empty());
+    let directory = match under_services {
+        Some(segment) => segment.to_string(),
+        None => declared.name.clone(),
+    };
     // Two sources, one install. A published artifact is the durable route; a
     // local archive is how a bundle reaches a host before there is an object
     // store the whole fleet can read, and it is checksummed on the far side the
@@ -102,7 +107,7 @@ pub(crate) async fn update(
         let output = host_channel::run_script(&target, &script, &runner)
             .await
             .map_err(click)?;
-        if !output.ok() {
+        if !output.succeeded() {
             return Err(CmdError::click(format!(
                 "{host}: {}",
                 host_channel::last_error_line(&output, "rollback failed")
@@ -112,11 +117,16 @@ pub(crate) async fn update(
         println!("{host}: {name} -> {version} (takes effect on the next restart)");
         return Ok(());
     }
+    // The archive installer lays a release out below the target's own
+    // platform directory, the one the catalog's `$STADO_PLATFORM` names.
+    let platform_dir =
+        crate::deploy::service_catalog::platform_directory(&target.release_platform);
     // Validate the archive against the unit's executable path before moving
     // `current`; a missing member would prevent the unit's next start.
     if let Some(path) = archive {
         let members = archive_members(path)?;
-        refuse_archive_without_program(program, &members).map_err(CmdError::refused)?;
+        refuse_archive_without_program(program, &members, platform_dir)
+            .map_err(CmdError::refused)?;
     }
     let (installed, already_active) = match (reference, archive) {
         (Some(reference), None) => (
@@ -125,7 +135,7 @@ pub(crate) async fn update(
         ),
         (None, Some(path)) => {
             let required = if let Some((_, below)) =
-                super::install::program_under_current(program, &directory)
+                super::install::program_under_current(program, &directory, platform_dir)
             {
                 below
             } else if program.contains(&format!("/services/{directory}/")) {
@@ -140,7 +150,7 @@ pub(crate) async fn update(
                         CmdError::click("managed service program has no filename")
                             .stating(crate::primitives::failure::FailureCode::Config)
                     })?;
-                format!("darwin-arm/{executable}")
+                format!("{platform_dir}/{executable}")
             };
             if !std::path::Path::new(&required)
                 .components()
@@ -185,7 +195,7 @@ pub(crate) async fn update(
                 .stating(crate::primitives::failure::FailureCode::NotFound)
             })?;
         if before.pid.is_empty() {
-            if before.loaded_domains.len() != 1 {
+            if !matches!(before.loaded_domains.as_slice(), [_only]) {
                 return Err(CmdError::refused(format!(
                     "{host}: {} has no live pid and {} loaded domains; refusing to guess a lifecycle action",
                     declared.unit_id(),
@@ -212,7 +222,7 @@ pub(crate) async fn update(
         let output = host_channel::run_script(&target, &script, &runner)
             .await
             .map_err(click)?;
-        if !output.ok() {
+        if !output.succeeded() {
             return Err(CmdError::click(format!(
                 "{host}: {}",
                 host_channel::last_error_line(&output, "the running image did not converge")

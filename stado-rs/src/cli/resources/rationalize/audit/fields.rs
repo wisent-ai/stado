@@ -25,12 +25,18 @@ pub(super) fn string_field(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
+/// A count the provider API writes either as a JSON number or, for its
+/// int64 fields, as a decimal string; `None` for a count absent or in any
+/// other shape, which the audit reports as the field not being stated.
 pub(super) fn number_field(value: &Value, key: &str) -> Option<u64> {
-    value.get(key).and_then(|number| {
-        number
-            .as_u64()
-            .or_else(|| number.as_str()?.parse::<u64>().ok())
-    })
+    match value.get(key) {
+        Some(Value::Number(number)) => number.as_u64(),
+        Some(Value::String(text)) => match text.parse::<u64>() {
+            Ok(count) => Some(count),
+            Err(_not_a_decimal) => None,
+        },
+        Some(_) | None => None,
+    }
 }
 
 /// The zone the row names, or its region; empty when it names neither, and

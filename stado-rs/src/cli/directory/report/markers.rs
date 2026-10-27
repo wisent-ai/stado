@@ -59,7 +59,8 @@ pub(super) fn adapter_url(target_entry: &Value, service: &str) -> Result<Option<
 /// still true when an unlink fails -- but the command must not exit zero, or a
 /// caller that runs this to convergence will believe the directory is clean.
 pub(super) fn prune_outcome(failed: usize) -> Result<(), CmdError> {
-    if failed == 0 {
+    use crate::primitives::tally::Tally;
+    if failed.counts_nothing() {
         return Ok(());
     }
     Err(CmdError::refused(format!(
@@ -86,14 +87,16 @@ pub(super) struct FossilMarker {
 
 impl FossilMarker {
     pub(super) fn age(&self) -> String {
-        self.age_seconds.map_or_else(
-            || "not reported by the filesystem".to_string(),
-            |seconds| registry::human_age(chrono::TimeDelta::seconds(seconds)),
-        )
+        match self.age_seconds {
+            Some(seconds) => registry::human_age(chrono::TimeDelta::seconds(seconds)),
+            None => "not reported by the filesystem".to_string(),
+        }
     }
 }
 
-/// What is on disk, against what the directory declares.
+/// What is on disk, against what the directory declares; a sweep starts
+/// having counted nothing.
+#[derive(Default)]
 pub(super) struct MarkerSweep {
     /// Every marker present, declared or not. The denominator: "8 fossils" is
     /// a different sentence from "8 of 11".
@@ -112,18 +115,15 @@ pub(super) struct MarkerSweep {
 /// writes only `.local`, so a `.url` marker is never a declaration: earlier
 /// forwards opened by hand left them behind, each naming a port someone
 /// picked, and they are fossils whatever service their name claims. A staging
-/// file left by an interrupted write is named `<name>.local.staging` and is
-/// not a marker; a symlink is not something `write_forward_marker` can have
+/// file left by an interrupted write is a hidden `.tmp…` name and is not a
+/// marker; a symlink is not something `write_forward_marker` can have
 /// produced, and following one would report -- and under `--prune` delete --
 /// an unrelated path.
 pub(super) fn sweep_markers(
     forwards: &std::path::Path,
     declared: &std::collections::BTreeSet<&str>,
 ) -> Result<MarkerSweep, CmdError> {
-    let mut sweep = MarkerSweep {
-        present: 0,
-        fossil: Vec::new(),
-    };
+    let mut sweep = MarkerSweep::default();
     for entry in std::fs::read_dir(forwards)? {
         let entry = entry?;
         let name = entry.file_name();
@@ -143,24 +143,20 @@ pub(super) fn sweep_markers(
         if !metadata.is_file() {
             continue;
         }
-        sweep.present += 1;
+        crate::primitives::tally::Tally::tally(&mut sweep.present);
         if declarable && declared.contains(service) {
             continue;
         }
         // An unreadable marker is still a fossil: the consumer reading it is
         // running as the owner and may well succeed where this did not, so
         // dropping the row would hide an address that still resolves.
-        let value = std::fs::read_to_string(&marker).map_or_else(
-            |error| format!("(unreadable: {error})"),
-            |content| {
-                content
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string()
+        let value = match std::fs::read_to_string(&marker) {
+            Err(error) => format!("(unreadable: {error})"),
+            Ok(content) => match content.lines().next() {
+                Some(first) => first.trim().to_string(),
+                None => "(empty)".to_string(),
             },
-        );
+        };
         sweep.fossil.push(FossilMarker {
             service: service.to_string(),
             marker,
@@ -180,18 +176,38 @@ pub(super) fn sweep_markers(
 ///
 /// A modification time in the future is clock skew, not a marker written
 /// tomorrow; `duration_since` refuses it and the row reads `unknown`, which is
-/// the honest answer and keeps it out of the oldest-first head of the list.
+/// the honest answer and keeps it out of the oldest-first head of the list. A
+/// write time the file system cannot give, or an age beyond any `i64`, is
+/// said on stderr.
 fn marker_age(metadata: &std::fs::Metadata) -> Option<i64> {
-    let written = metadata.modified().ok()?;
-    let age = std::time::SystemTime::now().duration_since(written).ok()?;
-    i64::try_from(age.as_secs()).ok()
+    let written = match metadata.modified() {
+        Ok(written) => written,
+        Err(error) => {
+            eprintln!("stado: a forward marker's write time cannot be read: {error}");
+            return None;
+        }
+    };
+    let age = match std::time::SystemTime::now().duration_since(written) {
+        Ok(age) => age,
+        Err(_skew) => return None,
+    };
+    match i64::try_from(age.as_secs()) {
+        Ok(seconds) => Some(seconds),
+        Err(error) => {
+            eprintln!("stado: a forward marker's age is beyond counting: {error}");
+            None
+        }
+    }
 }
 
-/// The marker holds the local forward's URL, nothing secret, so it keeps the
-/// permissions the process creates files with.
+/// The marker holds the local forward's URL, nothing secret, so it is
+/// readable as any shared record and written whole and flushed with its
+/// directory ([`crate::primitives::document::persist_with_mode`]).
 pub(super) fn write_forward_marker(marker: &std::path::Path, url: &str) -> Result<(), CmdError> {
-    let staging = marker.with_extension("local.staging");
-    std::fs::write(&staging, format!("{url}\n"))?;
-    std::fs::rename(&staging, marker)?;
+    crate::primitives::document::persist_with_mode(
+        marker,
+        format!("{url}\n").as_bytes(),
+        crate::primitives::file_mode::shared_read(),
+    )?;
     Ok(())
 }

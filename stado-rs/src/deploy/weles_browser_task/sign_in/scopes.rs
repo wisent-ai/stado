@@ -8,7 +8,7 @@ use crate::targets::ComputeTarget;
 /// The acquisition scopes catalog as the host registered it.
 ///
 /// `stado host sync-acquisition-scopes` delivers the checked-in catalog to
-/// `$HOME/.stado/files/` and runs `skarbiec token-register-acquisitions` from
+/// `$HOME/.stado/files/` and runs `skarbiec grant register` from
 /// THAT copy, so this staged file — not the release tree's — is the document
 /// the vault's workload registrations were minted from.
 pub const REGISTERED_SCOPES_FILE: &str = "$HOME/.stado/files/skarbiec-acquisition-scopes.conf";
@@ -88,7 +88,7 @@ pub async fn host_scopes(
     runner: &Runner,
 ) -> Result<Vec<AcquisitionScope>, DeployError> {
     let fetched = service_file_fetch::fetch_file(target, scopes_file, runner).await?;
-    if !fetched.ok() {
+    if !fetched.whole() {
         return Err(DeployError::unreachable(format!(
             "{}: could not read {scopes_file} to learn which identities its vault registers: {}",
             target.name, fetched.report.file_state

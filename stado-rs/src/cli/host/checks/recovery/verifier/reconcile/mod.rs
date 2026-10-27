@@ -58,7 +58,7 @@ pub(super) async fn reconcile_verifier(
         crate::deploy::host_channel::run_command(&resolved, &environment_command, &runner)
             .await
             .map_err(CmdError::from)?;
-    if !environment.ok() {
+    if !environment.succeeded() {
         return Err(CmdError::click(format!(
             "{}: {kind} verifier environment could not be read: {}",
             resolved.name,
@@ -278,7 +278,7 @@ pub(super) async fn reconcile_verifier(
     let reconciled = crate::deploy::host_channel::run_command(&resolved, &command, &runner)
         .await
         .map_err(CmdError::from)?;
-    if !reconciled.ok() {
+    if !reconciled.succeeded() {
         return Err(CmdError::click(format!(
             "{}: {kind} item grant reconciliation failed: {}",
             resolved.name,

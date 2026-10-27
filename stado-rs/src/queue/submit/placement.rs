@@ -2,8 +2,6 @@
 //! per-command hardware resolution and the planned job every phase after this
 //! one persists.
 
-use std::collections::BTreeMap;
-
 use crate::catalog::GPU_SIZING;
 use crate::config;
 use crate::models::Job;
@@ -27,13 +25,13 @@ pub const CPU_MACHINE_TYPE: &str = "e2-standard-8";
 
 /// config::estimate_gpu_memory against the configured queue bucket
 /// (Python's sizing scan always targets the global BUCKET, not the
-/// submit-time bucket option), using the process-wide sizing caches. A
-/// regex miss short-circuits to 0 without constructing the storage
-/// handle, like Python returning before the sizing import does any GCS
-/// work.
-async fn estimate_gpu_mem(command: &str) -> Result<i64, SubmitError> {
-    if crate::sizing::model_of(command).is_empty() {
-        return Ok(0);
+/// submit-time bucket option), using the process-wide sizing caches; `None`
+/// when the command names no model, decided without constructing the
+/// storage handle, like Python returning before the sizing import does any
+/// GCS work.
+async fn estimate_gpu_mem(command: &str) -> Result<Option<i64>, SubmitError> {
+    if crate::sizing::model_of(command).is_none() {
+        return Ok(None);
     }
     let store = default_store("").await?;
     Ok(config::estimate_gpu_memory(command, crate::sizing::global(), &store).await?)
@@ -46,47 +44,64 @@ pub(super) async fn resolve_hardware(
     if let Some(resolved) = options.resolved_hardware.as_ref() {
         return Ok(resolved.clone());
     }
+    // The caller's `--vram-gb` when it states one; otherwise the size the
+    // command's model measured. Neither is a job that sizes to nothing.
+    let stated_vram = options.vram_gb.is_positive().then_some(options.vram_gb);
     let caller_asked_for_gpu =
-        !options.gpu_type.is_empty() || options.vram_gb > 0 || !options.machine_type.is_empty();
-    let mut gpu_mem = if options.vram_gb > 0 {
-        options.vram_gb
-    } else {
-        estimate_gpu_mem(command).await?
+        !options.gpu_type.is_empty() || stated_vram.is_some() || !options.machine_type.is_empty();
+    let mut gpu_mem = match stated_vram {
+        Some(stated) => Some(stated),
+        None => estimate_gpu_mem(command).await?,
     };
-    let (machine_type, gpu_type) = if !caller_asked_for_gpu && gpu_mem == 0 {
+    let sizing = GPU_SIZING.get(options.provider.as_str());
+    let (machine_type, gpu_type) = if !caller_asked_for_gpu && gpu_mem.is_none() {
         (CPU_MACHINE_TYPE.into(), String::new())
     } else {
-        let (inferred_machine, inferred_accel) =
-            config::lookup_instance_type(&options.provider, gpu_mem);
+        // The provider's tier for the size, its smallest tier for a job of
+        // no known size, and no tier for a provider that sizes nothing.
+        let inferred = match gpu_mem {
+            Some(mem) => config::lookup_instance_type(&options.provider, mem),
+            None => sizing.and_then(|tiers| tiers.values().next().copied()),
+        };
+        let (inferred_machine, inferred_accel) = match inferred {
+            Some((machine, accel)) => (machine.to_string(), accel.to_string()),
+            None => (String::new(), String::new()),
+        };
         let gpu_type = if options.gpu_type.is_empty() {
-            inferred_accel.to_string()
+            inferred_accel
         } else {
             options.gpu_type.clone()
         };
         let machine_type = if !options.machine_type.is_empty() {
             options.machine_type.clone()
-        } else if !options.gpu_type.is_empty() && options.vram_gb == 0 {
-            let empty = BTreeMap::new();
-            let sizing = GPU_SIZING.get(options.provider.as_str()).unwrap_or(&empty);
-            match sizing
-                .iter()
-                .find(|(_, (_, accel))| *accel == options.gpu_type)
-            {
+        } else if !options.gpu_type.is_empty() && stated_vram.is_none() {
+            let tier = sizing.and_then(|tiers| {
+                tiers
+                    .iter()
+                    .find(|(_, (_, accel))| *accel == options.gpu_type)
+            });
+            match tier {
                 Some((mem, (machine, _))) => {
-                    if gpu_mem == 0 {
-                        gpu_mem = *mem;
+                    if gpu_mem.is_none() {
+                        gpu_mem = Some(*mem);
                     }
                     machine.to_string()
                 }
-                None => inferred_machine.to_string(),
+                None => inferred_machine,
             }
         } else {
-            inferred_machine.to_string()
+            inferred_machine
         };
         (machine_type, gpu_type)
     };
+    // A job of no known size records the caller's `--vram-gb`, which stated
+    // none.
+    let gpu_mem_gb = match gpu_mem {
+        Some(mem) => mem,
+        None => options.vram_gb,
+    };
     Ok(ResolvedHardwareProjection {
-        gpu_mem_gb: gpu_mem,
+        gpu_mem_gb,
         gpu_type,
         machine_type,
     })

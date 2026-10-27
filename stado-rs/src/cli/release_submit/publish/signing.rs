@@ -15,15 +15,18 @@ pub(crate) async fn signing(product: &str) -> Result<(String, Vec<u8>), CmdError
         CmdError::click("registry.release_control is not configured")
             .stating(crate::primitives::failure::FailureCode::Config)
     })?;
+    // A product's own policy may name its signing item and key id; one that
+    // names neither, or names them blank, signs with the deployment's
+    // declared release signing key.
     let policy = control.products.get(product);
-    let item = policy
-        .map(|value| value.signing_key_item.clone())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(crate::config::release_signing_key_item);
-    let key_id = policy
-        .map(|value| value.signing_key_id.clone())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(crate::config::release_signing_key_id);
+    let item = match policy.map(|value| value.signing_key_item.as_str()) {
+        Some(item) if !item.is_empty() => item.to_string(),
+        Some(_) | None => crate::config::release_signing_key_item(),
+    };
+    let key_id = match policy.map(|value| value.signing_key_id.as_str()) {
+        Some(key_id) if !key_id.is_empty() => key_id.to_string(),
+        Some(_) | None => crate::config::release_signing_key_id(),
+    };
     let encoded = crate::skarbiec::read_release_signing_key(&item)
         .await
         .map_err(|error| {

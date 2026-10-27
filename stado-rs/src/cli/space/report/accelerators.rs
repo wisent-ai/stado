@@ -29,11 +29,12 @@ pub(super) async fn accelerators_json(target: &crate::targets::ComputeTarget) ->
     };
     let now = chrono::Utc::now();
     let payload = &publication.payload;
-    let diag = payload
-        .get("diag")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    // A publication without a `diag` block carries no accelerator readings;
+    // every field below then reports as absent.
+    let diag = match payload.get("diag").and_then(Value::as_object) {
+        Some(diag) => diag.clone(),
+        None => serde_json::Map::new(),
+    };
     let line = crate::providers::local::accelerators::accelerator_holders_line(&diag).map(|line| {
         if publication.stale(now) {
             format!("{line} (publication stale)")
@@ -48,7 +49,9 @@ pub(super) async fn accelerators_json(target: &crate::targets::ComputeTarget) ->
         "total_vram_gb": payload.get("total_vram_gb"),
         "free_vram_gb": payload.get("free_vram_gb"),
         "memory_model": diag.get("accelerator_memory_model"),
-        "holders": diag.get("accelerator_holders").cloned().unwrap_or_else(|| json!([])),
+        // Holders the agent did not list are reported as absent, which a
+        // reader tells from an empty list the agent did publish.
+        "holders": diag.get("accelerator_holders"),
         "unattributed_gb": diag.get("vram_unattributed_gb"),
         "holders_error": diag.get("accelerator_holders_error"),
         "line": line,

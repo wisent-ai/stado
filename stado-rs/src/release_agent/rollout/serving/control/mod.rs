@@ -26,12 +26,21 @@ pub(crate) use transactions::{
     adopt_transaction_blocking, inspect_transaction_blocking, OwnedTransaction, TransactionRequest,
 };
 
-const SCHEMA: u32 = 1;
+/// The control protocol a command and the host process speak, named in every
+/// request and response; either side refuses a message that names another,
+/// so a host process left running from an older build is told apart rather
+/// than misread.
+const PROTOCOL: &str = "stado.release-proxy-control.v1";
+
+// The superuser is user ID 0
+// (https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap03.html#tag_03_14),
+// the one caller besides the owner the control socket answers.
+const SUPERUSER_UID: u32 = 0;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
-    schema_version: u32,
+    protocol: String,
     action: Action,
 }
 
@@ -86,7 +95,7 @@ struct OwnedProxy {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Response {
-    schema_version: u32,
+    protocol: String,
     pid: i32,
     proxy: Option<OwnedProxy>,
     #[serde(default)]
@@ -94,15 +103,17 @@ struct Response {
     error: Option<String>,
 }
 
-/// Run `future` from a synchronous caller inside this program's runtime.
+/// Run `future` from a synchronous caller inside this program's runtime, or,
+/// when the caller runs outside any runtime, on one made for this call.
 fn block_on<F: Future>(future: F) -> F::Output {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
-        Err(_) => tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("a runtime for the host process control client")
-            .block_on(future),
+        Err(outside) => match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(runtime) => runtime.block_on(future),
+            Err(error) => panic!(
+                "the host process control client has no runtime to run on ({outside}) and cannot make one: {error}"
+            ),
+        },
     }
 }
 
@@ -110,10 +121,11 @@ fn socket_path(home: Option<&str>) -> Result<PathBuf, String> {
     let path = if let Some(path) = std::env::var_os("STADO_RELEASE_PROXY_SOCKET") {
         PathBuf::from(path)
     } else {
-        let home = home
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-            .ok_or_else(|| "release proxy owner has no HOME".to_string())?;
+        let home = match home {
+            Some(home) => PathBuf::from(home),
+            None => crate::config_file::home()
+                .map_err(|cause| format!("the release proxy control socket has no home to live under: {cause}"))?,
+        };
         home.join(".stado/release-proxy.sock")
     };
     if !path.is_absolute() {
@@ -133,7 +145,7 @@ fn coordinates(state: &Path, bind: &str) -> Result<(PathBuf, SocketAddr), Contro
     let bind: SocketAddr = bind.parse().map_err(|error| {
         ControlClientError::Config(format!("invalid release proxy bind {bind:?}: {error}"))
     })?;
-    if !bind.ip().is_loopback() || bind.port() == 0 {
+    if !bind.ip().is_loopback() || std::num::NonZeroU16::new(bind.port()).is_none() {
         return Err(ControlClientError::Config(
             "release proxy bind must name a nonzero loopback port".to_string(),
         ));

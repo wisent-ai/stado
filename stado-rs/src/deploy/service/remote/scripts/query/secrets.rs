@@ -112,10 +112,10 @@ printf 'Authorization: Bearer %s\\n' \"$token\" > \"$header\" || fail_check 'can
 unset token
 /bin/chmod 600 \"$header\" || fail_check 'cannot protect authorization header'
 if [ \"$post_empty\" = yes ]; then
-  status=$(/usr/bin/curl --silent --show-error --max-time 15 --output \"$response\" --write-out '%{http_code}' --request POST --header 'Content-Type: application/json' --header \"@$header\" --data '{}' \"$probe_url\" 2>\"$error_file\")
+  status=$(/usr/bin/curl --silent --show-error --output \"$response\" --write-out '%{http_code}' --request POST --header 'Content-Type: application/json' --header \"@$header\" --data '{}' \"$probe_url\" 2>\"$error_file\")
   rc=$?
 else
-  status=$(/usr/bin/curl --silent --show-error --max-time 15 --output \"$response\" --write-out '%{http_code}' --header \"@$header\" \"$probe_url\" 2>\"$error_file\")
+  status=$(/usr/bin/curl --silent --show-error --output \"$response\" --write-out '%{http_code}' --header \"@$header\" \"$probe_url\" 2>\"$error_file\")
   rc=$?
 fi
 /bin/rm -f \"$header\" \"$response\" \"$error_file\"

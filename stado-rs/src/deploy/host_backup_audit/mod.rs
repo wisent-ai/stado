@@ -96,7 +96,7 @@ pub async fn audit_host(
     // Every same-size pair is hashed, so the pass takes as long as the replica
     // it reads; it is waited for, not cut off.
     let output = host_channel::run_script_to_completion(&target, &script, runner).await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &output,
             "the host did not classify its replica",

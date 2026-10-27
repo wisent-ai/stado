@@ -60,6 +60,24 @@ pub mod tombstone;
 /// key may be listed, composed, or served — so the marker is declared once
 /// here rather than spelled again at each reader.
 pub const UPLOAD_PART_MARKER: &str = ".__stado_upload/";
+
+/// The name of one staged part under `<key>.__stado_upload/<upload id>/`:
+/// its index zero-padded to a fixed width, so parts list in order. Writers
+/// (`put`, the S3 multipart stage) and readers (composition, the deletion
+/// authorizer) share this one spelling.
+pub fn upload_part_name(index: u32) -> String {
+    format!("{index:08}")
+}
+
+/// Whether `name` is exactly the name [`upload_part_name`] gives some index:
+/// digits only, at the padded width, so a staged key is recognised by the
+/// shape its writer gave it and not by any looser pattern.
+pub fn is_upload_part_name(name: &str) -> bool {
+    match name.parse::<u32>() {
+        Ok(index) => upload_part_name(index) == name,
+        Err(_not_an_index) => false,
+    }
+}
 pub use azure_blob::AzureBlobBackend;
 pub use contract::{BlobBackend, BlobInfo, ChangeWatch, Listing, StorageError, VersionedText};
 pub use gcs::GcsBackend;

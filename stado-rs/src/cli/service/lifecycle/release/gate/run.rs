@@ -20,7 +20,7 @@ pub(crate) async fn release(
     let requested_supersede_unit = options
         .supersede_unit
         .or(automatic_supersede_unit.as_deref());
-    if options.require_release_version && options.readiness_url.is_none() {
+    if options.require_release_version && options.readiness.is_none() {
         return Err(CmdError::usage(
             "--require-release-version requires --readiness-url",
         ));
@@ -34,9 +34,14 @@ pub(crate) async fn release(
     let runner = production_runner();
     // Before anything is installed or restarted: work the running service
     // says a restart would end keeps this pass from touching the unit.
-    if let Some(url) = options.readiness_url {
-        let in_flight =
-            in_flight_work(&target, url, options.readiness_timeout_seconds, &runner).await?;
+    if let Some(readiness) = options.readiness {
+        let in_flight = in_flight_work(
+            &target,
+            readiness.url,
+            readiness.window_seconds.get(),
+            &runner,
+        )
+        .await?;
         if !in_flight.is_empty() {
             return Ok(ReleaseOutcome::Deferred(in_flight));
         }
@@ -155,13 +160,13 @@ pub(crate) async fn release(
     .map_err(click);
     let activation = match restart {
         Ok(report) if report.succeeded("restarted") => {
-            if let Some(url) = options.readiness_url {
+            if let Some(readiness) = options.readiness {
                 let expected = options.require_release_version.then_some(options.version);
                 wait_for_service_readiness(
                     &target,
-                    url,
+                    readiness.url,
                     expected,
-                    options.readiness_timeout_seconds,
+                    readiness.window_seconds.get(),
                     &runner,
                 )
                 .await
@@ -253,7 +258,7 @@ pub(crate) async fn release(
         bundle.previous_version.as_deref(),
         if supersede_unit.is_some() {
             "service readiness passed; superseded user LaunchAgent removed"
-        } else if options.readiness_url.is_some() {
+        } else if options.readiness.is_some() {
             "service restart and readiness passed"
         } else {
             "service restarted; no readiness endpoint was requested"
@@ -270,14 +275,14 @@ pub(crate) async fn release(
         "artifact_sha256": bundle.artifact.artifact_sha256,
         "artifact_directory": installed_directory,
         "status": "released",
-        "readiness": if options.readiness_url.is_some() { "passed" } else { "unit-running" },
+        "readiness": if options.readiness.is_some() { "passed" } else { "unit-running" },
         "superseded_unit": supersede_unit,
     });
     if options.emit {
         if options.json {
             print_json(&report)?;
         } else {
-            let readiness = if options.readiness_url.is_some() {
+            let readiness = if options.readiness.is_some() {
                 "restart and readiness passed"
             } else {
                 "unit restarted; readiness was not requested"

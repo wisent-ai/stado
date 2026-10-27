@@ -73,16 +73,26 @@ pub(crate) fn parse_machine_api_clients(
             &format!("machine_api.clients.{name}"),
             &mut problems,
         );
-        let item = entry
-            .get("item")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        // The item name is derived, not chosen; a client without one, or
+        // with one of another type, is named as such, not as a wrong name.
         let expected_item = format!("{name}-machine-api");
-        if item != expected_item {
-            problems.push(format!(
-                "machine_api.clients.{name}.item must be {expected_item:?}"
-            ));
+        match entry.get("item") {
+            Some(Value::String(item)) if *item == expected_item => {}
+            Some(Value::String(item)) => {
+                problems.push(format!(
+                    "machine_api.clients.{name}.item must be {expected_item:?}, not {item:?}"
+                ));
+            }
+            Some(other) => {
+                problems.push(format!("machine_api.clients.{name}.item must be the string {expected_item:?}, not {other}"));
+            }
+            None => {
+                problems.push(format!(
+                    "machine_api.clients.{name}.item is required and must be {expected_item:?}"
+                ));
+            }
         }
+        let item = expected_item.as_str();
         if !items.insert(item.to_string()) {
             problems.push(format!(
                 "machine_api.clients maps more than one client to item {item:?}"
@@ -163,19 +173,28 @@ pub(crate) fn parse_machine_api_clients(
 
 static MACHINE_API_CLIENTS: LazyLock<Result<BTreeMap<String, MachineApiClient>, Vec<String>>> =
     LazyLock::new(|| {
-        let configured = match std::env::var("WC_MACHINE_API_CLIENTS")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    return Err(vec![format!(
-                        "WC_MACHINE_API_CLIENTS must be a JSON object: {error}"
-                    )])
+        // `WC_MACHINE_API_CLIENTS` overrides the config file's block when
+        // it is set and not blank; unset or blank, the file is read. A value
+        // that is not Unicode cannot be JSON and is refused as such.
+        let configured = match std::env::var("WC_MACHINE_API_CLIENTS") {
+            Ok(encoded) if !encoded.trim().is_empty() => {
+                match serde_json::from_str::<Value>(&encoded) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        return Err(vec![format!(
+                            "WC_MACHINE_API_CLIENTS must be a JSON object: {error}"
+                        )])
+                    }
                 }
-            },
-            None => crate::config_file::get("machine_api.clients"),
+            }
+            Ok(_) | Err(std::env::VarError::NotPresent) => {
+                crate::config_file::get("machine_api.clients")
+            }
+            Err(std::env::VarError::NotUnicode(raw)) => {
+                return Err(vec![format!(
+                    "WC_MACHINE_API_CLIENTS must be a JSON object, and is not Unicode: {raw:?}"
+                )])
+            }
         };
         parse_machine_api_clients(configured.as_ref())
     });

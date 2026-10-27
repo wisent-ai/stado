@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 
-use super::helpers::str_list;
+use super::helpers::DatasetSpec;
 use super::ActivationDatasetAdapter;
 use crate::artifacts::adapters::ArtifactAdapter;
 use crate::artifacts_models::{ArtifactManifest, VerificationReport};
@@ -40,24 +40,12 @@ impl ArtifactAdapter for ActivationDatasetAdapter {
                 Map::new(),
             );
         };
-        // Python validates models/raw/aggregated BEFORE the network call;
-        // a cheap pre-check avoids listing the repo for a malformed spec.
-        let structural = {
-            let mut issues = Vec::new();
-            if str_list(spec, "models").is_empty() {
-                issues.push("activation_dataset.models must be a non-empty list".to_string());
-            }
-            if !spec.get("raw").is_some_and(Value::is_object) {
-                issues.push("activation_dataset.raw must be an object".to_string());
-            }
-            if !spec.get("aggregated").is_some_and(Value::is_object) {
-                issues.push("activation_dataset.aggregated must be an object".to_string());
-            }
-            issues
+        // The specification is read before the network call: a malformed one
+        // is named without listing the repository.
+        let spec = match DatasetSpec::read(spec) {
+            Ok(spec) => spec,
+            Err(issues) => return self.report(false, issues, Map::new()),
         };
-        if !structural.is_empty() {
-            return self.report(false, structural, Map::new());
-        }
         let files: HashSet<String> = match (self.tree_fetcher)(repo, revision).await {
             Ok(files) => files.into_iter().collect(),
             Err(exc) => {
@@ -70,6 +58,6 @@ impl ArtifactAdapter for ActivationDatasetAdapter {
                 );
             }
         };
-        self.inventory_report(spec, &files)
+        self.inventory_report(&spec, &files)
     }
 }

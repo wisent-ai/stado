@@ -51,7 +51,7 @@ const PUBLISHED_BY: &str = "stado route placement publish";
 /// [`PUBLISHED_BY`] for the host-side reconciler, the worker role.
 pub(crate) const RECONCILED_BY: &str = "stado serve --worker reconcile-placement-policy";
 
-/// The one document shape the worker's loader parses (`schema_version must be
-/// 1`, `placement-policy.ts`). Publishing anything else delivers a file the
-/// consumer refuses.
+/// The one document shape the worker's loader parses (`placement-policy.ts`
+/// in Weles); publishing anything else delivers a file the consumer refuses:
+/// <https://stado.wisent.com/docs/capabilities/route>.
 const POLICY_SCHEMA_VERSION: u64 = 1;

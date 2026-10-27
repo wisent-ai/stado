@@ -17,7 +17,7 @@ use crate::cli::service::commands::spec::unit_inputs::credentials::{
 pub(crate) async fn dispatch(command: CredentialCommands) -> Result<(), CmdError> {
     match command {
         CredentialCommands::Grant { command } => grant(command).await,
-        CredentialCommands::TokenFile {
+        CredentialCommands::Bearer {
             command:
                 ServiceTokenFileCommands::Sync {
                     name,

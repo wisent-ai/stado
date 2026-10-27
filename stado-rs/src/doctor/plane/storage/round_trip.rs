@@ -60,9 +60,11 @@ pub(in crate::doctor) async fn check_storage_round_trip(
     // leaks an object on every failing run is worse than no doctor. Delete
     // is idempotent, so running it after a failed write costs nothing.
     let written = store.upload_text(&path, &payload).await;
-    let read_back = match written {
+    let read_back = match &written {
         Ok(()) => Some(store.download_text(&path).await),
-        Err(_) => None,
+        // Nothing was written, so there is nothing to read back; the write's
+        // own error is reported below.
+        Err(_write_reported_below) => None,
     };
     let cleaned = store.delete_blob(&path).await;
 

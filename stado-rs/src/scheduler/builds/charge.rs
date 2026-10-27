@@ -74,7 +74,7 @@ pub async fn charge(
         return Ok(());
     }
     let approved = if let Some(refusal) = budget.refusal(wanted, asked_by) {
-        let Some(intent) = intent.filter(|_| matches!(builds.as_slice(), [_])) else {
+        let Some(intent) = intent.filter(|_intent| matches!(builds.as_slice(), [_])) else {
             return Err(CmdError::refused(refusal));
         };
         Some(

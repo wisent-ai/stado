@@ -6,20 +6,32 @@
 //! keeps in `~/.stado/<name>-database-client-skarbiec-token` and every host
 //! running the product holds a copy of. The crate reads `pooler_url` and, for
 //! a server, `ca_certificate`; a Postgres database is opened on its
-//! `session_url`. A field the client may not read answers 403 and the product
-//! cannot start. This widens the client's grant on the vault owner to exactly
-//! those fields, keeping its bearer, so no host's copy has to be synced again.
+//! `session_url`; a consumer on the provider's client library reads
+//! `rest_url` and a key. A field the client may not read answers 403 and the
+//! product cannot start. This widens the client's grant on the vault owner to
+//! exactly those fields, keeping its bearer, so no host's copy has to be
+//! synced again.
 
 use serde_json::json;
 
 use super::writes::report_mutation;
 use super::CmdError;
 
-/// The fields `stado_database` reads for an engine.
+/// The fields `stado_database` reads for an engine, and for Postgres the
+/// REST API's coordinates a consumer built on the hosted provider's client
+/// library reads instead (`rest_url`, `anon_key`, `service_role_key`), which
+/// `stado database rest place` writes onto the same item.
 fn client_fields(engine: &str) -> &'static [&'static str] {
     match engine {
         "sqlite" => &["pooler_url"],
-        "postgres" => &["pooler_url", "session_url", "ca_certificate"],
+        "postgres" => &[
+            "pooler_url",
+            "session_url",
+            "ca_certificate",
+            "rest_url",
+            "anon_key",
+            "service_role_key",
+        ],
         _ => &["pooler_url", "ca_certificate"],
     }
 }

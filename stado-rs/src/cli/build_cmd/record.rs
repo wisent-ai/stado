@@ -43,22 +43,27 @@ pub(crate) async fn record_build(
     )
     .await?;
     let now = Utc::now().to_rfc3339();
-    let mut build = load_build(&id).await?.unwrap_or(BuildRun {
-        schema_version: 1,
-        build_id: id.clone(),
-        product: m.product.clone(),
-        version: version.to_owned(),
-        source_commit: reading.commit.clone(),
-        source_sha256: staged.source_sha256.clone(),
-        source_uri: staged.source_uri.clone(),
-        manifest_sha256: staged.manifest_sha256.clone(),
-        manifest_uri: build_uri(&m.product, &id, "manifest.json"),
-        state: BuildRunState::Waiting,
-        platforms: BTreeMap::new(),
-        failure: None,
-        created_at: now.clone(),
-        updated_at: now,
-    });
+    let mut build = match load_build(&id).await? {
+        Some(recorded) => recorded,
+        // No build is recorded under this id yet: this is its first record,
+        // and the identity checks below hold for it by construction.
+        None => BuildRun {
+            schema_version: crate::release_pipeline::SCHEMA_VERSION,
+            build_id: id.clone(),
+            product: m.product.clone(),
+            version: version.to_owned(),
+            source_commit: reading.commit.clone(),
+            source_sha256: staged.source_sha256.clone(),
+            source_uri: staged.source_uri.clone(),
+            manifest_sha256: staged.manifest_sha256.clone(),
+            manifest_uri: build_uri(&m.product, &id, "manifest.json"),
+            state: BuildRunState::Waiting,
+            platforms: BTreeMap::new(),
+            failure: None,
+            created_at: now.clone(),
+            updated_at: now,
+        },
+    };
     if build.source_commit != reading.commit
         || build.source_sha256 != staged.source_sha256
         || build.manifest_sha256 != staged.manifest_sha256

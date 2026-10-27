@@ -23,7 +23,7 @@ pub(crate) enum IdentityCommands {
     /// Capture an identity provider's sign-in challenge on the verified
     /// account holder and store it on this worker.
     #[command(hide = true)]
-    RelayChallenge {
+    Relay {
         /// The identity provider whose challenge is relayed.
         #[arg(long, value_enum)]
         provider: IdentityProvider,
@@ -40,7 +40,7 @@ pub(crate) enum IdentityCommands {
     /// Issue an identity provider's login capabilities in the worker's own
     /// Weles broker.
     #[command(hide = true)]
-    IssueCapabilities {
+    Issue {
         /// The identity provider whose login the capabilities redeem.
         #[arg(long, value_enum)]
         provider: IdentityProvider,

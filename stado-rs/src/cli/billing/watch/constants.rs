@@ -12,4 +12,5 @@ pub(super) const SENDER_DOMAINS: &[&str] = &[
     "google.com",
     "googlecloud.com",
     "payments-noreply.google.com",
+    "supabase.com",
 ];

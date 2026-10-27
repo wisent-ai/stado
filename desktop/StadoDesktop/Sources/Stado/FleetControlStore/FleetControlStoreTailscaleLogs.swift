@@ -132,10 +132,24 @@ extension FleetControlStore {
             return "Stado did not classify this host-exec operation as read-only."
         }
         guard result.ok, receipt.status == "ok" else {
-            return nonEmpty(result.standardError)
-                ?? receipt.error.flatMap(nonEmpty)
-                ?? nonEmpty(receipt.standardError)
-                ?? "The retained-log command exited with code \(receipt.exitCode) and printed no error."
+            // Every sentence the failure produced, in the order it was
+            // produced: the bridge's standard error, the receipt's error, and
+            // the command's own standard error. None is dropped in favour of
+            // another, since each names a different stage.
+            var sentences: [String] = []
+            if let bridge = nonEmpty(result.standardError) {
+                sentences.append("bridge: \(bridge)")
+            }
+            if let error = receipt.error, let error = nonEmpty(error) {
+                sentences.append("receipt: \(error)")
+            }
+            if let command = nonEmpty(receipt.standardError) {
+                sentences.append("command: \(command)")
+            }
+            if sentences.isEmpty {
+                return "The retained-log command exited with code \(receipt.exitCode) (receipt status \(receipt.status)) and printed no error."
+            }
+            return "The retained-log command exited with code \(receipt.exitCode) (receipt status \(receipt.status)): \(sentences.joined(separator: "; "))"
         }
         return nil
     }

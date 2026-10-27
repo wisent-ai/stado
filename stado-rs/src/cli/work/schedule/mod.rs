@@ -6,73 +6,29 @@
 
 use chrono::Utc;
 
+use crate::cli::work::schedule::held::store as open_store;
 use crate::models::isoformat_utc;
-use crate::queue::JobStorage;
 use crate::schedules::{self, compute_next_due, cron_is_valid, read_schedule, Schedule};
 
 use crate::cli::CmdError;
 
 mod create;
+mod declare;
+mod held;
+mod list;
 pub use create::create;
+pub use list::list;
 
 /// The id a schedule is stored under, from the id a caller names it by.
 /// `schedule create --id <uuid>` stores the uuid as `sch-<hex>`, the form
 /// every schedule id takes, so every verb takes the same uuid and finds the
 /// schedule create made from it; an id in the stored form is taken as it is.
 pub fn stored_id(given: &str) -> String {
-    match uuid::Uuid::parse_str(given.trim()) {
-        Ok(id) => format!("sch-{}", id.simple()),
-        Err(_) => given.to_owned(),
+    // A name that is not a uuid is already in the stored form.
+    if let Ok(id) = uuid::Uuid::parse_str(given.trim()) {
+        return format!("sch-{}", id.simple());
     }
-}
-
-/// `schedule list`: all schedules, sorted by next run (paused last).
-pub async fn list(json: bool) -> Result<(), CmdError> {
-    let store = JobStorage::new().await?;
-    let mut scheds = schedules::list_schedules(&store).await?;
-    // Python sort key: s.next_due_at or "~" — plain string sort, paused
-    // ("" → "~") last.
-    scheds.sort_by_key(|s| {
-        if s.next_due_at.is_empty() {
-            "~".to_string()
-        } else {
-            s.next_due_at.clone()
-        }
-    });
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&scheds).map_err(CmdError::from)?
-        );
-        return Ok(());
-    }
-    if scheds.is_empty() {
-        println!("(no schedules)");
-        return Ok(());
-    }
-    println!(
-        "{:<14} {:<3} {:<16} {:<14} {:<28} {:>5} COMMAND",
-        "ID", "EN", "CRON", "TZ", "NEXT RUN (UTC)", "FIRED"
-    );
-    println!("{}", "-".repeat(120));
-    let count = scheds.len();
-    for s in &scheds {
-        let en = if s.enabled { "Y" } else { "n" };
-        // Whole values; the columns pad short ones and the command runs last.
-        let cmd = s.command.split_whitespace().collect::<Vec<_>>().join(" ");
-        let tz = &s.tz;
-        let next = if s.next_due_at.is_empty() {
-            "-"
-        } else {
-            s.next_due_at.as_str()
-        };
-        println!(
-            "{:<14} {:<3} {:<16} {:<14} {:<28} {:>5} {}",
-            s.schedule_id, en, s.cron, tz, next, s.fire_count, cmd
-        );
-    }
-    println!("\n{count} schedule(s)");
-    Ok(())
+    given.to_owned()
 }
 
 /// The caller named a schedule the store does not hold.
@@ -85,7 +41,7 @@ fn unknown_schedule(schedule_id: &str) -> CmdError {
 /// waiting past its next run carries `overdue`: why it has not fired, read
 /// against the coordinator's last recorded schedule sweep.
 pub async fn show(schedule_id: &str, json: bool) -> Result<(), CmdError> {
-    let store = JobStorage::new().await?;
+    let store = open_store().await?;
     let Some(s) = read_schedule(&store, schedule_id)
         .await?
         .filter(|schedule| !schedule.deleted)
@@ -106,7 +62,7 @@ pub async fn show(schedule_id: &str, json: bool) -> Result<(), CmdError> {
 /// `schedule rm ID`: delete a schedule (does not affect jobs it already
 /// submitted).
 pub async fn rm(schedule_id: &str) -> Result<(), CmdError> {
-    let store = JobStorage::new().await?;
+    let store = open_store().await?;
     if schedules::delete_schedule(&store, schedule_id).await? {
         println!("deleted schedule {schedule_id}");
         Ok(())
@@ -137,12 +93,19 @@ pub async fn edit(
             "invalid cron expression: '{cron}'"
         )));
     }
-    let store = JobStorage::new().await?;
+    let store = open_store().await?;
     let Some(current) = read_schedule(&store, schedule_id).await? else {
         return Err(unknown_schedule(schedule_id));
     };
-    let new_cron = cron.unwrap_or(&current.cron).to_string();
-    let new_tz = tz.unwrap_or(&current.tz).to_string();
+    // What the caller did not name keeps the schedule's standing value.
+    let new_cron = match cron {
+        Some(cron) => cron.to_string(),
+        None => current.cron.clone(),
+    };
+    let new_tz = match tz {
+        Some(tz) => tz.to_string(),
+        None => current.tz.clone(),
+    };
     let next_due = compute_next_due(&new_cron, Utc::now(), &new_tz)
         .map_err(|exc| CmdError::usage(format!("could not compute next run ({new_tz}): {exc}")))?;
     let next_due = isoformat_utc(next_due);
@@ -170,7 +133,7 @@ pub async fn edit(
 
 /// Python `_set_enabled`.
 async fn set_enabled(schedule_id: &str, enabled: bool) -> Result<Schedule, CmdError> {
-    let store = JobStorage::new().await?;
+    let store = open_store().await?;
     let Some(s) = read_schedule(&store, schedule_id).await? else {
         return Err(unknown_schedule(schedule_id));
     };
@@ -208,7 +171,7 @@ pub async fn run(schedule_id: &str, retry_token: &str, json: bool) -> Result<(),
     if retry_token.trim().is_empty() {
         return Err(CmdError::usage("--retry-token must not be empty"));
     }
-    let store = JobStorage::new().await?;
+    let store = open_store().await?;
     if read_schedule(&store, schedule_id).await?.is_none() {
         return Err(unknown_schedule(schedule_id));
     }

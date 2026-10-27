@@ -26,9 +26,12 @@ pub(super) fn version_queries(home: &str) -> Result<BTreeMap<String, VersionQuer
         else {
             continue;
         };
-        let root = root
-            .strip_prefix("$HOME/")
-            .map_or_else(|| root.to_string(), |relative| format!("{home}/{relative}"));
+        // A `$HOME`-relative root is resolved under the host's home; an
+        // absolute root is used as declared.
+        let root = match root.strip_prefix("$HOME/") {
+            Some(relative) => format!("{home}/{relative}"),
+            None => root.to_string(),
+        };
         queries.insert(
             format!("{root}/{}", product.name),
             VersionQuery {

@@ -22,17 +22,19 @@ pub(crate) fn release_object_namespace(namespace: &str) -> bool {
 /// the chunked uploader can be removed, and it is authenticated against the
 /// final target rather than against an independently chosen prefix.
 pub(crate) fn release_upload_target_key(key: &str) -> Option<&str> {
-    let (target, suffix) = key.split_once(".__stado_upload/")?;
+    let (target, suffix) = key.split_once(crate::queue::UPLOAD_PART_MARKER)?;
     let mut parts = suffix.split('/');
     let upload_id = parts.next()?;
     let chunk_index = parts.next()?;
+    // The upload id is the hex of a SHA-256, so its length is the digest's
+    // byte count doubled; the chunk index is the part name its writer gave it.
+    let digest_bytes = <sha2::Sha256 as sha2::Digest>::output_size();
     if target.is_empty()
-        || upload_id.len() != 64
+        || upload_id.len() != digest_bytes + digest_bytes
         || !upload_id
             .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        || chunk_index.len() != 8
-        || !chunk_index.bytes().all(|byte| byte.is_ascii_digit())
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || !crate::queue::is_upload_part_name(chunk_index)
         || parts.next().is_some()
     {
         return None;
@@ -147,11 +149,18 @@ pub(crate) async fn authorize_release(
             refusals.join("; ")
         ))
     })?;
-    let policy = if list {
-        config::release_publisher_for_list(key_or_prefix).map(|(policy, _)| policy)
+    let lookup = if list {
+        config::release_publisher_for_list(key_or_prefix)
+            .map(|found| found.map(|(policy, _)| policy))
     } else {
         config::release_publisher_for_key(key_or_prefix)
     };
+    // A declaration that cannot be read is the authority being unavailable,
+    // which answers 503, never "no publisher", which answers 401 and sends
+    // the operator to declare a publisher that may already be declared.
+    let policy = lookup.map_err(|refusal| {
+        AuthorityUnavailable::new(format!("release_api.publishers is refused: {refusal}"))
+    })?;
     let Some(policy) = policy else {
         // The key, not the bearer: nothing was even looked up to compare
         // against, and the repair is a `release_api.publishers` entry.

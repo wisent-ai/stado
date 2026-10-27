@@ -7,11 +7,14 @@ use super::super::constants::PHASE_UNREPORTED;
 
 /// The word [`RolloutPhase`] publishes for itself, so the phase this command
 /// prints is the phase the state file and the published status row spell.
+/// Every phase is a unit variant renamed to snake case, so `json!` renders
+/// it as a string; a variant that ever serialized otherwise would be a
+/// phase the status row cannot spell, and is printed as unreported.
 pub(super) fn phase_word(phase: RolloutPhase) -> String {
-    serde_json::to_value(phase)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_else(|| PHASE_UNREPORTED.to_string())
+    match serde_json::json!(phase).as_str() {
+        Some(word) => word.to_string(),
+        None => PHASE_UNREPORTED.to_string(),
+    }
 }
 
 /// Is a candidate staged, started or under observation right now?

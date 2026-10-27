@@ -22,7 +22,7 @@ static SKARBIEC_URL: LazyLock<Result<String, String>> = LazyLock::new(|| {
         "WC_SKARBIEC_URL",
         "secrets.skarbiec.url",
         "",
-    ));
+    ))?;
     if !configured.trim().is_empty() {
         return Ok(configured);
     }
@@ -64,7 +64,9 @@ static SKARBIEC_VAULT_FILE: LazyLock<String> = LazyLock::new(|| {
 pub fn skarbiec_url() -> &'static str {
     match SKARBIEC_URL.as_ref() {
         Ok(url) => url,
-        Err(_) => "",
+        // The cause stays in the static and `skarbiec_url_absent` hands
+        // it on; the empty address is what every caller tests for.
+        Err(_explained_by_skarbiec_url_absent) => "",
     }
 }
 

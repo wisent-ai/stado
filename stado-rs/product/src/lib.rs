@@ -72,6 +72,16 @@ pub struct Build {
     pub product: &'static str,
 }
 
+/// The role whose item holds the fleet's Apple certificate and key: the vault
+/// item carrying `stado:role:macos-development-signing`. It signs every product
+/// installation unless the operator names another role through
+/// `WISENT_CODESIGN_ROLE` or supplies `WISENT_CODESIGN_CERTIFICATE_PEM`.
+///
+/// A role says what the secret is for, never which item holds it, so renaming
+/// or replacing the item changes nothing here; it is the same role the
+/// release manifests name in `secret_env`.
+pub const SIGNING_ROLE: &str = "macos-development-signing";
+
 static BUILD: OnceLock<Build> = OnceLock::new();
 
 /// Declare the compiled Stado identity before any product operation records

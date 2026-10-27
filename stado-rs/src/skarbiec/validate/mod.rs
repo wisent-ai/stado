@@ -97,11 +97,20 @@ pub async fn validate_integration_verifier() -> Result<usize, SkarbiecError> {
 }
 
 pub async fn validate_integration_provider(domain: &str) -> Result<usize, SkarbiecError> {
-    let policy = crate::config::integration_provider(domain).ok_or_else(|| {
-        SkarbiecError::Deployment(format!(
-            "integration provider domain {domain:?} is not configured"
-        ))
-    })?;
+    let policy = match crate::config::integration_provider(domain) {
+        Ok(Some(policy)) => policy,
+        Ok(None) => {
+            return Err(SkarbiecError::Deployment(format!(
+                "integration provider domain {domain:?} is not configured"
+            )))
+        }
+        Err(problems) => {
+            return Err(SkarbiecError::Deployment(format!(
+                "invalid integration.providers: {}",
+                problems.join("; ")
+            )))
+        }
+    };
     let provider = Client::stado()?;
     let expected = policy.items().iter().cloned().collect::<BTreeSet<_>>();
     let visible = provider

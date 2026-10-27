@@ -6,7 +6,7 @@
 //! let a second job in on memory the first one already took.
 
 use crate::config::{self, estimate_gpu_memory};
-use crate::providers::local::helpers::MODEL_RE;
+use crate::primitives::procutil::pid_alive;
 use crate::providers::local::probe::gpu;
 use crate::providers::local::Slot;
 use crate::queue::{JobStorage, StorageError};
@@ -22,10 +22,8 @@ pub fn slot_is_exclusive(slot: &Slot) -> bool {
     if slot.job.exclusive {
         return true;
     }
-    match MODEL_RE.captures(&slot.job.command) {
-        Some(caps) => config::is_exclusive_model(caps[1].trim_matches(['\'', '"'])),
-        None => false,
-    }
+    crate::sizing::model_of(&slot.job.command)
+        .is_some_and(|model| config::is_exclusive_model(&model))
 }
 
 /// Best known VRAM footprint for a running slot. Python `_slot_vram`.
@@ -39,33 +37,47 @@ pub async fn slot_vram(
     sizing: &Sizing,
     store: &JobStorage,
 ) -> Result<i64, StorageError> {
-    let declared = slot
-        .job
-        .gpu_mem_gb
-        .max(estimate_gpu_memory(&slot.job.command, sizing, store).await?);
-    let live = slot_live_vram_gb(slot).await;
-    Ok(declared.max(live).max(slot.peak_vram_gb))
+    let declared = estimate_gpu_memory(&slot.job.command, sizing, store)
+        .await?
+        .into_iter()
+        .fold(slot.job.gpu_mem_gb, i64::max);
+    let counted = declared.max(slot.peak_vram_gb);
+    Ok(match slot_live_vram_gb(slot).await {
+        Ok(Some(live)) => counted.max(live),
+        Ok(None) => counted,
+        // The declared and peak figures still bound the slot; the live one
+        // is missing, and that is said rather than read as no use.
+        Err(cause) => {
+            eprintln!(
+                "{}: live VRAM unread, admission counts its declared and peak figure: {cause}",
+                slot.job.job_id
+            );
+            counted
+        }
+    })
 }
 
-/// Python `_slot_live_vram_gb`: 0 when the slot has no pid or the probe is
-/// unreadable (Python's broad `except Exception` / `max(0, ...)`).
-pub async fn slot_live_vram_gb(slot: &Slot) -> i64 {
-    let Some(pid) = slot.pid else { return 0 };
-    gpu::smi_job_used_gb(pid).await.max(0)
-}
-
-/// `kill(pid, 0)` liveness check, standing in for Python's
-/// `proc.poll() is None`.
-pub(crate) fn pid_alive(pid: i32) -> bool {
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
+/// What nvidia-smi attributes to the slot's process tree now; `None` when
+/// the slot has no pid or its tree holds no GPU memory yet, and why when the
+/// driver could not be read.
+pub async fn slot_live_vram_gb(slot: &Slot) -> Result<Option<i64>, String> {
+    let Some(pid) = slot.pid else {
+        return Ok(None);
+    };
+    Ok(gpu::smi_job_used_gb(pid).await?.filter(|used| used.is_positive()))
 }
 
 /// Whether any process of the group `pgid` leads still exists. A slot's
 /// workload is spawned as its own process group, so its build or training
 /// keeps the group alive after the launching shell exits; liveness keyed to
-/// the shell's pid alone ended when the launcher did.
+/// the shell's pid alone ended when the launcher did. `EPERM` is a group
+/// whose processes belong to somebody else, which is still alive, as
+/// [`crate::primitives::procutil::pid_alive`] answers for one pid.
 pub(crate) fn group_alive(pgid: i32) -> bool {
-    nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None).is_ok()
+    match nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None) {
+        Ok(()) => true,
+        Err(errno) => errno == nix::errno::Errno::EPERM,
+    }
 }
 
 /// True when a GPU slot is live but CUDA allocation is not visible yet.
@@ -81,9 +93,13 @@ pub async fn slot_waiting_for_vram(
     if !pid_alive(pid) {
         return Ok(false);
     }
-    let declared = slot
-        .job
-        .gpu_mem_gb
-        .max(estimate_gpu_memory(&slot.job.command, sizing, store).await?);
-    Ok(declared > 0 && slot_live_vram_gb(slot).await <= 0)
+    let declared = estimate_gpu_memory(&slot.job.command, sizing, store)
+        .await?
+        .into_iter()
+        .fold(slot.job.gpu_mem_gb, i64::max);
+    Ok(declared.is_positive()
+        && slot_live_vram_gb(slot)
+            .await
+            .map_err(StorageError::Other)?
+            .is_none())
 }

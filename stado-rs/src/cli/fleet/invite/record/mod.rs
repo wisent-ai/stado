@@ -5,6 +5,8 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::primitives::tally::Tally;
+
 pub(in crate::cli::fleet::invite) mod listing;
 pub(in crate::cli::fleet::invite) mod store;
 pub(in crate::cli::fleet::invite) mod token;
@@ -30,14 +32,12 @@ pub const MODE_ONLINE: &str = "online";
 pub const MODE_OFFLINE: &str = "offline";
 
 /// A stored invite. `secret_sha256` is the only trace of the secret anywhere,
-/// and it is empty for exactly one reason: an offline invite never had a
-/// secret. An empty digest is not a weak digest — no input hashes to it, so a
-/// presented token cannot match one, which is the same refusal an unknown id
-/// gets.
+/// and it is absent for exactly one reason: an offline invite never had a
+/// secret, so no presented token can be compared with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invite {
     pub id: String,
-    pub secret_sha256: String,
+    pub secret_sha256: Option<String>,
     pub target_name: String,
     pub created_at: String,
     pub expires_at: String,
@@ -64,7 +64,9 @@ pub fn secret_digest(secret: &str) -> String {
 ///
 /// `secret_sha256` is required of an online invite and refused of an offline
 /// one: a stored offline object carrying a digest would mean something minted
-/// a secret for a mode that has nothing to present it to.
+/// a secret for a mode that has nothing to present it to. Every other member
+/// is required; one that is missing is refused by name, never read as a
+/// count or a writer nobody recorded.
 pub fn parse_invite(document: &Value) -> Result<Invite, String> {
     let field = |name: &str| -> Result<String, String> {
         document
@@ -74,14 +76,14 @@ pub fn parse_invite(document: &Value) -> Result<Invite, String> {
             .map(str::to_string)
             .ok_or_else(|| format!("invite object has no '{name}'"))
     };
-    let counter = |name: &str, when_absent: u64| -> u64 {
+    let counter = |name: &str| -> Result<u64, String> {
         document
             .get(name)
             .and_then(Value::as_u64)
-            .unwrap_or(when_absent)
+            .ok_or_else(|| format!("invite object has no whole-number '{name}'"))
     };
     let mode = match document.get("mode").and_then(Value::as_str) {
-        None | Some("") | Some(MODE_ONLINE) => MODE_ONLINE.to_string(),
+        None | Some(MODE_ONLINE) => MODE_ONLINE.to_string(),
         Some(MODE_OFFLINE) => MODE_OFFLINE.to_string(),
         Some(other) => return Err(format!("invite object has an unknown mode '{other}'")),
     };
@@ -89,9 +91,9 @@ pub fn parse_invite(document: &Value) -> Result<Invite, String> {
         if document.get("secret_sha256").is_some() {
             return Err("an offline invite object must carry no 'secret_sha256'".to_string());
         }
-        String::new()
+        None
     } else {
-        field("secret_sha256")?
+        Some(field("secret_sha256")?)
     };
     Ok(Invite {
         id: field("id")?,
@@ -99,14 +101,10 @@ pub fn parse_invite(document: &Value) -> Result<Invite, String> {
         target_name: field("target_name")?,
         created_at: field("created_at")?,
         expires_at: field("expires_at")?,
-        uses_allowed: counter("uses_allowed", 1),
-        uses_spent: counter("uses_spent", 0),
+        uses_allowed: counter("uses_allowed")?,
+        uses_spent: counter("uses_spent")?,
         status: field("status")?,
-        created_by: document
-            .get("created_by")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
+        created_by: field("created_by")?,
         mode,
     })
 }
@@ -127,8 +125,8 @@ pub fn invite_document(invite: &Invite) -> Value {
         "created_by": invite.created_by,
         "mode": invite.mode,
     });
-    if !invite.secret_sha256.is_empty() {
-        document["secret_sha256"] = Value::String(invite.secret_sha256.clone());
+    if let Some(digest) = &invite.secret_sha256 {
+        document["secret_sha256"] = Value::String(digest.clone());
     }
     document
 }
@@ -145,12 +143,12 @@ pub fn effective_status(invite: &Invite, now: DateTime<Utc>) -> &'static str {
     if invite.status == STATUS_SPENT || invite.uses_spent >= invite.uses_allowed {
         return STATUS_SPENT;
     }
+    // An expiry still ahead keeps the invite open. An unparsable expiry is
+    // not a permit: reading it as "never expires" would turn one corrupt
+    // field into an eternal credential, so it reads as expired.
     match DateTime::parse_from_rfc3339(&invite.expires_at) {
-        Ok(deadline) if now >= deadline.with_timezone(&Utc) => STATUS_EXPIRED,
-        // An unparsable deadline is not a permit. Treating it as "never
-        // expires" would turn one corrupt field into an eternal credential.
-        Err(_) => STATUS_EXPIRED,
-        Ok(_) => STATUS_OPEN,
+        Ok(expires) if now < expires.with_timezone(&Utc) => STATUS_OPEN,
+        _ => STATUS_EXPIRED,
     }
 }
 
@@ -159,7 +157,7 @@ pub fn effective_status(invite: &Invite, now: DateTime<Utc>) -> &'static str {
 /// through this, so a use is counted one way.
 pub fn with_one_use_spent(invite: &Invite) -> Invite {
     let mut spent = invite.clone();
-    spent.uses_spent = spent.uses_spent.saturating_add(1);
+    spent.uses_spent.tally();
     if spent.uses_spent >= spent.uses_allowed {
         spent.status = STATUS_SPENT.to_string();
     }

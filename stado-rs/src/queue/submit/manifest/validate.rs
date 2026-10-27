@@ -13,6 +13,22 @@ use crate::queue::submit::{
 
 use super::ManifestEntry;
 
+const OUTCOME_FIELDS: &[&str] = &["prefix", "recorded_at", "job"];
+
+/// Lowercase hex of a SHA-256 digest's length, measured from a digest.
+fn lowercase_sha256_hex(value: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    value.len() == hex::encode(Sha256::digest(b"")).len()
+        && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// An RFC 3339 instant the manifest records, refused naming it and why.
+fn recorded_instant(value: &str, what: &str) -> Result<DateTime<Utc>, SubmitError> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|instant| instant.with_timezone(&Utc))
+        .map_err(|error| SubmitError::Validation(format!("{what} {value:?} is not RFC 3339: {error}")))
+}
+
 pub(in crate::queue::submit) fn validate_run_manifest(
     manifest: &Value,
     run_id: &str,
@@ -112,12 +128,7 @@ pub(in crate::queue::submit) fn validate_run_manifest(
     let legacy_request_digest = manifest
         .get("migrated_from_v2_request_digest")
         .and_then(Value::as_str);
-    if legacy_request_digest.is_some_and(|digest| {
-        digest.len() != 64
-            || !digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    }) {
+    if legacy_request_digest.is_some_and(|digest| !lowercase_sha256_hex(digest)) {
         return Err(SubmitError::Validation(format!(
             "run id {run_id} has an invalid v2 identity digest"
         )));
@@ -126,7 +137,11 @@ pub(in crate::queue::submit) fn validate_run_manifest(
     for (index, entry) in entries.iter().enumerate() {
         let command = &commands[index];
         let key = submission_job_key(request_digest, index, command);
-        let identity_digest = legacy_request_digest.unwrap_or(request_digest);
+        // A run migrated from v2 keeps the job identities that request gave it.
+        let identity_digest = match legacy_request_digest {
+            Some(legacy) => legacy,
+            None => request_digest,
+        };
         let identity_key = submission_job_key(identity_digest, index, command);
         let job_id = job_id_from_key(&identity_key);
         if entry.get("command_index").and_then(Value::as_u64) != Some(index as u64)
@@ -204,19 +219,16 @@ pub(in crate::queue::submit) fn validate_run_manifest(
                 .get("outcome")
                 .and_then(Value::as_object)
                 .ok_or_else(|| SubmitError::Validation("terminal entry has no outcome".into()))?;
-            if outcome.len() != 3
-                || !["prefix", "recorded_at", "job"]
-                    .into_iter()
-                    .all(|field| outcome.contains_key(field))
+            if outcome.len() != OUTCOME_FIELDS.len()
+                || !OUTCOME_FIELDS.iter().all(|field| outcome.contains_key(*field))
             {
                 return Err(SubmitError::Validation(
                     "terminal entry outcome has invalid fields".into(),
                 ));
             }
-            let prefix = outcome
-                .get("prefix")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            let Some(prefix) = outcome.get("prefix").and_then(Value::as_str) else {
+                return Err(SubmitError::Validation("terminal outcome prefix is not text".into()));
+            };
             let terminal_job = outcome_job.as_ref().ok_or_else(|| {
                 SubmitError::Validation("terminal entry has no retained job".into())
             })?;
@@ -227,17 +239,12 @@ pub(in crate::queue::submit) fn validate_run_manifest(
                     "terminal entry prefix and retained job state disagree".into(),
                 ));
             }
-            let recorded_at = outcome
-                .get("recorded_at")
-                .and_then(Value::as_str)
-                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                .map(|value| value.with_timezone(&Utc))
-                .ok_or_else(|| {
-                    SubmitError::Validation("terminal outcome recorded_at is invalid".into())
-                })?;
-            if recorded_at < manifest_created_at
-                || recorded_at > Utc::now() + chrono::Duration::minutes(5)
-            {
+            let Some(recorded_raw) = outcome.get("recorded_at").and_then(Value::as_str) else {
+                return Err(SubmitError::Validation("terminal outcome recorded_at is not text".into()));
+            };
+            let recorded_at = recorded_instant(recorded_raw, "terminal outcome recorded_at")?;
+            // No clock-skew allowance is invented: a future outcome is refused.
+            if recorded_at < manifest_created_at || recorded_at > Utc::now() {
                 return Err(SubmitError::Validation(
                     "terminal outcome recorded_at is outside the run lifetime".into(),
                 ));
@@ -257,13 +264,12 @@ pub(in crate::queue::submit) fn validate_run_manifest(
                     .then_some(terminal_job.completed_at.as_deref())
                     .flatten()
             }
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&Utc))
             .ok_or_else(|| {
                 SubmitError::Validation(
                     "terminal retained job has contradictory terminal timestamps".into(),
                 )
             })?;
+            let terminal_at = recorded_instant(terminal_at, "terminal retained job timestamp")?;
             if terminal_at < manifest_created_at || terminal_at > recorded_at {
                 return Err(SubmitError::Validation(
                     "terminal retained job timestamp is outside the outcome lifetime".into(),

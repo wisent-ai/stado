@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use serde_json::{json, Value};
 
 use crate::service_resolution::{self, ResolverAdapter};
@@ -13,6 +15,8 @@ use crate::cli::resolver::report::published::{
 use crate::cli::resolver::report::vault;
 use crate::cli::resolver::report::waiting;
 
+mod authority;
+mod process;
 mod state;
 mod text;
 
@@ -63,8 +67,8 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
     // machine happens to serve itself. So the
     // probe runs only where the binds live, and elsewhere reports that it did
     // not run rather than a measurement of the wrong socket.
-    let local_target = current_target(&document).ok();
-    let binds_are_local = local_target.as_deref() == Some(target.as_str());
+    let local_target = current_target(&document);
+    let binds_are_local = local_target.as_deref() == Ok(target.as_str());
     let api_listening = if binds_are_local {
         Some(bind_listening(&config.api_bind).await)
     } else {
@@ -82,12 +86,14 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
     }
     let authority = probe_authority(&registry, &directory, &target, notice.as_deref()).await;
 
-    let resolver_state = published
+    let resolver_state = match published
         .as_ref()
         .map(|state| state.state.as_str())
         .filter(|state| !state.is_empty())
-        .unwrap_or(RESOLVER_UNPUBLISHED)
-        .to_string();
+    {
+        Some(state) => state.to_string(),
+        None => RESOLVER_UNPUBLISHED.to_string(),
+    };
     let held = published.as_ref().and_then(|state| state.generation);
     let held_age = published
         .as_ref()
@@ -129,41 +135,23 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
             });
         }
     }
-    if !authority.reachable {
-        let mut sentence = format!(
-            "the registry authority {} is unreachable",
-            directory.authority.target
-        );
-        if let Some(detail) = authority.detail.as_deref() {
-            sentence.push_str(": ");
-            sentence.push_str(detail);
-        }
-        blockers.push(sentence);
-    }
-    // An authority that answers, but only after longer than the refresh
-    // interval this resolver declares, cannot have refreshed the snapshot
-    // in time: that wait is the stale snapshot's cause and is said as one.
-    if let Some(seconds) = authority
-        .answered_after_seconds
-        .filter(|seconds| *seconds > config.refresh_seconds)
-    {
-        blockers.push(format!(
-            "the registry authority {} answered `{} resolver snapshot` over SSH only after {seconds}s, \
-             longer than the {}s refresh interval this target declares",
-            directory.authority.target, directory.authority.command, config.refresh_seconds
-        ));
-    }
+    blockers.extend(authority::blockers(
+        &authority,
+        &directory.authority,
+        config.refresh_seconds,
+    ));
+    blockers.extend(authority::store_blocker());
+    blockers.extend(authority::fenced_store_blocker());
     if let Some((held, publishes)) = behind {
         blockers.push(format!(
             "the resolver holds service directory generation {held} and the authority publishes \
              {publishes}"
         ));
     }
-    if past_window {
+    if let Some(age) = held_age.filter(|_age| past_window) {
         blockers.push(format!(
-            "the snapshot the resolver holds is {}s old, past the {}s max-stale window this \
+            "the snapshot the resolver holds is {age}s old, past the {}s max-stale window this \
              target declares",
-            held_age.unwrap_or_default(),
             config.max_stale_seconds
         ));
     }
@@ -208,10 +196,14 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
     // the Oko defect its second stop raised (`runtime::stops`).
     let serve_stops = crate::cli::integrations::runtime::stops::newest_build();
 
+    let pid = published
+        .as_ref()
+        .and_then(|state| NonZeroU32::new(state.pid));
     let report = json!({
         "target": target,
         "state": resolver_state,
-        "pid": published.as_ref().map(|state| state.pid).filter(|pid| *pid != 0),
+        "pid": pid,
+        "process": process::reading(pid.map(NonZeroU32::get), binds_are_local),
         "updated_at": published.as_ref().map(|state| state.updated_at.clone()),
         "api": {"bind": config.api_bind, "listening": api_listening},
         // A null `listening` is a measurement that did not happen, not a
@@ -223,7 +215,10 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
             format!(
                 "not probed: these binds are loopback addresses on {target}, and this command \
                  ran on {}; ask that host with `stado host inventory {target}`",
-                local_target.as_deref().unwrap_or("a host with no registry identity")
+                match &local_target {
+                    Ok(here) => here.clone(),
+                    Err(why) => format!("a host whose registry identity could not be read ({why})"),
+                }
             )
         },
         "adapters": probed
@@ -242,14 +237,19 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
             "generation": authority.generation,
             "detail": authority.detail,
             "answered_after_seconds": authority.answered_after_seconds,
+            "remembered": authority::remembered(&directory.authority),
         },
         "generation": held,
+        "generation_store_version": published.as_ref().and_then(|state| state.store_version.clone()),
+        // The authority the held generation was read from; null when it came
+        // from this host's own registry store.
+        "generation_read_from": published.as_ref().and_then(|state| state.read_from.clone()),
         "generation_age_seconds": held_age,
         "max_stale_seconds": config.max_stale_seconds,
         "stale": stale,
         "registry_staleness_seconds": registry_staleness,
         "reason": published.as_ref().and_then(|state| state.reason.clone()),
-        "attempt": published.as_ref().map_or(0, |state| state.attempt),
+        "attempt": published.as_ref().map(|state| state.attempt),
         "next_attempt_at": published.as_ref().and_then(|state| state.next_attempt_at.clone()),
         "verdict": verdict,
         "waiting_opens": waiting_opens,
@@ -261,9 +261,16 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        let generation = match held {
-            Some(held) => held.to_string(),
-            None => "-".to_string(),
+        // The generation with the store version and the source that delivered
+        // it, so a refused rollback can be traced to the host that served it.
+        let generation = match (held, published.as_ref()) {
+            (Some(held), Some(state)) => format!(
+                "{held}(store={},from={})",
+                crate::cli::reporting::optional_text(state.store_version.as_deref()),
+                state.read_from.as_deref().map_or("local-store", |authority| authority)
+            ),
+            (Some(held), None) => held.to_string(),
+            (None, _) => crate::cli::reporting::NOT_REPORTED.to_string(),
         };
         text::print(
             &target,
@@ -277,7 +284,7 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
             &directory.authority.target,
             &authority,
             vault.repair.as_ref(),
-            &serve_stops,
+            &report,
             &blockers,
         );
     }

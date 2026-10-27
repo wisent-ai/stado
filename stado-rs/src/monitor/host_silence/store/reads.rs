@@ -48,7 +48,7 @@ pub(super) async fn read_document<T: serde::de::DeserializeOwned>(
 /// Every silence record for `host`, newest first.
 pub async fn silences(store: &JobStorage, host: &str) -> Result<Vec<SilenceRecord>, StorageError> {
     let mut out = Vec::new();
-    for path in newest_first(store, &silence_prefix(host)).await? {
+    for path in newest_first(store, &silence_prefix(host)?).await? {
         if let Some(record) = read_document::<SilenceRecord>(store, &path).await? {
             out.push(record);
         }
@@ -67,7 +67,7 @@ pub async fn open_silence(
     store: &JobStorage,
     host: &str,
 ) -> Result<Option<(String, SilenceRecord)>, StorageError> {
-    let Some(path) = newest_first(store, &silence_prefix(host))
+    let Some(path) = newest_first(store, &silence_prefix(host)?)
         .await?
         .into_iter()
         .next()
@@ -91,7 +91,7 @@ pub async fn refusals_since(
     since: Option<DateTime<Utc>>,
 ) -> Result<Vec<RefusalRecord>, StorageError> {
     let mut out = Vec::new();
-    for path in newest_first(store, &refusal_prefix(host)).await? {
+    for path in newest_first(store, &refusal_prefix(host)?).await? {
         let Some(record) = read_document::<RefusalRecord>(store, &path).await? else {
             continue;
         };

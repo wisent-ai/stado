@@ -62,8 +62,12 @@ pub fn remote_inventory_script() -> Result<String, DeployError> {
     for (name, root, argument, shape) in products::installed_programs()? {
         // The root is `$HOME`-relative in the declaration and stays that way
         // on the wire: only the host knows what `$HOME` is, and expanding it
-        // here would bind one host's answer into every host's program.
-        let relative = root.strip_prefix("$HOME/").unwrap_or(root);
+        // here would bind one host's answer into every host's program. A
+        // root declared without the prefix is already relative to it.
+        let relative = match root.strip_prefix("$HOME/") {
+            Some(under_home) => under_home,
+            None => root,
+        };
         rows.push_str(&format!("{name}\t{relative}\t{argument}\t{shape}\n"));
     }
     Ok(format!(

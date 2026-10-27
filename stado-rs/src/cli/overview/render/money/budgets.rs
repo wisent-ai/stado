@@ -35,6 +35,12 @@ pub(super) fn print_budgets(document: &Value) {
             usd("end_of_month_usd"),
             crate::cli::reporting::field(&policy["budget_exceeded"]),
         );
+        // The month-end projection starts from the month's billed spend; a
+        // spend the billing snapshot does not give is said with its cause.
+        match policy.get("month_spent_unknown").and_then(Value::as_str) {
+            Some(cause) => println!("  billed this month: unknown, {cause}"),
+            None => println!("  billed this month: {}", usd("month_spent_usd")),
+        }
         match figure(policy.get("credit_runway_days")) {
             Figure::Absent => {}
             Figure::Amount(days) => println!("  credit runway: {days:.1} days"),

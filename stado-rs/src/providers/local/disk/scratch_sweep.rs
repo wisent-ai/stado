@@ -51,17 +51,15 @@ pub async fn sweep(log: &mut dyn FnMut(&str)) {
 /// One line an operator can read in the agent log: what went, what stayed, and
 /// what refused to go.
 fn summary(target: &str, report: &serde_json::Map<String, serde_json::Value>) -> String {
-    let number = |key: &str| {
-        report
-            .get(key)
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default()
+    // A count the report does not carry is said as such, never as zero.
+    let number = |key: &str| match report.get(key).and_then(serde_json::Value::as_u64) {
+        Some(count) => count.to_string(),
+        None => format!("(no {key} count reported)"),
     };
-    let failures = report
-        .get("failures")
-        .and_then(serde_json::Value::as_array)
-        .map(Vec::len)
-        .unwrap_or_default();
+    let failures = match report.get("failures").and_then(serde_json::Value::as_array) {
+        Some(failures) => failures.len().to_string(),
+        None => "(no failures list reported)".to_string(),
+    };
     format!(
         "scratch sweep: {target} destroyed {} expired lease(s), kept {}, {failures} refused",
         number("destroyed"),

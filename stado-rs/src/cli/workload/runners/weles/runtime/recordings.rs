@@ -118,10 +118,9 @@ pub(crate) async fn set_weles_recordings_dir(
     }
 
     std::fs::create_dir_all(path)?;
-    let agents_dir = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| {
-            CmdError::declaration("HOME is not set; set it before updating LaunchAgents")
+    let agents_dir = crate::config_file::home()
+        .map_err(|cause| {
+            CmdError::declaration(format!("the LaunchAgents to update cannot be found: {cause}"))
         })?
         .join(crate::deploy::service::USER_LAUNCHD_AGENTS);
     // The plists this host rewrote, by name; the report counts them.
@@ -168,30 +167,40 @@ fn set_plist_recordings_root(plist: &std::path::Path, path: &str) -> Result<(), 
     }
 
     let key = "EnvironmentVariables.WELES_RECORDINGS_ROOT";
-    if plutil(plist, &["-replace", key, "-string", path])?
-        .status
-        .success()
-    {
-        return Ok(());
-    }
-    if plutil(plist, &["-insert", key, "-string", path])?
-        .status
-        .success()
-    {
-        return Ok(());
-    }
-    let _ = plutil(
-        plist,
+    // Replace the key, else insert it, else create the dictionary and insert
+    // it. Each attempt that fails is kept for the refusal: only the last one
+    // was said, and the dictionary insert's own answer was dropped.
+    let attempts: &[&[&str]] = &[
+        &["-replace", key, "-string", path],
+        &["-insert", key, "-string", path],
         &["-insert", "EnvironmentVariables", "-xml", "<dict/>"],
-    )?;
+    ];
+    let mut said = Vec::new();
+    for args in attempts {
+        let output = plutil(plist, args)?;
+        if output.status.success() && args.contains(&key) {
+            return Ok(());
+        }
+        if !output.status.success() {
+            said.push(format!(
+                "plutil {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+    }
     let retry = plutil(plist, &["-insert", key, "-string", path])?;
     if retry.status.success() {
         return Ok(());
     }
-    let message = String::from_utf8_lossy(&retry.stderr).trim().to_string();
+    said.push(format!(
+        "plutil -insert {key}: {}",
+        String::from_utf8_lossy(&retry.stderr).trim()
+    ));
     Err(CmdError::click(format!(
-        "{}: failed to update WELES_RECORDINGS_ROOT: {message}",
-        plist.display()
+        "{}: failed to update WELES_RECORDINGS_ROOT: {}",
+        plist.display(),
+        said.join("; ")
     ))
     .stating(crate::primitives::failure::FailureCode::Refused))
 }

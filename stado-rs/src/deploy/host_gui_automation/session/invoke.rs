@@ -7,7 +7,7 @@ pub(in crate::deploy::host_gui_automation) async fn run(
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
     let output = host_channel::run_program(target, words, runner).await?;
-    if output.ok() {
+    if output.succeeded() {
         Ok(output)
     } else {
         Err(DeployError::unreachable(format!(
@@ -48,7 +48,7 @@ pub(in crate::deploy::host_gui_automation) async fn run_sudo(
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
     let output = invoke_sudo(target, words, password, runner).await?;
-    if output.ok() {
+    if output.succeeded() {
         Ok(output)
     } else {
         Err(DeployError::unreachable(format!(
@@ -92,7 +92,7 @@ pub(in crate::deploy::host_gui_automation) async fn invoke_in_gui_session(
     password: Option<&str>,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    let mut command = Vec::with_capacity(words.len() + 8);
+    let mut command = Vec::new();
     command.extend([
         "/bin/launchctl",
         "asuser",
@@ -128,7 +128,7 @@ pub(in crate::deploy::host_gui_automation) async fn run_in_gui_session(
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
     let output = invoke_in_gui_session(target, user, uid, words, password, runner).await?;
-    if output.ok() {
+    if output.succeeded() {
         Ok(output)
     } else {
         Err(DeployError::unreachable(format!(
@@ -157,7 +157,7 @@ pub(in crate::deploy::host_gui_automation) async fn optional(
     runner: &Runner,
 ) -> Result<Option<String>, DeployError> {
     let output = host_channel::run_program(target, words, runner).await?;
-    Ok(output.ok().then(|| output.stdout.trim().to_string()))
+    Ok(output.succeeded().then(|| output.stdout.trim().to_string()))
 }
 
 pub(in crate::deploy::host_gui_automation) async fn optional_sudo(
@@ -167,7 +167,7 @@ pub(in crate::deploy::host_gui_automation) async fn optional_sudo(
     runner: &Runner,
 ) -> Result<Option<String>, DeployError> {
     let output = invoke_sudo(target, words, password, runner).await?;
-    Ok(output.ok().then(|| output.stdout.trim().to_string()))
+    Ok(output.succeeded().then(|| output.stdout.trim().to_string()))
 }
 
 pub(in crate::deploy::host_gui_automation) async fn remove_if_present(

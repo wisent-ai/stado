@@ -15,12 +15,10 @@ pub(in crate::cli::fleet::ingress) mod public;
 /// the child itself said.
 fn log_tail(log: &Path) -> String {
     match std::fs::read_to_string(log) {
-        Ok(text) => text
-            .lines()
-            .map(str::trim)
-            .rfind(|line| !line.is_empty())
-            .unwrap_or("(the log is empty)")
-            .to_string(),
+        Ok(text) => match text.lines().map(str::trim).rfind(|line| !line.is_empty()) {
+            Some(last) => last.to_string(),
+            None => "(the log is empty)".to_string(),
+        },
         Err(exc) => format!("({} could not be read: {exc})", log.display()),
     }
 }

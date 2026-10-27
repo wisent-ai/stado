@@ -3,7 +3,7 @@
 
 use serde_json::{json, Map, Value};
 
-use super::super::types::{jbool, jstr, parse_sandbox_envelope, BoxCommandResult, BoxError};
+use super::super::types::{jbool, jint, jstr, parse_sandbox_envelope, BoxCommandResult, BoxError};
 use super::{BoxClient, FileUrl};
 
 impl BoxClient {
@@ -34,15 +34,14 @@ impl BoxClient {
             )
             .await?;
         Ok(BoxCommandResult {
-            success: jbool(value.get("success")),
-            // Python keeps the value only when it is an int instance.
-            exit_code: value.get("exitCode").and_then(Value::as_i64),
-            signal: jstr(value.get("signal")),
-            stdout: jstr(value.get("stdout")),
-            stderr: jstr(value.get("stderr")),
-            stdout_truncated: jbool(value.get("stdoutTruncated")),
-            stderr_truncated: jbool(value.get("stderrTruncated")),
-            timed_out: jbool(value.get("timedOut")),
+            success: jbool(value.get("success"), "success", "command")?,
+            exit_code: jint(value.get("exitCode"), "exitCode", "command")?,
+            signal: jstr(value.get("signal"), "signal", "command")?,
+            stdout: jstr(value.get("stdout"), "stdout", "command")?,
+            stderr: jstr(value.get("stderr"), "stderr", "command")?,
+            stdout_truncated: jbool(value.get("stdoutTruncated"), "stdoutTruncated", "command")?,
+            stderr_truncated: jbool(value.get("stderrTruncated"), "stderrTruncated", "command")?,
+            timed_out: jbool(value.get("timedOut"), "timedOut", "command")?,
         })
     }
 

@@ -3,6 +3,9 @@
 
 use serde_json::Value;
 
+/// The URL without its query and fragment, which may carry a signature. A
+/// recorded URL that does not parse is cut at its first `?` or `#` the same
+/// way, so no signed part is said either.
 pub(super) fn public_resource_url(raw: &str) -> String {
     match url::Url::parse(raw) {
         Ok(mut parsed) => {
@@ -10,14 +13,20 @@ pub(super) fn public_resource_url(raw: &str) -> String {
             parsed.set_fragment(None);
             parsed.to_string()
         }
-        Err(_) => raw.split(['?', '#']).next().unwrap_or_default().to_string(),
+        Err(_unparsed) => match raw.find(['?', '#']) {
+            Some(end) => raw[..end].to_string(),
+            None => raw.to_string(),
+        },
     }
 }
 
+/// The host a recorded URL names; a URL that does not parse, or names no
+/// host, has none to count.
 pub(super) fn resource_host(raw: &str) -> Option<String> {
-    url::Url::parse(raw)
-        .ok()
-        .and_then(|parsed| parsed.host_str().map(str::to_string))
+    match url::Url::parse(raw) {
+        Ok(parsed) => parsed.host_str().map(str::to_string),
+        Err(_unparsed) => None,
+    }
 }
 
 pub(super) fn is_stado_object_url(raw: &str) -> bool {
@@ -44,8 +53,10 @@ pub(super) fn is_legacy_cloud_image_url(raw: &str) -> bool {
     })
 }
 
+/// The content type a recorded response declares, or the empty text when it
+/// declares none, which no image type matches.
 pub(super) fn response_content_type(event: &Value) -> &str {
-    event
+    let declared = event
         .get("headers")
         .and_then(Value::as_object)
         .and_then(|headers| {
@@ -53,6 +64,9 @@ pub(super) fn response_content_type(event: &Value) -> &str {
                 .get("content-type")
                 .or_else(|| headers.get("Content-Type"))
         })
-        .and_then(Value::as_str)
-        .unwrap_or_default()
+        .and_then(Value::as_str);
+    match declared {
+        Some(declared) => declared,
+        None => "",
+    }
 }

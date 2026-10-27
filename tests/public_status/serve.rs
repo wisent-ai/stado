@@ -1,4 +1,4 @@
-//! `stado public-status serve` is the status page: every request reads the
+//! `stado availability serve` is the status page: every request reads the
 //! published document again.
 //!
 //! The built stado serves the page in the isolated deployment, on a port the
@@ -6,7 +6,7 @@
 //!
 //! - before any check, `/` answers 503 with the store's reason (no status is
 //!   published) and `/status.json` answers 503 with `{"error": …}` naming it;
-//! - after `stado public-status check` against the real declared endpoints,
+//! - after `stado availability check` against the real declared endpoints,
 //!   `/` answers 200 naming every declared component, and `/status.json`
 //!   answers exactly the document `show --json` reads;
 //! - a path that is not a page answers 404, a POST answers 405;
@@ -63,7 +63,7 @@ fn start(deployment: &mut Deployment, head_limit: Option<usize>) -> (Page, Strin
         );
     }
     let mut child = command
-        .args(["public-status", "serve", "--bind", &bind])
+        .args(["availability", "serve", "--bind", &bind])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -104,8 +104,8 @@ async fn the_page_reads_the_published_status_on_every_request() {
         "{body}"
     );
 
-    deployment.json(&["public-status", "check", "--json"]);
-    let shown = deployment.json(&["public-status", "show", "--json"]);
+    deployment.json(&["availability", "check", "--json"]);
+    let shown = deployment.json(&["availability", "show", "--json"]);
 
     let (status, body) = get(&origin, "/").await;
     assert_eq!(status, StatusCode::OK, "{body}");

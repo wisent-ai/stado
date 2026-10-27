@@ -132,12 +132,16 @@ pub fn rerecord_siblings(
             continue;
         }
         let mut updated = sibling.clone();
-        let mut fingerprints = updated
-            .extra
-            .get("placement_fingerprints")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+        // A sibling installed before fingerprints were kept records none; one
+        // whose record is not a map is refused rather than overwritten.
+        let mut fingerprints = match updated.extra.get("placement_fingerprints") {
+            None => serde_json::Map::new(),
+            Some(Value::Object(recorded)) => recorded.clone(),
+            Some(other) => bail!(
+                "{} records placement_fingerprints that are not a map: {other}",
+                sibling.surface
+            ),
+        };
         for placement in touched {
             fingerprints.insert(
                 placement.destination.to_string_lossy().into_owned(),
@@ -158,8 +162,16 @@ pub fn rerecord_siblings(
     Ok(())
 }
 
+/// Whether `path`, as written or where it physically lies, is inside or holds
+/// a shared path. A path that does not exist yet lies where it is written; one
+/// whose physical location cannot be resolved is kept as shared, so no shared
+/// file is replaced or removed through a link nobody could follow.
 pub fn overlaps(path: &Path, shared: &BTreeSet<PathBuf>) -> bool {
-    let physical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let physical = match path.canonicalize() {
+        Ok(physical) => physical,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(_unresolved) => return true,
+    };
     shared.iter().any(|other| {
         path.starts_with(other)
             || other.starts_with(path)

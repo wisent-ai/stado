@@ -135,23 +135,60 @@ read_version() {
 /// One release object, fetched whole, for either install shape.
 ///
 /// The release route answers an unranged GET by streaming until its own
-/// window closes, and it closes the body cleanly when it does. `curl` sees a
-/// complete HTTP/2 response and exits 0 on a file that stopped short: the
-/// darwin archive of 0.13.46 is 73,864,632 bytes, and two unranged reads of
-/// it ended, both HTTP 200, at 22,925,186 and 15,318,446 bytes after about
-/// 300 seconds each. Nothing in the fetch could see that. The short body
-/// surfaced one step later as `verify mismatch`, which says the coordinate
-/// holds bytes that disagree with its manifest -- the two-producer shape --
-/// when the coordinate was whole and the transfer was not.
-///
-/// So the size is asked for before the body, and the body is read in bounded
-/// ranges until it is that size. The route advertises `accept-ranges: bytes`
-/// and answers `--range 0-0` with the object's total, and an 8 MiB range with
-/// exactly 8 MiB in about 94 seconds, well inside the window that truncates
-/// the whole-object read. A range that comes back short or refused is a
-/// failure with its own marker instead of a digest that will not match.
+/// window closes and then ends the body cleanly, so `curl` exits 0 on a file
+/// that stopped short, and the short body surfaces a step later as `verify
+/// mismatch`, which blames the coordinate for a failed transfer. So the size
+/// is asked for before the body, and the body is read in ranges until it is
+/// that size; an 8 MiB range was measured to arrive whole well inside the
+/// window that truncates the whole-object read. A short or refused range
+/// fails with its own marker.
 pub const FETCH_PRELUDE: &str = r##"
 fetch_chunk_bytes=8388608
+
+# Every stage writes fixed names in the staged directory, and two deliveries
+# of one release can reach a host at once, so staging holds a lock there: a
+# symbolic link naming the holding process, made by one atomic call. A running
+# holder refuses this delivery by name; a gone one was killed before its exit
+# trap, so its lock is taken over and the stage's opening removal clears its files.
+hold_stage_lock() {
+  stage_lock="$1/.stage.lock"
+  if ! /bin/ln -s "$$" "$stage_lock" 2>/dev/null; then
+    stage_holder=$(/usr/bin/readlink "$stage_lock") || {
+      say stage lock_unreadable
+      exit 1
+    }
+    case "$stage_holder" in
+      ''|*[!0-9]*) say stage "lock_holder_not_a_process_$stage_holder"; exit 1 ;;
+    esac
+    if kill -0 "$stage_holder" 2>/dev/null; then
+      say stage "busy_$stage_holder"
+      exit 1
+    fi
+    # Moved aside by one rename, so of two takers only one moves it; one that
+    # moved a lock another taker had just made puts it back and refuses.
+    stage_stale="$stage_lock.taken.$$"
+    /bin/mv "$stage_lock" "$stage_stale" 2>/dev/null || {
+      say stage lock_taken_over_by_another_delivery
+      exit 1
+    }
+    stage_moved=$(/usr/bin/readlink "$stage_stale") || {
+      say stage lock_unreadable
+      exit 1
+    }
+    /bin/rm -f "$stage_stale"
+    if [ "$stage_moved" != "$stage_holder" ]; then
+      /bin/ln -s "$stage_moved" "$stage_lock" 2>/dev/null ||
+        say stage "lock_not_restored_for_$stage_moved"
+      say stage "busy_$stage_moved"
+      exit 1
+    fi
+    /bin/ln -s "$$" "$stage_lock" 2>/dev/null || {
+      say stage lock_taken_over_by_another_delivery
+      exit 1
+    }
+  fi
+  trap '/bin/rm -f "$stage_lock"' EXIT
+}
 
 # `release_resolve` is empty unless the origin is a tailnet name this fleet can
 # place, in which case the route is pinned to the tailnet address while the URL,

@@ -104,17 +104,30 @@ pub(crate) fn parse_service_deployers(
             &format!("service_api.deployers.{product}"),
             &mut problems,
         );
-        let item = entry
-            .get("item")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if item != product.as_str() {
-            problems.push(format!(
-                "service_api.deployers.{product}.item must be the product's own name \
-                 {product:?}, not {item:?}"
-            ));
-            entry_valid = false;
+        // The item is the product's own name, compared as the string it is;
+        // an absent item or one of another type is named as such.
+        match entry.get("item") {
+            Some(Value::String(item)) if item == product => {}
+            Some(Value::String(item)) => {
+                problems.push(format!(
+                    "service_api.deployers.{product}.item must be the product's own name {product:?}, not {item:?}"
+                ));
+                entry_valid = false;
+            }
+            Some(other) => {
+                problems.push(format!(
+                    "service_api.deployers.{product}.item must be the string {product:?}, not {other}"
+                ));
+                entry_valid = false;
+            }
+            None => {
+                problems.push(format!(
+                    "service_api.deployers.{product}.item is required and must be {product:?}"
+                ));
+                entry_valid = false;
+            }
         }
+        let item = product.as_str();
         if !items.insert(item.to_string()) {
             problems.push(format!(
                 "service_api.deployers maps more than one product to item {item:?}"
@@ -148,7 +161,12 @@ pub(crate) fn parse_service_deployers(
                                 None
                             }
                         };
-                    let service = current.as_deref().unwrap_or(declared);
+                    // A superseded label reads as the product's current unit;
+                    // a label the catalog does not supersede is itself.
+                    let service = match current.as_deref() {
+                        Some(unit) => unit,
+                        None => declared,
+                    };
                     let unit_label = service.strip_prefix("com.wisent.").is_some_and(canonical);
                     if !canonical(service) && !unit_label {
                         problems.push(format!(
@@ -233,19 +251,28 @@ pub(crate) fn parse_service_deployers(
 
 static SERVICE_API_DEPLOYERS: LazyLock<Result<BTreeMap<String, ServiceDeployer>, Vec<String>>> =
     LazyLock::new(|| {
-        let configured = match std::env::var("WC_SERVICE_API_DEPLOYERS")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    return Err(vec![format!(
-                        "WC_SERVICE_API_DEPLOYERS must be a JSON object: {error}"
-                    )])
+        // `WC_SERVICE_API_DEPLOYERS` overrides the config file's block when
+        // it is set and not blank; unset or blank, the file is read. A value
+        // that is not Unicode cannot be JSON and is refused as such.
+        let configured = match std::env::var("WC_SERVICE_API_DEPLOYERS") {
+            Ok(encoded) if !encoded.trim().is_empty() => {
+                match serde_json::from_str::<Value>(&encoded) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        return Err(vec![format!(
+                            "WC_SERVICE_API_DEPLOYERS must be a JSON object: {error}"
+                        )])
+                    }
                 }
-            },
-            None => crate::config_file::get("service_api.deployers"),
+            }
+            Ok(_) | Err(std::env::VarError::NotPresent) => {
+                crate::config_file::get("service_api.deployers")
+            }
+            Err(std::env::VarError::NotUnicode(raw)) => {
+                return Err(vec![format!(
+                    "WC_SERVICE_API_DEPLOYERS must be a JSON object, and is not Unicode: {raw:?}"
+                )])
+            }
         };
         parse_service_deployers(configured.as_ref())
     });
@@ -256,11 +283,4 @@ pub fn service_api_deployers(
         Ok(deployers) => Ok(deployers),
         Err(problems) => Err(problems.as_slice()),
     }
-}
-
-pub fn service_deployer_for(service: &str, action: &str) -> Option<&'static ServiceDeployer> {
-    service_api_deployers()
-        .ok()?
-        .values()
-        .find(|deployer| deployer.allows(service, action))
 }

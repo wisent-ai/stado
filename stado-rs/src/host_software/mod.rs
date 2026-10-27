@@ -75,7 +75,7 @@ mod report;
 mod row;
 mod verdict;
 
-pub use inspect::{gather, parse};
+pub use inspect::gather;
 pub use report::{load, load_in, record, record_refusal, reported_hosts, Report};
 pub use row::HostSoftware;
 pub use verdict::{judge, Finding, ProductBinary, REFRESH_COMMAND};

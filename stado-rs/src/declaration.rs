@@ -75,13 +75,15 @@ impl DeclarationRun {
 }
 
 impl ServiceDeclaration {
-    /// The declaration inside one directory entry, when the entry carries
-    /// one. Read through here and never by keying the raw object, so the
-    /// field name exists exactly once.
-    pub fn from_entry(entry: &Value) -> Option<Self> {
-        entry
-            .get("declaration")
-            .and_then(|value| serde_json::from_value(value.clone()).ok())
+    /// The declaration inside one directory entry: `Ok(None)` when the entry
+    /// carries none, `Err` with serde's reason when it carries one this
+    /// build cannot read. Read through here and never by keying the raw
+    /// object, so the field name exists exactly once.
+    pub fn from_entry(entry: &Value) -> Result<Option<Self>, serde_json::Error> {
+        match entry.get("declaration") {
+            Some(value) => serde_json::from_value(value.clone()).map(Some),
+            None => Ok(None),
+        }
     }
 }
 
@@ -117,14 +119,15 @@ pub fn validate(location: &str, declaration: &ServiceDeclaration) -> Vec<String>
             "{location}.declaration.source.artifact: must be a non-empty reference without '..'"
         ));
     }
+    // The pin is one SHA-256 digest in lowercase hex: it decodes to exactly
+    // the hash's output and carries no uppercase, so one spelling names it.
     let sha = declaration.source.sha256.as_str();
-    if !(sha.len() == 64
-        && sha
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
-    {
+    let one_lowercase_digest = !sha.bytes().any(|byte| byte.is_ascii_uppercase())
+        && hex::decode(sha)
+            .is_ok_and(|bytes| bytes.len() == <sha2::Sha256 as sha2::Digest>::output_size());
+    if !one_lowercase_digest {
         problems.push(format!(
-            "{location}.declaration.source.sha256: must be 64 lowercase hex characters"
+            "{location}.declaration.source.sha256: must be one SHA-256 digest in lowercase hex"
         ));
     }
     if let Some(program) = declaration.run.program.as_ref() {

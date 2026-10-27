@@ -54,6 +54,10 @@ pub enum PolicyCommands {
 #[derive(Serialize)]
 struct OptimizeStatus {
     policy: Option<crate::autonomy::AutonomyPolicy>,
+    /// Why the stored policy cannot be read, when it cannot: the coordinator
+    /// then fail-closes every unpinned dispatch, and this is where it is said
+    /// beside the log line its tick writes.
+    policy_unreadable: Option<String>,
     policy_version: Option<String>,
     control: crate::autonomy::storage::ControlState,
     inventory: Option<InventoryStatus>,
@@ -87,8 +91,14 @@ pub async fn dispatch_optimize(command: OptimizeCommands) -> Result<(), CmdError
 
 async fn status(json_output: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    let policy = crate::autonomy::storage::load_policy(&store).await?;
-    let versioned = crate::autonomy::storage::load_policy_versioned(&store).await?;
+    let (policy, policy_unreadable) = match crate::autonomy::storage::load_policy(&store).await {
+        Ok(policy) => (policy, None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let versioned = match policy_unreadable {
+        Some(_) => None,
+        None => crate::autonomy::storage::load_policy_versioned(&store).await?,
+    };
     let control = crate::autonomy::storage::load_control(&store).await?;
     let inventory = crate::autonomy::storage::load_latest_inventory(&store)
         .await?
@@ -123,6 +133,7 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
         .count();
     let status = OptimizeStatus {
         policy,
+        policy_unreadable,
         policy_version: versioned.map(|value| value.version),
         control,
         inventory,
@@ -141,34 +152,34 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
         println!("{}", serde_json::to_string_pretty(&status)?);
         return Ok(());
     }
-    match &status.policy {
-        Some(policy) => println!("Autonomy mode: {:?}", policy.mode),
-        None => println!("Autonomy policy: none written; autonomy does not run"),
+    match (&status.policy, &status.policy_unreadable) {
+        (_, Some(cause)) => println!(
+            "Autonomy policy: unreadable, so the coordinator fail-closes every unpinned dispatch: {cause}"
+        ),
+        (Some(policy), None) => println!("Autonomy mode: {}", policy.mode),
+        (None, None) => println!("Autonomy policy: none written; autonomy does not run"),
     }
-    println!(
-        "Emergency pause: {}{}",
-        status.control.emergency_paused,
-        status
-            .control
-            .reason
-            .as_deref()
-            .map(|reason| format!(" ({reason})"))
-            .unwrap_or_default()
-    );
-    println!(
-        "Circuit breaker: open={}, consecutive failures={}, until={}",
-        status.control.circuit_open_at(chrono::Utc::now()),
-        status.control.mutation_failures.len(),
-        status
-            .control
-            .circuit_open_until
-            .as_deref()
-            .unwrap_or("not open")
-    );
-    println!(
-        "Policy version: {}",
-        status.policy_version.as_deref().unwrap_or("not persisted")
-    );
+    match &status.control.reason {
+        Some(reason) => println!(
+            "Emergency pause: {} ({reason})",
+            status.control.emergency_paused
+        ),
+        None => println!("Emergency pause: {}", status.control.emergency_paused),
+    }
+    let open = status.control.circuit_open_at(chrono::Utc::now());
+    let failures = status.control.mutation_failures.len();
+    match &status.control.circuit_open_until {
+        Some(until) => {
+            println!("Circuit breaker: open={open}, consecutive failures={failures}, until={until}")
+        }
+        None => println!(
+            "Circuit breaker: open={open}, consecutive failures={failures}, until=not open"
+        ),
+    }
+    match &status.policy_version {
+        Some(version) => println!("Policy version: {version}"),
+        None => println!("Policy version: not persisted"),
+    }
     if let Some(inventory) = status.inventory {
         println!(
             "Inventory: {} resources, complete={}, snapshot={}",
@@ -210,7 +221,7 @@ async fn run_once() -> Result<(), CmdError> {
         .await?
         .ok_or_else(|| {
             CmdError::refused(
-                "no autonomy policy is written; `stado optimize policy apply <file>` states its limits",
+                "no autonomy policy is written; `stado optimize policy apply --file <file>` states its limits",
             )
         })?;
     let providers = crate::coordinator::resolve_providers();
@@ -267,28 +278,19 @@ async fn policy(command: PolicyCommands) -> Result<(), CmdError> {
 pub(crate) async fn show_report(name: &str, json_output: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let value = report_value(&store, name).await?.ok_or_else(|| {
-        CmdError::click(format!(
-            "cost report absent: {name}; run `stado optimize run`"
-        ))
-        .stating(crate::primitives::failure::FailureCode::NotFound)
+        CmdError::click(format!("cost report absent: {name}; run `stado optimize run`"))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     crate::cli::print_answer(&value, json_output)
 }
 
 async fn report_value(store: &JobStorage, name: &str) -> Result<Option<Value>, CmdError> {
-    Ok(
-        crate::autonomy::storage::read_json(store, &format!("state/autonomy/cost/{name}.json"))
-            .await?,
-    )
+    Ok(crate::autonomy::storage::read_json(store, &format!("state/autonomy/cost/{name}.json")).await?)
 }
 
 /// Who a recorded mutation is attributed to: the account the submitter of a
-/// job is read as, refused when it cannot be read.
-///
-/// Shared by every record in this binary that writes an operator's name into
-/// durable state: one spelling of "who did this". Read as a stand-in name, a
-/// mutation by a process without a login environment was attributed to an
-/// account that does not exist.
+/// job is read as, refused when it cannot be read — the one spelling of "who
+/// did this" every durable record in this binary writes.
 pub(crate) fn actor() -> Result<String, CmdError> {
     crate::queue::submit::submitter().map_err(|error| CmdError::refused(error.to_string()))
 }

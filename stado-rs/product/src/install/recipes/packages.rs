@@ -25,7 +25,12 @@ pub fn names(recipe: &Value, key: &str) -> Result<Vec<String>> {
         bail!("recipe {key} is empty");
     }
     for name in &names {
-        if relative(Path::new(name))?.components().count() != 1 {
+        let path = relative(Path::new(name))?;
+        let mut parts = path.components();
+        if !matches!(
+            (parts.next(), parts.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        ) {
             bail!("binary name must be one filename: {name}");
         }
     }
@@ -50,13 +55,15 @@ pub fn prepare(
             &uuid::Uuid::new_v4().to_string(),
         )?;
         let staging = staging_run.path.clone();
-        let mut arguments = vec![
-            "--release".to_owned(),
+        // What is built: the same targets, binaries and features for the
+        // check and for the release build, so the check reads what the
+        // release build would compile.
+        let mut selection = vec![
             "--target-dir".to_owned(),
             staging.to_string_lossy().into_owned(),
         ];
         for binary in &binaries {
-            arguments.extend(["--bin".to_owned(), binary.clone()]);
+            selection.extend(["--bin".to_owned(), binary.clone()]);
         }
         if let Some(features) = recipe.get("features") {
             let features = features
@@ -66,23 +73,38 @@ pub fn prepare(
                 .map(|value| value.as_str().context("cargo features must be strings"))
                 .collect::<Result<Vec<_>>>()?;
             if !features.is_empty() {
-                arguments.extend(["--features".to_owned(), features.join(",")]);
+                selection.extend(["--features".to_owned(), features.join(",")]);
             }
         }
-        let built = cargo::execute(
-            runtime,
-            &super::build::manifest::inside(root, text(recipe, "manifest")?)?,
-            "build",
-            &arguments,
-        )?;
-        if built.code != 0 {
+        let manifest = super::build::manifest::inside(root, text(recipe, "manifest")?)?;
+        // One committed revision is built: the checkout's commit as it is
+        // now, exported once into its build area. Another session's commit
+        // landing while the build runs, or its uncommitted edit, is not read,
+        // so the build cannot see two revisions or refuse its own source
+        // stamp halfway (the cargo surface's build script compares the stated
+        // commit with the checkout's only when it builds inside a checkout).
+        let commit = source::git(root, &["rev-parse", "--verify", "HEAD^{commit}"])
+            .with_context(|| format!("{} names no commit to build", root.display()))?;
+        // A source that does not compile is found by `cargo check` in a
+        // fraction of a release build's time, so the release build starts
+        // only once the check passes: a compile error never costs a release
+        // build, and its refusal says the release build was not started.
+        let check = cargo::execute_revision(runtime, &manifest, Some(&commit), "check", &selection)?;
+        if check.code != libc::EXIT_SUCCESS {
             bail!(
-                "Cargo build of {} failed: {}; evidence {}",
+                "Cargo check of {} failed, so its release build was not started: {}",
                 text(recipe, "manifest")?,
-                built.report["error"]
-                    .as_str()
-                    .unwrap_or("no error was recorded"),
-                built.report["evidence"].as_str().unwrap_or("unrecorded")
+                recorded(&check.report)
+            );
+        }
+        let mut arguments = vec!["--release".to_owned()];
+        arguments.extend(selection);
+        let built = cargo::execute_revision(runtime, &manifest, Some(&commit), "build", &arguments)?;
+        if built.code != libc::EXIT_SUCCESS {
+            bail!(
+                "Cargo build of {} failed: {}",
+                text(recipe, "manifest")?,
+                recorded(&built.report)
             );
         }
         let mut placements = Vec::new();
@@ -102,7 +124,9 @@ pub fn prepare(
         }
         return Ok(Prepared {
             placements,
-            source_revision: source::revision(root)?,
+            // The commit that was exported and built, not the checkout's
+            // head now, which another session may have moved since.
+            source_revision: commit,
             source_directory: Some(root.to_path_buf()),
             release: None,
             scratch: Some(staging.clone()),
@@ -196,4 +220,18 @@ pub fn prepare(
         cache: None,
         resumed_from: None,
     })
+}
+
+/// What a failed Cargo run recorded: its error and its evidence file, each
+/// named as missing when the report holds none.
+fn recorded(report: &Value) -> String {
+    let error = match report["error"].as_str() {
+        Some(error) => error.to_owned(),
+        None => format!("its report records no error: {report}"),
+    };
+    let evidence = match report["evidence"].as_str() {
+        Some(evidence) => format!("evidence {evidence}"),
+        None => "it recorded no evidence file".to_owned(),
+    };
+    format!("{error}; {evidence}")
 }

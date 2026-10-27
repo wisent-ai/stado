@@ -31,7 +31,7 @@ pub(super) async fn show(as_json: bool) -> Result<(), CmdError> {
     println!("{rule}");
     // Per accelerator across providers: the total and the available count,
     // summed only from rows a provider gave.
-    let mut grand: std::collections::BTreeMap<String, (i64, i64)> = Default::default();
+    let mut grand: std::collections::BTreeMap<String, (i64, u64)> = Default::default();
     for (provider_name, rows) in &summary {
         if rows.is_empty() {
             println!(

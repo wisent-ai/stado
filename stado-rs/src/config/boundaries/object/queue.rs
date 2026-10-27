@@ -70,19 +70,28 @@ pub fn queue_prefix_problem(namespaces: &BTreeMap<String, ObjectApiNamespace>) -
 
 static OBJECT_API_NAMESPACES: LazyLock<Result<BTreeMap<String, ObjectApiNamespace>, Vec<String>>> =
     LazyLock::new(|| {
-        let configured = match std::env::var("WC_OBJECT_API_NAMESPACES")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    return Err(vec![format!(
-                        "WC_OBJECT_API_NAMESPACES must be a JSON object: {error}"
-                    )])
+        // The environment declaration wins over the configuration file;
+        // unset or blank, the file's `object_api.namespaces` is read. A
+        // value that is not Unicode cannot be JSON and is refused as such.
+        let configured = match std::env::var("WC_OBJECT_API_NAMESPACES") {
+            Ok(encoded) if !encoded.trim().is_empty() => {
+                match serde_json::from_str::<Value>(&encoded) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        return Err(vec![format!(
+                            "WC_OBJECT_API_NAMESPACES must be a JSON object: {error}"
+                        )])
+                    }
                 }
-            },
-            None => crate::config_file::get("object_api.namespaces"),
+            }
+            Ok(_) | Err(std::env::VarError::NotPresent) => {
+                crate::config_file::get("object_api.namespaces")
+            }
+            Err(std::env::VarError::NotUnicode(raw)) => {
+                return Err(vec![format!(
+                    "WC_OBJECT_API_NAMESPACES must be a JSON object, and is not Unicode: {raw:?}"
+                )])
+            }
         };
         parse_object_api_namespaces(configured.as_ref())
     });
@@ -113,5 +122,10 @@ pub fn object_verifier_items(
 /// Policy for one canonical namespace. Invalid aggregate configuration fails
 /// closed for every namespace rather than partially enabling the valid rows.
 pub fn object_api_namespace(namespace: &str) -> Option<&'static ObjectApiNamespace> {
-    object_api_namespaces().ok()?.get(namespace)
+    match object_api_namespaces() {
+        Ok(namespaces) => namespaces.get(namespace),
+        // The table's own refusal is answered by `object_api_namespaces`;
+        // a caller that must say why reads it there before asking here.
+        Err(_table_refused) => None,
+    }
 }

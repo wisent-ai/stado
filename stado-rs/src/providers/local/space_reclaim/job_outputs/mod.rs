@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 
 pub use inventory::candidate_job_ids;
 
+use super::janitor::state::report::met::Met;
 use super::{euid, free_bytes, CleanupReport, JanitorError};
 
 /// The name this cleaner's report is filed under.
@@ -102,13 +103,14 @@ pub fn scan_job_outputs(
     terminal_jobs: Option<&BTreeSet<String>>,
     report: &mut CleanupReport,
 ) {
-    let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
+    let mut met = Met::default();
+    let body = |met: &mut Met, report: &mut CleanupReport| -> Result<(), JanitorError> {
         if status_roots.is_empty() {
-            report.skip_job_outputs("root_absent", 1);
+            met.skipped("root_absent");
             return Ok(());
         }
         let Some(terminal) = terminal_jobs else {
-            report.skip_job_outputs("queue_store_unreadable", 1);
+            met.skipped("queue_store_unreadable");
             return Ok(());
         };
         let home_device = std::fs::metadata(home)?.dev();
@@ -118,48 +120,55 @@ pub fn scan_job_outputs(
         {
             let output = root.join(job_id).join(OUTPUT_DIR);
             if !output.is_dir() {
-                report.skip_job_outputs("output_absent", 1);
+                met.skipped("output_absent");
                 continue;
             }
-            let mut pending = vec![(output, 0usize)];
-            while let Some((directory, depth)) = pending.pop() {
+            // Whether a directory is the job's output directory itself, whose
+            // record files are kept, or a tree the job wrote below it.
+            let mut pending = vec![(output, true)];
+            while let Some((directory, top)) = pending.pop() {
                 let Ok(entries) = std::fs::read_dir(&directory) else {
-                    report.skip_job_outputs("unreadable_directory", 1);
+                    met.skipped("unreadable_directory");
                     continue;
                 };
-                for entry in entries.flatten() {
-                    report.job_outputs.scanned_items += 1;
+                let entries: Vec<_> = entries.collect();
+                met.listed(entries.len());
+                for entry in entries {
+                    // An entry the directory cannot list is a skipped item
+                    // with its reason, never left out without a trace.
+                    let Ok(entry) = entry else {
+                        met.skipped("entry_unreadable");
+                        continue;
+                    };
                     let name = entry.file_name().to_string_lossy().into_owned();
                     let path = entry.path();
                     let Ok(info) = std::fs::symlink_metadata(&path) else {
-                        report.skip_job_outputs("stat_failed", 1);
+                        met.skipped("stat_failed");
                         continue;
                     };
                     if info.file_type().is_symlink()
                         || info.uid() != euid()
                         || info.dev() != home_device
                     {
-                        report.skip_job_outputs("not_a_plain_owned_file", 1);
+                        met.skipped("not_a_plain_owned_file");
                         continue;
                     }
                     // A job that wrote a tree wrote artifacts; the walk
                     // reaches them and leaves the directories themselves,
                     // so a later reader sees the job's own shape.
                     if info.is_dir() {
-                        pending.push((path, depth + 1));
+                        pending.push((path, false));
                         continue;
                     }
                     if !info.is_file() {
-                        report.keep_job_outputs("not_a_plain_owned_file", info.len() as i64);
+                        met.kept("not_a_plain_owned_file", info.len());
                         continue;
                     }
-                    if depth == 0 && is_record(&name) {
-                        report.keep_job_outputs("record_kept", info.len() as i64);
+                    if top && is_record(&name) {
+                        met.kept("record_kept", info.len());
                         continue;
                     }
-                    report.job_outputs.eligible_items += 1;
-                    report.job_outputs.expected_bytes +=
-                        i64::try_from(info.len()).unwrap_or(i64::MAX);
+                    met.eligible(info.len());
                     if !enforcing {
                         continue;
                     }
@@ -169,10 +178,9 @@ pub fn scan_job_outputs(
                         Ok(free_bytes(home)? - before)
                     })();
                     match attempt {
-                        Ok(delta) => {
-                            report.job_outputs.actual_free_delta_bytes += delta.max(0);
-                            report.job_outputs.deleted_items += 1;
-                        }
+                        // Free space another writer took meanwhile is no
+                        // space this removal freed: only a gain is counted.
+                        Ok(delta) => met.removed(delta.is_positive().then(|| delta.unsigned_abs())),
                         Err(exc) => report.add_error(CLEANER, &exc),
                     }
                 }
@@ -180,7 +188,11 @@ pub fn scan_job_outputs(
         }
         Ok(())
     };
-    if let Err(exc) = body(report) {
+    if let Err(exc) = body(&mut met, report) {
         report.add_error(CLEANER, &exc);
+    }
+    match met.report() {
+        Ok(record) => report.job_outputs = record,
+        Err(cause) => report.add_error(CLEANER, &JanitorError::os(&cause)),
     }
 }

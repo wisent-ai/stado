@@ -34,7 +34,9 @@ pub(crate) struct Finished {
 pub(crate) struct Running {
     pub name: String,
     pub since: String,
-    pub seconds: i64,
+    /// Seconds since the step started; absent when its start time could not
+    /// be read, negative when the host's clock runs ahead of this one.
+    pub seconds: Option<i64>,
     /// What the step is stuck behind, when its output says so.
     pub blocked_on: Option<String>,
 }
@@ -76,19 +78,34 @@ pub(crate) fn steps(log: &str, now: DateTime<Utc>) -> Progress {
             continue;
         };
         if let Some((name, at)) = rest.split_once(STARTED) {
-            if let Ok(at) = DateTime::parse_from_rfc3339(at) {
-                let at = at.with_timezone(&Utc);
-                progress.running = Some(Running {
+            // A start time that does not parse is still a running step; the
+            // report says the time could not be read rather than dropping it.
+            // A negative elapsed time is the host's clock running ahead of
+            // this one, and is shown as measured.
+            progress.running = Some(match DateTime::parse_from_rfc3339(at) {
+                Ok(at) => {
+                    let at = at.with_timezone(&Utc);
+                    Running {
+                        name: name.to_owned(),
+                        since: at.to_rfc3339(),
+                        seconds: Some((now - at).num_seconds()),
+                        blocked_on: None,
+                    }
+                }
+                Err(error) => Running {
                     name: name.to_owned(),
-                    since: at.to_rfc3339(),
-                    seconds: (now - at).num_seconds().max(0),
+                    since: format!("{at:?}, which is not RFC 3339 ({error})"),
+                    seconds: None,
                     blocked_on: None,
-                });
-            }
+                },
+            });
         } else if let Some((name, exit)) = rest.split_once(EXIT) {
             let (exit, seconds) = match exit.rsplit_once(AFTER) {
-                Some((exit, seconds)) => (exit, seconds.trim_end_matches('s').parse().ok()),
-                None => (exit, None),
+                Some((exit, raw)) => match raw.trim_end_matches('s').parse::<u64>() {
+                    Ok(seconds) => (exit.to_owned(), Some(seconds)),
+                    Err(error) => (format!("{exit} (duration {raw:?} unreadable: {error})"), None),
+                },
+                None => (exit.to_owned(), None),
             };
             if progress
                 .running
@@ -99,7 +116,7 @@ pub(crate) fn steps(log: &str, now: DateTime<Utc>) -> Progress {
             }
             progress.steps.push(Finished {
                 name: name.to_owned(),
-                exit: exit.to_owned(),
+                exit,
                 seconds,
             });
         }
@@ -153,7 +170,7 @@ pub(crate) async fn read(store: &JobStorage, job_id: &str, now: DateTime<Utc>) -
                 Ok(at) => {
                     progress.last_output = at.map(|at| LastOutput {
                         at: at.to_rfc3339(),
-                        seconds_ago: (now - at).num_seconds().max(0),
+                        seconds_ago: (now - at).num_seconds(),
                     })
                 }
                 Err(error) => progress.last_output_error = Some(error.to_string()),
@@ -177,17 +194,17 @@ impl Progress {
             return lines;
         }
         lines.push(match &self.running {
-            Some(running) => format!(
-                "step {}: running for {}s (since {}){}",
-                running.name,
-                running.seconds,
-                running.since,
-                running
-                    .blocked_on
-                    .as_deref()
-                    .map(|blocked| format!("; blocked: {blocked}"))
-                    .unwrap_or_default()
-            ),
+            Some(running) => {
+                let elapsed = match running.seconds {
+                    Some(seconds) => format!("running for {seconds}s"),
+                    None => "running".to_owned(),
+                };
+                let blocked = match running.blocked_on.as_deref() {
+                    Some(blocked) => format!("; blocked: {blocked}"),
+                    None => String::new(),
+                };
+                format!("step {}: {elapsed} (since {}){blocked}", running.name, running.since)
+            }
             None if self.steps.is_empty() => {
                 "preparing the source and toolchain; no step has started".to_owned()
             }

@@ -19,7 +19,8 @@ pub(super) async fn list(json_output: bool) -> Result<(), CmdError> {
     let document = registry_document().await?;
     let routes = document
         .get("service_directory")
-        .map(|_| directory_routes(&document))
+        .is_some()
+        .then(|| directory_routes(&document))
         .transpose()?;
 
     let mut rows = Vec::new();

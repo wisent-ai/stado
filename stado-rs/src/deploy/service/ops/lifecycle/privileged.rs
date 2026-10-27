@@ -8,7 +8,7 @@ use crate::deploy::service::*;
 pub(super) async fn privileged_restart_system_daemon(
     target: &ComputeTarget,
     service: &ManagedService,
-    password: &str,
+    password: Option<&str>,
     reload_unit: bool,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
@@ -19,7 +19,7 @@ pub(super) async fn privileged_restart_system_daemon(
         let lint =
             host_channel::run_program(target, &["/usr/bin/plutil", "-lint", &service.path], runner)
                 .await?;
-        if !lint.ok() {
+        if !lint.succeeded() {
             return Err(DeployError::unreachable(format!(
                 "refusing to reload invalid LaunchDaemon plist {} on {}: {}",
                 service.path,
@@ -28,6 +28,12 @@ pub(super) async fn privileged_restart_system_daemon(
             )));
         }
     }
+    // `sudo -S` reads the password from stdin; an account that needs none
+    // (passwordless sudo) is given an empty line, which sudo does not consume.
+    let answer = match password {
+        Some(password) => format!("{password}\n"),
+        None => "\n".to_string(),
+    };
     let recovery_stop = host_channel::run_program_with_stdin(
         target,
         &[
@@ -39,11 +45,11 @@ pub(super) async fn privileged_restart_system_daemon(
             "bootout",
             &recovery,
         ],
-        &format!("{password}\n"),
+        &answer,
         runner,
     )
     .await?;
-    if !recovery_stop.ok() && !super::launchd_job_absent(recovery_stop.code) {
+    if !recovery_stop.succeeded() && !super::launchd_job_absent(recovery_stop.code) {
         let detail =
             host_channel::last_error_line(&recovery_stop, "sudo or launchctl returned no detail");
         return Err(DeployError::unreachable(format!(
@@ -63,11 +69,11 @@ pub(super) async fn privileged_restart_system_daemon(
                 "bootout",
                 &qualified,
             ],
-            &format!("{password}\n"),
+            &answer,
             runner,
         )
         .await?;
-        if !bootout.ok() && !super::launchd_job_absent(bootout.code) {
+        if !bootout.succeeded() && !super::launchd_job_absent(bootout.code) {
             let detail =
                 host_channel::last_error_line(&bootout, "sudo or launchctl returned no detail");
             return Err(DeployError::unreachable(format!(
@@ -86,11 +92,11 @@ pub(super) async fn privileged_restart_system_daemon(
                 "print",
                 &qualified,
             ],
-            &format!("{password}\n"),
+            &answer,
             runner,
         )
         .await?;
-        if print.ok() {
+        if print.succeeded() {
             return Err(DeployError::unreachable(format!(
                 "privileged launchd bootout on {} returned, and launchctl print still finds {}",
                 target.name, qualified
@@ -107,11 +113,11 @@ pub(super) async fn privileged_restart_system_daemon(
                 "enable",
                 &qualified,
             ],
-            &format!("{password}\n"),
+            &answer,
             runner,
         )
         .await?;
-        if !enable.ok() {
+        if !enable.succeeded() {
             return Err(DeployError::unreachable(format!(
                 "privileged launchd enable failed on {} with exit {}: {}",
                 target.name,
@@ -131,7 +137,7 @@ pub(super) async fn privileged_restart_system_daemon(
                 "system",
                 &service.path,
             ],
-            &format!("{password}\n"),
+            &answer,
             runner,
         )
         .await?
@@ -148,12 +154,12 @@ pub(super) async fn privileged_restart_system_daemon(
                 "-k",
                 &qualified,
             ],
-            &format!("{password}\n"),
+            &answer,
             runner,
         )
         .await?
     };
-    if !output.ok() && !reload_unit {
+    if !output.succeeded() && !reload_unit {
         let bootstrap = host_channel::run_program_with_stdin(
             target,
             &[
@@ -166,11 +172,11 @@ pub(super) async fn privileged_restart_system_daemon(
                 "system",
                 &service.path,
             ],
-            &format!("{password}\n"),
+            &answer,
             runner,
         )
         .await?;
-        if bootstrap.ok() {
+        if bootstrap.succeeded() {
             output = host_channel::run_program_with_stdin(
                 target,
                 &[
@@ -183,13 +189,13 @@ pub(super) async fn privileged_restart_system_daemon(
                     "-k",
                     &qualified,
                 ],
-                &format!("{password}\n"),
+                &answer,
                 runner,
             )
             .await?;
         }
     }
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "privileged launchd restart failed on {} with exit {}: {}",
             target.name,

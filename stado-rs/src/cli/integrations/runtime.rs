@@ -44,11 +44,9 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     // One process per role on a host: the lock is held for this process's
     // life (`_role`), and a second `serve` for the same target is refused
     // here, before any listener, resolver or worker of it starts.
-    let home = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| {
-            CmdError::declaration("HOME is not set, so this host's role locks cannot be found")
-        })?;
+    let home = crate::config_file::home().map_err(|cause| {
+        CmdError::declaration(format!("this host's role locks cannot be found: {cause}"))
+    })?;
     let program = std::env::current_exe().map_err(|error| {
         CmdError::unreachable(format!(
             "this program cannot name its own executable: {error}"
@@ -168,7 +166,7 @@ async fn start_roles(
     if let Some(interval) = args.release_interval_seconds {
         let release_target = identity::required_name(&target)?;
         supervisor.spawn("release", move || async move {
-            crate::release_agent::agent(&release_target, None, false, interval.get()).await
+            crate::release_agent::agent(&release_target, interval).await
         })?;
     }
     if let Some(interval) = args.health_interval_seconds {
@@ -248,9 +246,14 @@ async fn start_roles(
             crate::cli::hosts::space_reclaim::watch(every)
         })?;
     }
-    if let Some(interval) = args.failure_fixer_interval_seconds {
+    if let (Some(interval), Some(workspace), Some(max_steps)) = (
+        args.failure_fixer_interval_seconds,
+        args.failure_fixer_workspace.clone(),
+        args.failure_fixer_max_steps,
+    ) {
+        let session = crate::failure_fixer::FixSession { workspace, max_steps };
         supervisor.spawn("failure-fixer", move || async move {
-            crate::failure_fixer::run_resident(interval, args.failure_fixer_command_pattern)
+            crate::failure_fixer::run_resident(interval, args.failure_fixer_command_pattern, session)
                 .await
                 .map_err(CmdError::from)
         })?;
@@ -264,6 +267,7 @@ async fn start_roles(
                 args.worker.kind,
                 args.worker.vast_auto_list,
                 args.worker.vast_price_gpu,
+                args.worker.vast_price_disk,
                 args.worker.vast_max_duration_s,
                 args.worker.vast_idle_window_s,
                 args.worker.poll_seconds,

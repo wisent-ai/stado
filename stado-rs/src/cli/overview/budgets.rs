@@ -20,13 +20,16 @@ async fn authorized_json(
 ) -> Result<Value, String> {
     let response = crate::wait::request(client.get(url).bearer_auth(token))
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|error| format!("GET {url} failed: {error}"))?;
     let status = response.status();
-    let text = response.text().await.map_err(|err| err.to_string())?;
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("the answer of GET {url} cannot be read: {error}"))?;
     if !status.is_success() {
-        return Err(format!("HTTP {status}: {text}"));
+        return Err(format!("GET {url} answered HTTP {status}: {text}"));
     }
-    serde_json::from_str(&text).map_err(|err| err.to_string())
+    serde_json::from_str(&text).map_err(|error| format!("the answer of GET {url} is not JSON: {error}"))
 }
 
 /// The budgets the fleet is actually held to.
@@ -51,6 +54,8 @@ pub(super) async fn read_budgets(store: &JobStorage) -> Value {
             "daily_usd": forecast["daily_budget_usd"].clone(),
             "monthly_usd": forecast["monthly_budget_usd"].clone(),
             "current_hourly_usd": forecast["current_hourly_usd"].clone(),
+            "month_spent_usd": forecast["month_spent_usd"].clone(),
+            "month_spent_unknown": forecast["month_spent_unknown"].clone(),
             "end_of_month_usd": forecast["end_of_month_usd"].clone(),
             "budget_exceeded": forecast["budget_exceeded"].clone(),
             "credit_runway_days": forecast["credit_runway_days"].clone(),
@@ -106,11 +111,20 @@ async fn read_gcp_budgets() -> Value {
     };
     let budgets_url = format!("{BILLING_BUDGETS_BASE}/v1/{account}/budgets");
     match authorized_json(&client, &budgets_url, token.as_str()).await {
-        Ok(value) => json!({
-            "status": "ok",
-            "billing_account": account,
-            "budgets": value.get("budgets").cloned().unwrap_or_else(|| json!([])),
-        }),
+        Ok(value) => {
+            // proto3 JSON leaves an empty repeated field out, so an account
+            // with no budgets answers without `budgets`.
+            // https://protobuf.dev/programming-guides/json/
+            let budgets = match value.get("budgets") {
+                Some(budgets) => budgets.clone(),
+                None => json!([]),
+            };
+            json!({
+                "status": "ok",
+                "billing_account": account,
+                "budgets": budgets,
+            })
+        }
         Err(err) => json!({"status": "error", "billing_account": account, "detail": err}),
     }
 }

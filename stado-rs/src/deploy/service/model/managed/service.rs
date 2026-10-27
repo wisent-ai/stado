@@ -186,17 +186,17 @@ impl ManagedService {
         record
     }
 
-    /// Read one `services[]` element back. Missing fields read as empty:
-    /// the array is operator-facing state in a hand-editable document, and
-    /// a half-filled record should degrade to a listed service with blanks
-    /// rather than vanish from the managed set.
+    /// Read one `services[]` element back. The registry validator
+    /// (`targets::validate::document`) refuses a record whose members are
+    /// not in this shape, or that names no unit, before the document is
+    /// written and under `registry doctor`; so a member absent here is one
+    /// the operator left out of an otherwise sound record, and reads as
+    /// empty: the record stays a listed service rather than vanishing from
+    /// the managed set.
     pub(crate) fn from_record(host: &str, record: &Map<String, Value>) -> Self {
-        let text = |key: &str| {
-            record
-                .get(key)
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string()
+        let text = |key: &str| match record.get(key).and_then(Value::as_str) {
+            Some(value) => value.to_string(),
+            None => String::new(),
         };
         let label = text("label");
         let unit = text("unit");
@@ -213,6 +213,46 @@ impl ManagedService {
             _ if label.is_empty() => unit.clone(),
             _ => label.clone(),
         };
+        // The validator admits `args` only as a list of strings and `env`
+        // only as an object of strings; a member in another shape never
+        // reaches here, so the non-text arms are unreachable by construction.
+        let args = match record.get("args").and_then(Value::as_array) {
+            Some(args) => args
+                .iter()
+                .map(|argument| match argument.as_str() {
+                    Some(argument) => argument.to_string(),
+                    None => argument.to_string(),
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let env = match record.get("env").and_then(Value::as_object) {
+            Some(env) => env
+                .iter()
+                .map(|(key, value)| match value.as_str() {
+                    Some(value) => (key.clone(), value.to_string()),
+                    None => (key.clone(), value.to_string()),
+                })
+                .collect(),
+            None => BTreeMap::new(),
+        };
+        // An onboarding block that does not decode is a validator gap, and
+        // is reported where it is read instead of read as none.
+        let onboarding = match record.get("onboarding") {
+            Some(value) => match serde_json::from_value(value.clone()) {
+                Ok(onboarding) => Some(onboarding),
+                Err(error) => {
+                    tracing::warn!(
+                        host,
+                        service = name,
+                        %error,
+                        "a managed service record carries an onboarding block that does not decode; it is read as none"
+                    );
+                    None
+                }
+            },
+            None => None,
+        };
         Self {
             host: host.to_string(),
             host_heuristic: record
@@ -227,31 +267,10 @@ impl ManagedService {
             source: SOURCE_REGISTRY.to_string(),
             managed_since: text("managed_since"),
             program: text("program"),
-            args: record
-                .get("args")
-                .and_then(Value::as_array)
-                .map(|args| {
-                    args.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            env: record
-                .get("env")
-                .and_then(Value::as_object)
-                .map(|env| {
-                    env.iter()
-                        .filter_map(|(key, value)| {
-                            value.as_str().map(|value| (key.clone(), value.to_string()))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+            args,
+            env,
             systemd_unit: text("systemd_unit"),
-            onboarding: record
-                .get("onboarding")
-                .and_then(|value| serde_json::from_value(value.clone()).ok()),
+            onboarding,
         }
     }
 }

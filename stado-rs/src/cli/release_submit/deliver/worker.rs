@@ -129,12 +129,16 @@ fn disagreements(
             request.manifest_sha256.as_str(),
         ),
     ] {
-        if reads != Some(asked) {
-            found.push(format!(
-                "{}'s {field} is {}, the delivery names {asked}",
-                request.platform,
-                reads.unwrap_or("absent")
-            ));
+        match reads {
+            Some(reads) if reads == asked => {}
+            Some(reads) => found.push(format!(
+                "{}'s {field} is {reads}, the delivery names {asked}",
+                request.platform
+            )),
+            None => found.push(format!(
+                "{}'s run records no {field}, the delivery names {asked}",
+                request.platform
+            )),
         }
     }
     found
@@ -168,7 +172,7 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
         )));
     }
     require_current_delivery(&request).await?;
-    if request.schema_version != 1 {
+    if request.schema_version != crate::release_pipeline::SCHEMA_VERSION {
         return Err(CmdError::click(format!(
             "delivery request {} has unsupported schema version {}",
             args.request.display(),
@@ -250,11 +254,14 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
     ]);
     let mut delivery_argv = request.argv.clone();
     if runs_own_executable(&request) {
-        delivery_argv[0] = std::env::current_exe()?.display().to_string();
+        let program = delivery_argv.first_mut().ok_or_else(|| {
+            CmdError::refused(format!("delivery {} names no program to run", request.name))
+        })?;
+        *program = std::env::current_exe()?.display().to_string();
     }
     let step = execute(&request.name, &delivery_argv, &source_root, &environment)?;
     let receipt = DeliveryReceipt {
-        schema_version: 1,
+        schema_version: crate::release_pipeline::SCHEMA_VERSION,
         run_id: request.run_id,
         job_id,
         name: request.name,

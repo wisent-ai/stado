@@ -13,6 +13,8 @@ use crate::providers::local::slots::{
 use crate::providers::local::space_reclaim;
 use crate::queue::JobStorage;
 
+use super::scan::Census;
+
 /// Claim and start one candidate. `true` means this scan is finished — the
 /// host is saturated, or the janitor holds the lock a workload needs.
 #[allow(clippy::too_many_arguments)]
@@ -34,11 +36,7 @@ pub(crate) async fn start_candidate(
     free_vram_gb: &mut i64,
     slots: &mut Vec<ActiveSlot>,
     agent_diag: &mut Map<String, Value>,
-    diag_eligibility_rejected: &mut i64,
-    diag_eligible: &mut i64,
-    diag_claim_errors: &mut i64,
-    claim_declined: &mut Vec<Value>,
-    started: &mut i64,
+    census: &mut Census,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<bool> {
     if let Some(reason) = helpers::eligibility_refusal(
@@ -50,7 +48,7 @@ pub(crate) async fn start_candidate(
         slots.len(),
         pinned_only,
     ) {
-        *diag_eligibility_rejected += 1;
+        census.eligibility_rejected.push(job.job_id.clone());
         // The count alone read `eligibility_rejected=72,
         // eligible_count=0` on the always-on mac for seven days and
         // named none of the nine rules that produce it, so the number
@@ -69,7 +67,7 @@ pub(crate) async fn start_candidate(
     // predicate to the fresh queue record before taking the workload
     // lock or performing any claim/start side effect.
     if !job_system_packages_eligible(job, kind) {
-        *diag_eligibility_rejected += 1;
+        census.eligibility_rejected.push(job.job_id.clone());
         return Ok(false);
     }
     // One build cache, one compile: a release build whose product and
@@ -82,7 +80,7 @@ pub(crate) async fn start_candidate(
             .iter()
             .any(|slot| helpers::build_cache_key(&slot.slot.job) == Some((product, platform)))
         {
-            claim_declined.push(serde_json::json!({
+            census.declined.push(serde_json::json!({
                 "job_id": job.job_id,
                 "reason": format!(
                     "a {product} {platform} build is already running here and holds the Cargo \
@@ -92,7 +90,7 @@ pub(crate) async fn start_candidate(
             return Ok(false);
         }
     }
-    *diag_eligible += 1;
+    census.eligible.push(job.job_id.clone());
     // The space-reclaim workload lock (Python
     // `acquire_workload_lock`): a shared hold on the janitor's
     // lock file for as long as the workload owns its slot. A job that stages
@@ -154,7 +152,7 @@ pub(crate) async fn start_candidate(
     };
     // Which board: the emptiest one that can hold the job. One card, or
     // none, means nothing to choose and the job keeps the driver's default.
-    let placement = if card_budget.len() < 2 {
+    let placement = if matches!(&*card_budget, [] | [_]) {
         None
     } else {
         card_budget
@@ -188,7 +186,7 @@ pub(crate) async fn start_candidate(
                 "claim refused for {}: {}; skipping this job and continuing the scan",
                 job.job_id, exc
             ));
-            *diag_claim_errors += 1;
+            census.claim_errors.push(job.job_id.clone());
             agent_diag.insert(
                 "last_claim_error_job".into(),
                 Value::from(job.job_id.clone()),
@@ -207,8 +205,8 @@ pub(crate) async fn start_candidate(
             // eligible it read as a healthy host that simply had not got to
             // it yet.
             release(workload_lock, log_fn);
-            *diag_eligible -= 1;
-            claim_declined.push(serde_json::json!({
+            census.eligible.retain(|eligible| *eligible != job.job_id);
+            census.declined.push(serde_json::json!({
                 "job_id": job.job_id,
                 "reason": reason,
             }));
@@ -228,14 +226,14 @@ pub(crate) async fn start_candidate(
     let exclusive_started = helpers::slot_is_exclusive(&new_slot.slot);
     slots.push(new_slot);
     *available_cpu_cores = available_cpu_cores.saturating_sub(requested_cpu_cores);
-    *available_ram_gb = (*available_ram_gb - requested_memory_gb).max(0.0);
+    *available_ram_gb -= requested_memory_gb.min(*available_ram_gb);
     *free_vram_gb -= need;
     if let Some(uuid) = &placement {
         if let Some(entry) = card_budget.iter_mut().find(|(id, _)| id == uuid) {
-            entry.1 = (entry.1 - need).max(0);
+            entry.1 -= need.min(entry.1);
         }
     }
-    *started += 1;
+    census.started.push(job.job_id.clone());
     agent_diag.insert(
         "last_started_job_id".into(),
         Value::from(job.job_id.clone()),
@@ -244,9 +242,12 @@ pub(crate) async fn start_candidate(
         "last_started_at".into(),
         Value::from(isoformat_utc(Utc::now())),
     );
+    // The scan ends once one more job could not get CPU, RAM or VRAM from
+    // this host: every candidate after this one is judged against nothing.
+    let ram_left = available_ram_gb.is_sign_positive() && available_ram_gb.is_normal();
     if exclusive_started
-        || *available_cpu_cores == 0
-        || *available_ram_gb < 1.0
+        || !available_cpu_cores.is_positive()
+        || !ram_left
         || !free_vram_gb.is_positive()
     {
         return Ok(true);

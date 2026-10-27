@@ -25,7 +25,7 @@ use std::ffi::OsStr;
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use super::safefs;
 
@@ -45,6 +45,16 @@ enum Consent {
 
 static CONSENT: LazyLock<Mutex<BTreeMap<PathBuf, Consent>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
+
+/// The consent map. A thread that panicked while holding it left it as it was
+/// (every change is a single insert or remove), so a poisoned lock is entered
+/// as it stands rather than taken for consent nobody gave.
+fn consents() -> MutexGuard<'static, BTreeMap<PathBuf, Consent>> {
+    match CONSENT.lock() {
+        Ok(states) => states,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 /// The folders under `home` macOS gates behind a consent dialog and this
 /// cleaner still walks, because build trees live in them.
@@ -66,17 +76,11 @@ fn gated_folder<'a>(gated: &'a [PathBuf], absolute: &Path) -> Option<&'a PathBuf
 }
 
 fn state(folder: &Path) -> Option<Consent> {
-    CONSENT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get(folder)
-        .copied()
+    consents().get(folder).copied()
 }
 
 fn set_state(folder: &Path, consent: Option<Consent>) {
-    let mut states = CONSENT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut states = consents();
     match consent {
         Some(consent) => {
             states.insert(folder.to_path_buf(), consent);
@@ -143,9 +147,7 @@ pub fn bounded(
     // One probe per folder per process: a question already with the person
     // at the keyboard is not asked again by a second thread.
     {
-        let mut states = CONSENT
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut states = consents();
         if states.get(folder) == Some(&Consent::Pending) {
             return Ok(Gated::Pending);
         }
@@ -162,7 +164,7 @@ pub fn bounded(
                     Ok(_) => Some(Consent::Confirmed),
                     // Refused, or the folder is not there: nothing pending,
                     // and the next open reports the error itself.
-                    Err(_) => None,
+                    Err(_reported_by_the_next_open) => None,
                 },
             );
         });

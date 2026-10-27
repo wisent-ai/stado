@@ -14,7 +14,6 @@ use super::install::{
     install_spec, installed_spec, parse_remote_install, retire_superseded_agent_units_spec,
     ssh_argv, WC_BIN_DEFAULT,
 };
-use super::units::remote_home;
 
 /// Provision one registry target (Python `_provision`'s shape, Rust
 /// binaries). Echoes the `[skip]`/`[install]`/`[unit]`/`[ok]` lines; `Err`
@@ -112,7 +111,14 @@ pub async fn provision_target(
 
     // Both platforms receive the dedicated workload-agent grant; a host
     // without one declines every job that declares a secret.
-    let remote_home = remote_home(&ssh_target);
+    // The home the host's own shell states, never /root or /home/<user>
+    // derived from the ssh user; a dry run does not reach the host, so its
+    // preview names the shell's $HOME.
+    let remote_home = if dry_run {
+        "$HOME".to_string()
+    } else {
+        host_channel::remote_home(target, runner).await?
+    };
     let grant = if dry_run {
         AgentGrant::declared(&remote_home)
     } else {

@@ -14,5 +14,7 @@ pub struct CostRow {
     pub cost_usd: Option<f64>,
     /// The provider the job ran on; `None` when the job records none.
     pub target_kind: Option<String>,
-    pub model: String,
+    /// The model the job's command names (`--model`, read by
+    /// [`crate::sizing::model_of`]); `None` when it names none.
+    pub model: Option<String>,
 }

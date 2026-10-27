@@ -14,7 +14,7 @@ use crate::cli::resources::model::{Action, Plan};
 use crate::cli::resources::planner;
 use crate::cli::CmdError;
 
-use super::failure::{fail_action, fail_preflight};
+use super::failure::{fail_action, fail_preflight, preserve_failure};
 
 struct Preflight {
     action_id: String,
@@ -77,19 +77,17 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
         let observed = match context.inspect(action).await {
             Ok(observed) => observed,
             Err(error) => {
-                let message = format!("preflight inspection failed for {}: {error}", action.id);
-                fail_preflight(journal, plan, action, None, &message).await?;
-                let mut wrapped = CmdError::click(message);
-                wrapped.failure = error.failure;
-                return Err(wrapped);
+                let wrapped = error.within(format!("preflight inspection failed for {}", action.id));
+                let recorded = fail_preflight(journal, plan, action, None, &wrapped.to_string()).await;
+                return Err(preserve_failure(wrapped, recorded, plan, action));
             }
         };
         let already_desired = conditions_match(&action.postconditions, &observed);
         if !already_desired && !conditions_match(&action.preconditions, &observed) {
             let detail = explain_mismatch(&action.preconditions, &observed);
             let message = format!("preflight failed for {}: {detail}", action.id);
-            fail_preflight(journal, plan, action, Some(&observed), &message).await?;
-            return Err(CmdError::refused(message));
+            let recorded = fail_preflight(journal, plan, action, Some(&observed), &message).await;
+            return Err(preserve_failure(CmdError::refused(message), recorded, plan, action));
         }
         let applied_by_operation = prior_state.actions.get(&action.id).is_some_and(|item| {
             matches!(
@@ -155,14 +153,11 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
             let dependency_observed = match context.inspect(dependency).await {
                 Ok(observed) => observed,
                 Err(error) => {
-                    let message = format!(
-                        "cannot recheck dependency {} before {}: {error}",
-                        dependency.id, action.id
-                    );
-                    fail_action(journal, plan, action, message.clone()).await?;
-                    let mut wrapped = CmdError::click(message);
-                    wrapped.failure = error.failure;
-                    return Err(wrapped);
+                    let wrapped = error.within(format!(
+                        "cannot recheck dependency {} before {}", dependency.id, action.id
+                    ));
+                    let recorded = fail_action(journal, plan, action, wrapped.to_string()).await;
+                    return Err(preserve_failure(wrapped, recorded, plan, action));
                 }
             };
             if !conditions_match(&dependency.postconditions, &dependency_observed) {
@@ -172,15 +167,15 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
                     action.id,
                     explain_mismatch(&dependency.postconditions, &dependency_observed)
                 );
-                fail_action(journal, plan, action, message.clone()).await?;
-                return Err(CmdError::refused(message));
+                let recorded = fail_action(journal, plan, action, message.clone()).await;
+                return Err(preserve_failure(CmdError::refused(message), recorded, plan, action));
             }
         }
         let immediate = match context.inspect(action).await {
             Ok(observed) => observed,
             Err(error) => {
-                fail_action(journal, plan, action, error.to_string()).await?;
-                return Err(error);
+                let recorded = fail_action(journal, plan, action, error.to_string()).await;
+                return Err(preserve_failure(error, recorded, plan, action));
             }
         };
         if conditions_match(&action.postconditions, &immediate) {
@@ -205,8 +200,8 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
                 action.id,
                 explain_mismatch(&action.preconditions, &immediate)
             );
-            fail_action(journal, plan, action, message.clone()).await?;
-            return Err(CmdError::refused(message));
+            let recorded = fail_action(journal, plan, action, message.clone()).await;
+            return Err(preserve_failure(CmdError::refused(message), recorded, plan, action));
         }
         journal
             .update(&plan.operation_id, |state| {
@@ -232,8 +227,8 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
                     "observed": observed,
                 }),
                 _ => {
-                    fail_action(journal, plan, action, error.to_string()).await?;
-                    return Err(error);
+                    let recorded = fail_action(journal, plan, action, error.to_string()).await;
+                    return Err(preserve_failure(error, recorded, plan, action));
                 }
             },
         };
@@ -245,8 +240,8 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
             Err(error) => match context.inspect(action).await {
                 Ok(observed) if conditions_match(&action.postconditions, &observed) => observed,
                 _ => {
-                    fail_action(journal, plan, action, error.to_string()).await?;
-                    return Err(error);
+                    let recorded = fail_action(journal, plan, action, error.to_string()).await;
+                    return Err(preserve_failure(error, recorded, plan, action));
                 }
             },
         };

@@ -107,6 +107,10 @@ fn the_operator_chooses_how_he_is_asked_and_every_wrong_choice_names_its_cause()
         "\"resend\" is not a channel Stado pages through",
     );
     refused(
+        &deployment.stado(&["alerts", "preferences", "set", "--channel", "sendgrid"]),
+        "\"sendgrid\" is not a channel Stado pages through",
+    );
+    refused(
         &deployment.stado(&[
             "alerts",
             "preferences",

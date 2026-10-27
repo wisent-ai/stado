@@ -36,6 +36,24 @@ pub(super) fn services(block: &Map<String, Value>) -> Result<&Map<String, Value>
         .ok_or_else(|| CmdError::declaration(format!("{DIRECTORY_KEY} carries no services map")))
 }
 
+/// The host the directory says currently serves `service` in a registry
+/// document already read; `None` when the fleet declares nothing about it
+/// (no directory block, no such service, or no active host). A block or
+/// services map that is present and not a map is the error.
+pub(crate) fn active_host_in(document: &Value, service: &str) -> Result<Option<String>, CmdError> {
+    if document.get(DIRECTORY_KEY).is_none() {
+        return Ok(None);
+    }
+    let Some(entry) = services(directory(document)?)?.get(service) else {
+        return Ok(None);
+    };
+    Ok(entry
+        .get("active_host")
+        .and_then(Value::as_str)
+        .filter(|host| !host.is_empty())
+        .map(str::to_string))
+}
+
 pub(super) fn service<'a>(
     block: &'a Map<String, Value>,
     name: &str,
@@ -95,24 +113,30 @@ pub(super) async fn this_target() -> Result<String, CmdError> {
 /// This machine's fleet name, read from a document the caller already holds.
 ///
 /// `service directory connect` read the registry once for the directory and
-/// then twice more through `this_target`, and with the object API refusing,
-/// each read spends its retries before falling back to the copy. Three
-/// sequential reads outlast the limit of every agent hook that asks for
-/// Brama's address, so every hooked tool call is refused. One document
-/// answers all three questions, from one generation.
+/// then twice more through `this_target`, each read its own wait on the
+/// object API before the copy. Three sequential reads outlast the limit of
+/// every agent hook that asks for Brama's address, so every hooked tool call
+/// is refused. One document answers all three questions, from one generation.
 pub(super) fn this_target_in(document: &Value) -> Result<String, CmdError> {
+    named_target_in(document)?.ok_or_else(|| {
+        CmdError::missing(format!(
+            "host {} is not in {}",
+            crate::providers::vast::system_hostname(),
+            targets::registry_location()
+        ))
+    })
+}
+
+/// This machine's fleet name in `document`, or `None` when the registry
+/// does not name this machine; a registry that cannot be read for it is
+/// the error.
+pub(super) fn named_target_in(document: &Value) -> Result<Option<String>, CmdError> {
     let hostname = crate::providers::vast::system_hostname();
     let registry = targets::load_registry_from_value(document).map_err(CmdError::from)?;
-    registry
+    Ok(registry
         .lookup_self(&hostname)
         .map_err(CmdError::from)?
-        .map(|found| found.name.clone())
-        .ok_or_else(|| {
-            CmdError::missing(format!(
-                "host {hostname} is not in {}",
-                targets::registry_location()
-            ))
-        })
+        .map(|found| found.name.clone()))
 }
 
 /// The address the directory hands one target for one service.

@@ -42,7 +42,12 @@ pub fn to_report(
             // totals of a truncated read are a lower bound and reading them as
             // the answer is how a half-finished relocation looks finished.
             "complete": reading.complete,
-            "remaining": (reading.scanned - reading.decided).max(0),
+            // Marker lines the host printed that this build could not read,
+            // each with its cause; a counter listed here was not totalled.
+            "unreadable": reading.unreadable,
+            // Objects scanned and not yet decided; a host that decided more
+            // than it scanned reports no remainder.
+            "remaining": reading.scanned.saturating_sub(reading.decided).max(reading.scanned - reading.scanned),
         }),
     );
     report.insert(

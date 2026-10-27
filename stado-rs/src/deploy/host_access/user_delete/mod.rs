@@ -202,7 +202,7 @@ pub async fn delete_user(
         Err(error) => Err(error.message),
     };
     match output {
-        Ok(output) if output.ok() => match parse_status(&output.stdout, username) {
+        Ok(output) if output.succeeded() => match parse_status(&output.stdout, username) {
             Ok((status, os_name)) if status == PROTECTED_STATUS => {
                 result.os_name = os_name;
                 result.error = Some(format!(

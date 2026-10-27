@@ -6,6 +6,10 @@ use std::path::Path;
 
 use super::recycle::defers_to_release_handshake;
 
+/// The MainPID systemd reports for a unit that has no main process:
+/// https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.systemd1.html
+const NO_MAIN_PID: u32 = 0;
+
 async fn systemctl_stdout(user: bool, args: &[&str]) -> Result<String, String> {
     let mut command = tokio::process::Command::new("systemctl");
     if user {
@@ -39,8 +43,8 @@ pub(super) async fn recycle_systemd(
     paths: &[String],
     ours: u32,
     log_fn: &mut dyn FnMut(&str),
-) -> Result<usize, String> {
-    let mut restarted = 0usize;
+) -> Result<Vec<String>, String> {
+    let mut restarted = Vec::new();
     for user in [false, true] {
         let listing = systemctl_stdout(
             user,
@@ -70,7 +74,7 @@ pub(super) async fn recycle_systemd(
                 .trim()
                 .parse::<u32>()
                 .map_err(|error| format!("{context}: {unit} reported invalid MainPID: {error}"))?;
-            if main_pid == 0 {
+            if main_pid == NO_MAIN_PID {
                 return Err(format!(
                     "{context}: {unit} was listed running but reported MainPID=0"
                 ));
@@ -117,9 +121,12 @@ pub(super) async fn recycle_systemd(
                 .map_err(|error| format!("{context}: {unit}: MainPID unreadable: {error}"))?
                 .trim()
                 .parse::<u32>()
-                .ok()
-                .filter(|pid| *pid != 0)
-                .ok_or_else(|| format!("{context}: {unit} restarted and has no main pid"))?;
+                .map_err(|error| {
+                    format!("{context}: {unit} restarted and reported an invalid MainPID: {error}")
+                })?;
+            if new_pid == NO_MAIN_PID {
+                return Err(format!("{context}: {unit} restarted and has no main pid"));
+            }
             let verified = crate::deploy::service::running_images(&[new_pid])
                 .map_err(|error| {
                     format!("{context}: {unit} pid {new_pid} image unreadable: {error}")
@@ -134,7 +141,7 @@ pub(super) async fn recycle_systemd(
             log_fn(&format!(
                 "{context}: restarted {unit}; pid {main_pid} held the replaced inode and pid {new_pid} maps the installed inode"
             ));
-            restarted += 1;
+            restarted.push(unit.to_string());
         }
     }
     Ok(restarted)

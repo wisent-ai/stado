@@ -22,8 +22,8 @@ struct Checkout {
 impl Checkout {
     /// A repository whose one commit holds `files`.
     fn committed(case: &str, files: &[(&str, &str)]) -> Self {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("quality-absent-manifest")
+        let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/journeys/quality-absent-manifest")
             .join(format!("{case}-{}", std::process::id()));
         let root = base.join("checkout");
         let home = base.join("home");

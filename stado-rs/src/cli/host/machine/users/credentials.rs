@@ -18,7 +18,12 @@ pub(crate) struct CredentialHost {
 /// host consumes. An absent field is never replaced with a conventional path:
 /// a plausible default is precisely how two vaults can both receive real writes.
 pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdError> {
-    let target = crate::cli::canonical_host(target).await?;
+    credential_host_at(crate::cli::canonical_host(target).await?).await
+}
+
+/// [`credential_host`] for a host the caller already resolved from the
+/// registry it read.
+pub(crate) async fn credential_host_at(target: ComputeTarget) -> Result<CredentialHost, CmdError> {
     let runner = crate::deploy::production_runner();
     let home = crate::deploy::host_channel::remote_home(&target, &runner)
         .await
@@ -72,7 +77,7 @@ pub(crate) async fn gnupg_home(
     )
     .await
     .map_err(CmdError::from)?;
-    if !environment.ok() {
+    if !environment.succeeded() {
         return Err(CmdError::click(format!(
             "{}: GNUPGHOME could not be resolved from the host environment",
             target.name
@@ -104,7 +109,6 @@ pub(crate) async fn release_managed_skarbiec(
     runner: &crate::deploy::Runner,
     home: &str,
 ) -> Result<String, CmdError> {
-    let legacy = format!("{home}/.stado/bin/skarbiec");
     // The authority first, then the last-known-good copy the host channel
     // already resolves hosts from. Credential custody is how a broken bearer
     // is repaired, and the authority is served by the object API, which
@@ -123,7 +127,19 @@ pub(crate) async fn release_managed_skarbiec(
             .stating(crate::primitives::failure::FailureCode::InfraDown)
         })?,
     };
-    let control = crate::release_control::control(&document).map_err(CmdError::declaration)?;
+    release_managed_skarbiec_in(&document, resolved, runner, home).await
+}
+
+/// [`release_managed_skarbiec`] against a registry document the caller
+/// already read, so a command that reads the registry once asks nothing more.
+pub(crate) async fn release_managed_skarbiec_in(
+    document: &Value,
+    resolved: &crate::targets::ComputeTarget,
+    runner: &crate::deploy::Runner,
+    home: &str,
+) -> Result<String, CmdError> {
+    let legacy = format!("{home}/.stado/bin/skarbiec");
+    let control = crate::release_control::control(document).map_err(CmdError::declaration)?;
     let Some(control) = control else {
         return Ok(legacy);
     };
@@ -148,7 +164,7 @@ pub(crate) async fn release_managed_skarbiec(
     let output = crate::deploy::host_channel::run_program(resolved, &invocation, runner)
         .await
         .map_err(CmdError::from)?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(CmdError::click(format!(
             "{}: release-controlled Skarbiec has no available active binary: {}",
             resolved.name,

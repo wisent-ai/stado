@@ -141,8 +141,13 @@ impl GceClient {
                 ))
             }
         };
-        let parsed = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
-        let error = parsed.get("error").cloned().unwrap_or(Value::Null);
+        // A body that is the documented error envelope is quoted by its
+        // codes and message; any other body is quoted whole below, so
+        // nothing is read as a message the API did not write.
+        let error = match serde_json::from_str::<Value>(&text) {
+            Ok(parsed) => parsed["error"].clone(),
+            Err(_not_json) => Value::Null,
+        };
         let mut codes = Vec::new();
         if let Some(entries) = error.get("errors").and_then(Value::as_array) {
             for entry in entries {
@@ -156,7 +161,10 @@ impl GceClient {
                 }
             }
         }
-        let message = error.get("message").and_then(Value::as_str).unwrap_or("");
+        let message = match error.get("message").and_then(Value::as_str) {
+            Some(message) => message,
+            None => "",
+        };
         let detail = if message.is_empty() && codes.is_empty() {
             text.to_string()
         } else {

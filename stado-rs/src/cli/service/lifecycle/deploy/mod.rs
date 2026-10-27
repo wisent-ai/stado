@@ -72,10 +72,19 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
                      `stado service declare --file`; the directory names no service '{name}'"
                 )));
             };
-            let Some(declared) = crate::declaration::ServiceDeclaration::from_entry(&entry) else {
-                return Err(CmdError::usage(format!(
-                    "deploy needs --from PATH or --from-artifact REF: '{name}' is declared without a source"
-                )));
+            let declared = match crate::declaration::ServiceDeclaration::from_entry(&entry) {
+                Ok(Some(declared)) => declared,
+                Ok(None) => {
+                    return Err(CmdError::usage(format!(
+                        "deploy needs --from PATH or --from-artifact REF: '{name}' is declared \
+                         without a source"
+                    )))
+                }
+                Err(error) => {
+                    return Err(CmdError::declaration(format!(
+                        "{name}: the directory's declaration cannot be read by this build: {error}"
+                    )))
+                }
             };
             if let Some(image) = declared.source.artifact.strip_prefix(OCI_SCHEME) {
                 // A container image pinned by digest: the runtime the run
@@ -190,17 +199,13 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
         // running-but-unmanaged state this command family closes, so say
         // what happened and name the one command that repairs it.
         Err(exc) => {
-            let detail = exc
-                .message
-                .unwrap_or_else(|| "registry write failed".to_string());
-            // The registry write's own class survives the added repair advice.
-            let mut wrapped = CmdError::click(format!(
-                "{host}: {name} is deployed and running, but recording it failed: {detail}. \
-                 Run `stado service adopt {} --host {host}` to bring it under management.",
+            // `within` keeps the error's own words and class, whatever shape
+            // it came in, under the sentence that says what was being done.
+            return Err(exc.within(format!(
+                "{host}: {name} is deployed and running, but recording it failed \
+                 (run `stado service adopt {} --host {host}` to bring it under management)",
                 record.unit_id()
-            ));
-            wrapped.failure = exc.failure;
-            return Err(wrapped);
+            )));
         }
     };
     // The version is the point of --from-artifact: without it the operator is

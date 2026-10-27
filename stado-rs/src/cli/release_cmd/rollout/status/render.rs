@@ -26,20 +26,21 @@ pub(super) fn print_runs(runs: &[Value]) {
         println!("--- pipeline runs (newest first):");
     }
     for run in runs {
+        // The build the run consumes, so `stado build status` can be asked
+        // about the jobs without reading the run JSON; a run that names none
+        // prints no build.
+        let build = match run["build_id"].as_str() {
+            Some(build) => format!(" build={build}"),
+            None => String::new(),
+        };
         println!(
-            "run {} {} {} {} {} {}{}",
+            "run {} {} {} {} {} {}{build}",
             recorded(run, "run_id"),
             recorded(run, "product"),
             recorded(run, "version"),
             recorded(run, "channel"),
             recorded(run, "state"),
             recorded(run, "updated_at"),
-            // The build the run consumes, so `stado build status` can be
-            // asked about the jobs without reading the run JSON.
-            run["build_id"]
-                .as_str()
-                .map(|build| format!(" build={build}"))
-                .unwrap_or_default(),
         );
         // Each platform on its own line: the run-level state alone reads
         // as a promise, while "linux-amd64 submitted job=<id> [running]" is a
@@ -84,11 +85,15 @@ pub(super) fn print_runs(runs: &[Value]) {
             }
         }
         for (name, record) in run["deliveries"].as_object().into_iter().flatten() {
+            use crate::cli::reporting::field;
             println!(
                 "  delivery {name} state={} platform={} required={} job_id={}",
-                record["state"], record["platform"], record["required"], record["job_id"]
+                field(&record["state"]),
+                field(&record["platform"]),
+                field(&record["required"]),
+                field(&record["job_id"])
             );
-            println!("    output prefix: {}", record["output_prefix"]);
+            println!("    output prefix: {}", field(&record["output_prefix"]));
             if let Some(digest) = record["receipt_sha256"].as_str() {
                 println!("    accepted receipt SHA-256: {digest}");
             }

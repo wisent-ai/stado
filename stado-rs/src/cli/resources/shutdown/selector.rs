@@ -10,15 +10,24 @@ use crate::cli::resources::model::{
 use crate::cli::CmdError;
 
 pub(super) fn parse_selector(project: &str, selector: &str) -> Result<Action, CmdError> {
-    let (provider, rest) = selector.split_once(':').unwrap_or((selector, ""));
-    let (resource_type, locator) = rest.split_once(':').unwrap_or((rest, ""));
+    // The selector is three colon-separated parts; one with fewer, or whose
+    // provider is not the one this command drives, is refused with the shape.
+    let shape = || {
+        CmdError::usage(format!(
+            "resource {selector:?} must use gcp:TYPE:LOCATION/NAME"
+        ))
+    };
+    let Some((provider, rest)) = selector.split_once(':') else {
+        return Err(shape());
+    };
+    let Some((resource_type, locator)) = rest.split_once(':') else {
+        return Err(shape());
+    };
     if !crate::capabilities::ProviderId::Gcp.matches(provider)
         || resource_type.is_empty()
         || locator.is_empty()
     {
-        return Err(CmdError::usage(format!(
-            "resource {selector:?} must use gcp:TYPE:LOCATION/NAME"
-        )));
+        return Err(shape());
     }
     let (location, name) = if resource_type == "cloud-sql" {
         (None, locator)

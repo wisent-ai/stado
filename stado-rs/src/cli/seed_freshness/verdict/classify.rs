@@ -25,44 +25,41 @@ pub fn classify(seed_state: &str, attempts: &[Attempt]) -> Verdict {
         .iter()
         .filter(|attempt| attempt.code_submitted)
         .collect();
-    if submitting.is_empty() {
+    let Some(newest) = submitting.last() else {
         // Nothing ever put a code from this seed in front of the provider.
         // Failures that never reached the step are a different condition, and
         // no failures at all is simply untested.
-        let unreached = ordered
+        let unreached: Vec<&&Attempt> = ordered
             .iter()
             .filter(|attempt| attempt.authenticator_unreached || attempt.result != "signed_in")
-            .count();
-        return if unreached > 0 {
-            Verdict::PresentFailingElsewhere {
-                attempts: unreached,
-            }
-        } else {
+            .collect();
+        return if unreached.is_empty() {
             Verdict::PresentUntested
-        };
-    }
-
-    // The newest submission that was NOT refused is the last moment this seed
-    // is known to have matched. Everything after it, if every one of those was
-    // refused, is the streak that proves the seed no longer matches.
-    let last_good = submitting
-        .iter()
-        .rposition(|attempt| !attempt.code_rejected);
-    match last_good {
-        Some(index) if index + 1 == submitting.len() => Verdict::LastKnownGood {
-            at: submitting[index].at.clone(),
-        },
-        other => {
-            let start = other.map_or(0, |index| index + 1);
-            let streak = &submitting[start..];
-            Verdict::RejectedSince {
-                since: streak
-                    .first()
-                    .map(|attempt| attempt.at.clone())
-                    .unwrap_or_default(),
-                attempts: streak.len(),
-                locked_out: streak.iter().any(|attempt| attempt.locked_out),
+        } else {
+            Verdict::PresentFailingElsewhere {
+                attempts: unreached.len(),
             }
-        }
+        };
+    };
+
+    // The run of refused submissions that ends the history, newest first. An
+    // empty run means the newest submission matched: the last moment this
+    // seed is known good. Otherwise the run is the streak that proves the seed
+    // no longer matches, beginning at its oldest refusal.
+    let streak: Vec<&&Attempt> = submitting
+        .iter()
+        .rev()
+        .take_while(|attempt| attempt.code_rejected)
+        .copied()
+        .collect();
+    match streak.last() {
+        None => Verdict::LastKnownGood {
+            at: newest.at.clone(),
+        },
+        Some(oldest_refusal) => Verdict::RejectedSince {
+            since: oldest_refusal.at.clone(),
+            attempts: streak.len(),
+            locked_out: streak.iter().any(|attempt| attempt.locked_out),
+        },
     }
 }

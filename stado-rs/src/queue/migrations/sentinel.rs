@@ -48,12 +48,19 @@ pub(super) async fn read_sentinel(store: &JobStorage) -> Result<Sentinel, Storag
     if value.get("coverage").and_then(serde_json::Value::as_str) != Some(COVERAGE) {
         return Ok(fresh);
     }
-    Ok(Sentinel {
-        done: value
-            .get("done")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
-    })
+    // `done` is a boolean the sweep wrote; absent, the sweep is not done.
+    // A `done` of another type is a sentinel nobody wrote and is refused,
+    // since reading it as not done would restart a finished sweep forever.
+    let done = match value.get("done") {
+        None | Some(serde_json::Value::Null) => fresh.done,
+        Some(serde_json::Value::Bool(done)) => *done,
+        Some(other) => {
+            return Err(StorageError::Other(format!(
+                "the migration sentinel at {SENTINEL_PATH} holds done = {other}, not a boolean"
+            )))
+        }
+    };
+    Ok(Sentinel { done })
 }
 
 /// Whether some sweep has covered `queue/` end-to-end under the current

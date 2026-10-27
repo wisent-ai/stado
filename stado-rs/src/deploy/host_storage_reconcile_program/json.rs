@@ -4,13 +4,11 @@
 //! compared against these bytes, so the encoding is part of the file format.
 
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use super::fs::{fsync_dir, make_private_dirs, parent_of, PRIVATE_FILE};
+use super::fs::{make_private_dirs, parent_of};
 use super::Step;
 
 /// The first character the transaction's JSON escapes: DEL, then everything
@@ -29,10 +27,10 @@ fn write_value(value: &Value, out: &mut String) {
             let mut keys: Vec<&String> = map.keys().collect();
             keys.sort();
             out.push('{');
-            for (index, key) in keys.into_iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
+            let mut separator = "";
+            for key in keys {
+                out.push_str(separator);
+                separator = ",";
                 write_string(key, out);
                 out.push(':');
                 write_value(&map[key], out);
@@ -41,10 +39,10 @@ fn write_value(value: &Value, out: &mut String) {
         }
         Value::Array(items) => {
             out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
+            let mut separator = "";
+            for item in items {
+                out.push_str(separator);
+                separator = ",";
                 write_value(item, out);
             }
             out.push(']');
@@ -56,13 +54,12 @@ fn write_value(value: &Value, out: &mut String) {
 
 fn write_string(text: &str, out: &mut String) {
     let quoted = Value::String(text.to_string()).to_string();
-    let mut units = [0u16; 2];
     for character in quoted.chars() {
         if character < FIRST_ESCAPED {
             out.push(character);
             continue;
         }
-        for unit in character.encode_utf16(&mut units) {
+        for unit in character.to_string().encode_utf16() {
             out.push_str(&format!("\\u{unit:04x}"));
         }
     }
@@ -76,21 +73,48 @@ pub(super) fn now() -> Step<Value> {
     Ok(json!(elapsed.as_secs_f64()))
 }
 
-/// Whether a field is present and not empty, zero, false or null.
-pub(super) fn truthy(value: Option<&Value>) -> bool {
+/// A recorded boolean, such as the queue fence's `drained` and `resumed`,
+/// which its writer always records; anything but a JSON boolean is refused by
+/// name.
+pub(super) fn flag(value: Option<&Value>, field: &str) -> Step<bool> {
     match value {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(flag)) => *flag,
-        Some(Value::Number(number)) => number.as_f64().is_some_and(|value| value != 0.0),
-        Some(Value::String(text)) => !text.is_empty(),
-        Some(Value::Array(items)) => !items.is_empty(),
-        Some(Value::Object(map)) => !map.is_empty(),
+        Some(Value::Bool(flag)) => Ok(*flag),
+        None | Some(Value::Null) => Err(format!("{field} is not recorded")),
+        Some(other) => Err(format!("{field} is {other}, not a boolean")),
     }
 }
 
-pub(super) fn object<'a>(value: &'a Value, key: &str) -> &'a Map<String, Value> {
-    static EMPTY: std::sync::LazyLock<Map<String, Value>> = std::sync::LazyLock::new(Map::new);
-    value.get(key).and_then(Value::as_object).unwrap_or(&EMPTY)
+/// Whether a time is recorded: absent or null is not, epoch seconds (a
+/// positive, normal number) is, and the zero a writer starts a field at is
+/// not; any other value is refused by name.
+pub(super) fn time_recorded(value: Option<&Value>, field: &str) -> Step<bool> {
+    match value {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Number(number)) => Ok(number
+            .as_f64()
+            .is_some_and(|seconds| seconds.is_normal() && seconds.is_sign_positive())),
+        Some(other) => Err(format!("{field} is {other}, not epoch seconds")),
+    }
+}
+
+/// Whether a text is recorded: absent or null is not, a non-empty string is,
+/// and an empty string or any other value is refused by name.
+pub(super) fn text_recorded(value: Option<&Value>, field: &str) -> Step<bool> {
+    match value {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::String(text)) if !text.is_empty() => Ok(true),
+        Some(other) => Err(format!("{field} is {other}, not a recorded text")),
+    }
+}
+
+/// Whether a document is recorded: absent or null is not, a JSON object is,
+/// and any other value is refused by name.
+pub(super) fn document_recorded(value: Option<&Value>, field: &str) -> Step<bool> {
+    match value {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Object(_)) => Ok(true),
+        Some(other) => Err(format!("{field} is {other}, not a document")),
+    }
 }
 
 pub(super) fn list<'a>(value: &'a Value, key: &str, label: &str) -> Step<&'a Vec<Value>> {
@@ -105,20 +129,14 @@ pub(super) fn read_json(path: &str) -> Result<Value, String> {
     serde_json::from_slice(&bytes).map_err(|error| error.to_string())
 }
 
+/// The transaction's canonical bytes at `path`, owner-only, through the one
+/// way Stado replaces a file it keeps ([`crate::primitives::document::persist`]):
+/// staged, flushed, renamed and the directory flushed.
 pub(super) fn atomic_json(path: &str, value: &Value) -> Step<()> {
-    let parent = parent_of(path);
-    make_private_dirs(&parent)?;
-    let temporary = format!("{path}.new");
-    let written = (|| -> std::io::Result<()> {
-        let mut file = fs::File::create(&temporary)?;
-        file.write_all(canonical(value).as_bytes())?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(PRIVATE_FILE))?;
-        fs::rename(&temporary, path)
-    })();
-    written.map_err(|error| format!("cannot write {path}: {error}"))?;
-    fsync_dir(&parent)
+    make_private_dirs(&parent_of(path)?)?;
+    let bytes = format!("{}\n", canonical(value));
+    crate::primitives::document::persist(std::path::Path::new(path), bytes.as_bytes())
+        .map_err(|error| format!("cannot write {path}: {error}"))
 }
 
 /// The document at `path` and its reference: path, SHA-256 and length of

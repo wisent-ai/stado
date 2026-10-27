@@ -63,11 +63,12 @@ pub(crate) async fn secret_sync(options: SecretSyncOptions<'_>) -> Result<(), Cm
             None if restart_after_sync => "skipped".to_string(),
             None => "not requested".to_string(),
         };
-        let detail = restarted
-            .as_ref()
-            .map(|report| report.detail.as_str())
-            .filter(|detail| !detail.is_empty())
-            .unwrap_or(&synced.detail);
+        // The row's detail is the restart's when one ran and said
+        // something; otherwise the sync's own detail stands.
+        let detail = match &restarted {
+            Some(report) if !report.detail.is_empty() => report.detail.as_str(),
+            Some(_) | None => synced.detail.as_str(),
+        };
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),

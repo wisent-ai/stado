@@ -1,11 +1,11 @@
-//! One object body, resumed after a truncated read and then ranged. A
-//! connection the object API refuses ends the read at once with that cause.
+//! One object body, read whole or, when too large, in ranges. Every error
+//! the object API answers with ends the read at once with that cause.
 
 use crate::cli::storage::*;
 
 impl RemoteObjectApi {
     pub(in crate::cli::storage) async fn get(&self, uri: &str) -> Result<Vec<u8>, CmdError> {
-        self.get_object_resumable(uri, false).await?.ok_or_else(|| {
+        self.get_object_whole(uri, false).await?.ok_or_else(|| {
             CmdError::click(format!("object disappeared during GET: {uri}"))
                 .stating(crate::primitives::failure::FailureCode::NotFound)
         })
@@ -15,7 +15,7 @@ impl RemoteObjectApi {
         &self,
         uri: &str,
     ) -> Result<Option<Vec<u8>>, CmdError> {
-        self.get_object_resumable(uri, true).await
+        self.get_object_whole(uri, true).await
     }
 
     async fn get_object_in_ranges(
@@ -31,24 +31,24 @@ impl RemoteObjectApi {
 
         'download: loop {
             let start = body.len();
-            let end = start.saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1));
-            let response = match sent(
+            // The last byte of this chunk: a Range header names it inclusively.
+            let Some(end) = (start..start.saturating_add(OBJECT_API_CHUNK_BYTES)).next_back()
+            else {
+                return Err(CmdError::click(
+                    "OBJECT_API_CHUNK_BYTES declares no bytes per ranged object GET",
+                )
+                .stating(crate::primitives::failure::FailureCode::Config));
+            };
+            let response = sent(
                 self.request_as(reqwest::Method::GET, endpoint.clone(), bearer)
                     .header(reqwest::header::RANGE, format!("bytes={start}-{end}")),
             )
             .await
-            {
-                Ok(response) => response,
-                Err(error) => {
-                    let cause = match crate::wait::refusal(&error) {
-                        Some(cause) => format!("the object API refused the connection: {cause}"),
-                        None => crate::cli::http_failure(&error),
-                    };
-                    return Err(CmdError::unreachable(format!(
-                        "authenticated object GET of the range beginning at {start} failed: {cause}"
-                    )));
-                }
-            };
+            .map_err(|error| {
+                error.within(format!(
+                    "authenticated object GET of the range beginning at {start} failed"
+                ))
+            })?;
             if response.status() == reqwest::StatusCode::NOT_FOUND && body.is_empty() && optional {
                 return Ok(None);
             }
@@ -98,115 +98,60 @@ impl RemoteObjectApi {
         }
     }
 
-    async fn get_object_resumable(
+    /// One GET of the whole object. Every error the object API answers with
+    /// ends the read at once with that cause, as the ranged read does: a GET
+    /// sent again after a refused connection, a failed send or a body cut
+    /// short only waits on the same dependency again.
+    async fn get_object_whole(
         &self,
         uri: &str,
         optional: bool,
     ) -> Result<Option<Vec<u8>>, CmdError> {
         let endpoint = self.endpoint("/api/object", &[("uri", uri)])?;
         let bearer = self.release_bearer(uri).await?;
-        let mut body = Vec::new();
-        let mut last_read_error = None;
+        let request = self.request_as(reqwest::Method::GET, endpoint.clone(), bearer.as_deref());
+        let response = sent(request)
+            .await
+            .map_err(|error| error.within("authenticated object GET failed"))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND && optional {
+            return Ok(None);
+        }
+        if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            drop(response);
+            return self
+                .get_object_in_ranges(endpoint, bearer.as_deref(), optional)
+                .await;
+        }
+        if !response.status().is_success() {
+            return Err(self.response_error(response, bearer.as_deref()).await);
+        }
 
-        for recovery in 0..=3 {
-            let mut request =
-                self.request_as(reqwest::Method::GET, endpoint.clone(), bearer.as_deref());
-            if !body.is_empty() {
-                request = request.header(reqwest::header::RANGE, format!("bytes={}-", body.len()));
-            }
-            let response = match sent(request).await {
-                Ok(response) => response,
-                Err(error) => {
-                    // A refused connection ends the read at once: sending the
-                    // same GET again only waits on the same refusal.
-                    if let Some(cause) = crate::wait::refusal(&error) {
+        let total = declared_size(&response, "object GET")?;
+        let mut body = Vec::new();
+        if let Some(total) = total {
+            body.reserve(total);
+        }
+        let mut response = response;
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+                Ok(None) => match total {
+                    Some(total) if body.len() != total => {
                         return Err(CmdError::unreachable(format!(
-                            "the object API refused the object GET after {} bytes: {cause}",
+                            "Stado object API object GET response ended after {} of {total} bytes",
                             body.len()
                         )));
                     }
-                    last_read_error = Some(format!(
-                        "error sending authenticated object GET after {} bytes: {}",
-                        body.len(),
-                        crate::cli::http_failure(&error)
-                    ));
-                    if recovery == 3 {
-                        break;
-                    }
-                    continue;
+                    _ => return Ok(Some(body)),
+                },
+                Err(error) => {
+                    return Err(CmdError::unreachable(format!(
+                        "Stado object API object GET response body connection closed before \
+                         completion after {} bytes: {error}",
+                        body.len()
+                    )));
                 }
-            };
-            if response.status() == reqwest::StatusCode::NOT_FOUND && body.is_empty() && optional {
-                return Ok(None);
-            }
-            if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE && body.is_empty() {
-                drop(response);
-                return self
-                    .get_object_in_ranges(endpoint, bearer.as_deref(), optional)
-                    .await;
-            }
-            if !response.status().is_success() {
-                return Err(self.response_error(response, bearer.as_deref()).await);
-            }
-            if !body.is_empty() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                return Err(CmdError::click(format!(
-                    "Stado object API object GET refused byte resume at offset {}",
-                    body.len()
-                ))
-                .stating(crate::primitives::failure::FailureCode::InfraDown));
-            }
-
-            let expected_start = body.len();
-            let total = if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-                Some(resumed_content_total(
-                    &response,
-                    expected_start,
-                    "object GET",
-                )?)
-            } else {
-                response
-                    .content_length()
-                    .and_then(|length| usize::try_from(length).ok())
-            };
-            if let Some(total) = total {
-                body.reserve(total.saturating_sub(body.capacity()));
-            }
-
-            let mut response = response;
-            loop {
-                match response.chunk().await {
-                    Ok(Some(chunk)) => body.extend_from_slice(&chunk),
-                    Ok(None) if total.is_some_and(|total| body.len() != total) => {
-                        last_read_error = Some(format!(
-                            "Stado object API object GET response ended after {} of {} bytes",
-                            body.len(),
-                            total.unwrap_or_default()
-                        ));
-                        break;
-                    }
-                    Ok(None) => return Ok(Some(body)),
-                    Err(error) => {
-                        last_read_error = Some(format!(
-                            "Stado object API object GET response body connection closed before \
-                             completion after {} bytes: {error}",
-                            body.len()
-                        ));
-                        break;
-                    }
-                }
-            }
-            if recovery == 3 {
-                break;
             }
         }
-
-        // The last read's own failure when there was one; otherwise every
-        // attempt answered and the resume budget itself ran out.
-        Err(match last_read_error {
-            Some(error) => CmdError::unreachable(error),
-            None => {
-                CmdError::unreachable("authenticated object GET exhausted its byte-resume attempts")
-            }
-        })
     }
 }

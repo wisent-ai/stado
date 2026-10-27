@@ -54,7 +54,7 @@ pub async fn reconcile_host_worker(
         .read(true)
         .write(true)
         .create(true)
-        .mode(0o600)
+        .mode(crate::primitives::file_mode::owner_read_write())
         .custom_flags(nix::libc::O_NOFOLLOW)
         .open(&lock_path)
         .map_err(DeployError::io(
@@ -73,20 +73,14 @@ pub async fn reconcile_host_worker(
         .stating(failure)
     })?;
     let descriptor = operation_lock.as_raw_fd();
-    // SAFETY: `descriptor` is owned by `operation_lock`; F_GETFD/F_SETFD do
-    // not consume it. Clearing CLOEXEC deliberately carries the same locked
-    // open-file description through every locally spawned lifecycle effect.
-    let flags = unsafe { nix::libc::fcntl(descriptor, nix::libc::F_GETFD) };
-    if flags < 0
-        || unsafe {
-            nix::libc::fcntl(
-                descriptor,
-                nix::libc::F_SETFD,
-                flags & !nix::libc::FD_CLOEXEC,
-            )
-        } < 0
-    {
-        let error = std::io::Error::last_os_error();
+    // Clearing CLOEXEC deliberately carries the same locked open-file
+    // description through every locally spawned lifecycle effect.
+    let inheritable = nix::fcntl::fcntl(&operation_lock, nix::fcntl::FcntlArg::F_GETFD).and_then(|bits| {
+        let flags = nix::fcntl::FdFlag::from_bits_truncate(bits) - nix::fcntl::FdFlag::FD_CLOEXEC;
+        nix::fcntl::fcntl(&operation_lock, nix::fcntl::FcntlArg::F_SETFD(flags))
+    });
+    if let Err(errno) = inheritable {
+        let error = std::io::Error::from(errno);
         return Err(DeployError(format!(
             "cannot make native transaction lock inheritable: {error}"
         ))
@@ -159,7 +153,14 @@ pub async fn reconcile_host_worker(
             ))
         })?),
     };
-    let revision = previous.unwrap_or_default().saturating_add(1);
+    // The first owner draws the first revision; each later one the next.
+    let revision = match previous {
+        Some(mut revision) => {
+            crate::primitives::tally::Tally::tally(&mut revision);
+            revision
+        }
+        None => crate::primitives::tally::FIRST_DRAW,
+    };
     let mut owner = json!({
         "schema": "stado.storage-root-owner.v1",
         "transaction": transaction,

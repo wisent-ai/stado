@@ -94,11 +94,12 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             )));
         }
         if let Some(object) = host.as_object_mut() {
-            let list = object
-                .get("vaults")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+            // A host whose probe reported no vaults holds none; the
+            // authority verdict is still written so the row says so.
+            let list: Vec<Value> = match object.get("vaults").and_then(Value::as_array) {
+                Some(vaults) => vaults.clone(),
+                None => Vec::new(),
+            };
             object.insert(
                 "authority".to_string(),
                 match (&declared, &owner_route) {
@@ -129,17 +130,18 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             println!("{name}: {absent}");
             continue;
         }
-        let list = host
-            .get("vaults")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+        // A host row that reports no vault list holds none: the listing
+        // reads `vaults` only where the probe wrote it.
+        let list: &[Value] = match host.get("vaults").and_then(Value::as_array) {
+            Some(vaults) => vaults.as_slice(),
+            None => &[],
+        };
+        // The authority verdict names the path it chose; a verdict without
+        // one (no authority) marks no line.
         let authority = host.get("authority");
-        let chosen = authority
+        let chosen: Option<&str> = authority
             .and_then(|verdict| verdict.get("path"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+            .and_then(Value::as_str);
         println!("{name}: {} vault(s)", list.len());
         for vault in list {
             let path = match vault.get("path").and_then(Value::as_str) {
@@ -150,7 +152,7 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             // read on that host goes through. Reading a count without it told
             // an operator how much is held and nothing about which store
             // answers.
-            let marker = if !chosen.is_empty() && path == chosen {
+            let marker = if chosen == Some(path.as_str()) {
                 "*"
             } else {
                 " "
@@ -178,24 +180,18 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             }
         }
     }
+    // A total the summary did not report is said so: zero unreachable hosts
+    // read as an all-clear.
+    let total = |key: &str| match summary.get(key).and_then(Value::as_u64) {
+        Some(total) => total.to_string(),
+        None => format!("(no {key} count)"),
+    };
     println!(
         "{} host(s), {} unreachable, {} vault(s), {} item(s)",
-        summary
-            .get("hosts")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        summary
-            .get("unreachable")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        summary
-            .get("vaults")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        summary
-            .get("items")
-            .and_then(Value::as_u64)
-            .unwrap_or_default()
+        total("hosts"),
+        total("unreachable"),
+        total("vaults"),
+        total("items"),
     );
     Ok(())
 }

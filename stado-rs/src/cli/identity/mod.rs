@@ -9,8 +9,8 @@
 //!
 //!   list                         what does the registry claim
 //!   verify                       what does each host confirm right now
-//!   relay-challenge --provider   capture on the holder and store on the worker
-//!   issue-capabilities --provider  the grants one provider login redeems
+//!   relay --provider             capture on the holder and store on the worker
+//!   issue --provider             the grants one provider login redeems
 //!
 //! `verify` reads the host rather than trusting the declaration, because these
 //! identities are granted elsewhere and revoked without notice: an Apple account

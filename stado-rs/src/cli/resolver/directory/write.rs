@@ -25,9 +25,12 @@ use crate::queue::StorageError;
 /// store. A copy that cannot be read is the error: taken for no copy, the
 /// write landed in the store instead of on the authority. A lost condition
 /// is [`StorageError::StorageConflict`], as the store's own swap reports it.
+/// `fence` is the transaction whose write fence holds the authority's store,
+/// when the writer is the role move that armed it; any other fence refuses.
 pub(crate) async fn authority_compare_and_swap(
     expected: &str,
     content: &str,
+    fence: Option<&str>,
 ) -> Result<Option<String>, StorageError> {
     let Some(copy) = kept_last_good_document().map_err(StorageError::Other)? else {
         return Ok(None);
@@ -49,13 +52,28 @@ pub(crate) async fn authority_compare_and_swap(
     else {
         return Ok(None);
     };
+    // An authority whose snapshot read was given up less than one refresh
+    // interval ago is not sent a write either: the write would stand on the
+    // same silent host, and every registry write of this command — a
+    // placement claim, an authority takeover — waited the whole interval in
+    // turn. The earlier read's sentence is the refusal, so the caller goes on
+    // to what that sentence names.
+    if let Some(standing) = super::remembered::unanswered::standing(&target) {
+        return Err(StorageError::Other(format!(
+            "registry write through authority {target} is not sent: {standing}"
+        )));
+    }
     // The guards a whole-document replace earns already ran here against the
     // document at `expected`; the authority's swap is conditional on that
     // same generation, so its own guards are told the decision was made.
     let remote = format!(
-        "{} registry push - --if-generation {} --force --allow-empty-fleet --json",
+        "{} registry push - --if-generation {} --force --allow-empty-fleet --json{}",
         crate::deploy::shlex_quote(&command),
-        crate::deploy::shlex_quote(expected)
+        crate::deploy::shlex_quote(expected),
+        match fence {
+            Some(transaction) => format!(" --fence-transaction {}", crate::deploy::shlex_quote(transaction)),
+            None => String::new(),
+        }
     );
     let mut failures = Vec::new();
     for path in &ssh {
@@ -75,18 +93,19 @@ pub(crate) async fn authority_compare_and_swap(
 fn swapped(target: &str, expected: &str, output: &Output) -> Result<String, StorageError> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let receipt = serde_json::from_slice::<Value>(&output.stdout);
-    let generation = receipt
-        .as_ref()
-        .ok()
-        .and_then(|receipt| receipt.get("generation"))
-        .and_then(Value::as_str);
-    if let Some(generation) = generation {
-        return Ok(generation.to_string());
+    // A receipt that parsed and names a generation is the answer; one that
+    // did not parse, or names none, is reported below with what it was.
+    if let Ok(receipt) = &receipt {
+        if let Some(generation) = receipt.get("generation").and_then(Value::as_str) {
+            return Ok(generation.to_string());
+        }
     }
-    let status = output
+    // The channel's exit status and the declared conflict exit are compared
+    // as wide integers, so no conversion can fail between them.
+    let conflict = output
         .exit_status
-        .and_then(|status| i32::try_from(status).ok());
-    if status == Some(REGISTRY_CONFLICT_EXIT) {
+        .is_some_and(|status| i64::from(status) == i64::from(REGISTRY_CONFLICT_EXIT));
+    if conflict {
         return Err(StorageError::StorageConflict(format!(
             "registry authority {target} refused the write conditional on generation {expected}: {}",
             stderr.trim()

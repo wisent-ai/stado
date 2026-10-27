@@ -51,7 +51,7 @@ async fn acquisition_scratch(
     )
     .await
     .map_err(|error| error.to_string())?;
-    if !made.ok() {
+    if !made.succeeded() {
         return Err(crate::deploy::host_channel::last_error_line(
             &made,
             "could not create a scratch file on the host",
@@ -68,7 +68,7 @@ async fn remove_remote(resolved: &ComputeTarget, paths: &[&str], runner: &crate:
     let mut words = vec!["/bin/rm", "-f"];
     words.extend_from_slice(paths);
     let left = match crate::deploy::host_channel::run_program(resolved, &words, runner).await {
-        Ok(removed) if removed.ok() => return,
+        Ok(removed) if removed.succeeded() => return,
         Ok(removed) => crate::deploy::host_channel::last_error_line(&removed, "rm -f failed"),
         Err(error) => error.to_string(),
     };
@@ -98,7 +98,7 @@ fn catalog_file_name(source: &str) -> Result<String, CmdError> {
     Ok(name.to_string())
 }
 
-/// `stado credentials acquisition-scopes sync --host TARGET SOURCE` — deliver the checked-in
+/// `stado credentials scopes sync --host TARGET SOURCE` — deliver the checked-in
 /// Skarbiec acquisition-scope catalog to TARGET and register it against the
 /// host's fleet vault.
 ///
@@ -179,7 +179,7 @@ pub async fn register_installed_acquisition_scopes(
         let copied = host_channel::run_program(resolved, &words, &runner)
             .await
             .map_err(CmdError::from)?;
-        if !copied.ok() {
+        if !copied.succeeded() {
             return Err(CmdError::click(format!(
                 "{}: the acquisition-scope catalog {installed} could not be staged at {staged}: {}",
                 resolved.name,

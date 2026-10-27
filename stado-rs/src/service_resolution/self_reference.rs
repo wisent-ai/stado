@@ -30,10 +30,15 @@ pub struct SelfReferencingEndpoint {
 }
 
 /// Normalize an address both sides spell differently — a bind is
-/// `127.0.0.1:17614`, an endpoint is `http://127.0.0.1:17614` — so the
+/// `<address>:<port>`, an endpoint is `http://<address>:<port>` — so the
 /// comparison is between sockets rather than between strings.
 pub(super) fn socket_of(url: &str) -> Option<std::net::SocketAddr> {
-    let parsed = url::Url::parse(url).ok()?;
+    // An endpoint that is not a URL names no socket and cannot close a
+    // loop; the directory's validation refuses it on its own terms.
+    let parsed = match url::Url::parse(url) {
+        Ok(parsed) => parsed,
+        Err(_not_a_url) => return None,
+    };
     listener_address(parsed.host_str()?, parsed.port_or_known_default()?)
 }
 
@@ -47,7 +52,10 @@ pub fn listener_address(host: &str, port: u16) -> Option<std::net::SocketAddr> {
     let ip = if host.eq_ignore_ascii_case("localhost") {
         IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
     } else {
-        host.parse::<IpAddr>().ok()?
+        match host.parse::<IpAddr>() {
+            Ok(ip) => ip,
+            Err(_a_name_not_resolved_here) => return None,
+        }
     };
     Some(std::net::SocketAddr::new(ip, port))
 }

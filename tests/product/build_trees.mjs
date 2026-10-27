@@ -12,8 +12,9 @@ import { fileURLToPath } from 'node:url';
 // under test reads a workspace of real git checkouts, lists every rebuildable
 // tree with its bytes, removes those no build holds and keeps everything
 // else. The workspace is a dedicated directory below this checkout's ignored
-// .build. One checkout's origin is a catalog desktop repository, so its
-// SwiftPM `.build` is Stado's to remove; the other's is not, and stays. A
+// .build. One checkout's origin is a catalog desktop repository, so the build
+// directories SwiftPM's links name in its package's `.build` are Stado's to
+// remove, and the checkout's own scratch beside them stays; the other's is not, and stays. A
 // Cargo build lock is held by a real `lockf` process for as long as the test
 // needs the tree in use. Required: STADO_BIN, the Stado executable under test.
 const stado = process.env.STADO_BIN;
@@ -81,10 +82,26 @@ try {
   // package below the root with that package's .build, the checkout's own
   // .build scratch area with no manifest beside it (one Stado run area in
   // it), a Cargo target, a former Stado install run, and what is not
-  // rebuildable beside them.
+  // rebuildable beside them. The package's .build is laid out as SwiftPM
+  // leaves it, a configuration link naming the per-triple build directory,
+  // dependency clones and the state file, an editor's index build inside it
+  // with its own state file and link, and the checkout's own scratch beside
+  // them: a review staging, and a candidate export whose own link names a
+  // directory of the export (no state file, so no SwiftPM scratch). Stado
+  // reads only that the manifest is a file, never what it says.
   const desktop = checkout('example-desktop', 'https://github.com/wisent-ai/tama-desktop.git');
-  write(join(desktop, 'app/Package.swift'), '// swift-tools-version:5.9\n');
-  write(join(desktop, 'app/.build/release/Example'), 'swift build output\n');
+  write(join(desktop, 'app/Package.swift'), '// a package manifest\n');
+  const packageBuild = join(desktop, 'app/.build');
+  write(join(packageBuild, 'arm64-apple-macosx/release/Example'), 'swift build output\n');
+  symlinkSync('arm64-apple-macosx/release', join(packageBuild, 'release'));
+  write(join(packageBuild, 'workspace-state.json'), '{"object": {}}\n');
+  write(join(packageBuild, 'checkouts/dependency/README'), 'a dependency clone\n');
+  write(join(packageBuild, 'index-build/workspace-state.json'), '{"object": {}}\n');
+  write(join(packageBuild, 'index-build/arm64-apple-macosx/debug/index'), 'an editor index build\n');
+  symlinkSync('arm64-apple-macosx/debug', join(packageBuild, 'index-build/debug'));
+  write(join(packageBuild, 'review-staging/notes.txt'), 'a review staging the checkout keeps\n');
+  write(join(packageBuild, 'candidate/inner/output'), 'a candidate export\n');
+  symlinkSync('inner/output', join(packageBuild, 'candidate/out'));
   write(join(desktop, '.build/wisent-source/index'), 'a private index\n');
   write(join(desktop, '.build/scratch/notes.txt'), 'the checkout\'s own scratch\n');
   cache(join(desktop, 'rust/target'), 'cargo build output\n');
@@ -111,7 +128,8 @@ try {
   }
 
   const expected = {
-    [join(desktop, 'app/.build')]: 'desktop_build_tree',
+    [join(desktop, 'app/.build/arm64-apple-macosx')]: 'desktop_build_tree',
+    [join(desktop, 'app/.build/index-build/arm64-apple-macosx')]: 'desktop_build_tree',
     [join(desktop, '.build/wisent-source')]: 'stado_run_area',
     [join(desktop, 'rust/target')]: 'cachedir_tag',
     [join(desktop, '.wisent-output/install')]: 'stado_run_area',
@@ -144,7 +162,9 @@ try {
   assert.deepEqual(inState(removed, 'in_use'), [join(tool, 'target')]);
   assert.equal(readFileSync(join(tool, 'target/payload'), 'utf8'), 'held build output\n');
   for (const kept of ['Sources/main.swift', 'notes/plan.md', 'notes/CACHEDIR.TAG', 'app/Package.swift',
-    '.build/scratch/notes.txt', '.wisent-output/evidence/report.txt']) {
+    '.build/scratch/notes.txt', '.wisent-output/evidence/report.txt', 'app/.build/review-staging/notes.txt',
+    'app/.build/checkouts/dependency/README', 'app/.build/workspace-state.json',
+    'app/.build/index-build/workspace-state.json', 'app/.build/candidate/inner/output']) {
     assert.ok(existsSync(join(desktop, kept)), `${kept} was removed`);
   }
   assert.ok(existsSync(join(tool, '.build/debug/tool')), 'a .build of no desktop product was removed');

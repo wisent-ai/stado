@@ -55,10 +55,11 @@ pub async fn job_liveness(store: &JobStorage, job: &Job, now: DateTime<Utc>) -> 
         .backend()
         .updated_at(&crate::queue::storage::StatusLeaf::Heartbeat.path(&job.job_id))
         .await;
-    // A pulse the coordinator cannot read is not proof of death.
+    // A pulse the coordinator cannot read is not proof of death: the job is
+    // kept, as a record the reaper cannot read is kept.
     let pulsed = match pulse {
         Ok(updated) => updated.is_some_and(|updated| updated > expires),
-        Err(_) => true,
+        Err(_unreadable_pulse_keeps_the_job) => true,
     };
     if pulsed || checkpoint_written_after(store, &job.command, expires).await {
         return JobLiveness::WrittenAfter(expires);
@@ -67,12 +68,13 @@ pub async fn job_liveness(store: &JobStorage, job: &Job, now: DateTime<Utc>) -> 
 }
 
 /// Whether any of `jids` is a running job that is alive at `now`. A job no
-/// longer in running/ is not alive here; a running/ read that fails is kept.
+/// longer in running/ is not alive here; a running/ record that cannot be
+/// read or parsed is kept, since nothing proves it dead.
 pub async fn any_job_alive(store: &JobStorage, jids: &[String], now: DateTime<Utc>) -> bool {
     for jid in jids.iter().filter(|jid| !jid.is_empty()) {
         let text = match store.download_text(&format!("running/{jid}.json")).await {
             Ok(text) => text,
-            Err(_) => return true,
+            Err(_unreadable_record_is_kept) => return true,
         };
         let Some(text) = text.filter(|text| !text.is_empty()) else {
             continue;

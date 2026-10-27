@@ -31,7 +31,8 @@ pub async fn down(as_json: bool) -> Result<bool, CmdError> {
         return Ok(true);
     };
     let this_machine = crate::providers::vast::system_hostname();
-    if !ingress.pid_hint.machine.is_empty() && ingress.pid_hint.machine != this_machine {
+    // parse_ingress refuses an object that names no machine.
+    if ingress.pid_hint.machine != this_machine {
         return Err(CmdError::refused(format!(
             "the published ingress runs on '{}', not on this machine ('{this_machine}'); its pids \
              mean nothing here and signalling them would hit something unrelated. Run \

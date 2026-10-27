@@ -15,6 +15,7 @@ pub mod policy;
 pub mod reconciler;
 pub mod service_reconciler;
 pub mod storage;
+mod time;
 
 pub use model::{DecisionRecord, InventorySnapshot, ResourceRecord, SavingsRecord};
 pub use policy::{AutonomyMode, AutonomyPolicy};

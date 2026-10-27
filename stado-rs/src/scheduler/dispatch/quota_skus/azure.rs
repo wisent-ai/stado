@@ -10,14 +10,35 @@ use serde_json::{json, Value};
 /// count is declared (`capabilities[].name`, value a count as text).
 const GPU_CAPABILITY: &str = "GPUs";
 
-/// The GPUs a SKU declares in its own capabilities, when it declares any.
-fn declared_gpus(sku: &Value) -> Option<NonZeroU64> {
-    sku.get("capabilities")
-        .and_then(Value::as_array)?
+/// What a SKU's own capabilities say about its GPUs.
+enum DeclaredGpus {
+    /// No `GPUs` capability, or one with no text value: not a GPU SKU.
+    None,
+    /// A positive count.
+    Some(NonZeroU64),
+    /// A `GPUs` capability whose value is not a positive count; the SKU is
+    /// a GPU SKU by Azure's own word, and the catalog row says the count is
+    /// unreadable rather than dropping the family.
+    Unreadable(String),
+}
+
+fn declared_gpus(sku: &Value) -> DeclaredGpus {
+    let Some(capabilities) = sku.get("capabilities").and_then(Value::as_array) else {
+        return DeclaredGpus::None;
+    };
+    let Some(capability) = capabilities
         .iter()
         .find(|capability| capability.get("name").and_then(Value::as_str) == Some(GPU_CAPABILITY))
-        .and_then(|capability| capability.get("value").and_then(Value::as_str))
-        .and_then(|count| count.parse::<NonZeroU64>().ok())
+    else {
+        return DeclaredGpus::None;
+    };
+    let Some(count) = capability.get("value").and_then(Value::as_str) else {
+        return DeclaredGpus::None;
+    };
+    match count.parse::<NonZeroU64>() {
+        Ok(count) => DeclaredGpus::Some(count),
+        Err(error) => DeclaredGpus::Unreadable(format!("{GPU_CAPABILITY}={count:?}: {error}")),
+    }
 }
 
 /// The pure SKU-table half of the catalog: every SKU that declares at least
@@ -27,9 +48,11 @@ fn declared_gpus(sku: &Value) -> Option<NonZeroU64> {
 pub fn azure_rows_from_skus(skus: &[Value]) -> Vec<Value> {
     let mut out = Vec::new();
     for sku in skus {
-        if declared_gpus(sku).is_none() {
-            continue;
-        }
+        let gpus = match declared_gpus(sku) {
+            DeclaredGpus::None => continue,
+            DeclaredGpus::Some(count) => json!(count),
+            DeclaredGpus::Unreadable(reason) => json!({ "unreadable": reason }),
+        };
         let (Some(family), Some(name)) = (
             sku.get("family").and_then(Value::as_str),
             sku.get("name").and_then(Value::as_str),
@@ -45,6 +68,7 @@ pub fn azure_rows_from_skus(skus: &[Value]) -> Vec<Value> {
                     "family": family,
                     "sku": name,
                     "location": loc,
+                    "gpus": gpus,
                 }));
             }
         }
@@ -114,13 +138,17 @@ pub async fn azure_catalog() -> Vec<Value> {
                 "error": format!("Azure Compute SKU list returned HTTP {status}: {body}"),
             })];
         }
-        skus.extend(
-            body.get("value")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .cloned(),
-        );
+        // A page whose SKUs are not a list is an error, never a page with
+        // none: read as empty, the catalog lost every SKU on it and the
+        // quota request skipped those families.
+        let Some(page) = body.get("value").and_then(Value::as_array) else {
+            return vec![json!({
+                "provider": crate::capabilities::ProviderId::Azure.as_str(),
+                "ok": false,
+                "error": format!("Azure Compute SKU list answered without a value list: {body}"),
+            })];
+        };
+        skus.extend(page.iter().cloned());
         next = body
             .get("nextLink")
             .and_then(Value::as_str)

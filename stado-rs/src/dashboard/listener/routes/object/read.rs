@@ -120,10 +120,40 @@ impl Dashboard {
             Err(response) => return Ok(response),
         };
         let prefix = if release_object_namespace(&namespace) {
-            config::release_publisher_for_list(&requested_prefix).map(|(_, authorized)| authorized)
+            // A publisher table that cannot be read is the authority being
+            // unavailable; the listing answers that, not "unauthorized".
+            match config::release_publisher_for_list(&requested_prefix) {
+                Ok(found) => found.map(|(_, authorized)| authorized),
+                Err(refusal) => {
+                    return Ok(send_json(
+                        http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+                        &json!({
+                            "error": "authority_unavailable",
+                            "detail": format!("release_api.publishers is refused: {refusal}"),
+                        }),
+                    ))
+                }
+            }
         } else {
-            config::object_api_namespace(&namespace)
-                .and_then(|policy| policy.authorized_list_prefix(&requested_prefix, "list"))
+            // The namespace table fails closed for every namespace when it
+            // is refused; the listing answers that refusal, not "unauthorized".
+            match config::object_api_namespaces() {
+                Ok(namespaces) => namespaces
+                    .get(&namespace)
+                    .and_then(|policy| policy.authorized_list_prefix(&requested_prefix, "list")),
+                Err(problems) => {
+                    return Ok(send_json(
+                        http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+                        &json!({
+                            "error": "authority_unavailable",
+                            "detail": format!(
+                                "object_api.namespaces is refused: {}",
+                                problems.join("; ")
+                            ),
+                        }),
+                    ))
+                }
+            }
         };
         let Some(prefix) = prefix else {
             return Ok(send_json(

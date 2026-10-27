@@ -4,29 +4,32 @@
 //! Split out of `serving/discover.rs`, which had grown past the module line
 //! cap; recognising the release proxy among those processes stays there.
 
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::Command;
 
 use nix::sys::signal::{kill, Signal};
-use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 
 use crate::release_agent::state::records::ProcessRecord;
 
+/// init, the first process the kernel starts: https://man7.org/linux/man-pages/man1/init.1.html
+const INIT_PID: i32 = 1;
+
+/// The argument the release proxy's command line carries after its program.
+const SERVE_ARGUMENT: &str = " serve";
+
+/// What Linux appends to /proc/<pid>/exe when the image was replaced on disk: https://man7.org/linux/man-pages/man5/proc_pid_exe.5.html
+const DELETED_SUFFIX: &str = " (deleted)";
+
+/// Whether a release process still lives, as `primitives::procutil` answers
+/// for every pid; init is never a release process this owner runs, so it is
+/// not one here.
 pub(crate) fn pid_alive(pid: i32) -> bool {
-    if pid <= 1 {
+    if pid <= INIT_PID {
         return false;
     }
-    let pid = Pid::from_raw(pid);
-    match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
-        Ok(WaitStatus::StillAlive) => true,
-        Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => false,
-        Ok(_) => true,
-        Err(nix::errno::Errno::ECHILD) => kill(pid, None).is_ok(),
-        Err(nix::errno::Errno::ESRCH) => false,
-        Err(_) => kill(pid, None).is_ok(),
-    }
+    crate::primitives::procutil::pid_alive(pid)
 }
 
 /// SIGTERM to a release process's group, else to the process itself. A process
@@ -87,7 +90,11 @@ pub(crate) fn process_executable_matches(pid: i32, expected: &Path) -> Result<bo
             Err(error) => return Err(format!("cannot read the image of pid {pid}: {error}")),
         };
         let actual = actual.to_string_lossy();
-        let actual = actual.strip_suffix(" (deleted)").unwrap_or(&actual);
+        // A replaced image still names the path it was started from, before the suffix.
+        let actual = match actual.strip_suffix(DELETED_SUFFIX) {
+            Some(started_from) => started_from,
+            None => &actual,
+        };
         Ok(same_executable(Path::new(actual), expected))
     }
     #[cfg(not(target_os = "linux"))]
@@ -137,8 +144,8 @@ pub(crate) fn controller_process_matches(pid: i32) -> Result<bool, String> {
     }
     let observed = String::from_utf8_lossy(&output.stdout);
     let command = observed.trim();
-    for (index, _) in command.match_indices(" serve") {
-        let remaining = &command[index + " serve".len()..];
+    for (index, _) in command.match_indices(SERVE_ARGUMENT) {
+        let remaining = &command[index + SERVE_ARGUMENT.len()..];
         if !remaining.is_empty() && !remaining.starts_with(char::is_whitespace) {
             continue;
         }
@@ -159,28 +166,35 @@ pub(crate) fn controller_process_matches(pid: i32) -> Result<bool, String> {
     Ok(false)
 }
 
+/// Whether two files hold the same bytes, compared through buffered reads as
+/// they come; files of different lengths are not compared at all.
 fn same_native_image(left: &Path, right: &Path) -> std::io::Result<bool> {
-    let mut left = std::fs::File::open(left)?;
-    let mut right = std::fs::File::open(right)?;
-    let left_metadata = left.metadata()?;
-    let right_metadata = right.metadata()?;
+    let left_file = std::fs::File::open(left)?;
+    let right_file = std::fs::File::open(right)?;
+    let left_metadata = left_file.metadata()?;
+    let right_metadata = right_file.metadata()?;
     if !left_metadata.is_file()
         || !right_metadata.is_file()
         || left_metadata.len() != right_metadata.len()
     {
         return Ok(false);
     }
-    let mut remaining = left_metadata.len();
-    let mut left_bytes = [0_u8; 8192];
-    let mut right_bytes = [0_u8; 8192];
-    while remaining != 0 {
-        let count = remaining.min(left_bytes.len() as u64) as usize;
-        left.read_exact(&mut left_bytes[..count])?;
-        right.read_exact(&mut right_bytes[..count])?;
-        if left_bytes[..count] != right_bytes[..count] {
+    let mut left = BufReader::new(left_file);
+    let mut right = BufReader::new(right_file);
+    loop {
+        let (count, same, left_ended, right_ended) = {
+            let left_bytes = left.fill_buf()?;
+            let right_bytes = right.fill_buf()?;
+            let count = left_bytes.len().min(right_bytes.len());
+            (count, left_bytes[..count] == right_bytes[..count], left_bytes.is_empty(), right_bytes.is_empty())
+        };
+        if left_ended || right_ended {
+            return Ok(left_ended && right_ended);
+        }
+        if !same {
             return Ok(false);
         }
-        remaining -= count as u64;
+        left.consume(count);
+        right.consume(count);
     }
-    Ok(true)
 }

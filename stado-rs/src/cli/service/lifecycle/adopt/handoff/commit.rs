@@ -78,7 +78,7 @@ pub(super) async fn finish_handoff_under_lease(
     )
     .await
     .map_err(click)?;
-    if !active.ok() {
+    if !active.succeeded() {
         return Err(CmdError::click(format!(
             "{host}: installed Stado rejected active release binary: {}",
             host_channel::last_error_line(&active, "release active binary failed")
@@ -128,7 +128,7 @@ pub(super) async fn finish_handoff_under_lease(
     } else {
         println!(
             "{host}: {service_name} handed to release-control product {product} at registry generation {}",
-            report["generation"]
+            crate::cli::reporting::field(&report["generation"])
         );
         Ok(())
     }

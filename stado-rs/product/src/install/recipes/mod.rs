@@ -22,7 +22,7 @@ pub fn prepare(
     if source_commit.is_some() && (surface == "desktop" || kind != "stado-release") {
         bail!(
             "--source-commit applies to a stado-release recipe, which builds an exported \
-             commit; a {surface} {kind} installation builds the checkout as it stands"
+             commit; a {surface} {kind} installation builds the checkout's own commit"
         );
     }
     if surface == "desktop" {

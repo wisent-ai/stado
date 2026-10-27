@@ -10,7 +10,7 @@ extension HostsView {
         WisentSectionBox(
             title: "Cargo home",
             detail: "Live metadata from the fixed $HOME/.cargo and $HOME/.cargo/bin paths. Symlink targets and direct bin children are metadata only; no file contents are read.",
-            trailing: reading ? "Reading…" : (inventory.map { $0.complete ? "Complete" : "Incomplete" } ?? "Not read")
+            trailing: cargoTrailing(reading: reading, inventory: inventory)
         ) {
             if let failure = inventoryStore.failure(for: target) {
                 WisentAlertPanel(
@@ -80,16 +80,30 @@ extension HostsView {
         }
     }
 
+    /// The trailing word of the cargo section: reading, the inventory's own
+    /// completeness once read, or that no inventory has been read.
+    private func cargoTrailing(reading: Bool, inventory: HostCargoInventory?) -> String {
+        if reading { return "Reading…" }
+        switch inventory {
+        case .some(let inventory): return inventory.complete ? "Complete" : "Incomplete"
+        case .none: return "Not read"
+        }
+    }
+
     private func cargoMetadataDescription(_ metadata: HostFilesystemMetadata) -> String {
         var values = [
             "type \(metadata.kind)",
             "metadata \(metadata.metadataState)",
             "mode \(metadata.mode)",
-            "uid \(metadata.uid.map { String($0) } ?? "unavailable")",
-            "gid \(metadata.gid.map { String($0) } ?? "unavailable")",
-            "size \(metadata.bytes.map { "\($0) bytes" } ?? "unavailable")",
-            "mtime \(metadata.modifiedEpoch.map { String($0) } ?? "unavailable")",
         ]
+        // The stat facts are written only when the metadata state is `read`;
+        // in every other state the inventory writes them as null, and the
+        // state word above says why.
+        if let uid = metadata.uid, let gid = metadata.gid, let bytes = metadata.bytes,
+            let modified = metadata.modifiedEpoch
+        {
+            values += ["uid \(uid)", "gid \(gid)", "size \(bytes) bytes", "mtime \(modified)"]
+        }
         if metadata.nameState != "read" {
             values.append("name \(metadata.nameState)")
         }

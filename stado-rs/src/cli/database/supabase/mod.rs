@@ -3,6 +3,7 @@
 //! item `<name>-database` carries for one project.
 
 pub(super) mod adopt;
+pub(super) mod cost;
 pub(super) mod create;
 pub(super) mod destroy;
 pub(super) mod owner_vault;
@@ -122,20 +123,22 @@ async fn token() -> Result<String, CmdError> {
         })
 }
 
-/// The project's primary pooler, when the project reports one yet.
-async fn pooler(reference: &str, token: &str) -> Option<Value> {
-    call(
-        reqwest::Method::GET,
-        &format!("/projects/{reference}/config/database/pooler"),
-        token,
-        None,
-    )
-    .await
-    .ok()?
-    .as_array()?
-    .iter()
-    .find(|row| row["database_type"] == "PRIMARY")
-    .cloned()
+/// The project's primary pooler, or none when the project reports none yet
+/// (a project Supabase is still provisioning); a call that fails, or an
+/// answer that is not a list, is refused with its cause.
+async fn pooler(reference: &str, token: &str) -> Result<Option<Value>, CmdError> {
+    let path = format!("/projects/{reference}/config/database/pooler");
+    let answer = call(reqwest::Method::GET, &path, token, None).await?;
+    let rows = answer.as_array().ok_or_else(|| {
+        CmdError::click(format!(
+            "Supabase GET {path} answered {answer}, not a list of poolers"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
+    Ok(rows
+        .iter()
+        .find(|row| row["database_type"] == "PRIMARY")
+        .cloned())
 }
 
 /// The credential item's fields: coordinates, the pooler when the project
@@ -192,16 +195,15 @@ fn item_fields(
             Err(error) => fields["direct_unwritten"] = json!(error.to_string()),
         }
         if let Some(pooler) = pooler {
-            // A pooler without its user or host gives no connection URL: the
-            // item keeps the password and says why it holds no pooler URL,
-            // since `create` reaches here after the project exists and a
+            // A pooler without its user, host or port gives no connection URL:
+            // the item keeps the password and says why it holds no pooler
+            // URL, since `create` reaches here after the project exists and a
             // refusal would lose the only copy of the generated password.
-            match (pooler["db_user"].as_str(), pooler["db_host"].as_str()) {
-                (Some(user), Some(host)) => {
+            match (pooler["db_user"].as_str(), pooler["db_host"].as_str(), pooler["db_port"].as_u64()) {
+                (Some(user), Some(host), Some(pooler_port)) => {
                     let user = userinfo(user);
                     fields["pooler_url"] = json!(format!(
-                        "postgresql://{user}:{secret}@{host}:{}/postgres",
-                        pooler["db_port"]
+                        "postgresql://{user}:{secret}@{host}:{pooler_port}/postgres"
                     ));
                     // The same pooler in session mode: one server connection
                     // per client connection, so a statement a client names (as
@@ -220,8 +222,8 @@ fn item_fields(
                 }
                 _ => {
                     fields["pooler_unreported"] = json!(format!(
-                        "Supabase answered project {reference}'s pooler without its user or \
-                         host, so no pooler_url or session_url was written; run stado database \
+                        "Supabase answered project {reference}'s pooler without its user, host \
+                         or port, so no pooler_url or session_url was written; run stado database \
                          adopt to read it again"
                     ));
                 }
@@ -234,7 +236,7 @@ fn item_fields(
 /// A user or password as it may stand in a URL's userinfo: every byte but
 /// the unreserved characters percent-encoded, so `#`, `/`, `?`, `@`, `:` or
 /// a literal `%` in a password reach the server as themselves.
-fn userinfo(value: &str) -> String {
+pub(super) fn userinfo(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {

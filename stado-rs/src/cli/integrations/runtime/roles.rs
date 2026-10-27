@@ -37,14 +37,19 @@ pub(crate) fn print_roles(pid: u32) -> Result<(), CmdError> {
         };
         CmdError::click(detail).stating(code)
     })?;
-    let (roles, paths) = if argv.get(1).map(String::as_str) == Some("serve") {
-        let line = ServeLine::try_parse_from(&argv[1..]).map_err(|error| {
-            CmdError::click(format!(
-                "PID {pid} runs a serve line this build cannot read: {error}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
-        (roles(&line.args), role_paths(&line.args))
+    let words: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let (roles, paths) = if let [_program, serve @ ..] = words.as_slice() {
+        if serve.first() == Some(&"serve") {
+            let line = ServeLine::try_parse_from(serve).map_err(|error| {
+                CmdError::click(format!(
+                    "PID {pid} runs a serve line this build cannot read: {error}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })?;
+            (roles(&line.args), role_paths(&line.args))
+        } else {
+            (Vec::new(), Vec::new())
+        }
     } else {
         (Vec::new(), Vec::new())
     };
@@ -63,33 +68,28 @@ pub(crate) fn print_roles(pid: u32) -> Result<(), CmdError> {
 /// repeats it inside the one process. This is Stado's knowledge of its own
 /// commands, and it is how a unit running one of them is matched to the role
 /// that replaced it without any list of unit names. Empty for a line that is
-/// no Stado role, including a serve line this build cannot read and a
-/// command this build no longer has.
-pub(crate) fn command_roles(words: &[&str]) -> Vec<&'static str> {
-    let Some((&first, rest)) = words.split_first() else {
-        return Vec::new();
-    };
-    match (first, rest.first().copied()) {
-        ("serve", _) => ServeLine::try_parse_from(words)
-            .map(|line| roles(&line.args))
-            .unwrap_or_default(),
-        ("product", _) if product_verb(rest) == Some("sync") => {
-            vec!["--product-sync-interval-seconds"]
-        }
-        ("host", Some("beacon")) if matches!(rest.get(1).copied(), Some("publish" | "collect")) => {
-            vec!["--health-interval-seconds"]
-        }
+/// no Stado role, including a command this build no longer has; a serve line
+/// this build cannot read is an error with clap's own reason, never read as
+/// running no role.
+pub(crate) fn command_roles(words: &[&str]) -> Result<Vec<&'static str>, String> {
+    Ok(match words {
+        ["serve", ..] => match ServeLine::try_parse_from(words) {
+            Ok(line) => roles(&line.args),
+            Err(error) => return Err(format!("`{}` cannot be read by this build's serve: {error}", words.join(" "))),
+        },
+        ["product", rest @ ..] if product_verb(rest) == Some("sync") => vec!["--product-sync-interval-seconds"],
+        ["host", "beacon", "publish" | "collect", ..] => vec!["--health-interval-seconds"],
         // Units installed by builds before `host beacon` still run these
         // words; they are read here because they are on hosts, not because
         // this build accepts them.
-        ("host", Some("publish-beacon" | "collect-beacon")) => vec!["--health-interval-seconds"],
+        ["host", "publish-beacon" | "collect-beacon", ..] => vec!["--health-interval-seconds"],
         _ => Vec::new(),
-    }
+    })
 }
 
 /// The group's own options that take a value: `--catalog PATH`, another
 /// authority file, and `--workspace DIR`, another workspace of checkouts.
-const PRODUCT_VALUE_OPTIONS: [&str; 2] = ["--catalog", "--workspace"];
+const PRODUCT_VALUE_OPTIONS: &[&str] = &["--catalog", "--workspace"];
 
 /// The verb of a `stado product` line, past the group's own value options
 /// (`--catalog PATH`, `--workspace=DIR`), which a unit names before the verb.

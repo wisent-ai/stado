@@ -5,10 +5,8 @@
 # Usage: sh enable-aws.sh
 set -eu
 
-SB=${SKARBIEC_BIN:-skarbiec}
-
 # 1. credentials into YOUR skarbiec (fields per the AWS sdk contract)
-"$SB" set stado-aws --type env \
+skarbiec set stado-aws --type env \
   "access_key_id=$AWS_ACCESS_KEY_ID" \
   "secret_access_key=$AWS_SECRET_ACCESS_KEY"
 

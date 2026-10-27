@@ -20,7 +20,7 @@ static WORDS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:[^\s"'\\]|\\.|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')+"#).expect("static")
 });
 static ASSIGNMENT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*Environment\s*=(.*)$").expect("static"));
+    LazyLock::new(|| Regex::new(r"^\s*Environment\s*=(?P<body>.*)$").expect("static"));
 static CONTINUATION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\\r?\n").expect("static"));
 
 fn fail(detail: impl std::fmt::Display) -> String {
@@ -48,12 +48,13 @@ fn unquote(word: &str) -> String {
     out
 }
 
+/// `$HOME/<rest>` under the home every Stado file is kept under
+/// ([`crate::config_file::home`]: HOME, else the user database), so a unit
+/// whose environment file names `$HOME` is resolved where the unit's own
+/// account keeps it; any other path unchanged.
 fn target_path(raw: &str) -> Result<PathBuf, String> {
     match raw.strip_prefix("$HOME/") {
-        Some(rest) => Ok(PathBuf::from(
-            std::env::var("HOME").map_err(|_| fail("HOME is not set"))?,
-        )
-        .join(rest)),
+        Some(rest) => Ok(crate::config_file::home().map_err(fail)?.join(rest)),
         None => Ok(PathBuf::from(raw)),
     }
 }
@@ -100,7 +101,7 @@ fn rewrite(original: &str, key: &str, value: Option<&str>) -> String {
         let assigned = in_service
             .then(|| ASSIGNMENT.captures(logical.trim_end_matches(['\r', '\n'])))
             .flatten()
-            .map(|captures| captures[1].to_string())
+            .map(|captures| captures["body"].to_string())
             .filter(|body| !body.trim().is_empty());
         if let Some(body) = assigned {
             let tokens: Vec<&str> = WORDS.find_iter(&body).map(|m| m.as_str()).collect();
@@ -129,8 +130,11 @@ fn rewrite(original: &str, key: &str, value: Option<&str>) -> String {
                 output.len()
             }
         };
-        if at > 0 && !output[at - 1].ends_with('\n') {
-            output[at - 1].push('\n');
+        // The line before the insertion ends where the assignment starts.
+        if let Some(previous) = output[..at].last_mut() {
+            if !previous.ends_with('\n') {
+                previous.push('\n');
+            }
         }
         let escaped = value
             .replace('\\', "\\\\")
@@ -190,7 +194,9 @@ fn update(
             .open(&temporary)
             .map_err(fail)?;
         stream
-            .set_permissions(fs::Permissions::from_mode(before.mode() & 0o7777))
+            .set_permissions(fs::Permissions::from_mode(
+                before.mode() & crate::primitives::file_mode::permission_bits(),
+            ))
             .map_err(fail)?;
         std::os::unix::fs::fchown(&stream, Some(before.uid()), Some(before.gid())).map_err(fail)?;
         stream.write_all(updated.as_bytes()).map_err(fail)?;
@@ -198,7 +204,10 @@ fn update(
         if !unchanged_since(&path) {
             return Err(fail("unit environment file changed during the update"));
         }
-        fs::rename(&temporary, &path).map_err(fail)
+        fs::rename(&temporary, &path).map_err(fail)?;
+        // The rename itself survives a power loss only once the directory
+        // holding it is flushed.
+        fs::File::open(parent).and_then(|directory| directory.sync_all()).map_err(fail)
     })();
     written
         .map(|()| "changed")
@@ -219,7 +228,7 @@ pub fn unit_env_local(path_b64: &str, key_b64: &str, value_b64: Option<&str>, ui
         Ok(outcome) => println!("{outcome}"),
         Err(detail) => {
             eprintln!("{detail}");
-            std::process::exit(1);
+            std::process::exit(nix::libc::EXIT_FAILURE);
         }
     }
 }

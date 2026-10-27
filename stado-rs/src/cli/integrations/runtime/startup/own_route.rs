@@ -31,10 +31,19 @@ fn reads_through_own_resolver(resolver: bool) -> bool {
     if configured.starts_with(crate::service_resolution::SERVICE_SCHEME) {
         return true;
     }
-    url::Url::parse(configured)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_string))
-        .is_some_and(|host| host == "127.0.0.1" || host == "localhost" || host == "::1")
+    // A store URL on this machine is one whose host is a loopback address
+    // or the loopback name; a URL this build cannot parse names no host
+    // and so is not behind this process's resolver.
+    let url = match url::Url::parse(configured) {
+        Ok(url) => url,
+        Err(_not_a_url) => return false,
+    };
+    match url.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
 }
 
 /// Wait for this process's resolver role to serve, when the store the other

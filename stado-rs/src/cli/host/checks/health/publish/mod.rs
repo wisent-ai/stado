@@ -81,11 +81,13 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
 /// The beacon slug for a host name: its leading label, lowercased. One
 /// spelling, used by the collector, the publisher and every reader.
 pub(super) fn beacon_slug(hostname: &str) -> String {
-    hostname
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase()
+    // The leading label is everything before the first `.`, or the whole
+    // name when it has none.
+    let label = match hostname.split_once('.') {
+        Some((label, _domain)) => label,
+        None => hostname,
+    };
+    label.to_ascii_lowercase()
 }
 
 /// Where one beacon document goes.
@@ -125,11 +127,12 @@ pub async fn deliver_document(
     destination: Destination<'_>,
     promise: Option<std::time::Duration>,
 ) -> Result<(), CmdError> {
-    let host = document
-        .get("host")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    // A document without `host` names no beacon; it is relayed as it is,
+    // never taken for this host's own.
+    let host = match document.get("host").and_then(Value::as_str) {
+        Some(host) => host.to_string(),
+        None => String::new(),
+    };
     if beacon_is_this_host(&host) {
         let runner = crate::deploy::production_runner();
         refresh_local_unit_lifecycle(document, &runner).await;
@@ -150,8 +153,12 @@ pub async fn deliver_document(
     // document so every reader, dashboards outside Stado included, judges the
     // beacon by the publisher's own promise instead of a window of its own.
     if let (Some(object), Some(promise)) = (document.as_object_mut(), promise) {
-        let next_by = chrono::Utc::now()
-            + chrono::Duration::from_std(promise).unwrap_or(chrono::Duration::MAX);
+        let promise = chrono::Duration::from_std(promise).map_err(|error| {
+            CmdError::click(format!(
+                "the publisher's promise of {promise:?} until the next beacon cannot be written as a time: {error}"
+            ))
+        })?;
+        let next_by = chrono::Utc::now() + promise;
         object.insert("next_by".to_string(), Value::from(next_by.to_rfc3339()));
     }
     // The merged document is what gets published, so the bytes on the wire
@@ -257,6 +264,6 @@ fn valid_beacon_host(host: &str) -> bool {
 /// path from being mistaken for a self-publish.
 fn beacon_is_this_host(host: &str) -> bool {
     let local = crate::targets::normalize_hostname(&crate::providers::vast::system_hostname());
-    let slug = local.split('.').next().unwrap_or_default();
+    let slug = beacon_slug(&local);
     !slug.is_empty() && slug == host
 }

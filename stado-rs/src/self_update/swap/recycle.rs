@@ -58,7 +58,7 @@ pub(crate) async fn recycle_replaced_units(
     } else {
         recycle_systemd(context, &paths, ours, log_fn).await?
     };
-    if restarted == 0 {
+    if restarted.is_empty() {
         log_fn(&format!(
             "{context}: no other managed unit was running a replaced binary"
         ));
@@ -75,7 +75,11 @@ pub(crate) async fn recycle_replaced_units(
 /// second spelling of "which units recycle themselves" is a second answer
 /// waiting to disagree with this one.
 pub(crate) fn defers_to_release_handshake<S: AsRef<str>>(argv: &[S]) -> bool {
-    let mut arguments = argv.iter().skip(1).map(AsRef::as_ref);
+    // argv names the program first; the subcommand is what follows it.
+    let Some((_program, after_program)) = argv.split_first() else {
+        return false;
+    };
+    let mut arguments = after_program.iter().map(AsRef::as_ref);
     let first = arguments.next();
     let subcommand = if first == Some("--") {
         arguments.next()
@@ -166,8 +170,7 @@ pub(crate) fn replacement_in_flight(program: &Path) -> Result<Option<u32>, Strin
             text.trim()
         )
     })?;
-    Ok(
-        (pid > 0 && nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok())
-            .then_some(pid as u32),
-    )
+    // Whether the installer still runs is primitives::procutil's one answer: a
+    // pid at or below zero is no process and EPERM is somebody else's live one.
+    Ok(crate::primitives::procutil::pid_alive(pid).then_some(pid as u32))
 }

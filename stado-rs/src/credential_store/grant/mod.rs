@@ -64,7 +64,7 @@ pub fn settle_field_reads(
     item: &str,
     fields: &[&str],
 ) -> Result<Option<GrantOutcome>, SkarbiecError> {
-    if super::skarbiec_url().is_none() {
+    if super::skarbiec_url()?.is_none() {
         return Ok(None);
     }
     let consumer = crate::config::skarbiec_consumer();
@@ -99,20 +99,23 @@ pub fn grant_field_reads(
         .get("expires_at")
         .and_then(Value::as_u64)
         .ok_or_else(|| deployment(format!("the {consumer} grant carries no expiry")))?;
-    let recorded_hash = grant
-        .get("hash")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let audience = grant
-        .get("audience")
-        .and_then(Value::as_str)
-        .unwrap_or(consumer)
-        .to_string();
-    let now = u64::try_from(now_seconds()).unwrap_or_default();
+    // A grant without a recorded hash predates hashes; the bearer check
+    // below then compares against nothing recorded and says so.
+    let recorded_hash = match grant.get("hash").and_then(Value::as_str) {
+        Some(hash) => hash.to_string(),
+        None => String::new(),
+    };
+    // A grant without an audience is for its consumer alone.
+    let audience = match grant.get("audience").and_then(Value::as_str) {
+        Some(audience) => audience.to_string(),
+        None => consumer.to_string(),
+    };
+    let now = u64::try_from(now_seconds()).map_err(|error| {
+        deployment(format!("the clock answers a time before the epoch, so no grant lifetime can be measured: {error}"))
+    })?;
     let lifetime = GrantLifetime::left(expires_at, now);
 
-    let held: Vec<String> = existing.iter().map(encode).collect();
+    let held: Vec<String> = existing.iter().map(encode).collect::<Result<_, _>>()?;
     let wanted: Vec<String> = if fields.is_empty() {
         vec![format!("{ACTION}:{item}")]
     } else {
@@ -144,11 +147,26 @@ pub fn grant_field_reads(
 
     // A bearer this cannot reproduce is a bearer it must not replace: the
     // holders of the old one would start failing with no way back.
-    if !token_file.is_file() {
-        return Err(deployment(format!(
-            "no bearer file at {}; refusing to re-mint {consumer}",
-            token_file.display()
-        )));
+    match std::fs::metadata(token_file) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_not_file) => {
+            return Err(deployment(format!(
+                "{} is not a bearer file; refusing to re-mint {consumer}",
+                token_file.display()
+            )))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(deployment(format!(
+                "no bearer file at {}; refusing to re-mint {consumer}",
+                token_file.display()
+            )))
+        }
+        Err(error) => {
+            return Err(deployment(format!(
+                "the bearer file {} cannot be examined: {error}; refusing to re-mint {consumer}",
+                token_file.display()
+            )))
+        }
     }
     let bearer = std::fs::read_to_string(token_file).map_err(|error| {
         deployment(format!(
@@ -205,10 +223,12 @@ pub fn grant_field_reads(
 
     let settled_document = read_vault(&vault)?;
     let settled = grant_of(&settled_document, consumer)?;
-    let settled_hash = settled
-        .get("hash")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    // The hash as the vault records it after the mint; a grant written
+    // without one is compared as having none, as before the mint.
+    let settled_hash = match settled.get("hash").and_then(Value::as_str) {
+        Some(hash) => hash,
+        None => "",
+    };
     if settled_hash != recorded_hash {
         return Err(deployment(format!(
             "the mint rotated the {consumer} bearer despite --token-file: every holder of the \
@@ -216,11 +236,13 @@ pub fn grant_field_reads(
             backup.display()
         )));
     }
-    let settled_capabilities: Vec<String> = settled
-        .get("capabilities")
-        .and_then(Value::as_array)
-        .map(|list| list.iter().map(encode).collect())
-        .unwrap_or_default();
+    // The settled grant lists its capabilities; a mint that left none is
+    // what the check below reports as missing each wanted one.
+    let settled_capabilities: Vec<String> =
+        match settled.get("capabilities").and_then(Value::as_array) {
+            Some(list) => list.iter().map(encode).collect::<Result<_, _>>()?,
+            None => Vec::new(),
+        };
     if let Some(missing) = wanted
         .iter()
         .find(|capability| !settled_capabilities.contains(capability))

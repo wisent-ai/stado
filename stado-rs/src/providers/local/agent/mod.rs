@@ -31,6 +31,7 @@
 
 pub mod capacity;
 pub mod claim;
+pub mod drain;
 pub mod heartbeat;
 pub mod janitor;
 pub mod probes;

@@ -13,7 +13,7 @@ enum NativeQueueOperations {
         .init(id: "job-status", title: "Read one job by its id, including a job the run reaper has retired", path: ["status"], hostPlacement: .none, fields: [
             .init(id: "job", label: "Job id — whole, or its first hex characters, with or without job-", required: true),
         ], mutates: false),
-        .init(id: "job-priority", title: "Change a queued job's priority", path: ["job", "set-priority"], hostPlacement: .none, fields: [
+        .init(id: "job-priority", title: "Change a queued job's priority", path: ["job", "prioritize"], hostPlacement: .none, fields: [
             .init(id: "job", label: "Queued job id", required: true),
             .init(id: "priority", label: "Nonnegative integer priority — higher is claimed first, then FIFO", required: true),
         ]),

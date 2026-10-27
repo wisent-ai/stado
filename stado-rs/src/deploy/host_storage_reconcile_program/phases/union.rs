@@ -4,18 +4,19 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+
+mod restore;
 
 use serde_json::{json, Value};
 
 use super::receipt::{emit, every_writer, read_fence, save, set, status};
 use super::{conflict_winner_from_fence, Context, Evidence, Step};
 use crate::deploy::host_storage_reconcile_program::fs::{
-    clone_file, fsync_dir, item_path, join, metadata_path, object_paths, parent_of,
-    physical_inventory, regular_identity, validate_complete_inventory,
-    validate_physical_checkpoint,
+    fsync_dir, item_path, join, metadata_path, object_paths, parent_of, physical_inventory,
+    regular_identity, validate_complete_inventory, validate_physical_checkpoint,
 };
-use crate::deploy::host_storage_reconcile_program::json::{list, now, object, truthy};
+use crate::deploy::host_storage_reconcile_program::json::{flag, list, now};
+use restore::{directories, restore_file};
 
 fn by_path(objects: &[Value]) -> Step<BTreeMap<String, Value>> {
     objects
@@ -24,10 +25,14 @@ fn by_path(objects: &[Value]) -> Step<BTreeMap<String, Value>> {
         .collect()
 }
 
+/// A member of a checkpointed item, or null for an item the checkpoint did
+/// not record or a member it lacks: the comparison below reads null as
+/// "absent on that side", which is what both mean.
 fn field(item: Option<&Value>, key: &str) -> Value {
-    item.and_then(|item| item.get(key))
-        .cloned()
-        .unwrap_or(Value::Null)
+    match item.and_then(|item| item.get(key)) {
+        Some(member) => member.clone(),
+        None => Value::Null,
+    }
 }
 
 /// Live B is still its checkpoint and live A holds exactly the union of
@@ -78,48 +83,6 @@ pub(super) fn prove_live_additive_union(
     Ok(())
 }
 
-/// Put one file of live A back to its checkpointed bytes and mode, or
-/// remove it when A did not have it.
-fn restore_file(
-    context: &Context,
-    destination: &str,
-    snapshot_source: &str,
-    before: &Value,
-    original: Option<&Value>,
-    omitted: &str,
-) -> Step<()> {
-    if before.is_null() {
-        fs::remove_file(destination)
-            .map_err(|error| format!("cannot remove {destination}: {error}"))?;
-    } else {
-        clone_file(context, snapshot_source, destination)?;
-        let mode = original
-            .and_then(|file| file.get("mode"))
-            .and_then(Value::as_u64)
-            .and_then(|mode| u32::try_from(mode).ok())
-            .ok_or_else(|| omitted.to_string())?;
-        fs::set_permissions(destination, fs::Permissions::from_mode(mode))
-            .map_err(|error| format!("cannot restore the mode of {destination}: {error}"))?;
-    }
-    fsync_dir(&parent_of(destination))
-}
-
-/// The directories a physical inventory names. An inventory without the list,
-/// or with an entry that is not a path, is refused: read as no directories,
-/// a checkpoint missing its list made every directory now on disk look
-/// created by the transaction, and the rollback removed each empty one.
-fn directories(inventory: &Value, which: &str) -> Step<BTreeSet<String>> {
-    list(inventory, "directories", which)?
-        .iter()
-        .map(|entry| {
-            entry
-                .as_str()
-                .map(str::to_string)
-                .ok_or_else(|| format!("{which} names a directory that is not a path: {entry}"))
-        })
-        .collect()
-}
-
 fn restore_primary_checkpoint(context: &Context, evidence: &Evidence) -> Step<()> {
     let backup = by_path(&evidence.backup_objects)?;
     let primary = by_path(&evidence.primary_objects)?;
@@ -167,9 +130,18 @@ fn restore_primary_checkpoint(context: &Context, evidence: &Evidence) -> Step<()
             ));
         }
         if current_metadata != before_metadata {
-            let metadata_relative = destination_metadata
-                .strip_prefix(&format!("{}/", context.primary))
-                .unwrap_or(&destination_metadata);
+            // The metadata file sits beside its object under the primary; a
+            // path outside it is a defect of this program, said as such.
+            let metadata_relative =
+                match destination_metadata.strip_prefix(&format!("{}/", context.primary)) {
+                    Some(relative) => relative,
+                    None => {
+                        return Err(format!(
+                            "metadata path {destination_metadata} is not under the primary {}",
+                            context.primary
+                        ))
+                    }
+                };
             restore_file(
                 context,
                 &destination_metadata,
@@ -196,7 +168,7 @@ fn restore_primary_checkpoint(context: &Context, evidence: &Evidence) -> Step<()
         fs::remove_dir(&path).map_err(|error| {
             format!("transaction-created directory cannot be rolled back: {path}: {error}")
         })?;
-        fsync_dir(&parent_of(&path))?;
+        fsync_dir(&parent_of(&path)?)?;
     }
     validate_complete_inventory(
         context,
@@ -219,7 +191,7 @@ fn fence_holds(context: &Context, evidence: &Evidence, fence: &Value) -> Step<bo
     let stopped = every_writer(fence, "stopped")?;
     use crate::deploy::host_storage_reconcile::FenceStatus;
     Ok(FenceStatus::read(fence, "status")? == FenceStatus::Fenced
-        && truthy(object(fence, "queue").get("drained"))
+        && flag(fence.pointer("/queue/drained"), "queue.drained")?
         && stopped)
 }
 

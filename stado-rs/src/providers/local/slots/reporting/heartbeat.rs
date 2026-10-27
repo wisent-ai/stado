@@ -91,12 +91,15 @@ pub fn start_heartbeat_task(
         };
         let mut previous = std::time::Instant::now();
         let mut lost = false;
+        // One renewal every agent poll period, the first a period from now.
+        let mut schedule = tokio::time::interval_at(tokio::time::Instant::now() + poll, poll);
+        schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // The workload runs as its own process group (`start_slot` spawns it
         // with `process_group(0)`, so the group id is its pid). A launcher
         // shell that exits while the build it started goes on would end a
         // pid-keyed loop and let the lease lapse under a live build.
         while helpers::group_alive(pid) {
-            tokio::time::sleep(poll).await;
+            schedule.tick().await;
             let began = std::time::Instant::now();
             let result = write_heartbeat(&store, &job_id).await;
             super::record_renewal(poll, Some(began - previous), began.elapsed());

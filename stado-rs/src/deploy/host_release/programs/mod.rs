@@ -100,10 +100,10 @@ fn bindings(plan: &ReleasePlan) -> String {
             shlex_quote(argument),
             shlex_quote(shape.as_str()),
         )),
-        Readback::JsonFile { path, .. } => bound.push_str(&format!(
+        Readback::JsonFile { path, pointer } => bound.push_str(&format!(
             "version_path={}\nversion_member={}\npreserve={}\n",
             shlex_quote(path),
-            shlex_quote(plan.product.readback.member().unwrap_or_default()),
+            shlex_quote(Readback::json_member(pointer)),
             // One newline-delimited binding rather than a word list: a path
             // list split on IFS is a path list split on spaces too.
             shlex_quote(&plan.product.install.preserve().join("\n")),

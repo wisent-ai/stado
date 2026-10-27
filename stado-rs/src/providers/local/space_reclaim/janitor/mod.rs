@@ -9,9 +9,8 @@ pub(crate) mod pass;
 pub(crate) mod policy;
 pub(crate) mod state;
 
-/// Bytes in one gibibyte, 2^30 by the IEC binary prefix:
-/// https://physics.nist.gov/cuu/Units/binary.html
-pub(crate) const GIB: i64 = 1024 * 1024 * 1024;
+/// Bytes in one gibibyte, the one declaration every reader shares.
+pub(crate) use crate::providers::local::host_memory::constants::GIB;
 /// The state file's format version, which every release reads with
 /// `version == STATE_VERSION` exactly, as the space documentation states:
 /// https://stado.wisent.com/docs/capabilities/space

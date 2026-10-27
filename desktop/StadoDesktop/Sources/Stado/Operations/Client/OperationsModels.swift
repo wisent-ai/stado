@@ -174,6 +174,13 @@ enum StadoFormat {
         return value.formatted(.number)
     }
 
+    /// A percentage as a whole number: the share is a reading, and its
+    /// fraction says nothing a table row needs. Rounded first, then formatted
+    /// as the integer it now is.
+    static func wholePercent(_ value: Double) -> String {
+        Int(value.rounded()).formatted(.number)
+    }
+
     /// A value a row may leave out, shown as the absence the caller names
     /// ("No region", "No report") instead of a dash that says nothing.
     static func named(_ value: String?, absent: String) -> String {

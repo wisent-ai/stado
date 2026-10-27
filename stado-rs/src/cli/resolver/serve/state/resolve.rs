@@ -62,34 +62,35 @@ impl ResolverState {
         let Some(target) = crate::service_resolution::listener_address(host, port) else {
             return Ok(resolved);
         };
-        let mut listeners: Vec<(String, String)> = self
-            .adapters
-            .read()
-            .map(|adapters| {
-                adapters
-                    .iter()
-                    .map(|adapter| {
-                        (
-                            format!(
-                                "adapter {} for consumer {}",
-                                adapter.service, adapter.consumer
-                            ),
-                            adapter.bind.clone(),
-                        )
-                    })
-                    .collect()
+        // Locks poisoned by a panic elsewhere are taken over, as the rest of
+        // the resolver state does, so one panic does not refuse every resolution.
+        let adapters = match self.adapters.read() {
+            Ok(adapters) => adapters,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let mut listeners: Vec<(String, String)> = adapters
+            .iter()
+            .map(|adapter| {
+                (
+                    format!("adapter {} for consumer {}", adapter.service, adapter.consumer),
+                    adapter.bind.clone(),
+                )
             })
-            .map_err(|_poisoned| "the adapter list is poisoned".to_string())?;
-        if let Ok(config) = self.config.read() {
-            listeners.push(("the resolver API".to_string(), config.api_bind.clone()));
-        }
+            .collect();
+        drop(adapters);
+        let api_bind = match self.config.read() {
+            Ok(config) => config.api_bind.clone(),
+            Err(poisoned) => poisoned.into_inner().api_bind.clone(),
+        };
+        listeners.push(("the resolver API".to_string(), api_bind));
         for (what, bind) in listeners {
+            // A listener whose address cannot be read cannot be ruled out as the target.
             let Some((bind_host, bind_port)) = bind.rsplit_once(':') else {
-                continue;
+                return Err(format!("{what} listens on {bind}, which is not host:port"));
             };
-            let Ok(bind_port) = bind_port.parse::<u16>() else {
-                continue;
-            };
+            let bind_port = bind_port
+                .parse::<u16>()
+                .map_err(|error| format!("{what} listens on {bind}, whose port is not a port: {error}"))?;
             if crate::service_resolution::listener_address(bind_host, bind_port) == Some(target) {
                 return Err(format!(
                     "service {} resolves to {}, which is {what} ({bind}) of this resolver on {}: \

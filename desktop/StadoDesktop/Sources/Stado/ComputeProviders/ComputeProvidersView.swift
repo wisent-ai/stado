@@ -29,6 +29,14 @@ struct ComputeProvidersView: View {
                         .disabled(!fleetStore.isConfigured)
                 }
                 WisentSectionBox(
+                    title: "Fleet sandboxes",
+                    detail: "Create gVisor sandboxes on a registered Linux server with caller-declared CPU, RAM and process ceilings. These are fleet-owned containers, not virtual machines or Boat rentals. The root filesystem is read-only; /workspace is private and writable; networking is disabled. Stop preserves the workspace; delete removes it permanently. Inspect prerequisites and complete receipts here."
+                ) {
+                    NativeCapabilityActions(host: "", fleet: fleetStore,
+                        operations: NativeFleetSandboxOperations.all)
+                        .disabled(!fleetStore.isConfigured)
+                }
+                WisentSectionBox(
                     title: "Sandboxes",
                     detail: "The Boat sandboxes this deployment's key reaches, driven as an agent drives them: create one, run a command line in it, read and write its files, fork it, stop and resume it, delete it. They use the boat provider's settings and its cloud-boat credential; a sandbox created here lives boat.ttl_seconds unless a lifetime is given."
                 ) {

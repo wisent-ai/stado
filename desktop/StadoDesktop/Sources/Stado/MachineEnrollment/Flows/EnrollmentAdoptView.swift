@@ -62,7 +62,7 @@ struct EnrollmentAdoptView: View {
                 ) {
                     VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                         TextField(
-                            "user@studio.local",
+                            "user@example-host.example",
                             text: Binding(
                                 get: { store.draft.sshTarget },
                                 set: { store.setSSHTarget($0) }
@@ -70,7 +70,7 @@ struct EnrollmentAdoptView: View {
                         )
                         .textFieldStyle(.roundedBorder)
                         .font(WisentTypeScale.body())
-                        Text(verbatim: "Examples: user@studio.local, user@100.92.4.11, user@studio.tailnet-name.ts.net")
+                        Text(verbatim: "Examples: user@example-host.example, user@192.0.2.10, or a user at the machine's tailnet name")
                             .font(WisentTypeScale.identifierSmall())
                             .foregroundStyle(WisentDesign.muted)
                     }
@@ -125,6 +125,11 @@ struct EnrollmentAdoptView: View {
     }
 
     private var guidance: String {
+        // A console with no usable endpoint cannot adopt anything; the
+        // parser's own refusal is the first thing to say.
+        if let problem = store.configurationProblem {
+            return "Nothing can be adopted until this console points at a Stado: \(problem)."
+        }
         if store.draft.isEnrolled {
             return "\(store.draft.machineName) has a registry entry. The two proofs below are what turn that entry into a machine the Hosts table can read."
         }

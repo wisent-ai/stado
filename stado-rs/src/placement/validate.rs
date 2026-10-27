@@ -6,14 +6,7 @@ use super::model::{PlacementProbe, PlacementUnit};
 use crate::deploy::service::UnitKind;
 
 fn identifier(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let edge = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
-    !bytes.is_empty()
-        && edge(bytes[0])
-        && edge(bytes[bytes.len() - 1])
-        && bytes
-            .iter()
-            .all(|byte| edge(*byte) || matches!(byte, b'.' | b'_' | b'-'))
+    crate::primitives::word::lowercase_identifier(value)
 }
 
 pub(in crate::placement) fn validate_identifier(value: &str, location: &str) -> Result<(), String> {
@@ -91,10 +84,14 @@ pub(in crate::placement) fn validate_probe(
     if parsed.scheme() != "http" {
         return Err(format!("{location}.url: must use http on loopback"));
     }
-    let loopback = parsed
-        .host_str()
-        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
-        .is_some_and(|address| address.is_loopback());
+    // A host that is a name, not an address, is never loopback here: the
+    // probe is dialled, and a name resolves wherever the resolver says. The
+    // URL parser already says which kind of host it read.
+    let loopback = match parsed.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        Some(url::Host::Domain(_)) | None => false,
+    };
     if !loopback || parsed.port().is_none() {
         return Err(format!(
             "{location}.url: must use a loopback address and explicit port"

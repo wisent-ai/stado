@@ -138,7 +138,7 @@ pub fn derive_predecessors(
             unit.declared.as_str()
         };
         let mut roles = if runs {
-            service_catalog::host_roles(entry, line)
+            service_catalog::host_roles(entry, line).map_err(|cause| format!("{}: {cause}", unit.label))?
         } else {
             Vec::new()
         };
@@ -190,10 +190,13 @@ pub async fn predecessors_on_with(
         _ => Vec::new(),
     };
     let units = host_units(loaded, &declared_services(target));
+    // Units resolve `$HOME` under the home the host itself states, never one
+    // derived from the login user's name.
+    let home = crate::deploy::host_channel::remote_home(target, runner).await?;
     derive_predecessors(
         entry,
         &units,
-        &service_catalog::home_for(target),
+        &home,
         &target.release_platform,
         &target.name,
         &role_paths,
@@ -232,66 +235,4 @@ pub async fn api_predecessors_on(
         .filter(service_catalog::api_role)
         .map(|role| role.unit)
         .collect())
-}
-
-/// The role of the host Stado process whose work the registry declaration
-/// `declared` on `target` does, when `entry` is that process; `None` for any
-/// other product, a declaration that runs another program, and one whose
-/// work no role covers. `running` is `entry`'s unit on that host, whose live
-/// role options match a declaration that runs a role's program or root.
-pub async fn declared_role(
-    target: &ComputeTarget,
-    entry: &CatalogService,
-    running: Option<&ManagedService>,
-    declared: &ManagedService,
-    runner: &Runner,
-) -> Option<RoleUnit> {
-    if service_catalog::host_process().ok()?.name != entry.name {
-        return None;
-    }
-    let role_paths = match running {
-        Some(running) => inspect_process(target, running, runner)
-            .await
-            .map(|process| process.serve_role_paths)
-            .unwrap_or_default(),
-        None => Vec::new(),
-    };
-    let unit = HostUnit {
-        label: declared.unit_id().to_string(),
-        declared: declared_line(declared),
-        running: String::new(),
-    };
-    derive_predecessors(
-        entry,
-        &[unit],
-        &service_catalog::home_for(target),
-        &target.release_platform,
-        &target.name,
-        &role_paths,
-    )
-    .ok()?
-    .roles
-    .into_iter()
-    .next()
-}
-
-/// The catalog product the registry declaration `service` belongs to
-/// although it is not that product's unit, judged from the program it
-/// declares on `target`. `None` for a catalog unit, a declaration that names
-/// no program, and one whose program no product runs.
-pub fn declared_owner(
-    target: &ComputeTarget,
-    service: &ManagedService,
-) -> Result<Option<CatalogService>, String> {
-    if service.program.is_empty() {
-        return Ok(None);
-    }
-    service_catalog::owner_of(
-        service.unit_id(),
-        &declared_line(service),
-        "",
-        &service_catalog::home_for(target),
-        &target.release_platform,
-        &target.name,
-    )
 }

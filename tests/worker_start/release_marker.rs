@@ -34,8 +34,8 @@ struct Run {
 
 impl Run {
     fn new() -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("worker-start-release-marker")
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/journeys/worker-start-release-marker")
             .join(std::process::id().to_string());
         if root.exists() {
             std::fs::remove_dir_all(&root).unwrap();
@@ -110,8 +110,15 @@ impl Run {
         self.worker = Some(child);
         let (lines, received) = mpsc::channel();
         std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if lines.send(line).is_err() {
+            for line in BufReader::new(stderr).lines() {
+                let (line, readable) = match line {
+                    Ok(line) => (line, true),
+                    Err(error) => (
+                        format!("the worker's standard error could not be read: {error}"),
+                        false,
+                    ),
+                };
+                if lines.send(line).is_err() || !readable {
                     return;
                 }
             }

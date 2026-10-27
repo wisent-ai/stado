@@ -1,13 +1,13 @@
 //! The two halves a freshness verdict is decided from: the vocabulary
-//! `skarbiec totp-seed-state` answers the vault's half in, and one reduced
+//! `skarbiec totp seed` answers the vault's half in, and one reduced
 //! sign-in attempt from the run history's half.
 
-/// What the vault said about one row, as `skarbiec totp-seed-state` spells it.
+/// What the vault said about one row, as `skarbiec totp seed` spells it.
 pub const SEED_PRESENT: &str = "present";
 pub const SEED_DECLARED_EMPTY: &str = "declared_empty";
 pub const SEED_FIELD_ABSENT: &str = "field_absent";
 pub const SEED_UNREADABLE: &str = "unreadable";
-/// The host's Skarbiec build has no `totp-seed-state`, so the vault's half is
+/// The host's Skarbiec build has no `totp seed`, so the vault's half is
 /// unavailable there. Reported as its own condition rather than guessed at:
 /// the run history's half is still evidence, and a diagnostic that answers
 /// nothing because one source is missing is the failure this command exists to

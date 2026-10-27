@@ -1,10 +1,17 @@
+use nix::libc;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
-use super::{socket_path, Action, ControlClientError, Request, Response, SCHEMA};
+use super::{socket_path, Action, ControlClientError, Request, Response, PROTOCOL};
 use crate::release_agent::rollout::serving::owner::process::controller_process_matches;
+
+// The kernel names PID 1 for the init process
+// (https://man7.org/linux/man-pages/man1/init.1.html,
+// https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/Lifecycle.html),
+// which is never the stado serve process this socket must belong to.
+const INIT_PID: i32 = 1;
 
 pub(super) async fn exchange(
     home: Option<&str>,
@@ -25,7 +32,10 @@ pub(super) async fn exchange(
             })
         }
     };
-    if !metadata.file_type().is_socket() || metadata.permissions().mode() & 0o077 != 0 {
+    let group_or_world = u32::from(libc::S_IRWXG | libc::S_IRWXO);
+    if !metadata.file_type().is_socket()
+        || std::num::NonZeroU32::new(metadata.permissions().mode() & group_or_world).is_some()
+    {
         return Err(ControlClientError::Refused(format!(
             "Stado proxy control path is not an owner-only socket: {}",
             path.display()
@@ -53,7 +63,7 @@ pub(super) async fn exchange(
         "cannot authenticate Stado proxy owner at {}",
         path.display()
     )))?;
-    let pid = peer.pid().filter(|pid| *pid > 1).ok_or_else(|| {
+    let pid = peer.pid().filter(|pid| *pid > INIT_PID).ok_or_else(|| {
         ControlClientError::Refused(
             "the operating system did not identify the Stado proxy owner PID".to_string(),
         )
@@ -66,7 +76,7 @@ pub(super) async fn exchange(
         )));
     }
     let request = Request {
-        schema_version: SCHEMA,
+        protocol: PROTOCOL.to_string(),
         action,
     };
     let bytes = serde_json::to_vec(&request).map_err(|error| {
@@ -96,9 +106,11 @@ pub(super) async fn exchange(
     let response: Response = serde_json::from_slice(&bytes).map_err(|error| {
         ControlClientError::Refused(format!("invalid proxy response from pid {pid}: {error}"))
     })?;
-    if response.schema_version != SCHEMA || response.pid != pid {
+    if response.protocol != PROTOCOL || response.pid != pid {
         return Err(ControlClientError::Refused(format!(
-            "proxy response does not match protocol {SCHEMA} and native peer pid {pid}"
+            "the answer of pid {pid} speaks protocol {} as pid {}, not {PROTOCOL} as native peer pid {pid}: \
+             the host process runs a build that speaks another control protocol than this command",
+            response.protocol, response.pid
         )));
     }
     if let Some(error) = &response.error {

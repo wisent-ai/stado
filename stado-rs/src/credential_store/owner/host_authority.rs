@@ -18,12 +18,12 @@ use serde_json::{json, Value};
 /// vaults, one candidate to discover, or several candidates under one owner,
 /// which is a refusal on that host until it declares which.
 pub fn authority(declared: Option<&str>, vaults: &[Value]) -> Value {
-    let path_of = |vault: &Value| {
-        vault
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
+    // A vault row the probe wrote without a path names no file; it matches
+    // no declared path and no candidate tail, which is what an empty path
+    // compares as below.
+    let path_of = |vault: &Value| match vault.get("path").and_then(Value::as_str) {
+        Some(path) => path.to_string(),
+        None => String::new(),
     };
     // A host whose installed release predates this key answers with no field
     // at all, which is not the same fact as a host that declares nothing —
@@ -64,15 +64,19 @@ pub fn authority(declared: Option<&str>, vaults: &[Value]) -> Value {
         .collect::<Vec<_>>();
     let mut owners = std::collections::BTreeMap::<String, Vec<String>>::new();
     for vault in &candidates {
-        let owner = vault
+        // A candidate without an owner is nobody's and cannot collide with
+        // another of the same owner; it is left out of the owner table.
+        let Some(owner) = vault
             .get("owner")
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        if owner.is_empty() {
+            .filter(|owner| !owner.is_empty())
+        else {
             continue;
-        }
-        owners.entry(owner).or_default().push(path_of(vault));
+        };
+        owners
+            .entry(owner.to_string())
+            .or_default()
+            .push(path_of(vault));
     }
     // Only a same-owner collision is ambiguous: two candidates with two
     // owners are two machines' worth of items in one home, not a question

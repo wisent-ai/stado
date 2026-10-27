@@ -10,6 +10,7 @@ use serde::Deserialize;
 use crate::release_control::{ProductReleasePolicy, ReleaseChannel};
 
 pub(super) mod policy;
+mod portable;
 pub(super) mod promote;
 pub(super) mod receipt;
 pub(super) mod reconcile;
@@ -29,10 +30,41 @@ pub enum ReleasePolicyCommands {
     /// removed, and each former target's release agent retires the proxy and
     /// release processes it ran for the product
     Remove(ReleasePolicyRemoveArgs),
+    /// A product's rollout targets: `remove` one host from them
+    #[command(subcommand)]
+    Target(ReleasePolicyTargetCommands),
+    /// A product's install root: `repair` one spelled under one target's home
+    #[command(subcommand)]
+    Root(ReleasePolicyRootCommands),
+}
+
+/// `stado release policy target`: the hosts a product is released to.
+#[derive(Subcommand)]
+pub enum ReleasePolicyTargetCommands {
     /// Stop releasing a product to one host: the target leaves the product's
     /// rollout policy, and the host's release agent then retires the proxy and
     /// the release processes it ran for the product there
-    RemoveTarget(ReleasePolicyTargetRemoveArgs),
+    Remove(ReleasePolicyTargetRemoveArgs),
+}
+
+/// `stado release policy root`: the directory a product installs into.
+#[derive(Subcommand)]
+pub enum ReleasePolicyRootCommands {
+    /// Write a product's install root, spelled under one target's home while
+    /// other targets' homes differ, as the same path under `{home}`, so each
+    /// target installs under its own home
+    Repair(ReleasePolicyPortableArgs),
+}
+
+#[derive(Args)]
+pub struct ReleasePolicyPortableArgs {
+    /// Product whose install root is rewritten.
+    pub product: String,
+    /// Report the rewrite without writing the registry.
+    #[arg(long)]
+    pub check: bool,
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
@@ -136,8 +168,8 @@ pub struct ReleaseStatusArgs {
     version: Option<String>,
     /// List only the newest N release runs; without it every recorded run is
     /// listed. Zero is refused: omit the flag to list every run.
-    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
-    limit: Option<u64>,
+    #[arg(long)]
+    limit: Option<std::num::NonZeroU64>,
     #[arg(long)]
     json: bool,
 }

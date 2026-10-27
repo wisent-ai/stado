@@ -7,10 +7,14 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::error::{py_str, ArtifactError};
-use super::records::{ArtifactLocation, ArtifactProducer, ArtifactVerification};
+use super::error::ArtifactError;
+use super::records::{as_text, recorded_text, ArtifactLocation, ArtifactProducer, ArtifactVerification};
 use super::reference::ArtifactRef;
 use canonical::{canonicalize, ensure_ascii};
+
+/// The one manifest version Stado writes and reads:
+/// <https://stado.wisent.com/docs/primitives/object-store#the-artifact-manifest-document>.
+pub const MANIFEST_SCHEMA_VERSION: i64 = 1;
 
 /// The immutable manifest document.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,7 +52,7 @@ impl ArtifactManifest {
             dependencies: Vec::new(),
             labels: BTreeMap::new(),
             verification: ArtifactVerification::default(),
-            schema_version: 1,
+            schema_version: MANIFEST_SCHEMA_VERSION,
         }
     }
 
@@ -135,36 +139,35 @@ impl ArtifactManifest {
         };
         let labels = match map.get("labels") {
             None | Some(Value::Null) => BTreeMap::new(),
-            Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), py_str(v))).collect(),
+            Some(Value::Object(m)) => m
+                .iter()
+                .map(|(key, value)| Ok((key.clone(), as_text("manifest.labels", key, value)?)))
+                .collect::<Result<BTreeMap<_, _>, ArtifactError>>()?,
             Some(_) => return Err(ArtifactError::invalid_manifest("labels must be an object")),
         };
+        // A manifest written before the member existed names none and is at
+        // the one version there has been; any other version is refused.
         let schema_version = match map.get("schema_version") {
-            None | Some(Value::Null) => 1,
-            Some(Value::Number(n)) => n.as_i64().ok_or_else(|| {
-                ArtifactError::invalid_manifest("schema_version must be an integer")
-            })?,
-            Some(Value::String(s)) => s.trim().parse::<i64>().map_err(|_| {
-                ArtifactError::invalid_manifest("schema_version must be an integer")
-            })?,
-            Some(_) => {
-                return Err(ArtifactError::invalid_manifest(
-                    "schema_version must be an integer",
-                ))
+            None | Some(Value::Null) => MANIFEST_SCHEMA_VERSION,
+            Some(Value::Number(n)) if n.as_i64() == Some(MANIFEST_SCHEMA_VERSION) => MANIFEST_SCHEMA_VERSION,
+            Some(other) => {
+                return Err(ArtifactError::invalid_manifest(format!(
+                    "schema_version {other} is not {MANIFEST_SCHEMA_VERSION}"
+                )))
             }
         };
-        // Python: title=str(value.get("title") or ref.name) — a falsy title
-        // falls back to the artifact name.
+        // An absent, null or empty title is the artifact's name.
         let title = match map.get("title") {
             None | Some(Value::Null) => ref_.name.clone(),
             Some(Value::String(s)) if s.is_empty() => ref_.name.clone(),
-            Some(other) => py_str(other),
+            Some(other) => as_text("manifest", "title", other)?,
         };
         Ok(Self {
             ref_,
             title,
-            description: map.get("description").map(py_str).unwrap_or_default(),
-            created_at: map.get("created_at").map(py_str).unwrap_or_default(),
-            created_by: map.get("created_by").map(py_str).unwrap_or_default(),
+            description: recorded_text("manifest", map, "description")?,
+            created_at: recorded_text("manifest", map, "created_at")?,
+            created_by: recorded_text("manifest", map, "created_by")?,
             producer,
             locations,
             schemas,

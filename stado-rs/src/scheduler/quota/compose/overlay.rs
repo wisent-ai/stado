@@ -33,10 +33,13 @@ pub async fn load_overlay(store: &JobStorage) -> Result<Value, QuotaError> {
     Ok(serde_json::from_str(&raw)?)
 }
 
-/// The canonical overlay/live-quota key for a configured provider variant.
+/// The canonical overlay/live-quota key for a configured provider variant; a
+/// provider that declares no quota variant is keyed by its own name.
 pub(super) fn quota_provider_key(provider_name: &str) -> &str {
-    crate::capabilities::variant(crate::capabilities::RuntimeFacet::Quota, provider_name)
-        .map_or(provider_name, |variant| variant.id)
+    match crate::capabilities::variant(crate::capabilities::RuntimeFacet::Quota, provider_name) {
+        Some(variant) => variant.id,
+        None => provider_name,
+    }
 }
 
 /// Compose an already-fetched live limit map with the storage-backed
@@ -52,12 +55,15 @@ pub(super) async fn load_quotas_from_live(
         return Ok(overlay);
     }
     let provider_key = quota_provider_key(provider_name);
-    let overlay_p = overlay.get(provider_key).cloned().unwrap_or(json!({}));
+    // An overlay that names no reservations for this provider reserves nothing.
+    let reservations = overlay.get(provider_key);
     let mut provider_rows = serde_json::Map::new();
     for (accel, total) in live {
         let reserved: i64 = py_int(
             "reserved",
-            overlay_p.get(&accel).and_then(|cfg| cfg.get("reserved")),
+            reservations
+                .and_then(|provider| provider.get(&accel))
+                .and_then(|cfg| cfg.get("reserved")),
         )?
         .into_iter()
         .sum();

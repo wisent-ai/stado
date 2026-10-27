@@ -101,10 +101,13 @@ async fn attach_jeden(
         }))?
     );
     let status = if host_channel::target_is_this_host(&target) {
-        let inherited = std::env::var_os("PATH").unwrap_or_default();
-        let path = std::env::join_paths(
-            std::iter::once(expand_home(".stado/bin")?).chain(std::env::split_paths(&inherited)),
-        )
+        // The managed runtime first, then whatever PATH this process was given;
+        // a process started with no PATH contributes no further directories.
+        let inherited: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+            .iter()
+            .flat_map(std::env::split_paths)
+            .collect();
+        let path = std::env::join_paths(std::iter::once(expand_home(".stado/bin")?).chain(inherited))
         .map_err(|error| {
             CmdError::click(format!(
                 "cannot construct the managed runtime PATH: {error}"
@@ -132,10 +135,16 @@ async fn attach_jeden(
             .await
             .map_err(CmdError::from)?;
         let mut argv = host_channel::ssh_options(connection.destination);
-        argv.insert(1, "-T".to_string());
-        let park = park_after_seconds
-            .map(|seconds| format!("{PARK_AFTER_SETTING}={seconds} "))
-            .unwrap_or_default();
+        // No terminal on the far side: among the options, before the
+        // destination that ends the argv.
+        if let Some(destination) = argv.pop() {
+            argv.push("-T".to_string());
+            argv.push(destination);
+        }
+        let park = match park_after_seconds {
+            Some(seconds) => format!("{PARK_AFTER_SETTING}={seconds} "),
+            None => String::new(),
+        };
         argv.push(format!(
             "cd \"$HOME\"/{checkout} && PATH=\"$HOME/.stado/bin:$PATH\" {park}exec \"$HOME\"/{MANAGED_JEDEN} rpc"
         ));

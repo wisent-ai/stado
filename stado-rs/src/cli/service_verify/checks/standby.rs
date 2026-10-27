@@ -92,12 +92,14 @@ pub(in crate::cli::service_verify) async fn serving_standbys(
         if state != OBSERVED {
             continue;
         }
-        let port = url::Url::parse(&endpoint.url)
-            .ok()
-            .and_then(|url| url.port());
-        let owner = match port {
-            Some(port) => port_verdicts(registry, name, me, port, &runner).await,
-            None => Err(format!("{} names no port to judge", endpoint.url)),
+        // The port the standby is judged on comes from the endpoint URL; an
+        // endpoint that is not a URL, or names no port, is said as such.
+        let owner = match url::Url::parse(&endpoint.url) {
+            Ok(url) => match url.port() {
+                Some(port) => port_verdicts(registry, name, me, port, &runner).await,
+                None => Err(format!("{} names no port to judge", endpoint.url)),
+            },
+            Err(error) => Err(format!("{} is not a URL to judge: {error}", endpoint.url)),
         };
         let (state, probed, detail) = match owner {
             Ok((unit, verdicts)) if verdicts.iter().any(|v| v.verdict == PORT_SERVED_BY_UNIT) => (

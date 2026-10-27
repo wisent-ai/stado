@@ -63,6 +63,16 @@ final class HostRetireFileStore: ObservableObject {
             && preview.flatMap { Self.applyArguments(request, receipt: $0) } != nil
     }
 
+    /// Why a receipt is not the `expected` outcome: the CLI's own detail when
+    /// it wrote one (a source that does not exist), else the status it did
+    /// report for a receipt about another file or host.
+    private nonisolated static func refusal(_ receipt: HostRetireFileReceipt, expected: String) -> String {
+        switch receipt.detail {
+        case .some(let detail): return detail
+        case .none: return "Stado reported \(receipt.status), not \(expected)."
+        }
+    }
+
     func preflight(_ request: HostRetireFileRequest) async {
         guard !isPreviewing, !mutation.isWorking else { return }
         isPreviewing = true
@@ -86,9 +96,9 @@ final class HostRetireFileStore: ObservableObject {
                 previewRequest = request
                 mutation = .idle
             } else {
-                preflightRefusal = receipt.detail
-                    ?? "Stado reported \(receipt.status), not a ready retirement."
-                mutation = .failed(preflightRefusal ?? "The file is not ready to retire.")
+                let message = Self.refusal(receipt, expected: "a ready retirement")
+                preflightRefusal = message
+                mutation = .failed(message)
             }
         } catch {
             let message = Self.message(for: error)
@@ -121,18 +131,16 @@ final class HostRetireFileStore: ObservableObject {
                receipt.target == request.host,
                receipt.source == request.path,
                receipt.transaction == reviewed.transaction,
-               receipt.destination == reviewed.destination,
+               let destination = receipt.destination,
+               destination == reviewed.destination,
                receipt.size == reviewed.size,
                receipt.sha256 == reviewed.sha256,
                receipt.mode == reviewed.mode
             {
                 preflightRefusal = nil
-                mutation = .succeeded(
-                    "Archived \(receipt.source) as \(receipt.destination ?? "an unreported destination")."
-                )
+                mutation = .succeeded("Archived \(receipt.source) as \(destination).")
             } else {
-                let message = receipt.detail
-                    ?? "Stado reported \(receipt.status), not a completed retirement."
+                let message = Self.refusal(receipt, expected: "a completed retirement")
                 preflightRefusal = message
                 mutation = .failed(message)
             }

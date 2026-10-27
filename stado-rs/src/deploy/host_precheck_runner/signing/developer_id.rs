@@ -61,7 +61,7 @@ pub async fn bootstrap_developer_id(
         &[("__WORK_DIR__", shlex_quote(&work))],
     );
     let prepare_output = host_channel::run_script(&target, &prepare, &production_runner()).await?;
-    if !prepare_output.ok() {
+    if !prepare_output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: Developer ID CSR preparation failed: {}",
             target.name,
@@ -75,7 +75,7 @@ pub async fn bootstrap_developer_id(
     // A completed Account Holder run downloads its certificate to
     // `{work}/certificate.cer`, which the finish script above reads, so a run
     // interrupted after the certificate was issued is already recovered there.
-    if !finish_output.ok() {
+    if !finish_output.succeeded() {
         let admission = weles_capture::resolve_admission(&target.name).await?;
         let channel = weles_capture::open_channel(&admission).await?;
         let guard_id = uuid::Uuid::new_v4().to_string();
@@ -186,7 +186,7 @@ pub async fn bootstrap_developer_id(
         )
         .await?;
         finish_output = host_channel::run_script(&target, &finish, &production_runner()).await?;
-        if !finish_output.ok() {
+        if !finish_output.succeeded() {
             return Err(DeployError::unreachable(format!(
                 "{}: Developer ID bundle export failed: {}",
                 target.name,
@@ -221,7 +221,7 @@ pub async fn bootstrap_developer_id(
         &[("__WORK_DIR__", shlex_quote(&work))],
     );
     let cleanup_output = host_channel::run_script(&target, &cleanup, &production_runner()).await?;
-    if !cleanup_output.ok() {
+    if !cleanup_output.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: certificate was stored but remote private material cleanup failed: {}",
             target.name,

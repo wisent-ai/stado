@@ -14,8 +14,8 @@
 //!     "brama": {
 //!       "placement_profile": "brama-skarbiec",
 //!       "active_host": "control-host",
-//!       "endpoints": {"control-host": {"url": "http://127.0.0.1:8080"},
-//!                     "operator-host":    {"url": "http://127.0.0.1:8080"}},
+//!       "endpoints": {"control-host": {"url": "http://192.0.2.10:8080"},
+//!                     "operator-host":    {"url": "http://192.0.2.10:8080"}},
 //!       "consumers": {"operator": {"capabilities": ["model-routing"]}}
 //!     }
 //!   }
@@ -63,20 +63,10 @@ use crate::cli::directory::routes::endpoints::{bind, endpoint};
 /// error: it read as "declares nothing", so a broken directory looked like
 /// an empty one.
 pub(crate) async fn active_host(service: &str) -> Result<Option<String>, CmdError> {
-    let registry_document = document::read_document().await?;
-    if registry_document.get(document::DIRECTORY_KEY).is_none() {
-        return Ok(None);
-    }
-    let block = document::directory(&registry_document)?;
-    let Some(entry) = document::services(block)?.get(service) else {
-        return Ok(None);
-    };
-    Ok(entry
-        .get("active_host")
-        .and_then(serde_json::Value::as_str)
-        .filter(|host| !host.is_empty())
-        .map(str::to_string))
+    document::active_host_in(&document::read_document().await?, service)
 }
+
+pub(crate) use document::active_host_in;
 
 #[derive(Subcommand)]
 pub enum DirectoryCommands {

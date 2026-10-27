@@ -86,7 +86,7 @@ pub enum RunnerCommands {
     /// repository's secret. Registering a runner does not do this: a Brama that
     /// refuses the route would otherwise stop a repository from getting a
     /// runner at all, for a secret its checks may never read.
-    ModelReview {
+    Review {
         target: String,
         /// Repository inside wisent-ai whose CI presents the bearer.
         #[arg(long)]
@@ -218,7 +218,7 @@ pub async fn run(command: RunnerCommands) -> Result<(), CmdError> {
             Ok(())
         }
         RunnerCommands::Credential { json } => crate::github_identity::report(json).await,
-        RunnerCommands::ModelReview {
+        RunnerCommands::Review {
             target,
             repository,
             json,

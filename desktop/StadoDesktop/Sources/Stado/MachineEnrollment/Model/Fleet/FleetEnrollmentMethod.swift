@@ -39,23 +39,9 @@ struct FleetEnrollmentMethod: Decodable, Identifiable, Equatable, Sendable {
 
     var isOpen: Bool { refusal == nil }
 
-    private enum CodingKeys: String, CodingKey {
-        case name, command, summary, requires, provides, allowed, gate
-    }
-
-    /// Read leniently on everything except the name: a method whose prose the
-    /// control plane trimmed is still a method, and dropping the whole list
-    /// over a missing sentence would leave the operator with no way in at all.
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        name = try values.decode(String.self, forKey: .name)
-        command = try values.decodeIfPresent(String.self, forKey: .command) ?? "stado fleet \(name)"
-        summary = try values.decodeIfPresent(String.self, forKey: .summary) ?? ""
-        requires = try values.decodeIfPresent(String.self, forKey: .requires) ?? ""
-        provides = try values.decodeIfPresent(String.self, forKey: .provides) ?? ""
-        allowed = try values.decodeIfPresent(Bool.self, forKey: .allowed) ?? false
-        gate = try values.decodeIfPresent(String.self, forKey: .gate)
-    }
+    /// Every field is decoded as the CLI writes it. A document that lacks
+    /// one is reported by key through the store's document reader; it is not
+    /// turned into a method that reads as forbidden or as having no command.
 }
 
 /// `{"methods": [...]}` — the envelope `fleet methods --json` prints.

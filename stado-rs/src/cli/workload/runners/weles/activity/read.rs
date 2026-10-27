@@ -66,7 +66,7 @@ async fn read_weles_activity(
         runner,
     )
     .await?;
-    if !environment.ok() {
+    if !environment.succeeded() {
         return Err(crate::deploy::DeployError::unreachable(
             host_channel::last_error_line(
                 &environment,
@@ -101,7 +101,7 @@ async fn read_weles_activity(
         runner,
     )
     .await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(crate::deploy::DeployError::unreachable(
             host_channel::last_error_line(&output, "the Weles activity read did not complete"),
         ));
@@ -155,7 +155,7 @@ pub(crate) async fn weles_activity(target: &str, json_output: bool) -> Result<()
         reported(&report["api"]["endpoint"]),
     );
     if !report["api"]["error"].is_null() {
-        println!("{target}: API connection error: {}", report["api"]["error"]);
+        println!("{target}: API connection error: {}", crate::cli::reporting::field(&report["api"]["error"]));
     }
     // A report without its run list or run count is said as such; both were
     // read as no runs at all.

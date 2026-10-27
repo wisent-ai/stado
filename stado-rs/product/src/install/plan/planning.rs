@@ -209,10 +209,14 @@ pub(in super::super) fn select(
                 Some(commit) => commit.to_owned(),
                 None => source::git(&root, &["rev-parse", "HEAD"])?,
             };
-            let recorded = incomplete.source_revision.as_deref().unwrap_or_default();
-            if recorded == head {
+            let recorded = incomplete.source_revision.as_deref();
+            if recorded == Some(head.as_str()) {
                 return retained();
             }
+            let recorded = match recorded {
+                Some(revision) => revision.to_string(),
+                None => "a revision it never recorded".to_string(),
+            };
             let replacement = recipes::prepare(
                 request.runtime,
                 request.product,
@@ -266,8 +270,23 @@ fn canonical_checkout(request: &Request) -> Result<PathBuf> {
 fn already_placed(plan: &Prepared) -> Result<bool> {
     for placement in &plan.placements {
         let holds = if placement.symbolic {
-            std::fs::read_link(&placement.destination).ok().as_deref()
-                == Some(placement.source.as_path())
+            // A destination that is absent, or is not a link, does not hold the link yet.
+            match std::fs::read_link(&placement.destination) {
+                Ok(target) => target == placement.source,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput
+                    ) =>
+                {
+                    false
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("reading the link at {}", placement.destination.display())
+                    })
+                }
+            }
         } else {
             placement.destination.is_file()
                 && crate::common::sha256(&placement.destination)?

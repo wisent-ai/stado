@@ -18,7 +18,7 @@ use crate::cli::host::secrets::vault::vault_word;
 /// there and nowhere else.
 ///
 /// Tags only: the payload is never read, rewritten or re-encrypted, which is
-/// the whole reason this is not a `set-json`.
+/// the whole reason this is not a `set`.
 pub async fn retag_vault_item(
     target: &str,
     item: &str,
@@ -185,7 +185,7 @@ pub(in crate::cli::host) async fn run_retag(
     )
     .await
     .map_err(CmdError::from)?;
-    if retagged.ok() {
+    if retagged.succeeded() {
         return Ok(Ok(()));
     }
     Ok(Err(crate::deploy::host_channel::last_error_line(

@@ -15,7 +15,7 @@ use crate::providers::gcp::client::GceError;
 use crate::providers::gcp::stockout;
 use crate::providers::{Provider, ProviderError};
 
-use super::{log, py_bool, region_of_zone, GcpProvider};
+use super::{log, region_of_zone, GcpProvider};
 
 #[async_trait]
 impl Provider for GcpProvider {
@@ -109,9 +109,8 @@ impl Provider for GcpProvider {
             {
                 Ok(()) => {
                     log(&format!(
-                        "Created {} preemptible={}",
+                        "Created {} preemptible={preemptible}",
                         Self::reference(name, zone),
-                        py_bool(preemptible)
                     ));
                     stockout::clear_after_create(store, zone, &region, accel_type).await?;
                     return Ok(Some(Self::reference(name, zone)));

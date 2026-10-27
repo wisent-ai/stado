@@ -24,8 +24,8 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
     // on a host name the declaration does not carry.
     if declared.is_redirect() {
         return Err(CmdError::refused(format!(
-            "web product {name} is a redirect to {}, so there is nothing to deploy: `stado web route {name}` is what publishes it",
-            declared.redirect_to().unwrap_or_default()
+            "web product {name} is {}, so there is nothing to deploy: `stado web route {name}` is what publishes it",
+            match declared.redirect_to() { Some(to) => format!("a redirect to {to}"), None => "a redirect whose destination the declaration does not state".to_string() }
         )));
     }
     // A hostname in front of an existing service owns no release either. The
@@ -200,7 +200,7 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
-    let readyz_url = format!("http://127.0.0.1:{}{}", declared.port(), declared.readyz());
+    let readyz_url = format!("http://{}:{}{}", std::net::Ipv4Addr::LOCALHOST, declared.port(), declared.readyz());
     let (readiness, readiness_detail) =
         wait_until_ready(&target, &label, &readyz_url, &runner).await?;
     if readiness != "ready" {

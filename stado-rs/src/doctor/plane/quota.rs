@@ -78,17 +78,34 @@ pub(in crate::doctor) async fn check_quota(store: Option<&JobStorage>, store_err
                     continue;
                 };
                 let mut totals: Vec<String> = Vec::new();
+                let mut unreadable: Vec<String> = Vec::new();
                 let mut provider_capacity = false;
                 for (accel, row) in rows {
-                    let total = row.get("total").and_then(Value::as_i64).unwrap_or_default();
-                    let reserved = row
-                        .get("reserved")
-                        .and_then(Value::as_i64)
-                        .unwrap_or_default();
+                    // Both counts are integers the declaration states; a
+                    // row that states either in another shape, or not at
+                    // all, is named rather than counted as no capacity.
+                    let (Some(total), Some(reserved)) = (
+                        row.get("total").and_then(Value::as_i64),
+                        row.get("reserved").and_then(Value::as_i64),
+                    ) else {
+                        unreadable.push(format!("{accel}={row}"));
+                        continue;
+                    };
                     provider_capacity |= (total - reserved).is_positive();
                     totals.push(format!("{accel}={total}(-{reserved} reserved)"));
                 }
                 any_capacity |= provider_capacity;
+                if !unreadable.is_empty() {
+                    findings.note(
+                        Status::Fail,
+                        format!(
+                            "{name}: config/quotas.json rows without integer total and reserved \
+                             counts: {}",
+                            unreadable.join(" ")
+                        ),
+                    );
+                    findings.remedy(QUOTA_REMEDY);
+                }
                 let status = if provider_capacity {
                     Status::Pass
                 } else {

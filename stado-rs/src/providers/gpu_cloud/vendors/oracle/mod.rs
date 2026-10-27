@@ -276,7 +276,12 @@ impl GpuCloudApi for Api {
             let request = self.signed(reqwest::Method::GET, &url, None).await?;
             let (answer, next) =
                 http::exchange_paged(VENDOR, operation, request, "opc-next-page").await?;
-            for instance in answer.as_array().into_iter().flatten() {
+            // A page in another shape is the answer failing, not a page of
+            // no machines: read as empty, running machines went unlisted.
+            let instances = answer.as_array().ok_or_else(|| {
+                GpuCloudError::response(VENDOR, operation, format!("the page is no list of instances: {answer}"))
+            })?;
+            for instance in instances {
                 machines.push(machine(operation, instance)?);
             }
             match next {

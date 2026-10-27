@@ -66,7 +66,8 @@ pub(crate) async fn run_weles_image_inspect(
     let diagnostics = crate::deploy::weles_capture::image_diagnostics(&channel, run_id)
         .await
         .map_err(|error| CmdError::from(error).within(target))?;
-    let task_result = result.get("result").cloned().unwrap_or(Value::Null);
+    // A run that returned no task result carries no final URL and no error;
+    // both are read through the pointer, which answers none for them.
     let report = json!({
         "kind": "weles-image-inspect",
         "target": target,
@@ -81,8 +82,8 @@ pub(crate) async fn run_weles_image_inspect(
             // missing `ok` is not a failed trajectory, and not a passed one.
             "trajectory_ok": result.get("ok").and_then(Value::as_bool),
             "exit_code": result.get("exitCode"),
-            "final_url": task_result.get("final_url"),
-            "trajectory_error": task_result.get("error"),
+            "final_url": result.pointer("/result/final_url"),
+            "trajectory_error": result.pointer("/result/error"),
         },
         "images": diagnostics,
     });
@@ -91,7 +92,7 @@ pub(crate) async fn run_weles_image_inspect(
     } else {
         println!(
             "{target}: inspected {} through {}",
-            report["source_url"].as_str().unwrap_or(source_url.as_str()),
+            source_url.as_str(),
             admission.declared_url,
         );
         print_json(&diagnostics);

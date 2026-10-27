@@ -7,9 +7,11 @@
 //! large volume of the other.
 
 mod settle;
+mod space;
 mod tree;
 
 pub(in crate::cli::placement) use settle::settle_state_backup;
+pub(in crate::cli::placement::transfer) use space::{ensure_room, ensure_room_for, Ends};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -43,15 +45,22 @@ pub(super) fn root_payload(
 ) -> Result<String, CmdError> {
     match state.root {
         StateRoot::Home => Ok(String::new()),
-        StateRoot::Work => target.work_root.as_deref().map(payload).ok_or_else(|| {
-            CmdError::click(format!(
-                "{}: state {} is kept under the work root, and the registry declares none for \
-                 {}; declare targets.{}.work_root before moving it there",
-                target.name, state.path, target.name, target.name
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config)
-        }),
+        StateRoot::Work => match target.work_root.as_deref() {
+            Some(work_root) => Ok(payload(work_root)),
+            None => Err(no_work_root(target, state)),
+        },
     }
+}
+
+/// The refusal for a work-rooted state on a host whose registry entry
+/// declares no work root.
+pub(super) fn no_work_root(target: &ComputeTarget, state: &PlacementState) -> CmdError {
+    CmdError::click(format!(
+        "{}: state {} is kept under the work root, and the registry declares none for \
+         {}; declare targets.{}.work_root before moving it there",
+        target.name, state.path, target.name, target.name
+    ))
+    .stating(crate::primitives::failure::FailureCode::Config)
 }
 
 /// The script lines that set `full` to the state's file on the host.
@@ -97,13 +106,18 @@ pub(super) async fn read_state(
         return tree::read_tree(target, state, transaction_id, runner).await;
     }
     let locate = full_path_lines(&root_payload(target, state)?, &state.path);
+    // The file's base64 goes straight from the encoder onto the marker line:
+    // held in a shell variable first, a store of hundreds of megabytes was
+    // copied through bash's command substitution before a byte was sent.
     let script = format!(
         r#"set -eu
+set -o pipefail
 {locate}
 if [ ! -e "$full" ]; then printf 'STADO_PLACEMENT_STATE\tmissing\n'; exit 0; fi
 [ -f "$full" ] || {{ printf '%s is not a regular file\n' "$full" >&2; exit 65; }}
-payload=$(/usr/bin/base64 < "$full" | /usr/bin/tr -d '\r\n')
-printf 'STADO_PLACEMENT_STATE\tpresent\t%s\n' "$payload"
+printf 'STADO_PLACEMENT_STATE\tpresent\t'
+/usr/bin/base64 < "$full" | /usr/bin/tr -d '\r\n'
+printf '\n'
 "#
     );
     let output = run_host_script(target, &script, runner, "state read").await?;
@@ -190,7 +204,9 @@ printf '%s\n' "$had" > "$meta"
 if [ '{present}' = yes ]; then
   tmp="$full.placement-$txn.tmp"
   trap '/bin/rm -f "$tmp"' EXIT HUP INT TERM
-  printf '%s' '{payload}' | /usr/bin/base64 "$decode" > "$tmp"
+  /usr/bin/base64 "$decode" > "$tmp" <<'STADO_PLACEMENT_PAYLOAD'
+{payload}
+STADO_PLACEMENT_PAYLOAD
   /bin/chmod 600 "$tmp"
   /bin/mv -f "$tmp" "$full"
 else

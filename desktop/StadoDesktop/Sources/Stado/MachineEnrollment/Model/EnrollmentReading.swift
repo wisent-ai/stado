@@ -27,43 +27,19 @@ enum MachineName {
     }
 }
 
-/// What the fleet commands print, read back.
-///
-/// `fleet key generate` prints the credential item with its fingerprint and
-/// then the public key. Both lines are matched on their own shape rather than
-/// on their position, so a note printed between them does not shift the parse.
-enum MachineEnrollmentOutput {
-    private static let keyPrefixes = ["ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-", "sk-ssh-ed25519", "ssh-dss "]
+/// `stado fleet key generate NAME --json` — the pair minted into the
+/// credential store: the item it lives under, its fingerprint, and the public
+/// half. Read as the CLI writes it; a document that lacks a field is reported
+/// by key through the store's document reader, never parsed out of prose.
+struct MintedFleetKey: Decodable, Equatable, Sendable {
+    let target: String
+    let item: String
+    let fingerprint: String
+    let publicKey: String
 
-    static func publicKey(in output: String) -> String? {
-        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let candidate = trimmed.hasPrefix("public key:")
-                ? String(trimmed.dropFirst("public key:".count)).trimmingCharacters(in: .whitespaces)
-                : trimmed
-            if keyPrefixes.contains(where: candidate.hasPrefix), candidate.split(separator: " ").count >= 2 {
-                return candidate
-            }
-        }
-        return nil
-    }
-
-    /// `stored credential item stado-ssh-NAME (SHA256:…)` — the item id and the
-    /// fingerprint are two different facts and belong in two different places
-    /// on screen, so they are separated here rather than in the view.
-    static func credential(in output: String) -> (item: String, fingerprint: String)? {
-        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("stored credential item ") else { continue }
-            let rest = String(trimmed.dropFirst("stored credential item ".count))
-            guard let open = rest.firstIndex(of: "("), rest.hasSuffix(")") else {
-                return (rest.trimmingCharacters(in: .whitespaces), "")
-            }
-            let item = String(rest[rest.startIndex..<open]).trimmingCharacters(in: .whitespaces)
-            let fingerprint = String(rest[rest.index(after: open)..<rest.index(before: rest.endIndex)])
-            return (item, fingerprint.trimmingCharacters(in: .whitespaces))
-        }
-        return nil
+    private enum CodingKeys: String, CodingKey {
+        case target, item, fingerprint
+        case publicKey = "public_key"
     }
 }
 

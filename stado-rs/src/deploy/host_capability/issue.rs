@@ -73,7 +73,7 @@ pub async fn issue(
 
 /// Store one captured challenge code in the Weles broker that will redeem it.
 ///
-/// The six digits travel on stdin only. They are never an argument, a registry
+/// The digits travel on stdin only. They are never an argument, a registry
 /// value, a diagnostic, or part of this function's receipt.
 pub async fn challenge_put(
     target: &ComputeTarget,
@@ -82,19 +82,21 @@ pub async fn challenge_put(
     code: &str,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+    // The same rule Skarbiec's `capability challenge` applies, which owns the item:
+    // digits, and at least one. How many a provider sends is its own.
+    if code.is_empty() || !code.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(
-            DeployError("refusing to store an invalid challenge code".to_string())
+            DeployError("refusing to store a challenge code that is not digits".to_string())
                 .stating(crate::primitives::failure::FailureCode::Refused),
         );
     }
-    let command = broker.command(&["challenge-put", resource]);
+    let command = broker.command(&["capability", "challenge", resource]);
     let output =
         host_channel::run_program_with_stdin(target, &["/bin/sh", "-c", &command], code, runner)
             .await?;
-    if !output.ok() {
+    if !output.succeeded() {
         return Err(DeployError::unreachable(format!(
-            "{}: `skarbiec challenge-put` failed against {}: {}",
+            "{}: `skarbiec capability challenge` failed against {}: {}",
             target.name,
             broker.vault,
             host_channel::last_error_line(&output, "the host gave no reason")
@@ -102,7 +104,7 @@ pub async fn challenge_put(
     }
     let receipt: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
         DeployError::unreachable(format!(
-            "{}: `skarbiec challenge-put` did not answer with JSON: {error}",
+            "{}: `skarbiec capability challenge` did not answer with JSON: {error}",
             target.name
         ))
     })?;

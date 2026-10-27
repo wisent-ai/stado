@@ -4,7 +4,7 @@
 use serde_json::Value;
 
 use crate::monitor::reap::manifest::{
-    has_complete_retained_outcomes, py_truthy, CLEANUP_COMPLETED_AT,
+    has_complete_retained_outcomes, marked, CLEANUP_COMPLETED_AT,
 };
 use crate::monitor::reap::reads::required_snapshot_text;
 use crate::queue::runs::TERMINAL_PREFIXES;
@@ -116,7 +116,7 @@ pub(crate) async fn validate_reconciliation_final_state(
                 crate::queue::submit::validate_stored_run_manifest(&manifest, run_id)
                     .map_err(|error| StorageError::Other(error.to_string()))?;
                 if !has_complete_retained_outcomes(&manifest)
-                    || !manifest.get(CLEANUP_COMPLETED_AT).is_some_and(py_truthy)
+                    || !marked(&manifest, CLEANUP_COMPLETED_AT, run_id)?
                 {
                     return Err(StorageError::Other(format!(
                         "terminal run {run_id} lacks complete retained outcomes"
@@ -145,10 +145,12 @@ pub(crate) async fn validate_reconciliation_final_state(
                     })?;
                 let expected_raw = required_snapshot_text(snapshot, store_path).await?;
                 let expected: Value = serde_json::from_str(&expected_raw)?;
-                let schema = expected
-                    .get("schema")
-                    .and_then(Value::as_str)
-                    .unwrap_or("legacy-unversioned");
+                // Manifests written before schemas were stamped carry none;
+                // they are proven by content rather than by typed outcomes.
+                let schema = match expected.get("schema").and_then(Value::as_str) {
+                    Some(schema) => schema,
+                    None => "legacy-unversioned",
+                };
                 if schema == "stado.run-submission.v3" {
                     let live_raw = required_snapshot_text(live, store_path).await?;
                     let manifest: Value = serde_json::from_str(&live_raw)?;
@@ -242,11 +244,7 @@ pub(crate) async fn validate_reconciliation_final_state(
             }
             "block_unclassified_live" => {
                 return Err(StorageError::Other(format!(
-                    "unclassified live lifecycle decision reached finalization: {}",
-                    decision
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .unwrap_or("<unknown>")
+                    "unclassified live lifecycle decision reached finalization: {decision}"
                 )));
             }
             other => {

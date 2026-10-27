@@ -136,10 +136,16 @@ async fn version(command: ReleaseVersionCommands) -> Result<(), CmdError> {
 /// and says so on standard error with its path and cause, so a caller is not
 /// left taking a damaged record for an absent one.
 fn active_dir(product: &str, relative: &str) {
-    let Some(home) = std::env::var_os("HOME") else {
-        return;
+    // The home every Stado file is kept under: a home neither HOME nor the
+    // user database names is said rather than read as an absent record.
+    let home = match crate::config_file::home() {
+        Ok(home) => home,
+        Err(cause) => {
+            eprintln!("stado: the release agent's record cannot be found: {cause}");
+            return;
+        }
     };
-    let state = std::path::Path::new(&home)
+    let state = home
         .join(".stado/release-state")
         .join(format!("{product}.json"));
     let document = match std::fs::read(&state) {

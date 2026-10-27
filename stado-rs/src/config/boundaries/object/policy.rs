@@ -106,7 +106,12 @@ impl ObjectApiNamespace {
             if !allowed.ends_with('/') {
                 return None;
             }
-            let root = allowed.strip_suffix('/').unwrap_or(allowed);
+            // `allowed` ends with `/` (checked above); the root is the
+            // coordinate without it.
+            let root = match allowed.strip_suffix('/') {
+                Some(root) => root,
+                None => allowed,
+            };
             if path == root {
                 Some(allowed.to_string())
             } else if path.starts_with(allowed) {
@@ -160,16 +165,22 @@ pub(crate) fn parse_object_api_namespaces(
         if let Err(error) = NamespaceEntryFields::deserialize(raw_entry) {
             problems.push(format!("object_api.namespaces.{namespace}: {error}"));
         }
-        let item = entry
-            .get("item")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        // The item is derived from the namespace, not chosen; an absent one
+        // or one of another type is named as such, not as a wrong name.
         let expected_item = super::namespace_item(namespace);
-        if item != expected_item {
-            problems.push(format!(
+        match entry.get("item") {
+            Some(Value::String(item)) if *item == expected_item => {}
+            Some(Value::String(item)) => problems.push(format!(
                 "object_api.namespaces.{namespace}.item must be {expected_item:?}, got {item:?}"
-            ));
+            )),
+            Some(other) => problems.push(format!(
+                "object_api.namespaces.{namespace}.item must be the string {expected_item:?}, not {other}"
+            )),
+            None => problems.push(format!(
+                "object_api.namespaces.{namespace}.item is required and must be {expected_item:?}"
+            )),
         }
+        let item = expected_item.as_str();
 
         let mut prefix_policies = Vec::new();
         if let Some(explicit) = entry.get("prefix_policies") {
@@ -192,15 +203,29 @@ pub(crate) fn parse_object_api_namespaces(
                         if let Err(error) = PrefixPolicyFields::deserialize(raw_policy) {
                             problems.push(format!("{location}: {error}"));
                         }
-                        let prefix = policy
-                            .get("prefix")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default();
-                        if prefix.is_empty() || !valid_object_prefix(prefix) {
-                            problems.push(format!(
-                                "{location}.prefix must be a non-empty canonical top-level object key or path ending in '/'"
-                            ));
-                        }
+                        // A policy without a prefix, or with one of another
+                        // type, is named as such; one that is a string but
+                        // empty or non-canonical by its shape.
+                        let prefix = match policy.get("prefix") {
+                            Some(Value::String(prefix)) => {
+                                if prefix.is_empty() || !valid_object_prefix(prefix) {
+                                    problems.push(format!(
+                                        "{location}.prefix must be a non-empty canonical top-level object key or path ending in '/'"
+                                    ));
+                                }
+                                prefix.as_str()
+                            }
+                            Some(other) => {
+                                problems.push(format!(
+                                    "{location}.prefix must be a string, not {other}"
+                                ));
+                                ""
+                            }
+                            None => {
+                                problems.push(format!("{location}.prefix is required"));
+                                ""
+                            }
+                        };
                         let actions = parse_object_actions(
                             policy.get("actions"),
                             &format!("{location}.actions"),

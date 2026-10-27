@@ -82,15 +82,20 @@ pub(in crate::cli::web) async fn deliver(
     // would report a change it cannot describe.
     let current = match installed.report.file_state.as_str() {
         service_file_fetch::FILE_MISSING => String::new(),
-        service_file_fetch::FILE_READ if installed.ok() => {
+        // A file read whole, with both ends agreeing on its bytes, is the
+        // current configuration.
+        service_file_fetch::FILE_READ
+            if installed.integrity == service_file_fetch::INTEGRITY_VERIFIED =>
+        {
             String::from_utf8_lossy(&installed.content).into_owned()
         }
-        _ => {
+        unread_state => {
             return Err(CmdError::click(format!(
                 "the edge's current configuration could not be read, so nothing was delivered: {}",
-                installed
-                    .failure(&target.name)
-                    .unwrap_or_else(|| "no detail".to_string())
+                match installed.failure(&target.name) {
+                    Some(failure) => failure,
+                    None => format!("the read reports state {unread_state:?} and no detail"),
+                }
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown))
         }
@@ -134,9 +139,15 @@ pub(in crate::cli::web) async fn deliver(
 
     let local = write_local(&desired)?;
     let content = std::fs::read(&local)?;
-    let synced = service::sync_service_file(&target, CADDYFILE_ON_EDGE, &content, 0o600, &runner)
-        .await
-        .map_err(CmdError::from)?;
+    let synced = service::sync_service_file(
+        &target,
+        CADDYFILE_ON_EDGE,
+        &content,
+        crate::primitives::file_mode::owner_read_write(),
+        &runner,
+    )
+    .await
+    .map_err(CmdError::from)?;
     if !synced.succeeded("file_synced") {
         return Err(CmdError::click(format!(
             "{}: the edge's configuration was not delivered: {}",
@@ -166,16 +177,10 @@ fn write_local(text: &str) -> Result<std::path::PathBuf, CmdError> {
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    let directory = std::path::Path::new(&home).join(".stado").join("web-edge");
-    std::fs::create_dir_all(&directory)?;
-    let path = directory.join("Caddyfile");
-    let staged = directory.join("Caddyfile.stado-web-edge");
-    std::fs::write(&staged, text)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600))?;
-    }
-    std::fs::rename(&staged, &path)?;
+    let path = std::path::Path::new(&home)
+        .join(".stado")
+        .join("web-edge")
+        .join("Caddyfile");
+    crate::primitives::document::persist(&path, text.as_bytes())?;
     Ok(path)
 }

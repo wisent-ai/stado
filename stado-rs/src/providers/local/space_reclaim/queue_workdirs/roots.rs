@@ -32,14 +32,27 @@ fn resolved(base: &Path) -> io::Result<PathBuf> {
     std::fs::canonicalize(base)
 }
 
-/// Canonical owner-visible root for every local queue job.
-pub fn work_root() -> PathBuf {
-    let (base, components) = work_base::base_and_jobs_components();
-    let mut root = resolved(&base).unwrap_or(base);
+/// Canonical owner-visible root for every local queue job. A base that does
+/// not exist yet (a declared root not created) is named as declared, since
+/// nothing is under it; one that cannot be resolved for another cause is
+/// refused, because the unresolved path may name another tree than the one
+/// the cleaner opens.
+pub fn work_root() -> io::Result<PathBuf> {
+    let (base, components) = work_base::base_and_jobs_components()?;
+    let mut root = match resolved(&base) {
+        Ok(root) => root,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => base,
+        Err(error) => {
+            return Err(io::Error::new(
+                error.kind(),
+                format!("the work base {} cannot be resolved: {error}", base.display()),
+            ))
+        }
+    };
     for component in components {
         root.push(component);
     }
-    root
+    Ok(root)
 }
 
 fn validate_owned_directory(fd: RawFd, label: &Path) -> io::Result<FileStat> {
@@ -62,7 +75,7 @@ fn open_owned_component(
     let opened = match safefs::open_dir_at(parent, name) {
         Ok(fd) => fd,
         Err(error) if create && error.kind() == io::ErrorKind::NotFound => {
-            match safefs::mkdir_at(parent, name, Mode::from_bits_truncate(0o700)) {
+            match safefs::mkdir_at(parent, name, Mode::S_IRWXU) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
@@ -72,17 +85,17 @@ fn open_owned_component(
         Err(error) => return Err(error),
     };
     validate_owned_directory(opened.as_raw_fd(), label)?;
-    safefs::fchmod(opened.as_raw_fd(), Mode::from_bits_truncate(0o700))?;
+    safefs::fchmod(opened.as_raw_fd(), Mode::S_IRWXU)?;
     Ok(opened)
 }
 
 /// Open the queue root below the work base this process was told about,
 /// component by component, creating the missing ones when asked. The base
 /// itself is never created: a declared root is made on the host by `stado
-/// space work-root`, owned by the agent's account, and a base that is not
+/// space root`, owned by the agent's account, and a base that is not
 /// an owned directory is refused here as it always was for the home.
 pub(super) fn open_work_root(create: bool) -> io::Result<(PathBuf, OwnedFd, dev_t)> {
-    let (base, components) = work_base::base_and_jobs_components();
+    let (base, components) = work_base::base_and_jobs_components()?;
     open_work_root_at(&base, components, create)
 }
 
@@ -106,7 +119,7 @@ fn open_work_root_at(
 /// The cleanup root: the queue root under the work base. `home` is the base
 /// an undeclared host cleans under; a declared work root replaces it.
 pub(super) fn open_cleanup_root(home: &Path) -> io::Result<(PathBuf, OwnedFd, dev_t)> {
-    let (declared_base, components) = work_base::base_and_jobs_components();
+    let (declared_base, components) = work_base::base_and_jobs_components()?;
     let base = if work_base::declared().is_some() {
         declared_base
     } else {
@@ -123,7 +136,7 @@ pub fn work_dir(job_id: &str) -> io::Result<PathBuf> {
             "queue job id must be job- followed by 24 lowercase hex digits",
         ));
     }
-    Ok(work_root().join(format!("{WORKDIR_PREFIX}{job_id}")))
+    Ok(work_root()?.join(format!("{WORKDIR_PREFIX}{job_id}")))
 }
 
 fn valid_job_id(id: &str) -> bool {

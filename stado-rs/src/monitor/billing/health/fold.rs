@@ -1,13 +1,26 @@
 //! Carrying one provider's history forward, and rendering the elapsed
 //! figures that fold produces.
 
-use chrono::{DateTime, Utc};
+use std::num::NonZeroU64;
+
+use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::{json, Value};
 
 use super::{
     ProviderHealth, MISSING_STATUS, OK_STATUS, SECONDS_PER_DAY, SECONDS_PER_HOUR,
     SECONDS_PER_MINUTE,
 };
+
+/// A text field of a billing section or of the stored history, as written:
+/// absent or null is none, text is itself, and anything else is shown in its
+/// JSON form so the alert carries what the section held instead of dropping it.
+fn text_field(value: Option<&Value>) -> Option<String> {
+    match value {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(other) => Some(other.to_string()),
+    }
+}
 
 /// Carry one provider's history forward against this tick's section.
 pub(super) fn fold_provider(
@@ -17,22 +30,18 @@ pub(super) fn fold_provider(
     stamp: &str,
     now: DateTime<Utc>,
 ) -> ProviderHealth {
-    let status = section
-        .and_then(|section| section.get("status"))
-        .and_then(Value::as_str)
-        .unwrap_or(MISSING_STATUS)
-        .to_string();
-    let detail = section
-        .and_then(|section| section.get("detail"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let prior_str = |field: &str| {
-        prior
-            .and_then(|prior| prior.get(field))
-            .and_then(Value::as_str)
-            .map(str::to_string)
+    // A section that names no status is the provider's own missing state.
+    let status = match text_field(section.and_then(|section| section.get("status"))) {
+        Some(status) => status,
+        None => MISSING_STATUS.to_string(),
     };
+    let mut detail = match text_field(section.and_then(|section| section.get("detail"))) {
+        Some(detail) => detail,
+        None => String::new(),
+    };
+    let prior_str = |field: &str| text_field(prior.and_then(|prior| prior.get(field)));
+    // No time has passed at the start of a run, nor while a provider is healthy.
+    let no_time = TimeDelta::zero().num_seconds();
 
     if status == OK_STATUS {
         return ProviderHealth {
@@ -41,14 +50,27 @@ pub(super) fn fold_provider(
             detail,
             last_ok: Some(stamp.to_string()),
             failing_since: None,
-            failing_seconds: 0,
+            failing_seconds: no_time,
             degraded: false,
         };
     }
     // An already-open run keeps its original start, so the elapsed figure
-    // survives restarts of whatever process happens to be collecting.
-    let failing_since = prior_str("failing_since").unwrap_or_else(|| stamp.to_string());
-    let failing_seconds = elapsed_seconds(&failing_since, now);
+    // survives restarts of whatever process happens to be collecting. A
+    // recorded start that is not a time cannot be carried: the run is counted
+    // from this tick and the detail says why, instead of reading as a run
+    // that failed for no time at all.
+    let (failing_since, failing_seconds) = match prior_str("failing_since") {
+        None => (stamp.to_string(), no_time),
+        Some(recorded) => match elapsed_seconds(&recorded, now) {
+            Ok(seconds) => (recorded, seconds),
+            Err(cause) => {
+                detail.push_str(&format!(
+                    " (the recorded failing_since {recorded:?} is not a time: {cause}; counted from now)"
+                ));
+                (stamp.to_string(), no_time)
+            }
+        },
+    };
     ProviderHealth {
         provider: provider.to_string(),
         status,
@@ -71,30 +93,31 @@ pub(super) fn health_value(health: &ProviderHealth) -> Value {
     })
 }
 
-/// Seconds between an RFC-3339 stamp and `now`, floored at zero. An
-/// unparseable stamp yields zero, which keeps a corrupt record quiet rather
-/// than alert-storming on garbage.
-fn elapsed_seconds(since: &str, now: DateTime<Utc>) -> i64 {
-    DateTime::parse_from_rfc3339(since)
-        .map(|start| (now - start.with_timezone(&Utc)).num_seconds().max(0))
-        .unwrap_or_default()
+/// Seconds between an RFC-3339 stamp and `now`, floored at none; a stamp
+/// that is not RFC 3339 is the parser's error.
+fn elapsed_seconds(since: &str, now: DateTime<Utc>) -> Result<i64, chrono::ParseError> {
+    let start = DateTime::parse_from_rfc3339(since)?;
+    Ok((now - start.with_timezone(&Utc)).max(TimeDelta::zero()).num_seconds())
 }
 
-/// Elapsed seconds as `1d 2h 3m`. Fed only by [`elapsed_seconds`], so the
-/// input is already non-negative; a negative one degrades to `0m`.
+/// Elapsed seconds as `1d 2h 3m`, the zero units left out and minutes always
+/// shown when nothing larger is. A negative count, which only a clock that
+/// stepped back can give, is said as such rather than read as none.
 pub fn humanize(seconds: i64) -> String {
-    let total = u64::try_from(seconds).unwrap_or_default();
+    let Ok(total) = u64::try_from(seconds) else {
+        return format!("{seconds}s (the clock is behind the recorded start)");
+    };
     let days = total / SECONDS_PER_DAY;
     let hours = (total % SECONDS_PER_DAY) / SECONDS_PER_HOUR;
     let minutes = (total % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
     let mut parts = Vec::new();
-    if days > 0 {
+    if NonZeroU64::new(days).is_some() {
         parts.push(format!("{days}d"));
     }
-    if hours > 0 {
+    if NonZeroU64::new(hours).is_some() {
         parts.push(format!("{hours}h"));
     }
-    if minutes > 0 || parts.is_empty() {
+    if NonZeroU64::new(minutes).is_some() || parts.is_empty() {
         parts.push(format!("{minutes}m"));
     }
     parts.join(" ")

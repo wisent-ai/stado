@@ -154,7 +154,7 @@ pub enum SecretsCommands {
     },
     /// Test unlock phrases found in transcripts against a local or remote
     /// vault, reporting which source name worked. Never prints a phrase.
-    TryUnlock {
+    Unlock {
         /// Registry host holding the protected vault. Omit for the local vault.
         #[arg(long)]
         host: Option<String>,
@@ -173,8 +173,7 @@ pub enum SecretsCommands {
         command: CredentialTokenCommands,
     },
     /// Acquisition-scope operations on a host vault.
-    #[command(name = "acquisition-scopes")]
-    AcquisitionScopes {
+    Scopes {
         #[command(subcommand)]
         command: CredentialAcquisitionScopeCommands,
     },
@@ -194,16 +193,24 @@ pub enum SecretsCommands {
         #[command(subcommand)]
         command: CredentialSeedCommands,
     },
+    /// Signing material a product ships with: a desktop product's update
+    /// key and its code-signing provisioning profiles.
+    Signing {
+        #[command(subcommand)]
+        command: CredentialSigningCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CredentialSigningCommands {
     /// A desktop product's Sparkle update key.
-    #[command(name = "sparkle-key")]
-    SparkleKey {
+    Key {
         #[command(subcommand)]
         command: CredentialSparkleKeyCommands,
     },
     /// A product's code-signing provisioning profiles, stored as fields of
     /// one owner-vault item.
-    #[command(name = "signing-profile")]
-    SigningProfile {
+    Profile {
         #[command(subcommand)]
         command: CredentialSigningProfileCommands,
     },

@@ -17,30 +17,29 @@ pub(super) fn quarantine_entries(
     state: Option<&HostReleaseState>,
     desired_digest: Option<&str>,
 ) -> Vec<Value> {
-    state.map_or_else(Vec::new, |state| {
-        state
-            .quarantined
-            .iter()
-            .map(|(digest, record)| {
-                let classified = record.classification();
-                json!({
-                    "digest": digest,
-                    "reason": record.reason,
-                    "quarantined_at": record.quarantined_at.to_rfc3339(),
-                    "is_desired_digest": desired_digest == Some(digest.as_str()),
-                    "cause": classified.cause.as_str(),
-                    "evidence": classified.evidence,
-                    "remedy": classified.cause.remedy(),
-                    // Whether this row needs an operator at all. A cause that
-                    // says nothing about the candidate is retired by the agent
-                    // itself on a later tick, and an operator reading a table
-                    // of refusals has to be able to see which of them are
-                    // already recovering.
-                    "agent_retires": !classified.cause.holds_the_candidate(),
-                })
+    // A host with no release state holds no quarantine record to show.
+    state
+        .into_iter()
+        .flat_map(|state| state.quarantined.iter())
+        .map(|(digest, record)| {
+            let classified = record.classification();
+            json!({
+                "digest": digest,
+                "reason": record.reason,
+                "quarantined_at": record.quarantined_at.to_rfc3339(),
+                "is_desired_digest": desired_digest == Some(digest.as_str()),
+                "cause": classified.cause.as_str(),
+                "evidence": classified.evidence,
+                "remedy": classified.cause.remedy(),
+                // Whether this row needs an operator at all. A cause that
+                // says nothing about the candidate is retired by the agent
+                // itself on a later tick, and an operator reading a table
+                // of refusals has to be able to see which of them are
+                // already recovering.
+                "agent_retires": !classified.cause.holds_the_candidate(),
             })
-            .collect()
-    })
+        })
+        .collect()
 }
 
 /// How many quarantines share each cause, which one dominates, and what to do
@@ -55,15 +54,28 @@ pub(super) fn quarantine_entries(
 /// operator asking what dominates wants a cause they can act on -- but hiding
 /// the count would misrepresent how much of the table is actually understood.
 pub(super) fn cause_summary(quarantined: &[Value]) -> Value {
+    // A row without a cause is one nobody classified; a cause word that does
+    // not read back is this crate's own serialization disagreeing with
+    // itself, and is named rather than counted as unclassified.
+    let mut unreadable: Vec<String> = Vec::new();
     let causes: Vec<QuarantineCause> = quarantined
         .iter()
-        .map(|entry| {
-            entry["cause"]
-                .as_str()
-                .map_or(QuarantineCause::Unclassified, parse_cause)
+        .filter_map(|entry| match entry.get("cause") {
+            None | Some(Value::Null) => Some(QuarantineCause::Unclassified),
+            Some(Value::String(word)) => match parse_cause(word) {
+                Ok(cause) => Some(cause),
+                Err(refusal) => {
+                    unreadable.push(format!("{}: {refusal}", entry["digest"]));
+                    None
+                }
+            },
+            Some(other) => {
+                unreadable.push(format!("{}: quarantine cause is not text: {other}", entry["digest"]));
+                None
+            }
         })
         .collect();
-    let total = causes.len();
+    let total = quarantined.len();
     let tally = release_cause::tally(causes);
     let dominant = release_cause::dominant(&tally);
     json!({
@@ -80,8 +92,10 @@ pub(super) fn cause_summary(quarantined: &[Value]) -> Value {
         "dominant_count": dominant.map(|(_, count)| count),
         "unclassified": tally
             .iter()
-            .find(|(cause, _)| !cause.is_classified())
-            .map_or(0, |(_, count)| *count),
+            .filter(|(cause, _)| !cause.is_classified())
+            .map(|(_, count)| *count)
+            .sum::<usize>(),
+        "unreadable_causes": unreadable,
     })
 }
 
@@ -89,7 +103,9 @@ pub(super) fn cause_summary(quarantined: &[Value]) -> Value {
 ///
 /// The summary counts the rendered entries rather than the records, so that the
 /// table and the totals above it can never disagree about one row. That means
-/// reading the word back, and the word is this crate's own serialization.
-fn parse_cause(word: &str) -> QuarantineCause {
-    serde_json::from_value(Value::String(word.to_string())).unwrap_or(QuarantineCause::Unclassified)
+/// reading the word back, and the word is this crate's own serialization; one
+/// that does not read back is refused naming it.
+fn parse_cause(word: &str) -> Result<QuarantineCause, String> {
+    serde_json::from_value(Value::String(word.to_string()))
+        .map_err(|error| format!("quarantine cause {word:?} does not read back: {error}"))
 }

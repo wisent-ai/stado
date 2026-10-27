@@ -1,13 +1,13 @@
-//! `stado credentials try-unlock` stops as unreachable, naming Skarbiec's
+//! `stado credentials unlock` stops as unreachable, naming Skarbiec's
 //! exit status, the parse error, the transcript record the phrase came from
-//! and Skarbiec's own stderr, when `skarbiec key-doctor` answers without a
+//! and Skarbiec's own stderr, when `skarbiec keys check` answers without a
 //! JSON report; it does not skip the run and conclude that no transcript
 //! phrase opens the vault.
 //!
 //! The real stado runs with an isolated `HOME` under the checkout's build
 //! directory holding one agent transcript that records an unlock phrase, and
 //! the real Skarbiec named by `SKARBIEC_BIN` (the Skarbiec under test, as the
-//! credential scripts name it), whose `key-doctor` in that `HOME` finds no
+//! credential scripts name it), whose `keys check` in that `HOME` finds no
 //! initialised vault and answers an error instead of a report. No
 //! `SKARBIEC_BIN` is a failed run, never a passed one.
 use std::path::PathBuf;
@@ -62,9 +62,9 @@ impl Run {
         .unwrap();
     }
 
-    fn try_unlock(&self) -> Output {
+    fn unlock(&self) -> Output {
         let output = Command::new(env!("CARGO_BIN_EXE_stado"))
-            .args(["credentials", "try-unlock"])
+            .args(["credentials", "unlock"])
             .env_clear()
             .env(
                 "PATH",
@@ -79,8 +79,8 @@ impl Run {
             .stderr(Stdio::piped())
             .output()
             .expect("run the real stado");
-        std::fs::write(self.root.join("try-unlock.stdout"), &output.stdout).unwrap();
-        std::fs::write(self.root.join("try-unlock.stderr"), &output.stderr).unwrap();
+        std::fs::write(self.root.join("unlock.stdout"), &output.stdout).unwrap();
+        std::fs::write(self.root.join("unlock.stderr"), &output.stderr).unwrap();
         output
     }
 }
@@ -95,7 +95,7 @@ impl Drop for Run {
 fn a_key_doctor_that_answers_no_report_stops_the_run_naming_it_not_the_phrases() {
     let run = Run::new();
     run.write_transcript();
-    let output = run.try_unlock();
+    let output = run.unlock();
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
@@ -105,7 +105,7 @@ fn a_key_doctor_that_answers_no_report_stops_the_run_naming_it_not_the_phrases()
     );
     assert!(
         stderr.contains(WITHOUT_REPORT) && stderr.contains(RECORD),
-        "the refusal says key-doctor answered without a report while testing the phrase recorded under {RECORD}: {stderr}"
+        "the refusal says keys check answered without a report while testing the phrase recorded under {RECORD}: {stderr}"
     );
     assert!(
         stderr.contains("vault not initialized"),

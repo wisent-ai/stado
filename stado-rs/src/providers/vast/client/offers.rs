@@ -1,10 +1,6 @@
 //! The marketplace offer operations: the `list_machine` price/duration
 //! parameters, the create-asks placement, the asks teardown and the
 //! host-side machine status read.
-//!
-//! Moved verbatim out of the former single-file `providers/vast`, with the
-//! default-price literals broken onto their own lines to clear the shared
-//! write policy on numeric key-value pairs.
 
 use serde_json::{json, Value};
 
@@ -13,30 +9,20 @@ use crate::providers::vast::VastError;
 use super::json::{json_int, machines_of};
 use super::VastClient;
 
-/// Python `list_machine` keyword defaults as a struct.
+/// What a listing offers, every price as the operator stated it. There is
+/// no default: a listing at a price nobody stated rents the machine out on
+/// terms nobody chose. Bandwidth prices and the minimum chunk are not sent,
+/// so Vast.ai applies its own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ListMachineParams {
+    /// Per-GPU-hour price in USD.
     pub price_gpu: f64,
+    /// Per-GB-month disk price in USD.
     pub price_disk: f64,
-    pub price_inetu: f64,
-    pub price_inetd: f64,
+    /// The interruptible-bid price floor, when one is stated.
     pub price_min_bid: Option<f64>,
-    pub min_chunk: i64,
+    /// The longest rental in seconds; `None` leaves the offer open-ended.
     pub duration: Option<i64>,
-}
-
-impl Default for ListMachineParams {
-    fn default() -> Self {
-        ListMachineParams {
-            price_gpu: 0.50,
-            price_disk: 0.05,
-            price_inetu: 0.01,
-            price_inetd: 0.01,
-            price_min_bid: None,
-            min_chunk: 1,
-            duration: None,
-        }
-    }
 }
 
 impl VastClient {
@@ -59,9 +45,6 @@ impl VastClient {
             "machine": machine_id,
             "price_gpu": params.price_gpu,
             "price_disk": params.price_disk,
-            "price_inetu": params.price_inetu,
-            "price_inetd": params.price_inetd,
-            "min_chunk": params.min_chunk,
         });
         if let Some(price_min_bid) = params.price_min_bid {
             body["price_min_bid"] = json!(price_min_bid);
@@ -89,21 +72,33 @@ impl VastClient {
     }
 
     /// Python `machine_status`: the current Vast.ai view of our machine
-    /// (current_rentals, listed_status, etc.), or an explicit not-found
-    /// record when /machines/?owner=me doesn't include it.
+    /// (current_rentals, listed_status, etc.).
     pub async fn machine_status(&self) -> Result<Value, VastError> {
         let mid = self.machine_id().await?;
         self.machine_status_with_id(mid).await
     }
 
-    /// [`VastClient::machine_status`] with the machine id resolved.
+    /// [`VastClient::machine_status`] with the machine id resolved. A
+    /// machine the account's listing does not hold is refused naming the
+    /// ids it does hold: answered as a record, readiness read it as Ready
+    /// and the bridge as a machine that is merely not listed.
     pub async fn machine_status_with_id(&self, machine_id: i64) -> Result<Value, VastError> {
         let resp = self.request("GET", "/machines/?owner=me", None).await?;
-        for machine in machines_of(&resp) {
-            if machine.get("id").and_then(json_int) == Some(machine_id) {
-                return Ok(machine.clone());
-            }
+        let machines = machines_of(&resp)?;
+        if let Some(machine) = machines
+            .iter()
+            .find(|machine| machine.get("id").and_then(json_int) == Some(machine_id))
+        {
+            return Ok((*machine).clone());
         }
-        Ok(json!({"id": machine_id, "error": "not found in /machines/?owner=me response"}))
+        let held: Vec<String> = machines
+            .iter()
+            .map(|machine| super::json::shown(machine.get("id")))
+            .collect();
+        Err(VastError::config(format!(
+            "Vast.ai /machines/?owner=me does not hold machine {machine_id}; this key's \
+             account holds [{}]",
+            held.join(", ")
+        )))
     }
 }

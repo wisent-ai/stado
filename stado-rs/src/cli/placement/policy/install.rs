@@ -139,7 +139,7 @@ pub(super) async fn apply_policy(
             "the worker parses schema_version 1 with a hosts array, and this is not that",
         ));
     }
-    let entry_query = format!("{POLICY_JQ_FILTER}\n($host | norm) as $h | entry($h) != null");
+    let entry_query = format!("{POLICY_JQ_FILTER}\n[$host][] | norm | entry(.) != null");
     if !jq_eval(
         resolved,
         runner,
@@ -182,18 +182,19 @@ pub(super) async fn apply_policy(
                 &dest,
             )
             .await?;
-            match summarized
-                .ok()
-                .then(|| summarized.stdout.trim().to_string())
-            {
-                Some(line) if !line.is_empty() => line,
-                _ => "unreadable\t-\t-".to_string(),
+            // The receipt carries the previous file's summary, or says the
+            // host could not summarize it; the install goes on either way,
+            // since the previous file is replaced, not read.
+            let line = summarized.stdout.trim();
+            match (summarized.succeeded(), line.is_empty()) {
+                (true, false) => line.to_string(),
+                (true, true) | (false, _) => "unreadable\t-\t-".to_string(),
             }
         };
 
     let made =
         host_channel::run_program(resolved, &["/bin/mkdir", "-p", &dest_dir], runner).await?;
-    if !made.ok() {
+    if !made.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &made,
             "could not create the policy directory",
@@ -209,7 +210,7 @@ pub(super) async fn apply_policy(
         vec!["/bin/mv", temporary.as_str(), dest.as_str()],
     ] {
         let stepped = host_channel::run_program(resolved, &words, runner).await?;
-        if !stepped.ok() {
+        if !stepped.succeeded() {
             // A failed install leaves no half-written destination and no
             // staging litter: the temporary file goes, exactly as the retired
             // script's EXIT trap removed it.
@@ -233,13 +234,18 @@ pub(super) async fn apply_policy(
     )
     .await?;
     let installed = installed_output.stdout.trim().to_string();
-    if !installed_output.ok() || installed.is_empty() {
+    if !installed_output.succeeded() || installed.is_empty() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &installed_output,
             "the installed policy could not be read back",
         )));
     }
-    let generation = installed.split('\t').next().unwrap_or_default();
+    // The installed line is `<generation>\t...`; a line without a tab is
+    // the generation alone.
+    let generation = match installed.split_once('\t') {
+        Some((generation, _rest)) => generation,
+        None => installed.as_str(),
+    };
 
     Ok(format!(
         "{VANTAGE_MARKER}\t{host}\n\

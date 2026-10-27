@@ -22,8 +22,15 @@ pub(crate) async fn list_unowned(json: bool) -> Result<(), CmdError> {
     let mut accounts: Vec<String> = Vec::new();
     let mut verdicts: Vec<HostVerdicts> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
-    for target in registry.local_targets() {
-        match service::unowned_processes(target, &runner).await {
+    // Every host is its own channel, so all are asked at once and a host
+    // that does not answer no longer holds the others; rows keep the
+    // registry's host order.
+    let targets = registry.local_targets();
+    let scans = targets
+        .iter()
+        .map(|target| service::unowned_processes(target, &runner));
+    for (target, scan) in targets.iter().zip(futures::future::join_all(scans).await) {
+        match scan {
             Ok(scan) => {
                 accounts.push(scan.account(&target.name));
                 verdicts.push((target.name.clone(), scan.judged.clone()));

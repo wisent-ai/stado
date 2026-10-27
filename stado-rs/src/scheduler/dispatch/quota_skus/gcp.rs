@@ -38,45 +38,43 @@ pub(crate) fn gcp_project_env() -> String {
 pub async fn gcp_catalog(client: &CloudQuotasClient) -> Result<Vec<Value>, CatalogError> {
     let mut out = Vec::new();
     for info in client.list_quota_infos().await? {
-        let qid = info.get("quotaId").and_then(Value::as_str).unwrap_or("");
+        // A quota row without an id is no quota this catalog can name.
+        let Some(qid) = info.get("quotaId").and_then(Value::as_str) else {
+            continue;
+        };
         let is_gpu_family = qid.contains("GPUS-PER-GPU-FAMILY");
         let is_legacy_gpu = legacy_gpu_quota_re().is_match(qid);
         if !(is_gpu_family || is_legacy_gpu) {
             continue;
         }
-        // metric_display_name or metric (empty display name falls back).
-        let metric = info
-            .get("metricDisplayName")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .or_else(|| info.get("metric").and_then(Value::as_str))
-            .unwrap_or("");
-        let empty_dims = Vec::new();
-        let dims_infos = info
-            .get("dimensionsInfos")
-            .and_then(Value::as_array)
-            .unwrap_or(&empty_dims);
+        // The display name when Google gave one, the metric otherwise; a
+        // row with neither is reported with an empty metric.
+        let metric = match info.get("metricDisplayName").and_then(Value::as_str) {
+            Some(display) if !display.is_empty() => display,
+            _absent_or_blank => match info.get("metric").and_then(Value::as_str) {
+                Some(metric) => metric,
+                None => "",
+            },
+        };
+        // A row without dimension infos carries no per-region cap.
+        let dims_infos = match info.get("dimensionsInfos").and_then(Value::as_array) {
+            Some(infos) => infos.as_slice(),
+            None => &[],
+        };
         for di in dims_infos {
-            let locs: Vec<&str> = di
-                .get("applicableLocations")
-                .and_then(Value::as_array)
-                .map(|locs| locs.iter().filter_map(Value::as_str).collect())
-                .unwrap_or_default();
+            let locs: Vec<&str> = match di.get("applicableLocations").and_then(Value::as_array) {
+                Some(locs) => locs.iter().filter_map(Value::as_str).collect(),
+                None => Vec::new(),
+            };
             // details.value is an int64 (string-encoded per the Google
-            // JSON convention); int(value) in Python.
-            let limit = di
-                .get("details")
-                .and_then(|d| d.get("value"))
-                .and_then(|v| match v {
-                    Value::String(s) => s.parse::<i64>().ok(),
-                    Value::Number(n) => n.as_i64(),
-                    _ => None,
-                });
-            let gpu_family = di
-                .get("dimensions")
-                .and_then(|d| d.get("gpu_family"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            // JSON convention); absent or in another shape, the cap is null.
+            let limit = json_i64(di.pointer("/details/value"));
+            // A dimension info without a gpu_family is a legacy quota's,
+            // which names no family.
+            let gpu_family = match di.pointer("/dimensions/gpu_family").and_then(Value::as_str) {
+                Some(family) => family,
+                None => "",
+            };
             // Python `for loc in locs or ["global"]`.
             let locations: Vec<&str> = if locs.is_empty() {
                 vec!["global"]
@@ -99,11 +97,16 @@ pub async fn gcp_catalog(client: &CloudQuotasClient) -> Result<Vec<Value>, Catal
 }
 
 /// Google int64 JSON convention: string-encoded, but tolerate numbers.
+/// `None` for a value absent or in another shape, which the rows carry as
+/// null.
 fn json_i64(value: Option<&Value>) -> Option<i64> {
     match value? {
-        Value::String(s) => s.parse().ok(),
+        Value::String(s) => match s.parse() {
+            Ok(number) => Some(number),
+            Err(_not_a_decimal) => None,
+        },
         Value::Number(n) => n.as_i64(),
-        _ => None,
+        _other_shape => None,
     }
 }
 
@@ -113,16 +116,15 @@ fn json_i64(value: Option<&Value>) -> Option<i64> {
 pub async fn gcp_request_status(client: &CloudQuotasClient) -> Result<Vec<Value>, CatalogError> {
     let mut out = Vec::new();
     for pref in client.list_quota_preferences().await? {
-        let config = pref.get("quotaConfig").cloned().unwrap_or(Value::Null);
-        let sd = config
-            .get("stateDetail")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_lowercase();
-        let reconciling = pref
-            .get("reconciling")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        // A preference without a quota config has no state detail and no
+        // values; each member below reads as absent through the index.
+        let config = pref["quotaConfig"].clone();
+        let sd = match config.get("stateDetail").and_then(Value::as_str) {
+            Some(detail) => detail.to_lowercase(),
+            None => String::new(),
+        };
+        // Google writes `reconciling` as a boolean; absent, it is not.
+        let reconciling = matches!(pref.get("reconciling"), Some(Value::Bool(true)));
         let state = if reconciling {
             "reconciling"
         } else if sd.contains("partially approved") {
@@ -134,7 +136,7 @@ pub async fn gcp_request_status(client: &CloudQuotasClient) -> Result<Vec<Value>
         } else {
             "unknown"
         };
-        let dims = pref.get("dimensions").cloned().unwrap_or(json!({}));
+        let dims = pref["dimensions"].clone();
         // Python `qc.granted_value if qc and qc.granted_value else None`:
         // a missing or nothing-granted value is null in the row.
         let granted = json_i64(config.get("grantedValue")).filter(|v| v.is_positive());
@@ -186,8 +188,16 @@ pub async fn gcp_request_all_families(
         {
             continue;
         }
-        let fam = row.get("gpu_family").and_then(Value::as_str).unwrap_or("");
-        let region = row.get("region").and_then(Value::as_str).unwrap_or("");
+        // A catalog row names its family and region as text; one without
+        // either names nothing to request in.
+        let fam = match row.get("gpu_family").and_then(Value::as_str) {
+            Some(fam) => fam,
+            None => "",
+        };
+        let region = match row.get("region").and_then(Value::as_str) {
+            Some(region) => region,
+            None => "",
+        };
         if !fam.is_empty() {
             families.insert(fam.to_string());
         }

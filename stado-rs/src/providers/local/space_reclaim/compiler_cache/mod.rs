@@ -34,7 +34,13 @@ pub fn scan_compiler_cache(home: &Path, enforcing: bool, report: &mut CleanupRep
             skipped.push("directory_unreadable");
             continue;
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            // An entry the directory cannot list is a skipped item with its
+            // reason, never left out of the scan without a trace.
+            let Ok(entry) = entry else {
+                skipped.push("entry_unreadable");
+                continue;
+            };
             // `symlink_metadata` does not follow a link, so a link out of the
             // store is never walked or removed.
             let Ok(info) = std::fs::symlink_metadata(entry.path()) else {
@@ -52,9 +58,9 @@ pub fn scan_compiler_cache(home: &Path, enforcing: bool, report: &mut CleanupRep
     }
     record.scanned_items = files.len() as i64;
     record.eligible_items = files.len() as i64;
-    record.expected_bytes = files.iter().map(|(_, bytes)| *bytes).sum::<u64>() as i64;
-    if report.active_job_count > 0 {
-        skipped.extend(files.iter().map(|_| "job_running"));
+    record.expected_bytes = files.iter().map(|(_path, bytes)| *bytes).sum::<u64>() as i64;
+    if report.active_job_count.is_positive() {
+        skipped.extend(files.iter().map(|_held| "job_running"));
         files.clear();
     }
     if enforcing {

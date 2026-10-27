@@ -19,11 +19,10 @@ fn runtime_token_file(product: &str) -> String {
 /// Run this Stado binary with `arguments` and return its stdout, or the
 /// refusal it printed.
 fn stado(arguments: &[&str]) -> Result<String, String> {
-    let output = crate::wait::output(
-        std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
-            .args(arguments),
-    )
-    .map_err(|error| error.to_string())?;
+    let program = std::env::current_exe()
+        .map_err(|error| format!("this stado binary cannot be located to run it again: {error}"))?;
+    let output = crate::wait::output(std::process::Command::new(&program).args(arguments))
+        .map_err(|error| format!("{} {} cannot be run: {error}", program.display(), arguments.join(" ")))?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
@@ -115,14 +114,18 @@ pub(super) async fn ensure_runtime_grant(
     }
 
     let (document, _) = registry::fetch_versioned_document().await?;
-    let targets: Vec<String> = release_control::control(&document)?
-        .and_then(|control| {
-            control
-                .products
-                .get(product)
-                .map(|policy| policy.targets.keys().cloned().collect())
-        })
-        .unwrap_or_default();
+    // A product without a release policy, or a registry without release
+    // control, rolls out to no target: the bearer stays on the owner and
+    // `enroll` of a policy later delivers it.
+    let targets: Vec<String> = match release_control::control(&document)?.and_then(|control| {
+        control
+            .products
+            .get(product)
+            .map(|policy| policy.targets.keys().cloned().collect())
+    }) {
+        Some(targets) => targets,
+        None => Vec::new(),
+    };
     // The copy is idempotent, and repeating it is what repairs a target that
     // missed an earlier delivery or joined the rollout later.
     let path = format!("~/.stado/{token_file}");

@@ -169,7 +169,7 @@ pub(in crate::cli::web::builds) fn link_inputs(
             None => (source, ""),
         };
         let target = input_directory(input)?.join(inside);
-        if !target.is_dir() {
+        if !crate::primitives::presence::present(&target)? || !target.is_dir() {
             return Err(CmdError::usage(format!(
                 "--link-input {declaration:?}: {} is not a directory of input {input:?}",
                 target.display()

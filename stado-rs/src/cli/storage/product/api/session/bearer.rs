@@ -2,7 +2,7 @@
 //! else the owner-only file `STADO_API_TOKEN_FILE` names, else the file
 //! `storage.stado.token_file` names. It is also the secret access key that
 //! namespace signs S3 requests with, which is how `stado storage url
-//! --presign` and `stado storage s3-endpoint` sign without a second
+//! --presign` and `stado storage endpoint` sign without a second
 //! credential.
 
 use crate::cli::storage::*;
@@ -51,9 +51,9 @@ fn read_token_file(named: &str) -> Result<String, CmdError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
+        if crate::primitives::file_mode::open_to_others(metadata.permissions().mode()) {
             return Err(config_refusal(format!(
-                "STADO_API_TOKEN_FILE must be owner-only (chmod 600): {}",
+                "STADO_API_TOKEN_FILE must be owner-only, readable and writable by its owner alone: {}",
                 path.display()
             )));
         }

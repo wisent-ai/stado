@@ -25,7 +25,12 @@ pub(super) fn xorg_systemd_unit() -> String {
 }
 
 pub(super) fn sunshine_systemd_unit(declaration: &DisplayStream) -> String {
-    let cuda_device = declaration.gpu_uuid.as_deref().unwrap_or("0");
+    // Without a declared board the encoder opens the driver's own default;
+    // no device is invented for it.
+    let cuda_device = match declaration.gpu_uuid.as_deref() {
+        Some(uuid) => format!("Environment=CUDA_VISIBLE_DEVICES={uuid}\n"),
+        None => String::new(),
+    };
     format!(
         "[Unit]\n\
          Description=Stado stream: Sunshine encoding the session\n\
@@ -40,11 +45,11 @@ pub(super) fn sunshine_systemd_unit(declaration: &DisplayStream) -> String {
          # driver's default device, so the first live session rendered on card 1 and\n\
          # encoded on card 0. Binding the encoder keeps the whole session on one board,\n\
          # which is the point of declaring one on a two-card host.\n\
-         Environment=CUDA_VISIBLE_DEVICES={cuda_device}\n\
+         {cuda_device}\
          ExecStartPre=/bin/sh -c 'for _ in $(seq 30); do /usr/bin/xdpyinfo -display {DISPLAY} >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'\n\
          # openbox does not daemonise, so it belongs in the background: as an\n\
-         # ExecStartPre it never returned and the unit sat in `activating` until the\n\
-         # start timeout, which reads exactly like a crash that never happened.\n\
+         # ExecStartPre it never returned and the unit sat in `activating`,\n\
+         # which reads exactly like a crash that never happened.\n\
          ExecStartPre=/bin/sh -c 'setsid /usr/bin/openbox --replace --sm-disable &'\n\
          ExecStart={SUNSHINE_PROGRAM} {SUNSHINE_CONFIG}\n\
          Restart=always\n\
@@ -63,11 +68,11 @@ pub fn managed_services(
     target: &ComputeTarget,
     declaration: &DisplayStream,
     managed_since: &str,
-) -> [service::ManagedService; 2] {
+) -> Vec<service::ManagedService> {
     let mut xorg = service::systemd_service(
         &target.name,
         XORG_UNIT,
-        &format!("/etc/systemd/system/{XORG_UNIT}"),
+        &format!("{}/{XORG_UNIT}", service::SYSTEMD_UNITS),
         service::SOURCE_REGISTRY,
         managed_since,
     );
@@ -85,7 +90,7 @@ pub fn managed_services(
     let mut sunshine = service::systemd_service(
         &target.name,
         SUNSHINE_UNIT,
-        &format!("/etc/systemd/system/{SUNSHINE_UNIT}"),
+        &format!("{}/{SUNSHINE_UNIT}", service::SYSTEMD_UNITS),
         service::SOURCE_REGISTRY,
         managed_since,
     );
@@ -94,17 +99,16 @@ pub fn managed_services(
     sunshine.env = [
         ("DISPLAY".to_string(), DISPLAY.to_string()),
         ("HOME".to_string(), "/root".to_string()),
-        (
-            "CUDA_VISIBLE_DEVICES".to_string(),
-            declaration
-                .gpu_uuid
-                .clone()
-                .unwrap_or_else(|| "0".to_string()),
-        ),
     ]
     .into_iter()
+    .chain(
+        declaration
+            .gpu_uuid
+            .clone()
+            .map(|uuid| ("CUDA_VISIBLE_DEVICES".to_string(), uuid)),
+    )
     .collect();
     sunshine.systemd_unit = sunshine_systemd_unit(declaration);
 
-    [xorg, sunshine]
+    vec![xorg, sunshine]
 }

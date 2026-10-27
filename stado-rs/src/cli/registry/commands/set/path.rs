@@ -21,33 +21,38 @@ const NAME_FIELD: &str = "name";
 /// has to be writable by the command the documentation names, or the
 /// declaration it describes can never be made at all.
 pub(super) fn leaf<'a>(document: &'a mut Value, path: &str) -> Result<&'a mut Value, CmdError> {
-    let mut value = document;
-    let mut walked = String::new();
     let segments: Vec<&str> = path
         .split(PATH_SEPARATOR)
         .filter(|part| !part.is_empty())
         .collect();
-    let last = segments.len().saturating_sub(1);
-    for (at, segment) in segments.into_iter().enumerate() {
-        let here = if walked.is_empty() {
-            "<root>".to_string()
-        } else {
-            walked.clone()
-        };
-        if at == last {
-            if let Value::Object(fields) = value {
-                if !fields.contains_key(segment) {
-                    fields.insert(segment.to_string(), Value::Null);
-                }
-            }
-        }
-        value = step(value, segment, &here)?;
+    // A path with no segments names the whole document.
+    let Some((last, parents)) = segments.split_last() else {
+        return Ok(document);
+    };
+    let mut value = document;
+    let mut walked = String::new();
+    for segment in parents {
+        value = step(value, segment, &shown(&walked))?;
         if !walked.is_empty() {
             walked.push(PATH_SEPARATOR);
         }
         walked.push_str(segment);
     }
-    Ok(value)
+    if let Value::Object(fields) = value {
+        if !fields.contains_key(*last) {
+            fields.insert(last.to_string(), Value::Null);
+        }
+    }
+    step(value, last, &shown(&walked))
+}
+
+/// The path walked so far, as a refusal names it.
+fn shown(walked: &str) -> String {
+    if walked.is_empty() {
+        "<root>".to_string()
+    } else {
+        walked.to_string()
+    }
 }
 
 /// The value that would hold this path's last segment, when the document
@@ -61,7 +66,11 @@ pub(super) fn holder_of<'a>(document: &'a Value, path: &str) -> Option<&'a Value
     if parent.is_empty() {
         return Some(document);
     }
-    select(document, &parent.join(&PATH_SEPARATOR.to_string())).ok()
+    // A parent the document does not carry holds nothing: the path is new or mistyped.
+    match select(document, &parent.join(&PATH_SEPARATOR.to_string())) {
+        Ok(holder) => Some(holder),
+        Err(_not_carried) => None,
+    }
 }
 
 /// One step of the same dotted path `pull --path` reads, mutably. The
@@ -79,9 +88,10 @@ fn step<'a>(value: &'a mut Value, segment: &str, walked: &str) -> Result<&'a mut
                 ))
                 .stating(crate::primitives::failure::FailureCode::NotFound));
             }
-            Ok(fields
-                .get_mut(segment)
-                .unwrap_or_else(|| unreachable!("the key was just found")))
+            match fields.get_mut(segment) {
+                Some(found) => Ok(found),
+                None => unreachable!("the key was just found"),
+            }
         }
         Value::Array(items) => {
             if let Ok(index) = segment.parse::<usize>() {

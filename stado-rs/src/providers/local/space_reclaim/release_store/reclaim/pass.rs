@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
+use crate::providers::local::space_reclaim::janitor::state::report::met::Met;
+
 use crate::providers::local::space_reclaim::release_store::decision::retention_decision;
 use crate::providers::local::space_reclaim::release_store::inventory::pins::{
     config_pinned_versions, host_pinned_versions,
@@ -32,21 +34,25 @@ pub fn scan_release_store(
     declared_pins: Option<&BTreeMap<String, BTreeSet<String>>>,
     report: &mut CleanupReport,
 ) {
-    let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
+    let mut met = Met::default();
+    let body = |met: &mut Met, report: &mut CleanupReport| -> Result<(), JanitorError> {
         let Some(declared_pins) = declared_pins else {
-            report.skip_release_store("registry_unreadable", 1);
+            met.skipped("registry_unreadable");
             return Ok(());
         };
         let releases = home.join(RELEASES_ROOT);
         if !releases.is_dir() {
-            report.skip_release_store("root_absent", 1);
+            met.skipped("root_absent");
             return Ok(());
         }
         let state_dir = home.join(STATE_DIR);
-        let ecosystem = releases
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| home.join(".stado/local-storage/ecosystem"));
+        let Some(ecosystem) = releases.parent() else {
+            return Err(JanitorError::os(&format!(
+                "the release store {} has no namespace directory above it",
+                releases.display()
+            )));
+        };
+        let ecosystem = ecosystem.to_path_buf();
         let host_pins = host_pinned_versions(&state_dir)?;
         let config_pins = config_pinned_versions(home)?;
         let run_evidence = run_retention_evidence(&ecosystem)?;
@@ -55,33 +61,44 @@ pub fn scan_release_store(
 
         // Inventory: every product directory, every version directory under it.
         let mut products: BTreeMap<String, ProductReleases> = BTreeMap::new();
-        for product_entry in std::fs::read_dir(&releases)?.flatten() {
+        for product_entry in std::fs::read_dir(&releases)? {
+            // An entry the store cannot list is a skipped item with its
+            // reason, never left out of the inventory without a trace.
+            let Ok(product_entry) = product_entry else {
+                met.skipped("product_entry_unreadable");
+                continue;
+            };
             let product_path = product_entry.path();
             let Ok(product_info) = std::fs::symlink_metadata(&product_path) else {
-                report.skip_release_store("product_stat_failed", 1);
+                met.skipped("product_stat_failed");
                 continue;
             };
             if !product_info.is_dir()
                 || product_info.uid() != euid()
                 || product_info.dev() != home_device
             {
-                report.skip_release_store("product_not_an_owned_directory", 1);
+                met.skipped("product_not_an_owned_directory");
                 continue;
             }
             let product = product_entry.file_name().to_string_lossy().to_string();
             let Ok(versions) = std::fs::read_dir(&product_path) else {
-                report.skip_release_store("read_dir_failed", 1);
+                met.skipped("read_dir_failed");
                 continue;
             };
-            for version_entry in versions.flatten() {
-                report.release_store.scanned_items += 1;
+            let versions: Vec<_> = versions.collect();
+            met.listed(versions.len());
+            for version_entry in versions {
+                let Ok(version_entry) = version_entry else {
+                    met.skipped("entry_unreadable");
+                    continue;
+                };
                 let version_path = version_entry.path();
                 let Ok(info) = std::fs::symlink_metadata(&version_path) else {
-                    report.skip_release_store("stat_failed", 1);
+                    met.skipped("stat_failed");
                     continue;
                 };
                 if !info.is_dir() || info.uid() != euid() || info.dev() != home_device {
-                    report.skip_release_store("not_an_owned_directory", 1);
+                    met.skipped("not_an_owned_directory");
                     continue;
                 }
                 let version = version_entry.file_name().to_string_lossy().to_string();
@@ -110,28 +127,31 @@ pub fn scan_release_store(
         for (product, inventory) in &products {
             let served_here = host_pins.contains_key(product) || run_pins.contains_key(product);
             if !served_here {
-                report
-                    .skip_release_store("product_not_served_here", inventory.versions.len() as i64);
+                // Each version of a product this host serves no release of
+                // is one skip.
+                for _ in inventory.versions.keys() {
+                    met.skipped("product_not_served_here");
+                }
                 continue;
             }
-            let empty = BTreeSet::new();
+            let none = BTreeSet::new();
             let versions: Vec<String> = inventory.versions.keys().cloned().collect();
             let decisions = retention_decision(
                 &versions,
                 &inventory.complete,
-                host_pins.get(product).unwrap_or(&empty),
-                declared_pins.get(product).unwrap_or(&empty),
-                config_pins.get(product).unwrap_or(&empty),
-                run_pins.get(product).unwrap_or(&empty),
+                pinned(&host_pins, product, &none),
+                pinned(declared_pins, product, &none),
+                pinned(&config_pins, product, &none),
+                pinned(run_pins, product, &none),
             );
             for (version, keep) in decisions {
                 let (path, bytes) = &inventory.versions[version];
                 if let Some(reason) = keep {
-                    report.skip_release_store(reason, 1);
+                    met.skipped(reason);
                     continue;
                 }
                 let Some(claim) = source_revision(path, product, version) else {
-                    report.skip_release_store("source_identity_unverified", 1);
+                    met.skipped("source_identity_unverified");
                     continue;
                 };
                 let finished = run_evidence
@@ -140,11 +160,10 @@ pub fn scan_release_store(
                     .and_then(|versions| versions.get(version))
                     .is_some_and(|sources| sources.contains(&claim.source_revision));
                 if !finished {
-                    report.skip_release_store("publication_completion_unverified", 1);
+                    met.skipped("publication_completion_unverified");
                     continue;
                 }
-                report.release_store.eligible_items += 1;
-                report.release_store.expected_bytes += bytes;
+                met.eligible(bytes.unsigned_abs());
                 if !enforcing {
                     continue;
                 }
@@ -181,8 +200,9 @@ pub fn scan_release_store(
                                 "host_state, host_declaration, config_release_version, pipeline_run",
                             "reclaimed a release version under the disk-full rule"
                         );
-                        report.release_store.actual_free_delta_bytes += delta.max(0);
-                        report.release_store.deleted_items += 1;
+                        // Free space another writer took meanwhile is no
+                        // space this removal freed: only a gain is counted.
+                        met.removed(delta.is_positive().then(|| delta.unsigned_abs()));
                     }
                     Err(exc) => report.add_error(CLEANER, &exc),
                 }
@@ -190,7 +210,24 @@ pub fn scan_release_store(
         }
         Ok(())
     };
-    if let Err(exc) = body(report) {
+    if let Err(exc) = body(&mut met, report) {
         report.add_error(CLEANER, &exc);
+    }
+    match met.report() {
+        Ok(record) => report.release_store = record,
+        Err(cause) => report.add_error(CLEANER, &JanitorError::os(&cause)),
+    }
+}
+
+/// The versions `pins` holds for `product`; a product it names nowhere has
+/// none pinned there.
+fn pinned<'a>(
+    pins: &'a BTreeMap<String, BTreeSet<String>>,
+    product: &str,
+    none: &'a BTreeSet<String>,
+) -> &'a BTreeSet<String> {
+    match pins.get(product) {
+        Some(versions) => versions,
+        None => none,
     }
 }

@@ -31,9 +31,9 @@
         },
         {
           "name": "crypto",
-          "summary": "Per-user GnuPG daemons wedge keybox access, a process keeps the keyring's lock, or a daemon outgrows its memory ceiling, and this step runs Skarbiec's own `recover-daemons` on the host to replace those daemons, release a lock whose holder cannot let go and restore Skarbiec decryption.",
+          "summary": "Per-user GnuPG daemons wedge keybox access, a process keeps the keyring's lock, or a daemon outgrows its memory ceiling, and this step runs Skarbiec's own `keyring recover` on the host to replace those daemons, release a lock whose holder cannot let go and restore Skarbiec decryption.",
           "mutating": true,
-          "proof": "Skarbiec readiness reports ok after `skarbiec recover-daemons`; the program refuses when readiness reports no GPG failure, no keybox lock and no held keyring lock, and no daemon of the account stands over SKARBIEC_GPG_DAEMON_MEMORY_LIMIT_MB"
+          "proof": "Skarbiec readiness reports ok after `skarbiec keyring recover`; the program refuses when readiness reports no GPG failure, no keybox lock and no held keyring lock, and no daemon of the account stands over SKARBIEC_GPG_DAEMON_MEMORY_LIMIT_MB"
         },
         {
           "name": "acquisition-state",

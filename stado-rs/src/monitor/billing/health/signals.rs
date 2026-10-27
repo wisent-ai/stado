@@ -48,11 +48,7 @@ pub(super) fn signals(document: &Value, providers: &[ProviderHealth]) -> Vec<Sig
             match variant.adapter {
                 crate::capabilities::RuntimeAdapter::Billing(
                     crate::capabilities::BillingAdapter::Gcp,
-                ) if section
-                    .get("credit_depleted")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false) =>
-                {
+                ) if matches!(section.get("credit_depleted"), Some(Value::Bool(true))) => {
                     firing.push(Signal {
                         key: format!("credit_depleted:{}", variant.id),
                         subject: "stado billing: GCP promotion credit exhausted".to_string(),

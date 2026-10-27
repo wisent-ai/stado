@@ -57,19 +57,19 @@ pub async fn dispatch(cmd: AlertsCommands) -> Result<(), CmdError> {
     match cmd {
         AlertsCommands::Channels { json } => channels(json).await,
         AlertsCommands::Send { message, subject } => send(&message, &subject).await,
-        AlertsCommands::Preferences { action } => {
-            match action.unwrap_or(PreferencesAction::Show { json: false }) {
-                PreferencesAction::Show { json } => show_preferences(json).await,
-                PreferencesAction::Set { channels } => {
-                    let generation = contact::choose(&channels).await?;
-                    println!(
-                        "the operator is asked through [{}] (registry generation {generation})",
-                        channels.join(", ")
-                    );
-                    Ok(())
-                }
+        AlertsCommands::Preferences { action } => match action {
+            // `alerts preferences` alone shows the choice in text.
+            None | Some(PreferencesAction::Show { json: false }) => show_preferences(false).await,
+            Some(PreferencesAction::Show { json: true }) => show_preferences(true).await,
+            Some(PreferencesAction::Set { channels }) => {
+                let generation = contact::choose(&channels).await?;
+                println!(
+                    "the operator is asked through [{}] (registry generation {generation})",
+                    channels.join(", ")
+                );
+                Ok(())
             }
-        }
+        },
     }
 }
 
@@ -107,9 +107,6 @@ async fn channels(json: bool) -> Result<(), CmdError> {
     }
     if let Some(telegram) = &resolved.telegram {
         rows.push(("telegram".to_string(), format!("chat {}", telegram.chat_id)));
-    }
-    if let Some(sendgrid) = &resolved.sendgrid {
-        rows.push(("sendgrid".to_string(), sendgrid.to.clone()));
     }
     if let Some(skrzynka) = &resolved.skrzynka {
         rows.push((

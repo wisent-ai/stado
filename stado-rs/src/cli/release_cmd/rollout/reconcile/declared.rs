@@ -80,12 +80,10 @@ pub(super) async fn declared_binary(
     // refusing it keeps weles-admission down. A receipt that names other
     // bytes is still refused.
     let platform = target.release_platform.as_str();
-    let home = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| {
-            CmdError::click("this account has no HOME, so no delivery receipt is found")
-                .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+    let home = crate::config_file::home().map_err(|cause| {
+        CmdError::click(format!("no delivery receipt is found: {cause}"))
+            .stating(crate::primitives::failure::FailureCode::Config)
+    })?;
     let receipt_path = home
         .join(".stado/releases")
         .join(product)

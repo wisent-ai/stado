@@ -9,6 +9,7 @@ use crate::queue::JobStorage;
 
 use super::super::{log, MonitorError};
 use super::current::{current_running, running_lease_live};
+use crate::primitives::tally::Tally;
 
 /// Move a Spot job back to queue, counting preemption separately from
 /// restarts. A merely missing fleet-list entry still respects a live worker
@@ -32,7 +33,7 @@ pub(in crate::monitor::monitor) async fn requeue_preempted(
         return Ok(false);
     }
     let mut next = current;
-    next.preempt_count += 1;
+    next.preempt_count.tally();
     next.state = job_state::QUEUED.to_string();
     next.instance_ref = None;
     next.started_at = None;

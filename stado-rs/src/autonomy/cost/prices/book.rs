@@ -21,7 +21,8 @@ impl PriceBook {
         let purchase = if preemptible { "spot" } else { "on_demand" };
         let matching = |quote: &&PriceQuote| {
             quote.provider == provider
-                && quote.hourly_usd > 0.0
+                && quote.hourly_usd.is_normal()
+                && quote.hourly_usd.is_sign_positive()
                 && quote.purchase_option == purchase
                 && region.is_none_or(|wanted| {
                     quote
@@ -35,11 +36,7 @@ impl PriceBook {
             .iter()
             .filter(matching)
             .filter(|quote| quote.machine_type.as_deref() == Some(machine_type))
-            .min_by(|left, right| {
-                left.hourly_usd
-                    .partial_cmp(&right.hourly_usd)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .min_by(|left, right| left.hourly_usd.total_cmp(&right.hourly_usd))
         {
             return Some(exact.clone());
         }
@@ -50,11 +47,7 @@ impl PriceBook {
             .iter()
             .filter(matching)
             .filter(|quote| quote.accelerator_type.as_deref() == Some(accelerator_type))
-            .min_by(|left, right| {
-                left.hourly_usd
-                    .partial_cmp(&right.hourly_usd)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .min_by(|left, right| left.hourly_usd.total_cmp(&right.hourly_usd))
             .cloned()
     }
 
@@ -117,12 +110,12 @@ impl PriceBook {
                 + accelerator.hourly_usd * accelerator_count,
             currency: "USD".to_string(),
             source: "GCP Cloud Billing Catalog API (composed)".to_string(),
-            observed_at: [core, memory, accelerator]
-                .iter()
-                .map(|quote| quote.observed_at.as_str())
-                .max()
-                .unwrap_or_default()
-                .to_string(),
+            // Dated by the latest observation among its three quotes.
+            observed_at: core
+                .observed_at
+                .clone()
+                .max(memory.observed_at.clone())
+                .max(accelerator.observed_at.clone()),
             dynamic: true,
         })
     }
@@ -138,7 +131,8 @@ impl PriceBook {
             .filter(|quote| {
                 quote.provider == ProviderId::Gcp
                     && quote.purchase_option == purchase
-                    && quote.hourly_usd > 0.0
+                    && quote.hourly_usd.is_normal()
+                    && quote.hourly_usd.is_sign_positive()
                     && region.is_none_or(|wanted| {
                         quote
                             .region
@@ -147,16 +141,17 @@ impl PriceBook {
                     })
             })
             .filter(|quote| predicate(quote))
-            .min_by(|left, right| {
-                left.hourly_usd
-                    .partial_cmp(&right.hourly_usd)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .min_by(|left, right| left.hourly_usd.total_cmp(&right.hourly_usd))
     }
 }
 
 fn gcp_machine_shape(machine_type: &str) -> Option<(&'static str, f64, f64, f64)> {
-    let parse = |value: &str| value.parse::<f64>().ok();
+    // A machine type whose core count is not a number is no shape this table
+    // describes.
+    let parse = |value: &str| match value.parse::<f64>() {
+        Ok(number) => Some(number),
+        Err(_not_a_number) => None,
+    };
     if let Some(raw_cores) = machine_type.strip_prefix("n1-standard-") {
         let cores = parse(raw_cores)?;
         return Some(("n1", cores, cores * parse("3.75")?, parse("1")?));

@@ -28,7 +28,7 @@
 //! published, so a host cannot advertise resources the tick has not measured.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::queue::capacity::{publish_capacity, CapacitySnapshot};
@@ -104,34 +104,45 @@ impl CapacityHeartbeat {
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
-        self.shared
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    /// The shared state, or nothing once a panic has poisoned it. No section
+    /// that holds this lock can panic, so a poisoned lock is a defect
+    /// elsewhere in the process; the republisher then stops and says so (see
+    /// [`Self::spawn`]), so the host stops being spoken for instead of being
+    /// republished from a state a panic left half-written, and the stamps
+    /// below have nobody left to read them.
+    fn lock(&self) -> Option<MutexGuard<'_, Shared>> {
+        match self.shared.lock() {
+            Ok(shared) => Some(shared),
+            Err(_poisoned) => None,
+        }
     }
 
     /// The tick is going around. Called at the top of every iteration; the
     /// call the last iteration ended in has returned.
     pub fn record_tick_start(&self) {
         let now = Instant::now();
-        let mut shared = self.lock();
-        shared.close_phase(now);
-        shared.tick_started = now;
-        shared.phase = ("iteration", now);
+        if let Some(mut shared) = self.lock() {
+            shared.close_phase(now);
+            shared.tick_started = now;
+            shared.phase = ("iteration", now);
+        }
     }
 
     /// The tick is entering `phase` (the call it is about to await); the
     /// one it was in has returned.
     pub fn record_phase(&self, phase: &'static str) {
         let now = Instant::now();
-        let mut shared = self.lock();
-        shared.close_phase(now);
-        shared.phase = (phase, now);
+        if let Some(mut shared) = self.lock() {
+            shared.close_phase(now);
+            shared.phase = (phase, now);
+        }
     }
 
     /// The tick published this. Republished verbatim until it publishes again.
     pub fn record_published(&self, snapshot: CapacitySnapshot) {
-        self.lock().snapshot = Some(snapshot);
+        if let Some(mut shared) = self.lock() {
+            shared.snapshot = Some(snapshot);
+        }
     }
 
     /// Start republishing every `poll`, the period every publication of this
@@ -146,16 +157,22 @@ impl CapacityHeartbeat {
         log_fn: fn(&str),
     ) -> HeartbeatTask {
         crate::queue::capacity::declare_publisher_cadence(poll);
-        let shared = self.shared.clone();
+        let heartbeat = self.clone();
         let handle = tokio::spawn(async move {
+            let mut schedule = tokio::time::interval_at(tokio::time::Instant::now() + poll, poll);
+            schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut spoken_for: Option<Instant> = None;
             loop {
-                tokio::time::sleep(poll).await;
+                schedule.tick().await;
                 let now = Instant::now();
                 let (snapshot, tick_started, (phase, phase_started), within, longest) = {
-                    let shared = shared
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let Some(shared) = heartbeat.lock() else {
+                        log_fn(
+                            "heartbeat: STOPPED, a panic poisoned the state the tick stamps; \
+                             this host is not spoken for until the agent restarts",
+                        );
+                        return;
+                    };
                     (
                         shared.snapshot.clone(),
                         shared.tick_started,
@@ -193,8 +210,8 @@ impl CapacityHeartbeat {
                          available_cpu_cores={} free_vram_gb={} while the tick works",
                         snapshot.accepting_jobs,
                         snapshot.running_jobs,
-                        snapshot.available_cpu_cores,
-                        snapshot.free_vram_gb
+                        snapshot.available_cpu_shown(),
+                        snapshot.free_vram_shown()
                     )),
                     Err(exc) => log_fn(&format!(
                         "heartbeat: capacity republish REFUSED by the store: {exc}"

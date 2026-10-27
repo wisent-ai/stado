@@ -20,7 +20,7 @@ impl BoxRuntime<'_> {
     ) -> Result<(), BoxDispatchError> {
         let tolerated = |err: &BoxError| match err {
             BoxError::Api(api) => {
-                api.status == 404
+                api.status == reqwest::StatusCode::NOT_FOUND.as_u16()
                     || matches!(api.code.as_str(), "no_active_work" | "machine_not_running")
             }
             _ => false,
@@ -30,7 +30,7 @@ impl BoxRuntime<'_> {
                 .client
                 .interrupt(&lease.provider_resource_id)
                 .await
-                .map(|_| ())
+                .map(|_interrupted| ())
         } else {
             let pid_path = runtime_paths(&job.job_id).pid;
             self.provider
@@ -41,7 +41,7 @@ impl BoxRuntime<'_> {
                     "",
                 )
                 .await
-                .map(|_| ())
+                .map(|_command_result| ())
         };
         match result {
             Ok(()) => Ok(()),

@@ -6,10 +6,7 @@
 //! declaration and most's Twilio material — sit beside it, together with the
 //! Pub/Sub OAuth fetch.
 
-use super::{
-    channel_failed, AlertChannels, PubSubChannel, SendgridChannel, TelegramChannel,
-    DEFAULT_EMAIL_FROM, PUBSUB_BASE, SENDGRID_URL, TELEGRAM_API_BASE,
-};
+use super::{channel_failed, AlertChannels, PubSubChannel, TelegramChannel, PUBSUB_BASE, TELEGRAM_API_BASE};
 
 mod providers;
 use providers::{gcp_token, resolve_most, resolve_skrzynka};
@@ -28,10 +25,7 @@ impl AlertChannels {
         };
         let is_enabled = |channel: &str| enabled.iter().any(|value| value == channel);
 
-        let needs_stored = is_enabled("slack")
-            || is_enabled("telegram")
-            || is_enabled("sendgrid")
-            || is_enabled("most");
+        let needs_stored = is_enabled("slack") || is_enabled("telegram") || is_enabled("most");
         let stored: std::collections::BTreeMap<String, String> = if needs_stored {
             // Per field, not the whole item: the listener refuses a read that
             // names no field ("field required"), so asking for the item as a
@@ -44,9 +38,6 @@ impl AlertChannels {
             if is_enabled("telegram") {
                 wanted.push("telegram_bot_token");
                 wanted.push("telegram_chat_id");
-            }
-            if is_enabled("sendgrid") {
-                wanted.push("sendgrid_api_key");
             }
             if is_enabled("most") {
                 wanted.push("most_phone");
@@ -107,35 +98,6 @@ impl AlertChannels {
         } else {
             None
         };
-        let sendgrid = if is_enabled("sendgrid") {
-            match (
-                secret("sendgrid_api_key"),
-                std::env::var("WC_EMAIL_TO").ok(),
-            ) {
-                (Some(api_key), Some(to)) if !to.is_empty() => Some(SendgridChannel {
-                    api_key,
-                    to,
-                    from: std::env::var("WC_EMAIL_FROM")
-                        .ok()
-                        .filter(|value| !value.is_empty())
-                        .unwrap_or_else(|| DEFAULT_EMAIL_FROM.to_string()),
-                    url: SENDGRID_URL.to_string(),
-                }),
-                (None, _) => {
-                    absent("sendgrid", &["sendgrid_api_key"]);
-                    None
-                }
-                _ => {
-                    channel_failed(
-                        "sendgrid-configuration",
-                        "no destination: set WC_EMAIL_TO for the sendgrid channel",
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
         let skrzynka = if is_enabled("skrzynka") {
             resolve_skrzynka()
         } else {
@@ -175,7 +137,6 @@ impl AlertChannels {
         Self {
             slack_webhook,
             telegram,
-            sendgrid,
             skrzynka,
             pubsub,
             most,

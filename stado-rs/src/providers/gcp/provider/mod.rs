@@ -24,15 +24,6 @@ fn log(msg: &str) {
     eprintln!("[gcp] {msg}");
 }
 
-/// Python f-string rendering of a bool.
-fn py_bool(value: bool) -> &'static str {
-    if value {
-        "True"
-    } else {
-        "False"
-    }
-}
-
 /// A Compute Engine instance status, the documented `Instance.status` values
 /// (Compute Engine "Instance lifecycle"); an external protocol, so the type
 /// follows Google's list. A value Google adds later reads as `None`, an

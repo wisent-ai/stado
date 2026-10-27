@@ -67,6 +67,14 @@ mod platform {
     use super::kernel_error;
     use crate::queue::{ChangeWatch, StorageError};
 
+    /// kevent(2): a vnode registration carries no filter data and no user
+    /// data (https://man.freebsd.org/cgi/man.cgi?query=kevent&sektion=2).
+    const NOTHING: isize = 0;
+    /// kevent(2): an event slot handed to the kernel to fill names no
+    /// descriptor until the kernel writes the event into it
+    /// (https://man.freebsd.org/cgi/man.cgi?query=kevent&sektion=2).
+    const UNFILLED: usize = 0;
+
     pub(super) struct Watch {
         queue: Kqueue,
         /// Held open: kqueue watches a vnode through this descriptor.
@@ -75,7 +83,11 @@ mod platform {
     }
 
     pub(super) fn arm(directories: &[PathBuf]) -> Result<Watch, StorageError> {
-        let first = directories.first().cloned().unwrap_or_default();
+        let Some(first) = directories.first().cloned() else {
+            return Err(StorageError::Other(
+                "no queue directory was named to watch for changes".to_string(),
+            ));
+        };
         let queue = Kqueue::new().map_err(|error| kernel_error("open", &first, error))?;
         let mut opened = Vec::with_capacity(directories.len());
         let mut changes = Vec::with_capacity(directories.len());
@@ -91,8 +103,8 @@ mod platform {
                 EventFilter::EVFILT_VNODE,
                 EvFlags::EV_ADD | EvFlags::EV_CLEAR,
                 FilterFlag::NOTE_WRITE | FilterFlag::NOTE_DELETE | FilterFlag::NOTE_RENAME,
-                0,
-                0,
+                NOTHING,
+                NOTHING,
             ));
             opened.push(file);
         }
@@ -109,12 +121,12 @@ mod platform {
     impl ChangeWatch for Watch {
         fn next(&mut self) -> Result<(), StorageError> {
             let mut events = [KEvent::new(
-                0,
+                UNFILLED,
                 EventFilter::EVFILT_VNODE,
                 EvFlags::empty(),
                 FilterFlag::empty(),
-                0,
-                0,
+                NOTHING,
+                NOTHING,
             )];
             let first: &Path = &self.first;
             self.queue
@@ -140,7 +152,11 @@ mod platform {
     }
 
     pub(super) fn arm(directories: &[PathBuf]) -> Result<Watch, StorageError> {
-        let first = directories.first().cloned().unwrap_or_default();
+        let Some(first) = directories.first().cloned() else {
+            return Err(StorageError::Other(
+                "no queue directory was named to watch for changes".to_string(),
+            ));
+        };
         let inotify = Inotify::init(InitFlags::IN_CLOEXEC)
             .map_err(|error| kernel_error("open", &first, error))?;
         for directory in directories {

@@ -15,10 +15,17 @@ use super::{is_file_url, is_postgres_url, Credentials};
 pub(super) fn from_environment(database: &FleetDatabase) -> Option<Result<Credentials, Error>> {
     let prefix = database.name.to_uppercase().replace('-', "_");
     let url_variable = format!("{prefix}_DATABASE_URL");
-    let url = std::env::var(&url_variable)
-        .ok()
-        .filter(|value| !value.trim().is_empty())?;
-    let url = url.trim().to_string();
+    let url = match std::env::var(&url_variable) {
+        Ok(value) if value.trim().is_empty() => return None,
+        Ok(value) => value.trim().to_string(),
+        Err(std::env::VarError::NotPresent) => return None,
+        Err(std::env::VarError::NotUnicode(raw)) => {
+            return Some(Err(Error::new(
+                "read environment",
+                format!("{url_variable} is set but is not Unicode text: {raw:?}"),
+            )))
+        }
+    };
     if is_file_url(&url) {
         return Some(Ok(Credentials {
             item: url_variable,

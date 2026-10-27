@@ -7,14 +7,12 @@
 //! host's own janitor takes it under the disk-full rule: run and result
 //! evidence beneath the declared roots, but not pinned inputs or release records.
 
-use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::Path;
 
-use super::janitor::state::report::{CleanerReport, CleanupReport};
+use super::janitor::state::report::{met::Met, CleanupReport};
 use super::{ifmt, safefs, IFDIR, IFREG};
-use crate::primitives::tally::Tally;
 
 /// The name this cleaner's report is filed under.
 pub const CLEANER: &str = "object_evidence";
@@ -34,18 +32,21 @@ const RELEASE_RECORD_DIRECTORIES: &[&str] = &["release-pipeline", "build", "rele
 /// opened from the selected home without following links, and every scan and
 /// deletion is relative to a held directory descriptor.
 pub fn scan_object_evidence(home: &Path, enforcing: bool, report: &mut CleanupReport) {
-    let mut record = CleanerReport::default();
+    let mut met = Met::default();
     for (prefix, protect_release_records) in [(ROOT, true), (RESULTS_ROOT, false)] {
         scan_root(
             home,
             prefix,
             protect_release_records,
             enforcing,
-            &mut record,
+            &mut met,
             report,
         );
     }
-    report.object_evidence = record;
+    match met.report() {
+        Ok(record) => report.object_evidence = record,
+        Err(cause) => refused(report, &cause),
+    }
 }
 
 fn scan_root(
@@ -53,11 +54,11 @@ fn scan_root(
     prefix: &str,
     protect_release_records: bool,
     enforcing: bool,
-    record: &mut CleanerReport,
+    met: &mut Met,
     report: &mut CleanupReport,
 ) {
     let root = home.join(prefix);
-    let Some(root_fd) = open_root(home, &root, prefix, record, report) else {
+    let Some(root_fd) = open_root(home, &root, prefix, met, report) else {
         return;
     };
     let mut frontier = vec![(root.clone(), root_fd)];
@@ -65,7 +66,7 @@ fn scan_root(
         let entries = match safefs::DirEntries::open(directory_fd.as_raw_fd()) {
             Ok(entries) => entries,
             Err(error) => {
-                bump(&mut record.skipped, "directory_unreadable");
+                met.skipped("directory_unreadable");
                 refused(
                     report,
                     &format!("cannot read {}: {error}", directory.display()),
@@ -73,11 +74,13 @@ fn scan_root(
                 continue;
             }
         };
-        for name in entries {
+        let names: Vec<_> = entries.collect();
+        met.listed(names.len());
+        for name in names {
             let name = match name {
                 Ok(name) => name,
                 Err(error) => {
-                    bump(&mut record.skipped, "unreadable");
+                    met.skipped("unreadable");
                     refused(
                         report,
                         &format!("cannot read an entry of {}: {error}", directory.display()),
@@ -85,14 +88,13 @@ fn scan_root(
                     continue;
                 }
             };
-            record.scanned_items.tally();
             let path = directory.join(&name);
             // Stat relative to the held directory: no ancestor can turn into
             // a link between inspection and the eventual unlink.
             let info = match safefs::fstatat_nofollow(directory_fd.as_raw_fd(), &name) {
                 Ok(info) => info,
                 Err(error) => {
-                    bump(&mut record.skipped, "unreadable");
+                    met.skipped("unreadable");
                     refused(report, &format!("cannot read {}: {error}", path.display()));
                     continue;
                 }
@@ -103,7 +105,7 @@ fn scan_root(
             let relative = match path.strip_prefix(&root) {
                 Ok(relative) => relative,
                 Err(error) => {
-                    bump(&mut record.skipped, "outside_root");
+                    met.skipped("outside_root");
                     refused(
                         report,
                         &format!(
@@ -118,40 +120,36 @@ fn scan_root(
             let kept = protected(relative, protect_release_records);
             if ifmt(info.st_mode as u32) == IFDIR {
                 if kept {
-                    bump(&mut record.skipped, "stado_record_or_pinned_input_kept");
+                    met.skipped("stado_record_or_pinned_input_kept");
                     continue;
                 }
                 match safefs::open_dir_at(directory_fd.as_raw_fd(), &name) {
                     Ok(child) => frontier.push((path, child)),
                     Err(error) => {
-                        bump(&mut record.skipped, "directory_unreadable");
+                        met.skipped("directory_unreadable");
                         refused(report, &format!("cannot open {}: {error}", path.display()));
                     }
                 }
                 continue;
             }
             if ifmt(info.st_mode as u32) != IFREG {
-                bump(&mut record.skipped, "not_a_regular_file");
+                met.skipped("not_a_regular_file");
                 continue;
             }
             // Release records and pinned inputs are needed for subsequent
             // delivery and are not disposable run evidence.
             if kept {
-                bump(&mut record.skipped, "stado_record_or_pinned_input_kept");
+                met.skipped("stado_record_or_pinned_input_kept");
                 continue;
             }
-            record.eligible_items.tally();
-            record.expected_bytes += info.st_size;
+            met.eligible(info.st_size.unsigned_abs());
             if !enforcing {
                 continue;
             }
             match safefs::unlink_at(directory_fd.as_raw_fd(), &name) {
-                Ok(()) => {
-                    record.deleted_items.tally();
-                    record.actual_free_delta_bytes += info.st_size;
-                }
+                Ok(()) => met.removed(Some(info.st_size.unsigned_abs())),
                 Err(error) => {
-                    bump(&mut record.skipped, "deletion_refused");
+                    met.skipped("deletion_refused");
                     refused(
                         report,
                         &format!("cannot remove {}: {error}", path.display()),
@@ -169,13 +167,13 @@ fn open_root(
     home: &Path,
     root: &Path,
     prefix: &str,
-    record: &mut CleanerReport,
+    met: &mut Met,
     report: &mut CleanupReport,
 ) -> Option<OwnedFd> {
     let mut directory = match safefs::open_dir_path(home) {
         Ok(directory) => directory,
         Err(error) => {
-            bump(&mut record.skipped, "root_unreadable");
+            met.skipped("root_unreadable");
             refused(report, &format!("cannot open {}: {error}", home.display()));
             return None;
         }
@@ -186,7 +184,7 @@ fn open_root(
         directory = match safefs::open_dir_at(directory.as_raw_fd(), component.as_os_str()) {
             Ok(child) => child,
             Err(error) if error.kind() == ErrorKind::NotFound => {
-                bump(&mut record.skipped, "root_absent");
+                met.skipped("root_absent");
                 return None;
             }
             Err(error)
@@ -198,7 +196,7 @@ fn open_root(
                 // A link or a file where the evidence root's path runs is
                 // left alone, and said, so a root nothing is cleaned under
                 // is told apart from one that does not exist.
-                bump(&mut record.skipped, "root_not_a_directory");
+                met.skipped("root_not_a_directory");
                 refused(
                     report,
                     &format!(
@@ -211,7 +209,7 @@ fn open_root(
                 return None;
             }
             Err(error) => {
-                bump(&mut record.skipped, "root_unreadable");
+                met.skipped("root_unreadable");
                 refused(
                     report,
                     &format!(
@@ -244,8 +242,4 @@ fn protected(relative: &Path, protect_release_records: bool) -> bool {
 /// Record why this cleaner could not read or remove a path.
 fn refused(report: &mut CleanupReport, cause: &str) {
     report.add_error(CLEANER, &super::JanitorError::os(cause));
-}
-
-fn bump(counts: &mut BTreeMap<String, i64>, reason: &str) {
-    counts.entry(reason.to_string()).or_default().tally();
 }

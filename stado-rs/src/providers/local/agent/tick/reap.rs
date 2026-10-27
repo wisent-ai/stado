@@ -28,6 +28,16 @@ use super::super::agent_log;
 /// Jobs with a receipt here that this process has seen leave `running/`.
 static SETTLED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
 
+/// The settled set, taken even after a panic poisoned its lock: the set
+/// holds job ids only, and a reaper pass that stopped mid-insert leaves a
+/// set that is at worst missing one id it will read from the lease again.
+fn settled_jobs() -> std::sync::MutexGuard<'static, HashSet<String>> {
+    match SETTLED.lock() {
+        Ok(settled) => settled,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 /// Job ids of this host's work trees that hold an `output/receipt.json` and
 /// are not yet known to have left `running/`. A work root not created yet
 /// holds none; one that cannot be listed is the error, since read as empty
@@ -35,15 +45,13 @@ static SETTLED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default)
 /// of the root that cannot be read is logged with the cause and the rest are
 /// still reaped; dropped, its job stayed in `running/` the same way.
 fn finished_here(log_fn: &mut dyn FnMut(&str)) -> Result<Vec<String>, String> {
-    let root = work_root();
+    let root = work_root().map_err(|error| format!("cannot name the work root: {error}"))?;
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(format!("cannot list {}: {error}", root.display())),
     };
-    let settled = SETTLED
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let settled = settled_jobs();
     let mut finished = Vec::new();
     for entry in entries {
         let entry = match entry {
@@ -90,10 +98,7 @@ pub(super) async fn reap_when_idle(store: &JobStorage, idle: bool, log_fn: &mut 
         {
             Ok(true) => jobs.push(job_id),
             Ok(false) => {
-                SETTLED
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .insert(job_id);
+                settled_jobs().insert(job_id);
             }
             Err(error) => log_fn(&format!(
                 "lease reaper: cannot tell whether {job_id} is still running: {error}"
@@ -106,9 +111,8 @@ pub(super) async fn reap_when_idle(store: &JobStorage, idle: bool, log_fn: &mut 
     let log = |message: &str| agent_log(&format!("lease reaper: {message}"));
     match crate::queue::reaper::reap_named(store, &jobs, &log).await {
         Ok(summary) => {
-            if summary.release_completions + summary.requeued + summary.failed + summary.unreadable
-                > 0
-            {
+            let acted = summary.release_completions + summary.requeued + summary.failed + summary.unreadable;
+            if std::num::NonZeroUsize::new(acted).is_some() {
                 log_fn(&format!(
                     "lease reaper: of {} finished job(s) here, completed {} release job(s) from \
                      their receipts, requeued {}, failed {}, could not read {}",

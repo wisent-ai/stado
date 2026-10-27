@@ -11,6 +11,8 @@ use crate::providers::local::slots::ActiveSlot;
 use crate::queue::JobStorage;
 use crate::sizing::Sizing;
 
+use super::scan::Census;
+
 /// Report `(need, requested cores, requested memory)` for a candidate this
 /// tick can still afford, or `None` for one it has just refused.
 #[allow(clippy::too_many_arguments)]
@@ -25,18 +27,16 @@ pub(crate) async fn candidate_fit(
     available_ram_gb: f64,
     slots: &[ActiveSlot],
     agent_diag: &mut Map<String, Value>,
-    diag_cpu_rejected: &mut i64,
-    diag_ram_rejected: &mut i64,
-    diag_vram_rejected: &mut i64,
+    census: &mut Census,
 ) -> anyhow::Result<Option<(i64, i64, f64)>> {
     let requested_cpu_cores = helpers::requested_cpu_cores(job);
     if requested_cpu_cores > available_cpu_cores {
-        *diag_cpu_rejected += 1;
+        census.cpu_rejected.push(job.job_id.clone());
         return Ok(None);
     }
     let requested_memory_gb = helpers::requested_memory_gb(job);
     if requested_memory_gb > available_ram_gb {
-        *diag_ram_rejected += 1;
+        census.ram_rejected.push(job.job_id.clone());
         return Ok(None);
     }
     // A submission that resolved to the CPU marker declared that it needs no
@@ -46,19 +46,22 @@ pub(crate) async fn candidate_fit(
     // model-name scan read it as a GPU workload needing VRAM, and on a
     // laptop with one GiB of it every such session was refused silently, on
     // every poll, while the same session without `--model` ran.
-    let need = if job.gpu_mem_gb == 0 && job.machine_type == crate::queue::submit::CPU_MACHINE_TYPE
-    {
-        0
-    } else {
+    let cpu_only = !job.gpu_mem_gb.is_positive()
+        && job.machine_type == crate::queue::submit::CPU_MACHINE_TYPE;
+    let need = if cpu_only {
         job.gpu_mem_gb
-            .max(estimate_gpu_memory(cmd, sizing, store).await?)
+    } else {
+        estimate_gpu_memory(cmd, sizing, store)
+            .await?
+            .into_iter()
+            .fold(job.gpu_mem_gb, i64::max)
     };
     // Refuse if the job needs more VRAM than is free now. Live free VRAM,
     // not only slot-declared usage, so external users such as ComfyUI are
     // counted. A job that needs no VRAM is never refused for it.
     let claimable_vram_gb = free_vram_gb;
     if need.is_positive() && need > claimable_vram_gb {
-        *diag_vram_rejected += 1;
+        census.vram_rejected.push(job.job_id.clone());
         agent_diag.insert(
             "last_buffer_reject_job_id".into(),
             Value::from(job.job_id.clone()),
@@ -82,7 +85,7 @@ pub(crate) async fn candidate_fit(
         projected_used += helpers::slot_vram(&s.slot, sizing, store).await?;
     }
     if need.is_positive() && projected_used > total_vram_gb {
-        *diag_vram_rejected += 1;
+        census.vram_rejected.push(job.job_id.clone());
         agent_diag.insert(
             "last_buffer_reject_job_id".into(),
             Value::from(job.job_id.clone()),

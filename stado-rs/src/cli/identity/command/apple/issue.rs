@@ -1,4 +1,4 @@
-//! `identity issue-capabilities --provider apple`: the three grants one Apple login redeems.
+//! `identity issue --provider apple`: the three grants one Apple login redeems.
 
 use anyhow::Result;
 use serde_json::json;
@@ -126,10 +126,7 @@ pub async fn issue_apple_capabilities(
         },
     });
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&receipt).unwrap_or_default()
-        );
+        crate::cli::runner::print_json(&receipt);
     } else {
         println!(
             "issued one Apple login authorization on {} for {agent}",

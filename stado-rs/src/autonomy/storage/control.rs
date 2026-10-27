@@ -3,9 +3,9 @@
 //! the compare-and-swap is refused as a conflict; the caller decides whether
 //! to ask again.
 
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroUsize;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::queue::{JobStorage, StorageError};
@@ -40,11 +40,14 @@ impl Default for ControlState {
     }
 }
 impl ControlState {
+    /// Whether the circuit breaker is still open at `now`. A recorded end that
+    /// is not a moment cannot be judged past, so the breaker stays open.
     pub fn circuit_open_at(&self, now: DateTime<Utc>) -> bool {
-        self.circuit_open_until
-            .as_deref()
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .is_some_and(|until| until.with_timezone(&Utc) > now)
+        match self.circuit_open_until.as_deref().map(DateTime::parse_from_rfc3339) {
+            Some(Ok(until)) => until.with_timezone(&Utc) > now,
+            Some(Err(_not_a_moment)) => true,
+            None => false,
+        }
     }
 }
 
@@ -59,20 +62,20 @@ pub async fn load_control(store: &JobStorage) -> Result<ControlState, StorageErr
 async fn update(
     store: &JobStorage,
     conflict: &str,
-    change: impl FnOnce(&mut ControlState),
+    change: impl FnOnce(&mut ControlState) -> Result<(), StorageError>,
 ) -> Result<ControlState, StorageError> {
     let versioned = store.read_text_versioned(CONTROL_PATH).await?;
     let mut state = match versioned.as_ref() {
         Some(value) => serde_json::from_str::<ControlState>(&value.content)?,
         None => ControlState::default(),
     };
-    change(&mut state);
+    change(&mut state)?;
     let content = serde_json::to_string(&state)?;
     let write = match versioned {
         Some(value) => store
             .compare_and_swap_text(CONTROL_PATH, &value.version, &content)
             .await
-            .map(|_| true),
+            .map(|_written_version| true),
         None => store.create_text_if_absent(CONTROL_PATH, &content).await,
     };
     match write {
@@ -99,6 +102,7 @@ pub async fn set_control(
             state.reason = reason;
             state.changed_at = Utc::now().to_rfc3339();
             state.changed_by = actor;
+            Ok(())
         },
     )
     .await
@@ -114,18 +118,17 @@ pub async fn record_mutation_outcome(
     let failure_threshold = NonZeroUsize::new(failure_threshold).ok_or_else(|| {
         StorageError::Other("circuit-breaker failure threshold must be positive".to_string())
     })?;
-    let cooldown_seconds = NonZeroU64::new(cooldown_seconds)
-        .and_then(|value| i64::try_from(value.get()).ok())
-        .ok_or_else(|| {
-            StorageError::Other(
-                "circuit-breaker cooldown must fit positive i64 seconds".to_string(),
-            )
-        })?;
     update(
         store,
         "autonomy circuit-breaker state changed concurrently",
         |state| {
             let now = Utc::now();
+            let open_until = crate::autonomy::time::expires_at(
+                now,
+                cooldown_seconds,
+                "limits.circuit_breaker_cooldown_seconds",
+            )
+            .map_err(StorageError::Other)?;
             if succeeded {
                 state.mutation_failures.clear();
                 state.circuit_open_until = None;
@@ -134,12 +137,12 @@ pub async fn record_mutation_outcome(
                 state.mutation_failures.push(now.to_rfc3339());
                 state.last_mutation_error = error.map(str::to_string);
                 if state.mutation_failures.len() >= failure_threshold.get() {
-                    state.circuit_open_until =
-                        Some((now + Duration::seconds(cooldown_seconds)).to_rfc3339());
+                    state.circuit_open_until = Some(open_until.to_rfc3339());
                 }
             }
             state.changed_at = now.to_rfc3339();
             state.changed_by = "autonomy-circuit-breaker".to_string();
+            Ok(())
         },
     )
     .await

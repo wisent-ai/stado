@@ -10,18 +10,13 @@ use crate::providers::local::space_reclaim::rule::{self, VolumeReading};
 pub(super) mod mechanisms;
 mod verdict;
 
-/// The host's volume as its own `df` read it: the rule's input.
-pub fn reading(report: &Value) -> Option<VolumeReading> {
-    let kib = |key: &str| {
-        report["usage"][key]
-            .as_str()
-            .and_then(|value| value.parse::<i64>().ok())
-            .and_then(|value| value.checked_mul(1024))
-    };
-    Some(VolumeReading {
-        total_bytes: kib("blocks_kb")?,
-        free_bytes: kib("available_kb")?,
-    })
+/// The host's volume as its own `df` read it (the rule's input), or why it
+/// is unmeasured, through the one reader the host verdict also uses.
+fn reading(report: &Value) -> (Option<VolumeReading>, Option<String>) {
+    match crate::deploy::host_disk::volume_of_report(report) {
+        Ok(volume) => (Some(volume), None),
+        Err(cause) => (None, Some(cause)),
+    }
 }
 
 pub fn section(
@@ -31,7 +26,7 @@ pub fn section(
     platform: &str,
     weles_recordings_dir: Option<&str>,
 ) -> Value {
-    let volume = reading(report);
+    let (volume, unmeasured) = reading(report);
     let occupants = paths::occupants(report);
     let covered = paths::covered(stages, home, platform, &occupants);
     let scopes = mechanisms::scopes(home, platform, report, weles_recordings_dir);
@@ -39,24 +34,26 @@ pub fn section(
     boundaries.extend(scopes.iter().map(|scope| scope.root.clone()));
     let partition = paths::partition(&occupants, &boundaries);
     let in_stage = |path: &str| covered.iter().any(|root| paths::within(path, &root.root));
-    let stage_bytes = partition
+    let stage_bytes: i64 = partition
         .iter()
         .filter(|row| in_stage(&row.path))
-        .fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
+        .map(|row| row.bytes)
+        .sum();
     let outside: Vec<_> = partition
         .iter()
         .filter(|row| !in_stage(&row.path))
         .collect();
-    let outside_bytes = outside
-        .iter()
-        .fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
-    let cleaner_bytes = outside
+    let outside_bytes: i64 = outside.iter().map(|row| row.bytes).sum();
+    let cleaner_bytes: i64 = outside
         .iter()
         .filter(|row| mechanisms::reach(&row.path, &scopes).is_some())
-        .fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
+        .map(|row| row.bytes)
+        .sum();
     let unswept_bytes = outside_bytes.saturating_sub(cleaner_bytes);
     let word = verdict::verdict(volume);
     let state = &report["cleanup_state"];
+    let incomplete = report.get("inventory_incomplete").filter(|why| !why.is_null());
+    let complete = incomplete.is_none();
     json!({
         "rule": rule::rule_json(volume),
         "headroom_bytes": volume.map(|volume| volume.headroom_bytes()),
@@ -71,7 +68,7 @@ pub fn section(
             "bytes": row.bytes,
             "measured": row.bytes.is_some(),
         })).collect::<Vec<_>>(),
-        "covered_bytes": stage_bytes,
+        "covered_bytes": complete.then_some(stage_bytes),
         "uncovered": outside.iter().map(|row| json!({
             "path": row.path,
             "bytes": row.bytes,
@@ -79,15 +76,33 @@ pub fn section(
             "mechanism": mechanisms::reach(&row.path, &scopes).map(|scope| scope.cleaner.name),
         })).collect::<Vec<_>>(),
         "uncovered_rows": outside.len(),
-        "uncovered_bytes": outside_bytes,
-        "cleaner_bytes": cleaner_bytes,
-        "unswept_bytes": unswept_bytes,
+        "uncovered_bytes": complete.then_some(outside_bytes),
+        "cleaner_bytes": complete.then_some(cleaner_bytes),
+        "unswept_bytes": complete.then_some(unswept_bytes),
+        // Partial observations remain useful, but are not whole-inventory
+        // totals and cannot prove that no unswept bytes exist.
+        "measured_bytes": incomplete.map(|_| json!({
+            "covered": stage_bytes,
+            "uncovered": outside_bytes,
+            "cleaner": cleaner_bytes,
+            "unswept": unswept_bytes,
+        })),
         "reclaimable_bytes": Value::Null,
-        "inventory_incomplete": report.get("inventory_incomplete"),
+        "inventory_incomplete": incomplete,
         "verdict": word,
-        "detail": verdict::detail(word, volume, stage_bytes.saturating_add(cleaner_bytes), unswept_bytes),
+        "detail": verdict::detail(
+            word,
+            volume,
+            stage_bytes.saturating_add(cleaner_bytes),
+            unswept_bytes,
+            incomplete,
+            unmeasured.as_deref(),
+        ),
         "janitor": {
-            "outcome": state.get("outcome").and_then(Value::as_str).unwrap_or("never_run"),
+            "outcome": match state.get("outcome").and_then(Value::as_str) {
+                Some(outcome) => outcome,
+                None => "never_run",
+            },
             "detail": verdict::janitor_detail(state),
             "report": state.get("report"),
         },

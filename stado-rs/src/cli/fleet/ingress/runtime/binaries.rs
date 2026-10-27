@@ -21,7 +21,7 @@ pub fn cloudflared_binary() -> Result<PathBuf, CmdError> {
         crate::config_file::variable("STADO_CLOUDFLARED_BIN").map_err(CmdError::declaration)?
     {
         let path = PathBuf::from(explicit.trim());
-        if !path.is_file() {
+        if !file_at(&path)? {
             return Err(CmdError::declaration(format!(
                 "STADO_CLOUDFLARED_BIN names no file: {}",
                 path.display()
@@ -31,7 +31,7 @@ pub fn cloudflared_binary() -> Result<PathBuf, CmdError> {
     }
     for candidate in CLOUDFLARED_CANDIDATES {
         let path = PathBuf::from(candidate);
-        if path.is_file() {
+        if file_at(&path)? {
             return Ok(path);
         }
     }
@@ -58,7 +58,7 @@ pub fn stado_binary() -> Result<PathBuf, CmdError> {
         return Ok(current);
     }
     if let Some(sibling) = current.parent().map(|dir| dir.join("stado")) {
-        if sibling.is_file() {
+        if file_at(&sibling)? {
             return Ok(sibling);
         }
     }
@@ -67,7 +67,7 @@ pub fn stado_binary() -> Result<PathBuf, CmdError> {
         .join(".stado")
         .join("bin")
         .join("stado");
-    if installed.is_file() {
+    if file_at(&installed)? {
         return Ok(installed);
     }
     search_path("stado").ok_or_else(|| {
@@ -76,6 +76,17 @@ pub fn stado_binary() -> Result<PathBuf, CmdError> {
              $HOME/.stado/bin/stado, none on PATH",
         )
     })
+}
+
+/// Whether `path` is a file; one that cannot be examined is refused naming
+/// it. `is_file` answered false for it, and the search took a later
+/// candidate, or refused as if the program were not installed.
+fn file_at(path: &std::path::Path) -> Result<bool, CmdError> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(CmdError::from(error).within(&format!("{} cannot be examined", path.display()))),
+    }
 }
 
 /// First executable named `name` on `PATH`.

@@ -24,6 +24,11 @@ struct HostVaultBearerReceipt: Decodable, Sendable {
     }
 }
 
+/// The grant as Skarbiec's `grant issue` answers it, which the mint receipt
+/// carries whole: `ok`, `consumer`, `capabilities`, `workload_bound` and
+/// `audience` are written in every answer, so a receipt that lacks one is a
+/// decoding error naming the key, not a grant that failed, served nobody or
+/// is unbound.
 struct HostVaultBearerGrant: Decodable, Sendable {
     let ok: Bool
     let consumer: String
@@ -39,18 +44,6 @@ struct HostVaultBearerGrant: Decodable, Sendable {
         case expiresAt = "expires_at"
         case tokenFile = "token_file"
     }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        ok = try values.decodeIfPresent(Bool.self, forKey: .ok) ?? false
-        consumer = try values.decodeIfPresent(String.self, forKey: .consumer) ?? ""
-        capabilities =
-            try values.decodeIfPresent([HostVaultBearerCapability].self, forKey: .capabilities) ?? []
-        workloadBound = try values.decodeIfPresent(Bool.self, forKey: .workloadBound) ?? false
-        audience = try values.decodeIfPresent(String.self, forKey: .audience) ?? ""
-        expiresAt = try values.decodeIfPresent(UInt64.self, forKey: .expiresAt)
-        tokenFile = try values.decodeIfPresent(String.self, forKey: .tokenFile)
-    }
 }
 
 struct HostVaultBearerCapability: Decodable, Sendable {
@@ -59,7 +52,10 @@ struct HostVaultBearerCapability: Decodable, Sendable {
     let field: String?
 
     var displayValue: String {
-        "\(action):\(item)\(field.map { "#\($0)" } ?? "")"
+        switch field {
+        case .some(let field): return "\(action):\(item)#\(field)"
+        case .none: return "\(action):\(item)"
+        }
     }
 }
 

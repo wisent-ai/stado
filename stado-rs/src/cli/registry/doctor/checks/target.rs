@@ -53,15 +53,26 @@ pub(in crate::cli::registry::doctor) async fn target_findings(
         // catalog. Release-control products already carry their desired
         // version in that block, while arbitrary `service update` trees carry
         // an artifact identity instead of an invented semver contract.
-        for undeclared in service::managed_units_without_declared_version(target, release_control) {
-            findings.push(
-                Finding::new(
-                    "undeclared-service-version",
-                    &target.name,
-                    undeclared.sentence(),
-                )
-                .about(undeclared.unit),
-            );
+        match service::managed_units_without_declared_version(target, release_control) {
+            Ok(undeclared_units) => {
+                for undeclared in undeclared_units {
+                    findings.push(
+                        Finding::new("undeclared-service-version", &target.name, undeclared.sentence())
+                            .about(undeclared.unit),
+                    );
+                }
+            }
+            // Without the catalog the check cannot tell a managed unit from
+            // an arbitrary tree; that is a finding about this host's doctor
+            // run, not a host with every version declared.
+            Err(error) => findings.push(Finding::new(
+                "product-catalog-unreadable",
+                &target.name,
+                format!(
+                    "the compiled product catalog could not be read, so no unit on {} could be checked for a declared version: {error}",
+                    target.name
+                ),
+            )),
         }
         // The same shape again, and the reason this one needed the check
         // extended rather than a second one built beside it: both loops
@@ -144,8 +155,18 @@ pub(in crate::cli::registry::doctor) async fn target_findings(
             ));
             continue;
         };
+        if let Some(cause) = &beacon.unreadable {
+            findings.push(Finding::new(
+                "unreadable-beacon",
+                &target.name,
+                format!(
+                    "{} exists but cannot be read as a beacon: {cause}",
+                    beacon.path
+                ),
+            ));
+        }
         match (beacon.observed_at(), beacon.next_by()) {
-            (Some(observed), Some(next_by)) => {
+            (Ok(Some(observed)), Ok(Some(next_by))) => {
                 if now > next_by {
                     findings.push(Finding::new(
                         "stale-beacon",
@@ -160,7 +181,7 @@ pub(in crate::cli::registry::doctor) async fn target_findings(
                     ));
                 }
             }
-            (Some(observed), None) => findings.push(Finding::new(
+            (Ok(Some(observed)), Ok(None)) => findings.push(Finding::new(
                 "stale-beacon",
                 &target.name,
                 format!(
@@ -172,11 +193,21 @@ pub(in crate::cli::registry::doctor) async fn target_findings(
                     observed.to_rfc3339()
                 ),
             )),
-            (None, _) => findings.push(Finding::new(
+            (Ok(None), _) => findings.push(Finding::new(
                 "stale-beacon",
                 &target.name,
                 format!(
                     "{} carries neither an object timestamp nor reported_at",
+                    beacon.path
+                ),
+            )),
+            // A stamp that is not a time is a corrupt beacon, said as such:
+            // the host is neither current nor never observed.
+            (Err(cause), _) | (_, Err(cause)) => findings.push(Finding::new(
+                "stale-beacon",
+                &target.name,
+                format!(
+                    "{} carries a stamp that is not a time, so its age cannot be judged: {cause}",
                     beacon.path
                 ),
             )),
@@ -187,7 +218,7 @@ pub(in crate::cli::registry::doctor) async fn target_findings(
             // it as `unit-not-active` or `missing-plist` called the intended
             // state a failure and pointed at a repair Stado refuses. What is
             // left to fix is the declaration itself.
-            match retired_replacement(target, &declared) {
+            match retired_replacement(target, &declared, local_host) {
                 Ok(Some(replacement)) => {
                     findings.push(
                         Finding::new(

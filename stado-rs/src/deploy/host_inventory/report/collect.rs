@@ -18,23 +18,29 @@ pub async fn inventory_target(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     let output = host_channel::run_script(target, &remote_inventory_script()?, runner).await?;
-    let parsed = parse_inventory(&output.stdout);
-    let mut report = match &parsed {
-        Ok(inventory) => to_report(target, directory, inventory),
-        Err(_) => host_channel::base_report(target),
+    let mut report = match parse_inventory(&output.stdout) {
+        Ok(inventory) => {
+            let mut report = to_report(target, directory, &inventory);
+            host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
+            report
+        }
+        // A clean exit with an unreadable payload is its own failure, and a
+        // different one from a broken channel: the host answered, and what
+        // it answered was not this command's report. A non-zero exit keeps
+        // the remote's own last stderr line, which explains more.
+        Err(unreadable) => {
+            let mut report = host_channel::base_report(target);
+            host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
+            if output.succeeded() {
+                report.insert(
+                    "status".to_string(),
+                    json!(host_channel::FAILED_STATUS.to_string()),
+                );
+                report.insert("error".to_string(), json!(unreadable.message));
+            }
+            report
+        }
     };
-    host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
-    // A clean exit with an unreadable payload is its own failure, and a
-    // different one from a broken channel: the host answered, and what it
-    // answered was not this command's report. A non-zero exit keeps the
-    // remote's own last stderr line, which explains more.
-    if let (Err(error), true) = (&parsed, output.ok()) {
-        report.insert(
-            "status".to_string(),
-            json!(host_channel::FAILED_STATUS.to_string()),
-        );
-        report.insert("error".to_string(), json!(error.message));
-    }
     Ok(Value::Object(report))
 }
 

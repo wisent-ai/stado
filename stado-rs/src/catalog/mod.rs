@@ -57,10 +57,15 @@ pub fn accel_vram_tier(accel: &str) -> Option<i64> {
     static DECLARED: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(r"-(?P<gb>\d+)gb$").expect("static accelerator-memory pattern compiles")
     });
+    // The pattern admits only digits, so the parse fails only for a run of
+    // them longer than the tier type holds; such a name declares no tier.
     DECLARED
         .captures(accel)
         .and_then(|captures| captures.name("gb"))
-        .and_then(|memory| memory.as_str().parse().ok())
+        .and_then(|memory| match memory.as_str().parse() {
+            Ok(tier) => Some(tier),
+            Err(_beyond_the_tier_type) => None,
+        })
         .or_else(|| {
             CLOUD_SIZING
                 .values()

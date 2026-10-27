@@ -23,7 +23,6 @@ pub const OPERATOR_CONTACT_KEY: &str = "operator_contact";
 pub const CHANNELS: &[&str] = &[
     "slack",
     "telegram",
-    "sendgrid",
     "skrzynka",
     "most",
     "gcp-pubsub",

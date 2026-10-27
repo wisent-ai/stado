@@ -72,27 +72,17 @@ pub(in crate::deploy::host_storage_reconcile) fn read_json_evidence(
         ))
         .stating(crate::primitives::failure::FailureCode::Refused));
     }
-    let mut hasher = Sha256::new();
-    let mut observed_bytes = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(DeployError::io(format!("cannot hash {label}")))?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-        observed_bytes += count as u64;
-    }
-    if observed_bytes != reference.bytes || hex::encode(hasher.finalize()) != reference.sha256 {
+    // The opened handle is hashed, not the path: it is the file whose device
+    // and inode were just checked against the canonical one.
+    let observed = crate::primitives::digest::sha256_reader(&mut file)
+        .map_err(DeployError::io(format!("cannot hash {label}")))?;
+    if observed.bytes != reference.bytes || observed.sha256 != reference.sha256 {
         return Err(
             DeployError(format!("{label} bytes differ from their durable reference"))
                 .stating(crate::primitives::failure::FailureCode::Refused),
         );
     }
-    file.seek(SeekFrom::Start(0))
-        .map_err(DeployError::io(format!("cannot rewind {label}")))?;
+    std::io::Seek::rewind(&mut file).map_err(DeployError::io(format!("cannot rewind {label}")))?;
     serde_json::from_reader(file).map_err(|error| {
         DeployError(format!("{label} is invalid: {error}"))
             .stating(crate::primitives::failure::FailureCode::InfraDown)

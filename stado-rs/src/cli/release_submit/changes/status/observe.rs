@@ -71,6 +71,12 @@ pub(super) async fn observe(
         let Some(bytes) = store.read_bytes(&path).await? else {
             if recipe.required {
                 qualified = false;
+                if run.state == BuildRunState::Passed && result.state != "failed" {
+                    result.state = "awaiting_tests".into();
+                    result.failure = Some(format!(
+                        "{platform}: the successful build has no retained receipt at {path}"
+                    ));
+                }
             }
             continue;
         };
@@ -112,13 +118,13 @@ pub(super) async fn observe(
         result.evidence.push(receipt);
     }
     if run.state == BuildRunState::Failed {
-        result.state = "failed".into();
-        if result.failure.is_none() {
+        if result.state != "failed" {
             result.failure = Some(match &run.failure {
                 Some(cause) => cause.clone(),
                 None => run_failure_reasons(run),
             });
         }
+        result.state = "failed".into();
     } else if qualified && run.state == BuildRunState::Passed && result.state != "failed" {
         result.state = "passed".into();
     }

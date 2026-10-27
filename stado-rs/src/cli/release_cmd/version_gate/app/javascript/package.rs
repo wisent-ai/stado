@@ -70,14 +70,14 @@ fn export_names(
             _ => Vec::new(),
         }),
         serde_json::Value::Object(map) => {
-            let subpaths = map.keys().filter(|key| key.starts_with('.')).count();
-            if subpaths == map.len() {
+            let is_subpath = |key: &String| key.starts_with('.');
+            if map.keys().all(is_subpath) {
                 Ok(map
                     .iter()
                     .filter(|(_, target)| reachable(target))
                     .map(|(key, _)| key.clone())
                     .collect())
-            } else if subpaths == 0 {
+            } else if !map.keys().any(is_subpath) {
                 Ok(if reachable(exports) {
                     root()
                 } else {
@@ -115,7 +115,12 @@ pub(in super::super) fn names(
     );
     match &document["bin"] {
         serde_json::Value::String(target) if !target.is_empty() => {
-            let command = name.rsplit('/').next().unwrap_or(name);
+            // A single bin installs the command npm names after the package,
+            // without its scope: `@scope/tool` installs `tool`.
+            let command = match name.rsplit_once('/') {
+                Some((_scope, command)) => command,
+                None => name,
+            };
             names.push(format!("bin:{command}"));
         }
         serde_json::Value::Object(map) => names.extend(

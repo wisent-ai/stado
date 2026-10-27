@@ -2,7 +2,8 @@
 
 use serde_json::{Map, Value};
 
-use crate::artifacts_models::error::{py_str, ArtifactError};
+use super::{recorded_text, text_list};
+use crate::artifacts_models::error::ArtifactError;
 
 /// Provenance of the producing run.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -19,18 +20,15 @@ impl ArtifactProducer {
         let map = value
             .as_object()
             .ok_or_else(|| ArtifactError::invalid_manifest("producer must be an object"))?;
-        let get_str = |key: &str| map.get(key).map(py_str).unwrap_or_default();
-        let job_ids = match map.get("job_ids") {
-            None | Some(Value::Null) => Vec::new(),
-            Some(Value::Array(items)) => items.iter().map(py_str).collect(),
-            Some(other) => vec![py_str(other)],
-        };
+        // Every provenance field is optional in a manifest; one the manifest
+        // omits is recorded empty, which `to_value` writes back as such. One
+        // it writes in another type is refused by name.
         Ok(Self {
-            run_id: get_str("run_id"),
-            job_ids,
-            repo: get_str("repo"),
-            commit: get_str("commit"),
-            host: get_str("host"),
+            run_id: recorded_text("producer", map, "run_id")?,
+            job_ids: text_list("producer", map, "job_ids")?,
+            repo: recorded_text("producer", map, "repo")?,
+            commit: recorded_text("producer", map, "commit")?,
+            host: recorded_text("producer", map, "host")?,
         })
     }
 

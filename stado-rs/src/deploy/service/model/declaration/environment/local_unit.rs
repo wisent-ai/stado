@@ -70,19 +70,24 @@ pub fn local_unit_file(path: &str, kind: &str) -> Result<Option<LocalUnitFile>, 
 pub fn parse_local_unit_file(text: &str, kind: &str) -> Result<LocalUnitFile, DeployError> {
     if kind == KIND_LAUNCHD {
         let document = parse_plist(text)?;
-        let program = plist_program(&document)?.unwrap_or_default().to_string();
-        let start_interval_seconds = document
-            .get("StartInterval")
-            .map(|value| {
-                value
-                    .as_unsigned_integer()
-                    .and_then(std::num::NonZeroU64::new)
-                    .ok_or_else(|| {
-                        DeployError("StartInterval must be a positive integer".to_string())
-                            .stating(crate::primitives::failure::FailureCode::Refused)
-                    })
-            })
-            .transpose()?;
+        // A plist with neither `Program` nor a first `ProgramArguments`
+        // entry starts nothing; `start_commands` below reads that as zero.
+        let program = match plist_program(&document)? {
+            Some(program) => program.to_string(),
+            None => String::new(),
+        };
+        let start_interval_seconds = match document.get("StartInterval") {
+            None => None,
+            Some(value) => match value.as_unsigned_integer().map(std::num::NonZeroU64::new) {
+                Some(Some(seconds)) => Some(seconds),
+                Some(None) | None => {
+                    return Err(DeployError(format!(
+                        "StartInterval must be a positive integer, found {value:?}"
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Refused))
+                }
+            },
+        };
         let mut arguments = match document.get("ProgramArguments") {
             Some(value) => value
                 .as_array()
@@ -117,15 +122,20 @@ pub fn parse_local_unit_file(text: &str, kind: &str) -> Result<LocalUnitFile, De
     } else if kind == KIND_SYSTEMD {
         let parsed = parse_systemd_unit(text)?;
         let start_commands = parsed.exec_start.len();
-        let arguments = parsed.exec_start.into_iter().next().unwrap_or_default();
-        let program = arguments
-            .first()
-            .map(|argument| {
-                argument
-                    .trim_start_matches(['@', '-', ':', '+', '!', '|'])
-                    .to_string()
-            })
-            .unwrap_or_default();
+        // A unit without an ExecStart starts nothing: no arguments and no
+        // program, which `start_commands` says as zero. The first word of
+        // the first ExecStart is the program, after systemd's execution
+        // prefixes.
+        let arguments = match parsed.exec_start.into_iter().next() {
+            Some(first_start) => first_start,
+            None => Vec::new(),
+        };
+        let program = match arguments.first() {
+            Some(argument) => argument
+                .trim_start_matches(['@', '-', ':', '+', '!', '|'])
+                .to_string(),
+            None => String::new(),
+        };
         Ok(LocalUnitFile {
             carries: parsed.env.iter().map(|(name, _)| name.clone()).collect(),
             env: parsed.env.into_iter().collect(),

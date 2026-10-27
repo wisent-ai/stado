@@ -8,12 +8,15 @@ set -eu
 stado host beacon list
 
 # reachability verdict per host (ssh check + beacon age); ping takes one
-# TARGET, so walk every registry host. `|| true`: one down host must not
-# stop the sweep — its verdict is the point.
+# TARGET, so walk every registry host. One down host must not stop the
+# sweep — its verdict is the point — so a refused ping is named and the
+# walk goes on.
 stado registry pull \
   | jq -r '.targets[].name' \
   | while IFS= read -r target; do
-      stado host ping "$target" --json || true
+      if ! stado host ping "$target" --json; then
+        printf '%s\n' "host $target: ping refused (its verdict is above)" >&2
+      fi
     done
 
 # managed services across the fleet, from beacons alone

@@ -77,6 +77,21 @@ try {
   assert.deepEqual(others, [], 'this boundary requires a single failed predecessor');
   const [predecessorDigest, predecessor] = entry;
   assert.equal(predecessor.cause, expectedCause);
+  const listed = stado(['release', 'quarantine', 'list', product, '--target', target, '--json']);
+  const retained = listed.entries.find(value => value.digest === predecessorDigest);
+  assert.ok(retained, 'the real quarantine listing lost the failed predecessor');
+  assert.equal(retained.cause, predecessor.cause, 'the CLI must preserve the observed cause');
+  assert.equal(retained.reason, predecessor.reason, 'the CLI must preserve the full observed failure');
+  assert.equal(retained.evidence, predecessor.evidence, 'the CLI must retain the decisive evidence line');
+  const diagnosed = stado(['release', 'doctor', product, '--target', target, '--json']);
+  const counted = diagnosed.quarantine_summary.causes.find(value => value.cause === expectedCause);
+  assert.ok(counted, 'the actual retained cause must not become unclassified in the summary');
+  assert.equal(counted.count, entries.length);
+  assert.deepEqual(diagnosed.quarantine_summary.unreadable_causes, [],
+    'valid typed failure evidence must not be reported as unreadable');
+  assert.deepEqual(readState(), before, 'read-only diagnostics must not retire the retained failure');
+  report.quarantine_listing = listed;
+  report.doctor = diagnosed;
   assert.notEqual(predecessorDigest, desiredDigest, 'the next candidate must have different bytes');
   assert.equal(before.active, null);
   assert.equal(before.previous, null);

@@ -102,9 +102,12 @@ pub(super) fn acknowledge_owner(launch: &Launch, observation: &Value) -> Result<
     if action != Some(launch.action.as_str())
         && !(forward(action) && forward(Some(launch.action.as_str())))
     {
+        let running = match action {
+            Some(action) => action.to_string(),
+            None => format!("an action its observation does not name ({observation})"),
+        };
         return Err(format!(
-            "native reconciliation is already executing {}; cannot accept {}",
-            action.unwrap_or("None"),
+            "native reconciliation is already executing {running}; cannot accept {}",
             launch.action
         ));
     }

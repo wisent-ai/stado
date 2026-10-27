@@ -84,7 +84,7 @@ fi
         let prepared = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
             .await
             .map_err(CmdError::from)?;
-        if !prepared.ok() {
+        if !prepared.succeeded() {
             return Err(CmdError::click(format!(
                 "{}: preparing token file {path} failed: {}",
                 resolved.name,
@@ -135,11 +135,13 @@ fi
         crate::deploy::host_channel::run_program(&resolved, &invocation, &runner).await
     }
     .map_err(CmdError::from)?;
-    if !output.ok() {
-        let retained = token_file
-            .as_ref()
-            .map(|path| format!("; bearer remains at {path} for a retry"))
-            .unwrap_or_default();
+    if !output.succeeded() {
+        // With a bearer file the note names where it stays; a request that
+        // carried no bearer has nothing to retain, so the note is empty.
+        let retained = match token_file.as_ref() {
+            Some(path) => format!("; bearer remains at {path} for a retry"),
+            None => String::new(),
+        };
         // The host channel reached the host and Skarbiec answered: its refusal
         // is the product's answer about this request, not an outage, and the
         // same request retried unchanged gets the same answer. A grant asked
@@ -158,10 +160,19 @@ fi
         } else {
             String::new()
         };
+        // The program that answered is named: under a register invocation it
+        // is the host's own stado, whose parser can refuse what this build
+        // sends; its whole answer is kept, since a usage refusal names the
+        // rejected argument above its last line.
+        let answered = if token_source.is_some() {
+            owner_stado.as_str()
+        } else {
+            skarbiec.as_str()
+        };
         return Err(CmdError::click(format!(
-            "{}: Skarbiec {command} refused: {}{lifetime}{retained}",
+            "{}: Skarbiec {command} refused by {answered}: {}{lifetime}{retained}",
             resolved.name,
-            crate::deploy::host_channel::last_error_line(&output, "remote command failed")
+            crate::deploy::host_channel::whole_failure(&output)
         ))
         .stating(crate::primitives::failure::FailureCode::Refused));
     }

@@ -14,18 +14,20 @@
 //! `stado ci status` and `stado ci delivery` carry the record under the
 //! routine's `main`: each step's last checked and last green commit and every
 //! commit checked; `stado ci delivery` names a step whose last checked commit
-//! is red as a way the delivery path is down.
+//! is red, and since when, as a way the delivery path is down (`document`).
 
+mod document;
 pub mod record;
+
+pub(in crate::cli::ci) use document::{document, print, red, unrecorded};
 
 use std::path::Path;
 
 use chrono::Utc;
-use serde_json::{json, Value};
 
 use crate::cli::ci::delivery::state::Refused;
 use crate::cli::ci::delivery::{main_tip, oko, plan};
-use crate::cli::quality::{check_revision, Report, Selection};
+use crate::cli::quality::{check_revision_for, Report, Selection};
 use crate::cli::release_loop::process::{run as process, succeeds};
 use crate::cli::CmdError;
 use record::{Checked, Record};
@@ -79,20 +81,23 @@ fn red_commit(repository: &str, product: &str, refused: &Refused) -> oko::Findin
 }
 
 /// Check one commit, settling it in Oko against the step's commit checked
-/// before it.
+/// before it. Its compile and test gates run as work serving `purpose`, the
+/// open defect the delivery plan names.
 async fn check_commit(
     step: &plan::Step,
     revision: String,
     checked: &Record,
+    purpose: &str,
 ) -> Result<Checked, CmdError> {
     let key = step.key();
     let repository = step.repository()?;
     let earlier_red = checked.last_checked(&key).filter(|done| !done.green);
-    let verdict = check_revision(
+    let verdict = check_revision_for(
         &step.checkout,
         &revision,
         Report::Stderr,
         Selection::Installation,
+        &[purpose],
     )
     .await;
     let mut unrecorded = Vec::new();
@@ -194,7 +199,7 @@ pub(in crate::cli::ci) async fn check(
             continue;
         }
         for revision in pending {
-            let done = check_commit(step, revision, &checked).await?;
+            let done = check_commit(step, revision, &checked, &plan.purpose).await?;
             let verdict = match done.green {
                 true => "green",
                 false => "red",
@@ -212,89 +217,4 @@ pub(in crate::cli::ci) async fn check(
         }
     }
     Ok((checked, said))
-}
-
-/// The record as `stado ci status` and `stado ci delivery` carry it: per
-/// step its last checked and last green commit, and every commit checked.
-pub(in crate::cli::ci) fn document() -> Result<Value, CmdError> {
-    let checked = record::read()?;
-    let steps: serde_json::Map<String, Value> = checked
-        .steps
-        .iter()
-        .map(|(key, commits)| {
-            (
-                key.clone(),
-                json!({
-                    "last_checked": checked.last_checked(key),
-                    "last_green": checked.last_green(key),
-                    "checked": commits,
-                }),
-            )
-        })
-        .collect();
-    Ok(json!({ "record": record::path()?, "steps": steps }))
-}
-
-/// Each step whose last checked commit is red, as one sentence.
-pub(in crate::cli::ci) fn red(document: &Value) -> Vec<String> {
-    document["steps"]
-        .as_object()
-        .into_iter()
-        .flatten()
-        .filter(|(_, step)| step["last_checked"]["green"] == false)
-        .map(|(key, step)| {
-            let last = &step["last_checked"];
-            format!(
-                "main of {key} is red at {} (installs stay at {}): {}",
-                last["revision"], step["last_green"]["revision"], last["refusals"]
-            )
-        })
-        .collect()
-}
-
-/// Each write the register refused about a step's last checked commit, or
-/// about a commit whose repair records are still to be recorded again, as
-/// one sentence naming the step and the commit.
-pub(in crate::cli::ci) fn unrecorded(document: &Value) -> Vec<String> {
-    let mut lines = Vec::new();
-    for (key, step) in document["steps"].as_object().into_iter().flatten() {
-        let last = &step["last_checked"];
-        let commits = step["checked"].as_array().into_iter().flatten();
-        let open = commits.filter(|commit| {
-            let unrepaired = commit["unrepaired"].as_array();
-            unrepaired.is_some_and(|defects| !defects.is_empty())
-                || commit["revision"] == last["revision"]
-        });
-        for commit in open {
-            let refused = commit["unrecorded"].as_array().into_iter().flatten();
-            for line in refused.filter_map(Value::as_str) {
-                lines.push(format!("main of {key} at {}: {line}", commit["revision"]));
-            }
-        }
-    }
-    lines
-}
-
-/// The record's lines in `stado ci status`'s and `stado ci delivery`'s plain
-/// form.
-pub(in crate::cli::ci) fn print(document: &Value) {
-    for (key, step) in document["steps"].as_object().into_iter().flatten() {
-        let last = &step["last_checked"];
-        let verdict = match last["green"].as_bool() {
-            Some(true) => "green",
-            Some(false) => "red",
-            None => "not checked",
-        };
-        println!(
-            "  main of {key}: last checked {} {verdict}; last green {}",
-            last["revision"], step["last_green"]["revision"]
-        );
-        for commit in step["checked"].as_array().into_iter().flatten() {
-            let unrepaired = commit["unrepaired"].as_array().into_iter().flatten();
-            for defect in unrepaired.filter_map(Value::as_str) {
-                let revision = &commit["revision"];
-                println!("    {revision}'s repair of {defect} is still to be recorded in Oko");
-            }
-        }
-    }
 }

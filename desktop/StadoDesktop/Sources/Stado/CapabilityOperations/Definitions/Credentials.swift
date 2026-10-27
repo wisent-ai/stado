@@ -32,7 +32,7 @@ enum NativeCredentialOperations {
             .init(id: "owner-uid", label: "Owner identity whose secret key that host's keyring holds", option: "--owner-uid", required: true),
             .init(id: "apply", label: "Move it (blank reads and reports only)", option: "--apply", flag: true),
         ]),
-        .init(id: "signing-profile-ensure", title: "Store code-signing provisioning profiles in a signing item", path: ["credentials", "signing-profile", "ensure"], fields: [
+        .init(id: "signing-profile-ensure", title: "Store code-signing provisioning profiles in a signing item", path: ["credentials", "signing", "profile", "ensure"], fields: [
             .init(id: "provider", label: "Profile provider (apple)", option: "--provider", required: true, initial: "apple"),
             .init(id: "item", label: "Signing item (for example tama-desktop-signing)", required: true),
             .init(id: "profiles", label: "FIELD=BUNDLE_ID pairs", option: "--profile", required: true, multiple: true),
@@ -40,7 +40,7 @@ enum NativeCredentialOperations {
             .init(id: "type", label: "Profile type", option: "--type", initial: "MAC_APP_DIRECT"),
             .init(id: "certificate-type", label: "Certificate type", option: "--certificate-type", initial: "DEVELOPER_ID_APPLICATION"),
         ]),
-        .init(id: "sparkle-key-mint", title: "Mint a desktop product's Sparkle update key", path: ["credentials", "sparkle-key", "mint"], hostPlacement: .none, fields: [
+        .init(id: "sparkle-key-mint", title: "Mint a desktop product's Sparkle update key", path: ["credentials", "signing", "key", "mint"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Desktop product (as its release manifest names it)", required: true),
             .init(id: "info-plist", label: "The app's Info.plist that ships SUPublicEDKey", option: "--info-plist", required: true),
             .init(id: "replace", label: "Replace the key the role already holds", option: "--replace", flag: true),
@@ -69,7 +69,7 @@ enum NativeCredentialOperations {
             .init(id: "destination-token", label: "Owner-only bearer file on selected host", option: "--token-file", required: true),
             .init(id: "check", label: "Check only; do not replace the selected host's file", option: "--check", flag: true, initial: "true"),
         ]),
-        .init(id: "acquisition-sync", title: "Synchronize acquisition scope catalogue", path: ["credentials", "acquisition-scopes", "sync"],
+        .init(id: "acquisition-sync", title: "Synchronize acquisition scope catalogue", path: ["credentials", "scopes", "sync"],
             payload: .file(option: nil, label: "Acquisition scope catalogue contents", initial: "")),
         .init(id: "grant-add", title: "Grant a consumer one field of a role", path: ["credentials", "grant", "add"], fields: [
             .init(id: "consumer", label: "Consumer", required: true),
@@ -94,7 +94,7 @@ enum NativeCredentialOperations {
         .init(id: "grant-renew", title: "Renew this host's agent grant and keep declared consumer grants", path: ["credentials", "grant", "renew"], hostPlacement: .none, fields: [
             .init(id: "force", label: "Renew the agent grant even when it already lives until revoked", option: "--force", flag: true),
         ]),
-        .init(id: "migrate-identities", title: "Migrate this Stado source's identity configuration", path: ["config", "migrate-identities"],
+        .init(id: "migrate-identities", title: "Migrate this Stado source's identity configuration", path: ["config", "migrate"],
             hostPlacement: .none, jsonOutput: false),
         .init(id: "backup-audit", title: "Audit backups or reclaim verified twins", path: ["credentials", "backup", "audit"], fields: [
             .init(id: "objects", label: "Object URIs", option: "--object", multiple: true),

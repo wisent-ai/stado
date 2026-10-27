@@ -18,10 +18,14 @@ pub async fn reconcile_host(
     if phase == STATUS {
         let mut status = reconcile_host_inner(&target, transaction, STATUS, runner).await?;
         let owner = read_operation_owner(&target, transaction, runner).await?;
-        status
-            .as_object_mut()
-            .expect("storage-root status report is an object")
-            .insert("operation_owner".to_string(), owner.unwrap_or(Value::Null));
+        if !status.is_object() {
+            return Err(DeployError(format!(
+                "{target_name}: the storage-root status report is not an object: {status}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
+        }
+        // Serde writes a transaction nobody owns as `null`.
+        status["operation_owner"] = serde_json::json!(owner);
         return Ok(status);
     }
     if !matches!(phase, RUN | RESUME | ROLLBACK | FINALIZE) {
@@ -53,20 +57,30 @@ pub async fn reconcile_host(
     let work = format!("$HOME/.stado/recovery/storage-root-reconcile/{transaction}");
     let staged_tool = format!("{work}/transaction-tool.{tool_sha256}");
     let canonical_tool = format!("{work}/transaction-tool");
-    let staged =
-        service::sync_service_file(&target, &staged_tool, &tool_bytes, 0o700, runner).await?;
+    let staged = service::sync_service_file(
+        &target,
+        &staged_tool,
+        &tool_bytes,
+        crate::primitives::file_mode::owner_program(),
+        runner,
+    )
+    .await?;
     if !staged.succeeded("file_synced") {
         return Err(DeployError::unreachable(format!(
             "transaction tool staging failed: {}",
             staged.failure()
         )));
     }
-    let runner_gate = runner_gate
-        .map(|gate| serde_json::to_vec(&gate))
-        .transpose()
-        .map_err(|error| DeployError(format!("cannot encode runner gate: {error}")))?
-        .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
-        .unwrap_or_default();
+    // A transaction without a runner gate sends the worker an empty gate
+    // argument, which the worker reads as no gate.
+    let runner_gate = match runner_gate {
+        Some(gate) => {
+            let bytes = serde_json::to_vec(&gate)
+                .map_err(|error| DeployError(format!("cannot encode runner gate: {error}")))?;
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        }
+        None => String::new(),
+    };
     let target_config = base64::engine::general_purpose::STANDARD.encode(
         serde_json::to_vec(&target)
             .map_err(|error| DeployError(format!("cannot encode resident target: {error}")))?,
@@ -102,7 +116,7 @@ pub async fn reconcile_host(
         runner,
     )
     .await?;
-    if !launched.ok() {
+    if !launched.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(
             &launched,
             "resident reconciliation worker did not launch",

@@ -19,40 +19,35 @@ where
                 .stating(crate::primitives::failure::FailureCode::Config)
         })?;
     let original = std::fs::read_to_string(&path)?;
-    let mut document: Value = serde_json::from_str(&original).map_err(CmdError::from)?;
-    if !document.is_object() {
+    let Value::Object(mut document) =
+        serde_json::from_str::<Value>(&original).map_err(CmdError::from)?
+    else {
         return Err(CmdError::click("config file must contain a JSON object")
             .stating(crate::primitives::failure::FailureCode::Config));
-    }
+    };
 
-    let entry = document
-        .as_object_mut()
-        .expect("checked above")
+    let Value::Object(entry) = document
         .entry("database_api".to_string())
-        .or_insert_with(|| json!({}));
-    if !entry.is_object() {
+        .or_insert_with(|| json!({}))
+    else {
         return Err(CmdError::click("database_api must be an object")
             .stating(crate::primitives::failure::FailureCode::Config));
-    }
-    let databases = entry
-        .as_object_mut()
-        .expect("checked above")
+    };
+    let Value::Object(map) = entry
         .entry("databases".to_string())
-        .or_insert_with(|| json!({}));
-    let map = databases.as_object_mut().ok_or_else(|| {
-        CmdError::click("database_api.databases must be an object")
-            .stating(crate::primitives::failure::FailureCode::Config)
-    })?;
+        .or_insert_with(|| json!({}))
+    else {
+        return Err(CmdError::click("database_api.databases must be an object")
+            .stating(crate::primitives::failure::FailureCode::Config));
+    };
     mutation(map)?;
     // The parser refuses an empty map, so a removal that empties the plane
     // collapses the section instead of leaving a configuration nothing can
     // validate.
     if map.is_empty() {
-        document
-            .as_object_mut()
-            .expect("checked above")
-            .remove("database_api");
+        document.remove("database_api");
     }
+    let document = Value::Object(document);
 
     // The plane's parser is the authority on shape; run it before the whole
     // document's validation so the refusal names the database, not an
@@ -81,13 +76,7 @@ where
         .stating(crate::primitives::failure::FailureCode::Config));
     }
 
-    let body = format!("{}\n", serde_json::to_string_pretty(&document)?);
-    let temporary = std::path::PathBuf::from(format!("{}.database-setting", path.display()));
-    std::fs::write(&temporary, body)?;
-    if let Ok(metadata) = std::fs::metadata(&path) {
-        std::fs::set_permissions(&temporary, metadata.permissions())?;
-    }
-    std::fs::rename(&temporary, &path)?;
+    crate::config_file::replace(&path, &document)?;
     Ok(document)
 }
 

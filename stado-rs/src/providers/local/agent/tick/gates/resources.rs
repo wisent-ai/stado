@@ -39,18 +39,21 @@ pub(crate) async fn measure(
     last_cap: &mut Option<CapacitySnapshot>,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<Step<MeasuredOffer>> {
-    let (refuse_disk, disk_diag) = gate::gate_and_maybe_evict(log_fn);
+    let (refuse_disk, disk_diag) = gate::measure_admission(log_fn);
     agent_diag.extend(diag_map(&disk_diag));
     if refuse_disk {
-        let snapshot = measured_capacity(
+        let mut snapshot = measured_capacity(
             slots,
             false,
             Some("disk_gate_refused"),
             BTreeMap::new(),
-            0,
+            None,
             total_vram_gb,
             agent_diag.clone(),
         );
+        if let Some(detail) = disk_diag.refusal_detail {
+            snapshot.diag.insert("admission_detail".into(), Value::from(detail));
+        }
         publish_branch(
             store,
             consumer_id,
@@ -79,7 +82,7 @@ pub(crate) async fn measure(
             false,
             Some("jobs_settling_for_vram"),
             BTreeMap::new(),
-            0,
+            None,
             total_vram_gb,
             agent_diag.clone(),
         );
@@ -95,7 +98,7 @@ pub(crate) async fn measure(
         *last_cap = Some(snapshot);
         return Ok(Step::Done);
     }
-    if *free_vram_gb > 0 && slots.is_empty() && gpu_type.starts_with("nvidia") {
+    if free_vram_gb.is_positive() && slots.is_empty() && gpu_type.starts_with("nvidia") {
         let (cuda_ok, cuda_detail) = gpu_driver_available().await;
         agent_diag.insert("gpu_driver_ok".into(), Value::from(cuda_ok));
         agent_diag.insert("gpu_driver_detail".into(), Value::from(cuda_detail.clone()));
@@ -108,14 +111,16 @@ pub(crate) async fn measure(
                 "NVIDIA driver probe failed; GPU jobs disabled while CPU jobs remain eligible: {}",
                 cuda_detail
             ));
-            *free_vram_gb = 0;
+            // No card is offered, so no VRAM is: what is offered is the sum
+            // of the offered cards' free VRAM.
             cards.clear();
+            *free_vram_gb = cards.iter().map(|card| card.free_vram_gb).sum();
         }
     }
-    // A policy refusal above sets `free_vram_gb` to 0 and falls through to
+    // A policy refusal above leaves no card offered and falls through to
     // this publish, so it decides whether any card is offered at all; the
     // per-card frees decide how many.
-    let broadcast_cards: Vec<i64> = if *free_vram_gb <= 0 {
+    let broadcast_cards: Vec<i64> = if !free_vram_gb.is_positive() {
         Vec::new()
     } else {
         cards.iter().map(|card| card.free_vram_gb).collect()

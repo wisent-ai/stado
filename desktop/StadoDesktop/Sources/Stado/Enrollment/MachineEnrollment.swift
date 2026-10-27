@@ -50,11 +50,21 @@ extension MachineEnrollmentPlan {
     init(from decoder: Decoder) throws {
         self.init()
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        endpoint = try values.decodeIfPresent(String.self, forKey: .endpoint) ?? ""
-        flow = try values.decodeIfPresent(MachineEnrollmentFlow.self, forKey: .flow) ?? .methods
-        inviteMode = try values.decodeIfPresent(MachineInviteMode.self, forKey: .inviteMode) ?? .online
+        // A member the stored plan does not carry keeps the value `init()`
+        // gave it, which is the plan's own declared starting state.
+        if let stored = try values.decodeIfPresent(String.self, forKey: .endpoint) {
+            endpoint = stored
+        }
+        if let stored = try values.decodeIfPresent(MachineEnrollmentFlow.self, forKey: .flow) {
+            flow = stored
+        }
+        if let stored = try values.decodeIfPresent(MachineInviteMode.self, forKey: .inviteMode) {
+            inviteMode = stored
+        }
         invite = try values.decodeIfPresent(MachineInviteRecord.self, forKey: .invite)
-        pending = try values.decodeIfPresent([FleetPendingRequest].self, forKey: .pending) ?? []
+        if let stored = try values.decodeIfPresent([FleetPendingRequest].self, forKey: .pending) {
+            pending = stored
+        }
         pendingReadAt = try values.decodeIfPresent(Date.self, forKey: .pendingReadAt)
         decision = try values.decodeIfPresent(MachineEnrollmentCheck.self, forKey: .decision)
         approvedName = try values.decodeIfPresent(String.self, forKey: .approvedName)

@@ -161,7 +161,9 @@ impl JobStorage {
                 Ok(()) => {
                     table.insert(store.to_string(), Marker::Valid);
                 }
-                Err(_) => {
+                // The failure itself travels to every waiter below; here
+                // only the marker is withdrawn, so the next read asks again.
+                Err(_handed_to_waiters_below) => {
                     table.remove(store);
                 }
             }

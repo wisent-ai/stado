@@ -20,20 +20,17 @@ pub(super) async fn resolve_input_artifacts(
 ) -> Result<(Map<String, Value>, Map<String, Value>), CmdError> {
     let name_re =
         regex::Regex::new(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$").expect("static regex compiles");
-    // The registry is built lazily: with no --input-artifact flags there is
-    // nothing to resolve (Python constructs JobStorage eagerly, but its
-    // constructor performs no I/O either).
-    let registry = if values.is_empty() {
-        None
-    } else {
-        Some(
-            crate::artifacts::ArtifactRegistry::new()
-                .await
-                .map_err(CmdError::from)?,
-        )
-    };
+    // With no --input-artifact flags there is nothing to resolve, so the
+    // registry is opened only when a flag names an input (Python constructs
+    // JobStorage eagerly, but its constructor performs no I/O either).
     let mut requested = Map::new();
     let mut resolved = Map::new();
+    if values.is_empty() {
+        return Ok((requested, resolved));
+    }
+    let registry = crate::artifacts::ArtifactRegistry::new()
+        .await
+        .map_err(CmdError::from)?;
     for value in values {
         let Some((name, reference)) = value.split_once('=') else {
             return Err(CmdError::usage(format!(
@@ -51,8 +48,6 @@ pub(super) async fn resolve_input_artifacts(
             )));
         }
         let manifest = registry
-            .as_ref()
-            .expect("registry exists when values are non-empty")
             .resolve_manifest(&crate::artifacts_models::ArtifactRef::parse(reference)?)
             .await?;
         let primary = manifest
@@ -114,7 +109,7 @@ pub(crate) fn parse_secret_env(
                 "--secret-env contains an unsafe environment, role, or field name: {value:?}"
             )));
         }
-        if !crate::config::agent_secret_reference_allowed(role, field) {
+        if !crate::config::agent_secret_reference_allowed(role, field).map_err(CmdError::refused)? {
             return Err(CmdError::refused(format!(
                 "--secret-env reference {role}#{field} is not in agent.skarbiec.secret_fields"
             )));

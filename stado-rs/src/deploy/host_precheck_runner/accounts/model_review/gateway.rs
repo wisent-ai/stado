@@ -60,7 +60,7 @@ pub(super) async fn reconcile_brama_introspection_grant(
         BRAMA_INTROSPECTION_CAPABILITY,
     );
     let reconciled = host_channel::run_script(target, &script, &context.runner).await?;
-    if !reconciled.ok() {
+    if !reconciled.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: Brama introspection grant reconciliation failed: {}",
             target.name,
@@ -94,7 +94,7 @@ pub(super) async fn reconcile_model_review_route(
         &context.runner,
     )
     .await?;
-    if !read.ok() {
+    if !read.succeeded() {
         return Err(DeployError::unreachable(format!(
             "{}: Brama route administrator bearer read failed: {}",
             target.name,

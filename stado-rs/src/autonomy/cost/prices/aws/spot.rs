@@ -26,7 +26,12 @@ pub(super) async fn read(
     loop {
         let output = crate::wait::sdk(request.clone().set_next_token(token).send())
             .await
-            .map_err(|error| format!("EC2 DescribeSpotPriceHistory: {error}"))?;
+            .map_err(|error| {
+                format!(
+                    "EC2 DescribeSpotPriceHistory: {}",
+                    aws_sdk_ec2::error::DisplayErrorContext(&error)
+                )
+            })?;
         for item in output.spot_price_history() {
             let machine = item
                 .instance_type()
@@ -40,13 +45,22 @@ pub(super) async fn read(
                 .timestamp()
                 .copied()
                 .ok_or_else(|| format!("EC2 spot price omitted effective timestamp: {item:?}"))?;
-            let price = item
-                .spot_price()
-                .and_then(|price| price.parse::<f64>().ok())
-                .filter(|price| price.is_finite() && *price >= 0.0)
-                .ok_or_else(|| {
-                    format!("EC2 spot price is not a nonnegative finite amount: {item:?}")
-                })?;
+            let Some(spot_price) = item.spot_price() else {
+                return Err(format!("EC2 spot price omitted its amount: {item:?}"));
+            };
+            let price = match spot_price.parse::<f64>() {
+                Ok(price) => price,
+                Err(error) => {
+                    return Err(format!(
+                        "EC2 spot price {spot_price:?} is not a number ({error}): {item:?}"
+                    ))
+                }
+            };
+            if !price.is_finite() || price.is_sign_negative() {
+                return Err(format!(
+                    "EC2 spot price is not a nonnegative finite amount: {item:?}"
+                ));
+            }
             if timestamp > at {
                 continue;
             }
