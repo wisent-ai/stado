@@ -1,0 +1,24 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Repairs: "The sandbox provider is Boat, and Stado speaks Boat Public API v1" its client's command module could only run a command to its end, so nothing could start a server or a long job in a sandbox, follow it or stop it, nor read what a sandbox cost
+Repairs: "stado sandbox drives Boat sandboxes directly, as an agent does" its exec waited for every command and its command module held every argument type beside the verb map, which this change would have pushed past the file limit
+Repairs: "stado sandbox covers what an agent does in a sandbox besides its life" its argument types lived in the command module, which could take no further verb within the file limit
+Repairs: "stado sandbox keeps a sandbox's disk as a template and gives its ports URLs" its argument types lived in the command module and its Desktop summary and journey had no background command or usage
+Harsh-Review-Attacked: whether moving the argument types changes any command line; every struct and field moved unchanged into args.rs, re-exported from the module, and clap reads the same derives.
+Harsh-Review-Attacked: whether --detach can silently fall back to waiting; with it exec calls start_command and returns its answer, without it exec runs the command to its end, and the two never mix.
+Harsh-Review-Attacked: whether the answer types are guessed; command.started, command.status, command.stopped and sandbox.usage are the type constants Boat's OpenAPI document gives those operations.
+Harsh-Review-Attacked: whether the journey waits or retries; it reads the started command's status once right after starting a command that never ends by itself, stops it, and keeps the status and usage it reads afterwards.
+Repairs: "stado sandbox keeps a sandbox's disk as a template and gives ports URLs" its lines in agent.rs, mod.rs are replaced by this change.
