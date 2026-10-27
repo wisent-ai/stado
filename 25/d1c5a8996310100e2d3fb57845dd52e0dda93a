@@ -1,0 +1,29 @@
+The committed tree compiles and passes clippy: callers use the shared renderer and tally, and the init-system unit paths are committed
+
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Repairs: "Keep the refusal dedupe working after a thread panics holding its table" its object-evidence cleaner called a free tally(&mut …) function no committed tree declares, so the tree did not compile
+Repairs: "Quota output names what a provider left out instead of printing "?"" its quota request rows called a reported helper the quota submit module does not declare, so the tree did not compile
+Repairs: "Refuse a stream decision on a field the host did not report" its session reader imported NOT_REPORTED from the stream report module, which does not declare it
+Repairs: "Four unit-directory readers use the one declaration; file retirement says why it failed" its readers named launchd and systemd unit directories declared in a module it never committed, and its two systemd word parsers wrote out by hand the ok() the declared clippy gate asks for
+Repairs: "overview names the job stamps it cannot read" its finished-job vector spelled an unnamed complex tuple type the declared clippy gate refuses
+Repairs: "stado host privacy refuses a measurement it cannot read" its folder lookup dereferenced a reference the declared clippy gate calls needless
+Repairs: "The module check resolves a declaration inside an inline module where rustc does" its layout of the two systemd word parsers kept the hand-written match the declared clippy gate asks to write as ok()
+
+Harsh-Review-Attacked: a removed helper still named in this tree; git grep at this commit finds no super::reported call, no NOT_REPORTED imported from the stream report module and no free tally(&mut …) call, and cli::reporting declares both NOT_REPORTED and field
+Harsh-Review-Attacked: quota rows printing differently; field renders a missing value as the not-reported word the removed helper printed and a text value bare, so each row reads as before
+Harsh-Review-Attacked: unit paths nobody declared; the five directories are launchd's and systemd's own fixed locations, every one is read by a committed caller (service domain, vocabulary, file retirement, precheck role), and resident_unit_paths gains its caller in the release installer's unit migration later in this push
+Harsh-Review-Attacked: a parse that hides an error; SystemdActiveState::parse and SystemdManager::parse answer None for a word systemd does not write, as their docs say, now through .ok() with the same meaning
