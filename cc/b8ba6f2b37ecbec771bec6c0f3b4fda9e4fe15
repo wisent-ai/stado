@@ -1,0 +1,22 @@
+I read this commit's message and every line of its patch, as a principal engineer who assumes an AI agent wrote every line.
+The claims about the lines this commit adds hold for them as the push leaves them: a defect that a later commit of the push repairs, naming this commit by its subject on a Repairs: line, is a repaired defect, never one left in place.
+No line this commit adds carries a defect: every path I traced does what its caller and the documentation say.
+This commit adds no needless abstraction and no second copy of something that already exists.
+No error is swallowed and no missing or failed value is answered with one nobody stated.
+No number is guessed: each comes from a declaration, a caller's argument refused by name when missing, or a measurement.
+No code hides a failure by pausing, waiting or trying again.
+No comment narrates the change or an incident, and no host, account, date or internal id is written into the repository.
+Every test added runs the real product and checks its behaviour, not a mock, a copy or the source text.
+This commit does not only reformat, and every commit the remote does not have yet whose lines it removes or replaces is named by its subject on a Repairs: line of its message or attestation note, with the defect it repairs there.
+The documentation this commit touches, or should touch, says exactly what the code does.
+No line and no message of this commit carries private information of ours: no host, account, person, address, secret, token, session or defect id, and no detail of an incident; what it says would be the same in a repository anyone can read.
+This commit solves no problem of ours alone: it adds or repairs a general primitive a user outside Wisent could run for their own case, not a fix shaped to one of our machines, accounts, runs or incidents.
+As a very strict, grumpy senior engineer who hates AI, I tried with everything I have to refuse this commit: what I attacked, what I checked, and why each attack failed.
+
+Repairs: "The sandbox provider is Boat, and Stado speaks Boat Public API v1" its client created sandboxes only on a fresh disk and its module map named no named-snapshot or public-URL call, so a sandbox could not start from a template nor expose a port
+Repairs: "stado sandbox drives Boat sandboxes directly, as an agent does" its create had no way to start from a named snapshot and its Desktop summary and journey covered no snapshot or URL
+Repairs: "stado sandbox covers what an agent does in a sandbox besides its life" its command group, agent verbs, Desktop operations and journey stopped short of named snapshots and public URLs
+Harsh-Review-Attacked: whether a snapshot name can address another resource; the name is form-urlencoded into one path segment, so a slash or a query mark is encoded rather than read as structure, and an empty name is refused before any request.
+Harsh-Review-Attacked: whether the scheduler's sandboxes change; BoxProvider::create_box passes no named snapshot, so the request it sends is the one it sent before.
+Harsh-Review-Attacked: whether the expected answer types are guessed; port.hosted, snapshot.named.saving, snapshot.named.list, snapshot.named.info and snapshot.named.deleted are the type constants Boat's OpenAPI document gives those operations.
+Harsh-Review-Attacked: whether the journey waits on a save; it reads the saving answer, the list and the show once each, deletes the snapshot and reads the list again, with no wait and no retry.
