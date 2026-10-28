@@ -62,7 +62,10 @@ fn retry_after(response: &reqwest::Response, desc: &str) -> Result<Duration, Azu
         )
     };
     let Some(header) = response.headers().get(reqwest::header::RETRY_AFTER) else {
-        return Err(AzureError::Api(format!("{} names no Retry-After", still_running())));
+        return Err(AzureError::Api(format!(
+            "{} names no Retry-After",
+            still_running()
+        )));
     };
     let value = header.to_str().map_err(|cause| {
         AzureError::Api(format!(
@@ -75,7 +78,10 @@ fn retry_after(response: &reqwest::Response, desc: &str) -> Result<Duration, Azu
         Ok(seconds) => Ok(Duration::from_secs(seconds)),
         Err(seconds_cause) => match chrono::DateTime::parse_from_rfc2822(value) {
             Ok(date) => until(date.with_timezone(&chrono::Utc)).map_err(|cause| {
-                AzureError::Api(format!("{} names Retry-After {value:?}: {cause}", still_running()))
+                AzureError::Api(format!(
+                    "{} names Retry-After {value:?}: {cause}",
+                    still_running()
+                ))
             }),
             Err(date_cause) => Err(AzureError::Api(format!(
                 "{} names Retry-After {value:?}, which is neither a number of seconds \
