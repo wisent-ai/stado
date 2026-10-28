@@ -128,9 +128,9 @@ pub(super) async fn reconcile_adapters(
     let store = crate::config::wc_stado_storage_url();
     if let Some(adapter) = current.iter().find(|adapter| {
         !kept.contains(adapter)
-            && store
-                .as_deref()
-                .is_ok_and(|store| store.trim_end_matches('/') == format!("http://{}", adapter.bind))
+            && store.as_deref().is_ok_and(|store| {
+                store.trim_end_matches('/') == format!("http://{}", adapter.bind)
+            })
     }) {
         // A declaration change this process cannot apply in place: config,
         // so the restart reads as the registry's doing, not a crash.

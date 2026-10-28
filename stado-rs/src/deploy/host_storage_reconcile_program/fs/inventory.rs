@@ -13,7 +13,7 @@ use super::{join, metadata_name, metadata_path, real_directory, regular_identity
 use crate::deploy::host_storage_reconcile_program::{json::list, Context, Step};
 
 /// The permission bits `stat.S_IMODE` keeps: every mode bit but the file type.
-const MODE_BITS: u32 = !(nix::libc::S_IFMT as u32);
+const MODE_BITS: u32 = !crate::primitives::file_mode::widen(nix::libc::S_IFMT);
 
 struct Labels {
     linked_directory: &'static str,

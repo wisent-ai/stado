@@ -95,7 +95,10 @@ fn find(crate_dir: &Path, source: &Path, known: Option<&Path>) -> Result<Finding
         .map(|root| resolve(root))
         .collect::<Result<Vec<PathBuf>, String>>()?;
     if roots.is_empty() {
-        return Err(format!("error: {} declares no crate root", crate_dir.display()));
+        return Err(format!(
+            "error: {} declares no crate root",
+            crate_dir.display()
+        ));
     }
     let seen = tree::reachable(&roots)?
         .iter()
@@ -105,7 +108,12 @@ fn find(crate_dir: &Path, source: &Path, known: Option<&Path>) -> Result<Finding
         .iter()
         .map(|entry| resolve(&crate_dir.join(entry)))
         .collect::<Result<BTreeSet<PathBuf>, String>>()?;
-    Ok(Findings { roots, every, seen, known })
+    Ok(Findings {
+        roots,
+        every,
+        seen,
+        known,
+    })
 }
 
 pub(super) fn check(crate_dir: &Path, known: Option<&Path>, as_json: bool) -> Outcome {
@@ -117,7 +125,12 @@ pub(super) fn check(crate_dir: &Path, known: Option<&Path>, as_json: bool) -> Ou
     if !source.is_dir() {
         return Outcome::Unreadable(format!("error: {} is not a directory", source.display()));
     }
-    let Findings { roots, every, seen, known } = match find(&crate_dir, &source, known) {
+    let Findings {
+        roots,
+        every,
+        seen,
+        known,
+    } = match find(&crate_dir, &source, known) {
         Ok(findings) => findings,
         Err(detail) => return Outcome::Unreadable(detail),
     };

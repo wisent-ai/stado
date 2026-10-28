@@ -36,7 +36,7 @@ pub use bridge::{
     AutoListParams, BusyState, AUTO_LIST_THREAD_RUNNING,
 };
 pub use client::{
-    parse_machine_id_env, read_vast_api_key, system_hostname, vast_api_key_available,
-    vast_refusal, ListMachineParams, VastClient, VAST_BASE, VAST_FIELD, VAST_ROLE,
+    parse_machine_id_env, read_vast_api_key, system_hostname, vast_api_key_available, vast_refusal,
+    ListMachineParams, VastClient, VAST_BASE, VAST_FIELD, VAST_ROLE,
 };
 pub use error::VastError;

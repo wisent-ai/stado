@@ -59,7 +59,8 @@ fn field<T>(
     let value = map
         .get(key)
         .ok_or_else(|| format!("the merged submit settings hold no {key}"))?;
-    read(value).ok_or_else(|| format!("the merged submit settings hold {key} = {value}, not {kind}"))
+    read(value)
+        .ok_or_else(|| format!("the merged submit settings hold {key} = {value}, not {kind}"))
 }
 
 pub(super) fn get_str(map: &Map<String, Value>, key: &str) -> Result<String, String> {

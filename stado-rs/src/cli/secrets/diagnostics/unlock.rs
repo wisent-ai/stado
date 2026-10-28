@@ -59,7 +59,9 @@ fn try_unlock_local(candidates: &[(String, String)]) -> Result<(), CmdError> {
         })?;
         if let Some("readable") = report.get("status").and_then(Value::as_str) {
             println!("the vault OPENS with the phrase recorded under {name}");
-            println!("set it as SKARBIEC_UNLOCK, then run skarbiec owner rotate onto a key you control");
+            println!(
+                "set it as SKARBIEC_UNLOCK, then run skarbiec owner rotate onto a key you control"
+            );
             return Ok(());
         }
     }

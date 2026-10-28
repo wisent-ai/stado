@@ -51,7 +51,10 @@ pub(super) fn json_int(value: &Value) -> Option<i64> {
 /// names none (absent or null), its text when it is a JSON string, and a
 /// refusal naming the record otherwise. Reading every other value as empty
 /// text hid a hostname Vast sent in another type behind "no hostname".
-pub(super) fn machine_text<'a>(machine: &'a Value, field: &str) -> Result<Option<&'a str>, VastError> {
+pub(super) fn machine_text<'a>(
+    machine: &'a Value,
+    field: &str,
+) -> Result<Option<&'a str>, VastError> {
     match machine.get(field) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => Ok(Some(text)),

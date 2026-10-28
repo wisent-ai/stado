@@ -177,7 +177,10 @@ fn select<'a>(
                 quote.provider == ProviderId::Local
                     && quote.source == "autonomy policy"
                     && quote.machine_type.is_none()
-                    && matches!(Purchase::decode(&quote.purchase_option), Ok(Purchase::OnDemand))
+                    && matches!(
+                        Purchase::decode(&quote.purchase_option),
+                        Ok(Purchase::OnDemand)
+                    )
                     && HourUnit::accepts(&quote.unit)
                     && quote.currency == "USD"
                     && quote.hourly_usd.is_finite()

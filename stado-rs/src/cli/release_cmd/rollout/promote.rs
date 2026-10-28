@@ -91,7 +91,10 @@ pub(in crate::cli::release_cmd) async fn promote(
             }
         }
         let Some(policy) = control.products.get_mut(&args.product) else {
-            return Err(crate::cli::release_cmd::unknown_release_product(&control, &args.product));
+            return Err(crate::cli::release_cmd::unknown_release_product(
+                &control,
+                &args.product,
+            ));
         };
         // The first rollout of a product is the first draw of its counter;
         // every later one counts past the release it replaces.

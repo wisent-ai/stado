@@ -89,8 +89,8 @@ pub fn lock_relative_path() -> String {
 /// file types below. The values are the platform's own `<sys/stat.h>`
 /// constants as `libc` declares them.
 pub(crate) fn ifmt(mode: u32) -> u32 {
-    mode & nix::libc::S_IFMT as u32
+    mode & crate::primitives::file_mode::widen(nix::libc::S_IFMT)
 }
-pub(crate) const IFDIR: u32 = nix::libc::S_IFDIR as u32;
-pub(crate) const IFREG: u32 = nix::libc::S_IFREG as u32;
-pub(crate) const IFLNK: u32 = nix::libc::S_IFLNK as u32;
+pub(crate) const IFDIR: u32 = crate::primitives::file_mode::widen(nix::libc::S_IFDIR);
+pub(crate) const IFREG: u32 = crate::primitives::file_mode::widen(nix::libc::S_IFREG);
+pub(crate) const IFLNK: u32 = crate::primitives::file_mode::widen(nix::libc::S_IFLNK);

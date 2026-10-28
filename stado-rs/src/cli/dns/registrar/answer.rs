@@ -38,10 +38,14 @@ const ANSWERED: &str = "OK";
 
 /// What a command answered when Namecheap says it answered; Namecheap's own
 /// error texts when it refused, the whole document when it gave none.
-pub(in crate::cli::dns) fn read<Command: DeserializeOwned>(body: &str) -> Result<ApiResponse<Command>, CmdError> {
+pub(in crate::cli::dns) fn read<Command: DeserializeOwned>(
+    body: &str,
+) -> Result<ApiResponse<Command>, CmdError> {
     let answer: ApiResponse<Command> = quick_xml::de::from_str(body).map_err(|error| {
-        CmdError::click(format!("Namecheap's answer is not an API response document: {error}"))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        CmdError::click(format!(
+            "Namecheap's answer is not an API response document: {error}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     if answer.status == ANSWERED {
         return Ok(answer);
@@ -59,14 +63,22 @@ pub(in crate::cli::dns) fn read<Command: DeserializeOwned>(body: &str) -> Result
         true => body.to_string(),
         false => errors.join("; "),
     };
-    Err(CmdError::refused(format!("Namecheap refused the request ({}): {said}", answer.status)))
+    Err(CmdError::refused(format!(
+        "Namecheap refused the request ({}): {said}",
+        answer.status
+    )))
 }
 
 /// The result one command answered with, refused naming the command when the
 /// answer carries none.
-pub(in crate::cli::dns) fn result<Command>(answer: ApiResponse<Command>, command: &str) -> Result<Command, CmdError> {
+pub(in crate::cli::dns) fn result<Command>(
+    answer: ApiResponse<Command>,
+    command: &str,
+) -> Result<Command, CmdError> {
     answer.command.ok_or_else(|| {
-        CmdError::click(format!("Namecheap answered {command} without a CommandResponse"))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        CmdError::click(format!(
+            "Namecheap answered {command} without a CommandResponse"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }

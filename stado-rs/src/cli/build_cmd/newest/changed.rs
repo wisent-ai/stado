@@ -19,10 +19,16 @@ use super::checkout::buildable;
 /// The commits `entry`'s checkout holds at `commit` past the newest build of
 /// its product that passed, every commit of its history when none passed;
 /// none when it holds nothing new.
-async fn change_of(root: &Path, entry: &Planned, commit: &str) -> Result<Option<NonZeroUsize>, CmdError> {
+async fn change_of(
+    root: &Path,
+    entry: &Planned,
+    commit: &str,
+) -> Result<Option<NonZeroUsize>, CmdError> {
     let checkout = root.join(&entry.checkout);
     let builds = crate::cli::build_cmd::report::recent_builds(Some(&entry.product), None).await?;
-    let built = builds.iter().find(|build| build.state == BuildRunState::Passed);
+    let built = builds
+        .iter()
+        .find(|build| build.state == BuildRunState::Passed);
     let range = match built {
         Some(build) => format!("{}..{commit}", build.source_commit),
         None => commit.to_string(),

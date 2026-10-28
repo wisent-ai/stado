@@ -71,7 +71,10 @@ pub(crate) async fn authority_compare_and_swap(
         crate::deploy::shlex_quote(&command),
         crate::deploy::shlex_quote(expected),
         match fence {
-            Some(transaction) => format!(" --fence-transaction {}", crate::deploy::shlex_quote(transaction)),
+            Some(transaction) => format!(
+                " --fence-transaction {}",
+                crate::deploy::shlex_quote(transaction)
+            ),
             None => String::new(),
         }
     );

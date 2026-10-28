@@ -22,7 +22,8 @@ const SWIFT_EXTENSION: &str = "swift";
 /// The entry `path` itself, not what a link points at; one that cannot be
 /// examined is refused naming it, so the gate never passes a tree it skipped.
 fn kind(path: &Path) -> Result<std::fs::Metadata, String> {
-    std::fs::symlink_metadata(path).map_err(|error| format!("cannot examine {}: {error}", path.display()))
+    std::fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot examine {}: {error}", path.display()))
 }
 
 /// The directories under `directory`, symbolic links excluded.

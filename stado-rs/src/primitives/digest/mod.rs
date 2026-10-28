@@ -28,7 +28,9 @@ pub fn sha256_reader(reader: &mut impl Read) -> std::io::Result<Sha256Digest> {
 /// The SHA-256 of the file at `path`, or the operating system's error naming
 /// the path that could not be opened or read.
 pub fn sha256_file(path: &Path) -> std::io::Result<Sha256Digest> {
-    let named = |error: std::io::Error| std::io::Error::new(error.kind(), format!("{}: {error}", path.display()));
+    let named = |error: std::io::Error| {
+        std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+    };
     let mut file = std::fs::File::open(path).map_err(named)?;
     sha256_reader(&mut file).map_err(named)
 }

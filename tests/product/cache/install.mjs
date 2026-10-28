@@ -32,7 +32,7 @@ mkdirSync(temporary);
 const environment = { PATH: required('PATH'), HOME: home, TMPDIR: temporary,
   CARGO_HOME: cargoHome, RUSTUP_HOME: rustupHome,
   WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store'),
-  STADO_CONFIG: join(home, 'absent-config'), WISENT_OUTPUT_DIR: join(output, 'commands') };
+  STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), WISENT_OUTPUT_DIR: join(output, 'commands') };
 const report = { result: 'failed', commands: [], product, source, binary, started_at: new Date().toISOString() };
 const digest = value => createHash('sha256').update(value).digest('hex');
 

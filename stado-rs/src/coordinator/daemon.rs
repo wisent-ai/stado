@@ -222,7 +222,10 @@ async fn until_next_tick(store: &JobStorage, interval: u64) -> Duration {
     };
     let now = chrono::Utc::now();
     let mut earliest: Option<chrono::DateTime<chrono::Utc>> = None;
-    for schedule in schedules.iter().filter(|schedule| schedule.enabled && !schedule.deleted) {
+    for schedule in schedules
+        .iter()
+        .filter(|schedule| schedule.enabled && !schedule.deleted)
+    {
         match chrono::DateTime::parse_from_rfc3339(&schedule.next_due_at) {
             Ok(due) => {
                 let due = due.with_timezone(&chrono::Utc);

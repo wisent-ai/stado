@@ -115,7 +115,11 @@ pub(in crate::cli::registry::doctor) fn foreign_install_roots(
                     "release-controlled product {product} installs every target at {}, under \
                      {}'s home, so {} (home {}) installs where it is not at home; write it as {} \
                      with stado release policy root repair {product}",
-                    policy.install_root, foreign.owner, foreign.host, foreign.home, foreign.portable_root
+                    policy.install_root,
+                    foreign.owner,
+                    foreign.host,
+                    foreign.home,
+                    foreign.portable_root
                 ),
             ));
         }

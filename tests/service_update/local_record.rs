@@ -9,7 +9,10 @@
 //! which logs every connection it accepts. The update installs a real archive
 //! into the isolated `HOME`, repoints the unit file onto `current`, and the
 //! authority's own log shows it was never connected to.
+// The fixture is shared with the host-silence journeys; this one never
+// hangs the channel it starts.
 #[path = "../host_silence/hung_ssh.rs"]
+#[allow(dead_code)]
 mod hung_ssh;
 
 use std::path::{Path, PathBuf};
@@ -54,7 +57,10 @@ impl Run {
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap())
             .env("HOME", &self.root)
-            .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .env("TMPDIR", self.root.join("tmp"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -232,8 +238,8 @@ fn an_archive_installs_from_this_machines_record_without_asking_the_authority() 
         said.contains("without asking the registry authority"),
         "the command says it acts from this machine's record: {said}"
     );
-    let authority_log = std::fs::read_to_string(authority.log())
-        .expect("read the authority's own log");
+    let authority_log =
+        std::fs::read_to_string(authority.log()).expect("read the authority's own log");
     assert!(
         !authority_log.contains("Connection from"),
         "the registry authority was never connected to: {said}\n{authority_log}"

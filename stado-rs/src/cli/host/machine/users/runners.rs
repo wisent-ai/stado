@@ -165,9 +165,11 @@ pub async fn cron(
         (Some(path), _) => crate::deploy::host_cron::restore(&resolved, path, &runner)
             .await
             .map_err(CmdError::from)?,
-        (None, Some(pattern)) => crate::deploy::host_cron::prune(&resolved, pattern, apply, &runner)
-            .await
-            .map_err(CmdError::from)?,
+        (None, Some(pattern)) => {
+            crate::deploy::host_cron::prune(&resolved, pattern, apply, &runner)
+                .await
+                .map_err(CmdError::from)?
+        }
         // Without --prune the verb only reads: host_cron::prune documents the
         // empty pattern as the one that reads and changes nothing.
         (None, None) => crate::deploy::host_cron::prune(&resolved, "", apply, &runner)

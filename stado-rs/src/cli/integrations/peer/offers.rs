@@ -135,7 +135,9 @@ pub(super) async fn status(peer: Option<&str>, json: bool) -> Result<(), CmdErro
 /// One snapshot: our queue on this host beside the peer's queue and this
 /// host's offer.
 pub(super) async fn monitor(peer: &str, bucket: &str, json: bool) -> Result<(), CmdError> {
-    let store = JobStorage::with_bucket(bucket).await.map_err(CmdError::from)?;
+    let store = JobStorage::with_bucket(bucket)
+        .await
+        .map_err(CmdError::from)?;
     let declared = declaration::require(&store, peer).await.map_err(cmd)?;
     let host = system_hostname();
     let ours = is_stado_busy(&store, &host).await.map_err(CmdError::from)?;

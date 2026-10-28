@@ -18,12 +18,19 @@ use crate::queue::StorageError;
 fn path_segment(host: &str) -> Result<String, StorageError> {
     if host.is_empty() {
         return Err(StorageError::Other(
-            "a host silence or refusal record names its host, and this one's host name is empty".to_string(),
+            "a host silence or refusal record names its host, and this one's host name is empty"
+                .to_string(),
         ));
     }
     Ok(host
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect())
 }
 
@@ -45,7 +52,11 @@ pub fn silence_prefix(host: &str) -> Result<String, StorageError> {
 
 /// Blob path of one silence record.
 pub fn silence_object_path(host: &str, started_at: DateTime<Utc>) -> Result<String, StorageError> {
-    Ok(format!("{}{}.json", silence_prefix(host)?, stamp(started_at)))
+    Ok(format!(
+        "{}{}.json",
+        silence_prefix(host)?,
+        stamp(started_at)
+    ))
 }
 
 /// Directory holding every refusal record about one host.

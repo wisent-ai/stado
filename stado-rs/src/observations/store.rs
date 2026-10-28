@@ -11,8 +11,9 @@ use super::observation::Observation;
 /// `~/.stado/observations.json` under the home every Stado file is kept
 /// under ([`crate::config_file::home`]).
 fn path() -> io::Result<PathBuf> {
-    let home = crate::config_file::home()
-        .map_err(|cause| io::Error::other(format!("there is nowhere to keep observations: {cause}")))?;
+    let home = crate::config_file::home().map_err(|cause| {
+        io::Error::other(format!("there is nowhere to keep observations: {cause}"))
+    })?;
     Ok(home.join(".stado").join("observations.json"))
 }
 

@@ -234,7 +234,9 @@ pub async fn dispatch(command: SandboxCommands) -> Result<(), CmdError> {
         SandboxCommands::Resume(args) => verbs::resume(&provider, &args).await,
         SandboxCommands::Delete(sandbox) => verbs::delete(&provider, &sandbox.id).await,
         SandboxCommands::Update(args) => agent::update(&provider, &args).await,
-        SandboxCommands::Prompt(PromptCommands::Send(args)) => agent::prompt(&provider, &args).await,
+        SandboxCommands::Prompt(PromptCommands::Send(args)) => {
+            agent::prompt(&provider, &args).await
+        }
         SandboxCommands::Prompt(PromptCommands::Status(run)) => {
             agent::prompt_status(&provider, &run).await
         }

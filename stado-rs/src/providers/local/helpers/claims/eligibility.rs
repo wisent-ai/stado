@@ -170,12 +170,10 @@ pub fn eligibility_refusal(
     }
     if crate::capabilities::execution_adapter(kind)
         != Some(crate::capabilities::ExecutionAdapter::Local)
-    {
-        if crate::sizing::model_of(&job.command)
+        && crate::sizing::model_of(&job.command)
             .is_some_and(|model| config::is_local_only_model(&model))
-        {
-            return Some("command names a local-only model on a non-local executor");
-        }
+    {
+        return Some("command names a local-only model on a non-local executor");
     }
     if job.pin_to_provider
         && !crate::capabilities::same_variant(

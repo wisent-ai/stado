@@ -22,7 +22,10 @@ async fn ensure_success(response: reqwest::Response) -> Result<(), String> {
 /// a Slack webhook's path and a Telegram bot's path carry the channel's
 /// secret, and reqwest's own message prints the whole URL.
 fn unsent(channel: &str, error: reqwest::Error) -> String {
-    format!("the {channel} request could not be sent: {}", error.without_url())
+    format!(
+        "the {channel} request could not be sent: {}",
+        error.without_url()
+    )
 }
 
 /// A Slack incoming webhook. Its URL is the credential, so the wait names the

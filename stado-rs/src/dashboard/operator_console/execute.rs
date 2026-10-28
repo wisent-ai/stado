@@ -43,8 +43,8 @@ async fn stage_input(content: &str) -> Result<StagedInput, ConsoleError> {
     let mut options = tokio::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    // Read and write by the owner alone, as POSIX names the bits.
-    options.mode(u32::from(nix::libc::S_IRUSR | nix::libc::S_IWUSR));
+    // Read and write by the owner alone.
+    options.mode(crate::primitives::file_mode::owner_read_write());
     let mut file = options
         .open(&path)
         .await

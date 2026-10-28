@@ -69,7 +69,10 @@ pub fn scan_agent_logs(home: &Path, enforcing: bool, report: &mut CleanupReport)
                     met.skipped("deletion_refused");
                     report.add_error(
                         CLEANER,
-                        &super::JanitorError::os(&format!("cannot remove {}: {error}", path.display())),
+                        &super::JanitorError::os(&format!(
+                            "cannot remove {}: {error}",
+                            path.display()
+                        )),
                     );
                 }
             }

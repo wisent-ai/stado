@@ -135,7 +135,11 @@ impl BoxClient {
             if !jbool(page.get("hasMore"), "pageInfo.hasMore", "GET /sandboxes")? {
                 return Ok(sandboxes);
             }
-            cursor = jstr(page.get("nextCursor"), "pageInfo.nextCursor", "GET /sandboxes")?;
+            cursor = jstr(
+                page.get("nextCursor"),
+                "pageInfo.nextCursor",
+                "GET /sandboxes",
+            )?;
             if cursor.is_empty() {
                 return Err(BoxError::transport(
                     "Boat answered GET /sandboxes with more pages and no next cursor",

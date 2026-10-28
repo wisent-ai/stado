@@ -43,7 +43,11 @@ impl ControlState {
     /// Whether the circuit breaker is still open at `now`. A recorded end that
     /// is not a moment cannot be judged past, so the breaker stays open.
     pub fn circuit_open_at(&self, now: DateTime<Utc>) -> bool {
-        match self.circuit_open_until.as_deref().map(DateTime::parse_from_rfc3339) {
+        match self
+            .circuit_open_until
+            .as_deref()
+            .map(DateTime::parse_from_rfc3339)
+        {
             Some(Ok(until)) => until.with_timezone(&Utc) > now,
             Some(Err(_not_a_moment)) => true,
             None => false,

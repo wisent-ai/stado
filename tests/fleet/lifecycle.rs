@@ -3,9 +3,9 @@
 //! registry document the command wrote and every refusal by its words.
 //!
 //! Every test drives `CARGO_BIN_EXE_stado` with WC_STORAGE_BACKEND=local and
-//! WC_LOCAL_STORAGE_PATH set to its own temporary directory. STADO_CONFIG
-//! points at a path that does not exist, so the developer's real config and
-//! registry are never read or written.
+//! WC_LOCAL_STORAGE_PATH set to its own temporary directory, and STADO_CONFIG
+//! naming the empty `tests/config/empty.json`, so the developer's real
+//! config and registry are never read or written.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -17,8 +17,11 @@ fn stado(storage: &Path, args: &[&str]) -> Output {
         .args(args)
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", storage)
-        // A set-but-missing STADO_CONFIG disables config-file discovery.
-        .env("STADO_CONFIG", storage.join("no-such-config.json"))
+        // The empty shared config: the developer's own config is never read.
+        .env(
+            "STADO_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+        )
         .env_remove("COMPUTE_API_KEY")
         .env_remove("COMPUTE_API_URL")
         .env_remove("WC_PROFILES_DIR")

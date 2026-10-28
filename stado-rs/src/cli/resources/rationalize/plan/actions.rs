@@ -115,7 +115,10 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
             json!({"scope": resource_scope}),
             stable_preconditions(
                 finding,
-                vec![planner::condition("target_size", json!(planner::NO_INSTANCES))],
+                vec![planner::condition(
+                    "target_size",
+                    json!(planner::NO_INSTANCES),
+                )],
             ),
         )],
         ResourceType::ComputeReservation => vec![irreversible_action(

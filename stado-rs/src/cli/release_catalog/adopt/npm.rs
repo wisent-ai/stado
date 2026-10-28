@@ -68,7 +68,10 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         .iter()
         .map(|entry| {
             entry.as_str().ok_or_else(|| {
-                CmdError::refused(format!("{} lists {entry} in files, which is not a path", path.display()))
+                CmdError::refused(format!(
+                    "{} lists {entry} in files, which is not a path",
+                    path.display()
+                ))
             })
         })
         .collect::<Result<_, _>>()?;

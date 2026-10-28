@@ -62,7 +62,9 @@ fn launch(
     let config = state.join("config.json");
     let document = json!({"storage": {"backend": "stado", "stado": stado}});
     let body = serde_json::to_string_pretty(&document).map_err(|error| {
-        PeerError::Local(format!("the worker configuration cannot be encoded: {error}"))
+        PeerError::Local(format!(
+            "the worker configuration cannot be encoded: {error}"
+        ))
     })?;
     std::fs::write(&config, body)
         .map_err(|error| local("cannot write the worker configuration", &config, error))?;
@@ -72,8 +74,9 @@ fn launch(
     let errors = output
         .try_clone()
         .map_err(|error| local("cannot share the worker log", &log, error))?;
-    let program = std::env::current_exe()
-        .map_err(|error| PeerError::Local(format!("this program's path cannot be read: {error}")))?;
+    let program = std::env::current_exe().map_err(|error| {
+        PeerError::Local(format!("this program's path cannot be read: {error}"))
+    })?;
     let mut command = tokio::process::Command::new(&program);
     command
         .args([
@@ -156,21 +159,25 @@ impl Lending {
 
     /// Seconds the session has run.
     pub fn seconds_running(&self) -> Result<i64, PeerError> {
-        let started = chrono::DateTime::parse_from_rfc3339(&self.session.started_at).map_err(
-            |error| {
+        let started =
+            chrono::DateTime::parse_from_rfc3339(&self.session.started_at).map_err(|error| {
                 PeerError::Local(format!(
                     "the session start {:?} cannot be read back: {error}",
                     self.session.started_at
                 ))
-            },
-        )?;
+            })?;
         Ok((chrono::Utc::now() - started.with_timezone(&chrono::Utc)).num_seconds())
     }
 
     /// Ask the worker to claim nothing more and exit once its jobs finish.
     pub fn drain(&self, reason: &str) -> Result<(), PeerError> {
-        crate::providers::local::agent::drain::request(&self.home, reason)
-            .map_err(|error| local("cannot ask the lending worker to drain in", &self.home, error))
+        crate::providers::local::agent::drain::request(&self.home, reason).map_err(|error| {
+            local(
+                "cannot ask the lending worker to drain in",
+                &self.home,
+                error,
+            )
+        })
     }
 
     /// How the worker ended, once it has; `None` while it runs.

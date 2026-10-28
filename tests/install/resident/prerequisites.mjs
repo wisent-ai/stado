@@ -31,7 +31,7 @@ const toolEnvironment = Object.fromEntries(['PATH', 'CARGO_HOME', 'RUSTUP_HOME']
 const environment = { ...toolEnvironment, HOME: home, TMPDIR: temporary,
   WISENT_WORKSPACE: dirname(root), STADO_CI_MAIN_RECORD: ciRecord,
   WC_STORAGE_BACKEND: 'local', WC_LOCAL_STORAGE_PATH: join(home, 'store'),
-  STADO_CONFIG: join(home, 'absent-config'),
+  STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'),
   WISENT_OUTPUT_DIR: join(output, 'commands') };
 const report = { result: 'failed', source_revision: revision, host, ci_record: ciRecord, commands: [] };
 const digest = path => createHash('sha256').update(readFileSync(path)).digest('hex');

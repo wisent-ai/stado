@@ -4,8 +4,8 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use super::{plan, state};
-use crate::cli::CmdError;
 use crate::cli::reporting::field;
+use crate::cli::CmdError;
 
 /// The plan, the step running and how long it has run, the refused step
 /// with every refusal and its defects, what each step last delivered, and
@@ -174,7 +174,10 @@ pub fn print_path(document: &Value) {
     println!("  build trees held by: {}", field(&document["build_holds"]));
     let unit = &document["unit"];
     match unit["read_error"].as_str() {
-        Some(error) => println!("  unit {}: could not be read: {error}", field(&unit["label"])),
+        Some(error) => println!(
+            "  unit {}: could not be read: {error}",
+            field(&unit["label"])
+        ),
         None => println!(
             "  unit {}: loaded {} state {} pid {} runs {} last exit code {}; events {}",
             field(&unit["label"]),
@@ -227,20 +230,26 @@ pub fn print_status(document: &Value) {
     if running.is_object() {
         println!(
             "  running: {} at {} for {}s",
-            field(&running["step"]), field(&running["revision"]), field(&running["age_seconds"])
+            field(&running["step"]),
+            field(&running["revision"]),
+            field(&running["age_seconds"])
         );
     }
     let refused = &document["refused"];
     if refused.is_object() {
         println!(
             "  refused: {} at {} on {}, defects {}",
-            field(&refused["step"]), field(&refused["revision"]), field(&refused["at"]), field(&refused["defects"])
+            field(&refused["step"]),
+            field(&refused["revision"]),
+            field(&refused["at"]),
+            field(&refused["defects"])
         );
     }
     for (step, delivered) in document["delivered"].as_object().into_iter().flatten() {
         println!(
             "  delivered: {step} at {} on {}",
-            field(&delivered["revision"]), field(&delivered["at"])
+            field(&delivered["revision"]),
+            field(&delivered["at"])
         );
         let unrepaired = delivered["unrepaired"].as_array().into_iter().flatten();
         for defect in unrepaired.filter_map(Value::as_str) {
@@ -250,13 +259,19 @@ pub fn print_status(document: &Value) {
     for (checkout, pushed) in document["pushed"].as_object().into_iter().flatten() {
         let (revision, at) = (field(&pushed["revision"]), field(&pushed["at"]));
         match pushed["refusal"].as_str() {
-            Some(refusal) => println!("  push refused: {checkout} at {revision} on {at}: {refusal}"),
+            Some(refusal) => {
+                println!("  push refused: {checkout} at {revision} on {at}: {refusal}")
+            }
             None => println!("  pushed: {checkout} at {revision} on {at}"),
         }
     }
     let last = &document["last_pass"];
     if last.is_object() {
-        println!("  last pass {}: {}", field(&last["ended_at"]), field(&last["said"]));
+        println!(
+            "  last pass {}: {}",
+            field(&last["ended_at"]),
+            field(&last["said"])
+        );
     }
     crate::cli::ci::main::print(&document["main"]);
 }

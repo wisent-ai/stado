@@ -29,9 +29,9 @@ pub fn parse_ps_pid_ppid(text: &str) -> Result<Vec<(i32, i32)>, String> {
                 return Err(format!("ps printed {line:?}, not a pid and its parent"));
             };
             let id = |value: &str| {
-                value
-                    .parse::<i32>()
-                    .map_err(|error| format!("ps printed {line:?}: {value:?} is not a pid: {error}"))
+                value.parse::<i32>().map_err(|error| {
+                    format!("ps printed {line:?}: {value:?} is not a pid: {error}")
+                })
             };
             Ok((id(pid)?, id(ppid)?))
         })
@@ -66,17 +66,25 @@ pub fn tree_pids_from(rows: &[(i32, i32)], root_pid: i32) -> HashSet<i32> {
 /// memory to this job. The under-count is said on stderr with the cause, so a
 /// job's GPU memory reading low is not mistaken for the job using little.
 pub async fn proc_tree_pids(root_pid: i32) -> HashSet<i32> {
-    let rows = match crate::wait::output_async(tokio::process::Command::new("ps").args(["-eo", "pid=,ppid="]))
-        .await
+    let rows = match crate::wait::output_async(
+        tokio::process::Command::new("ps").args(["-eo", "pid=,ppid="]),
+    )
+    .await
     {
         Ok(out) if out.status.success() => parse_ps_pid_ppid(&String::from_utf8_lossy(&out.stdout)),
-        Ok(out) => Err(format!("ps answered {} ({})", out.status, String::from_utf8_lossy(&out.stderr).trim())),
+        Ok(out) => Err(format!(
+            "ps answered {} ({})",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
         Err(error) => Err(format!("ps could not be run ({error})")),
     };
     match rows {
         Ok(rows) => tree_pids_from(&rows, root_pid),
         Err(cause) => {
-            eprintln!("gpu: {cause}; GPU memory is counted for pid {root_pid} alone, not its children");
+            eprintln!(
+                "gpu: {cause}; GPU memory is counted for pid {root_pid} alone, not its children"
+            );
             HashSet::from([root_pid])
         }
     }

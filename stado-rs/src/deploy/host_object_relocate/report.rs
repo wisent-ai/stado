@@ -47,7 +47,7 @@ pub fn to_report(
             "unreadable": reading.unreadable,
             // Objects scanned and not yet decided; a host that decided more
             // than it scanned reports no remainder.
-            "remaining": reading.scanned.saturating_sub(reading.decided).max(reading.scanned - reading.scanned),
+            "remaining": reading.scanned.saturating_sub(reading.decided).max(i64::default()),
         }),
     );
     report.insert(

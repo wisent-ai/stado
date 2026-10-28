@@ -181,7 +181,9 @@ fn account_for_agents(report: &mut Map<String, Value>, target: &ComputeTarget) {
                 // luck — it is the domain, and the reason belongs in the
                 // blocker rather than in a note above it that nobody connected
                 // to the unit underneath.
-                let reason = if domain_status.as_deref() == Some(crate::deploy::service::DOMAIN_STATUS_BACKGROUND) {
+                let reason = if domain_status.as_deref()
+                    == Some(crate::deploy::service::DOMAIN_STATUS_BACKGROUND)
+                {
                     let why = match &domain_reason {
                         Some(why) => why.clone(),
                         None => "the pass gave no reason".to_string(),

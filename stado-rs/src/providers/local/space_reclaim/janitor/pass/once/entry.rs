@@ -64,11 +64,14 @@ pub async fn run_cleanup_once(
 ///
 /// `stado space reclaim --local --dry-run` runs this locally; the
 /// `registry_cleanup` stage of a fleet preview runs it on its target.
-pub async fn preview_cleanup_once(
-    active_job_count: i64,
-    log_fn: &mut dyn FnMut(&str),
-) -> Value {
+pub async fn preview_cleanup_once(active_job_count: i64, log_fn: &mut dyn FnMut(&str)) -> Value {
     // A preview persists nothing, so its writer identity never reaches the
     // file; it is recorded anyway so the returned report is self-describing.
-    cleanup_once(active_job_count, true, CleanupWriter::Cli { every: None }, log_fn).await
+    cleanup_once(
+        active_job_count,
+        true,
+        CleanupWriter::Cli { every: None },
+        log_fn,
+    )
+    .await
 }

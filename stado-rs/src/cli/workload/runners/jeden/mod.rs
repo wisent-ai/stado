@@ -9,9 +9,11 @@
 mod attach;
 mod capacity;
 mod detached;
+mod probe;
 mod sessions;
 
 use capacity::{admission_refusal, live_capacity, placement_order};
+pub(super) use probe::probe_ready;
 
 pub(crate) use attach::connect_jeden;
 pub(crate) use detached::{start_detached, DetachedRequest};
@@ -75,7 +77,10 @@ pub(crate) fn current_workspace() -> String {
             return HOME_WORKSPACE.to_string();
         }
     };
-    match directory.file_name().map(|name| name.to_string_lossy().into_owned()) {
+    match directory
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+    {
         Some(name) if validate_component("workspace", &name).is_ok() => name,
         _ => HOME_WORKSPACE.to_string(),
     }
@@ -227,73 +232,4 @@ pub(super) async fn candidates(
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(targets)
-}
-
-/// What a candidate host answered about carrying a session.
-pub(super) struct HostReadiness {
-    /// True when the host holds the operator grant file Jeden reads its own
-    /// credentials through. A host without it needs the fleet to hand the
-    /// session its credentials as declared job secrets instead.
-    pub reads_own_credentials: bool,
-}
-
-/// Whether `target` can carry a session in `checkout` right now: the
-/// workspace exists, the managed binaries are installed, and the named
-/// session ledger is there when one was named. `Err(sentence)` is the
-/// host's own reason, kept for the refusal that names every candidate.
-pub(super) async fn probe_ready(
-    target: &ComputeTarget,
-    checkout: &str,
-    resume: Option<&str>,
-) -> Result<HostReadiness, String> {
-    let (ledger, _) = ledger_root(target);
-    let workspace = workspace_expression(checkout);
-    let resume_probe = match resume {
-        Some(session) => format!(
-            "if [ ! -d {ledger}/{session} ]; then printf 'session ledger is missing: %s\\n' {ledger}/{session} >&2; ready=no; fi\n"
-        ),
-        None => String::new(),
-    };
-    let probe = format!(
-        r#"ready=yes
-if [ ! -d {workspace} ]; then
-  printf 'workspace directory is missing: %s\n' {workspace} >&2
-  ready=no
-fi
-{resume_probe}
-for binary in {MANAGED_JEDEN} {MANAGED_STADO}; do
-  if [ ! -x "$HOME/$binary" ]; then
-    printf 'managed runtime is missing or not executable: %s\n' "$HOME/$binary" >&2
-    ready=no
-  fi
-done
-[ "$ready" = yes ] || exit 1
-if [ -r "$HOME"/{OPERATOR_GRANT_FILE} ]; then
-  printf 'ready own-credentials'
-else
-  printf 'ready fleet-credentials'
-fi
-"#,
-    );
-    let runner = crate::deploy::production_runner();
-    match host_channel::run_script(target, &probe, &runner).await {
-        Ok(output) if output.succeeded() && output.stdout.trim().starts_with("ready") => {
-            Ok(HostReadiness {
-                reads_own_credentials: output.stdout.trim().ends_with("own-credentials"),
-            })
-        }
-        Ok(output) => {
-            let detail = output.detail();
-            Err(format!(
-                "{}: {}",
-                target.name,
-                if detail.trim().is_empty() {
-                    "the runtime preflight returned no readiness or failure detail"
-                } else {
-                    detail.trim()
-                }
-            ))
-        }
-        Err(error) => Err(format!("{}: {error}", target.name)),
-    }
 }

@@ -31,8 +31,11 @@ pub(super) async fn preflight(
                 .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
     let [.., name] = components.as_slice() else {
-        return Err(DeployError(format!("destination {:?} has no components", plan.destination))
-            .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(DeployError(format!(
+            "destination {:?} has no components",
+            plan.destination
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     };
     let stage = format!("{parent}/.{name}.stado-delivery");
     let backup = format!("{parent}/.{name}.stado-previous");
@@ -178,8 +181,11 @@ pub(super) async fn commit(
                 .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
     let [.., name] = components.as_slice() else {
-        return Err(DeployError(format!("destination {:?} has no components", plan.destination))
-            .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(DeployError(format!(
+            "destination {:?} has no components",
+            plan.destination
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     };
     let backup = format!("{parent}/.{name}.stado-previous");
     let expected_test = match plan.kind {

@@ -72,7 +72,8 @@ pub(super) fn held_key(target: &str) -> Option<String> {
 }
 
 fn read_held_key(target: &str) -> Result<Option<String>, String> {
-    let path = held_key_path(target).map_err(|cause| format!("no held key for {target}: {cause}"))?;
+    let path =
+        held_key_path(target).map_err(|cause| format!("no held key for {target}: {cause}"))?;
     let metadata = match std::fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),

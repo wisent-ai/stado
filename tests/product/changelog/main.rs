@@ -100,7 +100,9 @@ fn spill(root: &Path, report: &mut Value) -> Result<String> {
         parts.len()
     );
     ensure!(
-        links.lines().all(|line| line.contains("](changelog/unreleased/part-")),
+        links
+            .lines()
+            .all(|line| line.contains("](changelog/unreleased/part-")),
         "spilled parts are not written into changelog/unreleased/: {links}"
     );
     for part in &parts {

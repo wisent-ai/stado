@@ -90,13 +90,17 @@ async fn fetch_manifest(api: &str, uri: &str) -> Result<Value, String> {
         .await
         .map_err(|error| format!("exact release manifest {uri} is unreachable: {error}"))?;
     if !response.status().is_success() {
-        return Err(format!("exact release manifest {uri} returned HTTP {}", response.status()));
+        return Err(format!(
+            "exact release manifest {uri} returned HTTP {}",
+            response.status()
+        ));
     }
     let body = response
         .text()
         .await
         .map_err(|error| format!("cannot read exact release manifest {uri}: {error}"))?;
-    serde_json::from_str(&body).map_err(|error| format!("{uri} is not a valid release manifest: {error}"))
+    serde_json::from_str(&body)
+        .map_err(|error| format!("{uri} is not a valid release manifest: {error}"))
 }
 
 /// Whether `manifest` names this deployment's product, version and platform,
@@ -104,7 +108,11 @@ async fn fetch_manifest(api: &str, uri: &str) -> Result<Value, String> {
 /// does not, with what it holds, when one does not.
 fn manifest_identity(manifest: &Value, version: &str, platform: &str) -> Result<(), String> {
     let field = |name: &str| manifest.get(name).and_then(Value::as_str);
-    for (name, expected) in [("product", "stado"), ("version", version), ("platform", platform)] {
+    for (name, expected) in [
+        ("product", "stado"),
+        ("version", version),
+        ("platform", platform),
+    ] {
         match field(name) {
             Some(stated) if stated == expected => {}
             Some(stated) => return Err(format!("its {name} is {stated:?}, not {expected:?}")),
@@ -113,12 +121,18 @@ fn manifest_identity(manifest: &Value, version: &str, platform: &str) -> Result<
     }
     // A git object id: SHA-1, or SHA-256 in a repository of that format.
     let commit = field("source_revision").ok_or("it states no source_revision")?;
-    if !crate::binary::provenance::is_commit_id(commit) && !crate::deploy::host_release::is_sha256(commit) {
-        return Err(format!("its source_revision {commit:?} is not a full git object id"));
+    if !crate::binary::provenance::is_commit_id(commit)
+        && !crate::deploy::host_release::is_sha256(commit)
+    {
+        return Err(format!(
+            "its source_revision {commit:?} is not a full git object id"
+        ));
     }
     let digest = field("artifact_sha256").ok_or("it states no artifact_sha256")?;
     if !crate::deploy::host_release::is_sha256(digest) {
-        return Err(format!("its artifact_sha256 {digest:?} is not a lowercase SHA-256"));
+        return Err(format!(
+            "its artifact_sha256 {digest:?} is not a lowercase SHA-256"
+        ));
     }
     Ok(())
 }
@@ -133,7 +147,10 @@ async fn findings_for_origin_route(api: &str, findings: &mut Findings) {
     let origin = match url::Url::parse(api) {
         Ok(origin) => origin,
         Err(error) => {
-            findings.note(Status::Fail, format!("STADO_API_URL {api:?} is not a URL: {error}"));
+            findings.note(
+                Status::Fail,
+                format!("STADO_API_URL {api:?} is not a URL: {error}"),
+            );
             findings.remedy(RELEASE_REMEDY);
             return;
         }
@@ -147,7 +164,10 @@ async fn findings_for_origin_route(api: &str, findings: &mut Findings) {
     };
     // The port the release travels to: the URL's own, or its scheme's.
     let Some(port) = origin.port_or_known_default() else {
-        findings.note(Status::Fail, format!("STADO_API_URL {api:?} names no port and no known scheme"));
+        findings.note(
+            Status::Fail,
+            format!("STADO_API_URL {api:?} names no port and no known scheme"),
+        );
         findings.remedy(RELEASE_REMEDY);
         return;
     };

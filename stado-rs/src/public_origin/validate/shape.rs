@@ -62,7 +62,8 @@ pub(super) fn is_loopback_origin(upstream: &str) -> bool {
         return false;
     };
     port.parse::<std::num::NonZeroU16>().is_ok()
-        && url::Url::parse(upstream).is_ok_and(|url| crate::primitives::http::origin::is_loopback_host(&url))
+        && url::Url::parse(upstream)
+            .is_ok_and(|url| crate::primitives::http::origin::is_loopback_host(&url))
 }
 
 /// An absolute path below the root: not `/` itself, no trailing slash, no

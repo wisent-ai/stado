@@ -108,7 +108,9 @@ if [ -n "$newest" ]; then root tail -n 120 "$newest"; fi
 /// the report, never a placeholder that reads like a value.
 fn field<'a>(head: &'a str, key: &str) -> Option<&'a str> {
     let prefix = format!("{key}=");
-    head.lines().map(str::trim).find_map(|line| line.strip_prefix(&prefix))
+    head.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(&prefix))
 }
 
 /// A metadata command can fail while the log remains readable. Keep its
@@ -118,7 +120,10 @@ fn runtime_probe(head: &str, key: &str) -> Value {
     let status = field(head, &format!("{key}Status"));
     let (exit_status, unread) = match status.map(|text| (text, text.parse::<i32>())) {
         Some((_, Ok(code))) => (Some(code), None),
-        Some((text, Err(error))) => (None, Some(format!("{text:?} is not an exit status: {error}"))),
+        Some((text, Err(error))) => (
+            None,
+            Some(format!("{text:?} is not an exit status: {error}")),
+        ),
         None => (None, Some("the probe printed no status".to_string())),
     };
     json!({

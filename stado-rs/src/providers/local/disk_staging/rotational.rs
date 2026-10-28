@@ -13,13 +13,16 @@ pub fn parse_mount_device(text: &str, mnt: &str) -> Result<Option<String>, Strin
     for line in text.lines() {
         let mut fields = line.split([' ', '\t']).filter(|field| !field.is_empty());
         let (Some(device), Some(mount_point)) = (fields.next(), fields.next()) else {
-            return Err(format!("/proc/mounts row {line:?} has no source and mount point"));
+            return Err(format!(
+                "/proc/mounts row {line:?} has no source and mount point"
+            ));
         };
         if super::mounts::decode_mount_field(mount_point)? == mnt {
             selected = Some(device);
         }
     }
-    selected.map(super::mounts::decode_mount_field)
+    selected
+        .map(super::mounts::decode_mount_field)
         .transpose()
         .map(|device| device.map(std::borrow::Cow::into_owned))
 }
@@ -32,9 +35,10 @@ fn queue_device(sys_root: &Path, name: &std::ffi::OsStr) -> Result<PathBuf, Stri
         .map_err(|error| format!("cannot resolve {}: {error}", declared.display()))?;
     let partition = device.join("partition");
     match std::fs::symlink_metadata(&partition) {
-        Ok(_) => device.parent().map(Path::to_path_buf).ok_or_else(|| {
-            format!("partition {} has no parent block device", device.display())
-        }),
+        Ok(_) => device
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| format!("partition {} has no parent block device", device.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(device),
         Err(error) => Err(format!("cannot inspect {}: {error}", partition.display())),
     }
@@ -64,10 +68,14 @@ pub fn is_rotational_at(mounts_text: &str, sys_root: &Path, mnt: &str) -> Result
     if !metadata.file_type().is_block_device() {
         return Err(format!("{mnt} is backed by {dev}, not a block device"));
     }
-    let resolved = std::fs::canonicalize(&dev)
-        .map_err(|error| format!("cannot resolve {dev}: {error}"))?;
-    let name = resolved.file_name()
-        .ok_or_else(|| format!("{dev} resolves to {}, which names no device", resolved.display()))?;
+    let resolved =
+        std::fs::canonicalize(&dev).map_err(|error| format!("cannot resolve {dev}: {error}"))?;
+    let name = resolved.file_name().ok_or_else(|| {
+        format!(
+            "{dev} resolves to {}, which names no device",
+            resolved.display()
+        )
+    })?;
     rotational_file_value(&queue_device(sys_root, name)?)
 }
 

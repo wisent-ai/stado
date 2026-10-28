@@ -41,7 +41,9 @@ pub(super) fn month_spent(snapshot: Option<&Value>, now: DateTime<Utc>) -> Resul
                 Some(detail) => detail,
                 None => section,
             };
-            return Err(format!("the {provider} billing section is not ok: {detail}"));
+            return Err(format!(
+                "the {provider} billing section is not ok: {detail}"
+            ));
         }
         let rows = section
             .get("monthly")

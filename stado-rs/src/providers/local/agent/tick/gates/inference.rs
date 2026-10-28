@@ -129,7 +129,11 @@ pub(crate) async fn before_admission(
     // `0/95 GiB free` line can name the process behind it.
     crate::providers::local::accelerators::holders::measure(slots)
         .await
-        .insert_into(agent_diag, total_vram_gb, free_for_one_job(total_vram_gb, used_vram, &cards));
+        .insert_into(
+            agent_diag,
+            total_vram_gb,
+            free_for_one_job(total_vram_gb, used_vram, &cards),
+        );
     if let Some(reservation) = &inference_reservation {
         agent_diag.insert(
             "inference_reservation".into(),
@@ -237,7 +241,10 @@ pub(crate) async fn before_admission(
             }
         }
     }
-    Ok(Step::Go((free_for_one_job(total_vram_gb, used_vram, &cards), cards)))
+    Ok(Step::Go((
+        free_for_one_job(total_vram_gb, used_vram, &cards),
+        cards,
+    )))
 }
 
 /// The free VRAM one job can use: what the bookkeeping leaves of the total
@@ -245,7 +252,12 @@ pub(crate) async fn before_admission(
 /// board the driver reports when it reports one.
 fn free_for_one_job(total_vram_gb: i64, used_vram: i64, cards: &[helpers::GpuCard]) -> i64 {
     let booked = total_vram_gb - used_vram.min(total_vram_gb);
-    match cards.iter().map(|card| card.free_vram_gb).filter(|free| !free.is_negative()).max() {
+    match cards
+        .iter()
+        .map(|card| card.free_vram_gb)
+        .filter(|free| !free.is_negative())
+        .max()
+    {
         Some(emptiest) => booked.min(emptiest),
         None => booked,
     }

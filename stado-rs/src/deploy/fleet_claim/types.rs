@@ -78,7 +78,11 @@ pub fn wait_words(seconds: i64) -> String {
     };
     // A job created after this clock's now is a clock that disagrees, said as
     // such rather than read as a job that has not waited at all.
-    let ahead = if wait < chrono::TimeDelta::zero() { " ahead of this host's clock" } else { "" };
+    let ahead = if wait < chrono::TimeDelta::zero() {
+        " ahead of this host's clock"
+    } else {
+        ""
+    };
     let wait = wait.abs();
     let hours = wait.num_hours();
     let minutes = (wait - chrono::TimeDelta::hours(hours)).num_minutes();

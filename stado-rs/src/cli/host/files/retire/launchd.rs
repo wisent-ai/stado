@@ -109,11 +109,19 @@ pub(super) async fn retire_system_launchd_file(
     const UNBOUND: &str = "-";
     let transaction = match binding {
         Some(binding) => binding.transaction.clone(),
-        None => format!("{}-{}", chrono::Utc::now().format("%Y%m%dT%H%M%SZ"), uuid::Uuid::new_v4().simple()),
+        None => format!(
+            "{}-{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+            uuid::Uuid::new_v4().simple()
+        ),
     };
     let destination = format!("/Library/LaunchDaemons/{name}.stado-retired-{transaction}");
     let (expected_size, expected_sha, expected_mode) = match binding {
-        Some(binding) => (binding.expected_size.to_string(), binding.expected_sha256.as_str(), binding.expected_mode.as_str()),
+        Some(binding) => (
+            binding.expected_size.to_string(),
+            binding.expected_sha256.as_str(),
+            binding.expected_mode.as_str(),
+        ),
         None => (UNBOUND.to_string(), UNBOUND, UNBOUND),
     };
     // A host with no stored sudo password is one whose sudo needs none; sudo
@@ -188,7 +196,9 @@ pub(super) async fn retire_system_launchd_file(
         )));
     }
     let size = size.parse::<u64>().map_err(|error| {
-        retire_refused(format!("privileged launchd retirement returned an invalid size {size:?}: {error}"))
+        retire_refused(format!(
+            "privileged launchd retirement returned an invalid size {size:?}: {error}"
+        ))
     })?;
     if !crate::deploy::host_release::is_sha256(sha256) {
         return Err(retire_refused(format!(

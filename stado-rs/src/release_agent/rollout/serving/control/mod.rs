@@ -123,8 +123,9 @@ fn socket_path(home: Option<&str>) -> Result<PathBuf, String> {
     } else {
         let home = match home {
             Some(home) => PathBuf::from(home),
-            None => crate::config_file::home()
-                .map_err(|cause| format!("the release proxy control socket has no home to live under: {cause}"))?,
+            None => crate::config_file::home().map_err(|cause| {
+                format!("the release proxy control socket has no home to live under: {cause}")
+            })?,
         };
         home.join(".stado/release-proxy.sock")
     };

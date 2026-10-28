@@ -16,10 +16,16 @@ use crate::providers::local::space_reclaim::rule::VolumeReading;
 pub fn volume_of(usage: &DiskUsage) -> Result<VolumeReading, String> {
     let bytes = |field: &str, value: &str| -> Result<i64, String> {
         let blocks = value.parse::<i64>().map_err(|error| {
-            format!("df row for {}: {field} {value:?} is not a block count: {error}", usage.mounted_on)
+            format!(
+                "df row for {}: {field} {value:?} is not a block count: {error}",
+                usage.mounted_on
+            )
         })?;
         blocks.checked_mul(KIB).ok_or_else(|| {
-            format!("df row for {}: {field} {blocks} blocks is more bytes than a signed count holds", usage.mounted_on)
+            format!(
+                "df row for {}: {field} {blocks} blocks is more bytes than a signed count holds",
+                usage.mounted_on
+            )
         })
     };
     Ok(VolumeReading {
@@ -37,8 +43,12 @@ pub fn volume_of_report(report: &Value) -> Result<VolumeReading, String> {
     let field = |name: &str| -> Result<String, String> {
         match &usage[name] {
             Value::String(text) => Ok(text.clone()),
-            Value::Null => Err(format!("the disk report carries no usage.{name}: the host's df row was not read")),
-            other => Err(format!("the disk report's usage.{name} is {other}, not df's text")),
+            Value::Null => Err(format!(
+                "the disk report carries no usage.{name}: the host's df row was not read"
+            )),
+            other => Err(format!(
+                "the disk report's usage.{name} is {other}, not df's text"
+            )),
         }
     };
     volume_of(&DiskUsage {

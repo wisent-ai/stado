@@ -51,7 +51,10 @@ impl Host {
         command
             .current_dir(&self.root)
             .env("HOME", &self.root)
-            .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

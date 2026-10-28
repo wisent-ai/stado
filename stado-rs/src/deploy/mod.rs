@@ -127,10 +127,10 @@ pub mod weles_capture;
 
 mod primitives;
 
+/// Python `repr()` of a value a deploy refusal quotes: the one copy in
+/// `models::python_compat`, named here for the deploy modules that use it.
+pub(crate) use crate::models::py_str_repr;
 pub use primitives::{
     production_runner, relaying_runner, runner_fn, shlex_quote, write_if_changed, CommandOutput,
     CommandSpec, DeployError, Runner,
 };
-/// Python `repr()` of a value a deploy refusal quotes: the one copy in
-/// `models::python_compat`, named here for the deploy modules that use it.
-pub(crate) use crate::models::py_str_repr;

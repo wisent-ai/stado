@@ -5,15 +5,13 @@ use serde_json::{json, Value};
 use crate::service_resolution::{self, ResolverAdapter};
 use crate::targets;
 
-use crate::cli::{CmdError, CLICK_ERROR_CODE};
-
 use crate::cli::resolver::directory::source::current_target;
 use crate::cli::resolver::report::probe::{age_seconds, bind_listening, probe_authority};
 use crate::cli::resolver::report::published::{
     published_state, RESOLVER_SERVING, RESOLVER_UNPUBLISHED,
 };
-use crate::cli::resolver::report::vault;
-use crate::cli::resolver::report::waiting;
+use crate::cli::resolver::report::{vault, waiting};
+use crate::cli::{CmdError, CLICK_ERROR_CODE};
 
 mod authority;
 mod process;
@@ -267,7 +265,10 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
             (Some(held), Some(state)) => format!(
                 "{held}(store={},from={})",
                 crate::cli::reporting::optional_text(state.store_version.as_deref()),
-                state.read_from.as_deref().map_or("local-store", |authority| authority)
+                state
+                    .read_from
+                    .as_deref()
+                    .map_or("local-store", |authority| authority)
             ),
             (Some(held), None) => held.to_string(),
             (None, _) => crate::cli::reporting::NOT_REPORTED.to_string(),

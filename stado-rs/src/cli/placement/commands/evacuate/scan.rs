@@ -83,7 +83,12 @@ pub(super) fn rolled_out_on(document: &Value, host: &str) -> Vec<String> {
         .and_then(Value::as_object)
         .into_iter()
         .flatten()
-        .filter(|(_, product)| product.get("targets").and_then(|targets| targets.get(host)).is_some())
+        .filter(|(_, product)| {
+            product
+                .get("targets")
+                .and_then(|targets| targets.get(host))
+                .is_some()
+        })
         .map(|(name, _)| name.clone())
         .collect()
 }
@@ -108,14 +113,29 @@ pub(super) fn release_drops(
     if !asked {
         return Vec::new();
     }
-    let mut services: Vec<&str> = stood_by.iter().flat_map(|profile| profile.services.iter()).map(String::as_str).collect();
-    services.extend(drafted.into_iter().flat_map(|profiled| profiled.drafted.iter()).filter_map(|drafted| drafted["service"].as_str()));
+    let mut services: Vec<&str> = stood_by
+        .iter()
+        .flat_map(|profile| profile.services.iter())
+        .map(String::as_str)
+        .collect();
+    services.extend(
+        drafted
+            .into_iter()
+            .flat_map(|profiled| profiled.drafted.iter())
+            .filter_map(|drafted| drafted["service"].as_str()),
+    );
     let products = rolled_out_on(document, from);
     for product in &products {
         let policy = &document["release_control"]["products"][product.as_str()];
-        let elsewhere = policy["targets"].as_object().into_iter().flatten().any(|(host, _)| host != from);
+        let elsewhere = policy["targets"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(host, _)| host != from);
         let service = policy["service"].as_str();
-        let gains_target = services.iter().any(|run| *run == product.as_str() || Some(*run) == service);
+        let gains_target = services
+            .iter()
+            .any(|run| *run == product.as_str() || Some(*run) == service);
         if !elsewhere && !gains_target {
             refusals.push(format!(
                 "--drop-release-targets: {from} is the only target of {product}; stop releasing it by release control with stado release policy remove {product}"
@@ -139,12 +159,20 @@ pub(super) fn authority_holder(document: &Value) -> Option<&str> {
 /// `{home}` first; without it each is a refusal. A product of a profile the
 /// run stands `to` by is left out: the standby writes that root under `{home}`
 /// itself. A release-control block that does not parse is a refusal too.
-pub(super) fn foreign_roots_for(document: &Value, to: &str, stood_by: &[&PlacementProfile], rewrite: bool, refusals: &mut Vec<String>) -> Vec<String> {
+pub(super) fn foreign_roots_for(
+    document: &Value,
+    to: &str,
+    stood_by: &[&PlacementProfile],
+    rewrite: bool,
+    refusals: &mut Vec<String>,
+) -> Vec<String> {
     let block = &document[crate::release_control::RELEASE_CONTROL_KEY];
     if block.is_null() {
         return Vec::new();
     }
-    let control: crate::release_control::ReleaseControl = match serde_json::from_value(block.clone()) {
+    let control: crate::release_control::ReleaseControl = match serde_json::from_value(
+        block.clone(),
+    ) {
         Ok(control) => control,
         Err(error) => {
             refusals.push(format!("the registry's release_control does not parse, so where {to} installs releases cannot be read: {error}"));
@@ -152,11 +180,21 @@ pub(super) fn foreign_roots_for(document: &Value, to: &str, stood_by: &[&Placeme
         }
     };
     let rewritten = |product: &str, service: &str| {
-        stood_by.iter().flat_map(|profile| profile.services.iter()).any(|run| run == product || run == service)
+        stood_by
+            .iter()
+            .flat_map(|profile| profile.services.iter())
+            .any(|run| run == product || run == service)
     };
     let mut portable = Vec::new();
-    for (product, policy) in control.products.iter().filter(|(product, policy)| !rewritten(product.as_str(), policy.service.as_str())) {
-        for foreign in crate::release_control::foreign_targets(policy).into_iter().filter(|foreign| foreign.host == to) {
+    for (product, policy) in control
+        .products
+        .iter()
+        .filter(|(product, policy)| !rewritten(product.as_str(), policy.service.as_str()))
+    {
+        for foreign in crate::release_control::foreign_targets(policy)
+            .into_iter()
+            .filter(|foreign| foreign.host == to)
+        {
             if rewrite {
                 portable.push(product.clone());
                 continue;

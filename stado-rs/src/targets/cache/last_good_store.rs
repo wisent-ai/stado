@@ -114,7 +114,10 @@ fn store_last_good_as(
                 return refuse(LastGoodRefusal::WouldLoseRecordedHosts {
                     // The hosts the recorded copy declares; a host with no
                     // copy recorded holds none.
-                    held: recorded.iter().map(|copy| declared_targets(copy).len()).sum(),
+                    held: recorded
+                        .iter()
+                        .map(|copy| declared_targets(copy).len())
+                        .sum(),
                     detail: error,
                 });
             }

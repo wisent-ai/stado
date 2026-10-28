@@ -45,7 +45,7 @@ pub(super) fn backup_directory(name: &str, stamp: &str) -> Result<PathBuf, CmdEr
     let created = |path: &Path, recursive: bool| {
         std::fs::DirBuilder::new()
             .recursive(recursive)
-            .mode(u32::from(nix::libc::S_IRWXU))
+            .mode(crate::primitives::file_mode::widen(nix::libc::S_IRWXU))
             .create(path)
             .map_err(|error| {
                 CmdError::click(format!("create {}: {error}", path.display()))
@@ -57,10 +57,13 @@ pub(super) fn backup_directory(name: &str, stamp: &str) -> Result<PathBuf, CmdEr
     Ok(directory)
 }
 
+/// A kept backup directory with its manifest, or the cause it has none.
+type Kept = (PathBuf, Result<Value, String>);
+
 /// Every backup directory kept for `name`, newest first (the stamps sort by
 /// time), each with its manifest, or with the cause it has none: a backup
 /// that stopped before its manifest was written is incomplete, and named so.
-fn kept(name: &str) -> Result<Vec<(PathBuf, Result<Value, String>)>, CmdError> {
+fn kept(name: &str) -> Result<Vec<Kept>, CmdError> {
     let parent = root()?.join(name);
     let entries = match std::fs::read_dir(&parent) {
         Ok(entries) => entries,
@@ -164,7 +167,7 @@ pub(in crate::cli::database) fn list(
 
 pub(in crate::cli::database) fn restrict(path: &Path) -> Result<(), CmdError> {
     use std::os::unix::fs::PermissionsExt;
-    let owner_only = u32::from(nix::libc::S_IRUSR | nix::libc::S_IWUSR);
+    let owner_only = crate::primitives::file_mode::widen(nix::libc::S_IRUSR | nix::libc::S_IWUSR);
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(owner_only))
         .map_err(|error| CmdError::from(error).within(format!("restrict {}", path.display())))
 }

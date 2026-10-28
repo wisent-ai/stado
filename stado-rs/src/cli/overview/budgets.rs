@@ -29,7 +29,8 @@ async fn authorized_json(
     if !status.is_success() {
         return Err(format!("GET {url} answered HTTP {status}: {text}"));
     }
-    serde_json::from_str(&text).map_err(|error| format!("the answer of GET {url} is not JSON: {error}"))
+    serde_json::from_str(&text)
+        .map_err(|error| format!("the answer of GET {url} is not JSON: {error}"))
 }
 
 /// The budgets the fleet is actually held to.

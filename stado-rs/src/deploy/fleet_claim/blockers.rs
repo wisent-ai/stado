@@ -94,8 +94,11 @@ fn declared_agent(target: &ComputeTarget) -> Result<Option<service::ManagedServi
     // A declared line this build's serve cannot read is refused by name:
     // read as running no role, the host would lose its agent blocker.
     for unit in &declared {
-        let roles = crate::deploy::service_catalog::host_roles(&host, &service::declared_line(unit))
-            .map_err(|cause| DeployError::from(format!("{} on {}: {cause}", unit.unit_id(), target.name)))?;
+        let roles =
+            crate::deploy::service_catalog::host_roles(&host, &service::declared_line(unit))
+                .map_err(|cause| {
+                    DeployError::from(format!("{} on {}: {cause}", unit.unit_id(), target.name))
+                })?;
         if roles.contains(&AGENT_ROLE) {
             return Ok(Some(unit.clone()));
         }

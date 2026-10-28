@@ -19,7 +19,9 @@ enum Mark {
 impl Mark {
     fn held_by(&self, state: &PublishedState) -> bool {
         match self {
-            Self::Generation(generation) => state.generation.is_some_and(|held| held >= *generation),
+            Self::Generation(generation) => {
+                state.generation.is_some_and(|held| held >= *generation)
+            }
             Self::Version(version) => state.store_version.as_deref() == Some(version.as_str()),
         }
     }
@@ -35,7 +37,10 @@ impl Mark {
     fn instead(&self, state: &PublishedState) -> Option<String> {
         match self {
             Self::Generation(_) => state.generation.map(|held| format!("generation {held}")),
-            Self::Version(_) => state.store_version.clone().map(|held| format!("store version {held}")),
+            Self::Version(_) => state
+                .store_version
+                .clone()
+                .map(|held| format!("store version {held}")),
         }
     }
 }
@@ -70,9 +75,13 @@ fn follow(mark: Mark) -> Result<(), String> {
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", path.display()))?
         .to_path_buf();
-    let state = published_state().ok_or_else(|| "no resolver has published its state on this host".to_string())?;
+    let state = published_state()
+        .ok_or_else(|| "no resolver has published its state on this host".to_string())?;
     if !publisher_running(&state) {
-        return Err(format!("the resolver that published last (pid {}) is not running", state.pid));
+        return Err(format!(
+            "the resolver that published last (pid {}) is not running",
+            state.pid
+        ));
     }
     if !takes_the_signal(&state) {
         return Err(format!(
@@ -85,14 +94,20 @@ fn follow(mark: Mark) -> Result<(), String> {
             }
         ));
     }
-    let pid = i32::try_from(state.pid).map_err(|error| format!("resolver pid {}: {error}", state.pid))?;
+    let pid =
+        i32::try_from(state.pid).map_err(|error| format!("resolver pid {}: {error}", state.pid))?;
     // A publication written after the request is the resolver's answer to it,
     // unless that read moved the resolver to another source (a registry that
     // names another authority): then it is asked again, of the new source.
     let (mut asked_after, mut asked_from) = (state.updated_at.clone(), state.read_from.clone());
     let ask = || {
-        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGUSR1)
-            .map_err(|error| format!("the resolver (pid {pid}) could not be asked to read the registry now: {error}"))
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGUSR1,
+        )
+        .map_err(|error| {
+            format!("the resolver (pid {pid}) could not be asked to read the registry now: {error}")
+        })
     };
     ask()?;
     let named = mark.named();
@@ -143,7 +158,9 @@ fn follow(mark: Mark) -> Result<(), String> {
 /// to bring forward. The write stands either way; a resolver that does not
 /// follow is said on stderr with its own answer.
 pub(crate) async fn follow_written(version: &str) {
-    let Some(state) = published_state() else { return };
+    let Some(state) = published_state() else {
+        return;
+    };
     if !publisher_running(&state) || !takes_the_signal(&state) {
         return;
     }

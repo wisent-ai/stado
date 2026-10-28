@@ -83,10 +83,15 @@ fn state_of(root: &Path) -> Result<(Value, PathBuf, Option<Value>), CmdError> {
             root.display()
         )));
     }
-    let intent_path = PathBuf::from(state["intent_path"].as_str().ok_or_else(|| {
-        CmdError::declaration("the write fence state names no intent path")
-    })?);
-    let intent = state.get("intent").filter(|intent| !intent.is_null()).cloned();
+    let intent_path = PathBuf::from(
+        state["intent_path"]
+            .as_str()
+            .ok_or_else(|| CmdError::declaration("the write fence state names no intent path"))?,
+    );
+    let intent = state
+        .get("intent")
+        .filter(|intent| !intent.is_null())
+        .cloned();
     Ok((state, intent_path, intent))
 }
 
@@ -107,7 +112,10 @@ fn io_refusal(what: String, error: &std::io::Error) -> CmdError {
 async fn arm(args: &FenceArgs) -> Result<(), CmdError> {
     let root = root_of(args.root.as_deref())?;
     let (_, intent_path, intent) = state_of(&root)?;
-    match intent.as_ref().and_then(|intent| intent["transaction"].as_str()) {
+    match intent
+        .as_ref()
+        .and_then(|intent| intent["transaction"].as_str())
+    {
         Some(held) if held != args.transaction => {
             return Err(CmdError::refused(format!(
                 "{} is already fenced by transaction {held}; it is lifted by that transaction",
@@ -126,7 +134,10 @@ async fn arm(args: &FenceArgs) -> Result<(), CmdError> {
             let bytes = serde_json::to_vec_pretty(&recorded)?;
             crate::primitives::document::persist(&intent_path, &bytes).map_err(|error| {
                 io_refusal(
-                    format!("the write fence intent {} cannot be written", intent_path.display()),
+                    format!(
+                        "the write fence intent {} cannot be written",
+                        intent_path.display()
+                    ),
                     &error,
                 )
             })?;
@@ -139,7 +150,10 @@ async fn arm(args: &FenceArgs) -> Result<(), CmdError> {
     let drained = tokio::task::spawn_blocking(move || lock.lock().map(drop));
     crate::wait::until(
         crate::wait::Kind::Lock,
-        format!("storage fence {}: writes in flight to finish", args.transaction),
+        format!(
+            "storage fence {}: writes in flight to finish",
+            args.transaction
+        ),
         root.display(),
         async {
             match drained.await {
@@ -172,11 +186,15 @@ fn disarm(args: &FenceArgs) -> Result<(), CmdError> {
     let (_, intent_path, intent) = state_of(&root)?;
     let Some(intent) = intent else {
         let report = json!({"state": "not-fenced", "root": root});
-        return say(args.json, &report, format!("{} is not fenced", root.display()));
+        return say(
+            args.json,
+            &report,
+            format!("{} is not fenced", root.display()),
+        );
     };
-    let held = intent["transaction"].as_str().ok_or_else(|| {
-        CmdError::declaration("the write fence intent names no transaction")
-    })?;
+    let held = intent["transaction"]
+        .as_str()
+        .ok_or_else(|| CmdError::declaration("the write fence intent names no transaction"))?;
     if held != args.transaction {
         return Err(CmdError::refused(format!(
             "{} is fenced by transaction {held}, not {}; only the transaction that armed it \
@@ -193,7 +211,10 @@ fn disarm(args: &FenceArgs) -> Result<(), CmdError> {
         .and_then(|directory| directory.sync_all())
         .map_err(|error| {
             io_refusal(
-                format!("the write fence intent {} cannot be removed", intent_path.display()),
+                format!(
+                    "the write fence intent {} cannot be removed",
+                    intent_path.display()
+                ),
                 &error,
             )
         })?;
@@ -201,7 +222,11 @@ fn disarm(args: &FenceArgs) -> Result<(), CmdError> {
     say(
         args.json,
         &report,
-        format!("lifted the write fence of transaction {} from {}", args.transaction, root.display()),
+        format!(
+            "lifted the write fence of transaction {} from {}",
+            args.transaction,
+            root.display()
+        ),
     )
 }
 

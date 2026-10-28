@@ -1,12 +1,6 @@
 //! `stado resolver` — logical service discovery and local data plane.
 
-use std::sync::Arc;
-
 use clap::Subcommand;
-use serde_json::json;
-
-use crate::service_resolution;
-use crate::targets::RegistryStore;
 
 use crate::cli::CmdError;
 
@@ -16,8 +10,11 @@ mod authority;
 mod directory;
 mod relay;
 mod report;
+mod resolve;
 mod serve;
 mod takeover;
+
+use resolve::{resolve_once, resolved_for};
 
 pub use crate::cli::resolver::directory::document::canonical_document;
 pub use crate::cli::resolver::directory::document::canonical_document_or_last_good;
@@ -226,7 +223,11 @@ pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
                 Some(generation) => {
                     tokio::task::spawn_blocking(move || follow_generation(generation))
                         .await
-                        .map_err(|error| CmdError::click(format!("the wait for this host's resolver did not end: {error}")))?
+                        .map_err(|error| {
+                            CmdError::click(format!(
+                                "the wait for this host's resolver did not end: {error}"
+                            ))
+                        })?
                         .map_err(CmdError::refused)?;
                     generation
                 }
@@ -245,56 +246,4 @@ pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
             }
         },
     }
-}
-
-fn logical_name(value: &str) -> Result<&str, CmdError> {
-    // Both spellings name the service: the bare logical name, and the
-    // stado://service/<name> address a workload uses.
-    let value = match value.strip_prefix("stado://service/") {
-        Some(name) => name,
-        None => value,
-    }
-    .trim();
-    if value.is_empty() || value.contains('/') {
-        return Err(CmdError::usage(
-            "SERVICE must be one logical name or stado://service/<name>",
-        ));
-    }
-    Ok(value)
-}
-
-/// The directory as this host reads it ([`directory_document`]) and the
-/// service resolved for `consumer` from it, with this host's own target name.
-async fn resolved_for(
-    service: &str,
-    consumer: &str,
-) -> Result<(service_resolution::ResolvedService, String), CmdError> {
-    let service = logical_name(service)?;
-    let store = Arc::new(RegistryStore::open().await?);
-    let (bootstrap, _, _) = read_local_snapshot(&store).await?;
-    let target = current_target(&bootstrap).map_err(CmdError::declaration)?;
-    let document = directory_document(store, &bootstrap, &target).await?;
-    let resolved =
-        service_resolution::resolve(&document, service, consumer).map_err(CmdError::from)?;
-    Ok((resolved, target))
-}
-
-async fn resolve_once(service: &str, consumer: &str, json_output: bool) -> Result<(), CmdError> {
-    let (resolved, _) = resolved_for(service, consumer).await?;
-    let uri = format!("stado://service/{}", resolved.name);
-    if json_output {
-        let report = json!({
-            "service": uri,
-            "generation": resolved.generation,
-            "capabilities": resolved.capabilities,
-        });
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        println!(
-            "{uri} generation={} capabilities={}",
-            resolved.generation,
-            resolved.capabilities.join(",")
-        );
-    }
-    Ok(())
 }

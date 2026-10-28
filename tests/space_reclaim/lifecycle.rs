@@ -37,7 +37,11 @@ fn below_the_threshold_a_pass_deletes_nothing() {
     fs::write(&log, b"{}").unwrap();
     let report = native.cleanup();
     // The janitor's rule and the host gates read one declared threshold.
-    assert_eq!(report["rule"]["full_percent"], native.disk()["full_percent"], "{report}");
+    assert_eq!(
+        report["rule"]["full_percent"],
+        native.disk()["full_percent"],
+        "{report}"
+    );
     assert_eq!(report["rule"]["triggered"], false, "{report}");
     assert_eq!(report["outcome"], "healthy_noop", "{report}");
     assert!(
@@ -45,26 +49,6 @@ fn below_the_threshold_a_pass_deletes_nothing() {
         "a cache went below the threshold"
     );
     assert!(log.is_file(), "a log went below the threshold");
-}
-
-/// The Time Machine snapshots of the machine's boot data volume, as
-/// `tmutil` lists them.
-fn host_snapshots() -> Vec<String> {
-    let output = std::process::Command::new("/usr/bin/tmutil")
-        .args(["listlocalsnapshots", "/"])
-        .output()
-        .expect("tmutil runs");
-    assert!(
-        output.status.success(),
-        "tmutil listlocalsnapshots / refused: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("com.apple.TimeMachine."))
-        .map(str::to_string)
-        .collect()
 }
 
 #[test]
@@ -202,7 +186,11 @@ fn unreadable_cache_size_refuses_deletion_and_preserves_the_cause() {
         .arg(&blocked)
         .status()
         .unwrap();
-    assert!(locked.success(), "chmod a= {} answered {locked}", blocked.display());
+    assert!(
+        locked.success(),
+        "chmod a= {} answered {locked}",
+        blocked.display()
+    );
     native.fill_with_user_data();
     let report = native.cleanup();
     assert!(

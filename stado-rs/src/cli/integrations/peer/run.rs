@@ -21,14 +21,17 @@
 //! loop is there. Every transition is written to this host's offer record,
 //! which the CLI and Stado Desktop read.
 
+mod listing;
+
 use std::time::{Duration, Instant};
 
 use crate::cli::CmdError;
-use crate::providers::peer::lending::{drain_left_behind, Lending};
+use crate::providers::peer::lending::Lending;
 use crate::providers::peer::{declaration, loop_role, offer, remote, Offer, PeerDeclaration};
 use crate::providers::vast::{is_stado_busy, system_hostname};
 use crate::queue::JobStorage;
 
+use self::listing::{record, start_offer};
 use super::{cmd, our_store};
 
 /// The loop's arguments, as the command took them.
@@ -116,7 +119,10 @@ pub(super) async fn auto_list(params: Params) -> Result<(), CmdError> {
             }
         }
         if !params.dry_run {
-            if let Some(stored) = offer::load(&store, &host, &params.peer).await.map_err(cmd)? {
+            if let Some(stored) = offer::load(&store, &host, &params.peer)
+                .await
+                .map_err(cmd)?
+            {
                 current.listed = stored.listed;
                 current.price_gpu = stored.price_gpu;
             }
@@ -157,12 +163,25 @@ pub(super) async fn auto_list(params: Params) -> Result<(), CmdError> {
                     active.drain(&reason).map_err(cmd)?;
                     drained = true;
                     say(&format!("draining the lending worker: {reason}"));
-                    record(&store, &mut current, &format!("draining: {reason}"), &params).await?;
+                    record(
+                        &store,
+                        &mut current,
+                        &format!("draining: {reason}"),
+                        &params,
+                    )
+                    .await?;
                 }
-                Some(_) => say(&format!("waiting for the drained worker to finish: {reason}")),
+                Some(_) => say(&format!(
+                    "waiting for the drained worker to finish: {reason}"
+                )),
                 None => {
-                    record(&store, &mut current, &format!("not lending: {reason}"), &params)
-                        .await?
+                    record(
+                        &store,
+                        &mut current,
+                        &format!("not lending: {reason}"),
+                        &params,
+                    )
+                    .await?
                 }
             }
         } else if lending.is_none() {
@@ -191,46 +210,6 @@ pub(super) async fn auto_list(params: Params) -> Result<(), CmdError> {
     }
 }
 
-/// This host's offer as the loop starts: listed at the loop's price, and a
-/// session a previous loop left running asked to drain.
-async fn start_offer(store: &JobStorage, host: &str, params: &Params) -> Result<Offer, CmdError> {
-    let existing = offer::load(store, host, &params.peer).await.map_err(cmd)?;
-    let mut current = match existing {
-        Some(existing) => existing,
-        None => Offer {
-            peer: params.peer.clone(),
-            host: host.to_string(),
-            listed: true,
-            price_gpu: params.price_gpu,
-            changed_at: String::new(),
-            changed_by: String::new(),
-            state: String::new(),
-            session: None,
-        },
-    };
-    if params.dry_run {
-        return Ok(current);
-    }
-    if let Some(session) = current
-        .session
-        .as_mut()
-        .filter(|session| session.ended_at.is_none())
-    {
-        let reason = "the loop that started it ended; a new loop took the peer";
-        let end = match drain_left_behind(session, reason) {
-            Ok(()) => format!("{reason}; its worker was asked to drain in {}", session.home),
-            Err(error) => format!("{reason}; asking its worker to drain failed: {error}"),
-        };
-        session.ended_at = Some(chrono::Utc::now().to_rfc3339());
-        session.end = Some(end);
-    }
-    current.listed = true;
-    current.price_gpu = params.price_gpu;
-    let started = format!("started by the auto-list loop pid {}", std::process::id());
-    record(store, &mut current, &started, params).await?;
-    Ok(current)
-}
-
 /// Start a session when the peer's queue holds work.
 async fn lend(
     store: &JobStorage,
@@ -250,7 +229,13 @@ async fn lend(
         ));
     };
     if empty {
-        record(store, current, "idle, and the peer's queue is empty", params).await?;
+        record(
+            store,
+            current,
+            "idle, and the peer's queue is empty",
+            params,
+        )
+        .await?;
         return Ok(None);
     }
     let Some(poll) = params.poll_interval_s else {
@@ -266,27 +251,4 @@ async fn lend(
     current.session = Some(active.session.clone());
     record(store, current, "lending", params).await?;
     Ok(Some(active))
-}
-
-/// Write the offer when what the loop observed changed. A dry run writes
-/// nothing.
-async fn record(
-    store: &JobStorage,
-    current: &mut Offer,
-    state: &str,
-    params: &Params,
-) -> Result<(), CmdError> {
-    if params.dry_run {
-        say(state);
-        return Ok(());
-    }
-    if current.state == state && current.changed_by == "auto-list" {
-        return Ok(());
-    }
-    say(state);
-    current.state = state.to_string();
-    current.changed_at = chrono::Utc::now().to_rfc3339();
-    current.changed_by = "auto-list".to_string();
-    *current = offer::save(store, current).await.map_err(cmd)?;
-    Ok(())
 }

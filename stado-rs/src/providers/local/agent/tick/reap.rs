@@ -111,7 +111,10 @@ pub(super) async fn reap_when_idle(store: &JobStorage, idle: bool, log_fn: &mut 
     let log = |message: &str| agent_log(&format!("lease reaper: {message}"));
     match crate::queue::reaper::reap_named(store, &jobs, &log).await {
         Ok(summary) => {
-            let acted = summary.release_completions + summary.requeued + summary.failed + summary.unreadable;
+            let acted = summary.release_completions
+                + summary.requeued
+                + summary.failed
+                + summary.unreadable;
             if std::num::NonZeroUsize::new(acted).is_some() {
                 log_fn(&format!(
                     "lease reaper: of {} finished job(s) here, completed {} release job(s) from \

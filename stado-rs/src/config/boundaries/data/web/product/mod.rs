@@ -210,32 +210,33 @@ pub(crate) fn parse_web_api_products(
 
 /// The declared web products: `None` when neither `WC_WEB_API_PRODUCTS` nor
 /// the config file declares the table, refused problems when one does and it
-/// does not parse. The override and the file are read in one place, so no
-/// reader can mistake a refused override for a fleet that declares nothing.
-static WEB_API_PRODUCTS: LazyLock<Result<Option<BTreeMap<String, WebApiProduct>>, Vec<String>>> =
-    LazyLock::new(|| {
-        // `WC_WEB_API_PRODUCTS` overrides the config file's block when it is
-        // set and not blank; unset or blank, the file is read. A value that
-        // is not Unicode cannot be JSON and is refused as such.
-        let declared = match std::env::var("WC_WEB_API_PRODUCTS") {
-            Ok(encoded) if !encoded.trim().is_empty() => {
-                Some(serde_json::from_str::<Value>(&encoded).map_err(|error| {
-                    vec![format!("WC_WEB_API_PRODUCTS must be valid JSON: {error}")]
-                })?)
-            }
-            Ok(_) | Err(std::env::VarError::NotPresent) => {
-                crate::config_file::get("web_api.products")
-            }
-            Err(std::env::VarError::NotUnicode(raw)) => {
-                return Err(vec![format!(
-                    "WC_WEB_API_PRODUCTS must be valid JSON, and is not Unicode: {raw:?}"
-                )])
-            }
-        };
-        declared
-            .map(|table| parse_web_api_products(Some(&table)))
-            .transpose()
-    });
+/// does not parse.
+type Declared = Result<Option<BTreeMap<String, WebApiProduct>>, Vec<String>>;
+
+/// The declared web products ([`Declared`]). The override and the file are
+/// read in one place, so no reader can mistake a refused override for a
+/// fleet that declares nothing.
+static WEB_API_PRODUCTS: LazyLock<Declared> = LazyLock::new(|| {
+    // `WC_WEB_API_PRODUCTS` overrides the config file's block when it is
+    // set and not blank; unset or blank, the file is read. A value that
+    // is not Unicode cannot be JSON and is refused as such.
+    let declared = match std::env::var("WC_WEB_API_PRODUCTS") {
+        Ok(encoded) if !encoded.trim().is_empty() => {
+            Some(serde_json::from_str::<Value>(&encoded).map_err(|error| {
+                vec![format!("WC_WEB_API_PRODUCTS must be valid JSON: {error}")]
+            })?)
+        }
+        Ok(_) | Err(std::env::VarError::NotPresent) => crate::config_file::get("web_api.products"),
+        Err(std::env::VarError::NotUnicode(raw)) => {
+            return Err(vec![format!(
+                "WC_WEB_API_PRODUCTS must be valid JSON, and is not Unicode: {raw:?}"
+            )])
+        }
+    };
+    declared
+        .map(|table| parse_web_api_products(Some(&table)))
+        .transpose()
+});
 
 static UNDECLARED: LazyLock<Vec<String>> = LazyLock::new(|| {
     vec![

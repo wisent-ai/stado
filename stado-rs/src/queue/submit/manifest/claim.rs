@@ -33,9 +33,7 @@ pub(in crate::queue::submit) enum EntryClaim {
 fn live_holder(entry: &Map<String, Value>) -> Option<String> {
     let Some(pid) = entry.get("owner_pid").and_then(Value::as_u64) else {
         // No process owner: the lease expiry decides.
-        let Some(stamp) = entry.get("lease_expires_at").and_then(Value::as_str) else {
-            return None;
-        };
+        let stamp = entry.get("lease_expires_at").and_then(Value::as_str)?;
         return match chrono::DateTime::parse_from_rfc3339(stamp) {
             Ok(expires) if expires > chrono::Utc::now() => Some(format!("a submission whose lease runs to {expires}")),
             Ok(_expired) => None,

@@ -16,7 +16,6 @@ use super::receipts::{
 };
 use super::repair::{
     reconcile_beacon, reconcile_observed, reconcile_undeclared, reconcile_unreachable, FailureKind,
-    RepairRefused,
 };
 use super::{LATEST_REPORT, SCHEMA_VERSION};
 
@@ -55,8 +54,14 @@ pub async fn reconcile(
     // A host that declares a product's old units but not the product's one
     // process gets that process now; the next pass retires the old units.
     outcomes.extend(
-        super::replacements::ensure_replacements(&statuses, policy, &runner, &mut gate, &mut summary)
-            .await?,
+        super::replacements::ensure_replacements(
+            &statuses,
+            policy,
+            &runner,
+            &mut gate,
+            &mut summary,
+        )
+        .await?,
     );
 
     // Without the host process no unit is known to be the beacon, so a dead
@@ -70,11 +75,17 @@ pub async fn reconcile(
         // The unit that publishes this host's health beacon: one whose own
         // command runs the host-health role, read by Stado's own command
         // definitions, never from its label.
-        let is_beacon = crate::deploy::service_catalog::host_roles(&host_product, &service::declared_line(&status.service))
-            .map_err(|cause| {
-                StorageError::Other(format!("service reconcile cannot read {}: {cause}", status.service.unit_id()))
-            })?
-            .contains(&"--health-interval-seconds");
+        let is_beacon = crate::deploy::service_catalog::host_roles(
+            &host_product,
+            &service::declared_line(&status.service),
+        )
+        .map_err(|cause| {
+            StorageError::Other(format!(
+                "service reconcile cannot read {}: {cause}",
+                status.service.unit_id()
+            ))
+        })?
+        .contains(&"--health-interval-seconds");
         let mut outcome = ServiceReconcileOutcome {
             host: status.service.host.clone(),
             service: status.service.name.clone(),
@@ -231,19 +242,7 @@ pub async fn reconcile(
         } else {
             None
         };
-        let result = match (result, retaken) {
-            (result, None) => result,
-            (Ok((_, _, detail)), Some(Ok(undone))) => {
-                Ok(("retired".to_string(), true, format!("{detail}; {undone}")))
-            }
-            (Ok((_, _, detail)), Some(Err(failed))) => {
-                Err(RepairRefused::from(format!("{detail}; {failed}")))
-            }
-            (Err(error), Some(Ok(undone) | Err(undone))) => Err(RepairRefused::new(
-                error.kind,
-                format!("{}; {undone}", error.detail),
-            )),
-        };
+        let result = super::predecessors::with_retake(result, retaken);
         let result = gate.release(&subject, &lease, result).await;
         match result {
             Ok((action, changed, detail)) => {

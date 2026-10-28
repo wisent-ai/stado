@@ -53,7 +53,10 @@ pub async fn install_bearer(peer: &PeerDeclaration) -> Result<PathBuf, PeerError
     // Owner-only, whole and flushed with its directory, so the queue client
     // never reads half a bearer and the stage no longer has a fixed name.
     crate::primitives::document::persist(&path, token.as_bytes()).map_err(|error| {
-        PeerError::Local(format!("cannot install the bearer file {}: {error}", path.display()))
+        PeerError::Local(format!(
+            "cannot install the bearer file {}: {error}",
+            path.display()
+        ))
     })?;
     Ok(path)
 }
@@ -82,7 +85,9 @@ pub async fn open(peer: &PeerDeclaration) -> Result<JobStorage, PeerError> {
 /// The queue is read one name deep: whether it is empty is all a lending
 /// decision needs, and the answer says so.
 pub async fn queue_state(store: &JobStorage) -> Result<Value, PeerError> {
-    let queued = store.list_page("queue/", "", Some(NonZeroUsize::MIN)).await?;
+    let queued = store
+        .list_page("queue/", "", Some(NonZeroUsize::MIN))
+        .await?;
     let running = store.list_paths("running/", Listing::Every).await?.len();
     Ok(json!({"queue_empty": queued.is_empty(), "running": running}))
 }
@@ -128,7 +133,8 @@ pub async fn lent_work(store: &JobStorage, host: Option<&str>) -> Result<Value, 
                 "completed_at": job.completed_at,
                 "seconds": seconds,
             })),
-            Err(reason) => unmeasured.push(json!({"job": job.job_id, "host": allocation.host, "reason": reason})),
+            Err(reason) => unmeasured
+                .push(json!({"job": job.job_id, "host": allocation.host, "reason": reason})),
         }
     }
     let seconds: i64 = jobs

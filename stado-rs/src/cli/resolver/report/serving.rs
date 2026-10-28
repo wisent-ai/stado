@@ -94,13 +94,18 @@ pub(crate) async fn follow_authority(require_resolver: bool) -> Result<u64, crat
             )));
         }
     }
-    let (document, version): (serde_json::Value, String) = match crate::cli::resolver::authority_snapshot().await? {
-        Some(snapshot) => (serde_json::from_str(&snapshot.content)?, snapshot.version),
-        None => crate::cli::registry::fetch_versioned_document().await?,
-    };
+    let (document, version): (serde_json::Value, String) =
+        match crate::cli::resolver::authority_snapshot().await? {
+            Some(snapshot) => (serde_json::from_str(&snapshot.content)?, snapshot.version),
+            None => crate::cli::registry::fetch_versioned_document().await?,
+        };
     let generation = document["service_directory"]["generation"]
         .as_u64()
-        .ok_or_else(|| CmdError::declaration("the registry the authority serves names no directory generation".to_string()))?;
+        .ok_or_else(|| {
+            CmdError::declaration(
+                "the registry the authority serves names no directory generation".to_string(),
+            )
+        })?;
     let running = published_state().is_some_and(|state| publisher_running(&state));
     if !running && !require_resolver {
         return Ok(generation);
@@ -110,8 +115,16 @@ pub(crate) async fn follow_authority(require_resolver: bool) -> Result<u64, crat
     let wanted = version.clone();
     tokio::task::spawn_blocking(move || follow_version(wanted))
         .await
-        .map_err(|error| CmdError::click(format!("the wait for this host's resolver did not end: {error}")))?
-        .map_err(|cause| CmdError::click(format!("this host's resolver did not follow registry store version {version}: {cause}")))?;
+        .map_err(|error| {
+            CmdError::click(format!(
+                "the wait for this host's resolver did not end: {error}"
+            ))
+        })?
+        .map_err(|cause| {
+            CmdError::click(format!(
+                "this host's resolver did not follow registry store version {version}: {cause}"
+            ))
+        })?;
     Ok(generation)
 }
 
@@ -150,10 +163,16 @@ async fn on_upstream_authority(
     if copy["service_directory"]["authority"]["target"].as_str() != Some(upstream.as_str()) {
         return Ok(None);
     }
-    let registry = crate::targets::load_registry_from_value(&copy)
-        .map_err(|error| CmdError::declaration(format!("this host's registry does not load: {error}")))?;
+    let registry = crate::targets::load_registry_from_value(&copy).map_err(|error| {
+        CmdError::declaration(format!("this host's registry does not load: {error}"))
+    })?;
     let target = crate::deploy::host_channel::resolve_target(&registry, &upstream)?;
     let script = format!("set -eu\n\"$HOME/.stado/bin/stado\" {verb}\n");
-    let output = crate::deploy::host_channel::run_script(target, &script, &crate::deploy::production_runner()).await?;
+    let output = crate::deploy::host_channel::run_script(
+        target,
+        &script,
+        &crate::deploy::production_runner(),
+    )
+    .await?;
     Ok(Some((upstream, output)))
 }

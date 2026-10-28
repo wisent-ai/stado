@@ -137,8 +137,7 @@ fn disagreement(host: &str, row: &HostSoftware, declared: Option<&str>) -> Optio
     if !row.is_release() {
         faults.push(format!(
             "its digest {} matches no release artefact Stado published, so it is {}",
-            row.sha256,
-            row.provenance
+            row.sha256, row.provenance
         ));
     }
     match declared {

@@ -10,10 +10,21 @@ use std::os::unix::fs::symlink;
 
 use native::Native;
 
+/// The served queue namespace of `native`'s store, as a host whose object API
+/// serves the store keeps it: Probierz's evidence prefixes live there, and so
+/// does the registry every queue client on the host reads once that
+/// directory exists (`StoreRoot::Client`).
+fn served_namespace(native: &Native) -> std::path::PathBuf {
+    let namespace = native.home.join(".stado/local-storage/ecosystem/probierz");
+    fs::create_dir_all(&namespace).unwrap();
+    fs::copy(&native.registry, namespace.join("registry.json")).unwrap();
+    namespace
+}
+
 #[test]
 fn dispatched_results_and_a_build_output_are_reclaimed_without_taking_release_records_or_inputs() {
     let native = Native::new("probierz-results");
-    let store = native.home.join(".stado/local-storage/ecosystem/probierz");
+    let store = served_namespace(&native);
     let result = store.join("results/journey/output.tar");
     let run = store.join("runs/probierz/journey/report.json");
     let release = store.join("runs/release-pipeline/stado/run/receipt.json");
@@ -51,7 +62,7 @@ fn dispatched_results_and_a_build_output_are_reclaimed_without_taking_release_re
 #[test]
 fn a_link_in_the_results_prefix_cannot_redirect_cleanup() {
     let native = Native::new("probierz-results-link");
-    let store = native.home.join(".stado/local-storage/ecosystem/probierz");
+    let store = served_namespace(&native);
     let outside = native.home.join("Documents/user-evidence.json");
     fs::create_dir_all(outside.parent().unwrap()).unwrap();
     fs::write(&outside, b"user-owned").unwrap();

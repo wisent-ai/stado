@@ -55,7 +55,10 @@ pub async fn execute_plan(
             let bootout_line = bootout.argv.join(" ");
             let unloaded = runner(bootout).await.map_err(DeployError::unreachable)?;
             if !unloaded.succeeded() {
-                echo(&format!("[note] {bootout_line}: {}", unloaded.detail().trim()));
+                echo(&format!(
+                    "[note] {bootout_line}: {}",
+                    unloaded.detail().trim()
+                ));
             }
             let output = runner(bootstrap).await.map_err(DeployError::unreachable)?;
             if output.succeeded() {
@@ -73,7 +76,10 @@ pub async fn execute_plan(
                 .await
                 .map_err(DeployError::unreachable)?;
                 if !unloaded.succeeded() {
-                    echo(&format!("[note] launchctl bootout {service}: {}", unloaded.detail().trim()));
+                    echo(&format!(
+                        "[note] launchctl bootout {service}: {}",
+                        unloaded.detail().trim()
+                    ));
                 }
                 let user_bootstrap = runner(CommandSpec::new(vec![
                     "launchctl".to_string(),

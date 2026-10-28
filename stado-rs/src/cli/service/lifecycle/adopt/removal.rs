@@ -24,7 +24,9 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
     // Whether a catalog product takes over the routes of the withdrawn unit
     // is judged from its program, whose `$HOME` resolves under the home the
     // host states.
-    let home = crate::deploy::host_channel::remote_home(&target, &runner).await.map_err(click)?;
+    let home = crate::deploy::host_channel::remote_home(&target, &runner)
+        .await
+        .map_err(click)?;
     let sudo_password = if UnitDomain::from_path(&found.path).requires_privileged_bootstrap() {
         host_sudo_password(&target).await?
     } else {
@@ -48,16 +50,15 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
-        let (removed, generation) =
-            withdraw_service_declaration(host, unit, &home)
-                .await
-                .map_err(|error| {
-                    error
-                        .within(format!(
-                            "{host}: {unit} stopped, but declaration withdrawal failed"
-                        ))
-                        .also("the registry still declares it")
-                })?;
+        let (removed, generation) = withdraw_service_declaration(host, unit, &home)
+            .await
+            .map_err(|error| {
+                error
+                    .within(format!(
+                        "{host}: {unit} stopped, but declaration withdrawal failed"
+                    ))
+                    .also("the registry still declares it")
+            })?;
         render_mutation(
             "retired",
             &removed,
@@ -95,7 +96,9 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
     }
     let path = found.path.clone();
     let runner = production_runner();
-    let home = crate::deploy::host_channel::remote_home(&target, &runner).await.map_err(click)?;
+    let home = crate::deploy::host_channel::remote_home(&target, &runner)
+        .await
+        .map_err(click)?;
     let sudo_password = if UnitDomain::from_path(&path).requires_privileged_bootstrap() {
         host_sudo_password(&target).await?
     } else {
@@ -131,16 +134,15 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
             ))
             .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
-        let (removed, generation) =
-            withdraw_service_declaration(host, unit, &home)
-                .await
-                .map_err(|error| {
-                    error
-                        .within(format!(
-                            "{host}: {unit} stopped, but declaration withdrawal failed"
-                        ))
-                        .also("the registry still declares it and its file was not touched")
-                })?;
+        let (removed, generation) = withdraw_service_declaration(host, unit, &home)
+            .await
+            .map_err(|error| {
+                error
+                    .within(format!(
+                        "{host}: {unit} stopped, but declaration withdrawal failed"
+                    ))
+                    .also("the registry still declares it and its file was not touched")
+            })?;
 
         // The registry is already clean: the file half runs last, because a
         // failed delete must leave a service the fleet can still see, not a file

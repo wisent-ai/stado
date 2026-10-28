@@ -138,7 +138,8 @@ pub fn derive_predecessors(
             unit.declared.as_str()
         };
         let mut roles = if runs {
-            service_catalog::host_roles(entry, line).map_err(|cause| format!("{}: {cause}", unit.label))?
+            service_catalog::host_roles(entry, line)
+                .map_err(|cause| format!("{}: {cause}", unit.label))?
         } else {
             Vec::new()
         };

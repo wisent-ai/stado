@@ -85,8 +85,9 @@ impl Facts {
         // How long since a pass last completed, reported beside the verdict;
         // the verdict itself is the janitor's own promise, read in
         // [`JanitorHealth::read`].
-        let cleanup_success_age_seconds = super::janitor::parsed(reading.state.last_success_at.as_deref())
-            .map(|stamp| (now - stamp).num_seconds());
+        let cleanup_success_age_seconds =
+            super::janitor::parsed(reading.state.last_success_at.as_deref())
+                .map(|stamp| (now - stamp).num_seconds());
         let janitor = JanitorHealth::read(reading, now, state_observed);
 
         Self {

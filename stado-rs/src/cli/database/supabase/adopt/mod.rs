@@ -245,7 +245,10 @@ pub(in crate::cli::database) async fn adopt(
                     "database adopt made a report row without its item or status: {row}"
                 )));
             };
-            println!("{item}: {status} ({} fields)", crate::cli::reporting::field(&row["fields"]));
+            println!(
+                "{item}: {status} ({} fields)",
+                crate::cli::reporting::field(&row["fields"])
+            );
         }
     }
     if check && !drifted_items.is_empty() {

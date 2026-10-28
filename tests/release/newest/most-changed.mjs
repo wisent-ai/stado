@@ -2,7 +2,7 @@
 // the fleet's one build of the day goes to the product that carries the most
 // commits past its last passed build, never to the one asked for first. The
 // store is a local store of this run (WC_STORAGE_BACKEND=local under
-// .build/build-newest-most-changed, STADO_CONFIG naming no file, HOME of its
+// .build/build-newest-most-changed, STADO_CONFIG the empty tests/config/empty.json, HOME of its
 // own), so no build of either product has passed and each one's change is its
 // whole pushed history. Two product checkouts push to bare origins of their
 // own beside them. `--plan` builds nothing.
@@ -45,7 +45,7 @@ for (const directory of [home, origins, empty]) mkdirSync(directory, { recursive
 const environment = {
   ...process.env,
   HOME: home,
-  STADO_CONFIG: join(output, 'no-config.json'),
+  STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'),
   WC_STORAGE_BACKEND: 'local',
   WC_LOCAL_STORAGE_PATH: join(output, 'store'),
 };

@@ -74,7 +74,8 @@ impl RequestLimits {
         };
         // Available memory alone, with the kernel's own cause when it is not
         // read; the swap and compressor reads of a full reading bound nothing.
-        let bytes = match crate::providers::local::host_memory::reading::read_available_and_total() {
+        let bytes = match crate::providers::local::host_memory::reading::read_available_and_total()
+        {
             Ok((available, _)) => available,
             Err(cause) => return Err(unbounded(format!("it could not be read: {cause}"))),
         };

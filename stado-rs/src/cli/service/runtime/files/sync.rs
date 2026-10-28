@@ -40,7 +40,7 @@ fn target_mode(executable: bool) -> u32 {
     } else {
         Mode::S_IRUSR | Mode::S_IWUSR
     };
-    u32::from(mode.bits())
+    crate::primitives::file_mode::widen(mode.bits())
 }
 
 /// The source's bytes and the words a refusal names it with.

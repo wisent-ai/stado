@@ -183,9 +183,7 @@ pub(super) fn declared_trajectories(target: &ComputeTarget) -> Vec<RequirementCl
             };
             // A declaration that names neither a service name nor a label
             // names no unit the beacon could report, so it claims nothing.
-            let Some(unit) = text("name").or_else(|| text("label")) else {
-                return None;
-            };
+            let unit = text("name").or_else(|| text("label"))?;
             // The beacon reports a unit under its launchd label or systemd
             // unit, and that is the key the missing-plist row is filed
             // under, so it is resolved here exactly as `declared_units`

@@ -46,8 +46,8 @@ pub(crate) async fn candidate_fit(
     // model-name scan read it as a GPU workload needing VRAM, and on a
     // laptop with one GiB of it every such session was refused silently, on
     // every poll, while the same session without `--model` ran.
-    let cpu_only = !job.gpu_mem_gb.is_positive()
-        && job.machine_type == crate::queue::submit::CPU_MACHINE_TYPE;
+    let cpu_only =
+        !job.gpu_mem_gb.is_positive() && job.machine_type == crate::queue::submit::CPU_MACHINE_TYPE;
     let need = if cpu_only {
         job.gpu_mem_gb
     } else {

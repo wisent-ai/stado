@@ -34,8 +34,8 @@ mod validation;
 pub use discovery::{config_path, find_config_file, load_config_file, load_config_file_fresh};
 pub(crate) use discovery::{expand_tilde, home, home_dir, home_text};
 pub(crate) use readers::variable;
-pub(crate) use replace::replace;
 pub use readers::{field_value, get, get_fresh, resolve, resolve_list};
+pub(crate) use replace::replace;
 pub use validation::validate;
 
 /// Environment variable naming an explicit config file path.

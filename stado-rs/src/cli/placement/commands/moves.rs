@@ -61,11 +61,6 @@ pub(super) struct MoveReceipt {
 }
 
 impl MoveReceipt {
-    /// The profile and the hosts it moved between.
-    pub(super) fn moved(&self) -> (String, String, String) {
-        (self.profile.clone(), self.from_host.clone(), self.to_host.clone())
-    }
-
     /// The receipt as `placement move --json` prints it.
     pub(super) fn report(&self) -> Value {
         json!({
@@ -178,7 +173,12 @@ pub(super) async fn relocate(
             let mut kept_replaced_state = Vec::new();
             let mut unsettled_state = Vec::new();
             let settles = progress.destination_written.iter().map(|state| {
-                settle_state_backup(&context.destination, state, &context.transaction.id, &runner)
+                settle_state_backup(
+                    &context.destination,
+                    state,
+                    &context.transaction.id,
+                    &runner,
+                )
             });
             let settled = futures::future::join_all(settles).await;
             for (state, settled) in progress.destination_written.iter().zip(settled) {
@@ -247,8 +247,7 @@ pub(super) async fn move_services(
         })?;
     ensure_profile_lifecycle_mutable(&profile)?;
     if check {
-        return super::check::check_move(document, generation, profile, to_host, json_output)
-            .await;
+        return super::check::check_move(document, generation, profile, to_host, json_output).await;
     }
     // The vault's ciphertext moves with its profile and its owner's secret
     // key does not: moved before the owner is rotated to a key the

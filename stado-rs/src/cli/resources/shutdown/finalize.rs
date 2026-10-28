@@ -50,7 +50,10 @@ pub(super) fn finalize(mut action: Action, observed: Value) -> Result<Option<Act
             }
             action.parameters["target_size"] = json!(planner::NO_INSTANCES);
             action.preconditions = vec![planner::condition("target_size", json!(target))];
-            action.postconditions = vec![planner::condition("target_size", json!(planner::NO_INSTANCES))];
+            action.postconditions = vec![planner::condition(
+                "target_size",
+                json!(planner::NO_INSTANCES),
+            )];
             action.rollback = Some(Rollback {
                 kind: ActionKind::ResizeManagedInstanceGroup,
                 parameters: json!({"target_size": target, "scope": action.parameters["scope"]}),

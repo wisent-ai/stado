@@ -20,9 +20,10 @@ use crate::cli::CmdError;
 
 /// Read and write by the owner alone, as POSIX names the bits. `mode_t` is
 /// narrower than `u32` on macOS, so the widening is lossless.
-const OWNER_ONLY_FILE: u32 = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
+const OWNER_ONLY_FILE: u32 =
+    crate::primitives::file_mode::widen(nix::libc::S_IRUSR | nix::libc::S_IWUSR);
 /// Read, write and search by the owner alone.
-const OWNER_ONLY_DIRECTORY: u32 = nix::libc::S_IRWXU as u32;
+const OWNER_ONLY_DIRECTORY: u32 = crate::primitives::file_mode::widen(nix::libc::S_IRWXU);
 
 fn invoke(skarbiec: &str, arguments: &[String]) -> Result<Value, CmdError> {
     // The whole line is named in every error: a caller passing no verb is

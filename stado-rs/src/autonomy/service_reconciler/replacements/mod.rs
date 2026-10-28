@@ -13,9 +13,9 @@ use std::collections::BTreeMap;
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::deploy::service::{self, ServiceStatus};
 use crate::deploy::service_catalog::CatalogService;
+use crate::deploy::Runner;
 use crate::primitives::tally::Tally;
 use crate::queue::StorageError;
-use crate::deploy::Runner;
 use crate::targets::ComputeTarget;
 
 use super::gate::MutationGate;

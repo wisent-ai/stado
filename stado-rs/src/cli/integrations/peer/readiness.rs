@@ -225,7 +225,10 @@ fn print_text(report: &Readiness) {
     if let Some(error) = &report.vault_error {
         println!("vault:    {error}");
     }
-    println!("peer:     {} namespace {}", report.peer_origin, report.peer_namespace);
+    println!(
+        "peer:     {} namespace {}",
+        report.peer_origin, report.peer_namespace
+    );
     if let Some(queue) = &report.peer_queue {
         println!("queue:    {queue}");
     }

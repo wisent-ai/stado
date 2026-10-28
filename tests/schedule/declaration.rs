@@ -44,7 +44,10 @@ impl Store {
             .env("HOME", &self.root)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.root.join("store"))
-            .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .args(arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

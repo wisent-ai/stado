@@ -73,7 +73,7 @@ const legacy = checkout('example-legacy', 'rustls-webpki = "=0.101.7"', [['rustl
 const locked = (path, crate) =>
   readFileSync(join(path, 'Cargo.lock'), 'utf8').match(new RegExp(`name = "${crate}"\\nversion = "(?<version>[^"]+)"`)).groups.version;
 
-const env = { ...toolchain, HOME: home, STADO_CONFIG: join(home, 'no-config.toml'), TMPDIR: join(home, 'tmp') };
+const env = { ...toolchain, HOME: home, STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), TMPDIR: join(home, 'tmp') };
 const runs = [];
 function advisoriesIn(environment, ...args) {
   const answer = run(stado, ['product', '--workspace', workspace, 'advisories', ...args], root, environment);

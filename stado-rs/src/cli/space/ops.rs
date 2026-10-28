@@ -281,11 +281,10 @@ pub(super) async fn relocate(
             Some(error) => error.to_string(),
             None => format!("the host's report names no error: {report}"),
         };
-        return Err(CmdError::click(format!(
-            "{} object relocation failed: {}",
-            target, cause
-        ))
-        .machine_readable(json_output));
+        return Err(
+            CmdError::click(format!("{} object relocation failed: {}", target, cause))
+                .machine_readable(json_output),
+        );
     }
     Ok(())
 }

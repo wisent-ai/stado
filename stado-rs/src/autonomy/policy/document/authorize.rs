@@ -55,9 +55,9 @@ impl AutonomyPolicy {
         {
             return AuthorizationDecision::deny("stateful resource is protected");
         }
-        if estimated_cost_usd.is_some_and(|estimate| {
-            !estimate.is_finite() || estimate.is_sign_negative()
-        }) {
+        if estimated_cost_usd
+            .is_some_and(|estimate| !estimate.is_finite() || estimate.is_sign_negative())
+        {
             return AuthorizationDecision::deny(
                 "action cost estimate must be a finite non-negative number",
             );

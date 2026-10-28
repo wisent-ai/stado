@@ -66,7 +66,10 @@ pub async fn status(as_json: bool) -> Result<bool, CmdError> {
     // machine is another host's is never read as running or stopped here.
     let local = ingress.pid_hint.machine == this_machine;
     let listener_alive = match local {
-        true => Some(group_alive(ingress.pid_hint.listener_pgid, "--enrollment-only")?),
+        true => Some(group_alive(
+            ingress.pid_hint.listener_pgid,
+            "--enrollment-only",
+        )?),
         false => None,
     };
     let tunnel_alive = match local {

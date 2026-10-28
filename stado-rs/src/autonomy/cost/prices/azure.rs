@@ -74,7 +74,9 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
             .and_then(Value::as_array)
         else {
             source.state = PriceState::Partial;
-            source.error = Some(format!("Azure Retail Prices answered a page without Items: {url}"));
+            source.error = Some(format!(
+                "Azure Retail Prices answered a page without Items: {url}"
+            ));
             break;
         };
         for item in items {

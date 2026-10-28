@@ -14,7 +14,10 @@ use crate::providers::BoxProvider;
 
 use super::agent::stated;
 use super::verbs::{failure, print};
-use super::{CmdError, EnvironmentId, EnvironmentKey, EnvironmentName, RepositoryArgs, SecretFileArgs, SecretPath};
+use super::{
+    CmdError, EnvironmentId, EnvironmentKey, EnvironmentName, RepositoryArgs, SecretFileArgs,
+    SecretPath,
+};
 
 #[derive(Subcommand)]
 pub enum EnvironmentCommands {

@@ -112,12 +112,21 @@ pub async fn unowned_processes(
     for line in output.stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
             ["STADO_UNOWNED_OWNED", count] => {
-                scan.owned_pids = count.trim().parse().map_err(|_not_count| unreadable(line))?;
+                scan.owned_pids = count
+                    .trim()
+                    .parse()
+                    .map_err(|_not_count| unreadable(line))?;
             }
             ["STADO_UNOWNED_ROOT", root, matched, under] => scan.roots.push((
                 (*root).trim().to_string(),
-                matched.trim().parse().map_err(|_not_count| unreadable(line))?,
-                under.trim().parse().map_err(|_not_count| unreadable(line))?,
+                matched
+                    .trim()
+                    .parse()
+                    .map_err(|_not_count| unreadable(line))?,
+                under
+                    .trim()
+                    .parse()
+                    .map_err(|_not_count| unreadable(line))?,
             )),
             ["STADO_UNOWNED_JUDGED", pid, verdict, owner] => scan.judged.push((
                 (*pid).trim().to_string(),

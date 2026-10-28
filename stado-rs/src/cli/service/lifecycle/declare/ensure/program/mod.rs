@@ -235,7 +235,11 @@ pub(crate) fn resolved_unit(
             .map_err(CmdError::declaration)
     };
     unit.program = declared(&unit.program)?;
-    unit.args = unit.args.iter().map(|arg| declared(arg)).collect::<Result<_, _>>()?;
+    unit.args = unit
+        .args
+        .iter()
+        .map(|arg| declared(arg))
+        .collect::<Result<_, _>>()?;
     for (_, value) in &mut unit_env {
         *value = declared(value)?;
     }

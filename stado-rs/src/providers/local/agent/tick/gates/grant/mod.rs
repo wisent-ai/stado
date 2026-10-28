@@ -144,7 +144,9 @@ async fn renew_own(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOutcome {
             return RenewOutcome::Failed;
         }
         Err(error) => {
-            log_fn(&format!("agent grant: the token file {token_file} cannot be examined: {error}"));
+            log_fn(&format!(
+                "agent grant: the token file {token_file} cannot be examined: {error}"
+            ));
             return RenewOutcome::Failed;
         }
     }

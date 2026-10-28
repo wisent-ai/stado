@@ -105,7 +105,10 @@ pub(super) fn admission_refusal(target: &ComputeTarget, capacity: &[Value]) -> O
 /// others. A host that published nothing, or did not state its cores, is
 /// still offered last, and its refusal is named by [`admission_refusal`].
 /// Sort descending by this key; ties fall to the host's name.
-pub(super) fn placement_order(target: &ComputeTarget, capacity: &[Value]) -> (bool, Option<i64>, bool) {
+pub(super) fn placement_order(
+    target: &ComputeTarget,
+    capacity: &[Value],
+) -> (bool, Option<i64>, bool) {
     let live = live_entry(target, capacity);
     let accepting = live
         .and_then(|entry| entry.get("accepting_jobs"))

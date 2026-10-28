@@ -6,6 +6,7 @@
 mod clone;
 mod darwin;
 mod inventory;
+mod metadata;
 mod seal;
 
 use std::fs;
@@ -25,6 +26,7 @@ pub(super) use inventory::{
     complete_physical_inventory, item_path, object_paths, physical_inventory,
     validate_complete_inventory, validate_physical_checkpoint,
 };
+pub(super) use metadata::{metadata_name, metadata_path};
 pub(super) use seal::{checkpoint_tree, seal_tree, set_tree_modes, validate_sealed_tree};
 
 /// The directory holding `path`; a path with none (the filesystem root, or
@@ -70,7 +72,10 @@ fn absolute(path: &str) -> Step<PathBuf> {
         std::env::current_dir()
             .map(|directory| directory.join(path))
             .map_err(|error| {
-                format!("cannot resolve {} against the working directory: {error}", path.display())
+                format!(
+                    "cannot resolve {} against the working directory: {error}",
+                    path.display()
+                )
             })?
     };
     let mut normal = PathBuf::new();
@@ -132,7 +137,10 @@ fn privileged(context: &Context, arguments: &[&str], label: &str) -> Step<Output
         let detail = if stderr.is_empty() { stdout } else { stderr };
         return Err(match detail.trim().lines().last() {
             Some(last) => format!("{label}: {last}"),
-            None => format!("{label}: privileged command failed with {} and printed nothing", output.status),
+            None => format!(
+                "{label}: privileged command failed with {} and printed nothing",
+                output.status
+            ),
         });
     }
     Ok(output)
@@ -172,10 +180,13 @@ fn privileged_digest(context: &Context, path: &str) -> Step<String> {
         .ok_or_else(|| "privileged confined digest printed no digest".to_string())?;
     // A SHA-256 digest is the hash's own output size in bytes, written as
     // lowercase hexadecimal.
-    let bytes = hex::decode(encoded)
-        .map_err(|error| format!("privileged confined digest {encoded:?} is not hexadecimal: {error}"))?;
+    let bytes = hex::decode(encoded).map_err(|error| {
+        format!("privileged confined digest {encoded:?} is not hexadecimal: {error}")
+    })?;
     if bytes.len() != <Sha256 as Digest>::output_size() || hex::encode(&bytes) != encoded {
-        return Err(format!("privileged confined digest {encoded:?} is not a lowercase SHA-256 digest"));
+        return Err(format!(
+            "privileged confined digest {encoded:?} is not a lowercase SHA-256 digest"
+        ));
     }
     Ok(encoded.to_string())
 }
@@ -252,41 +263,4 @@ pub(super) fn regular_identity(context: &Context, path: &str) -> Step<Value> {
         return Err(format!("non-regular object: {path}"));
     }
     Ok(json!({"bytes": info.len(), "sha256": digest(context, path)?}))
-}
-
-/// The object's sidecar name under `.metadata`, relative to it.
-pub(super) fn metadata_name(relative: &str) -> String {
-    if relative.ends_with(".json") {
-        relative.to_string()
-    } else {
-        format!("{relative}.json")
-    }
-}
-
-/// Where an object's metadata sidecar lives; refuses a symlinked directory
-/// on the way to it.
-pub(super) fn metadata_path(root: &str, relative: &str) -> Step<String> {
-    let candidate = join(&join(root, ".metadata"), &metadata_name(relative));
-    let directory = parent_of(&candidate)?;
-    let inside = Path::new(&directory)
-        .strip_prefix(root)
-        .map_err(|error| format!("metadata path leaves its root: {candidate}: {error}"))?;
-    let mut current = PathBuf::from(root);
-    for component in inside.components() {
-        current.push(component);
-        match fs::symlink_metadata(&current) {
-            Ok(info) if info.file_type().is_symlink() => {
-                return Err(format!(
-                    "symlinked metadata directory: {}",
-                    current.display()
-                ));
-            }
-            Ok(_directory) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!("cannot inspect metadata directory {}: {error}", current.display()))
-            }
-        }
-    }
-    Ok(candidate)
 }

@@ -162,7 +162,9 @@ pub(super) fn ensure_node(source: &Path) -> Result<(), CmdError> {
         return Ok(());
     }
     let home = crate::config_file::home().map_err(|cause| {
-        CmdError::refused(format!("Node.js has no home to be installed under: {cause}"))
+        CmdError::refused(format!(
+            "Node.js has no home to be installed under: {cause}"
+        ))
     })?;
     let report = stado_product::node_runtime::ensure(&home).map_err(|error| {
         CmdError::click(format!("{error:#}"))

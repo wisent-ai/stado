@@ -192,8 +192,9 @@ pub(super) async fn recycle_launchd(
                 current.label == unit.label && current.loaded_domains == unit.loaded_domains
             })
             .ok_or_else(|| format!("{context}: {service} is no longer loaded after its restart"))?;
-        let current_pid = running_pid(context, &current.label, &current.pid)?
-            .ok_or_else(|| format!("{context}: {service} restarted and launchd holds no pid for it"))?;
+        let current_pid = running_pid(context, &current.label, &current.pid)?.ok_or_else(|| {
+            format!("{context}: {service} restarted and launchd holds no pid for it")
+        })?;
         let images = crate::deploy::service::running_images(&[current_pid])
             .map_err(|error| format!("{context}: cannot verify {service}'s new image: {error}"))?;
         if !images

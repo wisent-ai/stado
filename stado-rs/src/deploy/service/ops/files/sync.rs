@@ -1,5 +1,4 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use nix::sys::stat::Mode;
 
 use crate::deploy::service::*;
 
@@ -17,8 +16,8 @@ pub async fn sync_service_file(
 ) -> Result<RemoteReport, DeployError> {
     // Owner read and write for a file, owner read, write and execute for a
     // program; nothing for the group or anyone else.
-    let owner_file = u32::from((Mode::S_IRUSR | Mode::S_IWUSR).bits());
-    let owner_program = u32::from(Mode::S_IRWXU.bits());
+    let owner_file = crate::primitives::file_mode::owner_read_write();
+    let owner_program = crate::primitives::file_mode::owner_program();
     if mode != owner_file && mode != owner_program {
         return Err(DeployError(format!(
             "service file mode must be {owner_file:o} or {owner_program:o}, got {mode:o}"

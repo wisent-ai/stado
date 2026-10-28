@@ -63,7 +63,12 @@ impl DatasetSpec {
             (Some(models), Some(require_complete), Some(raw), Some(aggregated))
                 if issues.is_empty() =>
             {
-                Ok(Self { models, require_complete, raw, aggregated })
+                Ok(Self {
+                    models,
+                    require_complete,
+                    raw,
+                    aggregated,
+                })
             }
             _ => Err(issues),
         }
@@ -80,7 +85,11 @@ impl Partition {
         let root = kept(text(map, "root", &path), issues);
         let benchmarks = kept(text_list(map, "benchmarks", &path), issues);
         let formats = kept(text_list(map, "formats", &path), issues);
-        Some(Self { root: root?, benchmarks: benchmarks?, formats: formats? })
+        Some(Self {
+            root: root?,
+            benchmarks: benchmarks?,
+            formats: formats?,
+        })
     }
 }
 

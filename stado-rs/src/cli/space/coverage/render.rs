@@ -10,7 +10,10 @@ use serde_json::Value;
 /// capability uses for disk figures (it takes 1 KiB blocks, `df -Pk`'s unit).
 pub fn gib(bytes: i64) -> String {
     use crate::providers::local::host_memory::constants::KIB;
-    format!("{:.1} GiB", crate::deploy::host_disk::gib_from_blocks((bytes / KIB) as f64))
+    format!(
+        "{:.1} GiB",
+        crate::deploy::host_disk::gib_from_blocks((bytes / KIB) as f64)
+    )
 }
 
 /// Print the rule line, the verdict, the janitor sentence and every
@@ -39,7 +42,11 @@ pub fn print_coverage(coverage: &Value) {
         None => println!("disk: {}", field(&coverage["verdict"])),
     }
     if let Some(janitor) = coverage.get("janitor") {
-        println!("janitor: {} — {}", field(&janitor["outcome"]), field(&janitor["detail"]));
+        println!(
+            "janitor: {} — {}",
+            field(&janitor["outcome"]),
+            field(&janitor["detail"])
+        );
         if let Some(pass) = janitor.get("report").filter(|pass| pass.is_object()) {
             if let Some(cleaners) = pass.get("cleaners").and_then(Value::as_object) {
                 for (name, result) in cleaners {

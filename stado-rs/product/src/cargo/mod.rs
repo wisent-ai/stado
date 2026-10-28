@@ -109,8 +109,8 @@ pub(crate) fn execute_revision(
     {
         use std::os::unix::fs::PermissionsExt;
         // Read, write and search for the owner only, as POSIX names the bits.
-        #[allow(clippy::useless_conversion)] // mode_t is u16 on macOS, u32 on Linux
-        let owner_only = fs::Permissions::from_mode(u32::from(libc::S_IRWXU));
+        let owner_only =
+            fs::Permissions::from_mode(crate::common::files::permission_bits(libc::S_IRWXU));
         fs::set_permissions(&evidence, owner_only.clone())?;
         fs::set_permissions(&scratch, owner_only)?;
     }

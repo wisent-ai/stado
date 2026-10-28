@@ -20,13 +20,7 @@ use crate::primitives::failure::FailureCode;
 pub const OPERATOR_CONTACT_KEY: &str = "operator_contact";
 
 /// Every channel Stado can page through, as the operator names them.
-pub const CHANNELS: &[&str] = &[
-    "slack",
-    "telegram",
-    "skrzynka",
-    "most",
-    "gcp-pubsub",
-];
+pub const CHANNELS: &[&str] = &["slack", "telegram", "skrzynka", "most", "gcp-pubsub"];
 
 /// The channels the operator chose, in his order, read from one registry
 /// document. A refusal names what is missing or malformed and how to record

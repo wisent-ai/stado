@@ -126,7 +126,15 @@ pub(crate) fn candidate(
     let Some(figures) = figures else {
         return Ok(row);
     };
-    let Figures { upfront, monthly_cost, lead, committed, net, gain, .. } = figures;
+    let Figures {
+        upfront,
+        monthly_cost,
+        lead,
+        committed,
+        net,
+        gain,
+        ..
+    } = figures;
     row.committed_cost_usd = Some(committed);
     row.monthly_net_usd = Some(net);
     row.horizon_net_usd = Some(gain);
@@ -192,7 +200,11 @@ pub(crate) fn portfolio_payback(rows: &[&Priced<'_>]) -> Option<f64> {
         return None;
     }
     // A balance already above water owes nothing more after the last start.
-    let owed = if positive(balance) { None } else { Some(-balance / slope) };
+    let owed = if positive(balance) {
+        None
+    } else {
+        Some(-balance / slope)
+    };
     match (time, owed) {
         (Some(time), Some(owed)) => Some(time + owed),
         (Some(time), None) => Some(time),

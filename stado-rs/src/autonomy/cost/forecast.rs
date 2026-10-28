@@ -48,7 +48,7 @@ fn positive(amount: f64) -> bool {
 
 /// How far `figure` exceeds `limit`, when it does.
 fn exceeding(limit: f64, figure: f64) -> Option<f64> {
-    (figure > limit).then(|| figure - limit)
+    (figure > limit).then_some(figure - limit)
 }
 
 pub fn forecast(
@@ -187,7 +187,9 @@ pub fn detect_anomalies(
     }
     for resource in &inventory.resources {
         // A resource with no live price has no burn to call idle.
-        let Some(hourly) = resource.current_hourly_cost_usd.filter(|hourly| positive(*hourly))
+        let Some(hourly) = resource
+            .current_hourly_cost_usd
+            .filter(|hourly| positive(*hourly))
         else {
             continue;
         };

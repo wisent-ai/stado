@@ -94,7 +94,8 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
             &profile,
             &cli_kwargs_json(args, &apt_list, spot, any_provider),
         );
-        let merged_field = |cause: String| CmdError::usage(format!("profile '{}': {cause}", args.profile));
+        let merged_field =
+            |cause: String| CmdError::usage(format!("profile '{}': {cause}", args.profile));
         gpu_type = get_str(&merged, "gpu_type").map_err(merged_field)?;
         vram_gb = get_i64(&merged, "vram_gb").map_err(merged_field)?;
         machine_type = get_str(&merged, "machine_type").map_err(merged_field)?;
@@ -196,7 +197,10 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     // The numeric settings are stated as stored; their unset value means what
     // `stado submit --help` declares for each (no cost cap, the FIFO bucket's
     // base priority, no declared VRAM).
-    flags.push(format!("max_cost_per_hour_usd={}", options.max_cost_per_hour_usd));
+    flags.push(format!(
+        "max_cost_per_hour_usd={}",
+        options.max_cost_per_hour_usd
+    ));
     if options.pin_to_provider {
         flags.push(format!("pinned={}", options.provider));
     }

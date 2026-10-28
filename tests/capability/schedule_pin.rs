@@ -24,8 +24,14 @@ const NOWHERE: &str = "macos-no-such-machine";
 fn write_schedule(deployment: &Deployment, schedule: &Value) {
     let directory = deployment.store().join("schedules");
     fs::create_dir_all(&directory).unwrap();
-    let id = schedule["schedule_id"].as_str().expect("a schedule names its id");
-    fs::write(directory.join(format!("{id}.json")), serde_json::to_vec_pretty(schedule).unwrap()).unwrap();
+    let id = schedule["schedule_id"]
+        .as_str()
+        .expect("a schedule names its id");
+    fs::write(
+        directory.join(format!("{id}.json")),
+        serde_json::to_vec_pretty(schedule).unwrap(),
+    )
+    .unwrap();
 }
 
 /// Every finding of `kind` `stado registry doctor --json` reports, as
@@ -52,7 +58,8 @@ fn findings(deployment: &mut Deployment, kind: &str) -> Vec<(String, String)> {
 fn a_schedule_pinned_to_no_declared_host_is_named() {
     let mut deployment = Deployment::start();
     let registry: Value =
-        serde_json::from_slice(&fs::read(deployment.store().join("registry.json")).unwrap()).unwrap();
+        serde_json::from_slice(&fs::read(deployment.store().join("registry.json")).unwrap())
+            .unwrap();
     let seeded = registry["targets"]
         .as_array()
         .and_then(|targets| targets.first())
@@ -60,14 +67,29 @@ fn a_schedule_pinned_to_no_declared_host_is_named() {
         .expect("config init seeds a registry naming this machine")
         .to_string();
     let cron = "@daily";
-    write_schedule(&deployment, &json!({"schedule_id": "pinned-nowhere", "cron": cron, "command": "true", "pinned_host": NOWHERE}));
-    write_schedule(&deployment, &json!({"schedule_id": "pinned-here", "cron": cron, "command": "true", "pinned_host": seeded}));
-    write_schedule(&deployment, &json!({"schedule_id": "removed", "cron": cron, "command": "true", "pinned_host": NOWHERE, "deleted": true}));
-    write_schedule(&deployment, &json!({"schedule_id": "unpinned", "cron": cron, "command": "true"}));
+    write_schedule(
+        &deployment,
+        &json!({"schedule_id": "pinned-nowhere", "cron": cron, "command": "true", "pinned_host": NOWHERE}),
+    );
+    write_schedule(
+        &deployment,
+        &json!({"schedule_id": "pinned-here", "cron": cron, "command": "true", "pinned_host": seeded}),
+    );
+    write_schedule(
+        &deployment,
+        &json!({"schedule_id": "removed", "cron": cron, "command": "true", "pinned_host": NOWHERE, "deleted": true}),
+    );
+    write_schedule(
+        &deployment,
+        &json!({"schedule_id": "unpinned", "cron": cron, "command": "true"}),
+    );
 
     let nowhere = findings(&mut deployment, "schedule-pinned-nowhere");
     deployment.report["schedule_pinned_nowhere"] = json!(nowhere);
-    let subjects: Vec<&str> = nowhere.iter().map(|(subject, _)| subject.as_str()).collect();
+    let subjects: Vec<&str> = nowhere
+        .iter()
+        .map(|(subject, _)| subject.as_str())
+        .collect();
     assert_eq!(subjects, ["pinned-nowhere"], "{nowhere:?}");
     assert!(
         nowhere.iter().all(|(_, detail)| detail.contains(NOWHERE)

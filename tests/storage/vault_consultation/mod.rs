@@ -18,6 +18,9 @@
 //!    the namespace's `failed` line in `/api/state.json` is that line; the
 //!    grant is issued again and the next request is authorized, which clears
 //!    the failure.
+// The fixture is shared with the host-silence journeys, which hang a
+// service this journey never stops.
+#[allow(dead_code)]
 mod fixture;
 
 use serde_json::{json, Value};

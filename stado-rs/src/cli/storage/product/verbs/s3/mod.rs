@@ -46,7 +46,7 @@ async fn signed(
     for (name, value) in carried {
         request = request.header(*name, *value);
     }
-    Ok(sent(request).await?)
+    sent(request).await
 }
 
 /// The S3 endpoint's refusal of `what`, in its own code and message, stated

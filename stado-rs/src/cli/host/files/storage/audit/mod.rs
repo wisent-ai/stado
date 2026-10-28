@@ -71,7 +71,8 @@ pub async fn backup_audit(
     let (_, audit) = crate::deploy::host_backup_audit::audit_host(target, &plan, &runner)
         .await
         .map_err(CmdError::from)?;
-    let gib = |bytes: u64| bytes as f64 / crate::providers::local::host_memory::constants::GIB as f64;
+    let gib =
+        |bytes: u64| bytes as f64 / crate::providers::local::host_memory::constants::GIB as f64;
 
     if json {
         document::print_audit_document(&audit, reclaim_twins, apply);
@@ -85,8 +86,9 @@ pub async fn backup_audit(
                 None => "the namespace inventory did not complete, and the host stated no cause"
                     .to_string(),
             };
-            return Err(CmdError::click(cause)
-                .stating(crate::primitives::failure::FailureCode::InfraDown));
+            return Err(
+                CmdError::click(cause).stating(crate::primitives::failure::FailureCode::InfraDown)
+            );
         }
         return Ok(());
     }

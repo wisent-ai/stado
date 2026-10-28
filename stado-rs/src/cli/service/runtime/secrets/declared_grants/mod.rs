@@ -62,19 +62,23 @@ async fn declared_grants(
     only: Option<&str>,
 ) -> Result<(String, Vec<Declared>), CmdError> {
     let registry = host_channel::canonical_registry().await.map_err(click)?;
-    let service = registry.service(name).ok_or_else(|| match registry.service_directory.as_ref() {
-        None => CmdError::refused(format!(
-            "the registry declares no service directory, so it carries no service {name:?}"
-        )),
-        Some(directory) => {
-            let mut names: Vec<&str> = directory.services.keys().map(String::as_str).collect();
-            names.sort_unstable();
-            CmdError::refused(format!(
-                "the service directory carries no service {name:?}; services there: {}",
-                names.join(", ")
-            ))
-        }
-    })?;
+    let service =
+        registry
+            .service(name)
+            .ok_or_else(|| match registry.service_directory.as_ref() {
+                None => CmdError::refused(format!(
+                    "the registry declares no service directory, so it carries no service {name:?}"
+                )),
+                Some(directory) => {
+                    let mut names: Vec<&str> =
+                        directory.services.keys().map(String::as_str).collect();
+                    names.sort_unstable();
+                    CmdError::refused(format!(
+                        "the service directory carries no service {name:?}; services there: {}",
+                        names.join(", ")
+                    ))
+                }
+            })?;
     let mut consumers: Vec<(&String, &ServiceConsumer)> = service.consumers.iter().collect();
     consumers.sort_by(|left, right| left.0.cmp(right.0));
     if let Some(only) = only {

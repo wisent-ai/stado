@@ -161,7 +161,10 @@ fn split_first_line(header: &[u8]) -> io::Result<(&str, &[u8])> {
         .position(|window| window == CRLF)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing HTTP request line"))?;
     let line = std::str::from_utf8(&header[..end]).map_err(|error| {
-        io::Error::new(io::ErrorKind::InvalidData, format!("request line is not UTF-8: {error}"))
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("request line is not UTF-8: {error}"),
+        )
     })?;
     Ok((line, &header[end + CRLF.len()..]))
 }
@@ -173,12 +176,16 @@ fn authority_host_port(authority: &str) -> io::Result<(String, u16)> {
     let (host, port) = authority
         .rsplit_once(':')
         .ok_or_else(|| invalid(format!("CONNECT target {authority:?} names no port")))?;
-    let port = port
-        .parse::<u16>()
-        .map_err(|error| invalid(format!("CONNECT target {authority:?} has the port {port:?}: {error}")))?;
+    let port = port.parse::<u16>().map_err(|error| {
+        invalid(format!(
+            "CONNECT target {authority:?} has the port {port:?}: {error}"
+        ))
+    })?;
     let host = host.trim_start_matches('[').trim_end_matches(']');
     if host.is_empty() {
-        return Err(invalid(format!("CONNECT target {authority:?} names no host")));
+        return Err(invalid(format!(
+            "CONNECT target {authority:?} names no host"
+        )));
     }
     Ok((host.to_owned(), port))
 }

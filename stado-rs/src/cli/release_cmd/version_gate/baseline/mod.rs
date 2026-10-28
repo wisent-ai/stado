@@ -20,9 +20,8 @@ use semver::Version;
 pub(super) use channel::Refusal;
 use channel::{release_base, state, surface_from_release, ObjectState};
 
-static CARGO_VERSION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)^version\s*=\s*"(?P<version>[^"]+)"\s*$"#).expect("static")
-});
+static CARGO_VERSION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?m)^version\s*=\s*"(?P<version>[^"]+)"\s*$"#).expect("static"));
 
 /// Byte-exact: the version gate asserts this source string literally.
 const BOOTSTRAP_SOURCE: &str = "bootstrap from the candidate binary; release channel was empty";

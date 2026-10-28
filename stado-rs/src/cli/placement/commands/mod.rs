@@ -207,9 +207,7 @@ pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
             json,
         } => match authority {
             true => crate::cli::resolver::take_authority(&to_host, check, json).await,
-            false => {
-                move_services(&services, &to_host, check, vault_owner_rotated, json).await
-            }
+            false => move_services(&services, &to_host, check, vault_owner_rotated, json).await,
         },
         PlacementCommands::Evacuate {
             from_host,
@@ -247,7 +245,10 @@ pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
                     report["reason"] = serde_json::json!(reason);
                     report["state"] = report["status"].clone();
                 }
-                crate::cli::placement::history::record("evacuate", kept.as_ref().map_err(|error| *error));
+                crate::cli::placement::history::record(
+                    "evacuate",
+                    kept.as_ref().map_err(|error| *error),
+                );
             }
             outcome.map(|_| ())
         }
@@ -274,7 +275,10 @@ pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
             crate::cli::placement::release::release(&id, json).await
         }
         PlacementCommands::History { json } => crate::cli::placement::history::list(json),
-        PlacementCommands::Holds { host: Some(host), json } => evacuate::holds(&host, json).await,
+        PlacementCommands::Holds {
+            host: Some(host),
+            json,
+        } => evacuate::holds(&host, json).await,
         PlacementCommands::Holds { host: None, json } => evacuate::holds_everywhere(json).await,
     }
 }

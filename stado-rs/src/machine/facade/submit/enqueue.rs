@@ -251,7 +251,11 @@ impl MachineFacade {
                     // land is part of the error.
                     if let Err(release) = self
                         .store
-                        .compare_and_swap_text(record_path, &versioned.version, &canonical_json(&Value::Object(released)))
+                        .compare_and_swap_text(
+                            record_path,
+                            &versioned.version,
+                            &canonical_json(&Value::Object(released)),
+                        )
                         .await
                     {
                         return Err(MachineError::retryable(

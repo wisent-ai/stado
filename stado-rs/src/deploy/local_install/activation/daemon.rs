@@ -103,7 +103,10 @@ pub(super) async fn install_darwin_daemon(
         .await
         .map_err(DeployError::unreachable)?;
     if !unloaded.succeeded() {
-        echo(&format!("[note] sudo -n launchctl bootout {service}: {}", unloaded.detail().trim()));
+        echo(&format!(
+            "[note] sudo -n launchctl bootout {service}: {}",
+            unloaded.detail().trim()
+        ));
     }
     let bootstrap = runner(sudo(vec![
         "/bin/launchctl",

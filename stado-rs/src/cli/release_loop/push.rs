@@ -80,7 +80,7 @@ pub async fn unpushed(root: &Path) -> Result<Vec<Unpushed>, CmdError> {
             ))
         })?;
         let kind = entry.file_type().map_err(|error| {
-            CmdError::from(error).within(&format!("cannot inspect {}", entry.path().display()))
+            CmdError::from(error).within(format!("cannot inspect {}", entry.path().display()))
         })?;
         if !kind.is_dir() {
             continue;

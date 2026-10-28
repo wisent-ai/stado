@@ -63,7 +63,10 @@ impl Checkout {
     fn quality(&self, args: &[&str], stdin: &str) -> Output {
         let mut child = Command::new(env!("CARGO_BIN_EXE_stado"))
             .env("HOME", &self.home)
-            .env("STADO_CONFIG", self.home.join("no-config.toml"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .args(["quality", "check", "--root"])
             .arg(&self.root)
             .args(args)

@@ -34,26 +34,27 @@ pub(in crate::fleet_shape) fn service_artefacts(
 ) {
     // A host that reported no artefact list, or one that is not a list of
     // artefacts, compared nothing; the note says which, never "0 found".
-    let artefacts: Vec<crate::deploy::host_inventory::ServiceArtifact> =
-        match reading.get("service_artifacts") {
-            None => {
+    let artefacts: Vec<crate::deploy::host_inventory::ServiceArtifact> = match reading
+        .get("service_artifacts")
+    {
+        None => {
+            notes.push(format!(
+                "{}: the host reported no service_artifacts, so no service artefact was compared",
+                target.name
+            ));
+            return;
+        }
+        Some(value) => match serde_json::from_value(value.clone()) {
+            Ok(artefacts) => artefacts,
+            Err(error) => {
                 notes.push(format!(
-                    "{}: the host reported no service_artifacts, so no service artefact was compared",
-                    target.name
-                ));
-                return;
-            }
-            Some(value) => match serde_json::from_value(value.clone()) {
-                Ok(artefacts) => artefacts,
-                Err(error) => {
-                    notes.push(format!(
                         "{}: the host's service_artifacts cannot be read ({error}), so no service artefact was compared",
                         target.name
                     ));
-                    return;
-                }
-            },
-        };
+                return;
+            }
+        },
+    };
     let mut compared = Vec::new();
     for artefact in &artefacts {
         // A version the host read from both files answers the question an

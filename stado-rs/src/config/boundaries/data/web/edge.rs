@@ -53,11 +53,7 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
         contact: Option<serde::de::IgnoredAny>,
         registrar_credential: Option<serde::de::IgnoredAny>,
     }
-    crate::config::boundaries::declared_fields::<Fields>(
-        object,
-        "web_api.edge",
-        &mut problems,
-    );
+    crate::config::boundaries::declared_fields::<Fields>(object, "web_api.edge", &mut problems);
     // Each required field is read as itself: absent, not a string, and a
     // string of the wrong shape are three problems with three sentences.
     let required = |name: &str, problems: &mut Vec<String>| -> Option<String> {

@@ -16,8 +16,11 @@ fn stado(storage: &Path, args: &[&str]) -> Output {
         .args(args)
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", storage)
-        // A set-but-missing STADO_CONFIG disables config-file discovery.
-        .env("STADO_CONFIG", storage.join("no-such-config.json"))
+        // The empty shared config: the developer's own config is never read.
+        .env(
+            "STADO_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+        )
         .env_remove("COMPUTE_API_KEY")
         .env_remove("COMPUTE_API_URL")
         .env_remove("WC_PROFILES_DIR")
@@ -60,7 +63,8 @@ fn store_publishing(hint: Value) -> tempfile::TempDir {
         "pid_hint": pid_hint,
     });
     let path = ingress_path(dir.path());
-    std::fs::create_dir_all(path.parent().expect("the object has a folder")).expect("the enrollments folder");
+    std::fs::create_dir_all(path.parent().expect("the object has a folder"))
+        .expect("the enrollments folder");
     std::fs::write(&path, document.to_string()).expect("the ingress object is written");
     dir
 }
@@ -70,13 +74,19 @@ fn store_publishing(hint: Value) -> tempfile::TempDir {
 fn refuses_a_machineless_entrance(verb: &str) {
     let storage = store_publishing(json!({}));
     let out = stado(storage.path(), &["fleet", "ingress", verb]);
-    assert!(!out.status.success(), "ingress {verb} accepted an entrance naming no machine");
+    assert!(
+        !out.status.success(),
+        "ingress {verb} accepted an entrance naming no machine"
+    );
     assert!(
         stderr(&out).contains("ingress pid_hint has no 'machine'"),
         "ingress {verb} did not name the missing machine: {}",
         stderr(&out)
     );
-    assert!(ingress_path(storage.path()).exists(), "a refused {verb} removed the published object");
+    assert!(
+        ingress_path(storage.path()).exists(),
+        "a refused {verb} removed the published object"
+    );
 }
 
 #[test]
@@ -95,17 +105,31 @@ fn down_on_another_machine_is_refused_naming_it_and_status_reads_unknown() {
     let storage = store_publishing(json!({ "machine": elsewhere }));
 
     let down = stado(storage.path(), &["fleet", "ingress", "down"]);
-    assert!(!down.status.success(), "ingress down acted on another machine's entrance");
+    assert!(
+        !down.status.success(),
+        "ingress down acted on another machine's entrance"
+    );
     assert!(
         stderr(&down).contains(&format!("runs on '{elsewhere}', not on this machine")),
         "ingress down did not name the machine the entrance runs on: {}",
         stderr(&down)
     );
-    assert!(ingress_path(storage.path()).exists(), "a refused down removed the published object");
+    assert!(
+        ingress_path(storage.path()).exists(),
+        "a refused down removed the published object"
+    );
 
     let status = stado(storage.path(), &["fleet", "ingress", "status", "--json"]);
     let answer: Value = serde_json::from_slice(&status.stdout).expect("status --json answers JSON");
     assert_eq!(answer["processes_on_this_machine"], json!(false));
-    assert_eq!(answer["listener_alive"], Value::Null, "another machine's listener was read as running or stopped here");
-    assert_eq!(answer["tunnel_alive"], Value::Null, "another machine's tunnel was read as running or stopped here");
+    assert_eq!(
+        answer["listener_alive"],
+        Value::Null,
+        "another machine's listener was read as running or stopped here"
+    );
+    assert_eq!(
+        answer["tunnel_alive"],
+        Value::Null,
+        "another machine's tunnel was read as running or stopped here"
+    );
 }

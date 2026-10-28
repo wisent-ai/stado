@@ -61,13 +61,18 @@ pub(super) fn probes_for(
     placed_on: &str,
 ) -> Result<Value, CmdError> {
     let listed = probes.as_array().ok_or_else(|| {
-        CmdError::declaration(format!("the probes declared for {placed_on} are not a list"))
+        CmdError::declaration(format!(
+            "the probes declared for {placed_on} are not a list"
+        ))
     })?;
     let mut moved = Vec::with_capacity(listed.len());
     for probe in listed {
-        let service = probe.get("service").and_then(Value::as_str).ok_or_else(|| {
-            CmdError::declaration(format!("a probe declared for {placed_on} names no service"))
-        })?;
+        let service = probe
+            .get("service")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                CmdError::declaration(format!("a probe declared for {placed_on} names no service"))
+            })?;
         let url = probe.get("url").and_then(Value::as_str).ok_or_else(|| {
             CmdError::declaration(format!(
                 "the probe of {service} declared for {placed_on} names no url"

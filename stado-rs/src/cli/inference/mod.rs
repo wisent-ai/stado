@@ -240,39 +240,34 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
         } => match (name, plan) {
             (Some(name), None) => read::logs(&name, lines, json).await,
             (None, Some(plan)) => read::plan_logs(&plan, lines, json).await,
-            _ => Err(CmdError::usage("inference logs takes a deployment or --plan PLAN_ID")),
+            _ => Err(CmdError::usage(
+                "inference logs takes a deployment or --plan PLAN_ID",
+            )),
         },
         InferenceCommands::Doctor { name, json } => read::doctor(&name, json).await,
         InferenceCommands::Verify { name, from, json } => {
             read::verify(&name, from.as_deref(), json).await
         }
-        InferenceCommands::Route {
-            command:
-                RouteCommands::Set {
-                    alias,
-                    to,
-                    expected,
-                    gateway,
-                    fallback,
-                    json,
-                },
-        } => routes::set(&alias, &to, &expected, gateway.as_deref(), &fallback, json).await,
-        InferenceCommands::Route {
-            command:
-                RouteCommands::Remove {
-                    alias,
-                    expected,
-                    json,
-                },
-        } => routes::remove(&alias, &expected, json).await,
-        InferenceCommands::Route {
-            command:
-                RouteCommands::Show {
-                    repair,
-                    probe_bearer_role,
-                    json,
-                },
-        } => routes::show(repair, probe_bearer_role.as_deref(), json).await,
+        InferenceCommands::Route { command } => match command {
+            RouteCommands::Set {
+                alias,
+                to,
+                expected,
+                gateway,
+                fallback,
+                json,
+            } => routes::set(&alias, &to, &expected, gateway.as_deref(), &fallback, json).await,
+            RouteCommands::Remove {
+                alias,
+                expected,
+                json,
+            } => routes::remove(&alias, &expected, json).await,
+            RouteCommands::Show {
+                repair,
+                probe_bearer_role,
+                json,
+            } => routes::show(repair, probe_bearer_role.as_deref(), json).await,
+        },
         InferenceCommands::Blockers { host, json } => process::blockers(&host, json).await,
         InferenceCommands::Release {
             host,

@@ -18,7 +18,10 @@
 //! Like [`crate::deploy::host_recovery`]'s script, the remote program is a
 //! fixed text with the two operator values spliced in shell-quoted.
 
+mod device;
 pub mod unmount;
+
+pub use device::validate_device;
 
 use serde_json::{json, Map, Value};
 
@@ -131,22 +134,6 @@ pub struct VolumeMount {
     pub error: Option<String>,
 }
 
-/// A device name the program will accept: one `/dev` leaf such as `sdb1` or
-/// `nvme0n1p2`, never a path and never a word the shell could read.
-pub fn validate_device(device: &str) -> Result<(), String> {
-    let acceptable = !device.is_empty()
-        && device
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
-    if acceptable {
-        Ok(())
-    } else {
-        Err(format!(
-            "--device names one /dev leaf such as sdb1 or nvme0n1p2, not {device:?}"
-        ))
-    }
-}
-
 /// A mount point the program will accept: an absolute, normalised path of
 /// plain components, and never `/`, `/boot` or a path inside the system
 /// trees a mount would shadow.
@@ -176,7 +163,19 @@ pub fn validate_mount_point(path: &str) -> Result<(), String> {
     }
     if matches!(
         components.first().copied(),
-        Some("boot" | "dev" | "etc" | "proc" | "run" | "sys" | "usr" | "bin" | "sbin" | "lib" | "var")
+        Some(
+            "boot"
+                | "dev"
+                | "etc"
+                | "proc"
+                | "run"
+                | "sys"
+                | "usr"
+                | "bin"
+                | "sbin"
+                | "lib"
+                | "var"
+        )
     ) {
         return Err(format!(
             "--mount-point {path:?} is under a system tree; mount a data disk under /mnt, /srv, /data or /home"

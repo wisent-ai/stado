@@ -24,7 +24,7 @@ impl Refusal<'_> {
     /// `unknown`, never a reading of its wording.
     fn code(&self) -> FailureCode {
         match &self.code {
-            Some(stated) => stated.clone(),
+            Some(stated) => *stated,
             None => FailureCode::Unknown,
         }
     }
@@ -42,7 +42,7 @@ pub(crate) fn batch_failure(refusals: &[Refusal<'_>]) -> CmdError {
     // The batch is retried when any product's cause is; otherwise it is
     // refused, each product's own cause being on its line above.
     let stated = match codes.iter().find(|code| code.retryable()) {
-        Some(retryable) => retryable.clone(),
+        Some(retryable) => *retryable,
         None => FailureCode::Refused,
     };
     CmdError::click(format!(

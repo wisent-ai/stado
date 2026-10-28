@@ -6,9 +6,8 @@ use clap::Subcommand;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::queue::JobStorage;
-
 use crate::cli::CmdError;
+use crate::queue::JobStorage;
 
 #[derive(Subcommand, Debug)]
 pub enum OptimizeCommands {
@@ -278,14 +277,19 @@ async fn policy(command: PolicyCommands) -> Result<(), CmdError> {
 pub(crate) async fn show_report(name: &str, json_output: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let value = report_value(&store, name).await?.ok_or_else(|| {
-        CmdError::click(format!("cost report absent: {name}; run `stado optimize run`"))
-            .stating(crate::primitives::failure::FailureCode::NotFound)
+        CmdError::click(format!(
+            "cost report absent: {name}; run `stado optimize run`"
+        ))
+        .stating(crate::primitives::failure::FailureCode::NotFound)
     })?;
     crate::cli::print_answer(&value, json_output)
 }
 
 async fn report_value(store: &JobStorage, name: &str) -> Result<Option<Value>, CmdError> {
-    Ok(crate::autonomy::storage::read_json(store, &format!("state/autonomy/cost/{name}.json")).await?)
+    Ok(
+        crate::autonomy::storage::read_json(store, &format!("state/autonomy/cost/{name}.json"))
+            .await?,
+    )
 }
 
 /// Who a recorded mutation is attributed to: the account the submitter of a

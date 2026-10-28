@@ -124,8 +124,10 @@ fn object_api_unit(
     // The unit runs without the shell's environment, so the home it is
     // handed is the one every Stado file is kept under, never an empty HOME.
     let home = crate::config_file::home_text().map_err(|cause| {
-        DeployError(format!("the object API unit has no home to run in: {cause}"))
-            .stating(crate::primitives::failure::FailureCode::Config)
+        DeployError(format!(
+            "the object API unit has no home to run in: {cause}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let uid = nix::unistd::getuid();
     let account = nix::unistd::User::from_uid(uid)

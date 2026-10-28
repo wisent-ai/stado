@@ -43,7 +43,7 @@ impl Run {
                 std::env::var_os("PATH").expect("PATH names the programs stado runs"),
             )
             .env("HOME", &self.root)
-            .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            .env("STADO_CONFIG", concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"))
             .env("TMPDIR", self.root.join("tmp"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

@@ -1,14 +1,13 @@
 //! The command itself: the stages in `stages/` driven in the one order that
 //! leaves no half-configured unit behind.
 
-use serde_json::{json, Map};
+use serde_json::json;
 
 use crate::cli::web::{former_unit_label, product, unit_label, UNIT_DOMAIN};
 use crate::cli::CmdError;
-use crate::declaration::{DeclarationRun, DeclarationSource, ServiceDeclaration};
 use crate::deploy::{host_channel, production_runner, service};
 
-use super::record::record_declaration;
+use super::record::{declaration, record_declaration};
 use super::stages::environment::{
     ensure_bearer, grant_capabilities, secret_deliveries, unit_environment,
 };
@@ -200,7 +199,12 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
-    let readyz_url = format!("http://{}:{}{}", std::net::Ipv4Addr::LOCALHOST, declared.port(), declared.readyz());
+    let readyz_url = format!(
+        "http://{}:{}{}",
+        std::net::Ipv4Addr::LOCALHOST,
+        declared.port(),
+        declared.readyz()
+    );
     let (readiness, readiness_detail) =
         wait_until_ready(&target, &label, &readyz_url, &runner).await?;
     if readiness != "ready" {
@@ -214,20 +218,12 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
 
-    let declaration = ServiceDeclaration {
-        source: DeclarationSource {
-            artifact: artifact.archive_uri.clone(),
-            sha256: artifact.artifact_sha256.clone(),
-            extra: Map::new(),
-        },
-        run: DeclarationRun {
-            program: Some(program.clone()),
-            args: Vec::new(),
-            env: environment.iter().cloned().collect(),
-            extra: Map::new(),
-        },
-        extra: Map::new(),
-    };
+    let declaration = declaration(
+        &artifact.archive_uri,
+        &artifact.artifact_sha256,
+        &program,
+        &environment,
+    );
     let generation = record_declaration(name, declared, &record, &declaration).await?;
 
     // The database credential is appended last by `secret_deliveries`, so it

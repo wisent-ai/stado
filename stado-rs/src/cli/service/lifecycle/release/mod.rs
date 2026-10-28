@@ -51,13 +51,12 @@ pub(crate) async fn release_pipeline_product(
     readiness_url: &str,
     readiness_window_seconds: u64,
 ) -> Result<gate::ReleaseOutcome, CmdError> {
-    let window_seconds =
-        std::num::NonZeroU64::new(readiness_window_seconds).ok_or_else(|| {
-            CmdError::declaration(format!(
-                "release control declares a readiness window of {readiness_window_seconds}s \
+    let window_seconds = std::num::NonZeroU64::new(readiness_window_seconds).ok_or_else(|| {
+        CmdError::declaration(format!(
+            "release control declares a readiness window of {readiness_window_seconds}s \
                  for {product}; a replace release needs at least one second"
-            ))
-        })?;
+        ))
+    })?;
     release(ServiceReleaseOptions {
         name,
         host,

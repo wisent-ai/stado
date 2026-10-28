@@ -38,8 +38,12 @@ pub(super) async fn authenticate(
     else {
         return Ok(None);
     };
-    let clients = config::registry_api_clients()
-        .map_err(|problems| format!("registry API clients cannot be read: {}", problems.join("; ")))?;
+    let clients = config::registry_api_clients().map_err(|problems| {
+        format!(
+            "registry API clients cannot be read: {}",
+            problems.join("; ")
+        )
+    })?;
     let mut matched = None;
     for client in clients
         .values()
@@ -47,7 +51,12 @@ pub(super) async fn authenticate(
     {
         let expected = crate::skarbiec::read_registry_token(client.item(), "token")
             .await
-            .map_err(|error| format!("registry token of {} cannot be read: {error}", client.item()))?
+            .map_err(|error| {
+                format!(
+                    "registry token of {} cannot be read: {error}",
+                    client.item()
+                )
+            })?
             .filter(|value| !value.is_empty())
             .ok_or_else(|| format!("registry token of {} is empty or absent", client.item()))?;
         if constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {

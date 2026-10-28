@@ -152,7 +152,9 @@ async fn restore(
     // or it would restart on an option only the incoming release has.
     if resident_host.is_some() {
         let home = crate::config_file::home().map_err(|cause| {
-            CmdError::unreachable(format!("the unit of {name} cannot be rendered again: {cause}"))
+            CmdError::unreachable(format!(
+                "the unit of {name} cannot be rendered again: {cause}"
+            ))
         })?;
         super::unit_migration::restore(destination, name, &home)?;
     }

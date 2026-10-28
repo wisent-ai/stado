@@ -58,7 +58,8 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                 rest.split_once(' ')
                     .map(|(digest, name)| (kind, digest.trim(), name.trim()))
             });
-            let Some((kind, digest, name)) = words.filter(|(_kind, _digest, name)| !name.is_empty())
+            let Some((kind, digest, name)) =
+                words.filter(|(_kind, _digest, name)| !name.is_empty())
             else {
                 unreadable.push(format!(
                     "artifact line names no kind, digest and name: {artifact}"
@@ -128,7 +129,9 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                     .iter()
                     .filter(|receipt| receipt.binary == artifact)
                     .filter(|receipt| {
-                        installed.is_some_and(|actual| receipt.artifact_sha256.eq_ignore_ascii_case(actual))
+                        installed.is_some_and(|actual| {
+                            receipt.artifact_sha256.eq_ignore_ascii_case(actual)
+                        })
                     })
                     .collect();
                 candidates.sort_by(|left, right| right.installed_at.cmp(&left.installed_at));

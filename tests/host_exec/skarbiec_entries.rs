@@ -3,8 +3,8 @@
 //! is refused naming both.
 //!
 //! The real `stado` runs against an isolated local store under the build
-//! directory (`WC_STORAGE_BACKEND=local`, `WC_LOCAL_STORAGE_PATH`, a
-//! `STADO_CONFIG` naming no file) whose registry knows no host. An
+//! directory (`WC_STORAGE_BACKEND=local`, `WC_LOCAL_STORAGE_PATH`, the
+//! empty `tests/config/empty.json` as `STADO_CONFIG`) whose registry knows no host. An
 //! unapproved spelling is refused before the registry is read, with the
 //! approved spellings; an approved one is admitted and the command goes on
 //! to resolve the target, which the empty registry refuses by name — so the
@@ -46,7 +46,10 @@ impl Store {
             .current_dir(&self.root)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.root.join("store"))
-            .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -98,8 +101,8 @@ fn an_unapproved_skarbiec_spelling_is_refused_naming_the_approved_ones() {
         "{DOCTOR} is an approved spelling: {approved}"
     );
     assert!(
-        spellings.contains(&RECOVER_DAEMONS),
-        "{RECOVER_DAEMONS} is an approved spelling: {approved}"
+        spellings.contains(&KEYRING_RECOVER),
+        "{KEYRING_RECOVER} is an approved spelling: {approved}"
     );
 }
 

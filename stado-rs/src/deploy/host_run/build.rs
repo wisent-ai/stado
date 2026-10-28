@@ -8,7 +8,6 @@ use crate::targets::ComputeTarget;
 
 use super::confined_file_prelude;
 
-
 #[derive(Debug, Serialize)]
 pub struct BuildOutcome {
     pub target: String,

@@ -117,7 +117,10 @@ pub(super) fn scan_repo(
             let mut blob_parts = blobs_parts.clone();
             blob_parts.push(name.clone());
             blobs.insert(blob_parts.clone(), identity(&info));
-            blob_sizes.insert(blob_parts, info.st_size.max(info.st_blocks * STAT_BLOCK_BYTES));
+            blob_sizes.insert(
+                blob_parts,
+                info.st_size.max(info.st_blocks * STAT_BLOCK_BYTES),
+            );
         }
     }
     drop(blobs_fd);
@@ -162,7 +165,11 @@ pub(super) fn scan_repo(
         }
     }
     drop(snapshots_fd);
-    let indices: Vec<usize> = candidates.iter().enumerate().map(|(index, _)| index).collect();
+    let indices: Vec<usize> = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, _)| index)
+        .collect();
     for index in indices {
         // Every blob another candidate still references stays.
         let retained_references: BTreeSet<Parts> = candidates

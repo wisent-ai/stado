@@ -19,11 +19,17 @@ pub(crate) fn diag_map(d: &DiskGateDiag) -> Vec<(String, Value)> {
             Ok(value) => (Value::from(*value), Value::Null),
             Err(cause) => (Value::Null, Value::from(cause.as_str())),
         };
-        [(name.to_string(), value), (format!("{name}_unread"), unread)]
+        [
+            (name.to_string(), value),
+            (format!("{name}_unread"), unread),
+        ]
     };
     let mut map: Vec<(String, Value)> = Vec::new();
     map.extend(measured("free_disk_gb", &d.free_disk_gb));
-    map.push(("home_write_probe_ok".to_string(), Value::from(d.home_write_probe.is_ok())));
+    map.push((
+        "home_write_probe_ok".to_string(),
+        Value::from(d.home_write_probe.is_ok()),
+    ));
     map.push((
         "home_write_probe_error".to_string(),
         match &d.home_write_probe {
@@ -56,16 +62,21 @@ pub(crate) fn measured_capacity(
     // An unreadable core count or processor-time counter publishes no CPU
     // figures, and the operating system's refusal is published below as the
     // admission detail; the first sample is a baseline and says so.
-    let (total_cpu_cores, available_cpu_cores, cpu_unmeasured) =
-        match (helpers::total_cpu_cores(), helpers::available_cpu_cores(requested_cpu)) {
-            (Ok(total), Ok(Some(available))) => (Some(total), Some(available), None),
-            (Ok(total), Ok(None)) => (
-                Some(total),
-                None,
-                Some("the first processor-time sample is a baseline; the next pass measures CPU".to_string()),
+    let (total_cpu_cores, available_cpu_cores, cpu_unmeasured) = match (
+        helpers::total_cpu_cores(),
+        helpers::available_cpu_cores(requested_cpu),
+    ) {
+        (Ok(total), Ok(Some(available))) => (Some(total), Some(available), None),
+        (Ok(total), Ok(None)) => (
+            Some(total),
+            None,
+            Some(
+                "the first processor-time sample is a baseline; the next pass measures CPU"
+                    .to_string(),
             ),
-            (Err(cause), _) | (Ok(_), Err(cause)) => (None, None, Some(cause)),
-        };
+        ),
+        (Err(cause), _) | (Ok(_), Err(cause)) => (None, None, Some(cause)),
+    };
     // An unreadable memory measurement publishes no RAM figures, and its cause
     // is published below as the admission detail.
     let (free_ram_gb, total_ram_gb, memory_unread) = match helpers::memory_gb() {
@@ -115,7 +126,10 @@ pub(crate) fn measured_capacity(
         }
     }
     // An unreadable load average is published as null, not as an idle host.
-    diag.insert("cpu_load_1m".into(), Value::from(helpers::load_average_1m()));
+    diag.insert(
+        "cpu_load_1m".into(),
+        Value::from(helpers::load_average_1m()),
+    );
     CapacitySnapshot {
         accepting_jobs: resource_reason.is_none(),
         running_jobs: running.len(),

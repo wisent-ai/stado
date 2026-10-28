@@ -1,8 +1,7 @@
 use serde_json::{json, Value};
 
-use crate::cli::CmdError;
-
 use crate::cli::host::secrets::vault::vault_word;
+use crate::cli::CmdError;
 
 /// What a token delivery does at its destination: verify only or install,
 /// and whether the destination reads the source's vault through its
@@ -176,8 +175,9 @@ pub async fn vault_token_sync(
             .machine_readable(json_output));
         }
     }
-    let export_operation =
-        CustodyOperation::Export.name().map_err(|error| error.machine_readable(json_output))?;
+    let export_operation = CustodyOperation::Export
+        .name()
+        .map_err(|error| error.machine_readable(json_output))?;
     let exported = host_channel::run_program(
         &source.target,
         &[
@@ -211,8 +211,10 @@ pub async fn vault_token_sync(
         .stating(FailureCode::Refused)
         .machine_readable(json_output));
     }
-    let delivery_operation =
-        mode.operation().name().map_err(|error| error.machine_readable(json_output))?;
+    let delivery_operation = mode
+        .operation()
+        .name()
+        .map_err(|error| error.machine_readable(json_output))?;
     let installed = host_channel::run_program_with_stdin(
         &destination.target,
         &[

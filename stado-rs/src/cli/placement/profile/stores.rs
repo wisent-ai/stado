@@ -58,9 +58,7 @@ pub(in crate::cli::placement) fn missing_stores(
 
 /// The stores `profile` lacks, read through any one of its hosts: every host
 /// of a profile holds the same services.
-pub(crate) fn lacking(
-    profile: &PlacementProfile,
-) -> Result<Vec<(String, CatalogState)>, CmdError> {
+pub(crate) fn lacking(profile: &PlacementProfile) -> Result<Vec<(String, CatalogState)>, CmdError> {
     let host = profile.hosts.values().next().ok_or_else(|| {
         CmdError::declaration(format!("placement profile {} names no host", profile.name))
     })?;
@@ -93,12 +91,17 @@ pub(in crate::cli::placement) async fn add_missing(name: &str) -> Result<Synced,
         .into_iter()
         .find(|profile| profile.name == name)
         .ok_or_else(|| {
-            CmdError::missing(format!("the registry declares no placement profile named {name:?}"))
+            CmdError::missing(format!(
+                "the registry declares no placement profile named {name:?}"
+            ))
         })?;
     ensure_profile_lifecycle_mutable(&profile)?;
     let missing = lacking(&profile)?;
     if missing.is_empty() {
-        return Ok(Synced { added: missing, generation: None });
+        return Ok(Synced {
+            added: missing,
+            generation: None,
+        });
     }
     let entries: Vec<Value> = missing
         .iter()
@@ -117,20 +120,30 @@ pub(in crate::cli::placement) async fn add_missing(name: &str) -> Result<Synced,
             .ok_or_else(|| CmdError::missing(format!("placement profile {name} disappeared")))?;
         let state = entry
             .as_object_mut()
-            .ok_or_else(|| CmdError::declaration(format!("placement profile {name} is not an object")))?
+            .ok_or_else(|| {
+                CmdError::declaration(format!("placement profile {name} is not an object"))
+            })?
             .entry("state")
             .or_insert_with(|| Value::Array(Vec::new()))
             .as_array_mut()
-            .ok_or_else(|| CmdError::declaration(format!("placement profile {name} state is not a list")))?;
+            .ok_or_else(|| {
+                CmdError::declaration(format!("placement profile {name} state is not a list"))
+            })?;
         for store in &entries {
-            if !state.iter().any(|kept| kept.get("path") == store.get("path")) {
+            if !state
+                .iter()
+                .any(|kept| kept.get("path") == store.get("path"))
+            {
                 state.push(store.clone());
             }
         }
         Ok(next)
     })
     .await?;
-    Ok(Synced { added: missing, generation: Some(generation) })
+    Ok(Synced {
+        added: missing,
+        generation: Some(generation),
+    })
 }
 
 /// `stado placement profile sync NAME [--json]`: [`add_missing`], said.
@@ -203,13 +216,18 @@ pub(super) async fn sync_every_state(json_output: bool) -> Result<(), CmdError> 
                 if !json_output {
                     println!("placement profile {name} was not synced: {error}");
                 }
-                rows.push(json!({ "profile": name, "state": "refused", "refused": error.to_string() }));
+                rows.push(
+                    json!({ "profile": name, "state": "refused", "refused": error.to_string() }),
+                );
                 refused.push(name.clone());
             }
         }
     }
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&json!({ "profiles": rows }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "profiles": rows }))?
+        );
     }
     if refused.is_empty() {
         return Ok(());

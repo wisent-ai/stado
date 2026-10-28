@@ -74,9 +74,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, CmdError> {
         &listener_log,
     )?;
     let listener_pgid = listener.id() as i32;
-    println!(
-        "listener: stado serve --api --enrollment-only on {bound} (pgid {listener_pgid})"
-    );
+    println!("listener: stado serve --api --enrollment-only on {bound} (pgid {listener_pgid})");
 
     if let Err(detail) = await_listener(&mut listener, port, &listener_log).await {
         terminate_child(&mut listener, "--enrollment-only");
@@ -136,7 +134,9 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, CmdError> {
             .host_str()
             .map(str::to_string)
             .ok_or_else(|| format!("cloudflared printed {base_url}, which names no host")),
-        Err(error) => Err(format!("cloudflared printed {base_url}, which is not a URL: {error}")),
+        Err(error) => Err(format!(
+            "cloudflared printed {base_url}, which is not a URL: {error}"
+        )),
     };
     let host = match named_host {
         Ok(host) => host,

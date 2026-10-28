@@ -108,7 +108,11 @@ fn classify(path: String, extension: &'static str, read: Option<(String, u64)>) 
             lines: tail.lines().map(str::to_string).collect(),
             // A file the host measured as holding nothing was opened and
             // never written.
-            state: if bytes.counts_nothing() { STREAM_EMPTY } else { STREAM_READ },
+            state: if bytes.counts_nothing() {
+                STREAM_EMPTY
+            } else {
+                STREAM_READ
+            },
         },
     }
 }

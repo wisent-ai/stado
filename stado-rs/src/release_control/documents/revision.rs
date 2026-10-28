@@ -113,6 +113,8 @@ impl VersionRevision {
     }
 
     pub fn describes(&self, product: &str, version: &str) -> bool {
-        self.schema_version == REVISION_SCHEMA_VERSION && self.product == product && self.version == version
+        self.schema_version == REVISION_SCHEMA_VERSION
+            && self.product == product
+            && self.version == version
     }
 }

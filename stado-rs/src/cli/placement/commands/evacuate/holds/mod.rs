@@ -26,13 +26,20 @@ pub(super) async fn ensure_emptied(from: &str, to: &str, authority: bool) -> Res
     let document = registry::fetch_document().await?;
     let placed = placed_on(&document, from)?;
     let fixed = fixed_routes_on(&document, from)?;
-    let names: Vec<String> = placed.profiles.iter().map(|profile| profile.name.clone()).collect();
+    let names: Vec<String> = placed
+        .profiles
+        .iter()
+        .map(|profile| profile.name.clone())
+        .collect();
     let held_by = authority_holder(&document);
     let mut standing: Vec<String> = Vec::new();
     standing.extend((!names.is_empty()).then(|| format!("profiles {}", names.join(", "))));
     standing.extend((!fixed.roles.is_empty()).then(|| format!("roles {}", fixed.roles.join(", "))));
     if authority && held_by != Some(to) {
-        standing.push(format!("the registry authority, which the directory names as {}", crate::cli::reporting::optional_text(held_by)));
+        standing.push(format!(
+            "the registry authority, which the directory names as {}",
+            crate::cli::reporting::optional_text(held_by)
+        ));
     }
     if standing.is_empty() {
         return Ok(());
@@ -58,17 +65,32 @@ pub(in crate::cli::placement) async fn holds_everywhere(json_output: bool) -> Re
     let runner = crate::deploy::production_runner();
     let (schedules, fences) = futures::join!(
         all_schedules(),
-        futures::future::join_all(registry_targets.targets.iter().map(|target| crate::cli::placement::transfer::store_fence(target, &runner)))
+        futures::future::join_all(
+            registry_targets
+                .targets
+                .iter()
+                .map(|target| crate::cli::placement::transfer::store_fence(target, &runner))
+        )
     );
     let mut rows = Vec::new();
     for (target, fence) in registry_targets.targets.iter().zip(fences) {
         let placed = placed_on(&document, &target.name)?;
         let fixed = fixed_routes_on(&document, &target.name)?;
-        let profiles: Vec<&str> = placed.profiles.iter().map(|profile| profile.name.as_str()).collect();
+        let profiles: Vec<&str> = placed
+            .profiles
+            .iter()
+            .map(|profile| profile.name.as_str())
+            .collect();
         let holds_authority = authority == Some(target.name.as_str());
-        let pinned = schedules.as_ref().map_err(String::clone).and_then(|schedules| pins_of(&registry_targets, target, schedules));
+        let pinned = schedules
+            .as_ref()
+            .map_err(String::clone)
+            .and_then(|schedules| pins_of(&registry_targets, target, schedules));
         let (pinned, unread) = match pinned {
-            Ok(pins) => (json!(pins.into_iter().map(|(id, _)| id).collect::<Vec<_>>()), Value::Null),
+            Ok(pins) => (
+                json!(pins.into_iter().map(|(id, _)| id).collect::<Vec<_>>()),
+                Value::Null,
+            ),
             Err(cause) => (Value::Null, json!(cause)),
         };
         let (store_fence, store_fence_unread) = match fence {
@@ -90,15 +112,32 @@ pub(in crate::cli::placement) async fn holds_everywhere(json_output: bool) -> Re
         }));
     }
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&json!({ "hosts": rows }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "hosts": rows }))?
+        );
         return Ok(());
     }
     for row in &rows {
         let names = |key: &str| -> Vec<String> {
-            row[key].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect()
+            row[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
         };
-        let marker = if row["authority"] == true { " (registry authority)" } else { "" };
-        let emptied = if row["emptied"] == true { " (emptied)" } else { "" };
+        let marker = if row["authority"] == true {
+            " (registry authority)"
+        } else {
+            ""
+        };
+        let emptied = if row["emptied"] == true {
+            " (emptied)"
+        } else {
+            ""
+        };
         let schedules = match row["pinned_schedules_unread"].as_str() {
             Some(cause) => format!("unread ({cause})"),
             None => listed(&names("pinned_schedules")),
@@ -131,16 +170,20 @@ fn fence_words(intent: &Value, unread: &Value) -> String {
     }
 }
 
-pub(in crate::cli::placement) async fn holds(host: &str, json_output: bool) -> Result<(), CmdError> {
+pub(in crate::cli::placement) async fn holds(
+    host: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
     let document = registry::fetch_document().await?;
     crate::targets::validate_registry(&document).map_err(CmdError::from)?;
     let registry_targets = crate::cli::placement::candidates::parse_registry(&document)?;
     let target = crate::cli::placement::candidates::target(&registry_targets, host)?;
     // The host's own store fence: a host a role move left keeps its copy
     // fenced, every write there refused; a host that does not answer is said.
-    let fence = crate::cli::placement::transfer::store_fence(target, &crate::deploy::production_runner())
-        .await
-        .map_err(|error| error.to_string());
+    let fence =
+        crate::cli::placement::transfer::store_fence(target, &crate::deploy::production_runner())
+            .await
+            .map_err(|error| error.to_string());
     let placed = placed_on(&document, host)?;
     let fixed = fixed_routes_on(&document, host)?;
     let authority = authority_holder(&document) == Some(host);
@@ -158,8 +201,9 @@ pub(in crate::cli::placement) async fn holds(host: &str, json_output: bool) -> R
         .filter(|profile| !placed.profiles.iter().any(|kept| kept.name == profile.name))
         .map(|profile| profile.name)
         .collect();
-    let pinned: Result<Vec<String>, String> =
-        pinned_schedules(&document, host).await.map(|pinned| pinned.into_iter().map(|(id, _)| id).collect());
+    let pinned: Result<Vec<String>, String> = pinned_schedules(&document, host)
+        .await
+        .map(|pinned| pinned.into_iter().map(|(id, _)| id).collect());
     let rolled_out = rolled_out_on(&document, host);
     if json_output {
         let (schedules, unread) = match &pinned {
@@ -189,8 +233,16 @@ pub(in crate::cli::placement) async fn holds(host: &str, json_output: bool) -> R
         return Ok(());
     }
     for profile in &placed.profiles {
-        let carries = if profile.services.iter().any(|service| service == vault) { " (the fleet vault)" } else { "" };
-        println!("profile {}{carries}: {}", profile.name, profile.services.join(", "));
+        let carries = if profile.services.iter().any(|service| service == vault) {
+            " (the fleet vault)"
+        } else {
+            ""
+        };
+        println!(
+            "profile {}{carries}: {}",
+            profile.name,
+            profile.services.join(", ")
+        );
     }
     for role in &fixed.roles {
         println!("role {role} of the host Stado process");

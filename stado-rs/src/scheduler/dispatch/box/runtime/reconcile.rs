@@ -80,14 +80,11 @@ impl BoxRuntime<'_> {
             }
             Err(err) => return Err(err.into()),
         };
-        let exit_code: i64 = exit_text
-            .trim()
-            .parse()
-            .map_err(|error| {
-                BoxError::transport(format!(
-                    "the Boat command exit file holds {exit_text:?}, not an exit code: {error}"
-                ))
-            })?;
+        let exit_code: i64 = exit_text.trim().parse().map_err(|error| {
+            BoxError::transport(format!(
+                "the Boat command exit file holds {exit_text:?}, not an exit code: {error}"
+            ))
+        })?;
         for stream in Stream::BOTH {
             let path = stream.path(&paths);
             let content = match self.provider.client.read_file(&box_id, path, "utf-8").await {

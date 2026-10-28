@@ -9,7 +9,10 @@ use crate::cli::host::secrets::vault::item::read_vault_phase;
 fn declared_item(value: &str) -> Result<Option<String>, String> {
     let declared: Value = serde_json::from_str(value)
         .map_err(|error| format!("the declaration is not JSON: {error}"))?;
-    Ok(declared.get("item").and_then(Value::as_str).map(str::to_string))
+    Ok(declared
+        .get("item")
+        .and_then(Value::as_str)
+        .map(str::to_string))
 }
 
 /// Refuse a publisher declaration whose Skarbiec item the host does not hold.
@@ -46,7 +49,8 @@ pub(super) async fn refuse_unminted_publisher(
     }
     // A publisher declaration the verifier cannot even parse closes the same
     // boundary an unminted item does, so it is refused here too.
-    let Some(item) = declared_item(value).map_err(|cause| CmdError::refused(format!("{key}: {cause}")))?
+    let Some(item) =
+        declared_item(value).map_err(|cause| CmdError::refused(format!("{key}: {cause}")))?
     else {
         return Ok(());
     };

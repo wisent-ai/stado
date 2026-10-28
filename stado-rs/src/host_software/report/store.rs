@@ -20,7 +20,11 @@ fn roster_detail(names: &[&str], scripts: Option<usize>) -> String {
         Some(scripts) => format!(" scripts={scripts}"),
         None => String::new(),
     };
-    format!("reported={}{scripts} names={}", names.len(), names.join(","))
+    format!(
+        "reported={}{scripts} names={}",
+        names.len(),
+        names.join(",")
+    )
 }
 
 /// Persist one host's report, replacing whatever was on file for it.
@@ -68,7 +72,10 @@ pub fn record_refusal(host: &str, detail: &str) -> io::Result<()> {
 
 /// The roster row for one host: its freshness, the program names it listed, and
 /// the script count beside them.
-fn roster(records: &[Observation], host: &str) -> Option<(Freshness, BTreeSet<String>, Option<usize>)> {
+fn roster(
+    records: &[Observation],
+    host: &str,
+) -> Option<(Freshness, BTreeSet<String>, Option<usize>)> {
     let fact = report_fact(host);
     let freshness = observations::freshness_in(records, &fact);
     let row = match &freshness {

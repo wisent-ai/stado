@@ -50,7 +50,10 @@ impl Store {
             .current_dir(&self.root)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.root.join("store"))
-            .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .env("STADO_WAITS_DIR", self.waits())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -252,12 +255,14 @@ fn a_register_that_cannot_be_read_is_refused_naming_why() {
         "a stray file is not read as a wait"
     );
     let said = String::from_utf8_lossy(&refused.stderr);
-    assert!(
-        said.contains(&format!(
-            "the register of open waits cannot be read: {} is not named <pid>-<n>, so it is no wait of this register; remove it",
-            stray.display()
-        )),
-        "{said}"
+    // The refusal names the stray file, why its name is no wait's (the cause
+    // u32 parsing gives for "not", as Stado formats it), and the remedy.
+    let cause = "not".parse::<u32>().expect_err("\"not\" is no process id");
+    let refusal = format!(
+        "the register of open waits cannot be read: {} is not named <pid>-<n> (pid \"not\": \
+         {cause}), so it is no wait of this register; remove it",
+        stray.display()
     );
+    assert!(said.contains(&refusal), "{said}");
     assert!(stray.exists(), "a refused reading removes nothing");
 }

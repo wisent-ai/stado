@@ -71,11 +71,7 @@ async fn native_api_preserves_confirmation_refusals_and_durable_declaration_chan
     let listed = payload(service.call(listing(), OK).await);
     assert_eq!(row(&listed).unwrap()["engine"], "postgres");
 
-    payload(
-        service
-            .call(confirmed(declaration("read,write")), OK)
-            .await,
-    );
+    payload(service.call(confirmed(declaration("read,write")), OK).await);
     assert_eq!(
         service.persisted()["database_api"]["databases"][name]["scopes"],
         json!(["read", "write"])
@@ -124,11 +120,24 @@ async fn native_api_preserves_confirmation_refusals_and_durable_declaration_chan
     // offers instead, and changes nothing.
     let before = service.persisted();
     let drifted = service
-        .call(confirmed(json!({"args": ["database", "decalre", name, "--json"]})), BAD_REQUEST)
+        .call(
+            confirmed(json!({"args": ["database", "decalre", name, "--json"]})),
+            BAD_REQUEST,
+        )
         .await
         .to_string();
-    assert!(drifted.contains("stado database has no command"), "{drifted}");
-    assert!(drifted.contains("decalre") && drifted.contains("declare"), "{drifted}");
-    assert_eq!(service.persisted(), before, "an undeclared path changed the config");
+    assert!(
+        drifted.contains("stado database has no command"),
+        "{drifted}"
+    );
+    assert!(
+        drifted.contains("decalre") && drifted.contains("declare"),
+        "{drifted}"
+    );
+    assert_eq!(
+        service.persisted(),
+        before,
+        "an undeclared path changed the config"
+    );
     service.pass();
 }

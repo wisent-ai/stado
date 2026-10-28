@@ -96,13 +96,14 @@ pub fn remote_script_with_stable_binds(
     // The declared unit directories go in before any registry-supplied row,
     // so no row text is read as a placeholder.
     crate::deploy::service::with_unit_directories(
-        &REMOTE_SCRIPT_TEMPLATE.replace("@DOMAIN_RESOLVER@", crate::deploy::service::DOMAIN_RESOLVER),
+        &REMOTE_SCRIPT_TEMPLATE
+            .replace("@DOMAIN_RESOLVER@", crate::deploy::service::DOMAIN_RESOLVER),
     )
-        .replace("@STABLE_BIND_ROWS@", &stable_bind_rows)
-        .replace("@IDENTITY_WORDS@", &identity_words)
-        .replace("@WC_WORDS@", &wc_words)
-        .replace("@AGENT_ROWS@", &agent_rows)
-        .replace("/usr/bin/tr '\t\r\n' ' '", r"/usr/bin/tr '\t\r\n' ' '")
+    .replace("@STABLE_BIND_ROWS@", &stable_bind_rows)
+    .replace("@IDENTITY_WORDS@", &identity_words)
+    .replace("@WC_WORDS@", &wc_words)
+    .replace("@AGENT_ROWS@", &agent_rows)
+    .replace("/usr/bin/tr '\t\r\n' ' '", r"/usr/bin/tr '\t\r\n' ' '")
 }
 
 /// ssh argv for a recovery pass: BatchMode, then StrictHostKeyChecking. The

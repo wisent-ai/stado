@@ -6,7 +6,15 @@ pub(super) async fn dispatch(command: RegistryCommands) -> Result<(), CmdError> 
     match command {
         RegistryCommands::Validate { path } => registry::validate(path),
         RegistryCommands::Import { path, json } => registry::import(path, json).await,
-        RegistryCommands::Push { path, if_generation, force, allow_empty_fleet, last_known_good, fence_transaction, json } => {
+        RegistryCommands::Push {
+            path,
+            if_generation,
+            force,
+            allow_empty_fleet,
+            last_known_good,
+            fence_transaction,
+            json,
+        } => {
             if let Some(transaction) = &fence_transaction {
                 // The fence admits this process's own writes to the files it
                 // fenced; a store reached through the object API is written
@@ -24,16 +32,33 @@ pub(super) async fn dispatch(command: RegistryCommands) -> Result<(), CmdError> 
                          WC_STORAGE_BACKEND names the local store"
                     )));
                 }
-                crate::queue::LocalBackend::admit_fence_transaction(transaction).map_err(CmdError::from)?;
+                crate::queue::LocalBackend::admit_fence_transaction(transaction)
+                    .map_err(CmdError::from)?;
             }
-            registry::push(path, force, allow_empty_fleet, if_generation, last_known_good, json).await
+            registry::push(
+                path,
+                force,
+                allow_empty_fleet,
+                if_generation,
+                last_known_good,
+                json,
+            )
+            .await
         }
         RegistryCommands::Pull {
             with_generation,
             generation_only,
             path,
             last_known_good,
-        } => registry::pull(with_generation, generation_only, path.as_deref(), last_known_good).await,
+        } => {
+            registry::pull(
+                with_generation,
+                generation_only,
+                path.as_deref(),
+                last_known_good,
+            )
+            .await
+        }
         RegistryCommands::Set { path, value, json } => registry::set(&path, &value, json).await,
         RegistryCommands::SelfTarget {
             name_only,

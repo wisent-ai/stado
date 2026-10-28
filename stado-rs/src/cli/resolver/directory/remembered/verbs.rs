@@ -14,8 +14,8 @@ use crate::cli::CmdError;
 /// The registry authority this host's last-known-good copy names, or `None`
 /// when it keeps no copy or the copy declares no service directory.
 fn authority() -> Result<Option<String>, CmdError> {
-    let Some(copy) = super::super::document::kept_last_good_document()
-        .map_err(CmdError::declaration)?
+    let Some(copy) =
+        super::super::document::kept_last_good_document().map_err(CmdError::declaration)?
     else {
         return Ok(None);
     };

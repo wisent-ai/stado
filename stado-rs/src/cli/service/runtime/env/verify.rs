@@ -81,7 +81,9 @@ pub(super) async fn verify_unit_env_write(
         state,
         chars: match observed.as_deref() {
             Some(value) => Some(u32::try_from(value.chars().count()).map_err(|error| {
-                CmdError::click(format!("the value {key} holds is too long to count: {error}"))
+                CmdError::click(format!(
+                    "the value {key} holds is too long to count: {error}"
+                ))
             })?),
             None => None,
         },

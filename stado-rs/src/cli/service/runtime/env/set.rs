@@ -102,7 +102,10 @@ pub(crate) async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> 
         // A key that was not written was not read back, which is its state.
         let (state, effective) = match &verdict {
             Some(readback) => (readback.state, readback.effective_cell()),
-            None => (service_env_file::EXPECT_UNVERIFIED, "not read back".to_string()),
+            None => (
+                service_env_file::EXPECT_UNVERIFIED,
+                "not read back".to_string(),
+            ),
         };
         cells.push(vec![
             declared.host.clone(),

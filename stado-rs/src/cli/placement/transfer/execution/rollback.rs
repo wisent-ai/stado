@@ -64,11 +64,10 @@ pub(in crate::cli::placement) async fn rollback(
     // back at once: the source stays fenced until the rollback ends, and the
     // service is down for the longest restore, not their sum. Every failure
     // is kept, in the reverse of the order the states were written.
-    let restores = progress
-        .destination_written
-        .iter()
-        .rev()
-        .map(|state| restore_state(&context.destination, state, &context.transaction.id, runner));
+    let restores =
+        progress.destination_written.iter().rev().map(|state| {
+            restore_state(&context.destination, state, &context.transaction.id, runner)
+        });
     for restored in futures::future::join_all(restores).await {
         if let Err(error) = restored {
             errors.push(error.to_string());

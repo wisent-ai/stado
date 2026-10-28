@@ -175,15 +175,26 @@ pub(in crate::deploy::host_gui_automation) async fn grant_accessibility_inner(
     // back are the same list and the expected count is its length.
     let mut grants: Vec<(&str, TccClient, &str)> = Vec::new();
     if let (Some(identity), Some(requirement)) = (&identity, &cua_requirement) {
-        grants.push((identity.bundle.as_str(), TccClient::Bundle, requirement.as_str()));
+        grants.push((
+            identity.bundle.as_str(),
+            TccClient::Bundle,
+            requirement.as_str(),
+        ));
         grants.push((CUA_DRIVER_EXECUTABLE, TccClient::Path, requirement.as_str()));
     }
-    grants.push((apple_challenge_helper_path(), TccClient::Path, helper_requirement.as_str()));
+    grants.push((
+        apple_challenge_helper_path(),
+        TccClient::Path,
+        helper_requirement.as_str(),
+    ));
     let clients = format!(
         "({})",
         grants
             .iter()
-            .map(|(client, kind, _)| format!("(client = '{client}' AND client_type = {})", *kind as u8))
+            .map(|(client, kind, _)| format!(
+                "(client = '{client}' AND client_type = {})",
+                *kind as u8
+            ))
             .collect::<Vec<_>>()
             .join(" OR ")
     );

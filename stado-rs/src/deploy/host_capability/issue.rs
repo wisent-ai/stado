@@ -85,10 +85,10 @@ pub async fn challenge_put(
     // The same rule Skarbiec's `capability challenge` applies, which owns the item:
     // digits, and at least one. How many a provider sends is its own.
     if code.is_empty() || !code.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(
-            DeployError("refusing to store a challenge code that is not digits".to_string())
-                .stating(crate::primitives::failure::FailureCode::Refused),
-        );
+        return Err(DeployError(
+            "refusing to store a challenge code that is not digits".to_string(),
+        )
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     let command = broker.command(&["capability", "challenge", resource]);
     let output =

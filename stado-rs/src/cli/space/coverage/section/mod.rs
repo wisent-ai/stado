@@ -52,7 +52,9 @@ pub fn section(
     let unswept_bytes = outside_bytes.saturating_sub(cleaner_bytes);
     let word = verdict::verdict(volume);
     let state = &report["cleanup_state"];
-    let incomplete = report.get("inventory_incomplete").filter(|why| !why.is_null());
+    let incomplete = report
+        .get("inventory_incomplete")
+        .filter(|why| !why.is_null());
     let complete = incomplete.is_none();
     json!({
         "rule": rule::rule_json(volume),

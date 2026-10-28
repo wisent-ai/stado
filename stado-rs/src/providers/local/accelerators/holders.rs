@@ -57,7 +57,9 @@ pub fn parse_compute_apps_named(text: &str) -> Result<Vec<ComputeApp>, String> {
         .map(|line| {
             let parts: Vec<&str> = line.split(',').map(str::trim).collect();
             let [device, pid, name @ .., used] = parts.as_slice() else {
-                return Err(format!("nvidia-smi row {line:?} is not gpu_uuid,pid,process_name,used_memory"));
+                return Err(format!(
+                    "nvidia-smi row {line:?} is not gpu_uuid,pid,process_name,used_memory"
+                ));
             };
             if name.is_empty() {
                 return Err(format!("nvidia-smi row {line:?} names no process"));
@@ -65,9 +67,9 @@ pub fn parse_compute_apps_named(text: &str) -> Result<Vec<ComputeApp>, String> {
             let pid: i32 = pid
                 .parse()
                 .map_err(|error| format!("nvidia-smi row {line:?} has pid {pid:?}: {error}"))?;
-            let used: i64 = used
-                .parse()
-                .map_err(|error| format!("nvidia-smi row {line:?} has used memory {used:?}: {error}"))?;
+            let used: i64 = used.parse().map_err(|error| {
+                format!("nvidia-smi row {line:?} has used memory {used:?}: {error}")
+            })?;
             Ok((device.to_string(), pid, name.join(","), used))
         })
         .collect()
@@ -199,7 +201,10 @@ impl AcceleratorHolders {
         if self.memory_model == "discrete" && total_vram_gb.is_positive() {
             let used = (total_vram_gb - free_vram_gb) as f64;
             let attributed: f64 = self.holders.iter().map(|holder| holder.used_vram_gb).sum();
-            diag.insert("vram_unattributed_gb".into(), Value::from(used - attributed));
+            diag.insert(
+                "vram_unattributed_gb".into(),
+                Value::from(used - attributed),
+            );
         }
     }
 }

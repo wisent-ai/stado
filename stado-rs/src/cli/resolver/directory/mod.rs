@@ -7,8 +7,8 @@ use crate::targets::{self, RegistryStore};
 use crate::cli::CmdError;
 
 pub(in crate::cli::resolver) mod document;
-pub(in crate::cli::resolver) mod source;
 pub(in crate::cli::resolver) mod remembered;
+pub(in crate::cli::resolver) mod source;
 pub(in crate::cli::resolver) mod write;
 
 #[derive(Debug, Serialize, Deserialize)]

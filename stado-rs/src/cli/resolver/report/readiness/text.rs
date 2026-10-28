@@ -47,7 +47,10 @@ pub(super) fn print(
         process["why"].as_str(),
     ) {
         (Some(cpu), Some(elapsed), _) => {
-            println!("process pid={} cpu={cpu} elapsed={elapsed}", crate::cli::reporting::field(&process["pid"]))
+            println!(
+                "process pid={} cpu={cpu} elapsed={elapsed}",
+                crate::cli::reporting::field(&process["pid"])
+            )
         }
         (_, _, Some(why)) => println!("process not read: {why}"),
         _ => println!("process not read: the report names no reading"),

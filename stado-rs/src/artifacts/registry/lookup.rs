@@ -5,8 +5,7 @@ use serde_json::Value;
 use crate::artifacts_models::{ArtifactError, ArtifactManifest, ArtifactRef};
 
 use super::{
-    alias_path, alias_text, manifest_path, ArtifactRegistry, RegistryError,
-    MANIFEST_PREFIX,
+    alias_path, alias_text, manifest_path, ArtifactRegistry, RegistryError, MANIFEST_PREFIX,
 };
 
 impl ArtifactRegistry {

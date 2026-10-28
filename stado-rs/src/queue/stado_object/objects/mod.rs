@@ -25,7 +25,9 @@ use crate::remote::object_store::ObjectRef;
 pub(super) fn text_room(path: &str) -> Option<usize> {
     let available = crate::providers::local::host_memory::reading::read_available_and_total()
         .and_then(|(available, _)| {
-            usize::try_from(available).map_err(|error| format!("available memory {available} is not a byte count: {error}"))
+            usize::try_from(available).map_err(|error| {
+                format!("available memory {available} is not a byte count: {error}")
+            })
         });
     match available {
         Ok(bytes) => Some(bytes),

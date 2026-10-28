@@ -31,7 +31,7 @@ fn recorded(command: &mut Command) -> Result<(Output, PathBuf)> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(
             &folder,
-            fs::Permissions::from_mode(u32::from(libc::S_IRWXU)),
+            fs::Permissions::from_mode(super::files::permission_bits(libc::S_IRWXU)),
         )?;
     }
     let stdout = folder.join("stdout.log");
@@ -285,6 +285,6 @@ fn executable_file(candidate: &std::path::Path) -> bool {
 fn any_execute_bit(mode: u32) -> bool {
     [libc::S_IXUSR, libc::S_IXGRP, libc::S_IXOTH]
         .into_iter()
-        .map(u32::from)
+        .map(super::files::permission_bits)
         .any(|bit| mode & bit == bit)
 }

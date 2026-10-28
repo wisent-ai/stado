@@ -207,7 +207,9 @@ fn update(
         fs::rename(&temporary, &path).map_err(fail)?;
         // The rename itself survives a power loss only once the directory
         // holding it is flushed.
-        fs::File::open(parent).and_then(|directory| directory.sync_all()).map_err(fail)
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(fail)
     })();
     written
         .map(|()| "changed")

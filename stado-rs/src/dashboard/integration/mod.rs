@@ -139,15 +139,24 @@ async fn authenticate(request: &Request, domain: &str, action: &str) -> Result<b
     else {
         return Ok(false);
     };
-    let clients = crate::config::integration_clients()
-        .map_err(|problems| format!("integration clients cannot be read: {}", problems.join("; ")))?;
+    let clients = crate::config::integration_clients().map_err(|problems| {
+        format!(
+            "integration clients cannot be read: {}",
+            problems.join("; ")
+        )
+    })?;
     for policy in clients
         .values()
         .filter(|policy| policy.allows(domain, action))
     {
         let expected = crate::skarbiec::read_integration_token(policy.item(), "token")
             .await
-            .map_err(|error| format!("integration token of {} cannot be read: {error}", policy.item()))?
+            .map_err(|error| {
+                format!(
+                    "integration token of {} cannot be read: {error}",
+                    policy.item()
+                )
+            })?
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| format!("integration token of {} is empty or absent", policy.item()))?;
         if constant_time_eq(presented.as_bytes(), expected.as_bytes()) {

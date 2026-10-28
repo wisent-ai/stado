@@ -100,9 +100,7 @@ fn record_part<'a>(
     name: &'a str,
 ) -> Result<()> {
     if let Some(previous) = seen.insert(number, name) {
-        bail!(
-            "unreleased part number {number} is linked more than once: {previous} and {name}"
-        );
+        bail!("unreleased part number {number} is linked more than once: {previous} and {name}");
     }
     Ok(())
 }

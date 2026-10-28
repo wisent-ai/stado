@@ -38,12 +38,14 @@ pub(super) fn accept(generation: u64, json_output: bool) -> Result<(), CmdError>
     let record = json!({ "generation": generation, "acceptedAt": now_iso() });
     // Whole and flushed: the serving resolver reads it on its next refresh,
     // and half an acceptance read there was refused as unreadable.
-    crate::primitives::document::persist(&path, record.to_string().as_bytes()).map_err(|error| {
-        CmdError::click(format!(
-            "the acceptance could not be written to {}: {error}",
-            path.display()
-        ))
-    })?;
+    crate::primitives::document::persist(&path, record.to_string().as_bytes()).map_err(
+        |error| {
+            CmdError::click(format!(
+                "the acceptance could not be written to {}: {error}",
+                path.display()
+            ))
+        },
+    )?;
     if json_output {
         println!("{}", json!({ "accepted": record, "path": path }));
     } else {

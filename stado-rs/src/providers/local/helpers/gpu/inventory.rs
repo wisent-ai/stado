@@ -72,15 +72,17 @@ pub fn parse_gpu_cards(stdout: &str) -> Result<Vec<GpuCard>, String> {
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
         let fields: Vec<&str> = line.split(',').map(str::trim).collect();
         let [uuid, total, free] = fields.as_slice() else {
-            return Err(format!("nvidia-smi printed {line:?}, not uuid, memory.total, memory.free"));
+            return Err(format!(
+                "nvidia-smi printed {line:?}, not uuid, memory.total, memory.free"
+            ));
         };
         if uuid.is_empty() {
             return Err(format!("nvidia-smi printed {line:?} with no card uuid"));
         }
         let mib = |name: &str, value: &str| {
-            value
-                .parse::<i64>()
-                .map_err(|error| format!("nvidia-smi's {name} {value:?} for {uuid} is not a MiB count: {error}"))
+            value.parse::<i64>().map_err(|error| {
+                format!("nvidia-smi's {name} {value:?} for {uuid} is not a MiB count: {error}")
+            })
         };
         cards.push(GpuCard {
             uuid: uuid.to_string(),

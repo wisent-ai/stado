@@ -89,7 +89,8 @@ pub fn prepare(
         // fraction of a release build's time, so the release build starts
         // only once the check passes: a compile error never costs a release
         // build, and its refusal says the release build was not started.
-        let check = cargo::execute_revision(runtime, &manifest, Some(&commit), "check", &selection)?;
+        let check =
+            cargo::execute_revision(runtime, &manifest, Some(&commit), "check", &selection)?;
         if check.code != libc::EXIT_SUCCESS {
             bail!(
                 "Cargo check of {} failed, so its release build was not started: {}",
@@ -99,7 +100,8 @@ pub fn prepare(
         }
         let mut arguments = vec!["--release".to_owned()];
         arguments.extend(selection);
-        let built = cargo::execute_revision(runtime, &manifest, Some(&commit), "build", &arguments)?;
+        let built =
+            cargo::execute_revision(runtime, &manifest, Some(&commit), "build", &arguments)?;
         if built.code != libc::EXIT_SUCCESS {
             bail!(
                 "Cargo build of {} failed: {}",

@@ -20,7 +20,11 @@ pub struct Reservation {
 /// holds.
 pub fn path() -> Result<PathBuf, String> {
     crate::config_file::home()
-        .map(|home| home.join(".stado").join("inference").join("reservation.json"))
+        .map(|home| {
+            home.join(".stado")
+                .join("inference")
+                .join("reservation.json")
+        })
         .map_err(|cause| format!("the inference reservation cannot be found: {cause}"))
 }
 

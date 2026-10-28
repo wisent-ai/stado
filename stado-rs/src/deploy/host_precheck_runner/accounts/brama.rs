@@ -35,7 +35,10 @@ fn brama_service_path(document: &str, key: &str, home: &str) -> Result<String, D
         })?;
     // One pair of matching quotes around the value is shell quoting, not
     // part of the path.
-    let quoted = |mark: char| raw.strip_prefix(mark).and_then(|inner| inner.strip_suffix(mark));
+    let quoted = |mark: char| {
+        raw.strip_prefix(mark)
+            .and_then(|inner| inner.strip_suffix(mark))
+    };
     let value = match quoted('"').or_else(|| quoted('\'')) {
         Some(inner) => inner,
         None => raw,

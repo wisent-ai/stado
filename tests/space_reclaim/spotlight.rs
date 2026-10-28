@@ -66,14 +66,14 @@ fn a_tagged_build_cache_is_marked_for_spotlight_and_an_untagged_directory_is_lef
 
     let locked = native.home.join("Projects/rates/target");
     native.cache(&locked);
-    let mut permissions = fs::metadata(&locked)
+    let writable = fs::metadata(&locked)
         .expect("the locked cache")
         .permissions();
+    let mut permissions = writable.clone();
     permissions.set_readonly(true);
-    fs::set_permissions(&locked, permissions.clone()).expect("the cache is made unwritable");
+    fs::set_permissions(&locked, permissions).expect("the cache is made unwritable");
     let refused = native.run(&["host", "spotlight", HOST, "--apply", "--json"]);
-    permissions.set_readonly(false);
-    fs::set_permissions(&locked, permissions).expect("the cache is writable again");
+    fs::set_permissions(&locked, writable).expect("the cache is writable again");
     assert!(
         !refused.status.success(),
         "an unwritable cache fails the command"

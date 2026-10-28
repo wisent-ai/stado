@@ -110,7 +110,9 @@ pub(in crate::fleet_shape) fn process_identity(
                             "pid {} started, then {binary} was replaced {gap} second(s) later",
                             unit.pid
                         ),
-                        None => format!("pid {} started before {binary} was last replaced", unit.pid),
+                        None => {
+                            format!("pid {} started before {binary} was last replaced", unit.pid)
+                        }
                     }
                 },
                 command: format!(

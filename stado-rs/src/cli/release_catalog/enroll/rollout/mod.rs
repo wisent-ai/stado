@@ -76,10 +76,19 @@ pub(super) async fn ensure_rollout_policy(
     // The policy's paths live under the home the host's own shell states,
     // never one derived from its SSH user name.
     let resolved = crate::cli::canonical_host(&host).await?;
-    let home = crate::deploy::host_channel::remote_home(&resolved, &crate::deploy::production_runner())
-        .await
-        .map_err(CmdError::from)?;
-    let policy = policy_for(&document, product, runtime, &host, &home, port, one_unit.is_some())?;
+    let home =
+        crate::deploy::host_channel::remote_home(&resolved, &crate::deploy::production_runner())
+            .await
+            .map_err(CmdError::from)?;
+    let policy = policy_for(
+        &document,
+        product,
+        runtime,
+        &host,
+        &home,
+        port,
+        one_unit.is_some(),
+    )?;
     let written = policy.clone();
     let written_route = route.clone();
     let route_host = host.clone();

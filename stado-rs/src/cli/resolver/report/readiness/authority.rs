@@ -51,7 +51,11 @@ pub(super) fn store_blocker() -> Option<String> {
     }
     let store = match crate::config::wc_stado_storage_url() {
         Ok(store) => store,
-        Err(cause) => return Some(format!("this host's registry store cannot be named: {cause}")),
+        Err(cause) => {
+            return Some(format!(
+                "this host's registry store cannot be named: {cause}"
+            ))
+        }
     };
     match crate::cli::resolver::authority_store_elsewhere(&store) {
         Ok(sentence) => sentence,
@@ -70,7 +74,11 @@ pub(super) fn store_blocker() -> Option<String> {
 pub(super) fn fenced_store_blocker() -> Option<String> {
     let home = match crate::config_file::home() {
         Ok(home) => home,
-        Err(cause) => return Some(format!("whether this host's object store is fenced cannot be told: {cause}")),
+        Err(cause) => {
+            return Some(format!(
+                "whether this host's object store is fenced cannot be told: {cause}"
+            ))
+        }
     };
     let root = home.join(crate::config_file::LOCAL_STORAGE_ROOT);
     let state = match crate::queue::LocalBackend::write_fence_state(&root) {
@@ -97,9 +105,8 @@ pub(super) fn fenced_store_blocker() -> Option<String> {
 /// that stops every command asking it until the interval ends, and the
 /// snapshot every registry read answers from until then.
 pub(super) fn remembered(declared: &ServiceAuthority) -> Value {
-    let kept = recalled::kept(&declared.target).map(|(version, until)| {
-        json!({ "version": version, "until": until.to_rfc3339() })
-    });
+    let kept = recalled::kept(&declared.target)
+        .map(|(version, until)| json!({ "version": version, "until": until.to_rfc3339() }));
     json!({
         "unanswered": unanswered::standing(&declared.target),
         "kept_snapshot": kept,

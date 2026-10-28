@@ -93,21 +93,19 @@ pub(crate) fn validate_registry_contract(document: &Value) -> Result<(), String>
     // A registry that lists no targets knows none, so every policy target is
     // then refused as unknown below; a target without a release_platform is
     // named as such, never read as an empty platform.
-    let platforms: BTreeMap<&str, Option<&str>> = match document
-        .get("targets")
-        .and_then(Value::as_array)
-    {
-        Some(targets) => targets
-            .iter()
-            .filter_map(|target| {
-                Some((
-                    target.get("name")?.as_str()?,
-                    target.get("release_platform").and_then(Value::as_str),
-                ))
-            })
-            .collect(),
-        None => BTreeMap::new(),
-    };
+    let platforms: BTreeMap<&str, Option<&str>> =
+        match document.get("targets").and_then(Value::as_array) {
+            Some(targets) => targets
+                .iter()
+                .filter_map(|target| {
+                    Some((
+                        target.get("name")?.as_str()?,
+                        target.get("release_platform").and_then(Value::as_str),
+                    ))
+                })
+                .collect(),
+            None => BTreeMap::new(),
+        };
     for (target_name, target_policy) in &policy.targets {
         let at = format!("{location}.targets.{target_name}");
         let Some(declared) = platforms.get(target_name.as_str()) else {

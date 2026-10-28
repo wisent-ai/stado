@@ -159,24 +159,48 @@ fn an_inventory_skipped_under_load_reports_unknown_totals_not_zero() {
     let native = Native::new("space-report-incomplete");
     let args = ["space", "report", "example-cleanup-host", "--json"];
     let ceiling = f64::MIN_POSITIVE.to_string();
-    let output = native.command(&args)
+    let output = native
+        .command(&args)
         .env("WC_HOST_SCAN_LOAD_CEILING", &ceiling)
         .output()
         .expect("the real report runs with the explicit scan ceiling");
     native.record(env!("CARGO_BIN_EXE_stado"), &args, &output);
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the real report is JSON");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the real report is JSON");
     native.observe("incomplete space report", report.clone());
-    let reason = report["inventory_incomplete"].as_str().expect("the real inventory was refused under load");
-    assert!(reason.contains("inventory walk skipped") && reason.contains("ceiling"), "{reason}");
-    assert!(report["usage"]["available_kb"].as_str().is_some(), "the actual df observation was lost: {report}");
+    let reason = report["inventory_incomplete"]
+        .as_str()
+        .expect("the real inventory was refused under load");
+    assert!(
+        reason.contains("inventory walk skipped") && reason.contains("ceiling"),
+        "{reason}"
+    );
+    assert!(
+        report["usage"]["available_kb"].as_str().is_some(),
+        "the actual df observation was lost: {report}"
+    );
     let coverage = &report["coverage"];
-    for field in ["covered_bytes", "uncovered_bytes", "cleaner_bytes", "unswept_bytes"] {
-        assert_eq!(coverage.get(field), Some(&serde_json::Value::Null),
-            "an incomplete inventory invented a whole-inventory total for {field}: {report}");
+    for field in [
+        "covered_bytes",
+        "uncovered_bytes",
+        "cleaner_bytes",
+        "unswept_bytes",
+    ] {
+        assert_eq!(
+            coverage.get(field),
+            Some(&serde_json::Value::Null),
+            "an incomplete inventory invented a whole-inventory total for {field}: {report}"
+        );
     }
-    assert_eq!(coverage["inventory_incomplete"], report["inventory_incomplete"],
-        "the coverage must retain the actual failed inventory operation");
+    assert_eq!(
+        coverage["inventory_incomplete"], report["inventory_incomplete"],
+        "the coverage must retain the actual failed inventory operation"
+    );
 }
 
 /// The installed memory as this machine's own tools state it, in bytes:
@@ -187,7 +211,10 @@ fn kernel_total_bytes(native: &Native) -> i64 {
     } else {
         ("free", &["-b"])
     };
-    let output = Command::new(program).args(args).output().expect("the memory tool runs");
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .expect("the memory tool runs");
     native.record(program, args, &output);
     let text = String::from_utf8_lossy(&output.stdout).to_string();
     let figure = if cfg!(target_os = "macos") {
@@ -199,14 +226,19 @@ fn kernel_total_bytes(native: &Native) -> i64 {
             .expect("free states a Mem: total")
             .to_string()
     };
-    figure.parse().expect("the installed memory is a byte count")
+    figure
+        .parse()
+        .expect("the installed memory is a byte count")
 }
 
 #[test]
 fn a_space_report_reads_memory_as_the_kernel_states_it() {
     let native = Native::new("space-report-memory");
     let args = ["space", "report", "example-cleanup-host", "--json"];
-    let output = native.command(&args).output().expect("run the real space report");
+    let output = native
+        .command(&args)
+        .output()
+        .expect("run the real space report");
     native.record(env!("CARGO_BIN_EXE_stado"), &args, &output);
     assert!(
         output.status.success(),
@@ -218,10 +250,21 @@ fn a_space_report_reads_memory_as_the_kernel_states_it() {
     let memory = &report["memory"];
     native.observe("memory", memory.clone());
     // A host whose kernel answers every figure leaves nothing unread.
-    assert!(memory["unread"].is_null(), "memory was not fully read: {memory}");
-    let total = memory["total_bytes"].as_i64().expect("total_bytes is a count");
-    assert_eq!(total, kernel_total_bytes(&native), "total_bytes is not the kernel's: {memory}");
-    let available = memory["available_bytes"].as_i64().expect("available_bytes is a count");
+    assert!(
+        memory["unread"].is_null(),
+        "memory was not fully read: {memory}"
+    );
+    let total = memory["total_bytes"]
+        .as_i64()
+        .expect("total_bytes is a count");
+    assert_eq!(
+        total,
+        kernel_total_bytes(&native),
+        "total_bytes is not the kernel's: {memory}"
+    );
+    let available = memory["available_bytes"]
+        .as_i64()
+        .expect("available_bytes is a count");
     assert!(
         available.is_positive() && available <= total,
         "available_bytes {available} is not a share of the installed {total}: {memory}"
@@ -229,9 +272,19 @@ fn a_space_report_reads_memory_as_the_kernel_states_it() {
     if cfg!(target_os = "macos") {
         // The page size comes from the vm_stat banner, as the host's own pass reads it.
         let args = ["-n", "hw.pagesize"];
-        let page = Command::new("/usr/sbin/sysctl").args(args).output().expect("sysctl runs");
+        let page = Command::new("/usr/sbin/sysctl")
+            .args(args)
+            .output()
+            .expect("sysctl runs");
         native.record("/usr/sbin/sysctl", &args, &page);
-        let page: i64 = String::from_utf8_lossy(&page.stdout).trim().parse().expect("hw.pagesize is an integer");
-        assert_eq!(memory["page_size_bytes"].as_i64(), Some(page), "page size is not the kernel's: {memory}");
+        let page: i64 = String::from_utf8_lossy(&page.stdout)
+            .trim()
+            .parse()
+            .expect("hw.pagesize is an integer");
+        assert_eq!(
+            memory["page_size_bytes"].as_i64(),
+            Some(page),
+            "page size is not the kernel's: {memory}"
+        );
     }
 }

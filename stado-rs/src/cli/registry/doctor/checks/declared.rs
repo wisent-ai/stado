@@ -90,7 +90,9 @@ pub(super) fn retired_replacement(
             target.name
         ));
     }
-    let home = crate::config_file::home_dir().to_string_lossy().into_owned();
+    let home = crate::config_file::home_dir()
+        .to_string_lossy()
+        .into_owned();
     let Some(owner) = service::declared_owner(target, service, &home)? else {
         return Ok(None);
     };

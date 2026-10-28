@@ -42,8 +42,9 @@ fn crates(directory: &Path, into: &mut Vec<PathBuf>) -> Result<(), CmdError> {
         })?;
         let path = entry.path();
         // The entry itself, not what a link points at: a link is not walked.
-        let kind = std::fs::symlink_metadata(&path)
-            .map_err(|error| CmdError::click(format!("cannot examine {}: {error}", path.display())))?;
+        let kind = std::fs::symlink_metadata(&path).map_err(|error| {
+            CmdError::click(format!("cannot examine {}: {error}", path.display()))
+        })?;
         if kind.is_dir() {
             crates(&path, into)?;
         }

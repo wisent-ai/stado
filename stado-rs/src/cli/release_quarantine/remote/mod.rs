@@ -56,7 +56,9 @@ async fn read_remote(
                 bytes = host_channel::marker_number(field, "byte count")
                     .map_err(|detail| unreadable(&detail))?;
             }
-            ["STADO_QUARANTINE_BYTES"] => return Err(unreadable("its byte count line has no value")),
+            ["STADO_QUARANTINE_BYTES"] => {
+                return Err(unreadable("its byte count line has no value"))
+            }
             // An empty file prints an empty field; a line without the field
             // at all is not an answer about the content.
             ["STADO_QUARANTINE_BASE64", field, ..] => encoded = Some(*field),

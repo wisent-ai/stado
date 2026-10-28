@@ -89,7 +89,10 @@ fn walk(
     // Without a process table there is no live-process gate, and this cleaner
     // does not delete with a gate missing.
     let Some(snapshot) = process_snapshot() else {
-        skipped.extend(std::iter::repeat_n("process_table_unavailable", ordered.len()));
+        skipped.extend(std::iter::repeat_n(
+            "process_table_unavailable",
+            ordered.len(),
+        ));
         return Ok(());
     };
     report.clones.scanned_items += ordered.len() as i64;

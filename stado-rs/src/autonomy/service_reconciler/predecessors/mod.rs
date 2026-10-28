@@ -29,7 +29,7 @@ mod roles;
 mod standby;
 mod strays;
 
-pub(super) use roles::{replaced, retake, taken_over};
+pub(super) use roles::{replaced, retake, taken_over, with_retake};
 
 /// A declared catalog service and its catalog entry: the replacements a pass
 /// retires predecessors for, and asks about before repairing a unit.

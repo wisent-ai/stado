@@ -263,7 +263,11 @@ async fn remote_stado(target: &str, prelude: &str, arguments: &[&str]) -> Result
     .map_err(CmdError::from)?;
     if !output.succeeded() {
         let detail = output.detail().trim().to_string();
-        let detail = if detail.is_empty() { "no output".to_string() } else { detail };
+        let detail = if detail.is_empty() {
+            "no output".to_string()
+        } else {
+            detail
+        };
         // A host Stado older or newer than this client fails on a word it
         // does not know; the refusal says which Stado each side runs.
         let host_version = host_stado_version(&resolved, prelude).await;
@@ -285,7 +289,11 @@ async fn host_stado_version(resolved: &ComputeTarget, prelude: &str) -> String {
     let runner = crate::deploy::production_runner();
     match crate::deploy::host_channel::run_script_to_completion(resolved, &script, &runner).await {
         Ok(answer) if answer.succeeded() => answer.stdout.trim().to_string(),
-        Ok(answer) => format!("a stado whose --version failed (exit {}): {}", answer.code, answer.detail().trim()),
+        Ok(answer) => format!(
+            "a stado whose --version failed (exit {}): {}",
+            answer.code,
+            answer.detail().trim()
+        ),
         Err(error) => format!("a stado whose version could not be asked: {error}"),
     }
 }

@@ -54,7 +54,10 @@ pub fn decide_action(
     // with less free than that cannot take it, whoever holds the rest.
     match (state.queued_need_gb, state.free_vram_gb) {
         (Some(need_gb), Some(free_vram_gb)) if free_vram_gb < need_gb as f64 => {
-            AutoListAction::WaitingForRental { free_vram_gb, need_gb }
+            AutoListAction::WaitingForRental {
+                free_vram_gb,
+                need_gb,
+            }
         }
         _ => AutoListAction::BusyNotListed,
     }

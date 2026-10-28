@@ -153,7 +153,7 @@ fn resource_cost_entry(resource: &ResourceRecord, hourly: f64) -> CostEntry {
         // A live hourly price is the gross and the net at once: a provider's
         // credits are applied on its bill, not on a price quoted per hour.
         gross_cost_usd: hourly,
-        credits_usd: hourly - hourly,
+        credits_usd: f64::default(),
         net_cost_usd: hourly,
         source: "live hourly price".to_string(),
         allocated: resource.owner.is_some() || resource.workload.is_some(),

@@ -76,12 +76,16 @@ pub(crate) fn validate_registry_body(
             }
         };
         if let Some(value) = target.get("gpu_power_limit_watts") {
-            let watts = value.as_u64().and_then(std::num::NonZeroU64::new).map(std::num::NonZeroU64::get).ok_or_else(|| {
-                verr(
-                    &format!("{location}.gpu_power_limit_watts"),
-                    "must be a positive integer",
-                )
-            })?;
+            let watts = value
+                .as_u64()
+                .and_then(std::num::NonZeroU64::new)
+                .map(std::num::NonZeroU64::get)
+                .ok_or_else(|| {
+                    verr(
+                        &format!("{location}.gpu_power_limit_watts"),
+                        "must be a positive integer",
+                    )
+                })?;
             if u32::try_from(watts).is_err() {
                 return Err(verr(
                     &format!("{location}.gpu_power_limit_watts"),

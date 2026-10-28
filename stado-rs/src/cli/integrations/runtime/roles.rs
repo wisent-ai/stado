@@ -75,9 +75,16 @@ pub(crate) fn command_roles(words: &[&str]) -> Result<Vec<&'static str>, String>
     Ok(match words {
         ["serve", ..] => match ServeLine::try_parse_from(words) {
             Ok(line) => roles(&line.args),
-            Err(error) => return Err(format!("`{}` cannot be read by this build's serve: {error}", words.join(" "))),
+            Err(error) => {
+                return Err(format!(
+                    "`{}` cannot be read by this build's serve: {error}",
+                    words.join(" ")
+                ))
+            }
         },
-        ["product", rest @ ..] if product_verb(rest) == Some("sync") => vec!["--product-sync-interval-seconds"],
+        ["product", rest @ ..] if product_verb(rest) == Some("sync") => {
+            vec!["--product-sync-interval-seconds"]
+        }
         ["host", "beacon", "publish" | "collect", ..] => vec!["--health-interval-seconds"],
         // Units installed by builds before `host beacon` still run these
         // words; they are read here because they are on hosts, not because

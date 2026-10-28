@@ -230,7 +230,11 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
             cell(&summary["total"]),
             cell(&summary["unclassified"])
         );
-        for unreadable in summary["unreadable_causes"].as_array().into_iter().flatten() {
+        for unreadable in summary["unreadable_causes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
             println!("unreadable cause  {}", cell(unreadable));
         }
         match summary["dominant_cause"].as_str() {

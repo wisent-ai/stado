@@ -136,11 +136,15 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
     // manifest cargo names but that cannot be resolved is refused, never
     // read as some other package's.
     let malformed = |detail: String| {
-        CmdError::click(format!("cargo metadata for {} {detail}", manifest.display()))
-            .stating(crate::primitives::failure::FailureCode::Config)
+        CmdError::click(format!(
+            "cargo metadata for {} {detail}",
+            manifest.display()
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     };
     let mut root_package = None;
-    let packages = crate::primitives::presence::listed(&metadata["packages"], "its packages").map_err(&malformed)?;
+    let packages = crate::primitives::presence::listed(&metadata["packages"], "its packages")
+        .map_err(&malformed)?;
     for package in packages {
         let Some(path) = package["manifest_path"].as_str() else {
             return Err(CmdError::click(format!(
@@ -185,14 +189,17 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
     // is refused: read as empty or skipped, a package was said to declare
     // no binary, or was adopted shipping fewer programs than it builds.
     let mut binaries: Vec<String> = Vec::new();
-    for target in crate::primitives::presence::listed(&package["targets"], "its targets").map_err(&malformed)? {
-        let kinds = crate::primitives::presence::listed(&target["kind"], "a target's kind").map_err(&malformed)?;
+    for target in crate::primitives::presence::listed(&package["targets"], "its targets")
+        .map_err(&malformed)?
+    {
+        let kinds = crate::primitives::presence::listed(&target["kind"], "a target's kind")
+            .map_err(&malformed)?;
         if !kinds.iter().any(|kind| kind == "bin") {
             continue;
         }
-        let name = target["name"]
-            .as_str()
-            .ok_or_else(|| malformed(format!("lists a binary target without its name: {target}")))?;
+        let name = target["name"].as_str().ok_or_else(|| {
+            malformed(format!("lists a binary target without its name: {target}"))
+        })?;
         binaries.push(name.to_string());
     }
     let name = text("name")?;

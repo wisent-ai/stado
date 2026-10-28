@@ -103,7 +103,10 @@ pub(crate) fn steps(log: &str, now: DateTime<Utc>) -> Progress {
             let (exit, seconds) = match exit.rsplit_once(AFTER) {
                 Some((exit, raw)) => match raw.trim_end_matches('s').parse::<u64>() {
                     Ok(seconds) => (exit.to_owned(), Some(seconds)),
-                    Err(error) => (format!("{exit} (duration {raw:?} unreadable: {error})"), None),
+                    Err(error) => (
+                        format!("{exit} (duration {raw:?} unreadable: {error})"),
+                        None,
+                    ),
                 },
                 None => (exit.to_owned(), None),
             };
@@ -203,7 +206,10 @@ impl Progress {
                     Some(blocked) => format!("; blocked: {blocked}"),
                     None => String::new(),
                 };
-                format!("step {}: {elapsed} (since {}){blocked}", running.name, running.since)
+                format!(
+                    "step {}: {elapsed} (since {}){blocked}",
+                    running.name, running.since
+                )
             }
             None if self.steps.is_empty() => {
                 "preparing the source and toolchain; no step has started".to_owned()

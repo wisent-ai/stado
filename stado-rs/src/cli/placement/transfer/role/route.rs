@@ -8,28 +8,40 @@ use crate::cli::CmdError;
 
 /// The route of `service` checked for a role move from its active host to
 /// `to_host`; the source host's name.
-pub(super) fn checked_route(document: &Value, service: &str, to_host: &str) -> Result<String, CmdError> {
+pub(super) fn checked_route(
+    document: &Value,
+    service: &str,
+    to_host: &str,
+) -> Result<String, CmdError> {
     let route = document
         .pointer(&format!("/service_directory/services/{service}"))
         .and_then(Value::as_object)
         .ok_or_else(|| CmdError::missing(format!("the service directory declares no {service}")))?;
-    let managed = route.get("managed_service").and_then(Value::as_str).ok_or_else(|| {
-        CmdError::refused(format!(
+    let managed = route
+        .get("managed_service")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CmdError::refused(format!(
             "directory service {service} names no managed_service; a placement profile moves it \
              with stado placement move"
         ))
-    })?;
+        })?;
     if !crate::deploy::service_catalog::is_host_unit(managed).map_err(CmdError::declaration)? {
         return Err(CmdError::refused(format!(
             "directory service {service} is served by {managed}, not by the host Stado process; \
              give it a placement profile and move it with stado placement move"
         )));
     }
-    let source = route.get("active_host").and_then(Value::as_str).ok_or_else(|| {
-        CmdError::declaration(format!("directory service {service} names no active_host"))
-    })?;
+    let source = route
+        .get("active_host")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CmdError::declaration(format!("directory service {service} names no active_host"))
+        })?;
     if source == to_host {
-        return Err(CmdError::refused(format!("{service} is already served by {to_host}")));
+        return Err(CmdError::refused(format!(
+            "{service} is already served by {to_host}"
+        )));
     }
     Ok(source.to_string())
 }
@@ -46,10 +58,16 @@ pub(super) fn served_address() -> Result<String, CmdError> {
             .and_then(|_option| arguments.next())
             .cloned()
             .ok_or_else(|| {
-                CmdError::declaration(format!("the catalog's host Stado process declares no {name}"))
+                CmdError::declaration(format!(
+                    "the catalog's host Stado process declares no {name}"
+                ))
             })
     };
-    Ok(format!("http://{}:{}", option("--bind")?, option("--port")?))
+    Ok(format!(
+        "http://{}:{}",
+        option("--bind")?,
+        option("--port")?
+    ))
 }
 
 /// `current` with `to_host` as `service`'s active host under the next

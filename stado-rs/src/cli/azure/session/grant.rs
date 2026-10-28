@@ -98,8 +98,10 @@ pub(super) async fn receive_authorization_code(
             Some(description) => description.as_str(),
             None => "Azure gave no error_description",
         };
-        Err(CmdError::click(format!("Azure login failed: {error}: {description}"))
-            .stating(crate::primitives::failure::FailureCode::Auth))
+        Err(
+            CmdError::click(format!("Azure login failed: {error}: {description}"))
+                .stating(crate::primitives::failure::FailureCode::Auth),
+        )
     } else {
         params
             .get("code")

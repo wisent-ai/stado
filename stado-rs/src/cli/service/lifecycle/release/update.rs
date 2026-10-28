@@ -119,8 +119,7 @@ pub(crate) async fn update(
     }
     // The archive installer lays a release out below the target's own
     // platform directory, the one the catalog's `$STADO_PLATFORM` names.
-    let platform_dir =
-        crate::deploy::service_catalog::platform_directory(&target.release_platform);
+    let platform_dir = crate::deploy::service_catalog::platform_directory(&target.release_platform);
     // Validate the archive against the unit's executable path before moving
     // `current`; a missing member would prevent the unit's next start.
     if let Some(path) = archive {

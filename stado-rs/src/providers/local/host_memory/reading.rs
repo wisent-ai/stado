@@ -110,29 +110,42 @@ pub fn read_available_and_total() -> Result<(i64, i64), String> {
         let total = sysctl("hw.memsize")?;
         return Ok((macos_available(sysctl(MACOS_MEMORY_LEVEL)?, total)?, total));
     }
-    let text = std::fs::read_to_string(MEMINFO).map_err(|error| format!("{MEMINFO} cannot be read: {error}"))?;
-    Ok((meminfo_bytes(&text, "MemAvailable")?, meminfo_bytes(&text, "MemTotal")?))
+    let text = std::fs::read_to_string(MEMINFO)
+        .map_err(|error| format!("{MEMINFO} cannot be read: {error}"))?;
+    Ok((
+        meminfo_bytes(&text, "MemAvailable")?,
+        meminfo_bytes(&text, "MemTotal")?,
+    ))
 }
 
 /// Where Linux states its memory.
 const MEMINFO: &str = "/proc/meminfo";
 
 fn command_stdout(program: &str, args: &[&str]) -> Result<String, String> {
-    let shown = [program].iter().chain(args).copied().collect::<Vec<_>>().join(" ");
+    let shown = [program]
+        .iter()
+        .chain(args)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
     let output = crate::wait::output(Command::new(program).args(args))
         .map_err(|error| format!("{shown} did not run: {error}"))?;
     if !output.status.success() {
         return Err(format!("{shown} exited {}", output.status));
     }
-    String::from_utf8(output.stdout).map_err(|error| format!("{shown} printed text that is not UTF-8: {error}"))
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("{shown} printed text that is not UTF-8: {error}"))
 }
 
 /// One integer `sysctl -n` states.
 fn sysctl(name: &str) -> Result<i64, String> {
     let text = command_stdout("/usr/sbin/sysctl", &["-n", name])?;
-    text.trim()
-        .parse::<i64>()
-        .map_err(|error| format!("sysctl {name} printed {:?}, not an integer: {error}", text.trim()))
+    text.trim().parse::<i64>().map_err(|error| {
+        format!(
+            "sysctl {name} printed {:?}, not an integer: {error}",
+            text.trim()
+        )
+    })
 }
 
 /// The `sysctl` that states, as a whole percentage of physical memory, what
@@ -148,7 +161,9 @@ pub const MACOS_SWAPOUT_ROW: &str = "Swapouts";
 /// why a level outside a percentage makes none.
 pub fn macos_available(level_pct: i64, total: i64) -> Result<i64, String> {
     if level_pct.is_negative() || level_pct > constants::PERCENT {
-        return Err(format!("{MACOS_MEMORY_LEVEL} is {level_pct}, not a percentage"));
+        return Err(format!(
+            "{MACOS_MEMORY_LEVEL} is {level_pct}, not a percentage"
+        ));
     }
     Ok(total.saturating_mul(level_pct) / constants::PERCENT)
 }
@@ -162,8 +177,10 @@ pub fn from_macos(
     swapusage: Result<String, String>,
 ) -> MemoryReading {
     let mut causes = Causes::default();
-    let mut reading = MemoryReading::default();
-    reading.total_bytes = causes.take(total);
+    let mut reading = MemoryReading {
+        total_bytes: causes.take(total),
+        ..MemoryReading::default()
+    };
     if let (Some(level), Some(total)) = (causes.take(level), reading.total_bytes) {
         reading.available_bytes = causes.take(macos_available(level, total));
     }
@@ -227,7 +244,8 @@ pub fn parse_suffixed_size(token: &str) -> Result<i64, String> {
             .parse::<f64>()
             .map_err(|error| format!("size {token:?} is not a decimal number: {error}"))
     };
-    let scaled = |digits: &str, scale: i64| decimal(digits).map(|value| (value * scale as f64) as i64);
+    let scaled =
+        |digits: &str, scale: i64| decimal(digits).map(|value| (value * scale as f64) as i64);
     match token.char_indices().last() {
         Some((at, 'K')) => scaled(&token[..at], constants::KIB),
         Some((at, 'M')) => scaled(&token[..at], constants::MIB),

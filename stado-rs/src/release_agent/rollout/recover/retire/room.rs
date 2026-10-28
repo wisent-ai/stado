@@ -18,11 +18,12 @@ impl HostRoom {
     /// treating as no room.
     pub fn read(state_dir: &str) -> Self {
         // The same reading the disk-full rule takes of a volume.
-        let free_disk_bytes =
-            match crate::providers::local::space_reclaim::rule::read_volume(std::path::Path::new(state_dir)) {
-                Ok(volume) => Some(volume.free_bytes),
-                Err(_unreadable_volume) => None,
-            };
+        let free_disk_bytes = match crate::providers::local::space_reclaim::rule::read_volume(
+            std::path::Path::new(state_dir),
+        ) {
+            Ok(volume) => Some(volume.free_bytes),
+            Err(_unreadable_volume) => None,
+        };
         Self {
             available_memory_bytes: read_host_memory().available_bytes,
             free_disk_bytes,

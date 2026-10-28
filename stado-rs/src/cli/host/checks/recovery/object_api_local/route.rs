@@ -12,69 +12,20 @@
 //! server's own runtime state, when it names the same pid, is the served
 //! route.
 
+mod launchctl;
+
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::LazyLock;
 
 use plist::Value as Plist;
-use regex::Regex;
 use serde_json::Value;
 
+use self::launchctl::from_launchctl;
 use super::config::{home, real, text};
 use super::definition::environment;
 
-static ENVIRONMENT_OPEN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*environment = \{\s*$").expect("static"));
-static BLOCK_CLOSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*\}\s*$").expect("static"));
-static ENTRY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*(?P<key>[^=\s]+)\s+=>\s+(?P<value>.*?)\s*$").expect("static")
-});
-static STATE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*state = (?P<state>.*?)\s*$").expect("static"));
-static PID: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*pid = (?P<pid>[0-9]+)\s*$").expect("static"));
-
 fn refuse(detail: &str) -> String {
     format!("object API recovery refused: {detail}")
-}
-
-/// `launchctl print` output: the job's environment block, its state and pid.
-fn from_launchctl(text: &str) -> (BTreeMap<String, String>, String, String) {
-    let (mut environment, mut state, mut pid) = (BTreeMap::new(), None, None);
-    let mut inside = false;
-    for line in text.lines() {
-        if ENVIRONMENT_OPEN.is_match(line) {
-            inside = true;
-            continue;
-        }
-        if inside {
-            if BLOCK_CLOSE.is_match(line) {
-                inside = false;
-            } else if let Some(found) = ENTRY.captures(line) {
-                environment.insert(found["key"].to_string(), found["value"].to_string());
-            }
-            continue;
-        }
-        if let Some(found) = STATE.captures(line) {
-            state.get_or_insert_with(|| found["state"].to_string());
-        }
-        if let Some(found) = PID.captures(line) {
-            pid.get_or_insert_with(|| found["pid"].to_string());
-        }
-    }
-    // launchctl prints no state line for a job it does not hold and no pid
-    // line for one that is not running; each is said as such.
-    (
-        environment,
-        match state {
-            Some(state) => state,
-            None => "(launchctl printed no state)".into(),
-        },
-        match pid {
-            Some(pid) => pid,
-            None => "(no pid: not running)".into(),
-        },
-    )
 }
 
 /// A launchd definition's top-level dictionary; a definition that cannot be
@@ -237,7 +188,9 @@ pub(super) fn inspect(request: &Inspection) -> Result<String, String> {
             Some(identity) => {
                 let reported_pid = match identity.get("pid") {
                     Some(Value::String(text)) => text.clone(),
-                    Some(Value::Null) | None => return Err(refuse("runtime identity names no pid")),
+                    Some(Value::Null) | None => {
+                        return Err(refuse("runtime identity names no pid"))
+                    }
                     Some(other) => other.to_string(),
                 };
                 if reported_pid != pid {

@@ -10,7 +10,8 @@ use crate::queue::runs::{
 use crate::queue::{JobStorage, StorageError};
 
 use super::manifest::{
-    has_complete_retained_outcomes, manifest_job_ids, marked, stamp, CLEANUP_COMPLETED_AT, REAPED_AT,
+    has_complete_retained_outcomes, manifest_job_ids, marked, stamp, CLEANUP_COMPLETED_AT,
+    REAPED_AT,
 };
 use super::{ReapRefusal, ReapSummary};
 
@@ -178,7 +179,9 @@ pub async fn reap_terminal_runs(store: &JobStorage) -> Result<ReapSummary, Stora
         reaped.push(run_id);
     }
     let count = |runs: &[String]| {
-        i64::try_from(runs.len()).map_err(|error| StorageError::Other(format!("{} runs cannot be counted: {error}", runs.len())))
+        i64::try_from(runs.len()).map_err(|error| {
+            StorageError::Other(format!("{} runs cannot be counted: {error}", runs.len()))
+        })
     };
     summary.examined_runs = count(&examined)?;
     summary.reaped_runs = count(&reaped)?;

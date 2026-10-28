@@ -66,7 +66,11 @@ pub(super) fn parse_list_blobs(xml: &str) -> Result<(Vec<ListEntry>, Option<Stri
 /// One listed blob as the walk reads it.
 fn entry(blob: Blob) -> Result<ListEntry, String> {
     let (created, modified, size) = match blob.properties {
-        Some(properties) => (properties.creation_time, properties.last_modified, properties.content_length),
+        Some(properties) => (
+            properties.creation_time,
+            properties.last_modified,
+            properties.content_length,
+        ),
         None => (None, None, None),
     };
     Ok(ListEntry {
@@ -80,10 +84,15 @@ fn entry(blob: Blob) -> Result<ListEntry, String> {
 
 /// A blob's written time, read as the HTTP date Azure writes; one in another
 /// shape is refused naming the blob, the field and the text.
-fn stamp(name: &str, field: &str, written: Option<String>) -> Result<Option<DateTime<Utc>>, String> {
+fn stamp(
+    name: &str,
+    field: &str,
+    written: Option<String>,
+) -> Result<Option<DateTime<Utc>>, String> {
     written
         .map(|text| {
-            parse_http_date(&text).ok_or_else(|| format!("blob {name}: {field} {text} is not an HTTP date"))
+            parse_http_date(&text)
+                .ok_or_else(|| format!("blob {name}: {field} {text} is not an HTTP date"))
         })
         .transpose()
 }

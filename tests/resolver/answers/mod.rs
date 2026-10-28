@@ -12,7 +12,10 @@
 //! after the first, `last_answered_at` and no unanswered record; after the
 //! second, `first_unanswered_at` and `last_unanswered_at` beside the kept
 //! `last_answered_at`; after the third, both unanswered fields cleared.
+// The deployment is shared with the shed journey; this one reads no
+// published state and waits on no hold.
 #[path = "../shed/deployment.rs"]
+#[allow(dead_code)]
 mod deployment;
 
 use std::io::{BufRead, BufReader, Read, Write};

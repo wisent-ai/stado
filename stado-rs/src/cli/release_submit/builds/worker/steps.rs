@@ -189,7 +189,9 @@ pub(super) fn require_node_toolchain(
 
 /// Free space of the volume holding `path`, in GiB, as the disk-full rule
 /// reads a volume: the bytes an unprivileged writer may still take.
-fn free_gibibytes(path: &Path) -> Result<f64, crate::providers::local::space_reclaim::JanitorError> {
+fn free_gibibytes(
+    path: &Path,
+) -> Result<f64, crate::providers::local::space_reclaim::JanitorError> {
     let volume = crate::providers::local::space_reclaim::rule::read_volume(path)?;
     Ok(volume.free_bytes as f64 / crate::providers::local::space_reclaim::GIB as f64)
 }

@@ -110,10 +110,7 @@ pub(super) async fn sweep_retained_run(
         let object = manifest.as_object_mut().ok_or_else(|| {
             StorageError::Other(format!("run manifest {run_id} is not a JSON object"))
         })?;
-        object.insert(
-            CLEANUP_COMPLETED_AT.into(),
-            Value::from(stamp()),
-        );
+        object.insert(CLEANUP_COMPLETED_AT.into(), Value::from(stamp()));
         match store
             .compare_and_swap_text(
                 &path,

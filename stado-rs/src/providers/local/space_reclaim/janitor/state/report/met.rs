@@ -48,10 +48,14 @@ impl Met {
     /// The report these records make. A count or byte total past what the
     /// report's integers hold is refused, never wrapped.
     pub fn report(&self) -> Result<CleanerReport, String> {
-        let count = |items: usize| i64::try_from(items).map_err(|error| format!("{items} items cannot be reported: {error}"));
+        let count = |items: usize| {
+            i64::try_from(items)
+                .map_err(|error| format!("{items} items cannot be reported: {error}"))
+        };
         let bytes = |sizes: &mut dyn Iterator<Item = u64>| {
             let total: u128 = sizes.map(u128::from).sum();
-            i64::try_from(total).map_err(|error| format!("{total} bytes cannot be reported: {error}"))
+            i64::try_from(total)
+                .map_err(|error| format!("{total} bytes cannot be reported: {error}"))
         };
         let mut by_reason: BTreeMap<&str, Vec<Option<u64>>> = BTreeMap::new();
         for (reason, kept) in &self.skipped {
@@ -59,9 +63,14 @@ impl Met {
         }
         let mut record = CleanerReport::default();
         for (reason, skips) in by_reason {
-            record.skipped.insert(reason.to_string(), count(skips.len())?);
+            record
+                .skipped
+                .insert(reason.to_string(), count(skips.len())?);
             if skips.iter().any(Option::is_some) {
-                record.skipped_bytes.insert(reason.to_string(), bytes(&mut skips.iter().flatten().copied())?);
+                record.skipped_bytes.insert(
+                    reason.to_string(),
+                    bytes(&mut skips.iter().flatten().copied())?,
+                );
             }
         }
         record.scanned_items = count(self.listed.iter().sum())?;

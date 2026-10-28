@@ -123,19 +123,19 @@ pub(crate) async fn upgrade(request: &Request) -> Response {
 
 async fn setup(socket: &mut Socket, limits: Limits) -> Result<Option<RunRequest>, String> {
     while let Some(message) = socket.next().await {
-        match message.map_err(|error| format!("the attachment request cannot be read from the socket: {error}"))? {
+        match message.map_err(|error| {
+            format!("the attachment request cannot be read from the socket: {error}")
+        })? {
             Message::Text(text) => {
                 let request: AttachmentRequest = serde_json::from_str(&text)
                     .map_err(|error| format!("invalid attachment request: {error}"))?;
                 return request.command(limits).map(Some);
             }
             Message::Close(_) => return Ok(None),
-            Message::Ping(_) | Message::Pong(_) => {
-                socket
-                    .flush()
-                    .await
-                    .map_err(|error| format!("the answer to a ping cannot be sent: {error}"))?
-            }
+            Message::Ping(_) | Message::Pong(_) => socket
+                .flush()
+                .await
+                .map_err(|error| format!("the answer to a ping cannot be sent: {error}"))?,
             _ => return Err("the first workload frame must be a JSON attachment request".into()),
         }
     }
@@ -152,7 +152,9 @@ pub(super) async fn error(socket: &mut Socket, detail: &str) {
         ))
         .await;
     if let Err(cause) = sent {
-        eprintln!("stado operator console: the attachment error ({detail}) could not be sent: {cause}");
+        eprintln!(
+            "stado operator console: the attachment error ({detail}) could not be sent: {cause}"
+        );
     }
 }
 

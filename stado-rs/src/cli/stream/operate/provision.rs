@@ -94,8 +94,10 @@ pub(in crate::cli::stream) async fn apply(
     let probed = remote::probe(target, &runner)
         .await
         .map_err(CmdError::from)?;
-    let bus_id = remote::bus_id_for(&probed, declaration.gpu_uuid.as_deref())
-        .map_err(|refusal| CmdError::click(format!("{target_name}: {refusal}")).stating(refusal.code()))?;
+    let bus_id =
+        remote::bus_id_for(&probed, declaration.gpu_uuid.as_deref()).map_err(|refusal| {
+            CmdError::click(format!("{target_name}: {refusal}")).stating(refusal.code())
+        })?;
     let report = remote::install(target, &declaration, &bus_id, provision_library, &runner)
         .await
         .map_err(CmdError::from)?;

@@ -13,9 +13,9 @@ pub fn validate_run_descendant(path: &str) -> Result<(), String> {
     // The root, then only ordinary names: no `.`, `..` or prefix anywhere.
     let components = std::path::Path::new(path).components().collect::<Vec<_>>();
     let ordinary = match components.split_first() {
-        Some((Component::RootDir, rest)) => {
-            rest.iter().all(|component| matches!(component, Component::Normal(_)))
-        }
+        Some((Component::RootDir, rest)) => rest
+            .iter()
+            .all(|component| matches!(component, Component::Normal(_))),
         _ => false,
     };
     let managed = path

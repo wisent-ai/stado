@@ -52,7 +52,11 @@ fn a_peer_fleet_is_declared_changed_and_retired() {
     assert_eq!(declared["name"], json!(PEER), "{declared}");
     assert_eq!(declared["origin"], json!(ORIGIN), "{declared}");
     assert_eq!(declared["namespace"], json!("peerqueue"), "{declared}");
-    assert_eq!(declared["credential_role"], json!("peer-journey-bearer"), "{declared}");
+    assert_eq!(
+        declared["credential_role"],
+        json!("peer-journey-bearer"),
+        "{declared}"
+    );
     assert_eq!(declared["offers"], json!([]), "{declared}");
 
     let shown = json_of(&deployment.cli(&["market", "peer", "show", PEER, "--json"]));
@@ -60,9 +64,10 @@ fn a_peer_fleet_is_declared_changed_and_retired() {
     assert_eq!(shown["declared_at"], declared["declared_at"], "{shown}");
     let listed = json_of(&deployment.cli(&["market", "peer", "list", "--json"]));
     assert_eq!(
-        listed
-            .as_array()
-            .map(|peers| peers.iter().map(|peer| peer["name"].clone()).collect::<Vec<_>>()),
+        listed.as_array().map(|peers| peers
+            .iter()
+            .map(|peer| peer["name"].clone())
+            .collect::<Vec<_>>()),
         Some(vec![json!(PEER)]),
         "{listed}"
     );
@@ -82,13 +87,19 @@ fn a_peer_fleet_is_declared_changed_and_retired() {
             "peer-journey-bearer",
         ],
     );
-    assert!(twice.contains("already declared") && twice.contains("edit"), "{twice}");
+    assert!(
+        twice.contains("already declared") && twice.contains("edit"),
+        "{twice}"
+    );
 
-    let changed = json_of(&deployment.cli(&[
-        "market", "peer", "edit", PEER, "--origin", MOVED, "--json",
-    ]));
+    let changed =
+        json_of(&deployment.cli(&["market", "peer", "edit", PEER, "--origin", MOVED, "--json"]));
     assert_eq!(changed["origin"], json!(MOVED), "{changed}");
-    assert_eq!(changed["namespace"], json!("peerqueue"), "edit changed what it did not name: {changed}");
+    assert_eq!(
+        changed["namespace"],
+        json!("peerqueue"),
+        "edit changed what it did not name: {changed}"
+    );
     assert_eq!(changed["declared_at"], declared["declared_at"], "{changed}");
     let nothing = refused(&mut deployment, &["market", "peer", "edit", PEER]);
     assert!(nothing.contains("names nothing to change"), "{nothing}");
@@ -125,7 +136,10 @@ fn a_peer_fleet_is_declared_changed_and_retired() {
         ],
     );
     assert!(capitals.contains("lowercase"), "{capitals}");
-    let no_peer = refused(&mut deployment, &["market", "unlist", "--provider", "stado"]);
+    let no_peer = refused(
+        &mut deployment,
+        &["market", "unlist", "--provider", "stado"],
+    );
     assert!(no_peer.contains("--peer NAME"), "{no_peer}");
     let vast_peer = refused(
         &mut deployment,

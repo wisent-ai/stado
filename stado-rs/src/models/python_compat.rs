@@ -91,6 +91,9 @@ pub(crate) fn py_str_repr(s: &str) -> String {
 /// Python `repr()` of a list of strings: `['a', 'b']`, each item quoted and
 /// escaped by [`py_str_repr`], so an item holding a quote reads back as itself.
 pub(crate) fn py_list_repr<S: AsRef<str>>(items: &[S]) -> String {
-    let quoted: Vec<String> = items.iter().map(|item| py_str_repr(item.as_ref())).collect();
+    let quoted: Vec<String> = items
+        .iter()
+        .map(|item| py_str_repr(item.as_ref()))
+        .collect();
     format!("[{}]", quoted.join(", "))
 }

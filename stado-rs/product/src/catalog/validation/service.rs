@@ -25,7 +25,10 @@ pub(super) fn validate(id: &str, service: &Value, kinds: &HashSet<&str>) -> Resu
             .context("service.args must be a list")?;
         if let Some(env) = service.get("env") {
             for (key, value) in env.as_object().context("service.env must be an object")? {
-                if key.bytes().next().is_none_or(|first| first.is_ascii_digit())
+                if key
+                    .bytes()
+                    .next()
+                    .is_none_or(|first| first.is_ascii_digit())
                     || !key
                         .bytes()
                         .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
@@ -130,7 +133,10 @@ pub(super) fn validate(id: &str, service: &Value, kinds: &HashSet<&str>) -> Resu
                 if store.get("tree").is_some_and(|tree| !tree.is_boolean()) {
                     bail!("{id}: service.state {path:?}: tree must be true or false");
                 }
-                if store.get("required").is_some_and(|required| !required.is_boolean()) {
+                if store
+                    .get("required")
+                    .is_some_and(|required| !required.is_boolean())
+                {
                     bail!("{id}: service.state {path:?}: required must be true or false");
                 }
             }

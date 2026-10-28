@@ -31,9 +31,16 @@ pub fn write_if_changed(path: &std::path::Path, content: &str) -> Result<bool, s
     match std::fs::read_to_string(path) {
         Ok(existing) if existing == content => return Ok(false),
         Ok(_differs) => {}
-        Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+            ) => {}
         Err(error) => {
-            return Err(std::io::Error::new(error.kind(), format!("{} cannot be read: {error}", path.display())))
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("{} cannot be read: {error}", path.display()),
+            ))
         }
     }
     std::fs::write(path, content)?;

@@ -4,9 +4,9 @@
 //! `cargo test --test host-health -- <module>::`.
 mod beacon;
 mod deployment;
-mod own_channel;
 #[path = "../../host_gates/disk.rs"]
 mod gates_disk;
+mod own_channel;
 #[path = "../privacy.rs"]
 mod privacy;
 mod roles;

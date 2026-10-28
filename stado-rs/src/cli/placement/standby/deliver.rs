@@ -9,11 +9,11 @@ use serde_json::Value;
 mod rollout;
 mod tree;
 
-use rollout::declare_rollout;
 use super::template::{ProgramKind, ServicePlan};
 use crate::cli::CmdError;
 use crate::deploy::host_release;
 use crate::targets::ComputeTarget;
+use rollout::declare_rollout;
 
 /// The words a delivery ends with.
 pub mod words {
@@ -48,8 +48,12 @@ pub(super) async fn deliver(
 ) -> Result<Delivery, CmdError> {
     let work = async {
         match &service.kind {
-            ProgramKind::Managed { product } => deliver_program(placed, target, service, product).await,
-            ProgramKind::Tree { product } => declare_rollout(document, placed, target, service, product).await,
+            ProgramKind::Managed { product } => {
+                deliver_program(placed, target, service, product).await
+            }
+            ProgramKind::Tree { product } => {
+                declare_rollout(document, placed, target, service, product).await
+            }
         }
     };
     crate::wait::until(crate::wait::Kind::Host, what, &target.name, work).await

@@ -30,7 +30,9 @@ pub(crate) fn record(kind: &str, outcome: Result<&Value, &CmdError>) {
     let recorded_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let entry = match outcome {
         Ok(receipt) => json!({"recorded_at": recorded_at, "kind": kind, "receipt": receipt}),
-        Err(error) => json!({"recorded_at": recorded_at, "kind": kind, "refused": error.to_string()}),
+        Err(error) => {
+            json!({"recorded_at": recorded_at, "kind": kind, "refused": error.to_string()})
+        }
     };
     let kept = directory().and_then(|directory| {
         let name = format!("{recorded_at}-{}.json", uuid::Uuid::new_v4());
@@ -73,14 +75,21 @@ fn entries() -> Result<(Vec<Value>, Vec<String>), CmdError> {
             Err(cause) => unread.push(cause),
         }
     }
-    kept.sort_by(|left, right| right["recorded_at"].as_str().cmp(&left["recorded_at"].as_str()));
+    kept.sort_by(|left, right| {
+        right["recorded_at"]
+            .as_str()
+            .cmp(&left["recorded_at"].as_str())
+    });
     Ok((kept, unread))
 }
 
 pub(super) fn list(json_output: bool) -> Result<(), CmdError> {
     let (kept, unread) = entries()?;
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&json!({"entries": kept, "unread": unread}))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({"entries": kept, "unread": unread}))?
+        );
         return Ok(());
     }
     if kept.is_empty() {
@@ -96,12 +105,20 @@ pub(super) fn list(json_output: bool) -> Result<(), CmdError> {
         };
         let from = host("from_host", "fenced");
         let to = host("to_host", "authority");
-        let what = match receipt.get("profile").or_else(|| receipt.get("service")).and_then(Value::as_str) {
+        let what = match receipt
+            .get("profile")
+            .or_else(|| receipt.get("service"))
+            .and_then(Value::as_str)
+        {
             Some(name) => format!(" {name}"),
             None => String::new(),
         };
         match entry.get("refused").and_then(Value::as_str) {
-            Some(refused) => println!("{} {} refused: {refused}", field(&entry["recorded_at"]), field(&entry["kind"])),
+            Some(refused) => println!(
+                "{} {} refused: {refused}",
+                field(&entry["recorded_at"]),
+                field(&entry["kind"])
+            ),
             None => println!(
                 "{} {}{what}: {from} -> {to} ({})",
                 field(&entry["recorded_at"]),

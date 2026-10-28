@@ -2,8 +2,6 @@
 //! through, plus the size limits and path rules that bound them.
 
 #[cfg(unix)]
-use nix::sys::stat::Mode;
-#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
@@ -86,7 +84,7 @@ fn create_owned_machine_file(
     let mut options = std::fs::OpenOptions::new();
     options.read(true).write(true).create_new(true);
     #[cfg(unix)]
-    options.mode(u32::from((Mode::S_IRUSR | Mode::S_IWUSR).bits()));
+    options.mode(crate::primitives::file_mode::owner_read_write());
     let file = options.open(&path).map_err(|error| {
         std::io::Error::new(
             error.kind(),

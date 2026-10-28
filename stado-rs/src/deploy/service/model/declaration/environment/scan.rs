@@ -56,9 +56,11 @@ pub fn unreachable_product_environments(
         // host's home is not read here, so its values stay templates.
         let home: Option<String> = match policy.targets.get(&target.name) {
             Some(policy_target) => Some(policy_target.home.clone()),
-            None if readable_here => {
-                Some(crate::config_file::home_dir().to_string_lossy().into_owned())
-            }
+            None if readable_here => Some(
+                crate::config_file::home_dir()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             None => None,
         };
         let declared: Vec<(String, String)> = policy

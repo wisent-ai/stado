@@ -30,7 +30,9 @@ pub async fn tmp_ram_filesystem() -> Result<Option<&'static str>, String> {
         ));
     }
     let filesystem = std::str::from_utf8(&out.stdout)
-        .map_err(|error| format!("stat -f returned an unreadable filesystem type for /tmp: {error}"))?
+        .map_err(|error| {
+            format!("stat -f returned an unreadable filesystem type for /tmp: {error}")
+        })?
         .trim();
     if filesystem.is_empty() {
         return Err("stat -f returned no filesystem type for /tmp".to_string());
@@ -62,7 +64,11 @@ pub(super) fn decode_mount_field(field: &str) -> Result<std::borrow::Cow<'_, str
             (Some('0'), Some('1'), Some('1')) => '\t',
             (Some('0'), Some('1'), Some('2')) => '\n',
             (Some('1'), Some('3'), Some('4')) => '\\',
-            escape => return Err(format!("mount field {field:?} carries an invalid escape {escape:?}")),
+            escape => {
+                return Err(format!(
+                    "mount field {field:?} carries an invalid escape {escape:?}"
+                ))
+            }
         };
         decoded.push(escaped);
     }
@@ -93,15 +99,17 @@ pub fn parse_mounts(
         let (Some(source), Some(mnt), Some(_fstype), Some(opts)) =
             (fields.next(), fields.next(), fields.next(), fields.next())
         else {
-            log_fn(&format!("staging: malformed /proc/mounts row {line:?}; skipping"));
+            log_fn(&format!(
+                "staging: malformed /proc/mounts row {line:?}; skipping"
+            ));
             continue;
         };
         if opts.split(',').any(|opt| opt == "ro") {
             continue;
         }
-        let (source, mnt) = match decode_mount_field(source).and_then(|source| {
-            decode_mount_field(mnt).map(|mnt| (source, mnt))
-        }) {
+        let (source, mnt) = match decode_mount_field(source)
+            .and_then(|source| decode_mount_field(mnt).map(|mnt| (source, mnt)))
+        {
             Ok(fields) => fields,
             Err(cause) => {
                 log_fn(&format!("staging: {cause}; skipping"));
@@ -140,13 +148,26 @@ pub fn writable_for_self(path: &Path) -> Result<(), String> {
     if !metadata.is_dir() {
         return Err(format!("{} is not a directory", path.display()));
     }
-    let mut probe = tempfile::NamedTempFile::with_prefix_in(".wc_staging_probe_", path)
-        .map_err(|error| format!("a probe file in {} cannot be created: {error}", path.display()))?;
+    let mut probe =
+        tempfile::NamedTempFile::with_prefix_in(".wc_staging_probe_", path).map_err(|error| {
+            format!(
+                "a probe file in {} cannot be created: {error}",
+                path.display()
+            )
+        })?;
     use std::io::Write;
-    let written = probe.write_all(b"x")
-        .map_err(|error| format!("a probe file in {} cannot be written: {error}", path.display()));
-    let removed = probe.close()
-        .map_err(|error| format!("a probe file in {} cannot be removed: {error}", path.display()));
+    let written = probe.write_all(b"x").map_err(|error| {
+        format!(
+            "a probe file in {} cannot be written: {error}",
+            path.display()
+        )
+    });
+    let removed = probe.close().map_err(|error| {
+        format!(
+            "a probe file in {} cannot be removed: {error}",
+            path.display()
+        )
+    });
     match (written, removed) {
         (Err(mut cause), Err(removal)) => {
             cause.push_str("; ");
@@ -162,14 +183,20 @@ pub fn writable_for_self(path: &Path) -> Result<(), String> {
 /// when it did not.
 fn add_other_exec(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
-    let search = u32::from(Mode::S_IXOTH.bits());
+    let search = crate::primitives::file_mode::widen(Mode::S_IXOTH.bits());
     let mode = std::fs::metadata(path)
         .map_err(|error| format!("{} cannot be read: {error}", path.display()))?
         .permissions()
         .mode();
     if mode & search != search {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | search))
-            .map_err(|error| format!("{} cannot be made searchable by others: {error}", path.display()))?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | search)).map_err(
+            |error| {
+                format!(
+                    "{} cannot be made searchable by others: {error}",
+                    path.display()
+                )
+            },
+        )?;
     }
     let after = std::fs::metadata(path)
         .map_err(|error| format!("{} cannot be read back: {error}", path.display()))?
@@ -191,7 +218,9 @@ pub(super) fn try_repair_traversal(target: &Path, log_fn: &mut dyn FnMut(&str)) 
             break;
         }
         if let Err(cause) = add_other_exec(p) {
-            log_fn(&format!("staging: {cause}; an administrator should add o+x"));
+            log_fn(&format!(
+                "staging: {cause}; an administrator should add o+x"
+            ));
         }
     }
 }

@@ -18,21 +18,33 @@ const SIZE: &str = "STADO_PLACEMENT_SIZE\t";
 const FREE: &str = "STADO_PLACEMENT_FREE\t";
 
 /// The kibibytes the figure after `marker` on its line states.
-fn figure(output: &crate::deploy::CommandOutput, marker: &str, host: &str) -> Result<u64, CmdError> {
+fn figure(
+    output: &crate::deploy::CommandOutput,
+    marker: &str,
+    host: &str,
+) -> Result<u64, CmdError> {
     let line = marker_line(output, marker).ok_or_else(|| {
-        CmdError::click(format!("{host}: the space reading returned no {marker:?} line"))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        CmdError::click(format!(
+            "{host}: the space reading returned no {marker:?} line"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })?;
     let text = line[marker.len()..].trim();
     text.parse().map_err(|error| {
-        CmdError::click(format!("{host}: the space reading {text:?} is not a number: {error}"))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        CmdError::click(format!(
+            "{host}: the space reading {text:?} is not a number: {error}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
     })
 }
 
 /// The kibibytes `state` takes on the source; a state that is absent takes
 /// none, which `du` cannot say of a missing path.
-async fn source_kib(source: &ComputeTarget, state: &PlacementState, runner: &Runner) -> Result<u64, CmdError> {
+async fn source_kib(
+    source: &ComputeTarget,
+    state: &PlacementState,
+    runner: &Runner,
+) -> Result<u64, CmdError> {
     let locate = full_path_lines(&root_payload(source, state)?, &state.path);
     let script = format!(
         r#"set -eu
@@ -97,15 +109,21 @@ pub(in crate::cli::placement::transfer) async fn ensure_room_for(
     states: &[PlacementState],
     runner: &Runner,
 ) -> Result<(), CmdError> {
-    let sizes = states.iter().map(|state| source_kib(ends.source, state, runner));
+    let sizes = states
+        .iter()
+        .map(|state| source_kib(ends.source, state, runner));
     let sizes = futures::future::join_all(sizes).await;
     let mut measured: Vec<(&PlacementState, u64)> = Vec::with_capacity(states.len());
     for (state, size) in states.iter().zip(sizes) {
         measured.push((state, size?));
     }
-    let trees: Vec<&(&PlacementState, u64)> = measured.iter().filter(|(state, _)| state.tree).collect();
+    let trees: Vec<&(&PlacementState, u64)> =
+        measured.iter().filter(|(state, _)| state.tree).collect();
     let tree_need: u64 = trees.iter().map(|(_, size)| size).sum();
-    let tree_names: Vec<String> = trees.iter().map(|(state, _)| state_location(state)).collect();
+    let tree_names: Vec<String> = trees
+        .iter()
+        .map(|(state, _)| state_location(state))
+        .collect();
     let mut roots: Vec<(StateRoot, u64, Vec<String>, &PlacementState)> = Vec::new();
     for &(state, size) in &measured {
         match roots.iter_mut().find(|(root, ..)| *root == state.root) {

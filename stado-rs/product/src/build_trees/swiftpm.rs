@@ -64,8 +64,8 @@ fn linked_directories(scratch: &Path) -> Result<Vec<PathBuf>, String> {
         if !info.file_type().is_symlink() {
             continue;
         }
-        let target =
-            fs::read_link(&path).map_err(|error| format!("reading the link {}: {error}", path.display()))?;
+        let target = fs::read_link(&path)
+            .map_err(|error| format!("reading the link {}: {error}", path.display()))?;
         if let Some(Component::Normal(first)) = target.components().next() {
             let directory = scratch.join(first);
             match fs::symlink_metadata(&directory) {
@@ -81,8 +81,8 @@ fn linked_directories(scratch: &Path) -> Result<Vec<PathBuf>, String> {
 
 /// The members of `directory` with their own metadata, links not followed.
 fn members(directory: &Path) -> Result<Vec<(PathBuf, fs::Metadata)>, String> {
-    let entries =
-        fs::read_dir(directory).map_err(|error| format!("reading {}: {error}", directory.display()))?;
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("reading {}: {error}", directory.display()))?;
     let mut found = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| format!("reading {}: {error}", directory.display()))?;

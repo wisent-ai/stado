@@ -18,6 +18,20 @@ use std::{
     path::Path,
 };
 
+/// Permission bits libc names, as `std` takes and gives a file's mode:
+/// `mode_t` is already `u32` on Linux and narrower on Darwin, so the
+/// widening is the identity on one platform and a conversion on the other,
+/// as Stado's own `primitives::file_mode` widens it.
+#[cfg(target_os = "linux")]
+pub(crate) fn permission_bits(bits: libc::mode_t) -> u32 {
+    bits
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn permission_bits(bits: libc::mode_t) -> u32 {
+    u32::from(bits)
+}
+
 /// Free bytes the filesystem reports at `path`, shared by the installer and
 /// its build-tree reclaimer.
 pub fn available_space(path: &Path) -> Result<u64> {
@@ -96,7 +110,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
             use std::os::unix::fs::OpenOptionsExt;
             // A new output is its owner's alone until it takes the mode of
             // the file it replaces.
-            options.mode(u32::from(libc::S_IRUSR | libc::S_IWUSR));
+            options.mode(permission_bits(libc::S_IRUSR | libc::S_IWUSR));
         }
         let mut file = options.open(&temporary)?;
         if let Some(metadata) = &existing {

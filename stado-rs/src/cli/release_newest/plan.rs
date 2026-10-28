@@ -176,10 +176,17 @@ fn product_name(checkout: &Path) -> Result<String, String> {
 /// else, so either refuses. An uncommitted edit elsewhere in the version
 /// file - stado's Cargo.toml gaining a dependency - declares nothing.
 fn standing(checkout: &Path, published: &Recorded) -> Result<Standing, String> {
-    let commit = head_commit(checkout)
-        .map_err(|error| format!("the HEAD commit of {} cannot be read: {error}", checkout.display()))?;
+    let commit = head_commit(checkout).map_err(|error| {
+        format!(
+            "the HEAD commit of {} cannot be read: {error}",
+            checkout.display()
+        )
+    })?;
     let uncommitted = uncommitted_paths(checkout).map_err(|error| {
-        format!("the uncommitted changes of {} cannot be listed: {error}", checkout.display())
+        format!(
+            "the uncommitted changes of {} cannot be listed: {error}",
+            checkout.display()
+        )
     })?;
     if uncommitted.contains(PRODUCT_MANIFEST) {
         return Err(format!(
@@ -188,8 +195,9 @@ fn standing(checkout: &Path, published: &Recorded) -> Result<Standing, String> {
              because a release reads a clean committed Git tree for it"
         ));
     }
-    let bytes = committed_file(checkout, &commit, PRODUCT_MANIFEST)
-        .map_err(|error| format!("{PRODUCT_MANIFEST} at commit {commit} cannot be read: {error}"))?;
+    let bytes = committed_file(checkout, &commit, PRODUCT_MANIFEST).map_err(|error| {
+        format!("{PRODUCT_MANIFEST} at commit {commit} cannot be read: {error}")
+    })?;
     let manifest = match release_pipeline::parse_product_manifest(&bytes)? {
         ProductManifest::Release(value) => value,
         ProductManifest::NonRelease(value) => {

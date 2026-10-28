@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use reqwest::Method;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::providers::gcp::inventory::fields::encode;
 use crate::providers::gcp::inventory::ProbeReport;

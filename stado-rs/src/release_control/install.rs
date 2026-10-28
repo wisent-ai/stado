@@ -223,7 +223,9 @@ fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<
                 };
                 std::fs::set_permissions(
                     &output,
-                    std::fs::Permissions::from_mode(u32::from(mode.bits())),
+                    std::fs::Permissions::from_mode(crate::primitives::file_mode::widen(
+                        mode.bits(),
+                    )),
                 )
                 .map_err(|error| {
                     format!("cannot set release mode {}: {error}", output.display())
@@ -253,7 +255,9 @@ fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<
 }
 
 pub fn install_root_path(policy: &ProductReleasePolicy, target: &ReleaseTargetPolicy) -> PathBuf {
-    let expanded = policy.install_root.replace(super::HOME_PLACEHOLDER, &target.home);
+    let expanded = policy
+        .install_root
+        .replace(super::HOME_PLACEHOLDER, &target.home);
     let path = PathBuf::from(expanded);
     if path.is_absolute() {
         path

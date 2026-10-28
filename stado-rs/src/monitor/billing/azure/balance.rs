@@ -2,8 +2,11 @@
 //! balance endpoint the configured scope selects, and the subscription
 //! billing-property lookup that turns a balance into a grant figure.
 
+mod amount;
+
 use serde_json::{json, Value};
 
+use self::amount::extract_amount;
 use super::azure_error;
 use crate::config;
 use crate::monitor::billing::format::{error_section, py_list_repr};
@@ -17,22 +20,33 @@ pub(super) async fn azure_section_with(
     login_base: &str,
     arm_base: &str,
 ) -> Value {
-    let field = |key: &str| sp.get(key).and_then(Value::as_str).filter(|value| !value.is_empty());
-    let (tenant_id, client_id, client_secret) =
-        match (field("tenant_id"), field("client_id"), field("client_secret")) {
-            (Some(tenant), Some(client), Some(secret)) => (tenant, client, secret),
-            (tenant, client, secret) => {
-                let missing: Vec<&str> = [("tenant_id", tenant), ("client_id", client), ("client_secret", secret)]
-                    .into_iter()
-                    .filter(|(_key, value)| value.is_none())
-                    .map(|(key, _value)| key)
-                    .collect();
-                return azure_error(
-                    "config_error",
-                    format!("Azure SP secret missing keys: {}", py_list_repr(&missing)),
-                );
-            }
-        };
+    let field = |key: &str| {
+        sp.get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+    };
+    let (tenant_id, client_id, client_secret) = match (
+        field("tenant_id"),
+        field("client_id"),
+        field("client_secret"),
+    ) {
+        (Some(tenant), Some(client), Some(secret)) => (tenant, client, secret),
+        (tenant, client, secret) => {
+            let missing: Vec<&str> = [
+                ("tenant_id", tenant),
+                ("client_id", client),
+                ("client_secret", secret),
+            ]
+            .into_iter()
+            .filter(|(_key, value)| value.is_none())
+            .map(|(key, _value)| key)
+            .collect();
+            return azure_error(
+                "config_error",
+                format!("Azure SP secret missing keys: {}", py_list_repr(&missing)),
+            );
+        }
+    };
 
     // Python ClientSecretCredential.get_token("https://management.azure.com/.default").
     let token_url = format!("{login_base}/{tenant_id}/oauth2/v2.0/token");
@@ -269,27 +283,4 @@ pub(super) async fn azure_section_with(
         "scope_detail": scope_detail,
         "raw": props,
     })
-}
-
-/// MCA credit balance lives under balanceSummary/currentBalance/value. Legacy
-/// APIs return `amount` or `availableBalance`; object values resolve through
-/// their `value` member.
-fn extract_amount(props: &Value) -> Value {
-    if let Some(value) = props.pointer("/balanceSummary/currentBalance/value") {
-        return value.clone();
-    }
-    let Some(map) = props.as_object() else {
-        return Value::Null;
-    };
-    let amount = map
-        .get("amount")
-        .filter(|value| !value.is_null())
-        .or_else(|| map.get("availableBalance"));
-    match amount {
-        // An amount object Azure sent without `value` states no amount; a
-        // map index would panic on it.
-        Some(amount @ Value::Object(_)) => amount["value"].clone(),
-        Some(value) => value.clone(),
-        None => Value::Null,
-    }
 }

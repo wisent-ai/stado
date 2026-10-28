@@ -14,10 +14,10 @@ use crate::queue::{JobStorage, StorageError};
 
 use super::super::lifecycle::requeue_jids_after_reap;
 use super::super::{dedup_preserve_order, log, MonitorError};
-use crate::models::py_list_repr;
 use super::completions::instance_refs_with_completions;
 use super::measured::KindDurations;
 use super::race::safety_is_real_race;
+use crate::models::py_list_repr;
 
 /// The VM name an instance ref carries before its `@`; a ref without one is
 /// the name itself.

@@ -3,6 +3,8 @@
 //! The copy lives only in `onboarding_first_use.json`. This module presents
 //! that definition and keeps device-local progress beside Stado's other state.
 
+mod render;
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +12,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use serde_json::{json, Value};
 
+use self::render::render;
 use crate::cli::CmdError;
 
 const PRODUCT_ID: &str = "stado-cli";
@@ -40,8 +43,10 @@ fn definition() -> Result<Value, CmdError> {
 /// ([`crate::config_file::home`]: HOME, else the user database).
 fn state_path() -> Result<PathBuf, CmdError> {
     let home = crate::config_file::home().map_err(|cause| {
-        CmdError::click(format!("onboarding progress has nowhere to be kept: {cause}"))
-            .stating(crate::primitives::failure::FailureCode::Config)
+        CmdError::click(format!(
+            "onboarding progress has nowhere to be kept: {cause}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     Ok(home.join(".stado/onboarding.json"))
 }
@@ -169,31 +174,6 @@ fn ordered_screens(definition: &Value) -> Result<Vec<&Value>, CmdError> {
     }
 
     Ok(ordered)
-}
-
-/// Print `screen` as the `position`-th of `total`.
-fn render(screen: &Value, position: usize, total: usize) {
-    let presentation = &screen["presentation"];
-    // A screen whose definition gives no title or body says which: a blank
-    // line read as a screen meant to be blank.
-    let declared = |field: &str| match presentation[field].as_str() {
-        Some(text) => text.to_string(),
-        None => format!("(the onboarding definition gives this screen no {field})"),
-    };
-    println!(
-        "{}/{}  {}\n       {}",
-        position,
-        total,
-        declared("title"),
-        declared("body")
-    );
-    if let Some(command) = presentation.get("command").and_then(Value::as_str) {
-        println!("       $ {command}");
-    }
-    if let Some(result) = presentation.get("result").and_then(Value::as_str) {
-        println!("       Result: {result}");
-    }
-    println!();
 }
 
 pub async fn run(

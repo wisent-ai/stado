@@ -90,12 +90,17 @@ pub(super) async fn schedules_pinned_nowhere(
             findings.push(Finding::new(
                 "unreadable-schedules",
                 "schedules",
-                format!("the schedule store did not answer, so no schedule's pin was judged: {error}"),
+                format!(
+                    "the schedule store did not answer, so no schedule's pin was judged: {error}"
+                ),
             ));
             return;
         }
     };
-    for schedule in schedules.into_iter().filter(|schedule| !schedule.deleted && !schedule.pinned_host.is_empty()) {
+    for schedule in schedules
+        .into_iter()
+        .filter(|schedule| !schedule.deleted && !schedule.pinned_host.is_empty())
+    {
         let mut named = false;
         for target in &registry.targets {
             match crate::deploy::host_gates::resolves_to(registry, target, &schedule.pinned_host) {
@@ -106,7 +111,10 @@ pub(super) async fn schedules_pinned_nowhere(
                     findings.push(Finding::new(
                         "ambiguous-schedule-pin",
                         &schedule.schedule_id,
-                        format!("schedule {} is pinned to {}: {error}", schedule.schedule_id, schedule.pinned_host),
+                        format!(
+                            "schedule {} is pinned to {}: {error}",
+                            schedule.schedule_id, schedule.pinned_host
+                        ),
                     ));
                     named = true;
                     break;

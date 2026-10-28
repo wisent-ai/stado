@@ -250,7 +250,6 @@ pub use report::{
 pub use run::{
     extract_semver, remote_home, remote_json_member, remote_program_version, remote_read_file,
     remote_test, remote_user_home, run_command, run_program, run_program_with_connection,
-    run_program_with_stdin,
-    run_program_with_stdin_and_connection, run_script, run_script_to_completion,
-    run_script_with_connection,
+    run_program_with_stdin, run_program_with_stdin_and_connection, run_script,
+    run_script_to_completion, run_script_with_connection,
 };

@@ -81,8 +81,10 @@ fn already_placed(name: &str) -> Result<bool, CmdError> {
     }
     let item = format!("{name}-database");
     crate::credential_store::owner::item_exists(&item).map_err(|error| {
-        CmdError::click(format!("whether {item} is in the owner vault cannot be read: {error}"))
-            .stating(crate::primitives::failure::FailureCode::Config)
+        CmdError::click(format!(
+            "whether {item} is in the owner vault cannot be read: {error}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })
 }
 
@@ -207,8 +209,10 @@ async fn placement(
     here: &str,
 ) -> Result<Value, CmdError> {
     let home = crate::config_file::home().map_err(|cause| {
-        CmdError::click(format!("a fleet database has no directory to live in: {cause}"))
-            .stating(crate::primitives::failure::FailureCode::Config)
+        CmdError::click(format!(
+            "a fleet database has no directory to live in: {cause}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let directory = home.join(".stado").join("databases").join(name);
     std::fs::create_dir_all(&directory).map_err(|error| {

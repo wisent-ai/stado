@@ -32,7 +32,9 @@ pub(in crate::scheduler::cost) fn wall_seconds(job: &Job) -> Result<Option<f64>,
         },
     };
     if end < start {
-        return Err(format!("it finished at {end}, before it started at {start}"));
+        return Err(format!(
+            "it finished at {end}, before it started at {start}"
+        ));
     }
     Ok(Some((end - start).as_seconds_f64()))
 }

@@ -64,7 +64,9 @@ pub async fn slot_live_vram_gb(slot: &Slot) -> Result<Option<i64>, String> {
     let Some(pid) = slot.pid else {
         return Ok(None);
     };
-    Ok(gpu::smi_job_used_gb(pid).await?.filter(|used| used.is_positive()))
+    Ok(gpu::smi_job_used_gb(pid)
+        .await?
+        .filter(|used| used.is_positive()))
 }
 
 /// Whether any process of the group `pgid` leads still exists. A slot's

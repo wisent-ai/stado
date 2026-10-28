@@ -58,7 +58,9 @@ pub(super) fn staging_base() -> Result<PathBuf, CmdError> {
 /// Where this machine keeps one tree: one directory per transaction and
 /// state under [`staging_base`].
 fn staging(transaction_id: &str, state: &PlacementState) -> Result<PathBuf, CmdError> {
-    Ok(staging_base()?.join(transaction_id).join(state.path.replace('/', "%2F")))
+    Ok(staging_base()?
+        .join(transaction_id)
+        .join(state.path.replace('/', "%2F")))
 }
 
 /// Whether the source holds the tree, refusing a path that is not a

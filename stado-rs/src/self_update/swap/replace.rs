@@ -20,7 +20,11 @@ pub(in crate::self_update) fn replace_verified(
     if dest.file_name().is_none() {
         return Err(SelfUpdateError::NoInstallDir(dest.to_path_buf()));
     }
-    crate::primitives::document::persist_copy(dest, staged, crate::primitives::file_mode::program())?;
+    crate::primitives::document::persist_copy(
+        dest,
+        staged,
+        crate::primitives::file_mode::program(),
+    )?;
     Ok(())
 }
 

@@ -41,7 +41,9 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
     let resolved = resolve().await.map_err(classed)?;
     let credential = read(&resolved).await.map_err(classed)?;
     let organization = crate::deploy::host_precheck_runner::GITHUB_ORGANIZATION;
-    let mut path = identity.reality_check.replace("{organization}", organization);
+    let mut path = identity
+        .reality_check
+        .replace("{organization}", organization);
     if path.contains("{repository}") {
         let repository = identity.reality_check_repository.as_deref().ok_or_else(|| {
             click(format!(
@@ -82,7 +84,10 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
     // GitHub states why it refused in the body's `message`; a body that is not JSON
     // is itself what GitHub said.
     let message: Option<String> = match serde_json::from_str::<Value>(&answered) {
-        Ok(body) => body.get("message").and_then(Value::as_str).map(str::to_string),
+        Ok(body) => body
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         Err(not_json) => Some(format!("a body that is not JSON ({not_json}): {answered}")),
     };
     let document = json!({

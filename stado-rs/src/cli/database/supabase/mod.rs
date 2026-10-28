@@ -199,7 +199,11 @@ fn item_fields(
             // the item keeps the password and says why it holds no pooler
             // URL, since `create` reaches here after the project exists and a
             // refusal would lose the only copy of the generated password.
-            match (pooler["db_user"].as_str(), pooler["db_host"].as_str(), pooler["db_port"].as_u64()) {
+            match (
+                pooler["db_user"].as_str(),
+                pooler["db_host"].as_str(),
+                pooler["db_port"].as_u64(),
+            ) {
                 (Some(user), Some(host), Some(pooler_port)) => {
                     let user = userinfo(user);
                     fields["pooler_url"] = json!(format!(

@@ -69,10 +69,9 @@ fn identities(payload: &Value, name: &str) -> Result<BTreeMap<String, Value>, St
         if let Some(key) = path.strip_prefix(LIFECYCLE_PREFIX) {
             // An entry without its body is refused like one without its path:
             // read as null, two unread bodies compared equal.
-            let body = item
-                .get("body")
-                .cloned()
-                .ok_or_else(|| format!("served-store {name} inventory entry {path} carries no body: {item}"))?;
+            let body = item.get("body").cloned().ok_or_else(|| {
+                format!("served-store {name} inventory entry {path} carries no body: {item}")
+            })?;
             result.insert(key.to_string(), body);
         }
     }

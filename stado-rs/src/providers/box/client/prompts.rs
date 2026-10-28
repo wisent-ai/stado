@@ -48,10 +48,8 @@ impl BoxClient {
             )
             .await?;
         let run = prompt_run(&value, "the prompt")?;
-        let prompt_id = super::super::types::first_stated(
-            &[value.get("promptId"), run.get("promptId")],
-            "",
-        );
+        let prompt_id =
+            super::super::types::first_stated(&[value.get("promptId"), run.get("promptId")], "");
         let run_id = jstr(run.get("promptId"), "promptId", "prompt run")?;
         if prompt_id.is_empty() || run_id != prompt_id {
             return Err(BoxError::transport(format!(

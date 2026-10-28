@@ -20,7 +20,9 @@ use serde_json::{json, Value};
 use crate::cli::registry::beacons::load::load_beacons;
 use crate::cli::registry::doctor::capability::claims::requirement_findings;
 use crate::cli::registry::doctor::checks::dedup::prune_symptoms;
-use crate::cli::registry::doctor::checks::directory::{directory_candidate_ports, foreign_install_roots};
+use crate::cli::registry::doctor::checks::directory::{
+    directory_candidate_ports, foreign_install_roots,
+};
 use crate::cli::registry::doctor::checks::target::target_findings;
 use crate::cli::registry::doctor::checks::{
     declared_release_control, profiles_lacking_stores, resolver_refusal, schedules_pinned_nowhere,

@@ -39,7 +39,9 @@ pub(super) async fn stored(at: Option<&str>, content: &str) -> Result<String, St
             Ok(false) => {
                 Err("a registry appeared in the store while it was being created".to_string())
             }
-            Err(error) => Err(format!("the registry cannot be created in the store: {error}")),
+            Err(error) => Err(format!(
+                "the registry cannot be created in the store: {error}"
+            )),
         },
     }
 }
@@ -48,7 +50,10 @@ pub(super) async fn stored(at: Option<&str>, content: &str) -> Result<String, St
 /// host's receipt, or why no path took it. The paths are tried one after
 /// another: a copy refuses a generation it already holds, so a second path
 /// would only be refused.
-pub(super) async fn handed(target: &targets::ComputeTarget, content: &str) -> Result<Value, String> {
+pub(super) async fn handed(
+    target: &targets::ComputeTarget,
+    content: &str,
+) -> Result<Value, String> {
     let remote = format!(
         "{} registry push - --last-known-good --json",
         crate::deploy::host_exec::STADO_CLI

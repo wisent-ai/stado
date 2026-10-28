@@ -22,7 +22,9 @@ const STAT_SUCCEEDED: libc::c_int = 0;
 /// The unit prefix Stado owns in the two privileged locations.
 const UNIT_PREFIX: &str = "com.wisent.";
 
-use crate::deploy::service::{LAUNCHD_DAEMONS, SYSTEMD_UNITS, USER_LAUNCHD_AGENTS, USER_SYSTEMD_UNITS};
+use crate::deploy::service::{
+    LAUNCHD_DAEMONS, SYSTEMD_UNITS, USER_LAUNCHD_AGENTS, USER_SYSTEMD_UNITS,
+};
 use crate::primitives::removal::RemovalStatus;
 
 fn report(status: RemovalStatus, detail: &str) {

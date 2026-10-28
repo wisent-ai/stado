@@ -63,7 +63,9 @@ pub(super) fn restored_state_matches(
             || state.process_started_at.is_none()
             || state.process_executable.is_none()
             || state.process_device.is_none()
-            || state.process_inode.is_none_or(|inode| std::num::NonZeroU64::new(inode).is_none())
+            || state
+                .process_inode
+                .is_none_or(|inode| std::num::NonZeroU64::new(inode).is_none())
         {
             return false;
         }

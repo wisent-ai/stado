@@ -49,8 +49,10 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
             "operation has no applied or indeterminate actions to restore",
         ));
     }
-    let reversible_owned: Vec<Action> =
-        reversible.iter().map(|(action, _, _)| (*action).clone()).collect();
+    let reversible_owned: Vec<Action> = reversible
+        .iter()
+        .map(|(action, _, _)| (*action).clone())
+        .collect();
     let context = Context::new(&reversible_owned).await?;
     let irreversible: Vec<String> = state
         .actions
@@ -155,7 +157,12 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
                 explain_mismatch(&rollback.preconditions, &immediate)
             );
             let recorded = fail_restore(journal, plan, action, &message).await;
-            return Err(preserve_failure(CmdError::refused(message), recorded, plan, action));
+            return Err(preserve_failure(
+                CmdError::refused(message),
+                recorded,
+                plan,
+                action,
+            ));
         }
         journal
             .update(&plan.operation_id, |state| {

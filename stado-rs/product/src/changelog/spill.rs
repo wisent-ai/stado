@@ -12,8 +12,8 @@
 //! release says.
 
 use super::{
-    record_part, section_end, sections, spilled_part, CHANGELOG, FIRST_PART, PART_MARK, RANGE_DIRECTORY,
-    SPILLED, UNRELEASED,
+    record_part, section_end, sections, spilled_part, CHANGELOG, FIRST_PART, PART_MARK,
+    RANGE_DIRECTORY, SPILLED, UNRELEASED,
 };
 use anyhow::{bail, Context, Result};
 use serde_json::json;

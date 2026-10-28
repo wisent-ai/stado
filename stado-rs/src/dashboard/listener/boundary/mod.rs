@@ -26,7 +26,9 @@ impl Dashboard {
     /// on a closed boundary names the verifier it waits on and since when.
     pub(crate) async fn validate_boundary(&self, boundary: Boundary) -> Result<(), String> {
         fn flat<T, E: std::fmt::Display>(outcome: Result<T, E>) -> Result<(), String> {
-            outcome.map(|_verified| ()).map_err(|error| error.to_string())
+            outcome
+                .map(|_verified| ())
+                .map_err(|error| error.to_string())
         }
         let waiting = crate::wait::begin(
             crate::wait::Kind::Network,

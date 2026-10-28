@@ -133,12 +133,15 @@ async fn expire(
             ))
         })
         .map_err(|error| failure(error, "account bytes", &blob.name, summary, log))?;
-    store
-        .delete_blob(&blob.name)
-        .await
-        .map_err(|error| {
-            failure(error, "delete request (outcome unconfirmed)", &blob.name, summary, log)
-        })?;
+    store.delete_blob(&blob.name).await.map_err(|error| {
+        failure(
+            error,
+            "delete request (outcome unconfirmed)",
+            &blob.name,
+            summary,
+            log,
+        )
+    })?;
     summary.deleted.push(blob.name.clone());
     summary.deleted_bytes = deleted_bytes;
     Ok(())
@@ -167,11 +170,14 @@ fn kept(
     let Some(size) = blob.size else {
         return Err(Kept::Unmeasured);
     };
-    let over_budget = policy.limits.max_deleted_bytes_per_tick.is_some_and(|budget| {
-        budget
-            .checked_sub(summary.deleted_bytes)
-            .is_none_or(|remaining| size > remaining)
-    });
+    let over_budget = policy
+        .limits
+        .max_deleted_bytes_per_tick
+        .is_some_and(|budget| {
+            budget
+                .checked_sub(summary.deleted_bytes)
+                .is_none_or(|remaining| size > remaining)
+        });
     if over_budget {
         return Err(Kept::OverBudget);
     }

@@ -57,8 +57,7 @@ pub async fn fetch_quotas_gcp(
             let Some(metric) = quota.get("metric").and_then(Value::as_str) else {
                 return Err(unstated("metric", quota));
             };
-            let Some((_, accel)) = GCP_METRIC_TO_ACCEL.iter().find(|(m, _)| *m == metric)
-            else {
+            let Some((_, accel)) = GCP_METRIC_TO_ACCEL.iter().find(|(m, _)| *m == metric) else {
                 continue;
             };
             // Python int(q.limit): float limits truncate.

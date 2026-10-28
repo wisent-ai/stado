@@ -18,7 +18,12 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_undeclared(
     let (plan, program, args, systemd_unit) = resolved_plan(status, target, runner).await?;
     let report = service::probe_service(target, status.service.unit_id(), runner)
         .await
-        .map_err(|error| format!("{} on {} cannot be probed: {error}", status.service.name, target.name))?;
+        .map_err(|error| {
+            format!(
+                "{} on {} cannot be probed: {error}",
+                status.service.name, target.name
+            )
+        })?;
     if !report.succeeded("probed") {
         return Err(format!(
             "the unit could not be inspected over the host channel: {}",
@@ -38,7 +43,12 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_undeclared(
         corrected.args = args.clone();
         let running = service::inspect_process(target, &corrected, runner)
             .await
-            .map_err(|error| format!("the process of {} on {} cannot be inspected: {error}", status.service.name, target.name))?;
+            .map_err(|error| {
+                format!(
+                    "the process of {} on {} cannot be inspected: {error}",
+                    status.service.name, target.name
+                )
+            })?;
         match running.matches_process() {
             Some(true) => {
                 let changed =
@@ -77,7 +87,12 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_undeclared(
     }
     let outcome = service::ensure_service(target, &plan, runner)
         .await
-        .map_err(|error| format!("{} on {} cannot be ensured: {error}", status.service.name, target.name))?;
+        .map_err(|error| {
+            format!(
+                "{} on {} cannot be ensured: {error}",
+                status.service.name, target.name
+            )
+        })?;
     if !outcome.succeeded() {
         return Err(format!(
             "ensure did not establish a running unit: {}",

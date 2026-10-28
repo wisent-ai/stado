@@ -6,7 +6,9 @@
 //! declaration and most's Twilio material — sit beside it, together with the
 //! Pub/Sub OAuth fetch.
 
-use super::{channel_failed, AlertChannels, PubSubChannel, TelegramChannel, PUBSUB_BASE, TELEGRAM_API_BASE};
+use super::{
+    channel_failed, AlertChannels, PubSubChannel, TelegramChannel, PUBSUB_BASE, TELEGRAM_API_BASE,
+};
 
 mod providers;
 use providers::{gcp_token, resolve_most, resolve_skrzynka};

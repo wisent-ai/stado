@@ -185,7 +185,13 @@ pub fn local_repo() -> Result<Option<PathBuf>, String> {
 /// gets a truthful `HEAD`.
 fn git(repo: &Path, arguments: &[&str]) -> Result<Option<String>, String> {
     let output = crate::wait::output(Command::new("git").arg("-C").arg(repo).args(arguments))
-        .map_err(|error| format!("git {} cannot run in {}: {error}", arguments.join(" "), repo.display()))?;
+        .map_err(|error| {
+            format!(
+                "git {} cannot run in {}: {error}",
+                arguments.join(" "),
+                repo.display()
+            )
+        })?;
     if !output.status.success() {
         return Ok(None);
     }

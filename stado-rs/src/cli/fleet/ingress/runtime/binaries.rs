@@ -85,7 +85,9 @@ fn file_at(path: &std::path::Path) -> Result<bool, CmdError> {
     match std::fs::metadata(path) {
         Ok(metadata) => Ok(metadata.is_file()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(CmdError::from(error).within(&format!("{} cannot be examined", path.display()))),
+        Err(error) => {
+            Err(CmdError::from(error).within(format!("{} cannot be examined", path.display())))
+        }
     }
 }
 

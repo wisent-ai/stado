@@ -10,6 +10,7 @@
 //! resolver that has not answered yet is not brought back before that
 //! resolver has tried.
 
+use crate::autonomy::service_reconciler::repair::RepairRefused;
 use crate::deploy::service::{self, ManagedService};
 use crate::deploy::Runner;
 
@@ -42,7 +43,10 @@ pub(in crate::autonomy::service_reconciler) async fn replaced(
     let home = match crate::deploy::host_channel::remote_home(&target, runner).await {
         Ok(home) => home,
         Err(error) => {
-            unknown(format!("the home of {} cannot be read: {error}", target.name));
+            unknown(format!(
+                "the home of {} cannot be read: {error}",
+                target.name
+            ));
             return None;
         }
     };
@@ -196,4 +200,26 @@ pub(in crate::autonomy::service_reconciler) async fn retake(
     } else {
         Ok(detail)
     })
+}
+
+/// A row's repair answer once [`retake`] ran after it: a repair that stood
+/// and a retirement that landed is the unit retired; a failed retirement
+/// fails the row; a failed repair stays failed, with the retirement said.
+pub(in crate::autonomy::service_reconciler) fn with_retake(
+    result: Result<(String, bool, String), RepairRefused>,
+    retaken: Option<Result<String, String>>,
+) -> Result<(String, bool, String), RepairRefused> {
+    match (result, retaken) {
+        (result, None) => result,
+        (Ok((_, _, detail)), Some(Ok(undone))) => {
+            Ok(("retired".to_string(), true, format!("{detail}; {undone}")))
+        }
+        (Ok((_, _, detail)), Some(Err(failed))) => {
+            Err(RepairRefused::from(format!("{detail}; {failed}")))
+        }
+        (Err(error), Some(Ok(undone) | Err(undone))) => Err(RepairRefused::new(
+            error.kind,
+            format!("{}; {undone}", error.detail),
+        )),
+    }
 }

@@ -11,6 +11,8 @@ mod error;
 mod helpers;
 mod process;
 
-pub use command::{production_runner, relaying_runner, runner_fn, CommandOutput, CommandSpec, Runner};
+pub use command::{
+    production_runner, relaying_runner, runner_fn, CommandOutput, CommandSpec, Runner,
+};
 pub use error::DeployError;
 pub use helpers::{shlex_quote, write_if_changed};

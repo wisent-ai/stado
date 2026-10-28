@@ -101,7 +101,12 @@ pub(super) fn print_volumes(report: &Value) {
 /// Every row the host printed whose figures were not numbers, each with
 /// why: a dropped row would read as a host that had nothing there.
 pub(super) fn print_unread(report: &Value) {
-    for row in report.get("unread").and_then(Value::as_array).into_iter().flatten() {
+    for row in report
+        .get("unread")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         match row.as_str() {
             Some(cause) => println!("unread: {cause}"),
             None => println!("unread: {row}"),

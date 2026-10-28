@@ -66,10 +66,12 @@ pub(in crate::cli::web::builds) fn stage(
     // the same reason every entry's is: the artifact's bytes must depend on the
     // commit and nothing else. No file name is stored either, since that would
     // record the builder's path.
-    let encoder = flate2::GzBuilder::new().mtime(crate::primitives::archive::gzip_epoch()).write(
-        std::io::BufWriter::new(file),
-        flate2::Compression::default(),
-    );
+    let encoder = flate2::GzBuilder::new()
+        .mtime(crate::primitives::archive::gzip_epoch())
+        .write(
+            std::io::BufWriter::new(file),
+            flate2::Compression::default(),
+        );
     let mut archive = tar::Builder::new(encoder);
     archive.follow_symlinks(false);
 

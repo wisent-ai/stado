@@ -58,6 +58,10 @@ pub struct Identity {
 }
 
 impl Identity {
+    #[allow(
+        clippy::unnecessary_cast,
+        reason = "dev_t is u64 on Linux and i32 on macOS"
+    )]
     fn of(info: &libc::stat) -> Self {
         Self {
             // dev_t is u64 on Linux and i32 on macOS; the cast is the platform

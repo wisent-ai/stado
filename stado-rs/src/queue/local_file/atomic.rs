@@ -34,8 +34,9 @@ pub(super) fn publish_replacing(target: &Path, data: &[u8]) -> Result<(), Storag
 fn publish(target: &Path, data: &[u8], placing: Placing) -> Result<bool, StorageError> {
     let mode = crate::primitives::file_mode::owner_read_write();
     match placing {
-        Placing::Replace => crate::primitives::document::persist_with_mode(target, data, mode)
-            .map(|()| true),
+        Placing::Replace => {
+            crate::primitives::document::persist_with_mode(target, data, mode).map(|()| true)
+        }
         Placing::IfAbsent => crate::primitives::document::persist_if_absent(target, data, mode),
     }
     .map_err(|error| local_io("persist", target, error))

@@ -73,7 +73,7 @@ async fn answer(
     // Consumer admission and placement fencing are the same as the fleet
     // resolver's, including when the caller asks for an unverified address.
     if let Some(consumer) = consumer.as_deref() {
-        crate::service_resolution::resolve(&document, name, consumer).map_err(|error| {
+        crate::service_resolution::resolve(document, name, consumer).map_err(|error| {
             use crate::service_resolution::ResolveError;
             let state = match &error {
                 ResolveError::UnknownService(_) => "undeclared",
@@ -84,11 +84,11 @@ async fn answer(
             route_failure(CmdError::from(error), name, Some(consumer), state)
         })?;
     }
-    let block = directory(&document)?;
+    let block = directory(document)?;
     let entry = service(block, name)?;
     let asking = match target {
         Some(value) => value,
-        None => this_target_in(&document)?,
+        None => this_target_in(document)?,
     };
     let invalid = |error| route_failure(error, name, consumer.as_deref(), "invalid_declaration");
     let active = entry
@@ -143,7 +143,7 @@ async fn answer(
     // this host's own view reads that statement. A machine the registry does
     // not name has no own view to compute; a registry that cannot say which
     // machine this is refuses the answer with its cause.
-    let here = named_target_in(&document)?;
+    let here = named_target_in(document)?;
     let own_view = here.as_deref() == Some(asking.as_str());
     let beside = match own_view {
         // This host's own statement decides it; a refusal here states no
@@ -161,7 +161,7 @@ async fn answer(
     } else if !through_adapter {
         format!("{scheme}://{}:{port}", std::net::Ipv4Addr::LOCALHOST)
     } else {
-        match adapter_route(&document, &asking, name, consumer.as_deref(), &scheme)? {
+        match adapter_route(document, &asking, name, consumer.as_deref(), &scheme)? {
             Some(route) => route,
             None => {
                 endpoint_url(entry, &asking)

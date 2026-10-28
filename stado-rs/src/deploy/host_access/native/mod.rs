@@ -79,7 +79,11 @@ async fn connect_as(
     result
 }
 
-async fn open(destination: &str, reverse: Option<reverse::Ports>, long_lived: bool) -> Result<Session> {
+async fn open(
+    destination: &str,
+    reverse: Option<reverse::Ports>,
+    long_lived: bool,
+) -> Result<Session> {
     crate::deploy::host_users::validate_ssh_target(destination)?;
     let (user, host) = match destination.split_once('@') {
         Some((user, host)) => (user.to_string(), host),

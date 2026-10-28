@@ -93,7 +93,8 @@ fn get(stado: &Path, uri: &str, destination: &Path) -> Result<(), Refusal> {
 /// Lowercase-or-uppercase hex of exactly a SHA-256 digest's length, measured
 /// from a digest rather than written here.
 fn sha256_hex(value: &str) -> bool {
-    value.len() == hex::encode(Sha256::digest(b"")).len() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == hex::encode(Sha256::digest(b"")).len()
+        && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// The fields of the SIGNED manifest the baseline reads. Additive fields are
@@ -122,10 +123,14 @@ pub(super) fn manifest(
     let destination = root.join(format!("release-{platform}.json"));
     get(stado, &uri, &destination)?;
     let bytes = std::fs::read(&destination).map_err(|error| {
-        format!("the release manifest {uri} fetched to {} cannot be read: {error}", destination.display())
+        format!(
+            "the release manifest {uri} fetched to {} cannot be read: {error}",
+            destination.display()
+        )
     })?;
-    let manifest: Manifest = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("the release manifest {uri} is not a signed release manifest: {error}"))?;
+    let manifest: Manifest = serde_json::from_slice(&bytes).map_err(|error| {
+        format!("the release manifest {uri} is not a signed release manifest: {error}")
+    })?;
     if manifest.product != "stado" || manifest.version != version || manifest.platform != platform {
         return Err(format!(
             "release manifest identity mismatch: {uri} names {} {} {}",
@@ -134,12 +139,19 @@ pub(super) fn manifest(
         .into());
     }
     if !sha256_hex(&manifest.artifact_sha256) {
-        return Err(format!("release manifest digest {:?} is not a SHA-256 digest: {uri}", manifest.artifact_sha256).into());
+        return Err(format!(
+            "release manifest digest {:?} is not a SHA-256 digest: {uri}",
+            manifest.artifact_sha256
+        )
+        .into());
     }
     // A git object id of either object format: SHA-1, or SHA-256.
     let revision = &manifest.source_revision;
     if !crate::binary::provenance::is_commit_id(revision) && !sha256_hex(revision) {
-        return Err(format!("release manifest source revision {revision:?} is not a git object id: {uri}").into());
+        return Err(format!(
+            "release manifest source revision {revision:?} is not a git object id: {uri}"
+        )
+        .into());
     }
     Ok((manifest, uri))
 }
@@ -162,8 +174,9 @@ pub(super) fn surface_from_release(
     if hex::encode(Sha256::digest(&payload)) != manifest.artifact_sha256.to_ascii_lowercase() {
         return Err(format!("release archive differs from its manifest: {archive_uri}").into());
     }
-    let size = u64::try_from(payload.len())
-        .map_err(|error| format!("release archive {archive_uri} is larger than a size can say: {error}"))?;
+    let size = u64::try_from(payload.len()).map_err(|error| {
+        format!("release archive {archive_uri} is larger than a size can say: {error}")
+    })?;
     if size != manifest.artifact_bytes.get() {
         return Err(
             format!("release archive is not the size its manifest binds: {archive_uri}").into(),
@@ -179,8 +192,9 @@ pub(super) fn surface_from_release(
     let mut mode = std::fs::metadata(&binary)
         .map_err(|error| format!("{}: {error}", binary.display()))?
         .permissions();
-    mode.set_mode(mode.mode() | u32::from(nix::libc::S_IXUSR));
-    std::fs::set_permissions(&binary, mode).map_err(|error| format!("{}: {error}", binary.display()))?;
+    mode.set_mode(mode.mode() | crate::primitives::file_mode::widen(nix::libc::S_IXUSR));
+    std::fs::set_permissions(&binary, mode)
+        .map_err(|error| format!("{}: {error}", binary.display()))?;
     let commands = super::super::surface::of_binary(&binary).map_err(|error| {
         format!("release binary advertised an invalid command surface: {archive_uri}: {error}")
     })?;

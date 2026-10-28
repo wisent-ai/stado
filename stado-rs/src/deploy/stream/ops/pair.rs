@@ -25,10 +25,10 @@ pub async fn pair(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     if pin.is_empty() || !pin.chars().all(|c| c.is_ascii_digit()) {
-        return Err(DeployError(format!(
-            "pin {pin:?} is not the digits Moonlight shows"
-        ))
-        .stating(crate::primitives::failure::FailureCode::Refused));
+        return Err(
+            DeployError(format!("pin {pin:?} is not the digits Moonlight shows"))
+                .stating(crate::primitives::failure::FailureCode::Refused),
+        );
     }
     if !client_name
         .chars()

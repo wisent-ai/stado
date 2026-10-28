@@ -32,7 +32,9 @@ impl Declaration {
         let directory = self
             .within
             .iter()
-            .fold(child_directory.to_path_buf(), |directory, inline| directory.join(inline));
+            .fold(child_directory.to_path_buf(), |directory, inline| {
+                directory.join(inline)
+            });
         vec![
             directory.join(format!("{}.rs", self.name)),
             directory.join(&self.name).join("mod.rs"),
@@ -42,16 +44,18 @@ impl Declaration {
 
 /// The string a `#[path = "…"]` attribute gives, when one is there.
 fn path_attribute(attributes: &[syn::Attribute]) -> Option<String> {
-    attributes.iter().find_map(|attribute| match &attribute.meta {
-        syn::Meta::NameValue(pair) if pair.path.is_ident("path") => match &pair.value {
-            syn::Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Str(text),
-                ..
-            }) => Some(text.value()),
+    attributes
+        .iter()
+        .find_map(|attribute| match &attribute.meta {
+            syn::Meta::NameValue(pair) if pair.path.is_ident("path") => match &pair.value {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(text),
+                    ..
+                }) => Some(text.value()),
+                _ => None,
+            },
             _ => None,
-        },
-        _ => None,
-    })
+        })
 }
 
 fn collect(items: &[syn::Item], within: &[String], into: &mut Vec<Declaration>) {

@@ -8,7 +8,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::error::ArtifactError;
-use super::records::{as_text, recorded_text, ArtifactLocation, ArtifactProducer, ArtifactVerification};
+use super::records::{
+    as_text, recorded_text, ArtifactLocation, ArtifactProducer, ArtifactVerification,
+};
 use super::reference::ArtifactRef;
 use canonical::{canonicalize, ensure_ascii};
 
@@ -149,7 +151,9 @@ impl ArtifactManifest {
         // the one version there has been; any other version is refused.
         let schema_version = match map.get("schema_version") {
             None | Some(Value::Null) => MANIFEST_SCHEMA_VERSION,
-            Some(Value::Number(n)) if n.as_i64() == Some(MANIFEST_SCHEMA_VERSION) => MANIFEST_SCHEMA_VERSION,
+            Some(Value::Number(n)) if n.as_i64() == Some(MANIFEST_SCHEMA_VERSION) => {
+                MANIFEST_SCHEMA_VERSION
+            }
             Some(other) => {
                 return Err(ArtifactError::invalid_manifest(format!(
                     "schema_version {other} is not {MANIFEST_SCHEMA_VERSION}"

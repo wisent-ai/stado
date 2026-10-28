@@ -72,7 +72,10 @@ impl ResolverState {
             .iter()
             .map(|adapter| {
                 (
-                    format!("adapter {} for consumer {}", adapter.service, adapter.consumer),
+                    format!(
+                        "adapter {} for consumer {}",
+                        adapter.service, adapter.consumer
+                    ),
                     adapter.bind.clone(),
                 )
             })
@@ -88,9 +91,9 @@ impl ResolverState {
             let Some((bind_host, bind_port)) = bind.rsplit_once(':') else {
                 return Err(format!("{what} listens on {bind}, which is not host:port"));
             };
-            let bind_port = bind_port
-                .parse::<u16>()
-                .map_err(|error| format!("{what} listens on {bind}, whose port is not a port: {error}"))?;
+            let bind_port = bind_port.parse::<u16>().map_err(|error| {
+                format!("{what} listens on {bind}, whose port is not a port: {error}")
+            })?;
             if crate::service_resolution::listener_address(bind_host, bind_port) == Some(target) {
                 return Err(format!(
                     "service {} resolves to {}, which is {what} ({bind}) of this resolver on {}: \

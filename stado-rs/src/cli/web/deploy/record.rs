@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 
 use crate::cli::CmdError;
 use crate::config::WebApiProduct;
-use crate::declaration::ServiceDeclaration;
+use crate::declaration::{DeclarationRun, DeclarationSource, ServiceDeclaration};
 use crate::deploy::service::{self, ManagedService};
 
 use super::click;
@@ -112,4 +112,28 @@ pub(super) async fn record_declaration(
         Ok(document)
     })
     .await
+}
+
+/// The declaration a deploy records: the release archive and its digest, and
+/// the launcher program with the unit's environment.
+pub(super) fn declaration(
+    artifact: &str,
+    sha256: &str,
+    program: &str,
+    environment: &[(String, String)],
+) -> ServiceDeclaration {
+    ServiceDeclaration {
+        source: DeclarationSource {
+            artifact: artifact.to_string(),
+            sha256: sha256.to_string(),
+            extra: Map::new(),
+        },
+        run: DeclarationRun {
+            program: Some(program.to_string()),
+            args: Vec::new(),
+            env: environment.iter().cloned().collect(),
+            extra: Map::new(),
+        },
+        extra: Map::new(),
+    }
 }

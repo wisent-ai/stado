@@ -102,7 +102,10 @@ pub(super) async fn check_move(
         return Ok(());
     }
     if checked.status == "already_placed" {
-        println!("{} is already placed on {}", checked.profile, checked.to_host);
+        println!(
+            "{} is already placed on {}",
+            checked.profile, checked.to_host
+        );
     } else {
         println!(
             "{} passes every check a move from {} to {} makes before it fences the source; \

@@ -13,9 +13,8 @@ pub(super) fn positive_duration(seconds: u64, field: &str) -> Result<Duration, S
     let signed = i64::try_from(positive.get()).map_err(|error| {
         format!("{field} cannot represent {seconds} seconds as a duration: {error}")
     })?;
-    Duration::try_seconds(signed).ok_or_else(|| {
-        format!("{field} of {seconds} seconds exceeds the supported duration range")
-    })
+    Duration::try_seconds(signed)
+        .ok_or_else(|| format!("{field} of {seconds} seconds exceeds the supported duration range"))
 }
 
 pub(super) fn expires_at(

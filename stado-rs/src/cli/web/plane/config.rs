@@ -55,8 +55,10 @@ where
         .entry(section.to_string())
         .or_insert_with(|| json!({}))
     else {
-        return Err(CmdError::click(format!("web_api.{section} must be an object"))
-            .stating(crate::primitives::failure::FailureCode::Config));
+        return Err(
+            CmdError::click(format!("web_api.{section} must be an object"))
+                .stating(crate::primitives::failure::FailureCode::Config),
+        );
     };
     mutation(map)?;
     // The parsers refuse an empty map, so a removal that empties the plane

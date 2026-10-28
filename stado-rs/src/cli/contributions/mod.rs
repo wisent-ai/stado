@@ -165,14 +165,18 @@ async fn pending(args: LedgerArgs) -> Result<(), CmdError> {
             };
             format!(
                 "{} {} {}s{state}",
-                field(&event["source_event_id"]), field(&event["contributor_id"]), field(&event["quantity"])
+                field(&event["source_event_id"]),
+                field(&event["contributor_id"]),
+                field(&event["quantity"])
             )
         })
-        .chain(
-            unmeasured
-                .iter()
-                .map(|job| format!("{} not reported: {}", field(&job["job"]), field(&job["reason"]))),
-        );
+        .chain(unmeasured.iter().map(|job| {
+            format!(
+                "{} not reported: {}",
+                field(&job["job"]),
+                field(&job["reason"])
+            )
+        }));
     print(
         &json!({"ledger": url, "events": events, "unmeasured": unmeasured}),
         args.json,
@@ -211,7 +215,8 @@ async fn report(args: LedgerArgs) -> Result<(), CmdError> {
                 Some(cause) => format!("{} refused: {cause}", field(&outcome["job"])),
                 None => format!(
                     "{} recorded: {}",
-                    field(&outcome["job"]), field(&outcome["answer"]["recorded"])
+                    field(&outcome["job"]),
+                    field(&outcome["answer"]["recorded"])
                 ),
             },
         )

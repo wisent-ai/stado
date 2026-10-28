@@ -54,11 +54,7 @@ pub(super) fn spec_rows(original: &Job, fresh: &Job) -> Vec<Vec<String>> {
             original.pinned_host.clone(),
             fresh.pinned_host.clone(),
         ),
-        row(
-            "deadline_at",
-            deadline(original),
-            deadline(fresh),
-        ),
+        row("deadline_at", deadline(original), deadline(fresh)),
         row(
             "platform_os",
             original.platform_os.clone(),

@@ -13,8 +13,10 @@ use super::socket::{ControlSocketError, Prepared};
 use super::{Action, OwnedProxy, OwnedTransaction, Request, Response, PROTOCOL, SUPERUSER_UID};
 use crate::release_agent::rollout::serving::proxy::{forward, ProxyState};
 
+mod retire;
 mod workers;
 
+use retire::retire;
 use workers::Worker;
 
 /// What one request produced.
@@ -146,31 +148,6 @@ async fn read_and_apply(stream: &mut UnixStream, owner: &Owner) -> Result<Reply,
     }
 }
 
-/// Stop the route `state` owns, whatever its bind.
-async fn retire(state: &std::path::Path, owner: &Owner) -> Result<(), String> {
-    if !state.is_absolute() {
-        return Err("proxy retirement requires an absolute state path".to_string());
-    }
-    let Some(route) = owner.routes.lock().await.remove(state) else {
-        return Ok(());
-    };
-    let bind = route.identity.bind;
-    route
-        .stop
-        .send(())
-        .map_err(|_| format!("proxy {bind} stopped before acknowledging retirement"))?;
-    route
-        .task
-        .await
-        .map_err(|error| format!("retiring proxy {bind} failed: {error}"))?;
-    eprintln!(
-        "stado release proxy retired: pid={} bind={bind} state={}",
-        std::process::id(),
-        state.display()
-    );
-    Ok(())
-}
-
 async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, String> {
     let (state, bind) = match &action {
         Action::Ensure { state, bind }
@@ -182,7 +159,10 @@ async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, Stri
             return Err("a transaction request reached the proxy table".to_string())
         }
     };
-    if !state.is_absolute() || !bind.ip().is_loopback() || std::num::NonZeroU16::new(bind.port()).is_none() {
+    if !state.is_absolute()
+        || !bind.ip().is_loopback()
+        || std::num::NonZeroU16::new(bind.port()).is_none()
+    {
         return Err(
             "proxy control requires an absolute state path and nonzero loopback bind".to_string(),
         );
@@ -261,10 +241,15 @@ async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, Stri
                     Ok(Ok(())) => return,
                     Err(payload) => {
                         // A panic raised with a message carries text; any other payload is said to be one.
-                        let message = match (payload.downcast_ref::<String>(), payload.downcast_ref::<&str>()) {
+                        let message = match (
+                            payload.downcast_ref::<String>(),
+                            payload.downcast_ref::<&str>(),
+                        ) {
                             (Some(text), _) => text.clone(),
                             (None, Some(text)) => (*text).to_string(),
-                            (None, None) => format!("a payload of no text type ({:?})", (*payload).type_id()),
+                            (None, None) => {
+                                format!("a payload of no text type ({:?})", (*payload).type_id())
+                            }
                         };
                         format!("forwarding loop panicked: {message}")
                     }

@@ -33,15 +33,23 @@ pub(crate) fn string(text: &[char]) -> String {
 
 /// `text` without surrounding whitespace.
 pub(crate) fn trimmed(text: &[char]) -> &[char] {
-    let start = text.iter().take_while(|character| character.is_whitespace()).count();
+    let start = text
+        .iter()
+        .take_while(|character| character.is_whitespace())
+        .count();
     let rest = &text[start..];
-    let trailing = rest.iter().rev().take_while(|character| character.is_whitespace()).count();
+    let trailing = rest
+        .iter()
+        .rev()
+        .take_while(|character| character.is_whitespace())
+        .count();
     &rest[..rest.len() - trailing]
 }
 
 pub(crate) fn starts(text: &[char], index: usize, pattern: &str) -> bool {
     let pattern: Vec<char> = pattern.chars().collect();
-    text.get(index..).is_some_and(|rest| rest.starts_with(&pattern))
+    text.get(index..)
+        .is_some_and(|rest| rest.starts_with(&pattern))
 }
 
 pub(crate) fn find(text: &[char], from: usize, pattern: &str) -> Option<usize> {
@@ -69,7 +77,10 @@ pub(crate) fn anchored(pattern: &Regex, text: &[char]) -> Option<(String, usize)
 /// or that it stopped at the end of the manifest.
 pub(crate) fn excerpt(text: &[char], index: usize) -> String {
     let line: String = match text.get(index..) {
-        Some(rest) => rest.iter().take_while(|character| **character != '\n').collect(),
+        Some(rest) => rest
+            .iter()
+            .take_while(|character| **character != '\n')
+            .collect(),
         None => String::new(),
     };
     match line.trim() {

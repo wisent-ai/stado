@@ -11,10 +11,9 @@ use crate::cli::CmdError;
 use crate::host_software::ProductBinary;
 use crate::release_control;
 
+use super::ReleaseStatusArgs;
 use reads::{matching_runs, recent_runs};
 use render::print_runs;
-
-use super::ReleaseStatusArgs;
 
 /// `stado release status [--product NAME] [--json]` — desired against observed,
 /// and now against what the host actually runs.
@@ -55,19 +54,36 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
     let mut failed: Vec<&String> = Vec::new();
     // Rollout targets the fleet registry does not declare; each is a failure.
     let mut undeclared: Vec<&String> = Vec::new();
-    let selected = |product: &str| args.product.as_deref().is_none_or(|chosen| chosen == product);
+    let selected = |product: &str| {
+        args.product
+            .as_deref()
+            .is_none_or(|chosen| chosen == product)
+    };
     let pairs: Vec<(String, String)> = control
         .products
         .iter()
         .filter(|(product, _)| selected(product))
-        .flat_map(|(product, policy)| policy.targets.keys().map(|target| (product.clone(), target.clone())))
+        .flat_map(|(product, policy)| {
+            policy
+                .targets
+                .keys()
+                .map(|target| (product.clone(), target.clone()))
+        })
         .collect();
     let mut states = reads::release_states(&pairs).await?;
-    for (product, policy) in control.products.iter().filter(|(product, _)| selected(product)) {
+    for (product, policy) in control
+        .products
+        .iter()
+        .filter(|(product, _)| selected(product))
+    {
         for target in policy.targets.keys() {
-            let state = states.remove(&(product.clone(), target.clone())).ok_or_else(|| {
-                CmdError::click(format!("the release state of {product} on {target} was not read"))
-            })??;
+            let state = states
+                .remove(&(product.clone(), target.clone()))
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "the release state of {product} on {target} was not read"
+                    ))
+                })??;
             let observed: Value = match state {
                 Some(bytes) => serde_json::from_slice(&bytes)?,
                 None => Value::Null,

@@ -61,7 +61,8 @@ pub(super) async fn collect_offers(
             payload_text(&payload, "machine_type")
                 .map(str::to_string)
                 .or_else(|| {
-                    sizing_for_accelerator(provider.as_str(), accelerator).map(|(_, machine)| machine)
+                    sizing_for_accelerator(provider.as_str(), accelerator)
+                        .map(|(_, machine)| machine)
                 })
         };
         let listed = payload
@@ -73,7 +74,10 @@ pub(super) async fn collect_offers(
                 continue;
             }
             let Some(accelerator) = payload_text(&payload, "gpu_type") else {
-                errors.insert(consumer_id, "the host reported free VRAM but no gpu_type".to_string());
+                errors.insert(
+                    consumer_id,
+                    "the host reported free VRAM but no gpu_type".to_string(),
+                );
                 continue;
             };
             let Some(machine_type) = machine_of(accelerator) else {
@@ -101,7 +105,9 @@ pub(super) async fn collect_offers(
             let Some(count) = count.as_i64() else {
                 errors.insert(
                     format!("{consumer_id}:{accelerator}"),
-                    format!("the host's available_accelerators count {count} is not a whole number"),
+                    format!(
+                        "the host's available_accelerators count {count} is not a whole number"
+                    ),
                 );
                 continue;
             };

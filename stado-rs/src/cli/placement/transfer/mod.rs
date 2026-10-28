@@ -16,7 +16,9 @@ pub(in crate::cli::placement) use journal::{
     summary as progress_summary, sweep as sweep_progress,
 };
 pub(in crate::cli::placement) use readiness::preflight;
-pub(in crate::cli::placement) use role::{apply_role, ensure_runs_on, move_role, prepare_role, store_fence};
+pub(in crate::cli::placement) use role::{
+    apply_role, ensure_runs_on, move_role, prepare_role, store_fence,
+};
 pub(in crate::cli::placement) use state::settle_state_backup;
 
 use std::sync::Arc;

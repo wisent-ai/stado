@@ -152,7 +152,10 @@ pub(crate) fn pick_or_rotate(
         Err(error) => {
             return Err(std::io::Error::new(
                 error.kind(),
-                format!("cannot read the staging directory {}: {error}", staging.display()),
+                format!(
+                    "cannot read the staging directory {}: {error}",
+                    staging.display()
+                ),
             ))
         }
     }

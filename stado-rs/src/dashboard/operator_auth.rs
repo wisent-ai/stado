@@ -37,7 +37,9 @@ impl OperatorAuthError {
     /// The whole reason, for the server's log.
     pub(super) fn cause(&self) -> String {
         match self {
-            Self::Configuration { cause } | Self::Credential { cause } => format!("{self}: {cause}"),
+            Self::Configuration { cause } | Self::Credential { cause } => {
+                format!("{self}: {cause}")
+            }
             Self::Request(_) | Self::Response(_) => self.to_string(),
         }
     }
@@ -91,12 +93,18 @@ async fn metadata() -> Result<(Url, String), OperatorAuthError> {
     let raw_url = vault
         .read_field(DEVICE_REGISTRY_ROLE, "url")
         .await
-        .map_err(|error| credential(format!("{DEVICE_REGISTRY_ROLE}.url cannot be read: {error}")))?;
+        .map_err(|error| {
+            credential(format!(
+                "{DEVICE_REGISTRY_ROLE}.url cannot be read: {error}"
+            ))
+        })?;
     let raw_key = vault
         .read_field(DEVICE_REGISTRY_ROLE, "anon_key")
         .await
         .map_err(|error| {
-            credential(format!("{DEVICE_REGISTRY_ROLE}.anon_key cannot be read: {error}"))
+            credential(format!(
+                "{DEVICE_REGISTRY_ROLE}.anon_key cannot be read: {error}"
+            ))
         })?;
     let base = Url::parse(required(&raw_url, "url")?)
         .map_err(|error| credential(format!("{DEVICE_REGISTRY_ROLE}.url is not a URL: {error}")))?;

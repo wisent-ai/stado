@@ -166,13 +166,13 @@ pub async fn inspect_label_carrying(
         }
     } else if let Some(key_now) = state.event_key.clone() {
         crate::primitives::lock::held(&CARRIED).insert(
-                key,
-                Carried {
-                    key: key_now,
-                    events: state.recent_events.clone(),
-                    status: state.event_read_status.clone(),
-                },
-            );
+            key,
+            Carried {
+                key: key_now,
+                events: state.recent_events.clone(),
+                status: state.event_read_status.clone(),
+            },
+        );
     }
     Ok(state)
 }

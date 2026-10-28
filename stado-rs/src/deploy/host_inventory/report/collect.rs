@@ -18,7 +18,7 @@ pub async fn inventory_target(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     let output = host_channel::run_script(target, &remote_inventory_script()?, runner).await?;
-    let mut report = match parse_inventory(&output.stdout) {
+    let report = match parse_inventory(&output.stdout) {
         Ok(inventory) => {
             let mut report = to_report(target, directory, &inventory);
             host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");

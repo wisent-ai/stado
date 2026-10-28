@@ -18,7 +18,7 @@ pub enum ResolveError {
     /// can end it when its process ended.
     Moving {
         service: String,
-        transaction: crate::placement::PlacementTransaction,
+        transaction: Box<crate::placement::PlacementTransaction>,
     },
 }
 

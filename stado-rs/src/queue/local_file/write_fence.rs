@@ -46,8 +46,8 @@ impl WriteFencePaths {
             .write(true)
             .create(true)
             .truncate(false)
-            // Read and write by the owner alone, as POSIX names the bits.
-            .mode(u32::from(libc::S_IRUSR | libc::S_IWUSR))
+            // Read and write by the owner alone.
+            .mode(crate::primitives::file_mode::owner_read_write())
             .custom_flags(libc::O_NOFOLLOW)
             .open(&self.lock)
             .map_err(|error| local_io("open write-fence lock", &self.lock, error))?;

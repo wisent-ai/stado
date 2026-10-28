@@ -20,7 +20,11 @@ pub(crate) async fn declare(command: &PeerCommands) -> Result<(), CmdError> {
             ca_file,
             json,
         } => {
-            if declaration::load(&store, name).await.map_err(cmd)?.is_some() {
+            if declaration::load(&store, name)
+                .await
+                .map_err(cmd)?
+                .is_some()
+            {
                 return Err(CmdError::refused(format!(
                     "peer {name} is already declared; `stado market peer edit {name}` changes it"
                 )));
@@ -146,7 +150,10 @@ fn print_peer(
     println!("peer {} {what}", peer.name);
     println!("origin:     {}", peer.origin);
     println!("namespace:  {}", peer.namespace);
-    println!("credential: the item playing {}, field token", peer.credential_role);
+    println!(
+        "credential: the item playing {}, field token",
+        peer.credential_role
+    );
     match &peer.ca_file {
         Some(ca_file) => println!("authority:  {ca_file}"),
         None => println!("authority:  the system roots"),

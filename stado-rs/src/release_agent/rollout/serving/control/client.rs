@@ -32,7 +32,7 @@ pub(super) async fn exchange(
             })
         }
     };
-    let group_or_world = u32::from(libc::S_IRWXG | libc::S_IRWXO);
+    let group_or_world = crate::primitives::file_mode::widen(libc::S_IRWXG | libc::S_IRWXO);
     if !metadata.file_type().is_socket()
         || std::num::NonZeroU32::new(metadata.permissions().mode() & group_or_world).is_some()
     {

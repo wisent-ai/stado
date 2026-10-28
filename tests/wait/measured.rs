@@ -30,7 +30,10 @@ fn show(root: &Path) -> Output {
         .current_dir(root)
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", root.join("store"))
-        .env("STADO_CONFIG", root.join("no-config.toml"))
+        .env(
+            "STADO_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+        )
         .env("STADO_WAITS_DIR", root.join("waits"))
         .env("STADO_WAITS_MEASURED_DIR", root.join("measured"))
         .stdin(Stdio::null())

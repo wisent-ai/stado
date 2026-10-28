@@ -60,7 +60,9 @@ pub fn parse_output(stdout: &str) -> DiskReading {
             ["STADO_BLOCK_DEVICE", row] => {
                 let device = parse_lsblk_pairs(row);
                 if let Some(cause) = &device.size_unread {
-                    reading.unread.push(format!("block device {}: {cause}", device.name));
+                    reading
+                        .unread
+                        .push(format!("block device {}: {cause}", device.name));
                 }
                 reading.block_devices.push(device);
             }
@@ -113,28 +115,32 @@ pub fn parse_output(stdout: &str) -> DiskReading {
                     blocks_kb,
                     path: (*path).to_string(),
                 }),
-                Err(error) => reading
-                    .unread
-                    .push(format!("directory {path}: size {blocks:?} is not a block count: {error}")),
+                Err(error) => reading.unread.push(format!(
+                    "directory {path}: size {blocks:?} is not a block count: {error}"
+                )),
             },
             ["STADO_BUILD_CACHE_ITEM", blocks, path] => match blocks.parse::<i64>() {
                 Ok(blocks_kb) => reading.tagged_build_caches.push(DiskItem {
                     blocks_kb,
                     path: (*path).to_string(),
                 }),
-                Err(error) => reading
-                    .unread
-                    .push(format!("build cache {path}: size {blocks:?} is not a block count: {error}")),
+                Err(error) => reading.unread.push(format!(
+                    "build cache {path}: size {blocks:?} is not a block count: {error}"
+                )),
             },
             ["STADO_BUILD_CACHE_END", _] => reading.tagged_build_caches_read = true,
             ["STADO_CLONE_SUMMARY", path, total, hour, day] => {
                 let count = |name: &str, value: &str| {
-                    value
-                        .parse::<i64>()
-                        .map_err(|error| format!("clone summary {path}: {name} {value:?} is not a count: {error}"))
+                    value.parse::<i64>().map_err(|error| {
+                        format!("clone summary {path}: {name} {value:?} is not a count: {error}")
+                    })
                 };
                 let counts = count("total", total).and_then(|total| {
-                    Ok((total, count("older than an hour", hour)?, count("older than a day", day)?))
+                    Ok((
+                        total,
+                        count("older than an hour", hour)?,
+                        count("older than a day", day)?,
+                    ))
                 });
                 match counts {
                     Ok((total, older_than_hour, older_than_day)) => {
@@ -161,7 +167,10 @@ pub fn parse_output(stdout: &str) -> DiskReading {
 fn headroom_kb(usage: &DiskUsage) -> Result<i64, String> {
     let count = |name: &str, value: &str| {
         value.parse::<i64>().map_err(|error| {
-            format!("df row for {}: {name} {value:?} is not a block count: {error}", usage.mounted_on)
+            format!(
+                "df row for {}: {name} {value:?} is not a block count: {error}",
+                usage.mounted_on
+            )
         })
     };
     let total = count("blocks", &usage.blocks_kb)?;
@@ -201,7 +210,9 @@ pub fn parse_lsblk_pairs(row: &str) -> BlockDevice {
             "SIZE" => match value.parse::<i64>() {
                 Ok(bytes) => device.size_bytes = Some(bytes),
                 Err(error) => {
-                    device.size_unread = Some(format!("lsblk printed the size {value:?}, which is not a byte count: {error}"))
+                    device.size_unread = Some(format!(
+                        "lsblk printed the size {value:?}, which is not a byte count: {error}"
+                    ))
                 }
             },
             "TYPE" => {

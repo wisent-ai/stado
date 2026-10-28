@@ -118,7 +118,8 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
             "pinned_host must be a lowercase consumer host name (letters, digits, dot, dash)",
         ));
     }
-    let (Some(repo), Some(repo_ref)) = (normalized["repo"].as_str(), normalized["repo_ref"].as_str())
+    let (Some(repo), Some(repo_ref)) =
+        (normalized["repo"].as_str(), normalized["repo_ref"].as_str())
     else {
         return Err(invalid("repo and repo_ref must be strings"));
     };

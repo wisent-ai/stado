@@ -75,10 +75,12 @@ pub async fn reconcile_host_worker(
     let descriptor = operation_lock.as_raw_fd();
     // Clearing CLOEXEC deliberately carries the same locked open-file
     // description through every locally spawned lifecycle effect.
-    let inheritable = nix::fcntl::fcntl(&operation_lock, nix::fcntl::FcntlArg::F_GETFD).and_then(|bits| {
-        let flags = nix::fcntl::FdFlag::from_bits_truncate(bits) - nix::fcntl::FdFlag::FD_CLOEXEC;
-        nix::fcntl::fcntl(&operation_lock, nix::fcntl::FcntlArg::F_SETFD(flags))
-    });
+    let inheritable =
+        nix::fcntl::fcntl(&operation_lock, nix::fcntl::FcntlArg::F_GETFD).and_then(|bits| {
+            let flags =
+                nix::fcntl::FdFlag::from_bits_truncate(bits) - nix::fcntl::FdFlag::FD_CLOEXEC;
+            nix::fcntl::fcntl(&operation_lock, nix::fcntl::FcntlArg::F_SETFD(flags))
+        });
     if let Err(errno) = inheritable {
         let error = std::io::Error::from(errno);
         return Err(DeployError(format!(

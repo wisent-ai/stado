@@ -62,9 +62,16 @@ async fn rewrite(product: &str, check: bool) -> Result<Value, CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
     let mut control = release_control::control(&document)?
         .ok_or_else(|| CmdError::refused("registry.release_control is not configured"))?;
-    let known = control.products.keys().cloned().collect::<Vec<_>>().join(", ");
+    let known = control
+        .products
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
     let policy = control.products.get_mut(product).ok_or_else(|| {
-        CmdError::refused(format!("{product} has no rollout policy; products with one: {known}"))
+        CmdError::refused(format!(
+            "{product} has no rollout policy; products with one: {known}"
+        ))
     })?;
     let install_root = policy.install_root.clone();
     if install_root.contains(release_control::HOME_PLACEHOLDER) {
@@ -97,7 +104,8 @@ async fn rewrite(product: &str, check: bool) -> Result<Value, CmdError> {
         return Ok(report);
     }
     policy.install_root = portable_root;
-    let store_generation = super::policy::commit(document, &expected_generation, &mut control).await?;
+    let store_generation =
+        super::policy::commit(document, &expected_generation, &mut control).await?;
     report["status"] = json!("rewritten");
     report["release_control_generation"] = json!(control.generation);
     report["store_generation"] = json!(store_generation);

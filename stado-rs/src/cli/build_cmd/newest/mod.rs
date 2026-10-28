@@ -121,7 +121,9 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
                 vec![entry]
             }
             None => {
-                println!("no product carries a commit past its last passed build; nothing to build");
+                println!(
+                    "no product carries a commit past its last passed build; nothing to build"
+                );
                 return Ok(());
             }
         },

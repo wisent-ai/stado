@@ -12,6 +12,10 @@ use crate::targets::*;
 /// Members it does not read (`host`, `unit_id`, `source`, `declared_only`,
 /// `onboarding`, and whatever a later release adds) pass through unjudged.
 #[derive(serde::Deserialize)]
+#[allow(
+    dead_code,
+    reason = "deserializing a member is the check that it has the type the model reads"
+)]
 struct ServiceRecord {
     name: Option<String>,
     unit: Option<String>,

@@ -145,13 +145,14 @@ pub(crate) fn forget() {
         Ok(mut guard) => *guard = None,
         Err(poisoned) => *poisoned.into_inner() = None,
     }
-    let removed = crate::primitives::document::located(FILE_VARIABLE, FILE, WHAT).and_then(
-        |path| match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(format!("{}: {error}", path.display())),
-        },
-    );
+    let removed =
+        crate::primitives::document::located(FILE_VARIABLE, FILE, WHAT).and_then(|path| {
+            match std::fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(format!("{}: {error}", path.display())),
+            }
+        });
     if let Err(cause) = removed {
         eprintln!(
             "stado: the kept registry authority snapshot could not be removed after a registry \

@@ -201,7 +201,10 @@ pub fn agent_secret_reference_allowed(role: &str, field: &str) -> Result<bool, S
                 allowed_role == role && allowed_field == field
             })
     };
-    if AGENT_SKARBIEC_SECRET_FIELDS.iter().any(|entry| matches(entry)) {
+    if AGENT_SKARBIEC_SECRET_FIELDS
+        .iter()
+        .any(|entry| matches(entry))
+    {
         return Ok(true);
     }
     Ok(fresh_secret_fields()?.iter().any(|entry| matches(entry)))

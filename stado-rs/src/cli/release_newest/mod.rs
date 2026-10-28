@@ -189,12 +189,12 @@ pub(crate) fn workspace(requested: Option<PathBuf>) -> Result<PathBuf, CmdError>
     let checkout = crate::binary::provenance::checkout_root(&here)
         .map_err(CmdError::click)?
         .ok_or_else(|| {
-        CmdError::click(format!(
-            "{} is not inside a product checkout, so the workspace holding the \
+            CmdError::click(format!(
+                "{} is not inside a product checkout, so the workspace holding the \
              checkouts cannot be read from it; name it with --root <DIR>",
-            here.display()
-        ))
-    })?;
+                here.display()
+            ))
+        })?;
     let parent = checkout.parent().ok_or_else(|| {
         CmdError::click(format!(
             "{} has no parent directory to read the workspace from; name it \

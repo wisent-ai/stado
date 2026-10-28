@@ -158,7 +158,11 @@ fn read(binary: &Path) -> Result<Tailnet, String> {
                 record(Some(peer), &mut addresses)?;
             }
         }
-        Some(other) => return Err(format!("`status --json` lists its peers as no object: {other}")),
+        Some(other) => {
+            return Err(format!(
+                "`status --json` lists its peers as no object: {other}"
+            ))
+        }
     }
     Ok(addresses)
 }

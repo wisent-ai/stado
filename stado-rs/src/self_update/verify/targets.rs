@@ -24,7 +24,8 @@ pub fn update_targets(
     // replaced: skipped, it stayed at the old release beside a new one.
     for &name in RELEASE_BINARIES {
         let sibling = install_dir.join(name);
-        if name != exe_name && crate::primitives::presence::present(&sibling)? && sibling.is_file() {
+        if name != exe_name && crate::primitives::presence::present(&sibling)? && sibling.is_file()
+        {
             targets.push(name.to_string());
         }
     }

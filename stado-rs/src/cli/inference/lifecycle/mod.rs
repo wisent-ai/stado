@@ -107,7 +107,9 @@ pub(super) async fn activate(
                 .stating(crate::primitives::failure::FailureCode::InfraDown),
         );
     }
-    wait_ready(&target, deployment, &bearer).await.map(|_readiness| ())
+    wait_ready(&target, deployment, &bearer)
+        .await
+        .map(|_readiness| ())
 }
 
 mod plan;

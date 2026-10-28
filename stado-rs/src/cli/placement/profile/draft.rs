@@ -28,7 +28,9 @@ fn route<'a>(document: &'a Value, service: &str) -> Result<&'a Map<String, Value
         .and_then(|services| services.get(service))
         .and_then(Value::as_object)
         .ok_or_else(|| {
-            CmdError::missing(format!("the service directory declares no service {service}"))
+            CmdError::missing(format!(
+                "the service directory declares no service {service}"
+            ))
         })
 }
 
@@ -114,7 +116,9 @@ fn catalog_probe(
         return Ok(None);
     };
     let base = url::Url::parse(address).map_err(|error| {
-        CmdError::declaration(format!("directory service {service} url {address} on {host}: {error}"))
+        CmdError::declaration(format!(
+            "directory service {service} url {address} on {host}: {error}"
+        ))
     })?;
     let url = base.join(&answering.path).map_err(|error| {
         CmdError::declaration(format!(
@@ -215,19 +219,25 @@ pub(super) fn draft(document: &Value, inputs: &DraftInputs<'_>) -> Result<Value,
                 "directory service {service} already moves with placement profile {profile}"
             )));
         }
-        let active = route.get("active_host").and_then(Value::as_str).ok_or_else(|| {
-            CmdError::declaration(format!("directory service {service} names no active_host"))
-        })?;
-        let managed = route.get("managed_service").and_then(Value::as_str).ok_or_else(|| {
-            CmdError::declaration(format!(
-                "directory service {service} names no managed_service, so no unit can be moved"
-            ))
-        })?;
+        let active = route
+            .get("active_host")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                CmdError::declaration(format!("directory service {service} names no active_host"))
+            })?;
+        let managed = route
+            .get("managed_service")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                CmdError::declaration(format!(
+                    "directory service {service} names no managed_service, so no unit can be moved"
+                ))
+            })?;
         // The host Stado process runs on every host, so a move would find it
         // already running on the destination and fence the whole process on
         // the source; a role it serves is not a unit a profile can move.
-        let host_process = crate::deploy::service_catalog::is_host_unit(managed)
-            .map_err(CmdError::declaration)?;
+        let host_process =
+            crate::deploy::service_catalog::is_host_unit(managed).map_err(CmdError::declaration)?;
         if host_process {
             return Err(CmdError::refused(format!(
                 "directory service {service} is served by {managed}, the host Stado process \

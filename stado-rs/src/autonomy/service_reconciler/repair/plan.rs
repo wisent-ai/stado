@@ -68,7 +68,12 @@ pub(super) async fn resolved_plan(
             &unit_env,
         ),
     }
-    .map_err(|error| format!("the deploy plan of {} cannot be built: {error}", declared.name))?;
+    .map_err(|error| {
+        format!(
+            "the deploy plan of {} cannot be built: {error}",
+            declared.name
+        )
+    })?;
     if !unit.systemd_unit.is_empty() {
         if !target.release_platform.starts_with("linux") {
             return Err(format!(
@@ -79,7 +84,12 @@ pub(super) async fn resolved_plan(
         }
         let definition = std::mem::take(&mut unit.systemd_unit);
         unit.systemd_unit = service::retain_systemd_unit(&mut plan, &definition, &unit_env, false)
-            .map_err(|error| format!("the systemd unit of {} cannot be kept in its plan: {error}", declared.name))?;
+            .map_err(|error| {
+                format!(
+                    "the systemd unit of {} cannot be kept in its plan: {error}",
+                    declared.name
+                )
+            })?;
     }
     if service::UnitDomain::from_path(&declared.path).is_per_login() {
         plan.force_daemon = false;
@@ -117,6 +127,11 @@ pub(super) async fn replace_declaration(
         Ok(document)
     })
     .await
-    .map_err(|error| format!("the corrected declaration of {} cannot be recorded in the registry: {error}", existing.name))?;
+    .map_err(|error| {
+        format!(
+            "the corrected declaration of {} cannot be recorded in the registry: {error}",
+            existing.name
+        )
+    })?;
     Ok(true)
 }

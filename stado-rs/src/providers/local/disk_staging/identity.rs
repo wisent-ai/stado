@@ -19,7 +19,11 @@ pub struct PasswdEntry {
 }
 
 /// The next field of a passwd row, or why the row has none.
-fn passwd_field<'a>(fields: &mut std::str::Split<'a, char>, row: &str, name: &str) -> Result<&'a str, String> {
+fn passwd_field<'a>(
+    fields: &mut std::str::Split<'a, char>,
+    row: &str,
+    name: &str,
+) -> Result<&'a str, String> {
     fields
         .next()
         .ok_or_else(|| format!("/etc/passwd row {row:?} ends before its {name} field"))
@@ -28,9 +32,9 @@ fn passwd_field<'a>(fields: &mut std::str::Split<'a, char>, row: &str, name: &st
 /// A numeric field of a passwd row, or why it is not a number.
 fn passwd_id(fields: &mut std::str::Split<'_, char>, row: &str, name: &str) -> Result<u32, String> {
     let field = passwd_field(fields, row, name)?;
-    field
-        .parse()
-        .map_err(|error| format!("/etc/passwd row {row:?} has {name} {field:?}, not a number: {error}"))
+    field.parse().map_err(|error| {
+        format!("/etc/passwd row {row:?} has {name} {field:?}, not a number: {error}")
+    })
 }
 
 /// Pure /etc/passwd parser, standing in for Python's `pwd` module (nix's
@@ -78,8 +82,14 @@ pub fn agent_user() -> Result<PasswdEntry, String> {
         if explicit.is_empty() {
             return Err("WISENT_STAGING_USER is empty; set it to the staging account name or unset it to use the effective account".to_string());
         }
-        read_passwd()?.into_iter().find(|entry| entry.name == explicit)
-            .ok_or_else(|| format!("WISENT_STAGING_USER names {explicit:?}, but /etc/passwd has no such account"))?
+        read_passwd()?
+            .into_iter()
+            .find(|entry| entry.name == explicit)
+            .ok_or_else(|| {
+                format!(
+                    "WISENT_STAGING_USER names {explicit:?}, but /etc/passwd has no such account"
+                )
+            })?
     } else {
         let uid = euid();
         read_passwd()?.into_iter().find(|entry| entry.uid == uid)
@@ -115,7 +125,11 @@ pub(super) fn chown_if_root(path: &Path, entry: &PasswdEntry) -> Result<(), Stri
     if after.uid() != entry.uid || after.gid() != entry.gid {
         return Err(format!(
             "{} ownership is {}:{}, expected {}:{} for {user} after staging handover",
-            path.display(), after.uid(), after.gid(), entry.uid, entry.gid,
+            path.display(),
+            after.uid(),
+            after.gid(),
+            entry.uid,
+            entry.gid,
         ));
     }
     Ok(())

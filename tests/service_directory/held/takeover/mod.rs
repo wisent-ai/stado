@@ -91,14 +91,24 @@ fn a_silent_authority_is_replaced_by_the_host_that_takes_the_role() {
     // The check says the role would be taken over from the silent authority
     // and writes nothing: this host's copy still names the old authority.
     let checked = deployment.run(&[
-        "placement", "move", "--authority", "--to-host", TARGET, "--check", "--json",
+        "placement",
+        "move",
+        "--authority",
+        "--to-host",
+        TARGET,
+        "--check",
+        "--json",
     ]);
     let plan = document_of(&checked);
     assert!(checked.status.success(), "the check answers: {plan}");
     assert_eq!(plan["state"], "would_take", "{plan}");
     assert_eq!(plan["how"], "taken-over", "{plan}");
     let kept = deployment.run(&[
-        "registry", "pull", "--last-known-good", "--path", "service_directory.authority.target",
+        "registry",
+        "pull",
+        "--last-known-good",
+        "--path",
+        "service_directory.authority.target",
     ]);
     let named = String::from_utf8_lossy(&kept.stdout);
     assert_eq!(named.trim(), AUTHORITY, "the check wrote this host's copy");

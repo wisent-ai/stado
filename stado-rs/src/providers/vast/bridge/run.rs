@@ -261,16 +261,20 @@ pub async fn auto_list_loop(
             // "waiting for Vast rental to finish" over a queue of two jobs
             // and a laptop GPU, which is a state that could not exist.
             match decided {
-                AutoListAction::WaitingForRental { free_vram_gb, need_gb } if client.is_some() => {
-                    log(&format!(
-                        "not listed, queued={}, free_vram_gb={} below the {need_gb} GB the queued \
+                AutoListAction::WaitingForRental {
+                    free_vram_gb,
+                    need_gb,
+                } if client.is_some() => log(&format!(
+                    "not listed, queued={}, free_vram_gb={} below the {need_gb} GB the queued \
                          job needs: something holds the GPU, most likely a Vast rental; \
                          wisent-compute claims when it releases",
-                        state.queued,
-                        py_float(free_vram_gb)
-                    ))
-                }
-                AutoListAction::WaitingForRental { free_vram_gb, need_gb } => log(&format!(
+                    state.queued,
+                    py_float(free_vram_gb)
+                )),
+                AutoListAction::WaitingForRental {
+                    free_vram_gb,
+                    need_gb,
+                } => log(&format!(
                     "not listed, queued={}, free_vram_gb={} below the {need_gb} GB the queued \
                      job needs: the GPU is occupied and this host holds no Vast credential, so \
                      no rental of ours is on it",

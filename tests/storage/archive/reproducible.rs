@@ -77,7 +77,11 @@ impl Deployment {
         fs::create_dir_all(tree.join("bin")).unwrap();
         fs::create_dir_all(tree.join("share/doc")).unwrap();
         fs::write(tree.join("bin/tool"), "#!/bin/sh\necho tool\n").unwrap();
-        fs::write(tree.join("share/doc/readme.txt"), "the same words in both copies\n").unwrap();
+        fs::write(
+            tree.join("share/doc/readme.txt"),
+            "the same words in both copies\n",
+        )
+        .unwrap();
         let path = |relative: &str| tree.join(relative).to_string_lossy().into_owned();
         self.succeed("chmod", &["u+x", &path("bin/tool")]);
         for file in ["bin/tool", "share/doc/readme.txt"] {
@@ -89,8 +93,16 @@ impl Deployment {
 
     fn archive(&mut self, source: &Path, output: &str) -> Value {
         let stado = env!("CARGO_BIN_EXE_stado");
-        let printed =
-            self.succeed(stado, &["storage", "archive", &source.to_string_lossy(), output, "--json"]);
+        let printed = self.succeed(
+            stado,
+            &[
+                "storage",
+                "archive",
+                &source.to_string_lossy(),
+                output,
+                "--json",
+            ],
+        );
         serde_json::from_str(&printed).unwrap()
     }
 }
@@ -116,13 +128,25 @@ fn one_tree_archives_to_one_digest_whatever_its_times_and_umask() {
     let inside = first.join("inside.tar.gz");
     let refused = deployment.run(
         stado,
-        &["storage", "archive", &first.to_string_lossy(), &inside.to_string_lossy()],
+        &[
+            "storage",
+            "archive",
+            &first.to_string_lossy(),
+            &inside.to_string_lossy(),
+        ],
     );
     let stderr = String::from_utf8_lossy(&refused.stderr);
-    assert!(!refused.status.success(), "an output inside the source must be refused: {stderr}");
+    assert!(
+        !refused.status.success(),
+        "an output inside the source must be refused: {stderr}"
+    );
     assert!(
         stderr.contains("archive output must be outside the source directory"),
         "the refusal names why: {stderr}"
     );
-    assert!(!inside.exists(), "a refused archive writes nothing: {}", inside.display());
+    assert!(
+        !inside.exists(),
+        "a refused archive writes nothing: {}",
+        inside.display()
+    );
 }

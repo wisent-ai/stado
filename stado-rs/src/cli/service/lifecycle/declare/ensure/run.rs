@@ -1,47 +1,10 @@
 //! `service ensure`: the host half of one pass.
 
+mod report;
+
 use super::*;
 
-/// Idempotently assert one service from the declared program and the host's
-/// observed unit. The same receipt serves the CLI and internal callers.
-pub(crate) async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
-    let as_json = options.as_json;
-    let receipt = ensure_unit(options).await?;
-    if as_json {
-        // The per-unit results are part of the JSON contract as well as stderr.
-        if let Some(audited) = receipt.audited.as_deref() {
-            eprintln!("audit record {audited}");
-        }
-        return print_json(&json!({
-            "host": receipt.host,
-            "name": receipt.name,
-            "label": receipt.label,
-            "domain": receipt.domain,
-            "action": receipt.action,
-            "pid": receipt.pid,
-            "predecessors": receipt.predecessors,
-        }));
-    }
-    let pid = match receipt.pid {
-        Some(pid) => pid.to_string(),
-        None => crate::cli::reporting::NOT_REPORTED.to_string(),
-    };
-    table::print(
-        &["HOST", "SERVICE", "LABEL", "DOMAIN", "ACTION", "PID"],
-        &[vec![
-            receipt.host,
-            receipt.name,
-            receipt.label,
-            receipt.domain,
-            receipt.action,
-            pid,
-        ]],
-    );
-    if let Some(audited) = receipt.audited.as_deref() {
-        println!("audit record {audited}");
-    }
-    Ok(())
-}
+pub(crate) use report::ensure;
 
 /// The pass itself, for callers that assert a unit and read the receipt.
 pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureReceipt, CmdError> {
@@ -85,7 +48,9 @@ async fn pass(
     // Every program the host declares, and the unit this ensure renders,
     // resolve `$HOME` under the home the host's own shell states.
     let runner = production_runner();
-    let home = crate::deploy::host_channel::remote_home(&target, &runner).await.map_err(click)?;
+    let home = crate::deploy::host_channel::remote_home(&target, &runner)
+        .await
+        .map_err(click)?;
     // A unit that runs a catalog product's program under a label that is not
     // that product's unit runs beside the process that replaced it the moment
     // it is loaded again, so no declaration may bring one back.
@@ -116,8 +81,8 @@ async fn pass(
         .filter(|entry| entry.name != host_product.name)
     {
         for candidate in &declared {
-            let owner =
-                service::declared_owner(&target, candidate, &home).map_err(CmdError::declaration)?;
+            let owner = service::declared_owner(&target, candidate, &home)
+                .map_err(CmdError::declaration)?;
             if owner.is_some_and(|owner| owner.name == entry.name) {
                 replaced.push(candidate.unit_id().to_string());
             }
@@ -133,11 +98,19 @@ async fn pass(
     // rendered, so the unit and every consumer's marker name the same number.
     let listen_port = match (catalog_entry.as_ref(), standby.as_ref()) {
         (_, Some(standby)) => standby.listen_port,
-        (Some(entry), None) => crate::cli::directory::listen_port_for(entry, &target, &runner).await?,
+        (Some(entry), None) => {
+            crate::cli::directory::listen_port_for(entry, &target, &runner).await?
+        }
         (None, None) => None,
     };
-    let (mut unit, unit_env) =
-        program::ensured_unit(&target, &home, &options, existing, catalog_entry.as_ref(), listen_port)?;
+    let (mut unit, unit_env) = program::ensured_unit(
+        &target,
+        &home,
+        &options,
+        existing,
+        catalog_entry.as_ref(),
+        listen_port,
+    )?;
     // A canonical declaration wins, then the identity carried by the resolved
     // program, then the unit already declared on this host. The canonical
     // identity must win even when the registry supplies the program: otherwise

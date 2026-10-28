@@ -30,56 +30,17 @@ pub(in crate::cli::placement) use fence::store_fence;
 
 use serde_json::{json, Value};
 
-use self::fence::{fence, left_fence};
+use self::fence::{fence, left_fence, store, undo};
 use self::route::{checked_route, served_address, switched};
 use super::settle_state_backup;
-use super::state::{ensure_room_for, read_state, restore_state, write_state, Ends};
+use super::state::{ensure_room_for, read_state, write_state, Ends};
 use crate::cli::placement::candidates::{parse_registry, target};
 use crate::cli::{registry, CmdError};
 use crate::deploy::{production_runner, Runner};
-use crate::placement::{PlacementState, StateRoot};
 use crate::targets::ComputeTarget;
 
 /// The state `stado storage fence arm --json` answers once the fence holds.
 const ARMED: &str = "armed";
-
-/// The store a host-process role carries, relative to the account's home.
-fn store() -> PlacementState {
-    PlacementState {
-        path: crate::config_file::LOCAL_STORAGE_ROOT.to_string(),
-        required: true,
-        root: StateRoot::Home,
-        tree: true,
-    }
-}
-
-/// Undo the copy on `destination` and lift the source's fence; what failed
-/// of either is added to `primary`.
-async fn undo(
-    primary: CmdError,
-    source: &ComputeTarget,
-    destination: Option<&ComputeTarget>,
-    transaction: &str,
-    runner: &Runner,
-) -> CmdError {
-    let mut failure = primary;
-    if let Some(destination) = destination {
-        if let Err(error) = restore_state(destination, &store(), transaction, runner).await {
-            failure = failure.also(format!("putting {}'s store back failed: {error}", destination.name));
-        }
-    }
-    // `disarmed`, or `not-fenced` when the arm never landed: either way the
-    // source takes writes again.
-    let lifted = fence(source, "disarm", transaction, "role move undone", runner).await;
-    if let Err(error) = lifted {
-        failure = failure.also(format!(
-            "lifting {}'s write fence failed, so it refuses writes until stado storage fence \
-             disarm --transaction {transaction} runs there: {error}",
-            source.name
-        ));
-    }
-    failure
-}
 
 /// One role move checked against the registry and the hosts' room, ready
 /// to run.
@@ -165,7 +126,15 @@ pub(in crate::cli::placement) async fn apply_role(
 }
 
 async fn role_steps(plan: &RoleMove, reason: &str, runner: &Runner) -> Result<Value, CmdError> {
-    let RoleMove { service, to_host, source, destination, served, left, with_authority } = plan;
+    let RoleMove {
+        service,
+        to_host,
+        source,
+        destination,
+        served,
+        left,
+        with_authority,
+    } = plan;
     let source_name = &source.name;
     let transaction = uuid::Uuid::new_v4().to_string();
     let why = format!("placement role move {service} to {to_host}: {reason}");
@@ -192,26 +161,38 @@ async fn role_steps(plan: &RoleMove, reason: &str, runner: &Runner) -> Result<Va
         if let Some(earlier) = left {
             match fence(destination, "disarm", earlier, &why, runner).await {
                 Ok(state) => lifted_first = Some(json!({"transaction": earlier, "state": state})),
-                Err(error) => return Err(undo(error, source, Some(destination), &transaction, runner).await),
+                Err(error) => {
+                    return Err(undo(error, source, Some(destination), &transaction, runner).await)
+                }
             }
         }
         match carry::carried(service, source_name, to_host, served, &transaction).await {
-            Ok(installed) => (installed.receipt["directory_generation"].clone(), Some(installed)),
+            Ok(installed) => (
+                installed.receipt["directory_generation"].clone(),
+                Some(installed),
+            ),
             Err(error) => {
                 let mut error = undo(error, source, Some(destination), &transaction, runner).await;
                 if let Some(earlier) = left {
                     if let Err(rearm) = fence(destination, "arm", earlier, &why, runner).await {
-                        error = error.also(format!("{to_host}'s earlier fence {earlier} was not put back: {rearm}"));
+                        error = error.also(format!(
+                            "{to_host}'s earlier fence {earlier} was not put back: {rearm}"
+                        ));
                     }
                 }
                 return Err(error);
             }
         }
     } else {
-        let committed = registry::commit_document(|current| switched(current, service, source_name, to_host, served)).await;
+        let committed = registry::commit_document(|current| {
+            switched(current, service, source_name, to_host, served)
+        })
+        .await;
         match committed {
             Ok(generation) => (json!(generation), None),
-            Err(error) => return Err(undo(error, source, Some(destination), &transaction, runner).await),
+            Err(error) => {
+                return Err(undo(error, source, Some(destination), &transaction, runner).await)
+            }
         }
     };
     let (kept_store, unsettled_store) =
@@ -264,14 +245,22 @@ pub(in crate::cli::placement) async fn move_role(
 ) -> Result<(), CmdError> {
     let runner = production_runner();
     let plan = prepare_role(service, to_host, with_authority, &runner).await?;
-    let receipt = if check { plan.report() } else { apply_role(&plan, reason, &runner).await? };
+    let receipt = if check {
+        plan.report()
+    } else {
+        apply_role(&plan, reason, &runner).await?
+    };
     if json_output {
         println!("{}", serde_json::to_string_pretty(&receipt)?);
         return Ok(());
     }
     let from = &plan.source.name;
     if check {
-        let carried = if with_authority { ", carrying the registry authority" } else { "" };
+        let carried = if with_authority {
+            ", carrying the registry authority"
+        } else {
+            ""
+        };
         println!(
             "{service} can move from {from} to {to_host}{carried}: the route is a role of the host Stado \
              process and the store fits on both {to_host} and this machine; nothing was fenced or \

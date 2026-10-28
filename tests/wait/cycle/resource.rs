@@ -44,7 +44,10 @@ impl Graph {
         Command::new(env!("CARGO_BIN_EXE_stado"))
             .args(args)
             .current_dir(&self.root)
-            .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .env("STADO_WAITS_DIR", self.root.join("waits"))
             .stdin(Stdio::null())
             .output()

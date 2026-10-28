@@ -57,7 +57,11 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
                 .and_then(Value::as_str)
                 .is_some_and(|path| path.ends_with(".inst.json"))
         })
-        .filter_map(|file| file.get("bytes").and_then(Value::as_u64).map(|bytes| (bytes, file)))
+        .filter_map(|file| {
+            file.get("bytes")
+                .and_then(Value::as_u64)
+                .map(|bytes| (bytes, file))
+        })
         .max_by_key(|(bytes, _)| *bytes)
         .map(|(_, file)| file)
         .ok_or_else(|| {
@@ -96,7 +100,10 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
             DeployError::unreachable("Weles browser recording has no request events".to_string())
         })?;
 
-    let unaddressed_events = events.iter().filter(|event| url_of(event).is_none()).count();
+    let unaddressed_events = events
+        .iter()
+        .filter(|event| url_of(event).is_none())
+        .count();
     let mut image_urls = BTreeSet::new();
     for event in events {
         let Some(url) = url_of(event) else {
@@ -166,7 +173,10 @@ pub async fn image_diagnostics(channel: &Channel, run_id: &str) -> Result<Value,
             Some(status) => {
                 statuses.entry(status.to_string()).or_default().tally();
                 if stado_object {
-                    stado_statuses.entry(status.to_string()).or_default().tally();
+                    stado_statuses
+                        .entry(status.to_string())
+                        .or_default()
+                        .tally();
                 }
                 if delivered(status) {
                     loaded_images.push(url);

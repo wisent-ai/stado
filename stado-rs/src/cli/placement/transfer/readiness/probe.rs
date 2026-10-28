@@ -198,7 +198,10 @@ pub(in crate::cli::placement::transfer) async fn await_healthy(
                     Some(pid) => format!("process {pid}"),
                     None => "no process".to_string(),
                 };
-                println!("  {}: unit {} restarted: process {was} is now {now}", target.name, managed.unit);
+                println!(
+                    "  {}: unit {} restarted: process {was} is now {now}",
+                    target.name, managed.unit
+                );
             }
             process = sockets.pid;
             previous = Some(answer);

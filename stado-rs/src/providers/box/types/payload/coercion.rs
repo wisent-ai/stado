@@ -50,7 +50,9 @@ pub(crate) fn jbool(value: Option<&Value>, field: &str, answer: &str) -> Result<
         Some(other) => Err(BoxError::transport(format!(
             "Boat's {answer} answer carries {field} as {other}, not a boolean"
         ))),
-        None => Err(BoxError::transport(format!("Boat's {answer} answer carries no {field}"))),
+        None => Err(BoxError::transport(format!(
+            "Boat's {answer} answer carries no {field}"
+        ))),
     }
 }
 
@@ -58,7 +60,11 @@ pub(crate) fn jbool(value: Option<&Value>, field: &str, answer: &str) -> Result<
 /// carries none (absent or null). Any other value is refused naming the
 /// answer and what Boat sent: read as `None`, an exit code Boat sent as text
 /// or as a fraction read as a command that never said how it ended.
-pub(crate) fn jint(value: Option<&Value>, field: &str, answer: &str) -> Result<Option<i64>, BoxError> {
+pub(crate) fn jint(
+    value: Option<&Value>,
+    field: &str,
+    answer: &str,
+) -> Result<Option<i64>, BoxError> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Number(number)) if number.is_i64() => Ok(number.as_i64()),

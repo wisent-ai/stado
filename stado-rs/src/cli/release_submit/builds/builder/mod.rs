@@ -190,7 +190,9 @@ pub(crate) async fn builder(
             let store = match crate::config::wc_stado_storage_url() {
                 Ok(store) if !store.is_empty() => store,
                 Ok(_unset) => "the configured queue store".to_string(),
-                Err(cause) => format!("the configured queue store, which cannot be resolved ({cause})"),
+                Err(cause) => {
+                    format!("the configured queue store, which cannot be resolved ({cause})")
+                }
             };
             // Every host that was considered and what its own publication said,
             // because "no builder is available" without a reason cost an hour of

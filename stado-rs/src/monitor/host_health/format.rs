@@ -21,7 +21,9 @@ fn shown(value: &Value) -> String {
 fn reported(value: Option<&Value>) -> String {
     match value {
         None | Some(Value::Null) => crate::cli::reporting::NOT_REPORTED.to_string(),
-        Some(Value::String(text)) if text.is_empty() => crate::cli::reporting::NOT_REPORTED.to_string(),
+        Some(Value::String(text)) if text.is_empty() => {
+            crate::cli::reporting::NOT_REPORTED.to_string()
+        }
         Some(v) => shown(v),
     }
 }

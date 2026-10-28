@@ -74,7 +74,9 @@ pub(super) fn policy_for(
         let (first, second) = free_candidate_ports(document, port)?;
         (
             // The stable bind is this host's loopback at the declared port.
-            Value::from(std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)).to_string()),
+            Value::from(
+                std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)).to_string(),
+            ),
             json!([first, second]),
         )
     };
@@ -148,7 +150,9 @@ fn free_candidate_ports(document: &Value, stable: u16) -> Result<(u16, u16), Cmd
                     .as_array()
                     .ok_or_else(|| unreadable("candidate_ports", ports))?
                 {
-                    let number = port.as_u64().ok_or_else(|| unreadable("candidate_ports", port))?;
+                    let number = port
+                        .as_u64()
+                        .ok_or_else(|| unreadable("candidate_ports", port))?;
                     used.insert(u16::try_from(number).map_err(|error| {
                         CmdError::refused(format!(
                             "release_control.products.{product}.targets.{host}.candidate_ports \
@@ -158,7 +162,9 @@ fn free_candidate_ports(document: &Value, stable: u16) -> Result<(u16, u16), Cmd
                 }
             }
             if let Some(bind) = target.get("stable_bind").filter(|bind| !bind.is_null()) {
-                let text = bind.as_str().ok_or_else(|| unreadable("stable_bind", bind))?;
+                let text = bind
+                    .as_str()
+                    .ok_or_else(|| unreadable("stable_bind", bind))?;
                 let (_, port) = text
                     .rsplit_once(':')
                     .ok_or_else(|| unreadable("stable_bind", bind))?;

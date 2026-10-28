@@ -4,7 +4,7 @@
 //!
 //! The command is `stado registry host show` against an isolated local
 //! store under this checkout's build directory (`WC_STORAGE_BACKEND=local`,
-//! `WC_LOCAL_STORAGE_PATH`, a `STADO_CONFIG` that names no file). The test
+//! `WC_LOCAL_STORAGE_PATH`, the empty `tests/config/empty.json`). The test
 //! holds the store's real kernel lock on `registry.json` — the same
 //! `.locks/<sha256 of the path>` file every Stado process locks — reads the
 //! command's stderr line by line until the `czekam` line names that lock,
@@ -24,8 +24,13 @@ struct Store {
 
 impl Store {
     fn new(case: &str) -> Self {
-        let parent =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/journeys/wait-held-lock");
+        // Rooted at the manifest's parent, so the lock path the journey
+        // builds holds no `..` and is the path Stado names: Stado normalizes
+        // the path lexically and resolves no link.
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate sits inside the repository")
+            .join(".build/journeys/wait-held-lock");
         std::fs::create_dir_all(&parent).expect("create the test output directory");
         let root = parent.join(format!("{case}-{}", std::process::id()));
         for directory in [".locks", ".metadata"] {
@@ -52,7 +57,10 @@ impl Store {
             .current_dir(&self.root)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.store())
-            .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .env("STADO_WAITS_DIR", self.waits())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -107,6 +115,8 @@ fn a_registry_read_behind_a_held_store_lock_names_the_lock_before_it_blocks() {
             break line;
         }
     };
+    // Stado names the lock by its normalized path, which is the path the
+    // journey built: its root holds no `..` and no link is resolved.
     assert_eq!(
         field(&started, "gdzie"),
         Some(lock_path.display().to_string().as_str()),

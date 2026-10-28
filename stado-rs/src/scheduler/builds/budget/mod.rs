@@ -60,13 +60,16 @@ impl BuildBudget {
         let today = now.format(DAY_FORMAT).to_string();
         let entry = document.get(BUILD_BUDGET_KEY);
         // A registry that declares no ceiling holds the documented default.
-        let limit = match entry.and_then(|budget| budget.get("limit")).and_then(Value::as_u64) {
+        let limit = match entry
+            .and_then(|budget| budget.get("limit"))
+            .and_then(Value::as_u64)
+        {
             Some(limit) => limit,
             None => DEFAULT_DAILY_BUILD_LIMIT,
         };
         // Only today's entry counts; an entry of another day is spent history.
-        let today_entry =
-            entry.filter(|budget| budget.get("day").and_then(Value::as_str) == Some(today.as_str()));
+        let today_entry = entry
+            .filter(|budget| budget.get("day").and_then(Value::as_str) == Some(today.as_str()));
         // A counter that begins the day it ships forgives every build the
         // fleet already made, and a lost write forgives the ones it lost.
         // The recipes carry their own runs with the instant each was
@@ -74,7 +77,10 @@ impl BuildBudget {
         // is the truth, and the count can only ever be understated by runs
         // the registry itself no longer holds.
         let submitted = runs_submitted_on(document, &today);
-        let used = match today_entry.and_then(|budget| budget.get("used")).and_then(Value::as_u64) {
+        let used = match today_entry
+            .and_then(|budget| budget.get("used"))
+            .and_then(Value::as_u64)
+        {
             Some(counted) => counted.max(submitted),
             None => submitted,
         };

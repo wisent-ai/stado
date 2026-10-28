@@ -56,20 +56,31 @@ fn reachability_follows_rust_declarations_and_refuses_what_is_not_rust() {
     let mut report = json!({"commands": [], "cases": []});
 
     let fixture = root.join("fixture");
-    write(&fixture, "Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n");
+    write(
+        &fixture,
+        "Cargo.toml",
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
     write(
         &fixture,
         "src/lib.rs",
         "mod reached;\n#[path = \"elsewhere/renamed.rs\"]\nmod renamed;\nmod inline {\n    mod deep;\n}\npub const TEXT: &str = \"mod quoted;\";\n",
     );
     write(&fixture, "src/reached.rs", "pub fn reached() {}\n");
-    write(&fixture, "src/elsewhere/renamed.rs", "pub fn renamed() {}\n");
+    write(
+        &fixture,
+        "src/elsewhere/renamed.rs",
+        "pub fn renamed() {}\n",
+    );
     write(&fixture, "src/inline/deep.rs", "pub fn deep() {}\n");
     write(&fixture, "src/quoted.rs", "pub fn quoted() {}\n");
     write(&fixture, "src/orphan.rs", "pub fn orphan() {}\n");
 
     let findings = gate(&root, &fixture, &mut report);
-    assert!(!findings.status.success(), "unreachable files must fail the gate");
+    assert!(
+        !findings.status.success(),
+        "unreachable files must fail the gate"
+    );
     let answer: Value = serde_json::from_slice(&findings.stdout).unwrap();
     let unreachable: Vec<&str> = answer["unreachable"]
         .as_array()
@@ -78,15 +89,31 @@ fn reachability_follows_rust_declarations_and_refuses_what_is_not_rust() {
         .map(|path| path.as_str().unwrap())
         .collect();
     assert_eq!(unreachable, ["src/orphan.rs", "src/quoted.rs"], "{answer}");
-    report["cases"].as_array_mut().unwrap().push(json!({"name": "declarations-as-rustc-reads-them", "result": "passed"}));
+    report["cases"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "declarations-as-rustc-reads-them", "result": "passed"}));
 
     write(&fixture, "src/reached.rs", "pub fn reached( {\n");
     let refused = gate(&root, &fixture, &mut report);
-    assert!(!refused.status.success(), "a reachable file that is not Rust must be refused");
+    assert!(
+        !refused.status.success(),
+        "a reachable file that is not Rust must be refused"
+    );
     let said = String::from_utf8_lossy(&refused.stderr);
-    assert!(said.contains("reached.rs") && said.contains("cannot parse"), "{said}");
-    report["cases"].as_array_mut().unwrap().push(json!({"name": "unparsable-reachable-file", "result": "passed"}));
+    assert!(
+        said.contains("reached.rs") && said.contains("cannot parse"),
+        "{said}"
+    );
+    report["cases"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "unparsable-reachable-file", "result": "passed"}));
 
-    fs::write(root.join("report.json"), serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    fs::write(
+        root.join("report.json"),
+        serde_json::to_vec_pretty(&report).unwrap(),
+    )
+    .unwrap();
     println!("passed: {}", root.join("report.json").display());
 }

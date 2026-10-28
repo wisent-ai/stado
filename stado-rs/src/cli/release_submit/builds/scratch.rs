@@ -52,7 +52,10 @@ pub(crate) fn published_free_bytes(publication: &Value) -> Option<i64> {
 /// not a refusal.
 pub(crate) fn scratch_verdict(publication: &Value, evidence: &ScratchReceipt) -> Option<String> {
     let volume = published_volume(publication)?;
-    let headroom = crate::providers::local::space_reclaim::rule::headroom_bytes(volume.total_bytes, volume.free_bytes);
+    let headroom = crate::providers::local::space_reclaim::rule::headroom_bytes(
+        volume.total_bytes,
+        volume.free_bytes,
+    );
     // A need past i64 does not fit any volume a publication can state.
     let fits = i64::try_from(evidence.bytes).is_ok_and(|need| headroom >= need);
     if fits {
@@ -68,7 +71,11 @@ pub(crate) fn scratch_verdict(publication: &Value, evidence: &ScratchReceipt) ->
             gib(evidence.free_bytes as f64)
         )
     } else {
-        format!("{:.1} GiB on {}", gib(evidence.bytes as f64), evidence.builder)
+        format!(
+            "{:.1} GiB on {}",
+            gib(evidence.bytes as f64),
+            evidence.builder
+        )
     };
     Some(format!(
         "{RELEASE_SCRATCH_SHORT} ({:.1} GiB free, {:.1} GiB before the {}% disk-full threshold; \

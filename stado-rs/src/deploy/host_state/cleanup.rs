@@ -140,7 +140,11 @@ pub fn cleaner_plans(plan: &Value) -> Result<Vec<CleanerPlan>, String> {
     let cleaners = match plan.get("cleaners") {
         Some(Value::Null) => return Ok(Vec::new()),
         Some(Value::Object(cleaners)) => cleaners,
-        Some(other) => return Err(format!("the janitor report's cleaners is not a map: {other}")),
+        Some(other) => {
+            return Err(format!(
+                "the janitor report's cleaners is not a map: {other}"
+            ))
+        }
         None => return Err("the janitor report carries no cleaners".to_string()),
     };
     cleaners

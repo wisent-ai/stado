@@ -27,10 +27,11 @@ pub fn declare_publisher_cadence(period: std::time::Duration) {
 /// The last measured write, refused when another publication panicked while
 /// holding it.
 fn last_publish() -> Result<Option<std::time::Duration>, StorageError> {
-    LAST_PUBLISH
-        .lock()
-        .map(|last| *last)
-        .map_err(|error| StorageError::Other(format!("the last capacity write time cannot be read: {error}")))
+    LAST_PUBLISH.lock().map(|last| *last).map_err(|error| {
+        StorageError::Other(format!(
+            "the last capacity write time cannot be read: {error}"
+        ))
+    })
 }
 
 /// Write this worker's current measured resource snapshot.
@@ -96,12 +97,17 @@ pub async fn publish_capacity(
     let reservations_exhausted = held.as_ref().is_some_and(|held| {
         !held.live.is_empty()
             && (measured_cpu.is_some_and(|measured| held.reserved.cpu_cores >= measured)
-                || snapshot.free_ram_gb.is_some_and(|free| held.reserved.ram_gb >= free))
+                || snapshot
+                    .free_ram_gb
+                    .is_some_and(|free| held.reserved.ram_gb >= free))
     });
     let mut accepting = snapshot.accepting_jobs;
     if accepting && held.is_none() {
         accepting = false;
-        diag.insert("admission_reason".into(), Value::from("reservations_unread"));
+        diag.insert(
+            "admission_reason".into(),
+            Value::from("reservations_unread"),
+        );
     } else if accepting && reservations_exhausted {
         accepting = false;
         diag.insert(
@@ -133,7 +139,10 @@ pub async fn publish_capacity(
                 "the capacity publisher's next promise of {promised:?} is not a time span: {error}"
             ))
         })?;
-        payload.insert("next_by".into(), Value::String((now + promised).to_rfc3339()));
+        payload.insert(
+            "next_by".into(),
+            Value::String((now + promised).to_rfc3339()),
+        );
     }
     payload.insert("accepting_jobs".into(), Value::from(accepting));
     payload.insert(
@@ -168,11 +177,14 @@ pub async fn publish_capacity(
         payload.insert("total_ram_gb".into(), Value::from(value));
     }
     // Unread reservations are published as unknown (null), never as none.
-    payload.insert("reserved".into(), serde_json::to_value(&reserved)?);
+    payload.insert("reserved".into(), serde_json::to_value(reserved)?);
     payload.insert(
         "reservations".into(),
         Value::from(held.as_ref().map(|held| {
-            held.live.iter().map(Reservation::published).collect::<Vec<Value>>()
+            held.live
+                .iter()
+                .map(Reservation::published)
+                .collect::<Vec<Value>>()
         })),
     );
     // Names only, never values: the `item#field` references a job may project
@@ -182,7 +194,9 @@ pub async fn publish_capacity(
     // stops the publication with its cause.
     payload.insert(
         "secret_fields".into(),
-        Value::from(crate::config::agent_skarbiec_secret_fields_now().map_err(StorageError::Other)?),
+        Value::from(
+            crate::config::agent_skarbiec_secret_fields_now().map_err(StorageError::Other)?,
+        ),
     );
     payload.insert("diag".into(), Value::Object(diag));
     payload.insert(
@@ -194,9 +208,11 @@ pub async fn publish_capacity(
     store
         .upload_text(&format!("{CAPACITY_PREFIX}{consumer_id}.json"), &body)
         .await?;
-    let mut last = LAST_PUBLISH
-        .lock()
-        .map_err(|error| StorageError::Other(format!("the last capacity write time cannot be kept: {error}")))?;
+    let mut last = LAST_PUBLISH.lock().map_err(|error| {
+        StorageError::Other(format!(
+            "the last capacity write time cannot be kept: {error}"
+        ))
+    })?;
     *last = Some(started.elapsed());
     Ok(())
 }

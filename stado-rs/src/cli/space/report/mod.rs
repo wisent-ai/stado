@@ -161,7 +161,10 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         // The host's own error, else the status it did report, so a read
         // that failed without a sentence is still told apart from one that
         // reported no status at all.
-        let cause = match (report.get("error").and_then(Value::as_str), report.get("status")) {
+        let cause = match (
+            report.get("error").and_then(Value::as_str),
+            report.get("status"),
+        ) {
             (Some(error), _) => error.to_string(),
             (None, Some(status)) => format!("it reported status {status} with no error"),
             (None, None) => "it reported neither a status nor an error".to_string(),

@@ -67,7 +67,10 @@ pub(super) async fn retire(
     let stop_line = stop.argv.join(" ");
     let stopped = runner(stop).await.map_err(DeployError::unreachable)?;
     if !stopped.succeeded() {
-        eprintln!("[note] retiring {label}: {stop_line}: {}", stopped.detail().trim());
+        eprintln!(
+            "[note] retiring {label}: {stop_line}: {}",
+            stopped.detail().trim()
+        );
     }
     match rename {
         Some(rename) => {

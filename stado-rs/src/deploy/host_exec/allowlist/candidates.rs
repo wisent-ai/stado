@@ -196,7 +196,9 @@ pub fn installed_program(program: &str) -> Result<std::path::PathBuf, String> {
         match std::fs::metadata(&path) {
             Ok(metadata) if metadata.is_file() => return Ok(path),
             Ok(_not_file) => tried.push(path.display().to_string()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => tried.push(path.display().to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tried.push(path.display().to_string())
+            }
             Err(error) => tried.push(format!("{} ({error})", path.display())),
         }
     }

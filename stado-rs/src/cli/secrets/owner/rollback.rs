@@ -61,7 +61,10 @@ pub(super) async fn restore_owner(plan: &Plan, runner: &Runner) -> Result<Value,
     plan.source
         .write_file(&plan.source.vault, &restored, runner)
         .await?;
-    let doctor = plan.source.skarbiec(&["keys", "check"], None, runner).await?;
+    let doctor = plan
+        .source
+        .skarbiec(&["keys", "check"], None, runner)
+        .await?;
     match doctor.get("status").and_then(Value::as_str) {
         Some(READABLE) => Ok(doctor),
         _ => Err(format!(

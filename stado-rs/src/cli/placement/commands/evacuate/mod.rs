@@ -18,10 +18,12 @@
 //! naming what moved and what still stands on A. A silent authority commits
 //! nothing, so with `--authority` it is taken on B first.
 
+mod apply;
 mod fixed;
 mod holds;
 mod scan;
 mod steps;
+mod text;
 
 pub(in crate::cli::placement) use holds::{holds, holds_everywhere};
 
@@ -60,15 +62,34 @@ pub(in crate::cli::placement) async fn evacuate(
     asked: Evacuation<'_>,
     json_output: bool,
 ) -> Result<Value, CmdError> {
-    let Evacuation { from, to, reason, vault_owner_uid, authority, check, standby, profile_fixed, repin_schedules, drop_release_targets, portable_roots } = asked;
-    if from == to { return Err(CmdError::click(format!("--from-host and --to-host both name {from}"))); }
+    let Evacuation {
+        from,
+        to,
+        reason,
+        vault_owner_uid,
+        authority,
+        check,
+        standby,
+        profile_fixed,
+        repin_schedules,
+        drop_release_targets,
+        portable_roots,
+    } = asked;
+    if from == to {
+        return Err(CmdError::click(format!(
+            "--from-host and --to-host both name {from}"
+        )));
+    }
     let taken_first = steps::authority_first(to, authority, check).await?;
     // Fixed routes given a profile first are declared before what stands on
     // A is read, so this run carries them; a check only drafts them.
     let profiled = if profile_fixed {
         fixed::profile_fixed_routes(from, !check).await?
     } else {
-        fixed::Profiled { drafted: Vec::new(), stays: Vec::new() }
+        fixed::Profiled {
+            drafted: Vec::new(),
+            stays: Vec::new(),
+        }
     };
     let (document, generation) = registry::fetch_versioned_document().await?;
     crate::targets::validate_registry(&document).map_err(CmdError::from)?;
@@ -76,8 +97,17 @@ pub(in crate::cli::placement) async fn evacuate(
     let fixed = fixed_routes_on(&document, from)?;
     // A's roles store the registry when A is the authority, so none takes a
     // commit once fenced: the first carries the authority (role move --with-authority).
-    let carried = authority && taken_first.is_none() && !fixed.roles.is_empty() && scan::authority_holder(&document) == Some(from);
-    if placed.profiles.is_empty() && fixed.roles.is_empty() && !authority && profiled.drafted.is_empty() && !repin_schedules && !drop_release_targets {
+    let carried = authority
+        && taken_first.is_none()
+        && !fixed.roles.is_empty()
+        && scan::authority_holder(&document) == Some(from);
+    if placed.profiles.is_empty()
+        && fixed.roles.is_empty()
+        && !authority
+        && profiled.drafted.is_empty()
+        && !repin_schedules
+        && !drop_release_targets
+    {
         return Err(CmdError::missing(format!(
             "no placement profile and no role of the host Stado process is placed on {from}; \
              fixed routes active there: {}; profiles whose placement cannot be told: {}",
@@ -107,7 +137,9 @@ pub(in crate::cli::placement) async fn evacuate(
             ready.push(profile);
         }
     }
-    let vault_unstaged = vaulted.first().is_some_and(|profile| unstaged.iter().any(|kept| kept.name == profile.name));
+    let vault_unstaged = vaulted
+        .first()
+        .is_some_and(|profile| unstaged.iter().any(|kept| kept.name == profile.name));
     match (vaulted.first(), vault_owner_uid) {
         (None, _) => {}
         (Some(profile), None) => refusals.push(format!(
@@ -121,10 +153,13 @@ pub(in crate::cli::placement) async fn evacuate(
             Err(error) => refusals.push(format!("{vault}: {error}")),
         },
     }
-    let checks = ready
+    let checks = ready.iter().map(|profile| {
+        preflight_move(document.clone(), generation.clone(), (*profile).clone(), to)
+    });
+    let role_checks = fixed
+        .roles
         .iter()
-        .map(|profile| preflight_move(document.clone(), generation.clone(), (*profile).clone(), to));
-    let role_checks = fixed.roles.iter().map(|role| prepare_role(role, to, carried, &runner));
+        .map(|role| prepare_role(role, to, carried, &runner));
     let (checks, role_checks) = futures::join!(
         futures::future::join_all(checks),
         futures::future::join_all(role_checks)
@@ -156,93 +191,72 @@ pub(in crate::cli::placement) async fn evacuate(
             Err(error) => refusals.push(format!("the registry authority: {error}")),
         }
     }
-    let mut schedules = holds::schedules_to_repin(&document, from, repin_schedules, &mut refusals).await;
+    let schedules =
+        holds::schedules_to_repin(&document, from, repin_schedules, &mut refusals).await;
     // B must install every release it is a target of under its own home.
     let portable = scan::foreign_roots_for(&document, to, &unstaged, portable_roots, &mut refusals);
-    let release_drops = scan::release_drops(&document, from, drop_release_targets, &unstaged, standby.then_some(&profiled), &mut refusals);
-    let (mut release_report, mut portable_report) = (json!(release_drops), json!(portable));
+    let release_drops = scan::release_drops(
+        &document,
+        from,
+        drop_release_targets,
+        &unstaged,
+        standby.then_some(&profiled),
+        &mut refusals,
+    );
     if !refusals.is_empty() {
-        let moved = if taken_first.is_some() { format!("only the registry authority, which did not answer, was taken on {to}") } else { "nothing was moved".to_string() };
-        return Err(CmdError::refused(format!("evacuating {from} to {to} would be refused, so {moved}: {}", refusals.join("; "))));
-    }
-    if !check {
-        // Every step in order; `done` names what moved before a failure.
-        let mut done: Vec<String> = taken_first.iter().map(|_| "the registry authority".to_string()).collect();
-        let names: Vec<String> = vaulted
-            .iter()
-            .chain(profiles.iter())
-            .map(|profile| profile.name.clone())
-            .chain(fixed.roles.iter().cloned())
-            .collect();
-        let stopped = |error: CmdError, done: &[String]| {
-            let left: Vec<String> = names.iter().filter(|name| !done.contains(name)).cloned().collect();
-            error.also(format!(
-                "the evacuation of {from} stopped; moved to {to} before it: {}; still on {from}: {}; the same command run again reads what still stands on {from} and moves only that",
-                listed(done),
-                listed(&left)
-            ))
+        let moved = if taken_first.is_some() {
+            format!("only the registry authority, which did not answer, was taken on {to}")
+        } else {
+            "nothing was moved".to_string()
         };
-        // Install roots first, then the profiles that need preparing (stores
-        // the catalog declares, B standing by), each passing its preflight.
-        portable_report = json!(fixed::portable_roots(&portable, to, &runner).await.map_err(|error| stopped(error, &done))?);
-        for profile in &unstaged {
-            if let Err(error) = steps::prepare(&profile.name, to, reason, &runner).await {
-                return Err(stopped(error, &done));
-            }
-        }
-        if let (Some(profile), Some(uid)) = (vaulted.first(), vault_owner_uid) {
-            match steps::vault(to, uid, true, &runner).await {
-                Ok(report) => vault_report = report,
-                Err(error) => return Err(stopped(error, &done)),
-            }
-            done.push(profile.name.clone());
-        }
-        reports.clear();
-        for profile in &profiles {
-            match steps::move_profile(&profile.name, to).await {
-                Ok(report) => reports.push(report),
-                Err(error) => return Err(stopped(error, &done)),
-            }
-            done.push(profile.name.clone());
-        }
-        role_reports.clear();
-        for role in &fixed.roles {
-            let carries = carried && fixed.roles.first() == Some(role);
-            match fixed::move_role(role, to, carries, reason, &runner).await {
-                Ok(receipt) => {
-                    if carries { authority_report = receipt["authority"].clone(); }
-                    role_reports.push(receipt);
-                }
-                Err(error) => return Err(stopped(error, &done)),
-            }
-            done.push(role.clone());
-        }
-        if authority && taken_first.is_none() && !carried {
-            match steps::authority(to, true, &runner).await {
-                Ok(report) => authority_report = report,
-                Err(error) => return Err(stopped(error, &done)),
-            }
-        }
-        holds::ensure_emptied(from, to, authority).await.map_err(|error| stopped(error, &done))?;
-        if repin_schedules {
-            schedules = holds::repin_schedules(&document, from, to).await.map_err(|error| stopped(error, &done))?;
-        }
-        let dropped = steps::drop_release_targets(from, &release_drops).await.map_err(|error| stopped(error, &done))?;
-        release_report = json!(dropped);
+        return Err(CmdError::refused(format!(
+            "evacuating {from} to {to} would be refused, so {moved}: {}",
+            refusals.join("; ")
+        )));
+    }
+    let mut answered = apply::Reports {
+        portable: json!(portable),
+        vault: vault_report,
+        profiles: reports,
+        roles: role_reports,
+        authority: authority_report,
+        schedules,
+        release: json!(release_drops),
+    };
+    if !check {
+        let plan = apply::Plan {
+            from,
+            to,
+            reason,
+            vault_owner_uid,
+            authority,
+            carried,
+            taken_first: taken_first.is_some(),
+            repin_schedules,
+            document: &document,
+            portable: &portable,
+            unstaged: &unstaged,
+            vaulted: &vaulted,
+            profiles: &profiles,
+            roles: &fixed.roles,
+            release_drops: &release_drops,
+            runner: &runner,
+        };
+        apply::run(&plan, &mut answered).await?;
     }
     let status = if check { "would_evacuate" } else { "evacuated" };
     let report = json!({
         "status": status,
         "from_host": from,
         "to_host": to,
-        "vault": vault_report,
-        "profiles": reports,
-        "roles": role_reports,
+        "vault": answered.vault,
+        "profiles": answered.profiles,
+        "roles": answered.roles,
         "verified_emptied": !check,
-        "repinned_schedules": schedules,
-        "release_targets_dropped": release_report,
-        "portable_roots": portable_report,
-        "authority": authority_report,
+        "repinned_schedules": answered.schedules,
+        "release_targets_dropped": answered.release,
+        "portable_roots": answered.portable,
+        "authority": answered.authority,
         "fixed_routes": fixed.routes,
         "drafted_profiles": profiled.drafted,
         "undrafted_routes": profiled.stays,
@@ -252,49 +266,24 @@ pub(in crate::cli::placement) async fn evacuate(
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(report);
     }
-    let verb = if check { "would move (checked; nothing claimed or changed)" } else { "moved" };
-    let stood = if check { "would prepare" } else { "prepared" };
-    for product in &portable {
-        println!("{} {product}'s install root under {{home}} first, so {to} installs it under its own home", if check { "would write" } else { "wrote" });
-    }
-    for profile in &unstaged {
-        println!("{stood} {} for {to} first (its catalog stores, placement standby)", profile.name);
-    }
-    for profile in &vaulted {
-        println!("{verb} {} with the fleet vault from {from} to {to}", profile.name);
-    }
-    for profile in &profiles {
-        println!("{verb} {} from {from} to {to}", profile.name);
-    }
-    for role in &fixed.roles {
-        println!("{verb} {role} (a role of the host Stado process) from {from} to {to}");
-    }
-    if authority {
-        println!("{}", if authority_report["status"] == "already_authority" { format!("{to} already holds the registry authority") } else { format!("{verb} the registry authority from {from} to {to}") });
-    }
-    if repin_schedules {
-        println!("{} pinned from {from} to {to}: {}", if check { "would repin the schedules" } else { "repinned the schedules" }, listed(&schedules));
-    }
-    if drop_release_targets {
-        println!("{} to {from}: {}", if check { "would stop releasing" } else { "stopped releasing" }, listed(&release_drops));
-    }
-    for drafted in &profiled.drafted {
-        let verb = if check { "would give" } else { "gave" };
-        let service = crate::cli::reporting::field(&drafted["service"]);
-        println!("{verb} fixed route {service} a placement profile of its own first");
-    }
-    for stays in &profiled.stays {
-        let (service, refused) = (crate::cli::reporting::field(&stays["service"]), crate::cli::reporting::field(&stays["refused"]));
-        println!("{service} stays on {from}: the profile draft refused it: {refused}");
-    }
-    for service in fixed.routes.iter().filter(|route| !profiled.covers(route)) {
-        println!("{service} stays on {from}: it is a fixed route with no placement profile; give it one with stado placement profile draft, or evacuate with --profile-fixed-routes");
-    }
-    for untold in &placed.untold {
-        println!("placement cannot be told, so it is not evacuated: {untold}");
-    }
-    if !check {
-        println!("the registry places no profile and no role of the host Stado process on {from} now");
-    }
+    text::print(&text::Said {
+        from,
+        to,
+        check,
+        portable: &portable,
+        unstaged: &unstaged,
+        vaulted: &vaulted,
+        profiles: &profiles,
+        roles: &fixed.roles,
+        authority,
+        authority_report: &answered.authority,
+        repin_schedules,
+        schedules: &answered.schedules,
+        drop_release_targets,
+        release_drops: &release_drops,
+        profiled: &profiled,
+        routes: &fixed.routes,
+        untold: &placed.untold,
+    });
     Ok(report)
 }

@@ -79,7 +79,9 @@ pub fn install_env(
 ) -> Result<Vec<(String, String)>, crate::deploy::DeployError> {
     let mut env = build_env(kind);
     let config = crate::config_file::config_path().map_err(|error| {
-        crate::deploy::DeployError(format!("the Stado config this unit is to run with cannot be read: {error}"))
+        crate::deploy::DeployError(format!(
+            "the Stado config this unit is to run with cannot be read: {error}"
+        ))
     })?;
     if let Some(path) = config {
         env.push((

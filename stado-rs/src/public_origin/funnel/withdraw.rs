@@ -63,7 +63,8 @@ pub async fn withdraw(target: &ComputeTarget, runner: &Runner) -> Result<Value, 
         let Some((_, port)) = endpoint.rsplit_once(':') else {
             return Err(unsupported("it names no port".to_string()));
         };
-        port.parse::<u16>().map_err(|error| unsupported(error.to_string()))?;
+        port.parse::<u16>()
+            .map_err(|error| unsupported(error.to_string()))?;
         let paths = before.get("Web").and_then(|web| web.get(endpoint))
             .and_then(|web| web.get("Handlers")).and_then(Value::as_object)
             .filter(|paths| !paths.is_empty())

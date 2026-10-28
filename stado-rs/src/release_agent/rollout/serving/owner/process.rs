@@ -20,6 +20,7 @@ const INIT_PID: i32 = 1;
 const SERVE_ARGUMENT: &str = " serve";
 
 /// What Linux appends to /proc/<pid>/exe when the image was replaced on disk: https://man7.org/linux/man-pages/man5/proc_pid_exe.5.html
+#[cfg(target_os = "linux")]
 const DELETED_SUFFIX: &str = " (deleted)";
 
 /// Whether a release process still lives, as `primitives::procutil` answers
@@ -186,7 +187,12 @@ fn same_native_image(left: &Path, right: &Path) -> std::io::Result<bool> {
             let left_bytes = left.fill_buf()?;
             let right_bytes = right.fill_buf()?;
             let count = left_bytes.len().min(right_bytes.len());
-            (count, left_bytes[..count] == right_bytes[..count], left_bytes.is_empty(), right_bytes.is_empty())
+            (
+                count,
+                left_bytes[..count] == right_bytes[..count],
+                left_bytes.is_empty(),
+                right_bytes.is_empty(),
+            )
         };
         if left_ended || right_ended {
             return Ok(left_ended && right_ended);

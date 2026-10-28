@@ -176,12 +176,13 @@ pub async fn load_host_health(
             paths: attempted,
         });
     };
-    let beacon: Value =
-        serde_json::from_str(&versioned.content).map_err(|source| HostHealthError::InvalidJson {
+    let beacon: Value = serde_json::from_str(&versioned.content).map_err(|source| {
+        HostHealthError::InvalidJson {
             bucket: bucket.clone(),
             path: path.clone(),
             source,
-        })?;
+        }
+    })?;
     let Value::Object(beacon) = beacon else {
         return Err(HostHealthError::NotAnObject {
             bucket: bucket.clone(),

@@ -45,8 +45,3 @@ pub fn python_returncode(status: std::process::ExitStatus) -> i32 {
         ),
     }
 }
-
-/// First `n` chars (Python `s[:n]`).
-pub(crate) fn head_chars(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
-}

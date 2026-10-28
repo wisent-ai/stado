@@ -155,7 +155,10 @@ pub(crate) async fn weles_activity(target: &str, json_output: bool) -> Result<()
         reported(&report["api"]["endpoint"]),
     );
     if !report["api"]["error"].is_null() {
-        println!("{target}: API connection error: {}", crate::cli::reporting::field(&report["api"]["error"]));
+        println!(
+            "{target}: API connection error: {}",
+            crate::cli::reporting::field(&report["api"]["error"])
+        );
     }
     // A report without its run list or run count is said as such; both were
     // read as no runs at all.

@@ -70,7 +70,10 @@ pub(super) fn cause_summary(quarantined: &[Value]) -> Value {
                 }
             },
             Some(other) => {
-                unreadable.push(format!("{}: quarantine cause is not text: {other}", entry["digest"]));
+                unreadable.push(format!(
+                    "{}: quarantine cause is not text: {other}",
+                    entry["digest"]
+                ));
                 None
             }
         })

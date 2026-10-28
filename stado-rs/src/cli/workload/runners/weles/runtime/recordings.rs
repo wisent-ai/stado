@@ -120,7 +120,9 @@ pub(crate) async fn set_weles_recordings_dir(
     std::fs::create_dir_all(path)?;
     let agents_dir = crate::config_file::home()
         .map_err(|cause| {
-            CmdError::declaration(format!("the LaunchAgents to update cannot be found: {cause}"))
+            CmdError::declaration(format!(
+                "the LaunchAgents to update cannot be found: {cause}"
+            ))
         })?
         .join(crate::deploy::service::USER_LAUNCHD_AGENTS);
     // The plists this host rewrote, by name; the report counts them.

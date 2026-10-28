@@ -94,7 +94,7 @@ enum Outcome {
 /// The index the pass starts at: the refused step once a newer commit than
 /// the refused one is green, the first step otherwise; the recorded refusal
 /// itself while it still holds.
-fn start(plan: &Plan, current: &mut State, checked: &Record) -> Result<usize, Refused> {
+fn start(plan: &Plan, current: &mut State, checked: &Record) -> Result<usize, Box<Refused>> {
     let Some(refused) = current.refused.as_ref() else {
         return Ok(Default::default());
     };
@@ -110,14 +110,14 @@ fn start(plan: &Plan, current: &mut State, checked: &Record) -> Result<usize, Re
     };
     match checked.last_green(&refused.step) {
         Some(green) if green.revision != refused.revision => Ok(index),
-        _ => Err(refused.clone()),
+        _ => Err(Box::new(refused.clone())),
     }
 }
 
 async fn pass(plan: &Plan, current: &mut State, checked: &Record) -> Result<Outcome, CmdError> {
     let first = match start(plan, current, checked) {
         Ok(first) => first,
-        Err(refused) => return Ok(Outcome::Waiting(refused)),
+        Err(refused) => return Ok(Outcome::Waiting(*refused)),
     };
     let mut said = Vec::new();
     for step in &plan.steps[first..] {

@@ -94,7 +94,12 @@ async fn ensure_empty_copies(
         return Ok(());
     }
     let units = running.join(", ");
-    let required: Vec<_> = context.profile.state.iter().filter(|state| state.required).collect();
+    let required: Vec<_> = context
+        .profile
+        .state
+        .iter()
+        .filter(|state| state.required)
+        .collect();
     if required.is_empty() {
         return Err(CmdError::refused(format!(
             "{}: destination unit(s) {units} already run, and the profile declares no required \
@@ -102,7 +107,9 @@ async fn ensure_empty_copies(
             context.destination.name
         )));
     }
-    let held = required.iter().map(|state| state_exists(&context.destination, state, runner));
+    let held = required
+        .iter()
+        .map(|state| state_exists(&context.destination, state, runner));
     for (state, exists) in required.iter().zip(futures::future::join_all(held).await) {
         if exists? {
             return Err(CmdError::refused(format!(

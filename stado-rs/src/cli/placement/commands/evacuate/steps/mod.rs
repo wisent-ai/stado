@@ -4,15 +4,21 @@
 //! profile's standby (`placement standby`) and the release targets dropped
 //! (`release policy remove-target`). The evacuation adds no second way.
 
+mod authority;
+
 use serde_json::Value;
 
 use crate::cli::CmdError;
 use crate::deploy::{CommandSpec, Runner};
 
+pub(super) use authority::{authority, authority_first};
+
 /// This Stado run with `args` and `--json`; its receipt, or why it refused.
 pub(super) async fn run_self(args: &[&str], runner: &Runner) -> Result<Value, CmdError> {
     let program = std::env::current_exe().map_err(|error| {
-        CmdError::declaration(format!("this Stado's own executable cannot be named: {error}"))
+        CmdError::declaration(format!(
+            "this Stado's own executable cannot be named: {error}"
+        ))
     })?;
     let mut argv = vec![program.display().to_string()];
     argv.extend(args.iter().map(|arg| arg.to_string()));
@@ -22,11 +28,13 @@ pub(super) async fn run_self(args: &[&str], runner: &Runner) -> Result<Value, Cm
         .await
         .map_err(|error| CmdError::click(format!("{shown} did not run: {error}")))?;
     if !output.succeeded() {
-        return Err(CmdError::refused(format!("{shown} failed: {}", output.stderr.trim())));
+        return Err(CmdError::refused(format!(
+            "{shown} failed: {}",
+            output.stderr.trim()
+        )));
     }
-    serde_json::from_str(output.stdout.trim()).map_err(|error| {
-        CmdError::click(format!("{shown} printed no readable report: {error}"))
-    })
+    serde_json::from_str(output.stdout.trim())
+        .map_err(|error| CmdError::click(format!("{shown} printed no readable report: {error}")))
 }
 
 /// One line on stderr as a step of the run starts, so a run that stands for
@@ -40,21 +48,42 @@ pub(super) fn starting(step: String) {
 /// refusal: a placement check reported refused. A destination keyring with no
 /// secret half for UID is not one: the applied move makes it there with
 /// Skarbiec's `owner key mint`.
-pub(super) async fn vault(to: &str, owner_uid: &str, apply: bool, runner: &Runner) -> Result<Value, CmdError> {
-    let mut args = vec!["credentials", "vault", "move", "--to", to, "--owner-uid", owner_uid];
+pub(super) async fn vault(
+    to: &str,
+    owner_uid: &str,
+    apply: bool,
+    runner: &Runner,
+) -> Result<Value, CmdError> {
+    let mut args = vec![
+        "credentials",
+        "vault",
+        "move",
+        "--to",
+        to,
+        "--owner-uid",
+        owner_uid,
+    ];
     if apply {
-        starting(format!("moving the fleet vault to {to}, its owner rotated to {owner_uid}"));
+        starting(format!(
+            "moving the fleet vault to {to}, its owner rotated to {owner_uid}"
+        ));
         args.push("--apply");
     }
     let report = run_self(&args, runner).await?;
     if let Some(refused) = report["placement_check"]["refused"].as_str() {
-        return Err(CmdError::refused(format!("the vault's placement move would be refused: {refused}")));
+        return Err(CmdError::refused(format!(
+            "the vault's placement move would be refused: {refused}"
+        )));
     }
     // The next step reads the vault through this host's resolver.
     if apply {
         crate::cli::resolver::follow_authority(false)
             .await
-            .map_err(|error| error.also(format!("the fleet vault itself moved to {to}; the run stopped before the next step")))?;
+            .map_err(|error| {
+                error.also(format!(
+                    "the fleet vault itself moved to {to}; the run stopped before the next step"
+                ))
+            })?;
     }
     Ok(report)
 }
@@ -120,13 +149,17 @@ pub(super) async fn needs_preparing(
 }
 
 /// Profile `name` as the registry declares it now, with that registry.
-async fn fresh(name: &str) -> Result<(Value, String, crate::placement::PlacementProfile), CmdError> {
+async fn fresh(
+    name: &str,
+) -> Result<(Value, String, crate::placement::PlacementProfile), CmdError> {
     let (current, generation) = crate::cli::registry::fetch_versioned_document().await?;
     let profile = crate::placement::profiles(&current)
         .map_err(CmdError::declaration)?
         .into_iter()
         .find(|profile| profile.name == name)
-        .ok_or_else(|| CmdError::missing(format!("the registry no longer declares profile {name}")))?;
+        .ok_or_else(|| {
+            CmdError::missing(format!("the registry no longer declares profile {name}"))
+        })?;
     Ok((current, generation, profile))
 }
 
@@ -142,7 +175,8 @@ pub(super) async fn check_preparing(
     runner: &Runner,
 ) -> Result<Value, String> {
     use crate::cli::placement::profile::stores;
-    let lacking = stores::lacking(profile).map_err(|error| format!("{}: reading its catalog stores: {error}", profile.name))?;
+    let lacking = stores::lacking(profile)
+        .map_err(|error| format!("{}: reading its catalog stores: {error}", profile.name))?;
     let standing = needs_standby(document, profile, to, runner)
         .await
         .map_err(|error| format!("{}: whether {to} stands by: {error}", profile.name))?;
@@ -166,12 +200,21 @@ pub(super) async fn check_preparing(
 /// that it lacks (`profile sync`), stand TO by when TO does not fully
 /// stand by for it (`placement standby`), then check its move from the
 /// registry as it then stands.
-pub(super) async fn prepare(name: &str, to: &str, reason: &str, runner: &Runner) -> Result<(), CmdError> {
-    starting(format!("preparing {name} for {to}: the catalog stores it lacks"));
+pub(super) async fn prepare(
+    name: &str,
+    to: &str,
+    reason: &str,
+    runner: &Runner,
+) -> Result<(), CmdError> {
+    starting(format!(
+        "preparing {name} for {to}: the catalog stores it lacks"
+    ));
     crate::cli::placement::profile::stores::add_missing(name).await?;
     let (current, _, profile) = fresh(name).await?;
     if needs_standby(&current, &profile, to, runner).await? {
-        starting(format!("standing {to} by for {name}: delivering its programs and staging its units"));
+        starting(format!(
+            "standing {to} by for {name}: delivering its programs and staging its units"
+        ));
         standby(name, to, reason).await?;
     }
     let (current, generation, profile) = fresh(name).await?;
@@ -193,7 +236,11 @@ pub(super) async fn move_profile(name: &str, to: &str) -> Result<Value, CmdError
             // The next step reaches the moved services through this host's resolver.
             crate::cli::resolver::follow_authority(false)
                 .await
-                .map_err(|error| error.also(format!("{name} itself moved to {to}; the run stopped before the next step")))?;
+                .map_err(|error| {
+                    error.also(format!(
+                        "{name} itself moved to {to}; the run stopped before the next step"
+                    ))
+                })?;
             Ok(report)
         }
         Err(error) => {
@@ -203,90 +250,29 @@ pub(super) async fn move_profile(name: &str, to: &str) -> Result<Value, CmdError
     }
 }
 
-/// `stado placement move --authority --to-host TO`, with `--check` unless
-/// `apply`; this host must be TO, as the role is taken where it runs. When
-/// the directory already names TO the authority (an evacuation run again
-/// after a later step stopped it), there is nothing to take, and the step
-/// says so instead of refusing the rerun.
-pub(super) async fn authority(to: &str, apply: bool, runner: &Runner) -> Result<Value, CmdError> {
-    let document = crate::cli::registry::fetch_document().await?;
-    if super::scan::authority_holder(&document) == Some(to) {
-        return Ok(serde_json::json!({ "status": "already_authority", "authority": to }));
-    }
-    let mut args = vec!["placement", "move", "--authority", "--to-host", to];
-    if apply {
-        starting(format!("taking the registry authority on {to}"));
-    } else {
-        args.push("--check");
-    }
-    let report = run_self(&args, runner).await?;
-    // The steps after it read the registry this host now serves.
-    if apply {
-        crate::cli::resolver::follow_authority(false)
-            .await
-            .map_err(|error| error.also(format!("the registry authority itself was taken on {to}; the run stopped before the next step")))?;
-    }
-    Ok(report)
-}
-
-/// With `--authority` (run on TO): a registry authority that does not answer
-/// commits no write, so it is taken on TO first and every other step goes
-/// through TO; its receipt. A check cannot read through a silent authority,
-/// so it refuses naming the silence; so does any run whose silent authority's
-/// host also serves a role of the host Stado process, since the store a new
-/// authority writes is that role's. `None` when the authority answers. Every
-/// run starts here, so it also refuses an answering authority whose Stado
-/// lacks `resolver follow`, which each moving step runs there.
-pub(super) async fn authority_first(to: &str, asked: bool, check: bool) -> Result<Option<Value>, CmdError> {
-    if !asked {
-        crate::cli::resolver::ensure_upstream_follows().await?;
-        return Ok(None);
-    }
-    crate::cli::placement::transfer::ensure_runs_on(to)?;
-    let Err(silence) = crate::cli::resolver::authority_snapshot().await else {
-        crate::cli::resolver::ensure_upstream_follows().await?;
-        return Ok(None);
-    };
-    let copy = crate::cli::resolver::kept_last_good_document()
-        .map_err(CmdError::declaration)?
-        .ok_or_else(|| CmdError::refused("this host keeps no registry copy naming the silent authority"))?;
-    // This host's registry store is the fleet object API when its storage is
-    // the object API; a takeover writes it, so a silent host serving it stops it.
-    let served_store = crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
-        == Some(crate::capabilities::StorageAdapter::StadoObject);
-    if let Some(holder) = super::scan::authority_holder(&copy).filter(|_| served_store) {
-        let roles = super::scan::fixed_routes_on(&copy, holder)?.roles;
-        if !roles.is_empty() {
-            return Err(CmdError::refused(format!(
-                "the registry authority {holder} does not answer ({silence}) and also serves {}, the store a new \
-                 authority would write, so neither can move without it; evacuate while {holder} answers",
-                roles.join(", ")
-            )));
-        }
-    }
-    if check {
-        return Err(CmdError::refused(format!(
-            "the registry authority does not answer ({silence}), so no step can be checked through it; \
-             run the evacuation without --check to take the authority on {to} first and check every other step through {to}"
-        )));
-    }
-    authority(to, true, &crate::deploy::production_runner()).await.map(Some)
-}
-
 /// Stop releasing each of `products` to `from`, each one verified registry
 /// write (`stado release policy target remove`); a product no longer
 /// released there when the run reaches it (dropped meanwhile) is passed
 /// over, and a refusal names the products dropped before it.
-pub(super) async fn drop_release_targets(from: &str, products: &[String]) -> Result<Vec<Value>, CmdError> {
+pub(super) async fn drop_release_targets(
+    from: &str,
+    products: &[String],
+) -> Result<Vec<Value>, CmdError> {
     let current = crate::cli::registry::fetch_document().await?;
     let still = super::scan::rolled_out_on(&current, from);
     let mut receipts = Vec::new();
     for product in products.iter().filter(|product| still.contains(product)) {
-        starting(format!("stopping release control from releasing {product} to {from}"));
+        starting(format!(
+            "stopping release control from releasing {product} to {from}"
+        ));
         match crate::cli::release_cmd::drop_policy_target(product, from).await {
             Ok(receipt) => receipts.push(receipt),
             Err(error) => {
-                let dropped: Vec<String> = receipts.iter().filter_map(|kept| kept["product"].as_str()).map(str::to_string).collect();
+                let dropped: Vec<String> = receipts
+                    .iter()
+                    .filter_map(|kept| kept["product"].as_str())
+                    .map(str::to_string)
+                    .collect();
                 return Err(error.also(format!(
                     "release targets dropped from {from} before it: {}",
                     super::scan::listed(&dropped)

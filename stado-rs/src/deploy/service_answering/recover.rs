@@ -104,7 +104,13 @@ pub async fn recover(
         [] => String::from("not declared"),
         reports => reports
             .iter()
-            .map(|report| format!("{} {}", crate::cli::reporting::field(&report["name"]), crate::cli::reporting::field(&report["status"])))
+            .map(|report| {
+                format!(
+                    "{} {}",
+                    crate::cli::reporting::field(&report["name"]),
+                    crate::cli::reporting::field(&report["status"])
+                )
+            })
             .collect::<Vec<_>>()
             .join(", "),
     };

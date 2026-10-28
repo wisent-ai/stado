@@ -66,7 +66,10 @@ impl Run {
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("HOME", &self.root)
-            .env("STADO_CONFIG", self.root.join("no-config.json"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .env("STADO_WAITS_DIR", self.root.join("waits"))
             .env("TMPDIR", self.root.join("tmp"));
         command

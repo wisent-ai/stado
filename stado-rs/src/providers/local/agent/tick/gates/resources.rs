@@ -52,7 +52,9 @@ pub(crate) async fn measure(
             agent_diag.clone(),
         );
         if let Some(detail) = disk_diag.refusal_detail {
-            snapshot.diag.insert("admission_detail".into(), Value::from(detail));
+            snapshot
+                .diag
+                .insert("admission_detail".into(), Value::from(detail));
         }
         publish_branch(
             store,

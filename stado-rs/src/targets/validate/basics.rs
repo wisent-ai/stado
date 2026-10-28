@@ -44,8 +44,9 @@ pub fn ssh_hostname(value: &str) -> String {
 /// in one place and the document Stado ships always satisfies it.
 pub fn registry_schema_version() -> i64 {
     static VERSION: std::sync::LazyLock<i64> = std::sync::LazyLock::new(|| {
-        let bundled: Value = serde_json::from_str(include_str!("../../../data/fleet/registry.json"))
-            .expect("the bundled registry is the JSON this build was compiled with");
+        let bundled: Value =
+            serde_json::from_str(include_str!("../../../data/fleet/registry.json"))
+                .expect("the bundled registry is the JSON this build was compiled with");
         bundled["schema_version"]
             .as_i64()
             .expect("the bundled registry declares its schema_version")

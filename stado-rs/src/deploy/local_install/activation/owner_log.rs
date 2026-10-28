@@ -26,8 +26,7 @@ pub(super) fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, Dep
         }
         Err(error) => return Err(DeployError::from(error)),
     }
-    #[allow(clippy::unnecessary_cast)] // mode_t is u16 on macOS, u32 on Linux
-    let directory_mode = nix::libc::S_IRWXU as u32;
+    let directory_mode = crate::primitives::file_mode::owner_only_directory();
     fs::set_permissions(&directory, fs::Permissions::from_mode(directory_mode))
         .map_err(DeployError::from)?;
 
@@ -44,8 +43,7 @@ pub(super) fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, Dep
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(DeployError::from(error)),
     }
-    #[allow(clippy::unnecessary_cast)] // mode_t is u16 on macOS, u32 on Linux
-    let file_mode = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
+    let file_mode = crate::primitives::file_mode::owner_read_write();
     OpenOptions::new()
         .create(true)
         .append(true)

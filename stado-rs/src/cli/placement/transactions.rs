@@ -53,7 +53,10 @@ pub(crate) async fn list(json_output: bool) -> Result<(), CmdError> {
     // What this host keeps of moves the registry no longer holds open is
     // spent: removed here, where every open move is known, and said on stderr
     // so standard output keeps only the answer.
-    let open_ids: Vec<String> = open.iter().map(|transaction| transaction.id.clone()).collect();
+    let open_ids: Vec<String> = open
+        .iter()
+        .map(|transaction| transaction.id.clone())
+        .collect();
     match sweep_progress(&open_ids) {
         Ok(removed) => {
             for what in removed {

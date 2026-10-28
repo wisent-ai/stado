@@ -13,13 +13,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use nix::sys::stat::Mode;
+use stado::primitives::file_mode::access_bits;
 use stado::providers::local::disk::fleet_flush::spawn_fleet_flush_with;
-
-/// The permission bits of a mode, apart from its file type.
-fn permission_bits() -> u32 {
-    u32::from((Mode::S_IRWXU | Mode::S_IRWXG | Mode::S_IRWXO).bits())
-}
 
 const CANNOT_LIST: &str = "cannot list the staging directory";
 
@@ -37,7 +32,7 @@ impl Staging {
         let root = parent.join(format!("{}-{name}", std::process::id()));
         let dir = root.join("fleet_staging");
         fs::create_dir_all(&dir).expect("create the staging directory");
-        let readable = fs::metadata(&dir).unwrap().permissions().mode() & permission_bits();
+        let readable = fs::metadata(&dir).unwrap().permissions().mode() & access_bits();
         Self {
             root,
             dir,
@@ -49,7 +44,7 @@ impl Staging {
     /// refused by the operating system.
     fn make_unlistable(&self) {
         let mut permissions = fs::metadata(&self.dir).unwrap().permissions();
-        permissions.set_mode(permissions.mode() & !permission_bits());
+        permissions.set_mode(permissions.mode() & !access_bits());
         fs::set_permissions(&self.dir, permissions).expect("take the staging permissions");
     }
 
@@ -81,7 +76,7 @@ impl Drop for Staging {
                 self.dir.display()
             ),
         };
-        permissions.set_mode((permissions.mode() & !permission_bits()) | self.readable);
+        permissions.set_mode((permissions.mode() & !access_bits()) | self.readable);
         let _ = fs::set_permissions(&self.dir, permissions);
         let _ = fs::remove_dir_all(&self.root);
     }

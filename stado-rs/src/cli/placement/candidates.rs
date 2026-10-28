@@ -24,7 +24,10 @@ pub(in crate::cli::placement) fn deploy_error(error: DeployError) -> CmdError {
 
 /// The refusal a release-controlled member answers; the owner is the one its
 /// lifecycle names, so no unit without one can reach this refusal.
-fn release_controlled_refusal(unit: &PlacementUnit, owner: &ReleaseControlledPlacementUnit) -> CmdError {
+fn release_controlled_refusal(
+    unit: &PlacementUnit,
+    owner: &ReleaseControlledPlacementUnit,
+) -> CmdError {
     CmdError::refused(format!(
         "release-controlled placement member {:?} for product {:?} is owned by controller \
          \"release-control\"; placement lifecycle mutation is forbidden",

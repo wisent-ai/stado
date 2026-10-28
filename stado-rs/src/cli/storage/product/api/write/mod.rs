@@ -2,5 +2,6 @@
 //! the removal.
 
 pub(in crate::cli::storage) mod delete;
+mod part;
 pub(in crate::cli::storage) mod put;
 pub(in crate::cli::storage) mod version;

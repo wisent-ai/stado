@@ -124,13 +124,14 @@ pub(super) fn measure_scratch(
         ))
         .stating(crate::cli::entry::error::io_failure_code(error.kind()))
     })?;
-    let volume = crate::providers::local::space_reclaim::rule::read_volume(root).map_err(|error| {
-        CmdError::click(format!(
-            "cannot read the free space of the volume holding {}: {error}",
-            root.display()
-        ))
-        .stating(crate::primitives::failure::FailureCode::InfraDown)
-    })?;
+    let volume =
+        crate::providers::local::space_reclaim::rule::read_volume(root).map_err(|error| {
+            CmdError::click(format!(
+                "cannot read the free space of the volume holding {}: {error}",
+                root.display()
+            ))
+            .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })?;
     let free_bytes = u64::try_from(volume.free_bytes).map_err(|error| {
         CmdError::click(format!(
             "the volume holding {} reports {} free bytes, which is not a byte count: {error}",

@@ -18,16 +18,12 @@ mod state;
 use adapters::{bind_adapters, bind_loopback, reconcile_adapters, self_served_store};
 
 use crate::cli::resolver::directory::source::SnapshotSource;
-use crate::cli::resolver::report::published::now_iso;
-use crate::cli::resolver::report::published::publish;
-use crate::cli::resolver::report::published::PublishedState;
+use crate::cli::resolver::report::published::{now_iso, publish, PublishedState};
 use crate::cli::resolver::serve::api::serve_api;
 pub(in crate::cli::resolver) use crate::cli::resolver::serve::api::SNAPSHOT_PATH;
 use crate::cli::resolver::serve::proxy::serve_adapter;
-use crate::cli::resolver::serve::startup::await_startup;
-use crate::cli::resolver::serve::startup::Startup;
-use crate::cli::resolver::serve::state::ResolverState;
-use crate::cli::resolver::serve::state::Snapshot;
+use crate::cli::resolver::serve::startup::{await_startup, Startup};
+use crate::cli::resolver::serve::state::{ResolverState, Snapshot};
 
 pub async fn serve(target: &str) -> Result<(), CmdError> {
     crate::cli::resolver::report::waiting::start();
@@ -119,10 +115,12 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
     state.keep_markers().await;
     // Taken before `serving` is published: a command that reads `serving`
     // may ask for a read now, and SIGUSR1 with no handler ends the process.
-    let asked = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1()) {
+    let asked = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+    {
         Ok(asked) => asked,
         Err(error) => {
-            let detail = format!("the resolver cannot take requests to read the registry now: {error}");
+            let detail =
+                format!("the resolver cannot take requests to read the registry now: {error}");
             publish(&PublishedState::failed(target, &detail));
             return Err(CmdError::click(detail));
         }
@@ -144,7 +142,8 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
     let (changes, mut changed) = tokio::sync::mpsc::unbounded_channel();
     let refresh_state = Arc::clone(&state);
     let refresh_seconds = config.refresh_seconds;
-    tasks.spawn(async move { watch_registry(refresh_state, refresh_seconds, changes, asked).await });
+    tasks
+        .spawn(async move { watch_registry(refresh_state, refresh_seconds, changes, asked).await });
     let renewing_state = Arc::clone(&state);
     tasks.spawn(async move { renew_sessions(renewing_state, refresh_seconds).await });
     let api_state = Arc::clone(&state);
@@ -240,9 +239,9 @@ async fn watch_registry(
         }
         match state.refresh().await {
             Ok(Some(next)) => {
-                changes
-                    .send(next)
-                    .map_err(|_unsent| "the resolver stopped taking configuration changes".to_string())?;
+                changes.send(next).map_err(|_unsent| {
+                    "the resolver stopped taking configuration changes".to_string()
+                })?;
             }
             Ok(None) => {
                 if let Some(attempts) = failed.take() {
@@ -269,11 +268,15 @@ async fn watch_registry(
                     Ok(config) => config.api_bind.clone(),
                     Err(poisoned) => poisoned.into_inner().api_bind.clone(),
                 };
-                let backing_off =
-                    PublishedState::backing_off(&state.local_target, attempt.get(), &error, refresh)
-                        .bound(state.published_adapters())
-                        .refreshing(refresh_seconds)
-                        .answering_at(&api_bind);
+                let backing_off = PublishedState::backing_off(
+                    &state.local_target,
+                    attempt.get(),
+                    &error,
+                    refresh,
+                )
+                .bound(state.published_adapters())
+                .refreshing(refresh_seconds)
+                .answering_at(&api_bind);
                 publish(&backing_off);
             }
         }

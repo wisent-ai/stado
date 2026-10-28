@@ -83,8 +83,14 @@ impl Deployment {
     fn refused(&mut self, args: &[&str], said: &str) {
         let output = self.run(args);
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        assert!(!output.status.success(), "stado {args:?} must be refused: {stderr}");
-        assert!(stderr.contains(said), "stado {args:?} says {said:?}: {stderr}");
+        assert!(
+            !output.status.success(),
+            "stado {args:?} must be refused: {stderr}"
+        );
+        assert!(
+            stderr.contains(said),
+            "stado {args:?} says {said:?}: {stderr}"
+        );
     }
 
     fn queue(&mut self) -> Value {
@@ -105,14 +111,25 @@ fn a_fenced_store_refuses_writes_until_its_own_transaction_lifts_the_fence() {
     let mut deployment = Deployment::start();
     deployment.cli(&["config", "init"]);
     let template = deployment.root.join("registry.json");
-    fs::write(&template, include_str!("../service_directory/registry.json")).unwrap();
+    fs::write(
+        &template,
+        include_str!("../service_directory/registry.json"),
+    )
+    .unwrap();
     deployment.cli(&["registry", "import", &template.to_string_lossy()]);
     let unfenced: Value =
         serde_json::from_str(&deployment.cli(&["storage", "fence", "status", "--json"])).unwrap();
     assert!(unfenced["intent"].is_null(), "{unfenced}");
 
     let armed: Value = serde_json::from_str(&deployment.cli(&[
-        "storage", "fence", "arm", "--transaction", TRANSACTION, "--reason", "journey", "--json",
+        "storage",
+        "fence",
+        "arm",
+        "--transaction",
+        TRANSACTION,
+        "--reason",
+        "journey",
+        "--json",
     ]))
     .unwrap();
     assert_eq!(armed["state"], "armed", "{armed}");
@@ -121,44 +138,116 @@ fn a_fenced_store_refuses_writes_until_its_own_transaction_lifts_the_fence() {
 
     deployment.refused(
         &["queue", "pause", "--reason", "fenced journey"],
-        &format!("local storage writes are fenced by stado storage fence transaction {TRANSACTION}"),
+        &format!(
+            "local storage writes are fenced by stado storage fence transaction {TRANSACTION}"
+        ),
     );
     let before = deployment.queue();
-    assert_ne!(before["paused"], true, "a fenced store took the pause marker: {before}");
+    assert_ne!(
+        before["paused"], true,
+        "a fenced store took the pause marker: {before}"
+    );
     deployment.refused(
-        &["storage", "fence", "arm", "--transaction", OTHER, "--reason", "journey"],
+        &[
+            "storage",
+            "fence",
+            "arm",
+            "--transaction",
+            OTHER,
+            "--reason",
+            "journey",
+        ],
         &format!("already fenced by transaction {TRANSACTION}"),
     );
     deployment.refused(
-        &["storage", "fence", "disarm", "--transaction", OTHER, "--reason", "journey"],
+        &[
+            "storage",
+            "fence",
+            "disarm",
+            "--transaction",
+            OTHER,
+            "--reason",
+            "journey",
+        ],
         &format!("is fenced by transaction {TRANSACTION}, not {OTHER}"),
     );
 
-    let token = deployment.cli(&["registry", "pull", "--generation-only"]).trim().to_string();
+    let token = deployment
+        .cli(&["registry", "pull", "--generation-only"])
+        .trim()
+        .to_string();
     let mut document: Value = serde_json::from_str(&deployment.cli(&["registry", "pull"])).unwrap();
     document["service_directory"]["authority"]["command"] = json!("/fence-journey/stado");
     let edited = deployment.root.join("registry-edited.json");
     fs::write(&edited, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
     let edited = edited.to_string_lossy().into_owned();
-    let fenced = format!("local storage writes are fenced by stado storage fence transaction {TRANSACTION}");
-    deployment.refused(&["registry", "push", &edited, "--if-generation", &token], &fenced);
-    deployment.refused(&["registry", "push", &edited, "--if-generation", &token, "--fence-transaction", OTHER], &fenced);
+    let fenced =
+        format!("local storage writes are fenced by stado storage fence transaction {TRANSACTION}");
+    deployment.refused(
+        &["registry", "push", &edited, "--if-generation", &token],
+        &fenced,
+    );
+    deployment.refused(
+        &[
+            "registry",
+            "push",
+            &edited,
+            "--if-generation",
+            &token,
+            "--fence-transaction",
+            OTHER,
+        ],
+        &fenced,
+    );
     // The fenced commit is conditional on the generation it was made against.
-    deployment.refused(&["registry", "push", &edited, "--fence-transaction", TRANSACTION], "--if-generation");
-    deployment.cli(&["registry", "push", &edited, "--if-generation", &token, "--fence-transaction", TRANSACTION]);
+    deployment.refused(
+        &[
+            "registry",
+            "push",
+            &edited,
+            "--fence-transaction",
+            TRANSACTION,
+        ],
+        "--if-generation",
+    );
+    deployment.cli(&[
+        "registry",
+        "push",
+        &edited,
+        "--if-generation",
+        &token,
+        "--fence-transaction",
+        TRANSACTION,
+    ]);
     let committed: Value = serde_json::from_str(&deployment.cli(&["registry", "pull"])).unwrap();
-    assert_eq!(committed["service_directory"]["authority"]["command"], "/fence-journey/stado", "{committed}");
+    assert_eq!(
+        committed["service_directory"]["authority"]["command"], "/fence-journey/stado",
+        "{committed}"
+    );
     deployment.refused(&["queue", "pause", "--reason", "fenced journey"], &fenced);
 
     let lifted: Value = serde_json::from_str(&deployment.cli(&[
-        "storage", "fence", "disarm", "--transaction", TRANSACTION, "--reason", "journey", "--json",
+        "storage",
+        "fence",
+        "disarm",
+        "--transaction",
+        TRANSACTION,
+        "--reason",
+        "journey",
+        "--json",
     ]))
     .unwrap();
     assert_eq!(lifted["state"], "disarmed", "{lifted}");
-    assert!(!deployment.intent().exists(), "the intent stays after disarm");
+    assert!(
+        !deployment.intent().exists(),
+        "the intent stays after disarm"
+    );
     deployment.cli(&["queue", "pause", "--reason", "after the fence"]);
     let after = deployment.queue();
-    assert_eq!(after["paused"], true, "the write after disarm did not land: {after}");
+    assert_eq!(
+        after["paused"], true,
+        "the write after disarm did not land: {after}"
+    );
 
     deployment.report["outcome"] = json!("passed");
     deployment.save();

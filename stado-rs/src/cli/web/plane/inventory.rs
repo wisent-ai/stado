@@ -117,7 +117,11 @@ fn twin(hostname: &str) -> Option<String> {
 fn with_twins(mut rows: Vec<Map<String, Value>>) -> Vec<Map<String, Value>> {
     let declared: std::collections::BTreeSet<String> = rows
         .iter()
-        .filter_map(|row| row.get("hostname").and_then(Value::as_str).map(str::to_string))
+        .filter_map(|row| {
+            row.get("hostname")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .collect();
     for row in &mut rows {
         let Some(twin) = row.get("hostname").and_then(Value::as_str).and_then(twin) else {
@@ -188,11 +192,18 @@ pub(crate) async fn remove(name: &str, json_output: bool) -> Result<(), CmdError
     } else {
         // Each receipt is said as it reads: its change, else its state (a
         // hostname-only product's retire answers `no-unit`), else the receipt.
-        let said = |receipt: &Value| match receipt["change"].as_str().or_else(|| receipt["state"].as_str()) {
+        let said = |receipt: &Value| match receipt["change"]
+            .as_str()
+            .or_else(|| receipt["state"].as_str())
+        {
             Some(word) => word.to_string(),
             None => receipt.to_string(),
         };
-        println!("{name}: record {}, unit {}, declaration removed", said(&record), said(&unit));
+        println!(
+            "{name}: record {}, unit {}, declaration removed",
+            said(&record),
+            said(&unit)
+        );
     }
     Ok(())
 }

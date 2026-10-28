@@ -39,48 +39,14 @@
 mod check;
 mod deliver;
 mod ports;
+mod report;
 mod template;
-
-use serde::Serialize;
 
 use crate::cli::CmdError;
 
 pub(crate) use check::check;
 pub use deliver::Delivery;
-
-/// The words a standby pass ends with.
-pub mod words {
-    /// A release-controlled tree is declared for the host but its agent has
-    /// not rolled it out yet; the units that depend on it were not staged.
-    pub const AWAITING_RELEASE_ROLLOUT: &str = "awaiting_release_rollout";
-    /// Every unit is staged and the host is written into the profile and
-    /// the directory.
-    pub const DECLARED: &str = "declared";
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct StandbyReport {
-    pub profile: String,
-    pub host: String,
-    pub placed_on: String,
-    pub platform: String,
-    /// Why the operator asked this host to stand by.
-    pub reason: String,
-    pub outcome: String,
-    pub deliveries: Vec<Delivery>,
-    pub units: Vec<UnitReceipt>,
-    pub registry_generation: Option<String>,
-    pub detail: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct UnitReceipt {
-    pub service: String,
-    pub label: String,
-    pub action: String,
-    /// The unit file staged on the host.
-    pub path: String,
-}
+pub use report::{words, StandbyReport, UnitReceipt};
 
 /// Prepare `host` for `profile`. See the module doc for the steps. With
 /// `check`, only the refusals a pass gives before it delivers anything, and
@@ -141,8 +107,14 @@ pub(crate) async fn prepare(
     host: &str,
     reason: &str,
 ) -> Result<StandbyReport, CmdError> {
-    let check::Planned { document, profile, target, placed, placed_on, plan } =
-        check::planned(profile_name, host, reason).await?;
+    let check::Planned {
+        document,
+        profile,
+        target,
+        placed,
+        placed_on,
+        plan,
+    } = check::planned(profile_name, host, reason).await?;
     let mut report = StandbyReport {
         profile: profile.name.clone(),
         host: target.name.clone(),
@@ -167,17 +139,28 @@ pub(crate) async fn prepare(
     // registry commit, so those run one after another and never race each
     // other's generation. The report keeps the plan's order, and the first
     // refusal in that order is the answer.
-    let waited = |what: String| format!("placement standby of {} on {}: {what}", profile.name, target.name);
-    let (programs, trees): (Vec<_>, Vec<_>) = plan.services.iter().enumerate().partition(
-        |(_, service)| matches!(service.kind, template::ProgramKind::Managed { .. }),
-    );
+    let waited = |what: String| {
+        format!(
+            "placement standby of {} on {}: {what}",
+            profile.name, target.name
+        )
+    };
+    let (programs, trees): (Vec<_>, Vec<_>) =
+        plan.services.iter().enumerate().partition(|(_, service)| {
+            matches!(service.kind, template::ProgramKind::Managed { .. })
+        });
     let mut answers: Vec<Option<Result<deliver::Delivery, CmdError>>> =
         plan.services.iter().map(|_| None).collect();
     let shared = (&document, &placed, &target);
     let delivered = programs.into_iter().map(|(index, service)| {
         let what = waited(format!("deliver {}", service.logical));
         let (document, placed, target) = shared;
-        async move { (index, deliver::deliver(document, placed, target, service, what).await) }
+        async move {
+            (
+                index,
+                deliver::deliver(document, placed, target, service, what).await,
+            )
+        }
     });
     for (index, answer) in futures::future::join_all(delivered).await {
         answers[index] = Some(answer);

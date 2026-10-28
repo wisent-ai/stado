@@ -39,12 +39,7 @@ fn placed_elsewhere(registry: &Registry, host: &str, unit: &str) -> Option<Strin
                 .get(host)
                 .is_some_and(|declared| declared.units.values().any(|placed| placed.unit == unit))
         })
-        .find_map(|profile| {
-            profile
-                .services
-                .iter()
-                .find_map(|name| active_elsewhere(name))
-        })
+        .find_map(|profile| profile.services.iter().find_map(&active_elsewhere))
 }
 
 /// The exit status a restart step that failed without one of its own reports:

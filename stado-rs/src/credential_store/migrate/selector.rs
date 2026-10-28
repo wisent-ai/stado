@@ -52,7 +52,10 @@ fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
         }
     };
     crate::primitives::document::persist_with_mode(path, body, mode).map_err(|source| {
-        deployment(format!("cannot replace config {}: {source}", path.display()))
+        deployment(format!(
+            "cannot replace config {}: {source}",
+            path.display()
+        ))
     })
 }
 

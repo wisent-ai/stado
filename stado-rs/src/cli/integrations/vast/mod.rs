@@ -12,7 +12,7 @@
 mod readiness;
 mod readiness_text;
 
-pub(crate) use readiness::{read_vault, VaultReading};
+pub(crate) use readiness::read_vault;
 
 use serde_json::json;
 

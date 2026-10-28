@@ -87,10 +87,20 @@ async fn stop_one(
     }
     let target = crate::deploy::host_channel::canonical_target(&finding.host)
         .await
-        .map_err(|error| format!("host {} of standby service {unit} cannot be reached: {error}", finding.host))?;
+        .map_err(|error| {
+            format!(
+                "host {} of standby service {unit} cannot be reached: {error}",
+                finding.host
+            )
+        })?;
     let report = service::stop_service(&target, declared, runner)
         .await
-        .map_err(|error| format!("standby service {unit} on {} cannot be stopped: {error}", target.name))?;
+        .map_err(|error| {
+            format!(
+                "standby service {unit} on {} cannot be stopped: {error}",
+                target.name
+            )
+        })?;
     if !report.postcondition_held() {
         return Err(format!("standby service {unit}: {}", report.failure()));
     }

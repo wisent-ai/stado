@@ -76,7 +76,10 @@ pub(crate) fn promises_after(
     let finished_at = attempted_at + duration.into_iter().sum::<f64>();
     let next_pass_by = finished_at
         + every
-        + [longest_pass, longest_lateness].into_iter().flatten().sum::<f64>();
+        + [longest_pass, longest_lateness]
+            .into_iter()
+            .flatten()
+            .sum::<f64>();
     promises.insert(
         writer.to_string(),
         serde_json::json!({

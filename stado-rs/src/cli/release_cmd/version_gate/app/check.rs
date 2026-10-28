@@ -78,7 +78,10 @@ fn provenance(root: &Path, marker: &str, released: &str) -> Read<()> {
     let record = verified_record(root, marker)?;
     // Read as empty, tags in another shape made origin serve no version
     // tag, and a head baseline passed as if nothing were released.
-    let origin_tags = listed(&record["origin_tags"], &format!("{VERIFIED_BASELINE} origin_tags"))?;
+    let origin_tags = listed(
+        &record["origin_tags"],
+        &format!("{VERIFIED_BASELINE} origin_tags"),
+    )?;
     let newest_tag = newest(origin_tags.iter().filter_map(Value::as_str));
     if let Some(tag) = marker.strip_prefix("git-archive:") {
         if version_of(tag).as_deref() != Some(released) {
@@ -92,7 +95,9 @@ fn provenance(root: &Path, marker: &str, released: &str) -> Read<()> {
                 return Err(format!("{BASELINE} is tag {tag}, but the newest version tag origin serves is {newest}. {REGENERATE}"));
             }
             None => {
-                return Err(format!("{BASELINE} is tag {tag}, but origin serves no version tag. {REGENERATE}"));
+                return Err(format!(
+                    "{BASELINE} is tag {tag}, but origin serves no version tag. {REGENERATE}"
+                ));
             }
         }
         return Ok(());
@@ -153,9 +158,11 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
     let published = listed(&committed["surface"], &format!("{BASELINE} surface"))?
         .iter()
         .map(|name| {
-            name.as_str()
-                .map(str::to_string)
-                .ok_or_else(|| format!("{BASELINE} publishes a surface name that is not text: {name}. {REGENERATE}"))
+            name.as_str().map(str::to_string).ok_or_else(|| {
+                format!(
+                    "{BASELINE} publishes a surface name that is not text: {name}. {REGENERATE}"
+                )
+            })
         })
         .collect::<Read<Vec<_>>>()?;
     let mut sorted = published.clone();

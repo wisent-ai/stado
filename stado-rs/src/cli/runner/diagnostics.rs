@@ -47,7 +47,12 @@ pub(super) async fn render(target: &str, profile: &str, json: bool) -> Result<()
     line("read", report.get("read"));
     // The report's nested observations (its runtime and memory readings) are
     // its object fields, each printed under its own name.
-    for (section, observation) in report.as_object().into_iter().flatten().filter(|(_, value)| value.is_object()) {
+    for (section, observation) in report
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, value)| value.is_object())
+    {
         println!("\n{section}:");
         print_json(observation);
     }
@@ -65,7 +70,9 @@ pub(super) async fn render(target: &str, profile: &str, json: bool) -> Result<()
             return Ok(());
         }
         None => {
-            println!("\nthe diagnostic report carries no tail field, so no log content can be shown");
+            println!(
+                "\nthe diagnostic report carries no tail field, so no log content can be shown"
+            );
             return Ok(());
         }
     };

@@ -9,7 +9,9 @@
 //! records "the operator was told" from an exit status that cannot say
 //! otherwise. The report below is what makes that claim checkable.
 
-use super::send::{email_subject, send_most, send_pubsub, send_skrzynka, send_slack, send_telegram};
+use super::send::{
+    email_subject, send_most, send_pubsub, send_skrzynka, send_slack, send_telegram,
+};
 use super::{channel_failed, log, AlertChannels};
 
 /// What one channel did with one alert.

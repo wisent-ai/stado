@@ -27,7 +27,9 @@ impl StadoObjectBackend {
             return Err(Self::response_error(response).await);
         }
         let header = response.headers().get(VERSION_HEADER).ok_or_else(|| {
-            StorageError::Other(format!("Stado object API omitted {VERSION_HEADER} for {path}"))
+            StorageError::Other(format!(
+                "Stado object API omitted {VERSION_HEADER} for {path}"
+            ))
         })?;
         let version = header
             .to_str()

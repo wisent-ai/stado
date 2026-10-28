@@ -8,9 +8,9 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::{diag_number, Evidence, Need, NeedKind, Severity};
-use crate::primitives::tally::Tally;
 use crate::fleet_needs::unmet::UnmetPlacement;
 use crate::models::Job;
+use crate::primitives::tally::Tally;
 use crate::queue::capacity::Publication;
 use crate::targets::Registry;
 

@@ -95,7 +95,10 @@ pub fn validate_declared(path: &str) -> Result<(), String> {
 /// the process.
 fn home() -> std::io::Result<PathBuf> {
     crate::config_file::home().map_err(|cause| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, format!("no work base: {cause}"))
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no work base: {cause}"),
+        )
     })
 }
 

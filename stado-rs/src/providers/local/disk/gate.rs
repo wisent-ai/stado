@@ -37,13 +37,21 @@ pub fn free_gb(path: &Path) -> Result<f64, String> {
 pub fn write_probe(path: &Path) -> Result<(), String> {
     let mut file = tempfile::NamedTempFile::with_prefix_in(".wc-disk-probe-", path)
         .map_err(|error| format!("a probe file cannot be created on the fleet volume: {error}"))?;
-    let written = file.write_all(b"x")
+    let written = file
+        .write_all(b"x")
         .map_err(|error| format!("a probe file on the fleet volume cannot be written: {error}"))
-        .and_then(|()| file.flush()
-            .map_err(|error| format!("a probe file on the fleet volume cannot be flushed: {error}")))
-        .and_then(|()| file.as_file().sync_all()
-            .map_err(|error| format!("a probe file on the fleet volume cannot be synced: {error}")));
-    let removed = file.close()
+        .and_then(|()| {
+            file.flush().map_err(|error| {
+                format!("a probe file on the fleet volume cannot be flushed: {error}")
+            })
+        })
+        .and_then(|()| {
+            file.as_file().sync_all().map_err(|error| {
+                format!("a probe file on the fleet volume cannot be synced: {error}")
+            })
+        });
+    let removed = file
+        .close()
         .map_err(|error| format!("a probe file on the fleet volume cannot be removed: {error}"));
     match (written, removed) {
         (Err(mut cause), Err(removal)) => {
@@ -61,17 +69,20 @@ pub fn write_probe(path: &Path) -> Result<(), String> {
 fn dir_size_bytes(path: &Path) -> Result<u64, String> {
     let entries = std::fs::read_dir(path)
         .map_err(|error| format!("pending directory cannot be listed: {error}"))?;
-    let bytes = entries.map(|entry| {
-        let entry = entry.map_err(|error| format!("pending directory entry cannot be read: {error}"))?;
-        let child = entry.path();
-        let metadata = std::fs::symlink_metadata(&child)
-            .map_err(|error| format!("pending directory entry cannot be inspected: {error}"))?;
-        if metadata.is_dir() {
-            dir_size_bytes(&child).map(u128::from)
-        } else {
-            Ok(u128::from(metadata.len()))
-        }
-    }).sum::<Result<u128, String>>()?;
+    let bytes = entries
+        .map(|entry| {
+            let entry = entry
+                .map_err(|error| format!("pending directory entry cannot be read: {error}"))?;
+            let child = entry.path();
+            let metadata = std::fs::symlink_metadata(&child)
+                .map_err(|error| format!("pending directory entry cannot be inspected: {error}"))?;
+            if metadata.is_dir() {
+                dir_size_bytes(&child).map(u128::from)
+            } else {
+                Ok(u128::from(metadata.len()))
+            }
+        })
+        .sum::<Result<u128, String>>()?;
     u64::try_from(bytes)
         .map_err(|error| format!("pending directory byte count cannot be represented: {error}"))
 }
@@ -86,7 +97,8 @@ pub fn largest_child_dir_gb(path: &Path) -> Result<Option<f64>, String> {
     };
     let mut largest = None;
     for entry in entries {
-        let entry = entry.map_err(|error| format!("pending directory entry cannot be read: {error}"))?;
+        let entry =
+            entry.map_err(|error| format!("pending directory entry cannot be read: {error}"))?;
         let child = entry.path();
         let metadata = std::fs::symlink_metadata(&child)
             .map_err(|error| format!("pending directory entry cannot be inspected: {error}"))?;
@@ -138,12 +150,16 @@ pub fn decide(obs: &GateObservation, log_fn: &mut dyn FnMut(&str)) -> bool {
                 refuse = true;
             }
             (Ok(_), Err(cause)) => {
-                log_fn(&format!("pending staging size unread ({cause}); refusing new work"));
+                log_fn(&format!(
+                    "pending staging size unread ({cause}); refusing new work"
+                ));
                 refuse = true;
             }
             (Ok(_), Ok(_)) => {}
             (Err(cause), _) => {
-                log_fn(&format!("staging free space unread ({cause}); refusing new work"));
+                log_fn(&format!(
+                    "staging free space unread ({cause}); refusing new work"
+                ));
                 refuse = true;
             }
         }

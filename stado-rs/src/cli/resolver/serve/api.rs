@@ -88,7 +88,10 @@ async fn read_request(stream: &mut TcpStream) -> Result<ApiRequest, String> {
 
 async fn handle_api_request(request: ApiRequest, state: &ResolverState) -> Vec<u8> {
     if request.method != "GET" {
-        return api_response(StatusCode::METHOD_NOT_ALLOWED, json!({"error": "method_not_allowed"}));
+        return api_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            json!({"error": "method_not_allowed"}),
+        );
     }
     if request.path == "/health" {
         let current = state.snapshot.read().await;
@@ -118,7 +121,10 @@ async fn handle_api_request(request: ApiRequest, state: &ResolverState) -> Vec<u
         return api_response(StatusCode::BAD_REQUEST, json!({"error": "invalid_service"}));
     }
     let Some(consumer) = request.headers.get("x-stado-consumer") else {
-        return api_response(StatusCode::UNAUTHORIZED, json!({"error": "consumer_required"}));
+        return api_response(
+            StatusCode::UNAUTHORIZED,
+            json!({"error": "consumer_required"}),
+        );
     };
     match state.resolve(service, consumer).await {
         Ok(resolved) => api_response(

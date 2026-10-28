@@ -205,7 +205,7 @@ fn write_private(path: &Path, text: &str) -> Result<(), CmdError> {
 
 fn restrict(path: &Path) -> Result<(), CmdError> {
     use std::os::unix::fs::PermissionsExt;
-    let owner_only = u32::from(nix::libc::S_IRUSR | nix::libc::S_IWUSR);
+    let owner_only = crate::primitives::file_mode::widen(nix::libc::S_IRUSR | nix::libc::S_IWUSR);
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(owner_only))
         .map_err(|error| CmdError::from(error).within(format!("restrict {}", path.display())))
 }

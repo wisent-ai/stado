@@ -97,7 +97,9 @@ pub(super) fn health_value(health: &ProviderHealth) -> Value {
 /// that is not RFC 3339 is the parser's error.
 fn elapsed_seconds(since: &str, now: DateTime<Utc>) -> Result<i64, chrono::ParseError> {
     let start = DateTime::parse_from_rfc3339(since)?;
-    Ok((now - start.with_timezone(&Utc)).max(TimeDelta::zero()).num_seconds())
+    Ok((now - start.with_timezone(&Utc))
+        .max(TimeDelta::zero())
+        .num_seconds())
 }
 
 /// Elapsed seconds as `1d 2h 3m`, the zero units left out and minutes always

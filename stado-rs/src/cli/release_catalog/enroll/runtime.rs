@@ -22,7 +22,13 @@ fn stado(arguments: &[&str]) -> Result<String, String> {
     let program = std::env::current_exe()
         .map_err(|error| format!("this stado binary cannot be located to run it again: {error}"))?;
     let output = crate::wait::output(std::process::Command::new(&program).args(arguments))
-        .map_err(|error| format!("{} {} cannot be run: {error}", program.display(), arguments.join(" ")))?;
+        .map_err(|error| {
+            format!(
+                "{} {} cannot be run: {error}",
+                program.display(),
+                arguments.join(" ")
+            )
+        })?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {

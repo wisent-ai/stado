@@ -107,13 +107,14 @@ async fn attach_jeden(
             .iter()
             .flat_map(std::env::split_paths)
             .collect();
-        let path = std::env::join_paths(std::iter::once(expand_home(".stado/bin")?).chain(inherited))
-        .map_err(|error| {
-            CmdError::click(format!(
-                "cannot construct the managed runtime PATH: {error}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config)
-        })?;
+        let path =
+            std::env::join_paths(std::iter::once(expand_home(".stado/bin")?).chain(inherited))
+                .map_err(|error| {
+                    CmdError::click(format!(
+                        "cannot construct the managed runtime PATH: {error}"
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Config)
+                })?;
         let mut command = tokio::process::Command::new(expand_home(MANAGED_JEDEN)?);
         command.arg("rpc").env("PATH", path);
         if let Some(seconds) = park_after_seconds {

@@ -18,7 +18,10 @@ use serde::Serialize;
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum HostCredentialChannel {
     /// The configured control-plane consumer, whose bearer file exists here.
-    ControlPlane { consumer: String, token_file: String },
+    ControlPlane {
+        consumer: String,
+        token_file: String,
+    },
     /// This host's own workload-agent grant.
     AgentGrant {
         consumer: String,
@@ -172,7 +175,9 @@ fn bearer_file(path: &str) -> Result<bool, String> {
     match std::fs::metadata(path) {
         Ok(metadata) => Ok(metadata.is_file()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!("the bearer file {path} cannot be examined: {error}")),
+        Err(error) => Err(format!(
+            "the bearer file {path} cannot be examined: {error}"
+        )),
     }
 }
 

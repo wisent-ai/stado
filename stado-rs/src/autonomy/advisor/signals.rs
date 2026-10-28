@@ -30,9 +30,8 @@ impl<'a> ResourceLookup<'a> {
     fn resource(&mut self, id: &str) -> Option<&'a ResourceRecord> {
         let resources = self.snapshot.resources.as_slice();
         let sorted = *self.sorted.get_or_insert_with(|| {
-            resources.is_sorted_by(|left, right| {
-                left.resource_id.as_str() <= right.resource_id.as_str()
-            })
+            resources
+                .is_sorted_by(|left, right| left.resource_id.as_str() <= right.resource_id.as_str())
         });
         if sorted {
             let index = resources.partition_point(|resource| resource.resource_id.as_str() < id);
@@ -40,7 +39,9 @@ impl<'a> ResourceLookup<'a> {
                 .get(index)
                 .filter(|resource| resource.resource_id.as_str() == id)
         } else {
-            resources.iter().find(|resource| resource.resource_id.as_str() == id)
+            resources
+                .iter()
+                .find(|resource| resource.resource_id.as_str() == id)
         }
     }
 }
@@ -54,14 +55,12 @@ pub(super) fn cross_boundary_dependencies(
         .dependencies
         .iter()
         .map(|dependency_id| {
-            let dependency = lookup
-                .resource(dependency_id)
-                .ok_or_else(|| {
-                    format!(
-                        "network dependency {dependency_id} is absent from inventory snapshot {}",
-                        lookup.snapshot.snapshot_id
-                    )
-                })?;
+            let dependency = lookup.resource(dependency_id).ok_or_else(|| {
+                format!(
+                    "network dependency {dependency_id} is absent from inventory snapshot {}",
+                    lookup.snapshot.snapshot_id
+                )
+            })?;
             let cross_boundary = dependency.provider != resource.provider
                 || resource
                     .region
@@ -113,9 +112,10 @@ pub(super) fn underutilized(
 }
 
 fn utilization(resource: &ResourceRecord, keys: &[&str]) -> Result<Option<f64>, String> {
-    let Some((key, value)) = keys.iter().find_map(|key| {
-        resource.utilization.get(*key).map(|value| (*key, *value))
-    }) else {
+    let Some((key, value)) = keys
+        .iter()
+        .find_map(|key| resource.utilization.get(*key).map(|value| (*key, *value)))
+    else {
         return Ok(None);
     };
     if value.is_finite() && !value.is_sign_negative() {

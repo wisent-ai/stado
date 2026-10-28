@@ -90,7 +90,10 @@ pub async fn status(product: &str, revision: Option<&str>, json: bool) -> Result
         );
         return Ok(());
     }
-    println!("{product} ({})", crate::cli::reporting::field(&document["repository"]));
+    println!(
+        "{product} ({})",
+        crate::cli::reporting::field(&document["repository"])
+    );
     if let Some(finding) = document["finding"].as_str() {
         println!("  {finding}");
     }
@@ -98,7 +101,10 @@ pub async fn status(product: &str, revision: Option<&str>, json: bool) -> Result
     for row in document["workflows"].as_array().into_iter().flatten() {
         let workflow = crate::cli::reporting::field(&row["workflow"]);
         match row["run"].as_object() {
-            None => println!("  {workflow}: {}", crate::cli::reporting::field(&row["finding"])),
+            None => println!(
+                "  {workflow}: {}",
+                crate::cli::reporting::field(&row["finding"])
+            ),
             Some(run) => {
                 use crate::cli::reporting::field;
                 println!(

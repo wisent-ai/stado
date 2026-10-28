@@ -66,16 +66,20 @@ pub fn access_bits() -> u32 {
     widen((Mode::S_IRWXU | Mode::S_IRWXG | Mode::S_IRWXO).bits())
 }
 
-/// `mode_t` is already `u32` on Linux and narrower on Darwin, so the widening
-/// is a conversion on one platform and the identity on the other.
+/// Bits libc names for a file's mode (`S_IRUSR`, `S_IFMT`, a `Mode`'s bits),
+/// as `std` takes and gives a mode: `mode_t` is already `u32` on Linux and
+/// narrower on Darwin, so the widening is a lossless conversion on one
+/// platform and the identity on the other; written as a cast or a `From`,
+/// it is refused on Linux as a conversion to its own type. Usable in a
+/// constant.
 #[cfg(target_os = "linux")]
-fn widen(mode: nix::libc::mode_t) -> u32 {
+pub const fn widen(mode: nix::libc::mode_t) -> u32 {
     mode
 }
 
 #[cfg(not(target_os = "linux"))]
-fn widen(mode: nix::libc::mode_t) -> u32 {
-    u32::from(mode)
+pub const fn widen(mode: nix::libc::mode_t) -> u32 {
+    mode as u32
 }
 
 /// Whether a file mode grants anything to the group or to other users.

@@ -35,14 +35,13 @@ pub(in crate::providers::local::space_reclaim::hf) fn recheck_ref(
         // The reference is read to the size the identity check just proved,
         // so a file grown since cannot be read past what was judged.
         let size = usize::try_from(info.st_size).map_err(|error| {
-            os_error(&format!("cache reference size {} is not a length: {error}", info.st_size))
+            os_error(&format!(
+                "cache reference size {} is not a length: {error}",
+                info.st_size
+            ))
         })?;
-        let descriptor = safefs::open_file_at(
-            parent_fd.as_raw_fd(),
-            name,
-            OFlag::O_RDONLY,
-            Mode::empty(),
-        )?;
+        let descriptor =
+            safefs::open_file_at(parent_fd.as_raw_fd(), name, OFlag::O_RDONLY, Mode::empty())?;
         let payload = {
             if identity(&safefs::fstat(descriptor.as_raw_fd())?) != *expected {
                 return Err(os_error("cache reference changed"));

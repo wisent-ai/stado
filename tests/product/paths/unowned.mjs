@@ -39,7 +39,7 @@ writeFileSync(join(home, '.stado', 'products', 'example', 'cli.json'), JSON.stri
   recipe: {}, installed_paths: [owned], backups: [], host: null, source_revision: null, previous: null,
 }));
 
-const env = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: join(home, 'no-config.toml'), TMPDIR: join(home, 'tmp') };
+const env = { PATH: process.env.PATH, HOME: home, STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), TMPDIR: join(home, 'tmp') };
 const answer = spawnSync(stado, ['product', 'paths', '--json'], { cwd: root, env, encoding: 'utf8' });
 writeFileSync(join(home, 'report.json'), JSON.stringify({ exit_status: answer.status, stdout: answer.stdout, stderr: answer.stderr }));
 assert.ok(!answer.status && !answer.signal && !answer.error, answer.stderr || answer.error?.message);

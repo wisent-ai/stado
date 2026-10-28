@@ -55,12 +55,23 @@ async fn every_desktop_operation_path_is_a_cli_command() {
             .as_array()
             .expect("every operation lists the options its fields pass")
             .iter()
-            .chain(operation["fixed_arguments"].as_array().into_iter().flatten())
+            .chain(
+                operation["fixed_arguments"]
+                    .as_array()
+                    .into_iter()
+                    .flatten(),
+            )
             .filter_map(Value::as_str)
             .filter(|option| option.starts_with("--"));
         for option in passed {
             let named = usage
-                .split(|character: char| character.is_whitespace() || character == ',' || character == '=' || character == '[' || character == ']')
+                .split(|character: char| {
+                    character.is_whitespace()
+                        || character == ','
+                        || character == '='
+                        || character == '['
+                        || character == ']'
+                })
                 .any(|word| word == option);
             if !named {
                 drifted.push(format!(
@@ -72,6 +83,10 @@ async fn every_desktop_operation_path_is_a_cli_command() {
             }
         }
     }
-    assert!(drifted.is_empty(), "Desktop operations the CLI does not have:\n{}", drifted.join("\n"));
+    assert!(
+        drifted.is_empty(),
+        "Desktop operations the CLI does not have:\n{}",
+        drifted.join("\n")
+    );
     service.pass();
 }

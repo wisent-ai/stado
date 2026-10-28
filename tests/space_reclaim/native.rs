@@ -8,7 +8,7 @@ use std::process::{Command, Output};
 use std::time::SystemTime;
 
 use serde_json::{json, Value};
-
+use stado::primitives::file_mode::widen;
 #[path = "native/fill.rs"]
 mod fill;
 
@@ -16,9 +16,9 @@ mod fill;
 /// https://stado.wisent.com/docs/capabilities/space#real-tests
 const VOLUME_MEGABYTES: u64 = 256;
 /// Every permission for the owner alone, the isolated home's mode.
-const OWNER_ALL: u32 = nix::libc::S_IRWXU as u32;
+const OWNER_ALL: u32 = widen(nix::libc::S_IRWXU);
 /// Read and write for the owner alone, the retained report's mode.
-const OWNER_READ_WRITE: u32 = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
+const OWNER_READ_WRITE: u32 = widen(nix::libc::S_IRUSR | nix::libc::S_IWUSR);
 
 pub struct Native {
     root: PathBuf,

@@ -69,7 +69,9 @@ pub(crate) async fn dispatch(sub: &CostCommands) -> Result<(), CmdError> {
                             quote.observed_at
                         ),
                         (_, Some(error)) => println!("{}: unpriced: {error}", row.job_id),
-                        (None, None) => println!("{}: unpriced, and the quote states no cause", row.job_id),
+                        (None, None) => {
+                            println!("{}: unpriced, and the quote states no cause", row.job_id)
+                        }
                     }
                 }
                 if let Some(error) = &report.book_error {

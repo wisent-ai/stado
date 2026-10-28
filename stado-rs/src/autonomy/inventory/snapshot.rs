@@ -104,7 +104,10 @@ pub async fn collect_and_publish(store: &JobStorage) -> Result<InventorySnapshot
 }
 
 fn resolve_dependencies(resources: &mut [ResourceRecord]) {
-    if resources.iter().all(|resource| resource.dependencies.is_empty()) {
+    if resources
+        .iter()
+        .all(|resource| resource.dependencies.is_empty())
+    {
         return;
     }
     let mut aliases = BTreeMap::new();

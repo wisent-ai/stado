@@ -16,9 +16,9 @@ pub fn parse_machine_id_env(value: Option<&str>) -> Result<Option<i64>, VastErro
     let Some(mid) = value.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
-    mid.parse::<i64>()
-        .map(Some)
-        .map_err(|error| VastError::config(format!("WC_VAST_MACHINE_ID must be int: {mid}: {error}")))
+    mid.parse::<i64>().map(Some).map_err(|error| {
+        VastError::config(format!("WC_VAST_MACHINE_ID must be int: {mid}: {error}"))
+    })
 }
 
 /// The kernel's hostname, `gethostname(2)`: what `hostname(1)`, Python's
@@ -68,13 +68,7 @@ impl VastClient {
         }
         let candidates: Vec<String> = machines
             .iter()
-            .map(|m| {
-                format!(
-                    "{}={}",
-                    shown(m.get("id")),
-                    shown(m.get("hostname"))
-                )
-            })
+            .map(|m| format!("{}={}", shown(m.get("id")), shown(m.get("hostname"))))
             .collect();
         Err(VastError::config(format!(
             "Vast.ai returned {} machines and hostname '{hostname}' did not match any. \

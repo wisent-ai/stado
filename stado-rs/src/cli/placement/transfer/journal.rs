@@ -240,14 +240,23 @@ pub(in crate::cli::placement) fn sweep(open: &[String]) -> Result<Vec<String>, S
             Ok(Some(_)) => continue,
             Ok(None) => {}
             Err(cause) => {
-                failed.push(format!("{}: whether its move still runs: {cause}", file.display()));
+                failed.push(format!(
+                    "{}: whether its move still runs: {cause}",
+                    file.display()
+                ));
                 continue;
             }
         }
         let (gone, what) = if staged {
-            (std::fs::remove_dir_all(&file), format!("the trees staged for {id}"))
+            (
+                std::fs::remove_dir_all(&file),
+                format!("the trees staged for {id}"),
+            )
         } else {
-            (std::fs::remove_file(&file), format!("the progress record of {id}"))
+            (
+                std::fs::remove_file(&file),
+                format!("the progress record of {id}"),
+            )
         };
         match gone {
             Ok(()) => removed.push(what),

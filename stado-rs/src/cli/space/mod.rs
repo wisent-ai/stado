@@ -1,5 +1,5 @@
 use clap::Subcommand;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use super::{host, CmdError};
 

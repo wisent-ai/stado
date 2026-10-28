@@ -106,7 +106,10 @@ fn a_host_activity_lists_the_jobs_its_worker_ran() {
     assert_eq!(done["command"], succeeded["command"], "{activity}");
     assert_eq!(broken["command"], failed["command"], "{activity}");
     assert_eq!(done["kind"], json!("local"), "{activity}");
-    assert_eq!(done["completed_at"], succeeded["completed_at"], "{activity}");
+    assert_eq!(
+        done["completed_at"], succeeded["completed_at"],
+        "{activity}"
+    );
     assert_eq!(broken["failed_at"], failed["failed_at"], "{activity}");
     let times: Vec<&Value> = activity["jobs"]
         .as_array()
@@ -118,14 +121,8 @@ fn a_host_activity_lists_the_jobs_its_worker_ran() {
     ordered.sort_by_key(|at| at.as_str().map(str::to_owned));
     assert_eq!(times, ordered, "the timeline is oldest first: {activity}");
 
-    let later = json_of(&deployment.cli(&[
-        "host",
-        "activity",
-        &host,
-        "--since",
-        &after_both,
-        "--json",
-    ]));
+    let later =
+        json_of(&deployment.cli(&["host", "activity", &host, "--since", &after_both, "--json"]));
     assert!(
         later["jobs"].as_array().is_some_and(|jobs| !jobs
             .iter()

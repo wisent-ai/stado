@@ -71,7 +71,10 @@ impl Run {
                 std::env::var_os("PATH").expect("PATH names the tools"),
             )
             .env("HOME", &self.root)
-            .env("STADO_CONFIG", self.root.join("no-config.json"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .env("TMPDIR", self.root.join("tmp"))
             .env("SKARBIEC_BIN", &self.skarbiec)
             .stdin(Stdio::null())

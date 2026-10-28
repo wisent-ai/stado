@@ -151,13 +151,16 @@ pub(super) fn fold_memory(markers: MemoryMarkers) -> MemoryReading {
     if !markers.meminfo.is_empty() {
         return host::from_meminfo(&markers.meminfo.join("\n"));
     }
-    let printed = |row: Option<String>, what: &str| row.ok_or_else(|| format!("the host printed no {what}"));
+    let printed =
+        |row: Option<String>, what: &str| row.ok_or_else(|| format!("the host printed no {what}"));
     let integer = |row: Option<String>, what: &str| {
         printed(row, what).and_then(|value| {
-            value
-                .trim()
-                .parse::<i64>()
-                .map_err(|error| format!("the host's {what} {:?} is not an integer: {error}", value.trim()))
+            value.trim().parse::<i64>().map_err(|error| {
+                format!(
+                    "the host's {what} {:?} is not an integer: {error}",
+                    value.trim()
+                )
+            })
         })
     };
     let vm_stat = if markers.pages.is_empty() {

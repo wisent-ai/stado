@@ -79,8 +79,9 @@ pub fn parse_ingress(document: &Value) -> Result<Ingress, String> {
             .get(key)
             .and_then(Value::as_i64)
             .ok_or_else(|| format!("ingress pid_hint has no integer '{key}'"))?;
-        let group = i32::try_from(stated)
-            .map_err(|error| format!("ingress pid_hint '{key}' {stated} is not a process group id: {error}"))?;
+        let group = i32::try_from(stated).map_err(|error| {
+            format!("ingress pid_hint '{key}' {stated} is not a process group id: {error}")
+        })?;
         if group <= INIT_PID {
             return Err(format!(
                 "ingress pid_hint '{key}' {group} names init or every process, never a group `up` started"

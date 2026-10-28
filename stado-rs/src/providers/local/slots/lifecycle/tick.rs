@@ -20,7 +20,9 @@ pub(super) async fn running_tick(
         Ok(_) => {}
         // The peak keeps what was read before; this tick's footprint is not
         // a zero, and the log says why it is missing.
-        Err(cause) => log_fn(&format!("{job_id}: GPU memory of pid {pid}'s tree unread: {cause}")),
+        Err(cause) => log_fn(&format!(
+            "{job_id}: GPU memory of pid {pid}'s tree unread: {cause}"
+        )),
     }
     if slot.paused {
         return Ok(());
@@ -141,7 +143,9 @@ pub(super) async fn verification_failure(
     let secret_environment = match resolve_job_secret_environment(job).await {
         Ok(environment) => environment,
         Err(error) => {
-            log_fn(&format!("verify_command secret resolution failed for {job_id}: {error}"));
+            log_fn(&format!(
+                "verify_command secret resolution failed for {job_id}: {error}"
+            ));
             return Some(i32::MAX);
         }
     };
@@ -163,7 +167,9 @@ pub(super) async fn verification_failure(
             Some(VERIFY_EXIT_OFFSET.saturating_add(vrc))
         }
         Err(error) => {
-            log_fn(&format!("verify_command failed to start for {job_id}: {error}"));
+            log_fn(&format!(
+                "verify_command failed to start for {job_id}: {error}"
+            ));
             Some(VERIFY_UNSTARTED)
         }
     }

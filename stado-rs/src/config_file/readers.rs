@@ -52,8 +52,9 @@ pub fn get(dotted: &str) -> Option<Value> {
 /// naming the file when it cannot be read. Read as "no key", an unreadable
 /// file withheld whatever the operator had just written into it.
 pub fn get_fresh(dotted: &str) -> Result<Option<Value>, String> {
-    let data = load_config_file_fresh()
-        .map_err(|error| format!("the stado config file cannot be read again for {dotted}: {error}"))?;
+    let data = load_config_file_fresh().map_err(|error| {
+        format!("the stado config file cannot be read again for {dotted}: {error}")
+    })?;
     Ok(get_in(&data, dotted).cloned())
 }
 

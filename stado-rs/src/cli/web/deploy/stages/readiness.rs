@@ -121,9 +121,10 @@ pub(in crate::cli::web::deploy) async fn wait_until_ready(
         [verdict, detail, ..] if !verdict.is_empty() && !detail.is_empty() => {
             (verdict.to_string(), detail.to_string())
         }
-        [verdict, ..] if !verdict.is_empty() => {
-            (verdict.to_string(), "the probe reported no detail".to_string())
-        }
+        [verdict, ..] if !verdict.is_empty() => (
+            verdict.to_string(),
+            "the probe reported no detail".to_string(),
+        ),
         _ => {
             return Err(CmdError::click(format!(
                 "{}: the readiness probe printed its marker with no verdict, so whether {url} \

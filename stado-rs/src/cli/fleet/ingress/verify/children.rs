@@ -20,7 +20,10 @@ const REGISTERED: &str = "Registered tunnel connection";
 /// when the listener serves it. A listener that exited closes the socket, and
 /// the request fails with the transport's own error.
 pub async fn await_listener(child: &mut Child, port: u16, log: &Path) -> Result<(), String> {
-    let endpoint = format!("{}/join.sh", crate::primitives::http::origin::loopback_origin(port));
+    let endpoint = format!(
+        "{}/join.sh",
+        crate::primitives::http::origin::loopback_origin(port)
+    );
     let exited = |child: &mut Child| match child.try_wait() {
         Ok(Some(status)) => format!("the listener exited ({status})"),
         Ok(None) => "the listener is still running".to_string(),

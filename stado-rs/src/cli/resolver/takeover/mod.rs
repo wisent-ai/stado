@@ -23,6 +23,9 @@
 //! nothing is reported as done that was not.
 
 mod hand;
+mod install;
+
+pub(crate) use install::{install, Handover, Installed};
 
 use serde_json::{json, Value};
 
@@ -93,7 +96,9 @@ pub(crate) async fn take_authority(
         })?;
     let old = directory.authority.target.clone();
     if old == to_host {
-        return Err(refused(format!("{to_host} is already the registry authority")));
+        return Err(refused(format!(
+            "{to_host} is already the registry authority"
+        )));
     }
     let command = &own_command()?;
     let answered = authority_snapshot().await;
@@ -137,7 +142,14 @@ pub(crate) async fn take_authority(
         Err(error) => {
             let promoted = promote(&copy, to_host, command)?;
             let content = serde_json::to_string_pretty(&promoted)?;
-            finish(&content, to_host, &old, Some(error.to_string()), json_output).await
+            finish(
+                &content,
+                to_host,
+                &old,
+                Some(error.to_string()),
+                json_output,
+            )
+            .await
         }
     }
 }
@@ -152,7 +164,11 @@ async fn handed_over(to_host: &str, command: &str) -> Result<String, CmdError> {
             .pointer("/service_directory/authority/target")
             .and_then(Value::as_str)
             == Some(to_host);
-        let next = if names { current.clone() } else { promote(current, to_host, command)? };
+        let next = if names {
+            current.clone()
+        } else {
+            promote(current, to_host, command)?
+        };
         let mut slot = match committed.lock() {
             Ok(slot) => slot,
             Err(poisoned) => poisoned.into_inner(),
@@ -174,115 +190,60 @@ async fn handed_over(to_host: &str, command: &str) -> Result<String, CmdError> {
 /// This program's own path, which resolvers run as the authority's command.
 pub(crate) fn own_command() -> Result<String, CmdError> {
     let program = std::env::current_exe().map_err(|error| {
-        config(format!("this program's own path, which resolvers would run here, cannot be read: {error}"))
-    })?;
-    program
-        .to_str()
-        .map(str::to_string)
-        .ok_or_else(|| config(format!("this program's path {} is not UTF-8", program.display())))
-}
-
-/// What [`install`] did: the receipt, and why it did not land everywhere.
-pub(crate) struct Installed {
-    pub receipt: Value,
-    pub failure: Option<CmdError>,
-}
-
-/// How a registry naming a new authority is installed: `to_host` takes the
-/// role from `old`; `unanswered` says why it was taken without `old`, and
-/// then every other host's copy is handed it; `store_at` names the object
-/// API to write the store in, instead of the store this host reads.
-pub(crate) struct Handover<'a> {
-    pub to_host: &'a str,
-    pub old: &'a str,
-    pub unanswered: Option<String>,
-    pub store_at: Option<&'a str>,
-}
-
-/// Write `content`, a registry naming the new authority, into this host's
-/// copy, the store, and the other hosts' copies as `handover` says. The
-/// receipt is kept in the placement history either way.
-pub(crate) async fn install(content: &str, handover: Handover<'_>) -> Result<Installed, CmdError> {
-    let Handover { to_host, old, unanswered, store_at } = handover;
-    let taken_over = unanswered.is_some();
-    let document: Value = serde_json::from_str(content)?;
-    let generation = document
-        .pointer("/service_directory/generation")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| config("the promoted registry names no directory generation".to_string()))?;
-    let version = if taken_over { PROMOTED_VERSION } else { HANDED_VERSION };
-    targets::store_last_good(content, version)
-        .map_err(|refusal| config(format!("this host's last-known-good copy refused the promoted registry: {refusal}")))?;
-    // The snapshot kept of the old authority answers for no read any more.
-    crate::cli::resolver::forget_recalled_registry();
-    let store = hand::stored(store_at, content).await;
-    let registry = targets::load_registry_from_str(content).map_err(|error| config(error.to_string()))?;
-    // After a takeover every other host is handed the registry at once: each
-    // is its own channel. After a hand-over the old authority serves it to
-    // every resolver, and a copy would refuse it while that authority answers.
-    let others: Vec<_> = registry
-        .targets
-        .iter()
-        .filter(|target| taken_over && target.name != to_host && target.name != old)
-        .collect();
-    let answers = futures::future::join_all(others.iter().map(|target| hand::handed(target, content))).await;
-    let mut hosts = Vec::new();
-    let mut not_handed = Vec::new();
-    for (target, answer) in others.iter().zip(answers) {
-        match answer {
-            Ok(receipt) => hosts.push(json!({"host": target.name, "receipt": receipt})),
-            Err(error) => {
-                not_handed.push(target.name.clone());
-                hosts.push(json!({"host": target.name, "error": error}));
-            }
-        }
-    }
-    let complete = store.is_ok() && not_handed.is_empty();
-    let receipt = json!({
-        "state": if complete { "taken" } else { "incomplete" },
-        "how": if taken_over { "taken-over" } else { "handed-over" },
-        "authority": to_host,
-        "fenced": old,
-        "directory_generation": generation,
-        "authority_unanswered": unanswered,
-        "store": match &store {
-            Ok(version) => json!({"version": version}),
-            Err(error) => json!({"error": error}),
-        },
-        "hosts": hosts,
-    });
-    crate::cli::placement::record_placement("authority", Ok(&receipt));
-    let failure = (!complete).then(|| {
-        let store_said = match &store {
-            Ok(version) => format!("the store was written ({version})"),
-            Err(error) => format!("the store was not written ({error})"),
-        };
-        CmdError::click(format!(
-            "the authority role moved to {to_host}, but not everywhere: {store_said}; hosts not handed the registry: [{}]",
-            not_handed.join(", ")
+        config(format!(
+            "this program's own path, which resolvers would run here, cannot be read: {error}"
         ))
-        .stating(FailureCode::InfraDown)
-    });
-    Ok(Installed { receipt, failure })
+    })?;
+    program.to_str().map(str::to_string).ok_or_else(|| {
+        config(format!(
+            "this program's path {} is not UTF-8",
+            program.display()
+        ))
+    })
 }
 
 /// [`install`], then its receipt printed.
-async fn finish(content: &str, to_host: &str, old: &str, unanswered: Option<String>, json_output: bool) -> Result<(), CmdError> {
-    let handover = Handover { to_host, old, unanswered, store_at: None };
+async fn finish(
+    content: &str,
+    to_host: &str,
+    old: &str,
+    unanswered: Option<String>,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let handover = Handover {
+        to_host,
+        old,
+        unanswered,
+        store_at: None,
+    };
     let Installed { receipt, failure } = install(content, handover).await?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&receipt)?);
     } else {
         use crate::cli::reporting::field;
-        let how = if receipt["how"] == "taken-over" { "took the registry authority from" } else { "was handed the registry authority by" };
-        println!("{to_host} {how} {old} at directory generation {}", field(&receipt["directory_generation"]));
+        let how = if receipt["how"] == "taken-over" {
+            "took the registry authority from"
+        } else {
+            "was handed the registry authority by"
+        };
+        println!(
+            "{to_host} {how} {old} at directory generation {}",
+            field(&receipt["directory_generation"])
+        );
         match receipt["store"]["error"].as_str() {
             Some(error) => println!("  store not written: {error}"),
-            None => println!("  store written at version {}", field(&receipt["store"]["version"])),
+            None => println!(
+                "  store written at version {}",
+                field(&receipt["store"]["version"])
+            ),
         }
         for row in receipt["hosts"].as_array().into_iter().flatten() {
             match row.get("error") {
-                Some(error) => println!("  {}: not handed the authority: {}", field(&row["host"]), field(error)),
+                Some(error) => println!(
+                    "  {}: not handed the authority: {}",
+                    field(&row["host"]),
+                    field(error)
+                ),
                 None => println!("  {}: handed the authority", field(&row["host"])),
             }
         }

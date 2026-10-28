@@ -29,12 +29,19 @@ const AUTHORITY: &str = "marker-host";
 /// host process; the route takes the template's own endpoint). Each case has
 /// its own, since an import never replaces what an earlier one declared.
 fn deployment_with_role_on(host: &str) -> Deployment {
-    let mut document: Value = serde_json::from_str(include_str!("../service_directory/registry.json")).unwrap();
-    for target in document["targets"].as_array_mut().expect("the template lists its targets") {
-        let services = target["services"].as_array_mut().expect("each target lists its services");
+    let mut document: Value =
+        serde_json::from_str(include_str!("../service_directory/registry.json")).unwrap();
+    for target in document["targets"]
+        .as_array_mut()
+        .expect("the template lists its targets")
+    {
+        let services = target["services"]
+            .as_array_mut()
+            .expect("each target lists its services");
         services.push(json!({ "name": "stado", "unit": "com.wisent.stado" }));
     }
-    let endpoint = document["service_directory"]["services"]["marker-api"]["endpoints"][AUTHORITY].clone();
+    let endpoint =
+        document["service_directory"]["services"]["marker-api"]["endpoints"][AUTHORITY].clone();
     document["service_directory"]["services"][ROLE] =
         json!({ "managed_service": "stado", "active_host": host, "endpoints": { host: endpoint } });
     let deployment = Deployment::start();
@@ -50,7 +57,18 @@ fn a_role_on_the_authority_moves_only_carrying_it() {
         &format!("{AUTHORITY} holds the registry authority, and {ROLE}'s store holds the registry it writes"),
     );
     deployment_with_role_on(PLACED_ON).refused(
-        &["placement", "role", "move", ROLE, "--to-host", AUTHORITY, "--reason", "journey", "--with-authority", "--check"],
+        &[
+            "placement",
+            "role",
+            "move",
+            ROLE,
+            "--to-host",
+            AUTHORITY,
+            "--reason",
+            "journey",
+            "--with-authority",
+            "--check",
+        ],
         &format!("but the directory names {AUTHORITY} the authority"),
     );
 }
@@ -91,18 +109,33 @@ fn a_fixed_route_is_drafted_into_a_profile_that_declares_as_printed() {
     let probe = format!("{SERVICE}={health}");
 
     deployment.refused(
-        &["placement", "profile", "draft", PROFILE, "--service", SERVICE, "--probe", &probe],
+        &[
+            "placement",
+            "profile",
+            "draft",
+            PROFILE,
+            "--service",
+            SERVICE,
+            "--probe",
+            &probe,
+        ],
         &format!(
             "registry target {PLACED_ON} declares managed service {managed} with no unit file path"
         ),
     );
     let mut recorded = template.clone();
     let unit_file = format!("/home/example/.config/systemd/user/{managed}.service");
-    for target in recorded["targets"].as_array_mut().expect("the template lists targets") {
+    for target in recorded["targets"]
+        .as_array_mut()
+        .expect("the template lists targets")
+    {
         if target["name"] != PLACED_ON {
             continue;
         }
-        for service in target["services"].as_array_mut().expect("the host lists services") {
+        for service in target["services"]
+            .as_array_mut()
+            .expect("the host lists services")
+        {
             if service["name"] == managed.as_str() {
                 service["path"] = json!(unit_file);
                 service["kind"] = json!("systemd");
@@ -114,30 +147,74 @@ fn a_fixed_route_is_drafted_into_a_profile_that_declares_as_printed() {
     let managed = managed.as_str();
 
     deployment.refused(
-        &["placement", "profile", "draft", PROFILE, "--service", SERVICE],
-        &format!("nor a GET answering request the catalog declares for its product names {SERVICE}"),
+        &[
+            "placement",
+            "profile",
+            "draft",
+            PROFILE,
+            "--service",
+            SERVICE,
+        ],
+        &format!(
+            "nor a GET answering request the catalog declares for its product names {SERVICE}"
+        ),
     );
     let absent = format!("absent-api={health}");
     deployment.refused(
-        &["placement", "profile", "draft", PROFILE, "--service", "absent-api", "--probe", &absent],
+        &[
+            "placement",
+            "profile",
+            "draft",
+            PROFILE,
+            "--service",
+            "absent-api",
+            "--probe",
+            &absent,
+        ],
         "the service directory declares no service absent-api",
     );
     // A fixed route served by its own unit is no role of the host Stado
     // process: role move refuses it, pointing at a profile, before any host
     // is fenced, and the registry stays as it was.
     deployment.refused(
-        &["placement", "role", "move", SERVICE, "--to-host", PLACED_ON, "--reason", "journey"],
+        &[
+            "placement",
+            "role",
+            "move",
+            SERVICE,
+            "--to-host",
+            PLACED_ON,
+            "--reason",
+            "journey",
+        ],
         &format!("is served by {managed}, not by the host Stado process"),
     );
     deployment.refused(
-        &["placement", "role", "move", "absent-api", "--to-host", PLACED_ON, "--reason", "journey"],
+        &[
+            "placement",
+            "role",
+            "move",
+            "absent-api",
+            "--to-host",
+            PLACED_ON,
+            "--reason",
+            "journey",
+        ],
         "the service directory declares no absent-api",
     );
     assert_eq!(generation(&deployment.registry()), generation(&before));
 
     let printed = deployment.cli(&[
-        "placement", "profile", "draft", PROFILE, "--service", SERVICE, "--probe", &probe,
-        "--state", ".stado/elsewhere.json",
+        "placement",
+        "profile",
+        "draft",
+        PROFILE,
+        "--service",
+        SERVICE,
+        "--probe",
+        &probe,
+        "--state",
+        ".stado/elsewhere.json",
     ]);
     let drafted: Value = serde_json::from_str(&printed).unwrap();
     assert_eq!(generation(&deployment.registry()), generation(&before));
@@ -148,8 +225,14 @@ fn a_fixed_route_is_drafted_into_a_profile_that_declares_as_printed() {
         json!([{ "path": ".stado/elsewhere.json", "required": true }]),
         "{drafted}"
     );
-    let hosts = drafted["hosts"].as_object().expect("the draft names its hosts");
-    assert_eq!(hosts.keys().collect::<Vec<_>>(), vec![PLACED_ON], "{drafted}");
+    let hosts = drafted["hosts"]
+        .as_object()
+        .expect("the draft names its hosts");
+    assert_eq!(
+        hosts.keys().collect::<Vec<_>>(),
+        vec![PLACED_ON],
+        "{drafted}"
+    );
     let unit = &drafted["hosts"][PLACED_ON]["units"][SERVICE];
     let declared = declared_service(&before, PLACED_ON, managed);
     assert_eq!(unit["name"], managed, "{unit}");
@@ -163,7 +246,12 @@ fn a_fixed_route_is_drafted_into_a_profile_that_declares_as_printed() {
 
     let file = deployment.write_profile("drafted.json", &drafted);
     let receipt: Value = serde_json::from_str(&deployment.cli(&[
-        "placement", "profile", "declare", "--file", &file, "--json",
+        "placement",
+        "profile",
+        "declare",
+        "--file",
+        &file,
+        "--json",
     ]))
     .unwrap();
     assert_eq!(receipt["state"], "declared", "{receipt}");
@@ -172,7 +260,16 @@ fn a_fixed_route_is_drafted_into_a_profile_that_declares_as_printed() {
     assert_eq!(linked["placement_profile"], PROFILE, "{linked}");
 
     deployment.refused(
-        &["placement", "profile", "draft", "second-group", "--service", SERVICE, "--probe", &probe],
+        &[
+            "placement",
+            "profile",
+            "draft",
+            "second-group",
+            "--service",
+            SERVICE,
+            "--probe",
+            &probe,
+        ],
         &format!("directory service {SERVICE} already moves with placement profile {PROFILE}"),
     );
     deployment.cli(&["placement", "profile", "remove", PROFILE]);

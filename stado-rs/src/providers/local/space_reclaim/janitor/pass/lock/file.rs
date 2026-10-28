@@ -15,7 +15,8 @@ use crate::providers::local::space_reclaim::janitor::{
 
 /// Read and write for the owner alone, the mode every lock and holder record
 /// is created with and forced to, from the platform's `<sys/stat.h>` bits.
-const OWNER_READ_WRITE: u32 = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
+const OWNER_READ_WRITE: u32 =
+    crate::primitives::file_mode::widen(nix::libc::S_IRUSR | nix::libc::S_IWUSR);
 
 /// Open the run lock ([`LOCK_NAME`]) with O_RDWR|O_CREAT|
 /// O_NOFOLLOW, verify it is a regular file owned by us, force

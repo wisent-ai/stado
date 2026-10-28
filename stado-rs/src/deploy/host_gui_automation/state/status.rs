@@ -44,7 +44,10 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
         runner,
     )
     .await?;
-    items.push(("remote-management-all-users".to_string(), stated_or(ard, "unset")));
+    items.push((
+        "remote-management-all-users".to_string(),
+        stated_or(ard, "unset"),
+    ));
     let vnc = optional_sudo(
         target,
         &[

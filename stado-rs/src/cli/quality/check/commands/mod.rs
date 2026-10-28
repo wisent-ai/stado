@@ -147,10 +147,9 @@ fn staged_binaries(
             )));
         }
         use nix::sys::stat::Mode;
-        // mode_t is u16 on macOS and u32 on Linux: the conversion is real on
-        // one and the identity on the other.
-        #[allow(clippy::useless_conversion)]
-        let execute = u32::from((Mode::S_IXUSR | Mode::S_IXGRP | Mode::S_IXOTH).bits());
+        let execute = crate::primitives::file_mode::widen(
+            (Mode::S_IXUSR | Mode::S_IXGRP | Mode::S_IXOTH).bits(),
+        );
         if metadata.is_file() && NonZeroU32::new(metadata.permissions().mode() & execute).is_some()
         {
             binaries.push(path);

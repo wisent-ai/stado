@@ -1,7 +1,7 @@
 // Real journey of `stado build newest --queued` through the built Stado: the
 // daily batch builds only the products whose handed-off work no build has
 // taken yet. The store is a local store of this run (WC_STORAGE_BACKEND=local
-// under .build/build-newest-queued, STADO_CONFIG naming no file, HOME of its
+// under .build/build-newest-queued, STADO_CONFIG the empty tests/config/empty.json, HOME of its
 // own); two product checkouts each push to a bare origin of their own beside
 // them, so a handoff names a commit on origin's main. `--plan` builds
 // nothing.
@@ -42,7 +42,7 @@ mkdirSync(origins, { recursive: true });
 const environment = {
   ...process.env,
   HOME: home,
-  STADO_CONFIG: join(output, 'no-config.json'),
+  STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'),
   WC_STORAGE_BACKEND: 'local',
   WC_LOCAL_STORAGE_PATH: join(output, 'store'),
 };

@@ -57,7 +57,14 @@ pub(super) async fn planned(
     }
     let placed = super::super::candidates::target(&parsed, &placed_on)?.clone();
     let plan = template::plan(&profile, &placed, &target)?;
-    Ok(Planned { document, profile, target, placed, placed_on, plan })
+    Ok(Planned {
+        document,
+        profile,
+        target,
+        placed,
+        placed_on,
+        plan,
+    })
 }
 
 /// `stado placement standby … --check`: every refusal a pass gives before it

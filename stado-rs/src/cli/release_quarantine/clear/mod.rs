@@ -113,10 +113,12 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
         ))
         .stating(crate::primitives::failure::FailureCode::InfraDown));
     }
-    let committed = output
-        .stdout
-        .lines()
-        .any(|line| matches!(host_channel::marker_fields(line).as_slice(), [_, "committed", ..]));
+    let committed = output.stdout.lines().any(|line| {
+        matches!(
+            host_channel::marker_fields(line).as_slice(),
+            [_, "committed", ..]
+        )
+    });
     if !committed {
         return Err(CmdError::click(format!(
             "{target_name}: host exited clean without confirming the rewrite of {path}"

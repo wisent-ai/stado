@@ -78,16 +78,24 @@ fn walked_path() -> String {
 /// the run: read as retaining nothing, the walk was marked done with those
 /// jobs unindexed, and every later reader called them never existing. An
 /// older manifest, which this walk only reads, keeps the lenient reading.
-fn retained_ids<'a>(manifest: &'a Map<String, Value>, run_id: &str) -> Result<Vec<&'a str>, StorageError> {
+fn retained_ids<'a>(
+    manifest: &'a Map<String, Value>,
+    run_id: &str,
+) -> Result<Vec<&'a str>, StorageError> {
     let current = manifest.get("schema").and_then(Value::as_str) == Some("stado.run-submission.v3");
     let Some(entries) = manifest.get("entries").and_then(Value::as_array) else {
         if current {
-            return Err(StorageError::Other(format!("run {run_id} lists no entries")));
+            return Err(StorageError::Other(format!(
+                "run {run_id} lists no entries"
+            )));
         }
         return Ok(Vec::new());
     };
     let mut retained = Vec::new();
-    for entry in entries.iter().filter(|entry| entry.get("outcome").is_some()) {
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.get("outcome").is_some())
+    {
         match entry.get("job_id").and_then(Value::as_str) {
             Some(job_id) => retained.push(job_id),
             None if current => {

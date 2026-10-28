@@ -70,7 +70,7 @@ fn take(path: &Path, mode: Take, product_scope: bool) -> Result<File> {
     {
         use std::os::unix::fs::OpenOptionsExt;
         options
-            .mode(u32::from(libc::S_IRUSR | libc::S_IWUSR))
+            .mode(super::permission_bits(libc::S_IRUSR | libc::S_IWUSR))
             .custom_flags(libc::O_NOFOLLOW);
     }
     let mut file = options.open(path)?;

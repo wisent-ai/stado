@@ -34,8 +34,23 @@ pub enum RoleCommands {
 
 pub(super) async fn run(command: RoleCommands) -> Result<(), CmdError> {
     match command {
-        RoleCommands::Move { service, to_host, reason, with_authority, check, json } => {
-            crate::cli::placement::transfer::move_role(&service, &to_host, &reason, with_authority, check, json).await
+        RoleCommands::Move {
+            service,
+            to_host,
+            reason,
+            with_authority,
+            check,
+            json,
+        } => {
+            crate::cli::placement::transfer::move_role(
+                &service,
+                &to_host,
+                &reason,
+                with_authority,
+                check,
+                json,
+            )
+            .await
         }
     }
 }

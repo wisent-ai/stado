@@ -41,9 +41,20 @@ pub(super) fn move_branch(
             )));
         }
     };
-    let declares = |header: &[u8]| content.split(|byte| *byte == b'\n').any(|line| line == header);
+    let declares = |header: &[u8]| {
+        content
+            .split(|byte| *byte == b'\n')
+            .any(|line| line == header)
+    };
     if !declares(b"# tama managed global Git dispatcher") {
-        git.one(&["update-ref", "-m", "stado release history", reference, new, old])?;
+        git.one(&[
+            "update-ref",
+            "-m",
+            "stado release history",
+            reference,
+            new,
+            old,
+        ])?;
         return Ok(());
     }
     if !declares(b"# tama reference-move preflight") {

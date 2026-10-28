@@ -163,13 +163,17 @@ pub(crate) async fn dispatch(command: RuntimeCommands) -> Result<(), CmdError> {
                     let repair = match &recovery.repair {
                         serde_json::Value::Array(reports) if !reports.is_empty() => reports
                             .iter()
-                            .map(|report| format!("{} {}", field(&report["name"]), field(&report["status"])))
+                            .map(|report| {
+                                format!("{} {}", field(&report["name"]), field(&report["status"]))
+                            })
                             .collect::<Vec<_>>()
                             .join(", "),
                         serde_json::Value::Array(_) | serde_json::Value::Null => {
                             String::from("not declared")
                         }
-                        report => format!("{} {}", field(&report["name"]), field(&report["status"])),
+                        report => {
+                            format!("{} {}", field(&report["name"]), field(&report["status"]))
+                        }
                     };
                     let acted = match &recovery.observed_by {
                         Some(observer) => {

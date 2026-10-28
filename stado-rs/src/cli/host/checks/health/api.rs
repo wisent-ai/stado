@@ -83,7 +83,8 @@ fn host_health_api_token_from_file() -> Result<Option<String>, CmdError> {
         // Any group or other bit shares the token: POSIX names those bits.
         // A mode keeps none of them exactly when adding every other bit to
         // it changes nothing.
-        let shared_bits = u32::from(nix::libc::S_IRWXG | nix::libc::S_IRWXO);
+        let shared_bits =
+            crate::primitives::file_mode::widen(nix::libc::S_IRWXG | nix::libc::S_IRWXO);
         let mode = metadata.permissions().mode();
         let owner_only = mode | !shared_bits == !shared_bits;
         if !owner_only {

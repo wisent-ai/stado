@@ -27,7 +27,9 @@ use crate::cli::CmdError;
 pub(in crate::cli::placement) fn ensure_runs_on(to: &str) -> Result<(), CmdError> {
     let copy = crate::cli::resolver::kept_last_good_document()
         .map_err(CmdError::declaration)?
-        .ok_or_else(|| CmdError::refused("this host keeps no registry copy to take the authority from"))?;
+        .ok_or_else(|| {
+            CmdError::refused("this host keeps no registry copy to take the authority from")
+        })?;
     let here = crate::cli::resolver::current_target(&copy).map_err(CmdError::declaration)?;
     if here != to {
         return Err(CmdError::refused(format!(
@@ -41,7 +43,13 @@ pub(in crate::cli::placement) fn ensure_runs_on(to: &str) -> Result<(), CmdError
 /// the registry authority moves only carrying it (`--with-authority`, run on
 /// the destination), and carrying it from a source that does not hold it
 /// has nothing to carry.
-pub(super) fn ensure_carriable(document: &Value, service: &str, source: &str, to_host: &str, with_authority: bool) -> Result<(), CmdError> {
+pub(super) fn ensure_carriable(
+    document: &Value,
+    service: &str,
+    source: &str,
+    to_host: &str,
+    with_authority: bool,
+) -> Result<(), CmdError> {
     let authority = document["service_directory"]["authority"]["target"].as_str();
     let source_is_authority = authority == Some(source);
     if source_is_authority && !with_authority {
@@ -67,10 +75,16 @@ pub(super) fn ensure_carriable(document: &Value, service: &str, source: &str, to
 /// take the registry commit through its own fence: its `registry push`, run
 /// as the directory names the authority's command, offers no
 /// `--fence-transaction`, so the commit would be refused and the move undone.
-pub(super) async fn ensure_source_takes_fenced_commit(document: &Value, source: &ComputeTarget, runner: &Runner) -> Result<(), CmdError> {
+pub(super) async fn ensure_source_takes_fenced_commit(
+    document: &Value,
+    source: &ComputeTarget,
+    runner: &Runner,
+) -> Result<(), CmdError> {
     let command = document["service_directory"]["authority"]["command"]
         .as_str()
-        .ok_or_else(|| CmdError::declaration("service_directory.authority names no command".to_string()))?;
+        .ok_or_else(|| {
+            CmdError::declaration("service_directory.authority names no command".to_string())
+        })?;
     let script = format!("set -eu\n{} registry push --help\n", shlex_quote(command));
     let output = run_host_script(source, &script, runner, "registry push --help").await?;
     if !output.stdout.contains("--fence-transaction") {
@@ -87,15 +101,22 @@ pub(super) async fn ensure_source_takes_fenced_commit(document: &Value, source: 
 /// does not answer a registry read at the catalog's address (this runs on
 /// the destination): the registry is written there once the authority's
 /// commit names it, and a store write that fails then cannot be undone.
-pub(super) async fn ensure_destination_store_answers(served: &str, to_host: &str) -> Result<(), CmdError> {
+pub(super) async fn ensure_destination_store_answers(
+    served: &str,
+    to_host: &str,
+) -> Result<(), CmdError> {
     let unanswered = |error: String| {
         CmdError::refused(format!(
             "{to_host}'s own object API at {served} did not answer a registry read, so the registry could not be \
              written there after the move: {error}"
         ))
     };
-    let store = crate::targets::RegistryStore::at_object_api(served).map_err(|error| unanswered(error.to_string()))?;
-    store.read_versioned().await.map_err(|error| unanswered(error.to_string()))?;
+    let store = crate::targets::RegistryStore::at_object_api(served)
+        .map_err(|error| unanswered(error.to_string()))?;
+    store
+        .read_versioned()
+        .await
+        .map_err(|error| unanswered(error.to_string()))?;
     Ok(())
 }
 
@@ -116,16 +137,27 @@ pub(super) async fn carried(
              before its store moves"
         ))
     };
-    let snapshot = crate::cli::resolver::authority_snapshot().await?.ok_or_else(unread)?;
+    let snapshot = crate::cli::resolver::authority_snapshot()
+        .await?
+        .ok_or_else(unread)?;
     let current: Value = serde_json::from_str(&snapshot.content)?;
     let next = switched(&current, service, source, to_host, served)?;
     let command = crate::cli::resolver::own_command()?;
     let promoted = crate::cli::resolver::promote_authority(&next, to_host, &command)?;
     let content = serde_json::to_string_pretty(&promoted)?;
-    crate::cli::resolver::authority_compare_and_swap(&snapshot.version, &content, Some(transaction))
-        .await?
-        .ok_or_else(unread)?;
-    let handover = AuthorityHandover { to_host, old: source, unanswered: None, store_at: Some(served) };
+    crate::cli::resolver::authority_compare_and_swap(
+        &snapshot.version,
+        &content,
+        Some(transaction),
+    )
+    .await?
+    .ok_or_else(unread)?;
+    let handover = AuthorityHandover {
+        to_host,
+        old: source,
+        unanswered: None,
+        store_at: Some(served),
+    };
     let mut installed = crate::cli::resolver::install_authority(&content, handover).await?;
     // Every write after this goes through the route just moved here, which
     // this host resolves once its resolver holds the new generation: the

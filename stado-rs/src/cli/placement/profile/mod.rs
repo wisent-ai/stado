@@ -207,8 +207,14 @@ pub async fn dispatch(command: ProfileCommands) -> Result<(), CmdError> {
                 registry::commit_document(|current| document::declare(current, &candidate)).await?;
             receipt("declared", &name, &generation, json)
         }
-        ProfileCommands::Sync { name: Some(name), json, .. } => stores::sync_state(&name, json).await,
-        ProfileCommands::Sync { name: None, json, .. } => stores::sync_every_state(json).await,
+        ProfileCommands::Sync {
+            name: Some(name),
+            json,
+            ..
+        } => stores::sync_state(&name, json).await,
+        ProfileCommands::Sync {
+            name: None, json, ..
+        } => stores::sync_every_state(json).await,
         ProfileCommands::Remove { name, json } => {
             let generation =
                 registry::commit_document(|current| document::remove(current, &name)).await?;

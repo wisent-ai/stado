@@ -16,10 +16,10 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
+use crate::primitives::tally::Tally;
 use crate::providers::local::helpers;
 use crate::providers::local::self_terminate;
 use crate::providers::local::slots::ActiveSlot;
-use crate::primitives::tally::Tally;
 use crate::queue::capacity::CapacitySnapshot;
 
 use reconcile::{GpuPowerLimitState, PlacementPolicyState};

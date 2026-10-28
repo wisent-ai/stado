@@ -4,39 +4,15 @@ use crate::targets::*;
 // __init__.py — `_load_from_gcs` + source-aware loaders
 // ---------------------------------------------------------------------------
 
-/// Store-relative `registry.json` download: `Ok(Some(text))` = fetched with
-/// the store's generation token, `Ok(None)` = blob absent (Python
-/// `blob.generation is None`), `Err(msg)` = the store could not be reached
-/// at all.
-///
-/// The generation travels with the text because the last-known-good cache
-/// records WHICH document it is holding ([`RegistryCacheMeta::generation`]):
-/// a cache that can only say "some registry, once" cannot be compared with
-/// the authority when the authority comes back.
-pub type RegistryDownloader =
-    Arc<dyn Fn() -> BoxFuture<'static, Result<Option<VersionedText>, String>> + Send + Sync>;
-
-/// Test seam replacing the production download (loopback mocks).
-static REGISTRY_DOWNLOADER: LazyLock<Mutex<Option<RegistryDownloader>>> =
-    LazyLock::new(|| Mutex::new(None));
-
-/// Install a downloader in place of the production fetch (tests only —
-/// `#[doc(hidden)]`, not part of the crate's operational surface). Serialize
-/// via `testutil::GLOBAL_STATE_LOCK`.
-#[doc(hidden)]
-pub fn set_registry_downloader_for_testing(downloader: Option<RegistryDownloader>) {
-    // Replaced whole, as the reader below takes it back through poison.
-    let mut slot = match REGISTRY_DOWNLOADER.lock() {
-        Ok(slot) => slot,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    *slot = downloader;
-}
-
 #[path = "store/authority.rs"]
 mod authority;
+#[path = "store/downloader.rs"]
+mod downloader;
 #[path = "store/local.rs"]
 mod local;
+
+pub(crate) use downloader::download_registry;
+pub use downloader::{set_registry_downloader_for_testing, RegistryDownloader};
 
 /// Read/write handle on the canonical registry document, backend-aware.
 ///
@@ -140,7 +116,12 @@ impl RegistryStore {
             crate::config::wc_stado_storage_token_file(),
             crate::config::wc_stado_storage_ca_file(),
         )?;
-        Ok(Self { backend: Arc::new(backend), blob: REGISTRY_BLOB.to_string(), location: format!("{url} {REGISTRY_BLOB}"), served_by_object_api: false })
+        Ok(Self {
+            backend: Arc::new(backend),
+            blob: REGISTRY_BLOB.to_string(),
+            location: format!("{url} {REGISTRY_BLOB}"),
+            served_by_object_api: false,
+        })
     }
 
     /// Operator-facing location of the object this handle addresses, in
@@ -265,18 +246,6 @@ async fn download_registry_blob() -> Result<Option<VersionedText>, String> {
     // the writer edits a live one.
     let store = RegistryStore::open().await.map_err(|exc| exc.to_string())?;
     store.read_versioned().await.map_err(|exc| exc.to_string())
-}
-
-pub(crate) async fn download_registry() -> Result<Option<VersionedText>, String> {
-    // One whole value at every moment, so a poisoned lock is taken over.
-    let downloader = match REGISTRY_DOWNLOADER.lock() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
-    };
-    match downloader {
-        Some(downloader) => downloader().await,
-        None => download_registry_blob().await,
-    }
 }
 
 /// Operator-facing location of the canonical registry document.

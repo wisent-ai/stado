@@ -35,7 +35,12 @@ async fn read() -> Result<Option<String>, String> {
     let runner = crate::deploy::production_runner();
     let state: LabelState = inspect_label_state(&target, &label, scope, &runner)
         .await
-        .map_err(|error| format!("the host unit {label} on {} cannot be inspected: {error}", target.name))?;
+        .map_err(|error| {
+            format!(
+                "the host unit {label} on {} cannot be inspected: {error}",
+                target.name
+            )
+        })?;
     let Some(failing) = state.failing() else {
         return Ok(None);
     };

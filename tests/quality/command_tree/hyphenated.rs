@@ -77,11 +77,17 @@ fn hyphenated_command_names_are_refused_from_the_tree() {
         "stderr": String::from_utf8_lossy(&output.stderr),
     });
     let report_path: &Path = &home.join("hyphenated-report.json");
-    fs::write(report_path, serde_json::to_vec_pretty(&report).expect("serialize report"))
-        .expect("retain report");
+    fs::write(
+        report_path,
+        serde_json::to_vec_pretty(&report).expect("serialize report"),
+    )
+    .expect("retain report");
     eprintln!("hyphenated command evidence: {}", report_path.display());
 
-    assert!(output.status.success(), "the inventory was not given: {report}");
+    assert!(
+        output.status.success(),
+        "the inventory was not given: {report}"
+    );
     let inventory: Value = serde_json::from_slice(&output.stdout).expect("inventory is JSON");
     let remaining: Vec<&str> = inventory["remaining"]
         .as_array()

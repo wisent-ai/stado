@@ -28,7 +28,10 @@ pub(super) fn print_quota(document: &Value) {
             for (accel, row) in rows {
                 println!(
                     "  {provider}/{accel}: total={} used={} reserved={} available={}",
-                    field(&row["total"]), field(&row["used"]), field(&row["reserved"]), field(&row["available"])
+                    field(&row["total"]),
+                    field(&row["used"]),
+                    field(&row["reserved"]),
+                    field(&row["available"])
                 );
             }
         }

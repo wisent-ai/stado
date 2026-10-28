@@ -164,7 +164,9 @@ pub fn runs_host_process(label: &str, program: &str) -> Result<bool, String> {
         return Ok(true);
     }
     let host = host_process()?;
-    Ok(host_roles(&host, program).map_err(|cause| format!("{label}: {cause}"))?.contains(&"--api"))
+    Ok(host_roles(&host, program)
+        .map_err(|cause| format!("{label}: {cause}"))?
+        .contains(&"--api"))
 }
 
 /// The sentence every refusal to deploy or repair a unit that runs a
@@ -234,7 +236,9 @@ pub fn platform_directory(release_platform: &str) -> &str {
 /// without one.
 pub fn resolve_word(word: &str, home: &str, release_platform: &str, host: &str) -> String {
     let short = platform_directory(release_platform);
-    let word = word.replace("$HOME", home).replace("$STADO_PLATFORM", short);
+    let word = word
+        .replace("$HOME", home)
+        .replace("$STADO_PLATFORM", short);
     resolve_address(&word.replace("$STADO_HOST", host))
 }
 

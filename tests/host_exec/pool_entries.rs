@@ -48,7 +48,8 @@ impl Store {
             .env("HOME", &self.root)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.root.join("store"))
-            .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            // `config init` writes this config, so it is the case's own.
+            .env("STADO_CONFIG", self.root.join("config.json"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

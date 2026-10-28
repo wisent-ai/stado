@@ -19,9 +19,8 @@ use crate::providers::local::host_memory::constants::MIB;
 
 /// `--model <value>` or `--model=<value>`: the one reading of a command's
 /// model every part of Stado shares ([`model_of`]).
-static MODEL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"--model(?:\s+|=)(?P<model>\S+)").expect("static regex compiles")
-});
+static MODEL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"--model(?:\s+|=)(?P<model>\S+)").expect("static regex compiles"));
 /// A decimal figure as PyTorch writes one: digits, and at most one fraction.
 /// Every text this admits is an `f64` literal, so reading it cannot fail.
 static OOM_PROC_RE: LazyLock<Regex> = LazyLock::new(|| {

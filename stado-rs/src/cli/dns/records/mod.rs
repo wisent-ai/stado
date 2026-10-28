@@ -142,7 +142,10 @@ async fn set_hosts(registrar: &Registrar, zone: &Zone, records: &[Record]) -> Re
         }
     }
     let body = call(parameters).await?;
-    let applied = answer::result(answer::read::<SetHostsCommand>(&body)?, "namecheap.domains.dns.setHosts")?;
+    let applied = answer::result(
+        answer::read::<SetHostsCommand>(&body)?,
+        "namecheap.domains.dns.setHosts",
+    )?;
     if !applied.result.is_success {
         return Err(CmdError::click(
             "Namecheap accepted the request but did not confirm the host update",

@@ -53,7 +53,10 @@ pub(super) fn claiming_outcome(
                 Some(detail) => format!("{}: {detail}", read.operation),
                 // An incomplete read that recorded no detail is said as such,
                 // not given a word it never produced.
-                None => format!("{}: incomplete, and the read recorded no detail", read.operation),
+                None => format!(
+                    "{}: incomplete, and the read recorded no detail",
+                    read.operation
+                ),
             })
             .collect::<Vec<_>>()
             .join("; ");

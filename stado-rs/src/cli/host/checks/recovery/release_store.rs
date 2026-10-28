@@ -166,7 +166,10 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
         }
         if root.exists() {
             let canonical = std::fs::canonicalize(&root).map_err(|error| {
-                refuse(format!("cannot resolve store_root {}: {error}; nothing repaired", root.display()))
+                refuse(format!(
+                    "cannot resolve store_root {}: {error}; nothing repaired",
+                    root.display()
+                ))
             })?;
             if canonical != root {
                 return Err(refuse(format!(

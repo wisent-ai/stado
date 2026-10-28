@@ -218,9 +218,10 @@ async fn catalog_unit(
     else {
         return Ok(None);
     };
-    let home = crate::deploy::host_channel::remote_home(target, &crate::deploy::production_runner())
-        .await
-        .map_err(click)?;
+    let home =
+        crate::deploy::host_channel::remote_home(target, &crate::deploy::production_runner())
+            .await
+            .map_err(click)?;
     let service = if target.release_platform.starts_with("linux") {
         service::systemd_service(
             &target.name,

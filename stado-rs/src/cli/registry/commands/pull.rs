@@ -179,8 +179,10 @@ fn pull_last_known_good(path: Option<&str>) -> Result<(), CmdError> {
                 Some(at) => at.display().to_string(),
                 None => "(no cache directory)".to_string(),
             };
-            CmdError::click(format!("this host keeps no last-known-good registry copy at {at}"))
-                .stating(crate::primitives::failure::FailureCode::NotFound)
+            CmdError::click(format!(
+                "this host keeps no last-known-good registry copy at {at}"
+            ))
+            .stating(crate::primitives::failure::FailureCode::NotFound)
         })?;
     match path {
         Some(path) => match select(&document, path)? {

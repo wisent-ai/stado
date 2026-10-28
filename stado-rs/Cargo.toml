@@ -16,12 +16,15 @@ exclude = ["target"]
 # The workspace's code says, in a `match`, what it reports when a value is
 # absent ("not reported", "never", "(no region)"): the absence is a named
 # answer at the place it is read, not a default an `unwrap_or` slips in, and
-# the repository's write gates refuse `unwrap_or` for that reason. Clippy's
-# suggestion to fold those matches back into `unwrap_or` is turned off so the
-# lint gate and the write gates ask for the same code.
+# the repository's write gates refuse `unwrap_or` for that reason. In the same
+# way a `match` on a `Result` says why an error is passed over, and the write
+# gates refuse `.ok()`, which drops it unsaid. Clippy's suggestions to fold
+# those matches back into `unwrap_or` or `.ok()` are turned off so the lint
+# gate and the write gates ask for the same code.
 [workspace.lints.clippy]
 manual_unwrap_or = "allow"
 manual_unwrap_or_default = "allow"
+manual_ok_err = "allow"
 
 [lints]
 workspace = true

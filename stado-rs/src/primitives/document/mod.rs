@@ -16,9 +16,8 @@ pub fn located(variable: &str, file: &str, what: &str) -> Result<PathBuf, String
     if let Some(explicit) = std::env::var_os(variable).filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(explicit));
     }
-    let home = crate::config_file::home().map_err(|cause| {
-        format!("the {what} has no place: {variable} is not set and {cause}")
-    })?;
+    let home = crate::config_file::home()
+        .map_err(|cause| format!("the {what} has no place: {variable} is not set and {cause}"))?;
     Ok(home.join(".stado").join(file))
 }
 
@@ -51,7 +50,11 @@ pub fn write(path: &Path, value: &impl Serialize, what: &str) -> Result<(), Stri
 /// the file but not the directory, or neither, so a record written just
 /// before a host lost power could come back as the old one or as nothing.
 pub fn persist(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    persist_with_mode(path, bytes, crate::primitives::file_mode::owner_read_write())
+    persist_with_mode(
+        path,
+        bytes,
+        crate::primitives::file_mode::owner_read_write(),
+    )
 }
 
 /// [`persist`] for a file another account or program reads too: the file
@@ -60,7 +63,10 @@ pub fn persist(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// with.
 pub fn persist_with_mode(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
     use std::io::Write;
-    persist_staged(path, mode, Placing::Replace, |staged| staged.write_all(bytes)).map(drop)
+    persist_staged(path, mode, Placing::Replace, |staged| {
+        staged.write_all(bytes)
+    })
+    .map(drop)
 }
 
 /// [`persist_with_mode`] with the bytes streamed from the file at `source`
@@ -80,7 +86,9 @@ pub fn persist_copy(path: &Path, source: &Path, mode: u32) -> std::io::Result<()
 /// left untouched; the caller decides whether what it holds is acceptable.
 pub fn persist_if_absent(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<bool> {
     use std::io::Write;
-    persist_staged(path, mode, Placing::IfAbsent, |staged| staged.write_all(bytes))
+    persist_staged(path, mode, Placing::IfAbsent, |staged| {
+        staged.write_all(bytes)
+    })
 }
 
 /// How a staged file takes its place: over what is there, or only where
@@ -103,7 +111,10 @@ fn persist_staged(
     use std::os::unix::fs::PermissionsExt;
 
     let parent = path.parent().ok_or_else(|| {
-        std::io::Error::other(format!("{} names no directory to write into", path.display()))
+        std::io::Error::other(format!(
+            "{} names no directory to write into",
+            path.display()
+        ))
     })?;
     std::fs::create_dir_all(parent)?;
     let mut staged = tempfile::NamedTempFile::new_in(parent)?;
@@ -118,7 +129,9 @@ fn persist_staged(
         }
         Placing::IfAbsent => match staged.persist_noclobber(path) {
             Ok(_) => {}
-            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Ok(false)
+            }
             Err(error) => return Err(error.error),
         },
     }

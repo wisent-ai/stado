@@ -11,6 +11,26 @@ use serde_json::json;
 
 use super::Native;
 
+/// The Time Machine snapshots of the machine's boot data volume, as
+/// `tmutil` lists them.
+fn host_snapshots() -> Vec<String> {
+    let output = std::process::Command::new("/usr/bin/tmutil")
+        .args(["listlocalsnapshots", "/"])
+        .output()
+        .expect("tmutil runs");
+    assert!(
+        output.status.success(),
+        "tmutil listlocalsnapshots / refused: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("com.apple.TimeMachine."))
+        .map(str::to_string)
+        .collect()
+}
+
 impl Native {
     /// Declare `dir` as this host's Weles recordings root in its registry
     /// entry, through the registry command an operator uses.
@@ -69,17 +89,20 @@ fn at_the_threshold_everything_the_fleet_put_there_goes_and_user_data_stays() {
         .collect();
     seed(&recordings, b"not uploaded anywhere");
     let user_data = native.fill_with_user_data();
-    let host_snapshots_before = crate::host_snapshots();
+    let host_snapshots_before = host_snapshots();
 
     let report = native.cleanup();
     // The snapshot cleaner reads the isolated volume, which has none, and
     // leaves every snapshot of the machine's own volume where it was.
     assert_eq!(
         report["local_snapshot_volume"],
-        json!(fs::canonicalize(&native.home).unwrap().display().to_string()),
+        json!(fs::canonicalize(&native.home)
+            .unwrap()
+            .display()
+            .to_string()),
         "{report}"
     );
-    let host_snapshots_after = crate::host_snapshots();
+    let host_snapshots_after = host_snapshots();
     for snapshot in &host_snapshots_before {
         assert!(
             host_snapshots_after.contains(snapshot),
@@ -89,9 +112,21 @@ fn at_the_threshold_everything_the_fleet_put_there_goes_and_user_data_stays() {
     assert_eq!(report["rule"]["triggered"], true, "{report}");
     assert_eq!(report["pressure_active"], true);
     let cleaners = &report["cleaners"];
-    assert_eq!(cleaners["build_caches"]["deleted_items"], json!(caches.len()), "{report}");
-    assert_eq!(cleaners["agent_logs"]["deleted_items"], json!(logs.len()), "{report}");
-    assert_eq!(cleaners["weles_recordings"]["deleted_items"], json!(recordings.len()), "{report}");
+    assert_eq!(
+        cleaners["build_caches"]["deleted_items"],
+        json!(caches.len()),
+        "{report}"
+    );
+    assert_eq!(
+        cleaners["agent_logs"]["deleted_items"],
+        json!(logs.len()),
+        "{report}"
+    );
+    assert_eq!(
+        cleaners["weles_recordings"]["deleted_items"],
+        json!(recordings.len()),
+        "{report}"
+    );
     for gone in caches.iter().chain(&logs).chain(&recordings) {
         assert!(!gone.exists(), "{} survived the rule", gone.display());
     }
@@ -107,7 +142,13 @@ fn at_the_threshold_a_host_without_a_declared_recordings_root_keeps_every_record
     let native = Native::new("weles-recordings-undeclared");
     let recordings: Vec<_> = ["run-1"]
         .iter()
-        .map(|run| native.home.join("weles/recordings").join(run).join("video.mp4"))
+        .map(|run| {
+            native
+                .home
+                .join("weles/recordings")
+                .join(run)
+                .join("video.mp4")
+        })
         .collect();
     seed(&recordings, b"not uploaded anywhere");
     native.fill_with_user_data();
@@ -123,7 +164,10 @@ fn at_the_threshold_a_host_without_a_declared_recordings_root_keeps_every_record
             .is_some_and(|skipped| skipped.keys().eq(["recordings_dir_undeclared"])),
         "{report}"
     );
-    assert_eq!(cleaner["deleted_items"], cleaner["scanned_items"], "{report}");
+    assert_eq!(
+        cleaner["deleted_items"], cleaner["scanned_items"],
+        "{report}"
+    );
     for recording in &recordings {
         assert_eq!(
             fs::read(recording).unwrap(),

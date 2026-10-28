@@ -81,7 +81,10 @@ pub(in crate::cli::ci) fn unrecorded(document: &Value) -> Vec<String> {
         for commit in open {
             let refused = commit["unrecorded"].as_array().into_iter().flatten();
             for line in refused.filter_map(Value::as_str) {
-                lines.push(format!("main of {key} at {}: {line}", field(&commit["revision"])));
+                lines.push(format!(
+                    "main of {key} at {}: {line}",
+                    field(&commit["revision"])
+                ));
             }
         }
     }
@@ -100,7 +103,8 @@ pub(in crate::cli::ci) fn print(document: &Value) {
         };
         println!(
             "  main of {key}: last checked {} {verdict}; last green {}",
-            field(&last["revision"]), field(&step["last_green"]["revision"])
+            field(&last["revision"]),
+            field(&step["last_green"]["revision"])
         );
         for commit in step["checked"].as_array().into_iter().flatten() {
             let unrepaired = commit["unrepaired"].as_array().into_iter().flatten();

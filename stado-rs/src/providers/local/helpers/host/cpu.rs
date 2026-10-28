@@ -12,10 +12,12 @@ use std::sync::Mutex;
 /// [`std::thread::available_parallelism`] reads them through cgroup and
 /// affinity limits, or the operating system's refusal.
 pub fn total_cpu_cores() -> Result<i64, String> {
-    let count = std::thread::available_parallelism()
-        .map_err(|error| format!("the cores this process may schedule on cannot be read: {error}"))?;
-    i64::try_from(count.get())
-        .map_err(|error| format!("{count} schedulable cores do not fit in a signed 64-bit count: {error}"))
+    let count = std::thread::available_parallelism().map_err(|error| {
+        format!("the cores this process may schedule on cannot be read: {error}")
+    })?;
+    i64::try_from(count.get()).map_err(|error| {
+        format!("{count} schedulable cores do not fit in a signed 64-bit count: {error}")
+    })
 }
 
 /// One-minute host load, or `None` when the operating system cannot provide it.
@@ -100,7 +102,9 @@ fn cpu_time() -> Result<CpuTime, String> {
         )
     };
     if status != nix::libc::KERN_SUCCESS {
-        return Err(format!("host_statistics(HOST_CPU_LOAD_INFO) answered kern_return_t {status}"));
+        return Err(format!(
+            "host_statistics(HOST_CPU_LOAD_INFO) answered kern_return_t {status}"
+        ));
     }
     if count != nix::libc::HOST_CPU_LOAD_INFO_COUNT {
         return Err(format!(
@@ -121,9 +125,9 @@ fn tick(fields: &mut std::str::SplitWhitespace<'_>, name: &str) -> Result<u64, S
     let field = fields
         .next()
         .ok_or_else(|| format!("/proc/stat's cpu line ends before its {name} field"))?;
-    field
-        .parse()
-        .map_err(|error| format!("/proc/stat's cpu {name} field {field:?} is not a tick count: {error}"))
+    field.parse().map_err(|error| {
+        format!("/proc/stat's cpu {name} field {field:?} is not a tick count: {error}")
+    })
 }
 
 /// The aggregate `cpu` line of /proc/stat, read by the fields proc(5) lists
@@ -140,7 +144,9 @@ fn cpu_time() -> Result<CpuTime, String> {
         .map_err(|error| format!("/proc/stat cannot be read: {error}"))?;
     let mut fields = line.split_whitespace();
     if fields.next() != Some("cpu") {
-        return Err(format!("/proc/stat does not begin with its aggregate cpu line: {line:?}"));
+        return Err(format!(
+            "/proc/stat does not begin with its aggregate cpu line: {line:?}"
+        ));
     }
     let user = tick(&mut fields, "user")?;
     let nice = tick(&mut fields, "nice")?;
@@ -169,5 +175,7 @@ pub fn available_cpu_cores(active_requested_cores: i64) -> Result<Option<i64>, S
         return Ok(None);
     };
     let observed_busy = (busy * total as f64).ceil() as i64;
-    Ok(Some(total.saturating_sub(active_requested_cores.max(observed_busy))))
+    Ok(Some(
+        total.saturating_sub(active_requested_cores.max(observed_busy)),
+    ))
 }

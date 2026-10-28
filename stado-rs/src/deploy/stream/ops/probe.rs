@@ -122,15 +122,20 @@ impl std::fmt::Display for BoardRefusal {
 /// probe asks nvidia-smi for; a row of any other shape, or a bus id that is not
 /// one, is refused naming it, never skipped.
 pub fn bus_id_for(probe_report: &Value, gpu_uuid: Option<&str>) -> Result<String, BoardRefusal> {
-    let rows: Vec<&str> = match probe_report.get("fields").and_then(|fields| fields.get("board")) {
+    let rows: Vec<&str> = match probe_report
+        .get("fields")
+        .and_then(|fields| fields.get("board"))
+    {
         None => Vec::new(),
         Some(Value::String(single)) => vec![single.as_str()],
         Some(Value::Array(list)) => list
             .iter()
             .map(|value| {
-                value
-                    .as_str()
-                    .ok_or_else(|| BoardRefusal::Unreadable(format!("a BOARD entry of the probe is not text: {value}")))
+                value.as_str().ok_or_else(|| {
+                    BoardRefusal::Unreadable(format!(
+                        "a BOARD entry of the probe is not text: {value}"
+                    ))
+                })
             })
             .collect::<Result<_, _>>()?,
         Some(other) => {
@@ -149,12 +154,20 @@ pub fn bus_id_for(probe_report: &Value, gpu_uuid: Option<&str>) -> Result<String
         };
         match gpu_uuid {
             Some(wanted) if *uuid != wanted => reported.push(uuid.to_string()),
-            _ => return xorg_bus_id(bus).map_err(|cause| BoardRefusal::Unreadable(format!("board {uuid}: {cause}"))),
+            _ => {
+                return xorg_bus_id(bus)
+                    .map_err(|cause| BoardRefusal::Unreadable(format!("board {uuid}: {cause}")))
+            }
         }
     }
     Err(BoardRefusal::NotFound(match gpu_uuid {
-        Some(wanted) if reported.is_empty() => format!("no board with uuid {wanted}: the host reports no NVIDIA board"),
-        Some(wanted) => format!("no board with uuid {wanted}; the host reports {}", reported.join(", ")),
+        Some(wanted) if reported.is_empty() => {
+            format!("no board with uuid {wanted}: the host reports no NVIDIA board")
+        }
+        Some(wanted) => format!(
+            "no board with uuid {wanted}; the host reports {}",
+            reported.join(", ")
+        ),
         None => "the host reports no NVIDIA board".to_string(),
     }))
 }
@@ -172,15 +185,20 @@ pub fn xorg_bus_id(smi_bus_id: &str) -> Result<String, String> {
     let parts: Vec<&str> = smi_bus_id.split(':').collect();
     let (bus, tail) = match parts.as_slice() {
         [_, bus, tail] | [bus, tail] => (*bus, *tail),
-        _ => return Err(format!("PCI bus id {smi_bus_id:?} is not [domain:]bus:device.function")),
+        _ => {
+            return Err(format!(
+                "PCI bus id {smi_bus_id:?} is not [domain:]bus:device.function"
+            ))
+        }
     };
     let (device, function) = tail
         .split_once('.')
         .ok_or_else(|| format!("PCI bus id {smi_bus_id:?} names no .function"))?;
     let radix = HEX_DIGITS.chars().count() as u32;
     let read = |field: &str, what: &str| {
-        u32::from_str_radix(field.trim(), radix)
-            .map_err(|error| format!("PCI bus id {smi_bus_id:?}: {what} {field:?} is not hex: {error}"))
+        u32::from_str_radix(field.trim(), radix).map_err(|error| {
+            format!("PCI bus id {smi_bus_id:?}: {what} {field:?} is not hex: {error}")
+        })
     };
     let bus = read(bus, "bus")?;
     let device = read(device, "device")?;

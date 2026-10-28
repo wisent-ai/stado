@@ -54,7 +54,10 @@ impl Run {
             .env_clear()
             .env("PATH", std::env::var_os("PATH").expect("PATH is set"))
             .env("HOME", &self.root)
-            .env("STADO_CONFIG", self.root.join("no-config.toml"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .env("TMPDIR", self.root.join("tmp"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

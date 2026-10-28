@@ -36,12 +36,12 @@ async fn available_instances_from_quotas(
         None => return Ok(BTreeMap::new()),
         Some(Value::Object(rows)) => rows,
         Some(other) => {
-            return Err(QuotaError::Provider(crate::providers::ProviderError::Value(
-                format!(
+            return Err(QuotaError::Provider(
+                crate::providers::ProviderError::Value(format!(
                     "{provider_name} quota section {} is not a map of accelerator rows: {other}",
                     quota_provider_key(provider_name)
-                ),
-            )))
+                )),
+            ))
         }
     };
     let running_counts = provider.list_running_instances().await?;

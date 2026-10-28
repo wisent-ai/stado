@@ -44,7 +44,7 @@ const AUTHORITY_ANSWERED = 'registry authority exited with';
 
 function run(program, args, home) {
   const env = home
-    ? { PATH: process.env.PATH, HOME: home, STADO_CONFIG: join(home, 'no-config.toml'), TMPDIR: join(home, 'tmp') }
+    ? { PATH: process.env.PATH, HOME: home, STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'), TMPDIR: join(home, 'tmp') }
     : process.env;
   const answer = spawnSync(program, args, { cwd: root, env, encoding: 'utf8' });
   report.commands.push({ program, arguments: args, home, exit_status: answer.status, signal: answer.signal,

@@ -165,7 +165,9 @@ pub(in crate::deploy::host_gui_automation) async fn login_user(
     )
     .await?;
     let user = match console {
-        Some(owner) if !matches!(owner.as_str(), "" | "root" | "loginwindow" | "_mbsetupuser") => owner,
+        Some(owner) if !matches!(owner.as_str(), "" | "root" | "loginwindow" | "_mbsetupuser") => {
+            owner
+        }
         _ => login,
     };
     safe_identity(&user, "GUI user")?;

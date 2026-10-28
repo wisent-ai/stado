@@ -85,7 +85,11 @@ pub fn scan_delivered_releases(home: &Path, enforcing: bool, report: &mut Cleanu
             Ok(kept) => kept,
             Err(cause) => {
                 record.scanned_items += versions.len() as i64;
-                skipped.extend(versions.keys().map(|_version| "installed_release_unreadable"));
+                skipped.extend(
+                    versions
+                        .keys()
+                        .map(|_version| "installed_release_unreadable"),
+                );
                 report.add_error(CLEANER, &super::JanitorError::os(&cause));
                 continue;
             }

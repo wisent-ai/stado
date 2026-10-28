@@ -46,7 +46,11 @@ pub fn parse_box_info(record: &Map<String, Value>) -> Result<BoxInfo, BoxError> 
         created_at: text("createdAt")?,
         updated_at: text("updatedAt")?,
         archive_after: text("archiveAfter")?,
-        snapshot_available: jbool(record.get("snapshotAvailable"), "snapshotAvailable", "sandbox")?,
+        snapshot_available: jbool(
+            record.get("snapshotAvailable"),
+            "snapshotAvailable",
+            "sandbox",
+        )?,
         snapshot_completed_at: text("snapshotCompletedAt")?,
         last_snapshot_attempt_at: text("lastSnapshotAttemptAt")?,
         last_snapshot_status: text("lastSnapshotStatus")?,

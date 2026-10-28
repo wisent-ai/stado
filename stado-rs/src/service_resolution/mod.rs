@@ -142,7 +142,7 @@ pub fn resolve(
         {
             return Err(ResolveError::Moving {
                 service: service.to_string(),
-                transaction,
+                transaction: Box::new(transaction),
             });
         }
     }

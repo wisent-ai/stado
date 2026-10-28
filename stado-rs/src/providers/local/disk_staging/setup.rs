@@ -80,7 +80,10 @@ pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String>
         }
         if let Err(first) = writable_for_self(&target) {
             if !nix::unistd::Uid::from_raw(euid()).is_root() {
-                log_fn(&format!("staging: candidate {} not writable ({first}); skipping", target.display()));
+                log_fn(&format!(
+                    "staging: candidate {} not writable ({first}); skipping",
+                    target.display()
+                ));
                 continue;
             }
             try_repair_traversal(&target, log_fn);
@@ -134,10 +137,10 @@ pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String>
         }
     }
     let Some((target, free, rotational)) = best else {
-        log_fn(
-            &format!("staging: /tmp is {tmp_fs} but no larger writable disk-backed mount found; \
-             staging stays on /tmp (RAM). Crashes possible."),
-        );
+        log_fn(&format!(
+            "staging: /tmp is {tmp_fs} but no larger writable disk-backed mount found; \
+             staging stays on /tmp (RAM). Crashes possible."
+        ));
         return None;
     };
     // Children inherit the env, so every job stages on disk for free.

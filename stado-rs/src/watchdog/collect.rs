@@ -25,11 +25,57 @@ pub(crate) fn hostname() -> String {
 fn commands() -> Vec<(&'static str, Vec<String>)> {
     let argv = |parts: &[&str]| parts.iter().map(|part| part.to_string()).collect();
     vec![
-        ("systemctl-agent", argv(&["systemctl", "status", "wisent-agent.service", "--no-pager", "-l"])),
-        ("systemctl-health", argv(&["systemctl", "status", "wisent-host-health.timer", "--no-pager", "-l"])),
-        ("journal-agent", argv(&["journalctl", "-u", "wisent-agent.service", "-n", "240", "--no-pager"])),
-        ("journal-health", argv(&["journalctl", "-u", "wisent-host-health.service", "-n", "120", "--no-pager"])),
-        ("ps", argv(&["ps", "-eo", "pid,ppid,stat,pcpu,pmem,comm,args", "--sort=-%cpu"])),
+        (
+            "systemctl-agent",
+            argv(&[
+                "systemctl",
+                "status",
+                "wisent-agent.service",
+                "--no-pager",
+                "-l",
+            ]),
+        ),
+        (
+            "systemctl-health",
+            argv(&[
+                "systemctl",
+                "status",
+                "wisent-host-health.timer",
+                "--no-pager",
+                "-l",
+            ]),
+        ),
+        (
+            "journal-agent",
+            argv(&[
+                "journalctl",
+                "-u",
+                "wisent-agent.service",
+                "-n",
+                "240",
+                "--no-pager",
+            ]),
+        ),
+        (
+            "journal-health",
+            argv(&[
+                "journalctl",
+                "-u",
+                "wisent-host-health.service",
+                "-n",
+                "120",
+                "--no-pager",
+            ]),
+        ),
+        (
+            "ps",
+            argv(&[
+                "ps",
+                "-eo",
+                "pid,ppid,stat,pcpu,pmem,comm,args",
+                "--sort=-%cpu",
+            ]),
+        ),
         ("nvidia-smi", argv(&["nvidia-smi"])),
         ("df", argv(&["df", "-h"])),
         ("memory", argv(&["free", "-h"])),
@@ -88,7 +134,9 @@ fn disk(path: &str) -> Value {
             "headroom_bytes": volume.headroom_bytes(),
             "full": volume.full(),
         }),
-        Err(error) => json!({"path": path, "error": format!("cannot read the volume holding {path}: {error}")}),
+        Err(error) => {
+            json!({"path": path, "error": format!("cannot read the volume holding {path}: {error}")})
+        }
     }
 }
 
@@ -104,10 +152,15 @@ pub fn collect(bucket: &str, runner: &dyn CommandRunner) -> Value {
     }
     let capacity = match std::env::current_exe() {
         Ok(stado) => {
-            let argv: Vec<String> = [stado.to_string_lossy().as_ref(), "capacity", "list", "--json"]
-                .iter()
-                .map(|part| part.to_string())
-                .collect();
+            let argv: Vec<String> = [
+                stado.to_string_lossy().as_ref(),
+                "capacity",
+                "list",
+                "--json",
+            ]
+            .iter()
+            .map(|part| part.to_string())
+            .collect();
             run_one(CAPACITY_LIST, &argv, runner)
         }
         Err(error) => json!({

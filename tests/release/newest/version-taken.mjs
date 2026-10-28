@@ -5,7 +5,7 @@
 // them could be released. A run now settles only its own commit.
 //
 // The run records live in a local store of this run (WC_STORAGE_BACKEND=local
-// under .build/release-version-taken, STADO_CONFIG naming no file, HOME of its
+// under .build/release-version-taken, STADO_CONFIG the empty tests/config/empty.json, HOME of its
 // own), written where the release pipeline writes them
 // (`runs/release-pipeline/<run>/run.json`). One product checkout declares its
 // version in VERSION; `--plan` builds nothing.
@@ -52,7 +52,7 @@ const environment = {
   ...process.env,
   HOME: home,
   PATH: `${dirname(okoBinary)}:${process.env.PATH}`,
-  STADO_CONFIG: join(output, 'no-config.json'),
+  STADO_CONFIG: join(root, 'tests', 'config', 'empty.json'),
   WC_STORAGE_BACKEND: 'local',
   WC_LOCAL_STORAGE_PATH: store,
   OKO_DEFECT_REGISTER: join(output, 'defects.json'),

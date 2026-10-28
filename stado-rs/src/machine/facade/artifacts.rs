@@ -32,7 +32,10 @@ impl MachineFacade {
             match std::fs::symlink_metadata(path) {
                 Ok(metadata) => Ok(Some(metadata.file_type())),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(security(format!("{} cannot be examined: {error}", path.display()))),
+                Err(error) => Err(security(format!(
+                    "{} cannot be examined: {error}",
+                    path.display()
+                ))),
             }
         }
         let job = self.lookup_job(job_id).await?;
@@ -62,7 +65,9 @@ impl MachineFacade {
             .into_iter()
             .flat_map(Path::ancestors)
         {
-            if kind(component)?.is_some_and(|found| found.is_symlink()) && !trusted.contains(component) {
+            if kind(component)?.is_some_and(|found| found.is_symlink())
+                && !trusted.contains(component)
+            {
                 return Err(security("output path must not contain symlinks"));
             }
         }

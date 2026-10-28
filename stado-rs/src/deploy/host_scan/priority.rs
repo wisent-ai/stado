@@ -14,16 +14,24 @@ use nix::libc;
 
 /// The calling thread, in `setpriority`'s own words: `who` names the caller
 /// when it is left unset.
+#[cfg(target_os = "macos")]
 fn calling_thread() -> libc::id_t {
     Default::default()
 }
+
+/// What `getpriority` and `setpriority` take as `which`: glibc declares its
+/// own `__priority_which_t`, every other libc an `int`.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+type Which = libc::__priority_which_t;
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+type Which = libc::c_int;
 
 /// Read a thread's priority: `getpriority` answers `-1` both as a value and
 /// as a failure, so the errno it leaves is the verdict.
 ///
 /// # Safety
 /// `which` and `who` name the calling thread, as the callers here pass them.
-unsafe fn read_priority(which: libc::c_int, who: libc::id_t) -> Option<libc::c_int> {
+unsafe fn read_priority(which: Which, who: libc::id_t) -> Option<libc::c_int> {
     Errno::clear();
     let read = libc::getpriority(which, who);
     (Errno::last() == Errno::UnknownErrno).then_some(read)

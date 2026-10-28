@@ -45,7 +45,10 @@ pub fn work_root() -> io::Result<PathBuf> {
         Err(error) => {
             return Err(io::Error::new(
                 error.kind(),
-                format!("the work base {} cannot be resolved: {error}", base.display()),
+                format!(
+                    "the work base {} cannot be resolved: {error}",
+                    base.display()
+                ),
             ))
         }
     };

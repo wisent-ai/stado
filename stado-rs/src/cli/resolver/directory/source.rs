@@ -199,7 +199,10 @@ impl SnapshotSource {
             Err(error) => {
                 let sentence = format!("registry authority SSH failed: {error:#}");
                 refuse_authority(target, reader, &sentence);
-                return Err(AuthorityUnread { sentence, silent: true });
+                return Err(AuthorityUnread {
+                    sentence,
+                    silent: true,
+                });
             }
         };
         // SSH carries the exit status as a u32; zero is success, and a channel
@@ -222,9 +225,15 @@ impl SnapshotSource {
             // which is a different finding from a silent host and must not
             // be counted as one.
             refuse_authority(target, reader, &sentence);
-            return Err(AuthorityUnread { sentence, silent: false });
+            return Err(AuthorityUnread {
+                sentence,
+                silent: false,
+            });
         }
-        let answered = |sentence: String| AuthorityUnread { sentence, silent: false };
+        let answered = |sentence: String| AuthorityUnread {
+            sentence,
+            silent: false,
+        };
         let payload: SnapshotPayload = serde_json::from_slice(&output.stdout)
             .map_err(|error| answered(format!("invalid registry authority response: {error}")))?;
         validate_snapshot(payload).map_err(answered)
@@ -251,7 +260,9 @@ pub(crate) fn current_target(document: &Value) -> Result<String, String> {
     let hostname = crate::providers::vast::system_hostname();
     parsed_registry(document)?
         .lookup_self(&hostname)
-        .map_err(|error| format!("this host {hostname:?} cannot be found in the registry: {error}"))?
+        .map_err(|error| {
+            format!("this host {hostname:?} cannot be found in the registry: {error}")
+        })?
         .map(|target| target.name.clone())
         .ok_or_else(|| format!("resolver host {hostname:?} has no registry target identity"))
 }

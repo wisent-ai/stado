@@ -6,9 +6,9 @@ use std::ops::Bound;
 
 use crate::catalog::GPU_SIZING;
 use crate::config;
+use crate::primitives::tally::Tally;
 use crate::providers::{Provider, ProviderError};
 use crate::queue::JobStorage;
-use crate::primitives::tally::Tally;
 use crate::scheduler::scheduler::{log, SchedulerError};
 use crate::sizing::Sizing;
 
@@ -243,7 +243,10 @@ pub async fn dispatch_agent_vms_with_template(
                 .get_mut(&effective_accel)
                 .expect("a tier is dispatched on only after its quota was read")
                 .retract();
-            accel_dispatched.entry(effective_accel.clone()).or_default().tally();
+            accel_dispatched
+                .entry(effective_accel.clone())
+                .or_default()
+                .tally();
             scheduled.tally();
             log(&format!(
                 "Dispatched agent VM {instance_ref} accel={effective_accel} machine={mt} \
