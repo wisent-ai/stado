@@ -36,23 +36,79 @@ struct ArmInner {
     auth: bool,
 }
 
-/// The wait Azure names in a poll response's `Retry-After` header. A
-/// long-running operation that is still running and names no wait is an
-/// error naming the operation, never a wait this client invents.
+/// The wait an HTTP-date `Retry-After` names: the time left until `date`.
+/// RFC 9110 §10.2.3 reads a date that has already passed as asking for the
+/// next request now, so such a date names no wait.
+fn until(date: chrono::DateTime<chrono::Utc>) -> Result<Duration, String> {
+    let now = chrono::Utc::now();
+    if date <= now {
+        return Ok(Duration::ZERO);
+    }
+    (date - now)
+        .to_std()
+        .map_err(|cause| format!("the time until {date} is no wait: {cause}"))
+}
+
+/// The wait Azure names in a poll response's `Retry-After` header, which
+/// RFC 9110 §10.2.3 states as a number of seconds or as an HTTP date. A
+/// long-running operation that is still running and names no wait, or names
+/// one in neither form, is an error naming the operation and the value,
+/// never a wait this client invents.
 fn retry_after(response: &reqwest::Response, desc: &str) -> Result<Duration, AzureError> {
-    response
-        .headers()
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .ok_or_else(|| {
-            AzureError::Api(format!(
-                "Azure {desc} is still running and its poll answer (HTTP {}) names no \
-                 Retry-After",
-                response.status()
-            ))
-        })
+    let still_running = || {
+        format!(
+            "Azure {desc} is still running and its poll answer (HTTP {})",
+            response.status()
+        )
+    };
+    let Some(header) = response.headers().get(reqwest::header::RETRY_AFTER) else {
+        return Err(AzureError::Api(format!("{} names no Retry-After", still_running())));
+    };
+    let value = header.to_str().map_err(|cause| {
+        AzureError::Api(format!(
+            "{} names a Retry-After that is not text ({header:?}): {cause}",
+            still_running()
+        ))
+    })?;
+    let value = value.trim();
+    match value.parse::<u64>() {
+        Ok(seconds) => Ok(Duration::from_secs(seconds)),
+        Err(seconds_cause) => match chrono::DateTime::parse_from_rfc2822(value) {
+            Ok(date) => until(date.with_timezone(&chrono::Utc)).map_err(|cause| {
+                AzureError::Api(format!("{} names Retry-After {value:?}: {cause}", still_running()))
+            }),
+            Err(date_cause) => Err(AzureError::Api(format!(
+                "{} names Retry-After {value:?}, which is neither a number of seconds \
+                 ({seconds_cause}) nor an HTTP date ({date_cause})",
+                still_running()
+            ))),
+        },
+    }
+}
+
+/// Hold the poll once for the wait Azure named before asking again: the
+/// first tick of an interval set to that wait falls at its end. A wait of
+/// nothing asks again at once.
+async fn hold_for(wait: Duration) {
+    if !wait.is_zero() {
+        tokio::time::interval_at(tokio::time::Instant::now() + wait, wait)
+            .tick()
+            .await;
+    }
+}
+
+/// The `code message` an ARM error object states, or `None` when the answer
+/// holds no error object with either.
+fn stated_error(answer: &Value) -> Option<String> {
+    let error = answer.get("error")?;
+    let code = error.get("code").and_then(Value::as_str);
+    let message = error.get("message").and_then(Value::as_str);
+    match (code, message) {
+        (None, None) => None,
+        (Some(code), None) => Some(code.to_string()),
+        (None, Some(message)) => Some(message.to_string()),
+        (Some(code), Some(message)) => Some(format!("{code} {message}")),
+    }
 }
 
 impl ArmClient {
@@ -114,7 +170,8 @@ impl ArmClient {
 
     /// Lift a non-2xx response into [`AzureError::Api`], embedding the
     /// ARM `error.code` + `error.message` so Python's substring
-    /// classification keeps working.
+    /// classification keeps working. An answer that states no error object
+    /// is quoted whole, and one that is not JSON says why beside it.
     pub(super) async fn api_error(response: reqwest::Response, desc: &str) -> AzureError {
         let status = response.status().as_u16();
         // A refusal whose body cannot be read says so: read as empty, the
@@ -129,20 +186,21 @@ impl ArmClient {
                 ))
             }
         };
-        let parsed = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
-        let error = parsed.get("error").cloned().unwrap_or(Value::Null);
-        let code = error.get("code").and_then(Value::as_str).unwrap_or("");
-        let message = error.get("message").and_then(Value::as_str).unwrap_or("");
-        let detail = if code.is_empty() && message.is_empty() {
-            text.to_string()
-        } else {
-            format!("{code} {message}").trim().to_string()
+        let detail = match serde_json::from_str::<Value>(&text) {
+            Ok(answer) => match stated_error(&answer) {
+                Some(stated) => stated,
+                None => text,
+            },
+            Err(cause) => format!("{text} (the answer is not JSON: {cause})"),
         };
         AzureError::Api(format!("Azure {desc} -> HTTP {status}: {detail}"))
     }
 
     /// Poll an Azure-AsyncOperation URL until Succeeded/Failed/Canceled, at
-    /// the interval each answer's `Retry-After` names.
+    /// the interval each answer's `Retry-After` names. An answer that states
+    /// no status is refused quoting it: read as running, it was polled for
+    /// ever. A failed or canceled operation without an error object is
+    /// reported by its whole answer.
     pub(super) async fn poll_async_operation(
         &self,
         url: &str,
@@ -158,19 +216,27 @@ impl ArmClient {
             let body: Value = serde_json::from_str(&text).map_err(|err| {
                 AzureError::Api(format!("Azure poll {desc} -> invalid JSON: {err}"))
             })?;
-            let status = body.get("status").and_then(Value::as_str).unwrap_or("");
-            match serde_json::from_value::<OperationStatus>(Value::String(status.to_string())) {
-                Ok(OperationStatus::Succeeded) => return Ok(()),
-                Ok(OperationStatus::Failed | OperationStatus::Canceled) => {
-                    let error = body.get("error").cloned().unwrap_or(Value::Null);
-                    let code = error.get("code").and_then(Value::as_str).unwrap_or("");
-                    let message = error.get("message").and_then(Value::as_str).unwrap_or("");
+            let Some(status) = body.get("status").and_then(Value::as_str) else {
+                return Err(AzureError::Api(format!(
+                    "Azure poll {desc} answered without a status: {text}"
+                )));
+            };
+            let read = serde_json::from_value::<OperationStatus>(Value::String(status.to_string()))
+                .map_err(|err| {
+                    AzureError::Api(format!("Azure poll {desc} status {status:?} -> {err}"))
+                })?;
+            match read {
+                OperationStatus::Succeeded => return Ok(()),
+                OperationStatus::Failed | OperationStatus::Canceled => {
+                    let detail = match stated_error(&body) {
+                        Some(stated) => stated,
+                        None => text,
+                    };
                     return Err(AzureError::Api(format!(
-                        "Azure {desc} operation {status}: {}",
-                        format!("{code} {message}").trim()
+                        "Azure {desc} operation {status}: {detail}"
                     )));
                 }
-                _ => tokio::time::sleep(wait?).await,
+                OperationStatus::Running => hold_for(wait?).await,
             }
         }
     }
@@ -181,7 +247,7 @@ impl ArmClient {
         loop {
             let response = self.send(reqwest::Method::GET, url, None).await?;
             if response.status() == reqwest::StatusCode::ACCEPTED {
-                tokio::time::sleep(retry_after(&response, desc)?).await;
+                hold_for(retry_after(&response, desc)?).await;
                 continue;
             }
             if !response.status().is_success() {
