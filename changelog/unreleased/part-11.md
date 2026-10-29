@@ -14,3 +14,6 @@ The version bump gathers them into the release's own file and removes this one.
   takes the latest time `touch -t` states, so no compile — not even one of another revision that
   held the target's lock while this run waited — is newer than its sources; dependencies from
   registries stay compiled.
+  A Cargo run that exits 0 without Cargo naming the manifest's own package as compiled or checked
+  is refused instead of passed: `<host>: cargo <operation> of <commit> exited 0 without compiling
+  or checking <package>, so its verdict is another run's output; run it again`.

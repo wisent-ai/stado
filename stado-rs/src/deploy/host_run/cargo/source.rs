@@ -83,3 +83,36 @@ pub(super) fn artifact(directory: &Path, binary: &str) -> Result<Artifact, Deplo
         path,
     })
 }
+
+/// The package a Cargo run of `arguments` over `manifest` is known to build:
+/// the one the manifest declares (`[package] name`). None when the run
+/// selects its packages itself (`-p`, `--workspace`), for a virtual
+/// workspace manifest, or one that cannot be read; Cargo names those
+/// members each on its own line.
+pub(super) fn own_package(manifest: &Path, arguments: &[String]) -> Option<String> {
+    let selects = arguments
+        .iter()
+        .take_while(|argument| *argument != "--")
+        .any(|argument| {
+            let option = argument.split('=').next().unwrap_or(argument);
+            ["-p", "--package", "--workspace", "--all", "--exclude"].contains(&option)
+        });
+    if selects {
+        return None;
+    }
+    let text = std::fs::read_to_string(manifest).ok()?;
+    let parsed: toml::Value = toml::from_str(&text).ok()?;
+    Some(parsed.get("package")?.get("name")?.as_str()?.to_string())
+}
+
+/// Whether Cargo's report says it compiled or checked `package` in this run.
+pub(super) fn compiled(stderr: &str, package: &str) -> bool {
+    stderr.lines().any(|line| {
+        let line = line.trim_start();
+        ["Compiling", "Checking"].iter().any(|verb| {
+            line.strip_prefix(verb)
+                .and_then(|rest| rest.trim_start().strip_prefix(package))
+                .is_some_and(|rest| rest.starts_with(" v"))
+        })
+    })
+}

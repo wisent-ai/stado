@@ -21,7 +21,7 @@ use crate::primitives::failure::FailureCode;
 use crate::targets::ComputeTarget;
 
 use super::{remove_run_directory, validate_arguments, validate_binary_name, RUN_AREA};
-use source::{artifact, source};
+use source::{artifact, compiled, own_package, source};
 
 /// The Cargo subcommands a host runs for a revision: the ones a quality gate
 /// and a release need, each always `--locked`.
@@ -186,6 +186,9 @@ pub async fn run(
     let export = crate_target.join(format!("export-{run_id}"));
     let archive_sha256 = stado_product::export_committed_source(&checkout, &commit, &export)
         .map_err(|error| DeployError(format!("{error:#}")).stating(FailureCode::Config))?;
+    // The package the run builds, read from the export the host gets: a
+    // Cargo run that passes without compiling it judged another run's output.
+    let package = own_package(&export.join(&manifest), &request.arguments);
     let destination = format!("{RUN_AREA}/{run_id}/{name}");
     let delivered = host_delivery::deliver_host(
         &target.name,
@@ -238,6 +241,16 @@ pub async fn run(
     let ran = ran?;
     pulled?;
     removed?;
+    if let Some(package) = package.filter(|_| ran.succeeded()) {
+        if !compiled(&ran.stderr, &package) {
+            return Err(refused(format!(
+                "{}: cargo {} of {commit} exited 0 without compiling or checking {package}, \
+                 so its verdict is another run's output; run it again",
+                target.name,
+                request.operation.word()
+            )));
+        }
+    }
     let (free_bytes_after, free_bytes_after_error) = match volume::measure(target, runner).await {
         Ok(after) => (Some(after.free_bytes), None),
         Err(error) => (None, Some(error.to_string())),
