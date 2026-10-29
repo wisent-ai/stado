@@ -5,18 +5,20 @@
 //! verdict: its own commits written again on the remote `main`
 //! ([`rebase`]), its declared gates run on the result ([`gates`]),
 //! classified ([`risk`]), reviewed before landing when high risk
-//! ([`review`]), pushed to `main` as a fast-forward, and recorded
-//! ([`integration`]). A `main` that moved before the push takes the
-//! candidate back to the rebase, so what lands is always exactly what the
-//! gates checked. A pass that cannot reach a verdict because the remote,
-//! the fleet or the harsh review does not answer puts the candidate back in
-//! the queue and ends with that cause. One whose gates Oko's admission does
-//! not admit, or does not answer for, is put back in the queue and held for
-//! the rest of the pass, which carries the candidates behind it and then
-//! ends naming it. A refused candidate is a verdict, and the pass goes on. A
-//! landed candidate stays landed whatever its review after landing meets.
+//! ([`review`]), pushed to `main` as a fast-forward with its landing
+//! recorded first, so the repository's pre-push gate knows the push for
+//! the queue's own, and recorded ([`integration`]). A `main` that moved
+//! before the push takes the candidate back to the rebase, so what lands
+//! is always exactly what the gates checked. A pass that cannot reach a
+//! verdict because the remote, the fleet or the harsh review does not
+//! answer puts the candidate back in the queue and ends with that cause.
+//! One whose gates Oko's admission does not admit, or does not answer for,
+//! is put back in the queue and held for the rest of the pass, which
+//! carries the candidates behind it and then ends naming it. A refused
+//! candidate is a verdict, and the pass goes on. A landed candidate stays
+//! landed whatever its review after landing meets.
 
-mod gates;
+pub(super) mod gates;
 mod integration;
 mod rebase;
 mod review;
@@ -145,8 +147,9 @@ async fn land(
             }
         };
         candidate.rebased = Some(rebased.clone());
+        candidate.landing = None;
         record::save(candidate)?;
-        let plan = match gates::plan(checkout, &rebased.commit).await? {
+        let plan = match gates::plan(checkout, &rebased.commit, gates::QUEUED).await? {
             Ok(plan) => plan,
             Err(why) => {
                 refuse(candidate, why);
@@ -219,6 +222,11 @@ async fn land(
         if cancelled(candidate)? {
             return Ok(());
         }
+        // Recorded before the push, so the repository's pre-push gate finds
+        // this exact commit as the queue's landing and does not run its
+        // gates again.
+        candidate.landing = Some(rebased.commit.clone());
+        record::save(candidate)?;
         match git::push(checkout, &rebased.commit).await? {
             Pushed::Landed => break rebased,
             Pushed::Moved => {
@@ -241,6 +249,7 @@ async fn land(
         candidate.id, landed.commit
     );
     candidate.state = State::Landed;
+    candidate.landing = None;
     candidate.landed = Some(Landed {
         commit: landed.commit.clone(),
         at: Utc::now(),

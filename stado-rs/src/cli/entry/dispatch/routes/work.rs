@@ -1,6 +1,6 @@
 //! Where the queue-work verbs and the local worker land.
 
-use crate::cli::entry::spec::root::work::{QualityCommands, WorkCommands};
+use crate::cli::entry::spec::root::work::{QualityCommands, QualityHooksCommands, WorkCommands};
 use crate::cli::hosts::machine;
 use crate::cli::reporting::{results, status};
 use crate::cli::work::cancel;
@@ -40,6 +40,7 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                 if_declared,
                 revision,
                 pre_push,
+                hosts,
                 purposes,
                 json,
                 place,
@@ -71,7 +72,7 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                         root.as_deref(),
                         if_declared,
                         revision.as_deref(),
-                        pre_push,
+                        pre_push.then_some(hosts.as_slice()),
                         &purposes,
                         json,
                     )
@@ -91,6 +92,20 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                     json,
                 )
                 .await
+            }
+            QualityCommands::Hooks(verb) => {
+                let (verb, scope) = match verb {
+                    QualityHooksCommands::Install(scope) => {
+                        (crate::cli::quality::HooksVerb::Install, scope)
+                    }
+                    QualityHooksCommands::Status(scope) => {
+                        (crate::cli::quality::HooksVerb::Status, scope)
+                    }
+                    QualityHooksCommands::Remove(scope) => {
+                        (crate::cli::quality::HooksVerb::Remove, scope)
+                    }
+                };
+                crate::cli::quality::hooks(verb, scope.product.as_deref(), scope.json)
             }
         },
         WorkCommands::Mcp => tokio::task::spawn_blocking(|| {

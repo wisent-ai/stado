@@ -9,7 +9,9 @@
 //! is answered without running. A host that cannot run its shard (it is
 //! unreachable, its disk is full) leaves the shard to the platform's other
 //! hosts; a platform left with no host ends the pass unchecked, never with
-//! a verdict on the candidate.
+//! a verdict on the candidate. A direct push to `main` runs the same
+//! compiling shards, its `lint` gates only ([`PUSHED`]), through
+//! [`compiling`] (`crate::cli::change::push`).
 
 mod cache;
 mod pool;
@@ -62,9 +64,24 @@ impl Plan {
     }
 }
 
-/// The plan of `commit`; a declaration the queue cannot run is the
-/// candidate's refusal (`Err` of the inner result).
-pub async fn plan(checkout: &Path, commit: &str) -> Result<Result<Plan, String>, CmdError> {
+/// The compiling gate kinds a queued candidate runs on the fleet: every
+/// `lint` and `test` gate, since what it lands is what the release builds.
+pub const QUEUED: &[GateKind] = &[GateKind::Lint, GateKind::Test];
+
+/// The compiling gate kinds a push to `main` the queue did not make runs on
+/// the fleet (`stado quality check --pre-push`): the `lint` gates, which
+/// compile the pushed tree without running it. Its `test` gates stay the
+/// queue's and the release's, as a push waits for its gates.
+pub const PUSHED: &[GateKind] = &[GateKind::Lint];
+
+/// The plan of `commit`, its compiling gates of the `kinds` named; a
+/// declaration the queue cannot run is the candidate's refusal (`Err` of
+/// the inner result).
+pub async fn plan(
+    checkout: &Path,
+    commit: &str,
+    kinds: &[GateKind],
+) -> Result<Result<Plan, String>, CmdError> {
     // Only an absent manifest is the candidate's refusal; a Git that cannot
     // read the commit leaves the candidate queued.
     let listed = git(
@@ -122,7 +139,7 @@ pub async fn plan(checkout: &Path, commit: &str) -> Result<Result<Plan, String>,
         for gate in recipe
             .quality
             .iter()
-            .filter(|gate| gate.kind != GateKind::Format)
+            .filter(|gate| kinds.contains(&gate.kind))
         {
             if !gate.inputs.is_empty() {
                 return Ok(Err(format!(
@@ -227,8 +244,27 @@ pub async fn run(
             refusal: Some(report),
         });
     }
-    // Each action the compiling gates take is asked of Oko once, as the
-    // submitting session's work, never as the queue's own.
+    let (remote, refusal) =
+        compiling(checkout, commit, tree, plan, hosts, (purposes, session)).await?;
+    shards.extend(remote);
+    Ok(Outcome { shards, refusal })
+}
+
+/// Every compiling shard of `plan` over `commit` (tree `tree`) of
+/// `checkout`, run or answered by the action cache on the pool of `hosts`
+/// once Oko admitted each action they take as work of `session`, and the
+/// refusal naming every shard that refused with the end of its report.
+pub async fn compiling(
+    checkout: &Path,
+    commit: &str,
+    tree: &str,
+    plan: &Plan,
+    hosts: &[String],
+    (purposes, session): (&[&str], Option<&str>),
+) -> Result<(Vec<Shard>, Option<String>), CmdError> {
+    // Each action the compiling gates take is asked of Oko once, as the work
+    // of the session that asked for the gates (a candidate's submitter, the
+    // session that pushed), never as the queue's own.
     let mut asked = BTreeSet::new();
     for planned in &plan.compiling {
         let action = if planned.kind == GateKind::Test {
@@ -270,9 +306,5 @@ pub async fn run(
             )
         })
         .collect::<Vec<_>>();
-    shards.extend(remote);
-    Ok(Outcome {
-        shards,
-        refusal: (!refusal.is_empty()).then(|| refusal.join("\n\n")),
-    })
+    Ok((remote, (!refusal.is_empty()).then(|| refusal.join("\n\n"))))
 }

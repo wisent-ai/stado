@@ -1,5 +1,5 @@
 //! Git pre-push protocol inputs select the tree, never checkout dirtiness.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -73,12 +73,14 @@ fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
 /// report goes to stderr and stdout carries one document: the revisions
 /// checked, or the failure envelope whose `details` name the refused gate's
 /// findings. `purposes` are the open defects the check serves, named to
-/// Oko's admission before a compile or test gate runs.
+/// Oko's admission before a compile or test gate runs. `pre_push`, when
+/// given, reads Git's pre-push updates and names the hosts the lint gates of
+/// a push to `main` run on (none: the placement chooses them).
 pub async fn check(
     root: Option<&str>,
     if_declared: bool,
     revision: Option<&str>,
-    pre_push: bool,
+    pre_push: Option<&[String]>,
     purposes: &[String],
     json: bool,
 ) -> Result<(), CmdError> {
@@ -104,7 +106,7 @@ async fn checked(
     root: Option<&str>,
     if_declared: bool,
     revision: Option<&str>,
-    pre_push: bool,
+    pre_push: Option<&[String]>,
     purposes: &[&str],
     report: Report,
 ) -> Result<BTreeSet<String>, CmdError> {
@@ -115,38 +117,81 @@ async fn checked(
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?,
     };
-    // Pre-push selects format-kind gates plus source and lock checks. A web
-    // format gate can itself run the product's typecheck and lint scripts;
-    // the full check selects every gate the installation runs.
-    let (revisions, selection) = if pre_push {
-        (pushed_revisions(&checkout, report)?, Selection::Formatting)
-    } else {
-        let revision = match revision {
-            Some(revision) => resolve(&checkout, revision)?,
-            None => built_revision(&checkout)?,
-        };
-        (BTreeSet::from([revision]), Selection::Installation)
+    if let Some(hosts) = pre_push {
+        return pushed(&checkout, if_declared, (hosts, purposes), report).await;
+    }
+    let revision = match revision {
+        Some(revision) => resolve(&checkout, revision)?,
+        None => built_revision(&checkout)?,
     };
-    if revisions.is_empty() {
+    report.say(&format!(
+        "stado quality check: checking committed revision {revision} of {}",
+        checkout.display()
+    ));
+    export_check(
+        &checkout,
+        &revision,
+        report,
+        Selection::Installation,
+        if_declared,
+        purposes,
+    )
+    .await
+    .map_err(|error| error.within(format!("quality of committed revision {revision}")))?;
+    Ok(BTreeSet::from([revision]))
+}
+
+/// The pre-push check: every distinct pushed commit gets the source and lock
+/// checks and the `format` gates here, which compile nothing (a web format
+/// gate can itself run the product's typecheck and lint scripts). A commit
+/// pushed to `main` also gets its `lint` gates on the fleet, unless the
+/// submit queue recorded it as its own landing, whose pass ran every gate on
+/// it; such a commit is not checked again and is not among those answered.
+async fn pushed(
+    checkout: &Path,
+    if_declared: bool,
+    (hosts, purposes): (&[String], &[&str]),
+    report: Report,
+) -> Result<BTreeSet<String>, CmdError> {
+    let updates = pushed_revisions(checkout, report)?;
+    if updates.is_empty() {
         report.say("stado quality check: no source revision is being pushed; nothing to check");
     }
-    for revision in &revisions {
+    let mut checked = BTreeSet::new();
+    for (revision, main) in &updates {
+        if *main {
+            if let Some(candidate) = crate::cli::change::push::landing(checkout, revision).await? {
+                report.say(&format!(
+                    "stado quality check: {revision} is the submit queue's landing of candidate \
+                     {candidate}, whose pass ran every declared gate on it; nothing to check"
+                ));
+                continue;
+            }
+        }
         report.say(&format!(
             "stado quality check: checking committed revision {revision} of {}",
             checkout.display()
         ));
+        let within =
+            |error: CmdError| error.within(format!("quality of committed revision {revision}"));
         export_check(
-            &checkout,
+            checkout,
             revision,
             report,
-            selection,
+            Selection::Formatting,
             if_declared,
             purposes,
         )
         .await
-        .map_err(|error| error.within(format!("quality of committed revision {revision}")))?;
+        .map_err(within)?;
+        if *main {
+            crate::cli::change::push::lint(checkout, revision, (hosts, purposes))
+                .await
+                .map_err(within)?;
+        }
+        checked.insert(revision.clone());
     }
-    Ok(revisions)
+    Ok(checked)
 }
 
 /// `stado quality tree`: the one-off commands a model reads in the
@@ -203,8 +248,10 @@ pub(super) fn resolve(checkout: &Path, revision: &str) -> Result<String, CmdErro
     )
 }
 
-fn pushed_revisions(checkout: &Path, report: Report) -> Result<BTreeSet<String>, CmdError> {
-    let mut revisions = BTreeSet::new();
+/// Every distinct commit Git's pre-push updates on stdin push, and whether
+/// any update pushing it lands on `main`.
+fn pushed_revisions(checkout: &Path, report: Report) -> Result<BTreeMap<String, bool>, CmdError> {
+    let mut revisions = BTreeMap::new();
     // Git's pre-push stdin grammar is local-ref local-oid remote-ref remote-oid.
     // A deletion has the null local object ID. These are protocol identities:
     // https://git-scm.com/docs/githooks#_pre_push
@@ -245,10 +292,11 @@ fn pushed_revisions(checkout: &Path, report: Report) -> Result<BTreeSet<String>,
             continue;
         }
         let revision = resolve(checkout, local_oid)?;
+        let main = crate::cli::change::push::updates_main(remote_ref);
         report.say(&format!(
             "stado quality check: push {local_ref} -> {remote_ref} selects {revision}"
         ));
-        revisions.insert(revision);
+        *revisions.entry(revision).or_insert(false) |= main;
     }
     Ok(revisions)
 }

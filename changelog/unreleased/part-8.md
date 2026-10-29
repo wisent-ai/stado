@@ -45,6 +45,18 @@ The version bump gathers them into the release's own file and removes this one.
 - **`stado workload results JOB --into DIR`:** reads the result lines a detached session wrote on
   its host. It appends to `DIR/<name>.jsonl` every line that file does not already hold, so
   repeated runs while the session works add only what is new.
+- **`stado quality hooks install|status|remove --product P|--all [--json]`:** the pre-push gate
+  of a product's checkouts on this machine. Every repository the catalog names for the product
+  (owner, surfaces, installations) has its canonical checkout found, and `install` writes Stado's
+  Git `pre-push` hook there, which hands every push to `stado quality check --pre-push
+  --if-declared` through the installed Stado. Running it again changes nothing; a hook another
+  Stado wrote is repaired; a hook that is not Stado's (a Git LFS upload) is kept as
+  `pre-push.chained` and runs after the gate with the same ref updates. A checkout whose
+  `core.hooksPath` sends Git to another directory is left and named, since that directory's
+  `pre-push` decides what a push runs. `status` reads each checkout's state (`installed`,
+  `outdated`, `absent`, `foreign`, `governed`, `no-checkout`, or `unreadable`, which exits
+  non-zero) and `remove` takes the hook out and puts back the chained one. Stado Desktop's
+  Releases operations run all three.
 
 ### Fixed
 
@@ -54,6 +66,18 @@ The version bump gathers them into the release's own file and removes this one.
   refuses consumer <name>: "<name>" is a retired agent identity that no host's configuration
   accepts; use "stado" locally or a new scoped *-agent consumer`, which is the same rule the
   configuration check applies.
+
+- **A push to `main` runs the pushed commit's `lint` gates, not only its `format` gates:** a commit
+  pushed straight to `main` skipped the clippy gate the submit queue and every installation run,
+  so `main` went red for every session building from it. `stado quality check --pre-push` now
+  runs the `lint` gates a commit pushed to `main` declares on fleet hosts exactly as `stado change
+  run` runs them (`stado host cargo` for a Cargo gate, the action cache answering a tree that
+  already passed, Oko asked to admit the compile as the pushing session's work) and refuses the
+  push with each refused gate's own report. The queue records the commit it is about to push as
+  the candidate's `landing`, and the pre-push check lets that exact commit through without
+  running its gates again. The hosts come from their capacity publications; `--host HOST`
+  names them by hand, and a push no host can take is refused naming the queue, whose pass
+  names its hosts.
 
 - **A resident unit that starts Stado with an option it refuses is rendered again by that Stado:**
   a unit written by an older release, or edited by hand, made the installed executable exit on

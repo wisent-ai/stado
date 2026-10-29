@@ -1,6 +1,8 @@
 //! Which of a product's declared quality gates `stado quality` runs, chosen
 //! by each gate's declared kind. An installation runs every kind; pre-push
-//! selects the gates declared as `format`. A web product can declare
+//! selects the gates declared as `format`, and a push that updates `main`
+//! also has its `lint` gates run on the fleet as the submit queue runs them
+//! (`crate::cli::change::push`). A web product can declare
 //! `stado web quality` with that kind; it installs locked dependencies and
 //! runs declared typecheck and lint scripts, but writes no formatter output.
 

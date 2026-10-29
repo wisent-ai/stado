@@ -165,9 +165,18 @@ pub(crate) enum QualityCommands {
         #[arg(long, conflicts_with = "pre_push")]
         revision: Option<String>,
         /// Read Git pre-push ref updates from stdin and check every distinct
-        /// pushed commit. Deletions have no source tree to check.
+        /// pushed commit. Deletions have no source tree to check. A commit
+        /// pushed to main also has its lint gates run on fleet hosts as the
+        /// submit queue runs them, unless the queue recorded that commit as
+        /// its own landing.
         #[arg(long, conflicts_with = "revision")]
         pre_push: bool,
+        /// With --pre-push: run the lint gates of a push to main on these
+        /// registry hosts, by name; repeat for several. Without it the hosts
+        /// are chosen from their capacity publications, as `stado change
+        /// run` chooses them.
+        #[arg(long = "host", requires = "pre_push")]
+        hosts: Vec<String>,
         /// An open defect this check serves, named to Oko's admission
         /// (`oko admit compile|test|build --purpose`) before a lint or test
         /// gate runs or the CLI is built; repeat for several. A consent the
@@ -221,4 +230,47 @@ pub(crate) enum QualityCommands {
         #[arg(long)]
         json: bool,
     },
+    /// The pre-push gate of a product's checkouts on this machine: the Git
+    /// hook that hands every push to `stado quality check --pre-push`.
+    #[command(subcommand)]
+    Hooks(QualityHooksCommands),
+}
+
+/// Which product's checkouts a `stado quality hooks` verb takes.
+#[derive(Args)]
+pub(crate) struct HooksScope {
+    /// The catalogued product whose checkouts are taken: the canonical
+    /// checkout of its owner repository and of every surface's and
+    /// installation's repository.
+    #[arg(long, required_unless_present = "all", conflicts_with = "all")]
+    pub product: Option<String>,
+    /// Every catalogued product's checkouts.
+    #[arg(long)]
+    pub all: bool,
+    /// One document on stdout: each checkout's repository, products, path,
+    /// hooks directory, state, whether an earlier hook is chained and what
+    /// the verb did.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Install, read or remove the pre-push gate of a product's checkouts.
+#[derive(Subcommand)]
+pub(crate) enum QualityHooksCommands {
+    /// Write Stado's pre-push hook into each checkout whose hooks Git runs
+    /// from its own hooks directory, or repair one another Stado wrote; a
+    /// hook that is there already and is not Stado's is kept as
+    /// pre-push.chained and runs after the gate. Running it again changes
+    /// nothing. A checkout whose core.hooksPath sends Git elsewhere is left
+    /// and named. Exits non-zero, after every checkout was taken, when one
+    /// could not be read or written.
+    Install(HooksScope),
+    /// Read where each checkout's pre-push gate stands: installed,
+    /// outdated, absent, foreign (a hook that is not Stado's), governed (by
+    /// core.hooksPath), no checkout on this machine, or unreadable (Git or
+    /// the hooks directory could not be read, which exits non-zero).
+    Status(HooksScope),
+    /// Take Stado's pre-push hook out of each checkout and put back the
+    /// hook it chained; a hook that is not Stado's is left.
+    Remove(HooksScope),
 }

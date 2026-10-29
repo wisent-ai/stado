@@ -155,6 +155,14 @@ pub struct Candidate {
     pub shards: Vec<Shard>,
     #[serde(default)]
     pub reviews: Vec<Review>,
+    /// The commit this pass is pushing to `main` now, every gate having
+    /// passed on it and its review having admitted it when its risk asks
+    /// for one: the queue's recorded landing that a repository's pre-push
+    /// gate (`stado quality check --pre-push`) reads, so the queue's own
+    /// push is not checked a second time. Cleared when the candidate is
+    /// written again on a `main` that moved, and when it lands.
+    #[serde(default)]
+    pub landing: Option<String>,
     #[serde(default)]
     pub landed: Option<Landed>,
     #[serde(default)]

@@ -40,6 +40,12 @@ pub use install::plan::conflict::InstallationHostConflict;
 /// the repository, or a commit no canonical branch carries.
 pub use source::{MissingCheckout, NotCanonical};
 
+/// The one canonical checkout of a repository (`owner/name`) in the
+/// runtime's workspace, validated as one: refused with [`MissingCheckout`]
+/// when the workspace holds none. `stado quality hooks` finds a product's
+/// checkouts with it.
+pub use source::checkout as canonical_checkout;
+
 /// Declare again the lasting state an installation's recipe declares through
 /// Stado, for a service its install path did not declare it for, and whether
 /// a recipe declares any.

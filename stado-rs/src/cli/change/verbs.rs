@@ -79,6 +79,7 @@ pub fn enqueue(
         risk: None,
         shards: Vec::new(),
         reviews: Vec::new(),
+        landing: None,
         landed: None,
         refusal: None,
         integrated: Vec::new(),

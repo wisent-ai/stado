@@ -9,9 +9,11 @@
 //! records each defect it repairs. `status`, `list` and `cancel` read and
 //! withdraw candidates. [`record`] keeps the queue, [`git`] does every Git
 //! step without the checkout's working tree or index, [`run`] is the pass,
-//! [`verbs`] the rest.
+//! [`push`] judges a push to `main` the queue did not make, [`verbs`] the
+//! rest.
 
 pub mod git;
+pub(crate) mod push;
 pub mod record;
 mod run;
 pub mod verbs;

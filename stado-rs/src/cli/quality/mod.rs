@@ -28,10 +28,13 @@
 //! complete help tree, and asks Brama to judge one-off commands, aliases and
 //! incomplete object operations. A review no model answered is reported as
 //! not run, with its cause; the gates decide the check. With `--place` the
-//! check runs as placed work on a fleet host ([`check::place`]).
+//! check runs as placed work on a fleet host ([`check::place`]). `stado
+//! quality hooks` puts the pre-push check in every checkout of a product
+//! as its Git `pre-push` hook ([`hooks`]).
 
 mod check;
 mod gates;
+mod hooks;
 mod inputs;
 mod lockfile;
 mod units;
@@ -44,6 +47,7 @@ pub use self::check::{check, command_tree};
 pub(crate) use self::check::{
     check_bundle, check_revision, check_revision_for, check_source, place,
 };
+pub use self::hooks::{hooks, Verb as HooksVerb};
 pub(crate) use units::check as units;
 
 pub(crate) use self::gates::Selection;

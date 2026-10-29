@@ -45,6 +45,22 @@ enum NativeReleaseSourceOperations {
             .init(id: "revision", label: "Exact committed revision (blank reads the revision an install builds)", option: "--revision"),
             .init(id: "purpose", label: "Open defect the reading serves, named to Oko's admission before the CLI is built", option: "--purpose"),
         ], fixedArguments: ["--json"], mutates: false),
+        // The pre-push gate of a product's checkouts on the selected host:
+        // the Git hook that hands every push to `stado quality check
+        // --pre-push`, so a push to main runs the commit's format and lint
+        // gates before it lands.
+        .init(id: "quality-hooks-status", title: "Read the pre-push gate of a product's checkouts", path: ["quality", "hooks", "status"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Catalogued product (blank with every product checked)", option: "--product"),
+            .init(id: "all", label: "Every catalogued product", option: "--all", flag: true),
+        ], mutates: false),
+        .init(id: "quality-hooks-install", title: "Install the pre-push gate in a product's checkouts", path: ["quality", "hooks", "install"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Catalogued product (blank with every product checked)", option: "--product"),
+            .init(id: "all", label: "Every catalogued product", option: "--all", flag: true),
+        ]),
+        .init(id: "quality-hooks-remove", title: "Remove the pre-push gate from a product's checkouts", path: ["quality", "hooks", "remove"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Catalogued product (blank with every product checked)", option: "--product"),
+            .init(id: "all", label: "Every catalogued product", option: "--all", flag: true),
+        ]),
         .init(id: "storage-archive", title: "Pack a directory as a release archive", path: ["storage", "archive"], hostPlacement: .none, fields: [
             .init(id: "source", label: "Source directory on the selected Stado API host", required: true),
             .init(id: "output", label: "New archive path on that host, outside the source directory", required: true),
