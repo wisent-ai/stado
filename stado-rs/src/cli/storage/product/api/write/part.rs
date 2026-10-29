@@ -30,14 +30,21 @@ impl RemoteObjectApi {
         } = part;
         let size = body.len();
         let sha256 = hex::encode(Sha256::digest(&body));
-        // Zero-padded to the width of the last part's number, so the parts of
-        // one upload list in their order.
-        let width = total.to_string().len();
+        // The one part name composition and the deletion authorizer read back
+        // (`crate::queue::upload_part_name`); a width of its own made
+        // composition refuse every chunked upload as "outside the target".
+        let part_index = u32::try_from(index).map_err(|_beyond_part_range| {
+            CmdError::click(format!(
+                "part {index} of {total} of {uri} is beyond the part names an upload can carry"
+            ))
+        })?;
         let chunk_object = crate::remote::object_store::ObjectRef::new(
             object.namespace(),
             &format!(
-                "{}.__stado_upload/{upload_id}/{index:0width$}",
-                object.key()
+                "{}{}{upload_id}/{}",
+                object.key(),
+                crate::queue::UPLOAD_PART_MARKER,
+                crate::queue::upload_part_name(part_index)
             ),
         )?;
         let chunk_uri = chunk_object.to_string();

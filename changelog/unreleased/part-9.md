@@ -21,6 +21,11 @@ The version bump gathers them into the release's own file and removes this one.
   folders (`not measured` for the rest), and the `du` inventory walks the home one top-level
   entry at a time so a refused one is never opened; `~/Library/Caches` is no longer an inventory
   root.
+- **A body larger than one object API chunk uploads again:** `put` named each staged part with
+  a width of its own (three digits for a 514-part body) while composition and the deletion
+  authorizer read the shared eight-digit part name, so composition refused every chunked upload
+  with `chunk 0 is outside the target upload` — `stado release catalog input pin --swiftpm`
+  among them. Parts are now named by the one shared spelling.
 
 ### Added
 
