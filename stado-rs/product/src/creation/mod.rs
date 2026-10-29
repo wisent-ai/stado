@@ -128,6 +128,11 @@ fn progress(
             request.product.id
         );
     }
+    // A new product is new only if what it would create does not exist yet:
+    // checked before the first repository is provisioned.
+    if existing.is_none() {
+        protocol::distinct::check(journal, request, &document)?;
+    }
     let response_key = format!("response/{id}");
     response["state"] = json!("provisioning");
     response["error"] = Value::Null;

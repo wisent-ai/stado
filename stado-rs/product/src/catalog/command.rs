@@ -59,6 +59,23 @@ pub fn services(document: &Value) -> Result<Value> {
     Ok(json!({"services": services}))
 }
 
+/// Every repository GitHub lists for `org`, archived ones included, each with
+/// `nameWithOwner`, `description` and `isArchived`: what `--unclaimed` and a
+/// product creation request read the organization as.
+pub fn organization_repositories(org: &str) -> Result<Vec<Value>> {
+    let output = checked(Command::new("gh").args([
+        "repo",
+        "list",
+        org,
+        "--limit",
+        "10000",
+        "--json",
+        "nameWithOwner,description,isArchived",
+    ]))?;
+    serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("`gh repo list {org}` answered no repository list"))
+}
+
 pub fn claimed(document: &Value) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for product in document["products"]
@@ -118,16 +135,7 @@ pub fn run(args: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         return Ok(libc::EXIT_SUCCESS);
     }
     if let Some(org) = args.optional("--unclaimed")? {
-        let output = checked(Command::new("gh").args([
-            "repo",
-            "list",
-            org,
-            "--limit",
-            "10000",
-            "--json",
-            "nameWithOwner,description,isArchived",
-        ]))?;
-        let repositories: Vec<Value> = serde_json::from_slice(&output.stdout)?;
+        let repositories = organization_repositories(org)?;
         let known = claimed(&document)?;
         let unclaimed: Vec<_> = repositories
             .into_iter()

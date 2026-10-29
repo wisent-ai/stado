@@ -5,7 +5,7 @@ mod rivals;
 mod types;
 mod validation;
 use anyhow::{bail, Context, Result};
-pub use command::{cli_catalog, run, services};
+pub use command::{cli_catalog, organization_repositories, run, services};
 /// Every rival claim of a product with its source fetched again.
 pub use rivals::check_claims;
 use serde_json::{json, Value};

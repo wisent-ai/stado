@@ -1,3 +1,5 @@
+pub mod distinct;
+
 use crate::catalog::{Family, Visibility};
 use crate::common::slug;
 use anyhow::{bail, Result};
