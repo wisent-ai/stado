@@ -17,7 +17,7 @@ const TARGET_LEAF: &str = "host-build/cargo-target";
 /// The build cache root on `target`: its declared work root's, or the one
 /// under the account's `~/.stado` when the registry declares none, as the
 /// host's own agent and release worker read it.
-fn cache_root(target: &ComputeTarget) -> String {
+pub(super) fn cache_root(target: &ComputeTarget) -> String {
     match target.work_root.as_deref() {
         Some(root) => format!("{}/{BUILD_CACHE_LEAF}", shlex_quote(root)),
         None => format!("\"$HOME/.stado/{BUILD_CACHE_LEAF}\""),

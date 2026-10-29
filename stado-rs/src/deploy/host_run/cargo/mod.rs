@@ -10,6 +10,7 @@
 
 mod script;
 mod source;
+mod volume;
 
 use std::path::{Path, PathBuf};
 
@@ -83,8 +84,8 @@ pub struct HostCargoReceipt {
     pub stdout: String,
     pub stderr: String,
     pub artifacts: Vec<Artifact>,
-    /// Free bytes on the host's volume before and after, from its own
-    /// `stado host gates` reading.
+    /// Free bytes on the volume holding the host's build cache before and
+    /// after, from `df -P` there ([`volume`]).
     pub free_bytes_before: Option<u64>,
     pub free_bytes_after: Option<u64>,
     pub free_bytes_after_error: Option<String>,
@@ -167,19 +168,7 @@ pub async fn run(
 ) -> Result<HostCargoReceipt, DeployError> {
     validate(request)?;
     let (checkout, commit, manifest) = source(&request.manifest_path, &request.revision).await?;
-    let gates = crate::deploy::host_gates::read_host_gates(&target.name, runner).await?;
-    let threshold = crate::providers::local::space_reclaim::rule::DISK_FULL_PERCENT;
-    if let Some(used) = gates
-        .used_percent
-        .filter(|used| *used >= f64::from(threshold))
-    {
-        return Err(DeployError::unreachable(format!(
-            "{}: its volume is {used:.1}% used, at the {threshold}% disk-full threshold; a \
-             compile would take the host's services down while its janitor deletes everything \
-             the fleet put there (`stado space report {}`)",
-            target.name, target.name
-        )));
-    }
+    let before = volume::admit(target, runner).await?;
     let name = checkout
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -249,11 +238,10 @@ pub async fn run(
     let ran = ran?;
     pulled?;
     removed?;
-    let (free_bytes_after, free_bytes_after_error) =
-        match crate::deploy::host_gates::read_host_gates(&target.name, runner).await {
-            Ok(after) => (after.free_bytes, None),
-            Err(error) => (None, Some(error.to_string())),
-        };
+    let (free_bytes_after, free_bytes_after_error) = match volume::measure(target, runner).await {
+        Ok(after) => (Some(after.free_bytes), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
     Ok(HostCargoReceipt {
         schema: "stado.host-cargo-receipt.v1",
         target: target.name.clone(),
@@ -268,7 +256,7 @@ pub async fn run(
         stdout: ran.stdout,
         stderr: ran.stderr,
         artifacts,
-        free_bytes_before: gates.free_bytes,
+        free_bytes_before: Some(before.free_bytes),
         free_bytes_after,
         free_bytes_after_error,
         run_directory,
