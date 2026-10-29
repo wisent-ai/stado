@@ -86,9 +86,23 @@ async fn fetch_manifest(api: &str, uri: &str) -> Result<Value, String> {
     let client = crate::cli::storage::fleet_https_client()
         .map_err(|error| format!("cannot build the fleet HTTPS client: {error}"))?;
     let endpoint = format!("{api}/api/release/object");
+    // reqwest's own words stop at "error sending request for url (...)";
+    // the reason TLS or the connection failed (an unknown issuer, an expired
+    // or mismatched certificate, a refused or reset connection) is in its
+    // sources, so the whole chain is said, the stage first.
     let response = crate::wait::request(client.get(&endpoint).query(&[("uri", uri)]))
         .await
-        .map_err(|error| format!("exact release manifest {uri} is unreachable: {error}"))?;
+        .map_err(|error| {
+            let stage = match (error.is_connect(), error.is_timeout()) {
+                (true, _) => "connecting or the TLS handshake failed",
+                (false, true) => "the request timed out",
+                (false, false) => "the request failed after it was sent",
+            };
+            format!(
+                "exact release manifest {uri} is unreachable through {endpoint}: {stage}: {}",
+                crate::wait::chain(&error)
+            )
+        })?;
     if !response.status().is_success() {
         return Err(format!(
             "exact release manifest {uri} returned HTTP {}",

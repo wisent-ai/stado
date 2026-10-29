@@ -34,3 +34,9 @@ The version bump gathers them into the release's own file and removes this one.
   passed the caller's cancellation to the credential resolver and to the Postgres pool, but a
   MySQL or SQLite pool connect still waited without it. Every engine's pool now opens through
   one wait that honours the cancellation and refuses with the step and `czekanie odwolane`.
+- **`stado doctor` names why the release manifest could not be fetched:** the release channel
+  check reported reqwest's own `error sending request for url (...)`, which hides why TLS or the
+  connection failed. It now names the stage (`connecting or the TLS handshake failed`, `the
+  request timed out`, `the request failed after it was sent`) and the whole chain of causes,
+  such as an unknown certificate issuer, an expired or mismatched certificate, or a refused
+  connection.
