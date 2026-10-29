@@ -571,6 +571,10 @@ products:
     status: planned
     outcome: Publish the OpenAI-compatible deployment behind a public origin with declared prices, throughput and rate limits, so model output is sold per token while yieldable mode keeps the board available to fleet work.
     source: https://stado.wisent.com/docs/earning
+  - title: Become an inference provider on OpenRouter
+    status: planned
+    outcome: List the fleet's OpenAI-compatible deployment as an OpenRouter inference provider with per-token prices, so its customers buy our model output without a storefront of our own.
+    source: https://stado.wisent.com/docs/earning
   - title: Operate a customer's own fleet
     status: planned
     outcome: Run enrollment, placement, delivery, declared repair and evidence for machines and cloud accounts the customer owns, with the provider's cost and the management fee separately visible.

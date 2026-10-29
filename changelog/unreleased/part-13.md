@@ -23,3 +23,5 @@ The version bump gathers them into the release's own file and removes this one.
   and refused, naming the repository and the product that claims it, when a requested
   repository exists or the product id is the name of an existing repository. A repository the
   same request provisioned on an earlier run is its own, so `--resume` still works.
+- **Stado's roadmap names OpenRouter as a way to sell tokens:** the catalog's roadmap for Stado
+  carries *Become an inference provider on OpenRouter*, and `/docs/earning` says what it needs.
