@@ -42,7 +42,9 @@ pub(crate) fn next_due(
         return Ok(Utc::now());
     };
     let seconds = i64::try_from(every.get()).map_err(|error| {
-        CmdError::usage(format!("--every {every} is more seconds than a clock holds: {error}"))
+        CmdError::usage(format!(
+            "--every {every} is more seconds than a clock holds: {error}"
+        ))
     })?;
     chrono::TimeDelta::try_seconds(seconds)
         .and_then(|step| started.checked_add_signed(step))

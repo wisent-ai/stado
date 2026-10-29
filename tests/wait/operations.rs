@@ -32,7 +32,9 @@ fn measured_operations(measured: &Path) -> BTreeSet<String> {
         .filter(|path| path.extension().is_none())
         .map(|path| {
             let record = std::fs::read_to_string(&path).expect("a measurement record");
-            let (nanos, operation) = record.split_once(' ').expect("nanoseconds, then the operation");
+            let (nanos, operation) = record
+                .split_once(' ')
+                .expect("nanoseconds, then the operation");
             nanos.parse::<u64>().expect("the record's nanoseconds");
             operation.trim_end().to_string()
         })
@@ -46,7 +48,8 @@ fn a_subcommand_beside_a_same_named_directory_and_a_named_operation_are_measured
     std::env::set_var(stado_wait::measured::DIRECTORY_ENV, &measured);
     std::env::set_var("STADO_WAITS_DIR", root.join("waits"));
 
-    stado_wait::output(Command::new("git").arg("status").current_dir(&root)).expect("git status ran");
+    stado_wait::output(Command::new("git").arg("status").current_dir(&root))
+        .expect("git status ran");
     assert_eq!(
         measured_operations(&measured),
         BTreeSet::from(["proces git status".to_string()]),

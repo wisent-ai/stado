@@ -137,7 +137,10 @@ pub fn last_started() -> Result<Option<DateTime<Utc>>, CmdError> {
     let attempt: Option<Attempt> =
         document::read(&attempt_path()?, ATTEMPT).map_err(CmdError::click)?;
     let ran = read()?.last_pass.map(|pass| pass.started_at);
-    Ok([attempt.map(|attempt| attempt.at), ran].into_iter().flatten().max())
+    Ok([attempt.map(|attempt| attempt.at), ran]
+        .into_iter()
+        .flatten()
+        .max())
 }
 
 /// The lock one pass holds for its whole run, beside the state: `None` when
