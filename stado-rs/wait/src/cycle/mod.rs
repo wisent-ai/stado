@@ -36,7 +36,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use holds::{held, holders, Held};
-use read::{needing, ps, this_process};
+use read::{command, needing, this_process};
 pub use resource::{Resource, ResourceKind};
 
 /// What follows the register directory's name in the graph's: the graph
@@ -241,7 +241,7 @@ impl Graph {
             for next in self.awaited.get(&held_by).into_iter().flatten() {
                 links.push(Link {
                     pid: held_by,
-                    command: ps(held_by, "command")?,
+                    command: command(held_by)?,
                     awaits: next.clone(),
                 });
                 if let Some(cycle) = self.search(links, needs_waiter, seen)? {
@@ -254,18 +254,15 @@ impl Graph {
     }
 
     fn follow(&self, waiter: u32, resource: &Resource) -> Result<Option<Cycle>, String> {
-        let (command, needs) = if waiter == std::process::id() {
-            let (command, needs) = this_process()?;
-            (command.clone(), std::borrow::Cow::Borrowed(needs))
+        let (runs, needs) = if waiter == std::process::id() {
+            let (runs, needs) = this_process()?;
+            (runs.clone(), std::borrow::Cow::Borrowed(needs))
         } else {
-            (
-                ps(waiter, "command")?,
-                std::borrow::Cow::Owned(needing(waiter)?),
-            )
+            (command(waiter)?, std::borrow::Cow::Owned(needing(waiter)?))
         };
         let mut links = vec![Link {
             pid: waiter,
-            command,
+            command: runs,
             awaits: resource.clone(),
         }];
         let mut seen = BTreeSet::from([waiter]);

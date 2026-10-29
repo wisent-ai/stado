@@ -32,10 +32,12 @@ pub fn replaces_running_program(destination: &Path) -> bool {
 }
 
 /// Refuse `candidate` when it does not accept this host's configuration,
-/// after its own migration.
+/// after its own migration. What it noted while accepting it (`NOTE ...`
+/// lines: a resolver state left by a resolver that no longer runs) is said.
 pub fn refuse_unaccepted(candidate: &Path, name: &str) -> Result<()> {
     let first = run(candidate, &["config", "validate"], name)?;
     if first.status.success() {
+        say_notes(&first, name);
         return Ok(());
     }
     let migration = run(candidate, &["config", "migrate"], name)?;
@@ -45,6 +47,7 @@ pub fn refuse_unaccepted(candidate: &Path, name: &str) -> Result<()> {
             "the incoming {name} migrated this host's configuration before installing: {}",
             String::from_utf8_lossy(&migration.stdout).trim()
         );
+        say_notes(&second, name);
         return Ok(());
     }
     bail!(
@@ -56,6 +59,17 @@ pub fn refuse_unaccepted(candidate: &Path, name: &str) -> Result<()> {
         String::from_utf8_lossy(&migration.stdout),
         String::from_utf8_lossy(&migration.stderr),
     )
+}
+
+/// Each `NOTE ...` line of an accepting `config validate`, under the name of
+/// the program that wrote it.
+fn say_notes(validated: &Output, name: &str) {
+    for note in String::from_utf8_lossy(&validated.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("NOTE "))
+    {
+        eprintln!("the incoming {name} accepts this host's configuration: {note}");
+    }
 }
 
 fn run(candidate: &Path, args: &[&str], name: &str) -> Result<Output> {

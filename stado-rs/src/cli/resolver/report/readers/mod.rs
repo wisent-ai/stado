@@ -1,8 +1,9 @@
 //! What other programs on this host read from the resolver's published
 //! state: where an adapter listens, why a route they dialled is not served,
-//! and the readiness marker of the host's roles.
+//! whether a resolver runs here, and the readiness marker of the host's
+//! roles.
 
-use super::published::{published_state, publisher_running, PublishedState};
+use super::published::{published_state, publisher_running, state_path, PublishedState};
 
 /// Why the resolver that published `state` left the adapter at `bind`
 /// unserved, when it did.
@@ -123,5 +124,34 @@ pub(crate) fn readiness_marker() -> Option<String> {
         state.state,
         state.pid,
         u8::from(state.listening)
+    ))
+}
+
+/// Whether a resolver runs on this host, by the state it published.
+pub(crate) enum HostResolver {
+    /// No resolver has published here.
+    Absent,
+    /// The process that published the state still runs.
+    Running,
+    /// The state outlived the process that published it: the sentence
+    /// names the file, the process and when it last published.
+    Exited(String),
+}
+
+/// Whether a resolver runs on this host. A state file outlives the
+/// resolver that wrote it, so a file whose publisher no longer runs is no
+/// resolver, and is said as such rather than read as one.
+pub(crate) fn host_resolver() -> HostResolver {
+    let Some(state) = published_state() else {
+        return HostResolver::Absent;
+    };
+    if publisher_running(&state) {
+        return HostResolver::Running;
+    }
+    let file = state_path().map_or_else(String::new, |path| format!(" {}", path.display()));
+    HostResolver::Exited(format!(
+        "the resolver state{file} was published by pid {} ({} at {}), which no longer runs, so \
+         no resolver runs on this host",
+        state.pid, state.state, state.updated_at
     ))
 }

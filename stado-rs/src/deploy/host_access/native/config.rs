@@ -52,13 +52,12 @@ fn declaring_commands() -> String {
         .join(" and ")
 }
 
-/// Why this host's configuration cannot carry the long-lived sessions it
-/// runs, or `None` when it can. A host runs one when a resolver has
-/// published here: its tunnel to the registry authority lives as long as the
-/// resolver. `stado config validate` reports it, so an incoming Stado
+/// Why this host's configuration cannot carry the long-lived session a
+/// running resolver holds, or `None` when it can: the resolver's tunnel to
+/// its registry authority lives as long as the resolver. `stado config
+/// validate` asks it while a resolver runs here, so an incoming Stado
 /// refuses to replace a binary on a host whose resolver it would stop.
 pub(crate) fn long_lived_refusal() -> Option<String> {
-    crate::cli::resolver::readiness_marker()?;
     let refused = client(true).err()?;
     Some(format!(
         "this host runs a resolver, whose tunnel to its registry authority is a long-lived SSH \

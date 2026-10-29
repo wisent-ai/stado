@@ -36,3 +36,18 @@ The version bump gathers them into the release's own file and removes this one.
   authority answers every other host's registry read from its resolver's held generation, so an
   authority without it refused every read with "the resolver that published its state … is not
   running".
+
+### Fixed
+
+- A registry authority read starts every declared path at once on Linux. A wait read its own
+  command and ancestors with one `ps` each, and `ps` walks every process of the machine: on a host
+  with thousands of threads that took nearly five seconds before the first path started, and the
+  read was abandoned at its five-second bound. The wait-for graph now reads `/proc/<pid>` directly.
+- A `.local` name the link answers late is still resolved: a resolution asks twice over three
+  seconds (RFC 6762 §5.2) instead of once over one, and the answer stands for the rest of the
+  command for its 120-second TTL, so the connections that follow it do not ask the link again.
+- `stado network up` mints the host's key and settles its node port before it reads the registry
+  authority. A host that cannot read the authority yet keeps the key, and the refusal names it.
+- `stado config validate`, and so every install's configuration check, reads a resolver state
+  file whose resolver no longer runs as no resolver: it says so in a `NOTE` line, which the
+  install relays, and no longer asks the host for the SSH keepalive a running resolver needs.

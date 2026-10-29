@@ -38,7 +38,8 @@ pub(crate) use crate::cli::resolver::directory::source::current_target;
 pub(crate) use crate::cli::resolver::directory::write::authority_compare_and_swap;
 pub(crate) use crate::cli::resolver::directory::{read_local_document, read_local_snapshot};
 pub(crate) use crate::cli::resolver::report::readers::{
-    not_serving_reason, published_adapter_url, readiness_marker, unserved_marker,
+    host_resolver, not_serving_reason, published_adapter_url, readiness_marker, unserved_marker,
+    HostResolver,
 };
 pub(crate) use crate::cli::resolver::report::vault::{KeyringLockRepair, VaultConsultations};
 pub(crate) use crate::cli::resolver::report::waiting::host::{

@@ -1,10 +1,16 @@
 //! `stado network up`: join this host to Stado's network and make it the
 //! host's preferred path. Its promise is kept in this order, and each step
-//! is observed before the next: the key exists; the registry declares the
-//! node; the node's unit runs and publishes that it listens; this host's
-//! own SSH server answers through the node at a declared endpoint, under the
-//! registry key; only then does the registry make the network the primary
-//! path, so a node that never answered is never anybody's preferred path.
+//! is observed before the next: the key and the node's port exist; the
+//! registry declares the node; the node's unit runs and publishes that it
+//! listens; this host's own SSH server answers through the node at a
+//! declared endpoint, under the registry key; only then does the registry
+//! make the network the primary path, so a node that never answered is
+//! never anybody's preferred path.
+//!
+//! The key and the port come first because neither needs the registry
+//! authority. The key is kept whatever the read answers, so a host that
+//! cannot read the authority yet declares the same identity on its next
+//! `up` instead of minting another.
 
 use clap::Args;
 use serde_json::json;
@@ -55,13 +61,12 @@ fn endpoint_checked(endpoint: &str) -> Result<String, CmdError> {
     }
 }
 
-/// The port the node listens on: the one already recorded, else one the
-/// system hands out now.
-fn node_port(host: &str) -> Result<u16, CmdError> {
+/// The port this account's node listens on: the one already recorded, else
+/// one the system hands out now. One account runs one node, so the port is
+/// the account's whichever registry host it is declared as.
+fn node_port() -> Result<u16, CmdError> {
     if let Some(state) = State::load().map_err(CmdError::declaration)? {
-        if state.host == host {
-            return Ok(state.port);
-        }
+        return Ok(state.port);
     }
     let listener =
         std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).map_err(|error| {
@@ -86,12 +91,18 @@ pub(super) async fn up(args: UpArgs) -> Result<(), CmdError> {
         .iter()
         .map(|endpoint| endpoint_checked(endpoint))
         .collect::<Result<Vec<_>, _>>()?;
+    let (keypair, created) = key::load_or_create().map_err(CmdError::declaration)?;
+    let port = node_port()?;
     let registry = crate::targets::fetch_registry_remote()
         .await
-        .map_err(|error| CmdError::unreachable(format!("`network up` declares the node in the registry, whose authority did not answer: {error}")))?;
+        .map_err(|error| {
+            CmdError::unreachable(format!(
+                "`network up` declares the node in the registry, whose authority did not answer: \
+                 {error}; this host's key {} is kept, and the next `network up` declares it",
+                keypair.public_base64()
+            ))
+        })?;
     let host = super::this_host(&registry, args.host.as_deref())?;
-    let (keypair, created) = key::load_or_create().map_err(CmdError::declaration)?;
-    let port = node_port(&host)?;
     let measured = declaration::measure(port)
         .await
         .map_err(CmdError::unreachable)?;
