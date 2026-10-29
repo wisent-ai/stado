@@ -31,10 +31,15 @@ pub(super) async fn remove(product: &str) -> Result<String, CmdError> {
     .await
 }
 
+/// One product's destinations, and whether they are its declared list
+/// (`declared`) or, with none declared, the hosts whose `managed_versions`
+/// say they run it (`running`).
 pub(super) async fn show(product: &str) -> Result<Value, CmdError> {
     let (document, generation) = registry::fetch_versioned_document().await?;
     let targets = destinations::read(&document, product).map_err(CmdError::declaration)?;
+    let declared = destinations::declared(&document, product).map_err(CmdError::declaration)?;
+    let state = if declared { "declared" } else { "running" };
     Ok(
-        json!({"product": product, "state": "declared", "registry_generation": generation, "destinations": targets}),
+        json!({"product": product, "state": state, "registry_generation": generation, "destinations": targets}),
     )
 }

@@ -22,3 +22,10 @@ The version bump gathers them into the release's own file and removes this one.
   asking running work for its turn and refused as a rule, `retrying will not help`, exit 1, though
   the turn ends once the pass has run. It is now a retryable wait: exit 69, `retry later`, and the
   sentence says to run it again once that pass has run or with `--wait`.
+- **A published release installs itself on the hosts that run its product:** a delivery whose
+  target selects a product went only to the hosts someone listed with `stado release destinations
+  set`, so a product nobody listed (Skarbiec among them) was published and reached no host. With no
+  declaration, its destinations are now every registry target whose `managed_versions` names the
+  product; a declaration still places a product on a host that does not run it yet, and
+  `destinations show` reports `running` or `declared`. A product no host runs and no declaration
+  places is refused naming both ways.

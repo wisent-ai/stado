@@ -67,14 +67,29 @@ pub(in crate::cli::release_submit) async fn prepare(
         return Err(CmdError::refused("release has delivery attempts but its immutable placement is missing; refusing to choose replacement hosts"));
     }
     let (document, generation) = registry::fetch_versioned_document().await?;
+    let mut chosen =
+        destinations::read(&document, &manifest.product).map_err(CmdError::declaration)?;
+    // A declared list is held to every host it names. The hosts that run the
+    // product are not a list anyone wrote for this release: one on a
+    // platform the release delivers nothing to keeps what it runs, instead of
+    // refusing the release for every other host.
+    if !destinations::declared(&document, &manifest.product).map_err(CmdError::declaration)? {
+        let delivered: BTreeSet<&str> = manifest
+            .deliveries
+            .iter()
+            .filter(|delivery| matches!(delivery.target, DeliveryTarget::Registry(_)))
+            .filter_map(|delivery| manifest.platforms.get(&delivery.platform))
+            .map(|platform| platform.runner_platform.as_str())
+            .collect();
+        chosen.retain(|destination| delivered.contains(destination.platform.as_str()));
+    }
     let plan = Placement {
         schema_version: crate::release_pipeline::SCHEMA_VERSION,
         run_id: run.run_id.clone(),
         source_sha256: run.source_sha256.clone(),
         manifest_sha256: run.manifest_sha256.clone(),
         registry_generation: generation,
-        destinations: destinations::read(&document, &manifest.product)
-            .map_err(CmdError::declaration)?,
+        destinations: chosen,
     };
     let deliveries = expand(manifest, &plan.destinations)?;
     queue_immutable(&path(run), &serde_json::to_vec(&plan)?).await?;

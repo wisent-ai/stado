@@ -22,7 +22,7 @@ enum DestinationCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Read one product's declared targets and their registry platforms.
+    /// Read one product's delivery targets and their registry platforms: its declared list, or with none the hosts that run it.
     Show {
         product: String,
         #[arg(long)]
@@ -42,7 +42,7 @@ enum DestinationCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Remove a declaration. Already frozen release runs keep their destinations.
+    /// Remove a declaration; the product then goes to the hosts that run it. Already frozen release runs keep their destinations.
     Remove {
         product: String,
         #[arg(long)]
