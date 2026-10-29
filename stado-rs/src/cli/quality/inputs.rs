@@ -8,10 +8,14 @@
 //! handed off. The check confirms every pinned object is in its store, and
 //! stages the ones a selected gate declares it reads the way the worker
 //! stages them: the bytes must hash to the pin, and they are extracted or
-//! mounted as declared, beside the exported tree and removed with it. An
-//! input no selected gate reads is confirmed stored and left in the store,
-//! so a gate that reads only the source never waits for a dependency
-//! resolution it does not use.
+//! mounted as declared, beside the exported tree and removed with it. A
+//! check that builds the product (installation, release submission, the
+//! command tree) stages every input, as the worker stages every input before
+//! the build that reads them: a build script that requires its pinned
+//! dependency (Brama's `src/release/build.sh` and Skarbiec) was otherwise run
+//! without it and refused every submission. An input that neither the build
+//! nor a selected gate reads is confirmed stored and left in the store, so a
+//! formatting check never waits for a dependency resolution it does not use.
 
 use std::path::Path;
 
@@ -19,12 +23,13 @@ use super::gates::DeclaredGates;
 use super::Report;
 use crate::cli::CmdError;
 
-/// Stage every input a selected gate of `declared` reads under `area`,
-/// answering the variables a gate reads them from, after confirming every
-/// pinned input is stored.
+/// Stage every input a selected gate of `declared` reads under `area`, and
+/// every input when the check `builds` the product, answering the variables
+/// they are read from, after confirming every pinned input is stored.
 pub(super) async fn stage(
     declared: &DeclaredGates,
     area: &Path,
+    builds: bool,
     report: Report,
 ) -> Result<Vec<(String, String)>, CmdError> {
     let mut variables = Vec::new();
@@ -40,16 +45,19 @@ pub(super) async fn stage(
             &format!("release input {name} of {}", declared.product),
         )
         .await?;
-        let readers: Vec<&str> = declared
+        let mut readers: Vec<&str> = declared
             .gates
             .iter()
             .filter(|gate| gate.inputs.iter().any(|read| read == name))
             .map(|gate| gate.name.as_str())
             .collect();
+        if builds {
+            readers.push("the build");
+        }
         if readers.is_empty() {
             report.say(&format!(
-                "stado quality check: release input {name} is stored at {}; no selected gate \
-                 declares reading it, so it stays in the store",
+                "stado quality check: release input {name} is stored at {}; neither the build \
+                 nor a selected gate reads it, so it stays in the store",
                 input.uri
             ));
             continue;

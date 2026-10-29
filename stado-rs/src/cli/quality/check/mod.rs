@@ -185,12 +185,14 @@ async fn check_tree(
     // A pin whose object was never stored, or was stored for a lock the
     // product has since moved past, is refused here, while the session that
     // pushed it can still repair it, instead of by the build that fetches it;
-    // a gate that reads an input finds it where the worker would put it.
+    // a gate that reads an input, and the build that reads every one, find
+    // it where the worker would put it.
     report.say(&format!(
         "stado quality check: staging the pinned release inputs of {revision} into {}",
         inputs_area.display()
     ));
-    let staged = inputs::stage(&declared, inputs_area, report).await?;
+    let builds = matches!(selection, Selection::Installation | Selection::CommandTree);
+    let staged = inputs::stage(&declared, inputs_area, builds, report).await?;
     // A gate reads the secrets the worker would put in its environment, such
     // as a web install's GITHUB_TOKEN for private dependencies.
     report.say(&format!(
