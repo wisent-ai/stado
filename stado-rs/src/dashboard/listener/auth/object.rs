@@ -18,9 +18,11 @@ pub(crate) fn release_object_namespace(namespace: &str) -> bool {
 
 /// Return the immutable target governed by one disposable chunk key.
 ///
-/// Release objects remain undeletable. Only the exact staging shape emitted by
-/// the chunked uploader can be removed, and it is authenticated against the
-/// final target rather than against an independently chosen prefix.
+/// Release objects remain undeletable. Only a staging shape the chunked
+/// uploader has emitted (its current part names and the earlier ones,
+/// `queue::is_staged_part_name`) can be removed, and it is authenticated
+/// against the final target rather than against an independently chosen
+/// prefix.
 pub(crate) fn release_upload_target_key(key: &str) -> Option<&str> {
     let (target, suffix) = key.split_once(crate::queue::UPLOAD_PART_MARKER)?;
     let mut parts = suffix.split('/');
@@ -34,7 +36,7 @@ pub(crate) fn release_upload_target_key(key: &str) -> Option<&str> {
         || !upload_id
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        || !crate::queue::is_upload_part_name(chunk_index)
+        || !crate::queue::is_staged_part_name(chunk_index)
         || parts.next().is_some()
     {
         return None;

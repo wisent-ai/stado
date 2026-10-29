@@ -63,8 +63,9 @@ pub const UPLOAD_PART_MARKER: &str = ".__stado_upload/";
 
 /// The name of one staged part under `<key>.__stado_upload/<upload id>/`:
 /// its index zero-padded to a fixed width, so parts list in order. Writers
-/// (`put`, the S3 multipart stage) and readers (composition, the deletion
-/// authorizer) share this one spelling.
+/// (`put`, the S3 multipart stage) and composition share this one spelling;
+/// the deletion authorizer also reads the earlier one
+/// ([`is_staged_part_name`]).
 pub fn upload_part_name(index: u32) -> String {
     format!("{index:08}")
 }
@@ -77,6 +78,19 @@ pub fn is_upload_part_name(name: &str) -> bool {
         Ok(index) => upload_part_name(index) == name,
         Err(_not_an_index) => false,
     }
+}
+
+/// Whether `name` is a name the chunked uploader has given a staged part:
+/// [`upload_part_name`]'s, or the one it gave before it used that spelling,
+/// the index zero-padded only to the width of the part count (`000` of 514
+/// parts). Composition reads only the current spelling; removal reads both,
+/// so the parts of an upload abandoned under the earlier names can still be
+/// discarded through the product.
+pub fn is_staged_part_name(name: &str) -> bool {
+    is_upload_part_name(name)
+        || (!name.is_empty()
+            && name.len() < upload_part_name(0).len()
+            && name.bytes().all(|byte| byte.is_ascii_digit()))
 }
 pub use azure_blob::AzureBlobBackend;
 pub use contract::{BlobBackend, BlobInfo, ChangeWatch, Listing, StorageError, VersionedText};
