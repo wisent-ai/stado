@@ -26,8 +26,7 @@ use crate::deploy::service::{
 };
 
 /// Why the unit is rendered again, as `service ensure --reason` records it.
-const REASON: &str =
-    "the resident unit's argument vector is refused by the executable it starts";
+const REASON: &str = "the resident unit's argument vector is refused by the executable it starts";
 /// Where the converge's own output is kept, beside this account's Stado logs.
 const LOG: &str = "~/.stado/logs/resident-converge.log";
 /// What the registry is read for, opening the sentence of a refused read.
@@ -79,8 +78,8 @@ async fn converge() -> Result<Option<String>, String> {
             Err(cause) if cause.kind() == std::io::ErrorKind::NotFound => continue,
             Err(cause) => return Err(format!("cannot read {}: {cause}", path.display())),
         };
-        let launchd = path.starts_with(home.join(USER_LAUNCHD_AGENTS))
-            || path.starts_with(LAUNCHD_DAEMONS);
+        let launchd =
+            path.starts_with(home.join(USER_LAUNCHD_AGENTS)) || path.starts_with(LAUNCHD_DAEMONS);
         let kind = if launchd { KIND_LAUNCHD } else { KIND_SYSTEMD };
         let unit = service::parse_local_unit_file(&text, kind)
             .map_err(|cause| format!("cannot parse {}: {cause}", path.display()))?;
@@ -119,13 +118,9 @@ async fn converge() -> Result<Option<String>, String> {
         .iter()
         .map(|word| word.to_string())
         .collect();
-        let child = crate::cli::fleet::ingress::spawn_detached(
-            &program,
-            &arguments,
-            Stdio::null(),
-            &log,
-        )
-        .map_err(|cause| cause.to_string())?;
+        let child =
+            crate::cli::fleet::ingress::spawn_detached(&program, &arguments, Stdio::null(), &log)
+                .map_err(|cause| cause.to_string())?;
         record(&running, child.id())?;
         return Ok(Some(format!(
             "{label} ({}) starts {} with an argument vector this build refuses; \
@@ -162,7 +157,7 @@ fn still_running(running: &Path) -> Result<Option<i32>, String> {
         }
     };
     let born = crate::wait::open::birth_seconds(converge.pid)?;
-    Ok(Some(converge.pid).filter(|_| born == Some(converge.born)))
+    Ok((born == Some(converge.born)).then_some(converge.pid))
 }
 
 /// Record the converge `child` in `running` with its kernel birth second;
@@ -174,8 +169,12 @@ fn record(running: &Path, child: u32) -> Result<(), String> {
         return Ok(());
     };
     let text = serde_json::json!({ "pid": pid, "born": born }).to_string();
-    std::fs::write(running, text)
-        .map_err(|cause| format!("cannot record the converge in {}: {cause}", running.display()))
+    std::fs::write(running, text).map_err(|cause| {
+        format!(
+            "cannot record the converge in {}: {cause}",
+            running.display()
+        )
+    })
 }
 
 /// The registry target this machine is, read from what this machine already
@@ -194,6 +193,8 @@ async fn self_host() -> Result<String, String> {
         .map_err(|cause| format!("host {hostname} cannot be looked up: {cause}"))?;
     match found {
         Some(target) => Ok(target.name.clone()),
-        None => Err(format!("host {hostname} is not in this machine's registry copy")),
+        None => Err(format!(
+            "host {hostname} is not in this machine's registry copy"
+        )),
     }
 }
