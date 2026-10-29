@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 // the upgraded service running. Never point it at an operator's live account.
 // After the install it rolls the CLI back and checks the restored executable
 // rendered the unit again and parses it, then installs the candidate again.
+// Last, it puts the retired option back into the unit file by hand and
+// reloads the unit: the installed executable must render its own unit again.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const binary = process.env.STADO_BIN;
 const source = process.env.STADO_TEST_SOURCE;
@@ -114,6 +116,47 @@ try {
   succeeded(run(program, ['product', '--workspace', workspace, 'install', 'stado',
     '--surface', 'cli', '--source-commit', commit]));
   assert.equal(digest(readFileSync(installed)), report.after_sha256, 'the second install did not place the candidate again');
+
+  // A unit no install wrote: the retired option is put back into the unit
+  // file by hand and the unit reloaded, so the installed executable is
+  // started on an argv it refuses. It must render its own unit again from
+  // its catalog before it exits, and the unit must serve without any command
+  // from outside.
+  const agent = join(process.env.HOME, 'Library', 'LaunchAgents', 'com.wisent.stado.plist');
+  const userUnit = join(process.env.HOME, '.config', 'systemd', 'user', 'com.wisent.stado.service');
+  const launchd = existsSync(agent);
+  const unitFile = launchd ? agent : userUnit;
+  assert.ok(existsSync(unitFile), 'the dedicated account runs the resident unit as a per-user unit');
+  const rendered = readFileSync(unitFile, 'utf8');
+  const edited = launchd
+    ? rendered.replace('<string>serve</string>', '<string>serve</string>\n\t\t<string>--disk-cleanup</string>')
+    : rendered.replace(/^(ExecStart=.*)$/m, '$1 --disk-cleanup');
+  assert.notEqual(edited, rendered, 'the unit file does not start serve where the retired option can be put');
+  writeFileSync(unitFile, edited);
+  // A record naming a live process that is no converge (this test, with a
+  // birth that is not its own) must not stop the converge.
+  const logs = join(process.env.HOME, '.stado', 'logs');
+  mkdirSync(logs, { recursive: true });
+  writeFileSync(join(logs, 'resident-converge.json'), JSON.stringify({ pid: process.pid, born: Date.now() }));
+  if (launchd) {
+    const domain = `gui/${process.getuid()}`;
+    run('launchctl', ['bootout', `${domain}/com.wisent.stado`]);
+    succeeded(run('launchctl', ['bootstrap', domain, unitFile]));
+  } else {
+    succeeded(run('systemctl', ['--user', 'daemon-reload']));
+    succeeded(run('systemctl', ['--user', 'restart', 'com.wisent.stado.service']));
+  }
+  const healed = JSON.parse(succeeded(run(program, ['service', 'serving', 'stado', '--host', host, '--wait', '--json'])));
+  assert.ok(Array.isArray(healed) && healed.length && healed.every(row => row.serving === 'serving'),
+    'the resident unit does not serve after its executable refused a hand-edited argv');
+  assert.ok(!readFileSync(unitFile, 'utf8').includes('--disk-cleanup'),
+    'the refusing executable did not render its unit again without the retired option');
+  const converged = join(process.env.HOME, '.stado', 'logs', 'resident-converge.log');
+  assert.ok(existsSync(converged) && readFileSync(converged, 'utf8').trim(),
+    'the converge started by the refusing executable left no answer');
+  succeeded(run(program, unit));
+  report.cases.push({ case: 'refused-argv-converged-by-the-unit', serving: healed,
+    converge_log: readFileSync(converged, 'utf8') });
   report.result = 'passed';
 } catch (error) {
   report.error = error.stack || String(error);

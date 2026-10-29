@@ -55,6 +55,13 @@ The version bump gathers them into the release's own file and removes this one.
   accepts; use "stado" locally or a new scoped *-agent consumer`, which is the same rule the
   configuration check applies.
 
+- **A resident unit that starts Stado with an option it refuses is rendered again by that Stado:**
+  a unit written by an older release, or edited by hand, made the installed executable exit on
+  its argument vector at every start, and init restarted it without end. When the refused
+  argument vector is exactly the resident unit file's, the refusing executable now starts its own
+  `stado service ensure stado --host <this host>` before it exits, says so on stderr and writes
+  the converge's answer to `~/.stado/logs/resident-converge.log`.
+
 ### Removed
 
 - `stado host run build`: `stado host cargo … build` replaces it. The old verb compiled with the

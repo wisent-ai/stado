@@ -79,6 +79,7 @@ pub use command::status::status;
 pub use command::up::up;
 pub use record::{ingress_document, parse_ingress, published, Ingress, PidHint};
 pub use runtime::binaries::cloudflared_binary;
+pub use runtime::process::spawn_detached;
 
 /// Where the published entrance lives. It sits under the join requests' prefix
 /// with the invites, and like them it is not a join request: `fleet pending`

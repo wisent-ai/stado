@@ -14,6 +14,7 @@ use crate::cli::{CmdError, CLICK_ERROR_CODE};
 
 mod failure;
 mod host_unit;
+mod resident;
 mod routes;
 
 use failure::{failure_point, failure_service};
@@ -48,7 +49,16 @@ pub async fn main_entry() -> i32 {
     // exactly these two steps — so the matches tree is still in hand
     // afterwards. It is the only place the subcommand path exists as data
     // rather than as a match arm, and that path is the failure point.
-    let matches = Cli::command().get_matches();
+    // A refused argv that is this machine's resident unit's own is a unit an
+    // older Stado or a hand wrote: this executable renders it again from its
+    // catalog before clap answers the refusal ([`resident`]).
+    let matches = match Cli::command().try_get_matches() {
+        Ok(matches) => matches,
+        Err(refused) => {
+            resident::converge_refused(&refused).await;
+            refused.exit()
+        }
+    };
     let point = failure_point(&matches);
     let service = failure_service(&matches);
     // Which installed program ran which command: what a later installation
