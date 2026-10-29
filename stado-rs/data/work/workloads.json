@@ -32,6 +32,12 @@
         "secrets": {
           "OMP_SESSION_GATEWAY_TOKEN": "omp-session-gateway#token",
           "GITHUB_TOKEN": "github#value"
+        },
+        "releases": {
+          "version_prefix": "omp/",
+          "url": "https://github.com/can1357/oh-my-pi/releases/download/v{version}/{asset}",
+          "checksums": "SHA256SUMS.txt",
+          "assets": {"darwin-arm64": "omp-darwin-arm64", "linux-amd64": "omp-linux-x64"}
         }
       },
       "report": ["target", "workspace", "detached_job", "results"]

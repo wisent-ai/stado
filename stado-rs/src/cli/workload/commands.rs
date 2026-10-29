@@ -115,8 +115,8 @@ pub enum WorkloadCommands {
         #[arg(long)]
         json: bool,
     },
-    /// The harness a session kind declares, on one host: read it or carry
-    /// this machine's copy there.
+    /// The harness a session kind declares, on one host: read it or bring
+    /// the version this machine runs there.
     #[command(subcommand)]
     Harness(HarnessCommands),
     /// Append the result lines a detached session wrote on its host to

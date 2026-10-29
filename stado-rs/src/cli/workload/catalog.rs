@@ -88,6 +88,26 @@ pub struct WorkloadHarness {
     /// The job secrets a session is handed, each `NAME` read by the host's
     /// agent from the item playing `role#field`.
     pub secrets: BTreeMap<String, String>,
+    /// Where the harness's maker publishes its builds, so a host on another
+    /// platform than this machine receives the same version built for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub releases: Option<HarnessReleases>,
+}
+
+/// A harness's published builds: one per platform for every version, and a
+/// checksum list beside them.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HarnessReleases {
+    /// What the harness prints before its version number on `--version`.
+    pub version_prefix: String,
+    /// The address of one published file, with `{version}` and `{asset}`
+    /// filled in.
+    pub url: String,
+    /// The release's checksum list, an asset of the same release: one
+    /// `SHA256  ASSET` line per file.
+    pub checksums: String,
+    /// Each release platform's build, by its asset name.
+    pub assets: BTreeMap<String, String>,
 }
 
 /// The model gateway a session reaches through the service directory: the

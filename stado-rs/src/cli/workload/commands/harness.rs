@@ -19,9 +19,12 @@ pub enum HarnessCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Carry this machine's copy of the harness to HOST's managed path,
-    /// checked there by its own `--version` before it replaces the one in
-    /// place. A host already running the same version is left alone.
+    /// Bring the harness version this machine runs to HOST's managed path:
+    /// this machine's copy for a host on its platform, the build its maker
+    /// published for any other platform (checked against the release's
+    /// SHA-256 list). Checked there by its own `--version` before it replaces
+    /// the one in place. A host already running the same version is left
+    /// alone.
     Install {
         kind: String,
         #[arg(long)]
