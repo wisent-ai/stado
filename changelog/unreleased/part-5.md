@@ -36,3 +36,7 @@ The version bump gathers them into the release's own file and removes this one.
   checkout and the commit, where it used to surface as git's `exists on disk, but not in`); and a
   signing credential read whose `stado credentials get` exited with the retry code because
   Skarbiec did not answer is `infra_down`, exit 69.
+- `stado serve` whose product sync installed the release that replaces it exits with the retry
+  code, 69, which launchd and systemd both restart into the installed release, and no longer
+  keeps that delivery in `~/.stado/serve-stops.jsonl` as a stop: every successful delivery used
+  to read as a crash (exit 1) and could later count as the build stopping again.

@@ -125,11 +125,14 @@ pub(super) async fn product_sync(period: Duration, surfaces: Vec<String>) -> Res
             sync_pass(workspace.clone(), surface.clone()).await;
         }
         if program_identity(&program)? != started_as {
-            return Err(CmdError::click(format!(
-                "product sync installed a new release over {}, the program this process runs; \
-                 the service ends so its init system starts the installed release",
+            // Delivered: the service ends successfully so its init system
+            // starts the installed release; it is not a stop of this one.
+            eprintln!(
+                "[stado serve product-sync] installed a new release over {}, the program this \
+                 process runs; the service ends so its init system starts the installed release",
                 program.display()
-            )));
+            );
+            return Ok(());
         }
         if STOPPED.load(Ordering::SeqCst) {
             return Err(CmdError::click(format!(

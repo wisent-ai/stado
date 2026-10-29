@@ -7,7 +7,7 @@ use std::future::Future;
 use crate::cli::CmdError;
 use crate::primitives::failure::FailureCode;
 
-use super::{End, Ended, Supervisor};
+use super::{End, Ended, Served, Supervisor};
 
 impl Supervisor {
     /// Startup may read the registry through an API this supervisor already
@@ -32,26 +32,32 @@ impl Supervisor {
     }
 
     /// Until the first component ends: a finished finite component is the
-    /// service's success, anything else its failure — unless a delivery
+    /// service's success, a finished delivery component the release that
+    /// replaces it installed, anything else its failure — unless a delivery
     /// component still runs, which the service then waits for
     /// ([`Self::deliver_after`]). A supervisor that never started a component
     /// was given a serve line that declares none.
     pub(in crate::cli::integrations::runtime) async fn until_ended(
         mut self,
-    ) -> Result<(), CmdError> {
+    ) -> Result<Served, CmdError> {
         drop(self.sender.take());
+        let delivering = self.delivering.clone();
         match self.next().await {
             Some(End {
+                component,
                 how: Ended::Finished(detail),
-                ..
             }) => {
                 eprintln!("{detail}");
-                Ok(())
+                if delivering.contains(&component) {
+                    Ok(Served::Replaced)
+                } else {
+                    Ok(Served::Finished)
+                }
             }
             Some(End {
                 how: Ended::Stopped(detail, failure),
                 ..
-            }) => self.deliver_after(Ended::into_error(detail, failure)).await,
+            }) => Err(self.deliver_after(Ended::into_error(detail, failure)).await),
             None => Err(CmdError::declaration(
                 "stado serve has no running components",
             )),
@@ -69,16 +75,17 @@ impl Supervisor {
     /// component running that is the end. Otherwise the service keeps
     /// delivering: every further stop is said on stderr, and the service
     /// ends with `failure` once the delivery component ends, so the init
-    /// system starts whatever it installed.
+    /// system starts whatever it installed. Answers the failure the service
+    /// ends with.
     pub(in crate::cli::integrations::runtime) async fn deliver_after(
         mut self,
         failure: CmdError,
-    ) -> Result<(), CmdError> {
+    ) -> CmdError {
         if let Some(cause) = super::super::stops::failed_install(&failure) {
             match crate::cli::release_cmd::roll_back_failed_release(&cause).await {
                 Ok(done) => {
                     eprintln!("stado serve pid={}: {done}", std::process::id());
-                    return Err(failure);
+                    return failure;
                 }
                 Err(refusal) => eprintln!(
                     "stado serve pid={}: this release failed on this host and the release \
@@ -88,7 +95,7 @@ impl Supervisor {
             }
         }
         if self.delivering.is_empty() {
-            return Err(failure);
+            return failure;
         }
         // A delivery component reports its own end before it ends, so this
         // waits on it whether or not other components still run. It is told
@@ -109,6 +116,6 @@ impl Supervisor {
                 Ended::Finished(detail) | Ended::Stopped(detail, _) => eprintln!("{detail}"),
             }
         }
-        Err(failure)
+        failure
     }
 }

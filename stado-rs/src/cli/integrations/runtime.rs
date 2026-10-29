@@ -20,8 +20,9 @@ mod start;
 pub(crate) mod stops;
 mod supervisor;
 use start::start_roles;
+pub(crate) use supervisor::Served;
 
-pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
+pub(crate) async fn run(mut args: ServeArgs) -> Result<Served, CmdError> {
     let serve_api = args.api;
     if !serve_api
         && (args.bind.is_some()
@@ -79,6 +80,6 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     let started = start_roles(&mut supervisor, args, serve_api, mutates_worker_environment).await;
     match started {
         Ok(()) => supervisor.until_ended().await,
-        Err(failure) => supervisor.deliver_after(failure).await,
+        Err(failure) => Err(supervisor.deliver_after(failure).await),
     }
 }

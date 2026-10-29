@@ -13,7 +13,11 @@
 //! it. While a delivery component runs, another component's stop is said on
 //! stderr and the service keeps only delivering; it ends, with the first
 //! stop as its failure, when the delivery component ends (which it does once
-//! it has replaced the program this process runs).
+//! it has replaced the program this process runs). A delivery component that
+//! replaced the program with no other component stopped ends the service as
+//! [`Served::Replaced`]: installing the release that replaces this one is the
+//! component's work done, not a stop of this release, so it is not kept as a
+//! stop that could later read as this build failing again.
 
 use std::fmt::Display;
 use std::future::Future;
@@ -34,6 +38,15 @@ enum Ended {
     /// returning at all. The class is the one the component's own error
     /// stated, when it stated one.
     Stopped(String, Option<FailureCode>),
+}
+
+/// How the service ended when nothing failed.
+pub(crate) enum Served {
+    /// A finite component completed the service's work.
+    Finished,
+    /// The delivery component installed the release that replaces this
+    /// program, which the init system has to start.
+    Replaced,
 }
 
 /// One component's end, with the component's name.
@@ -81,7 +94,9 @@ impl Supervisor {
     }
 
     /// A resident component that installs the release replacing this one:
-    /// another component's stop does not end the service while it runs.
+    /// another component's stop does not end the service while it runs, and
+    /// its `Ok` — it replaced the program this process runs — ends the
+    /// service successfully, as a finite component's does.
     pub(super) fn spawn_delivery<F, E>(
         &mut self,
         name: &'static str,
@@ -91,7 +106,7 @@ impl Supervisor {
         F: Future<Output = Result<(), E>> + 'static,
         E: Display + 'static,
     {
-        self.start(name, false, make_future)?;
+        self.start(name, true, make_future)?;
         self.delivering.push(name);
         Ok(())
     }
