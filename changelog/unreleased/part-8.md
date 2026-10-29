@@ -14,8 +14,10 @@ The version bump gathers them into the release's own file and removes this one.
   the host's shared Cargo target in its build cache (below the registry's `work_root` when the
   host declares one). `build` is `--release` and brings each `--bin` back to
   `<manifest directory>/target/host-cargo/<commit>/`. The run is removed whatever Cargo answered,
-  and the exit status is Cargo's. The receipt holds the commit, Cargo's streams, the binaries with
-  their SHA-256, and the free space the run took.
+  and the exit status is Cargo's. The build is given `WISENT_SOURCE_COMMIT` and
+  `WISENT_SOURCE_SHA256`, as a release worker gives them, so a build script that stamps its
+  revision does so without a Git directory. The receipt holds the commit, the archive digest,
+  Cargo's streams, the binaries with their SHA-256, and the free space the run took.
 - **Workload kind `omp-session`:** `stado workload start omp-session --workspace REPO --task TEXT
   --max-time DURATION [--target HOST] [--model M] [--allow-write] [--allow-command]` places one OMP
   coding-agent session on the fleet host with the most room, as a detached queue job. The host

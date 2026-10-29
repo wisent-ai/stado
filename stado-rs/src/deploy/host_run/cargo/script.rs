@@ -26,17 +26,29 @@ fn cache_root(target: &ComputeTarget) -> String {
 
 /// The whole script. `manifest_path` is the absolute manifest inside the run
 /// directory, `output` the run directory's `out` the built binaries are
-/// copied into; neither is caller text, both were built by [`super::run`].
+/// copied into, `source` the commit and the SHA-256 of the archive it was
+/// exported from; none of them is caller text, all were built by
+/// [`super::run`].
 pub(super) fn script(
     target: &ComputeTarget,
     manifest_path: &str,
     output: &str,
+    source: (&str, &str),
     operation: CargoOperation,
     binaries: &[String],
     arguments: &[String],
 ) -> Result<String, DeployError> {
     let mut script = String::from("set -uo pipefail\numask 077\n");
     script.push_str(&confined_file_prelude(manifest_path, "-f", "manifest"));
+    // The delivered tree is an export with no Git directory, so a build
+    // script that stamps its revision reads it the way it does on a release
+    // worker: from the source contract the worker states to a build.
+    let (commit, archive_sha256) = source;
+    script.push_str(&format!(
+        "export WISENT_SOURCE_COMMIT={} WISENT_SOURCE_SHA256={}\n",
+        shlex_quote(commit),
+        shlex_quote(archive_sha256)
+    ));
     script.push_str("cargo=''\n");
     for candidate in host_exec::cargo_candidates() {
         let candidate = if let Some(relative) = candidate.strip_prefix("~/") {

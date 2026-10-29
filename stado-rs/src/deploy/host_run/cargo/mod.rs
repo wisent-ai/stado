@@ -72,6 +72,9 @@ pub struct HostCargoReceipt {
     pub target: String,
     pub checkout: PathBuf,
     pub commit: String,
+    /// SHA-256 of the archive the commit was exported from, the
+    /// `WISENT_SOURCE_SHA256` the build was given beside the commit.
+    pub archive_sha256: String,
     pub manifest: String,
     pub operation: CargoOperation,
     pub binaries: Vec<String>,
@@ -192,7 +195,7 @@ pub async fn run(
         .join("target")
         .join("host-cargo");
     let export = crate_target.join(format!("export-{run_id}"));
-    stado_product::export_committed_source(&checkout, &commit, &export)
+    let archive_sha256 = stado_product::export_committed_source(&checkout, &commit, &export)
         .map_err(|error| DeployError(format!("{error:#}")).stating(FailureCode::Config))?;
     let destination = format!("{RUN_AREA}/{run_id}/{name}");
     let delivered = host_delivery::deliver_host(
@@ -215,6 +218,7 @@ pub async fn run(
         target,
         &format!("{home}/{destination}/{manifest}"),
         &output,
+        (&commit, &archive_sha256),
         request.operation,
         &request.binaries,
         &request.arguments,
@@ -255,6 +259,7 @@ pub async fn run(
         target: target.name.clone(),
         checkout,
         commit,
+        archive_sha256,
         manifest,
         operation: request.operation,
         binaries: request.binaries.clone(),
