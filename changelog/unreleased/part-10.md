@@ -7,6 +7,20 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Added
 
+- **The beacon says which declared role the host process does not run, and the resident unit is
+  rendered again for it:** the `roles` block carries `declared_not_running`, the `stado serve`
+  roles the registry declares for the publishing process's own serve unit (the declared serve
+  lines taking its role lock) that the process was not started with, read from both command lines
+  by serve's own definition, with the units compared and any line the parser refused;
+  `{"no_declared_unit": <lock>}` when no declared line takes the lock. When roles are missing and
+  the process is the host's resident unit, the pass starts the same detached `service ensure` the
+  executable starts when its unit's argument vector is refused, records the line it was started
+  for, and starts none again for that line; `converge` says what happened. A unit rendered without
+  `--resolver` keeps serving its API while every reader of the registry it would refresh goes
+  stale; `stado host health` now prints `roles: declared but not running: --resolver (<unit>);
+  rendered again: …`. A beacon collected by hand carries `null`. Journey:
+  `tests/host_health/beacon/declared_roles.rs`.
+
 - **`stado cloud host create|list|delete|reap --provider azure` rents fleet hosts from the cloud
   under the operator's credit floor:** `create NAME --location L --size S --disk-gb N
   --idle-minutes M` prints the projected hourly burn (the new machine's on-demand hour and that

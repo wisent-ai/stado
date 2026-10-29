@@ -94,6 +94,25 @@ pub(crate) fn command_roles(words: &[&str]) -> Result<Vec<&'static str>, String>
     })
 }
 
+/// The role lock a `stado serve` line takes on its host
+/// ([`crate::deploy::role_lock::serve_role`]): `serve`, or `serve--<target>`
+/// for a line serving one worker target. Two lines with the same lock are
+/// the same process's, never two beside each other. `None` for a line that
+/// is not `serve`; a serve line this build cannot read is clap's reason.
+pub(crate) fn serve_lock(words: &[&str]) -> Result<Option<String>, String> {
+    if words.first() != Some(&"serve") {
+        return Ok(None);
+    }
+    let line = ServeLine::try_parse_from(words).map_err(|error| {
+        format!(
+            "`{}` cannot be read by this build's serve: {error}",
+            words.join(" ")
+        )
+    })?;
+    let target = line.args.worker.target.as_deref();
+    Ok(Some(crate::deploy::role_lock::serve_role(target)))
+}
+
 /// The group's own options that take a value: `--catalog PATH`, another
 /// authority file, and `--workspace DIR`, another workspace of checkouts.
 const PRODUCT_VALUE_OPTIONS: &[&str] = &["--catalog", "--workspace"];

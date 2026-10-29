@@ -71,6 +71,7 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
                 None => crate::cli::reporting::NOT_REPORTED.to_string(),
             }
         ),
+        format!("roles: {}", roles_line(get("roles"))),
         "units:".to_string(),
     ];
 
@@ -114,4 +115,74 @@ fn privacy_line(block: Option<&Value>) -> String {
         )
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Whether the host process runs every role its declared serve unit names:
+/// `every declared role runs`, `declared but not running: <roles> (<units>)`,
+/// either followed by `; unreadable: <unit>: <cause>` for each declared line
+/// the parser refused and, for missing roles, `; rendered again: <what the
+/// converge did>`; `no declared serve unit takes role lock <lock>` when
+/// nothing was compared, `not measured: collected by hand` for a beacon a
+/// person collected (its arguments are not the unit's), the cause when the
+/// process's own arguments could not be read, or `not reported` for a beacon
+/// from before the comparison.
+fn roles_line(block: Option<&Value>) -> String {
+    let Some(declared) = block.and_then(|block| block.get("declared_not_running")) else {
+        return crate::cli::reporting::NOT_REPORTED.to_string();
+    };
+    if declared.is_null() {
+        return "not measured: collected by hand".to_string();
+    }
+    if let Some(cause) = declared.get("unread").and_then(Value::as_str) {
+        return format!("the comparison could not be read: {cause}");
+    }
+    if let Some(lock) = declared.get("no_declared_unit").and_then(Value::as_str) {
+        return format!("no declared serve unit takes role lock {lock}");
+    }
+    let list = |key: &str| {
+        declared
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+    };
+    let roles: Vec<&str> = list("roles").filter_map(Value::as_str).collect();
+    let units: Vec<&str> = list("declared_by").filter_map(Value::as_str).collect();
+    let mut line = match roles.is_empty() {
+        true => "every declared role runs".to_string(),
+        false => format!(
+            "declared but not running: {} ({})",
+            roles.join(", "),
+            units.join(", ")
+        ),
+    };
+    for refused in list("unreadable") {
+        line.push_str(&format!(
+            "; unreadable: {}: {}",
+            reported(refused.get("unit")),
+            reported(refused.get("cause"))
+        ));
+    }
+    if let Some(converge) = declared.get("converge") {
+        line.push_str(&format!("; rendered again: {}", converge_words(converge)));
+    }
+    line
+}
+
+/// What the converge of a unit missing roles did, as the beacon carries it.
+fn converge_words(converge: &Value) -> String {
+    let word = |key: &str| converge.get(key).map(|value| reported(Some(value)));
+    let log = reported(converge.get("log"));
+    match (
+        word("started"),
+        word("running"),
+        word("none"),
+        word("refused"),
+    ) {
+        (Some(pid), ..) => format!("converge started, pid {pid}, log {log}"),
+        (_, Some(pid), ..) => format!("converge still running, pid {pid}, log {log}"),
+        (_, _, Some(why), _) => format!("not started: {why}"),
+        (_, _, _, Some(cause)) => format!("refused: {cause}"),
+        _ => format!("unreadable: {converge}"),
+    }
 }

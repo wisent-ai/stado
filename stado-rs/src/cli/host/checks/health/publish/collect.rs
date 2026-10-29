@@ -291,7 +291,10 @@ async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
         // retired command. The health pass ends them and publishes them as
         // ended, so a stray never outlives one beacon; a collection run by
         // hand names them and ends none.
-        object.insert("roles".to_string(), roles_and_strays(&home, strays)?);
+        object.insert(
+            "roles".to_string(),
+            roles_and_strays(&home, &target, strays)?,
+        );
     }
     // The services of other hosts that hold this host's requests past the
     // bound, recovered from here when their own host did not act.

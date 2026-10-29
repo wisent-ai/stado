@@ -14,7 +14,7 @@ use crate::cli::{CmdError, CLICK_ERROR_CODE};
 
 mod failure;
 mod host_unit;
-mod resident;
+pub(crate) mod resident;
 mod routes;
 
 use failure::{failure_point, failure_service};
