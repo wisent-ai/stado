@@ -60,10 +60,12 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             shared,
             json,
         } => {
+            // A caller that asked for JSON gets its failure as JSON too, with
+            // the declared cause and its fix as fields.
             ops::enroll(
                 ops::EnrollRequest {
                     name: &name,
-                    ssh: Some(&ssh),
+                    ssh: &ssh,
                     kind: &kind,
                     fleet: fleet.as_deref(),
                     bootstrap,
@@ -73,6 +75,7 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
                 json,
             )
             .await
+            .map_err(|error| error.machine_readable(json))
         }
         FleetCommands::Invite(sub) => match sub {
             InviteCommands::Create {
@@ -91,13 +94,17 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             IngressCommands::Down { json } => ingress::down(json).await,
         },
         FleetCommands::Methods { json } => enroll::catalog::methods(json).await,
-        FleetCommands::Join { json } => enroll::join(json).await,
+        FleetCommands::Join { json } => enroll::join(json)
+            .await
+            .map_err(|error| error.machine_readable(json)),
         FleetCommands::Pending { json } => enroll::pending(json).await,
         FleetCommands::Approve {
             hostname,
             fleet,
             json,
-        } => enroll::approve(&hostname, fleet.as_deref(), json).await,
+        } => enroll::approve(&hostname, fleet.as_deref(), json)
+            .await
+            .map_err(|error| error.machine_readable(json)),
         FleetCommands::Reject { hostname, json } => enroll::reject(&hostname, json).await,
         FleetCommands::Catalog { json } => enroll::catalog::catalog(json).await,
         FleetCommands::Key(sub) => {

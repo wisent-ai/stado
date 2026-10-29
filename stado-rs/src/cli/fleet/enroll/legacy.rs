@@ -1,20 +1,27 @@
 //! Safe repair of legacy registry entries that declared a machine without a
 //! communication channel or any proof of contact.
 
+use crate::cli::fleet::enroll::failures::{
+    entry_summary, ALREADY_HAS_BEACON, ALREADY_REGISTERED, BEACON_UNREADABLE,
+    PLATFORM_DECLARATION_MALFORMED, PLATFORM_MISMATCH, TARGETS_MALFORMED,
+};
 use crate::cli::CmdError;
 use crate::monitor::host_health::HostHealthError;
 use crate::queue::JobStorage;
 use serde_json::{json, Value};
 
-fn targets_missing() -> CmdError {
-    CmdError::declaration("registry.targets: must be an array")
+fn targets_missing(document: &Value, name: &str) -> CmdError {
+    let held = document
+        .get("targets")
+        .map_or_else(|| "nothing".to_string(), Value::to_string);
+    CmdError::declared(&TARGETS_MALFORMED, &[("name", name), ("targets", &held)])
 }
 
 fn target_index(document: &Value, name: &str) -> Result<Option<usize>, CmdError> {
     let targets = document
         .get("targets")
         .and_then(Value::as_array)
-        .ok_or_else(targets_missing)?;
+        .ok_or_else(|| targets_missing(document, name))?;
     Ok(targets
         .iter()
         .position(|target| target.get("name").and_then(Value::as_str) == Some(name)))
@@ -29,20 +36,25 @@ pub async fn allow_takeover(document: &Value, name: &str) -> Result<bool, CmdErr
     };
     let target = &document["targets"][index];
     if target.get("ssh").is_some_and(|value| !value.is_null()) {
-        return Err(CmdError::refused(format!(
-            "target '{name}' is already registered with a communication channel"
-        )));
+        return Err(CmdError::declared(
+            &ALREADY_REGISTERED,
+            &[("name", name), ("entry", &entry_summary(target))],
+        ));
     }
 
-    let store = JobStorage::new().await?;
+    let unreadable = |error: CmdError| {
+        CmdError::declared(
+            &BEACON_UNREADABLE,
+            &[("name", name), ("answer", &error.to_string())],
+        )
+    };
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| unreadable(error.into()))?;
     match crate::monitor::host_health::load_host_health(&store, name).await {
         Err(HostHealthError::NoBeacon { .. }) => Ok(true),
-        Ok(_) => Err(CmdError::refused(format!(
-            "target '{name}' already has a health beacon and cannot be replaced"
-        ))),
-        Err(error) => {
-            Err(CmdError::from(error).within(format!("cannot prove target '{name}' has no beacon")))
-        }
+        Ok(_) => Err(CmdError::declared(&ALREADY_HAS_BEACON, &[("name", name)])),
+        Err(error) => Err(unreadable(CmdError::from(error))),
     }
 }
 
@@ -61,16 +73,17 @@ pub fn register_verified(
     let targets = next
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(targets_missing)?;
+        .ok_or_else(|| targets_missing(document, name))?;
 
     if let Some(target) = targets
         .iter_mut()
         .find(|target| target.get("name").and_then(Value::as_str) == Some(name))
     {
         if !takeover {
-            return Err(CmdError::refused(format!(
-                "target '{name}' is already registered"
-            )));
+            return Err(CmdError::declared(
+                &ALREADY_REGISTERED,
+                &[("name", name), ("entry", &entry_summary(target))],
+            ));
         }
         // An undeclared or empty platform is the legacy declaration this
         // repairs; one declared as anything but text is not a platform, and
@@ -80,15 +93,25 @@ pub fn register_verified(
             Some(Value::String(declared))
                 if declared.is_empty() || declared == release_platform => {}
             Some(Value::String(declared)) => {
-                return Err(CmdError::refused(format!(
-                    "target '{name}' declares release_platform {declared}, \
-                     but enrollment observed {release_platform}"
-                )));
+                return Err(CmdError::declared(
+                    &PLATFORM_MISMATCH,
+                    &[
+                        ("name", name),
+                        ("ssh", destination),
+                        ("declared", declared),
+                        ("platform", release_platform),
+                    ],
+                ));
             }
             Some(other) => {
-                return Err(CmdError::refused(format!(
-                    "target '{name}' declares release_platform {other}, which is not a platform name"
-                )));
+                return Err(CmdError::declared(
+                    &PLATFORM_DECLARATION_MALFORMED,
+                    &[
+                        ("name", name),
+                        ("declared", &other.to_string()),
+                        ("platform", release_platform),
+                    ],
+                ));
             }
         }
         target["ssh"] = Value::String(destination.to_string());
@@ -124,7 +147,7 @@ pub fn rollback_registration(
     let targets = next
         .get_mut("targets")
         .and_then(Value::as_array_mut)
-        .ok_or_else(targets_missing)?;
+        .ok_or_else(|| targets_missing(current, name))?;
     if takeover {
         let previous = original
             .get("targets")

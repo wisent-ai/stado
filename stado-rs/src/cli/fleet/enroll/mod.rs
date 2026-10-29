@@ -15,6 +15,7 @@
 //! is refused.
 
 pub mod catalog;
+pub mod failures;
 pub mod legacy;
 
 mod answer;

@@ -14,7 +14,8 @@ mod report;
 mod sections;
 
 pub use gates::{
-    require_adopt_allowed, require_enroll_allowed, require_invite_allowed, require_join_allowed,
+    require_adopt_allowed, require_enroll_allowed, require_invite_allowed,
+    require_invited_approval, require_join_allowed,
 };
 pub use methods::methods;
 pub use report::catalog;

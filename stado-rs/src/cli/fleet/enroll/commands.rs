@@ -9,6 +9,7 @@ use crate::targets::normalize_hostname;
 use serde_json::{json, Value};
 
 use super::catalog;
+use super::failures::{PLATFORM_UNSUPPORTED, REQUEST_STORE};
 use super::request::{
     build_request, pending_request, release_platform, request_destination, request_invite_id,
     request_path, request_target_name, target_name_for, REQUESTS_PREFIX, STATUS_PENDING,
@@ -22,20 +23,29 @@ pub async fn join(as_json: bool) -> Result<bool, CmdError> {
     // The catalog gates join wherever the registry is readable from here;
     // on carry-over setups the control plane gates at approve instead.
     match fetch_document().await {
-        Ok(document) => catalog::require_join_allowed(&document)?,
+        Ok(document) => catalog::require_join_allowed(&document, &hostname)?,
         Err(error) => {
             eprintln!("note: registry not readable here ({error}); the catalog gates at approve")
         }
     }
-    release_platform(std::env::consts::OS, std::env::consts::ARCH).map_err(CmdError::refused)?;
-    let request = build_request(&hostname, std::env::consts::OS, std::env::consts::ARCH);
-    let store = JobStorage::new().await?;
+    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+    if release_platform(os, arch).is_err() {
+        return Err(CmdError::declared(
+            &PLATFORM_UNSUPPORTED,
+            &[("name", &hostname), ("os", os), ("arch", arch)],
+        ));
+    }
+    let request = build_request(&hostname, os, arch);
+    let values = [("name", hostname.as_str())];
+    let unrecorded = |error: CmdError| REQUEST_STORE.raise(error, &values);
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| unrecorded(CmdError::from(error)))?;
+    let text = serde_json::to_string_pretty(&request).map_err(|error| unrecorded(error.into()))?;
     let created = store
-        .create_text_if_absent(
-            &request_path(&hostname),
-            &serde_json::to_string_pretty(&request)?,
-        )
-        .await?;
+        .create_text_if_absent(&request_path(&hostname), &text)
+        .await
+        .map_err(|error| unrecorded(CmdError::from(error)))?;
     let approve_with = format!("stado fleet approve '{}'", target_name_for(&hostname));
     if as_json {
         crate::cli::print_answer(

@@ -179,7 +179,7 @@ pub(super) async fn create(args: CreateArgs) -> Result<(), CmdError> {
     let enrolled = crate::cli::fleet::ops::enrolled(
         crate::cli::fleet::ops::EnrollRequest {
             name,
-            ssh: Some(&destination),
+            ssh: &destination,
             kind: "local",
             fleet: None,
             bootstrap: false,

@@ -16,10 +16,9 @@ use wisent_errors::Operation;
 
 use crate::cli::{CmdError, CLICK_ERROR_CODE};
 
-/// Every operation that declares how it fails. None does yet; each
-/// operation's catalogue is added here as it is declared.
+/// Every operation that declares how it fails.
 fn operations() -> Vec<&'static Operation> {
-    Vec::new()
+    crate::cli::fleet::enroll::failures::OPERATIONS.to_vec()
 }
 
 #[derive(Subcommand)]

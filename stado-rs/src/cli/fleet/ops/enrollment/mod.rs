@@ -1,7 +1,15 @@
 //! `stado fleet enroll`: the target-entry transforms, the identity probe run
 //! through Stado's deploy channel, the preflight and the command that ties
 //! them into one conditional write with a rollback.
+//!
+//! Every way it fails is a declared cause of `fleet.enroll`
+//! ([`crate::cli::fleet::enroll::failures`]), raised at the step that broke.
 
+use crate::cli::fleet::enroll::failures::{
+    self, ALREADY_REGISTERED, BOOTSTRAP_FAILED, BOOTSTRAP_UNREACHABLE, DESTINATION_INVALID,
+    FLEETS_MALFORMED, FLEET_UNDECLARED, KEY_INSTALL, KIND_UNKNOWN, NAME_INVALID, REGISTRY_READ,
+    ROLLBACK_FAILED, TARGETS_MALFORMED,
+};
 use crate::cli::registry::{fetch_versioned_document, push_document_if};
 use crate::cli::CmdError;
 use serde_json::{json, Value};
@@ -31,18 +39,10 @@ pub fn register_target(
     release_platform: &str,
 ) -> Result<Value, CmdError> {
     let mut next = document.clone();
-    let targets = next
-        .get_mut("targets")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::declaration("registry.targets: must be an array"))?;
-    if targets
-        .iter()
-        .any(|target| target.get("name").and_then(Value::as_str) == Some(name))
-    {
-        return Err(CmdError::refused(format!(
-            "target '{name}' is already registered"
-        )));
-    }
+    refuse_registered(&next, name)?;
+    let Some(targets) = next.get_mut("targets").and_then(Value::as_array_mut) else {
+        return Err(targets_malformed(document, name));
+    };
     targets.push(json!({
         "name": name,
         "kind": kind,
@@ -72,6 +72,32 @@ pub fn remove_target(document: &Value, name: &str) -> Result<Value, CmdError> {
     Ok(next)
 }
 
+/// `registry.targets` is not a list: the declared cause, quoting what it holds.
+fn targets_malformed(document: &Value, name: &str) -> CmdError {
+    let held = document
+        .get("targets")
+        .map_or_else(|| "nothing".to_string(), Value::to_string);
+    CmdError::declared(&TARGETS_MALFORMED, &[("name", name), ("targets", &held)])
+}
+
+/// Refuse `name` when the document already registers it, quoting its entry.
+fn refuse_registered(document: &Value, name: &str) -> Result<(), CmdError> {
+    let targets = document
+        .get("targets")
+        .and_then(Value::as_array)
+        .ok_or_else(|| targets_malformed(document, name))?;
+    match targets
+        .iter()
+        .find(|target| target.get("name").and_then(Value::as_str) == Some(name))
+    {
+        Some(entry) => Err(CmdError::declared(
+            &ALREADY_REGISTERED,
+            &[("name", name), ("entry", &failures::entry_summary(entry))],
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Enroll preflight, run BEFORE any write: the machine must not already be
 /// registered, and the requested fleet must be declared — otherwise the
 /// command would register a target and only then fail the fleet step.
@@ -81,32 +107,89 @@ pub fn preflight_enroll(
     name: &str,
     fleet_name: Option<&str>,
 ) -> Result<(), CmdError> {
-    let targets = document
-        .get("targets")
-        .and_then(Value::as_array)
-        .ok_or_else(|| CmdError::declaration("registry.targets: must be an array"))?;
-    if targets
-        .iter()
-        .any(|target| target.get("name").and_then(Value::as_str) == Some(name))
-    {
-        return Err(CmdError::refused(format!(
-            "target '{name}' is already registered"
-        )));
-    }
+    refuse_registered(document, name)?;
     if let Some(fleet) = fleet_name {
-        require_declared_fleet(document, fleet)?;
+        require_declared_fleet(document, name, fleet)?;
     }
     Ok(())
 }
 
 /// The fleet an enrollment names must be declared before anything is
-/// written.
-fn require_declared_fleet(document: &Value, fleet: &str) -> Result<(), CmdError> {
-    let fleets = parse_fleets(document).map_err(CmdError::declaration)?;
-    find_fleet(&fleets, fleet).ok_or_else(|| {
-        CmdError::refused(format!("fleet '{fleet}' is not declared; create it first"))
-    })?;
+/// written; the refusal names the fleets that are.
+pub(crate) fn require_declared_fleet(
+    document: &Value,
+    name: &str,
+    fleet: &str,
+) -> Result<(), CmdError> {
+    let fleets = parse_fleets(document)
+        .map_err(|answer| CmdError::declared(&FLEETS_MALFORMED, &[("answer", &answer)]))?;
+    if find_fleet(&fleets, fleet).is_none() {
+        let declared: Vec<&str> = fleets
+            .iter()
+            .map(|declared| declared.name.as_str())
+            .collect();
+        let declared = if declared.is_empty() {
+            "none".to_string()
+        } else {
+            declared.join(", ")
+        };
+        return Err(CmdError::declared(
+            &FLEET_UNDECLARED,
+            &[("name", name), ("fleet", fleet), ("declared", &declared)],
+        ));
+    }
     Ok(())
+}
+
+/// The name, destination and kind a request gives, refused for their form
+/// before anything is read: a name the registry would refuse only after the
+/// probe, a destination ssh would read as an option, a kind nobody declares.
+pub(crate) fn check_request(name: &str, ssh: &str, kind: &str) -> Result<(), CmdError> {
+    if !crate::targets::is_target_name(name) {
+        let suggestion = suggested_name(name);
+        return Err(CmdError::declared(
+            &NAME_INVALID,
+            &[("name", name), ("suggestion", &suggestion)],
+        ));
+    }
+    if ssh.is_empty() || ssh.starts_with('-') || ssh.chars().any(char::is_whitespace) {
+        return Err(CmdError::declared(
+            &DESTINATION_INVALID,
+            &[("name", name), ("ssh", ssh)],
+        ));
+    }
+    let kinds: Vec<&str> =
+        crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::HostTarget)
+            .collect();
+    if !kinds.contains(&kind) {
+        return Err(CmdError::declared(
+            &KIND_UNKNOWN,
+            &[("name", name), ("kind", kind), ("kinds", &kinds.join(", "))],
+        ));
+    }
+    Ok(())
+}
+
+/// The nearest lowercase target identifier to `name`, for the refusal to
+/// offer.
+fn suggested_name(name: &str) -> String {
+    let lowered: String = name
+        .to_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_lowercase() || character.is_ascii_digit() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = lowered.trim_matches('-');
+    if trimmed.is_empty() {
+        "machine-1".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// `stado fleet enroll NAME --ssh DEST [--install-key] [--kind local]
@@ -152,7 +235,7 @@ pub struct EnrollRequest<'a> {
     /// The target name the machine is registered under.
     pub name: &'a str,
     /// The SSH destination it is verified through.
-    pub ssh: Option<&'a str>,
+    pub ssh: &'a str,
     pub kind: &'a str,
     /// The declared fleet it is placed in, if any.
     pub fleet: Option<&'a str>,
@@ -170,7 +253,7 @@ pub struct EnrollRequest<'a> {
 pub async fn enrolled(request: EnrollRequest<'_>, quiet: bool) -> Result<Value, CmdError> {
     let EnrollRequest {
         name,
-        ssh,
+        ssh: destination,
         kind,
         fleet: fleet_name,
         bootstrap,
@@ -184,31 +267,32 @@ pub async fn enrolled(request: EnrollRequest<'_>, quiet: bool) -> Result<Value, 
             println!("{line}");
         }
     };
-    let Some(destination) = ssh else {
-        return Err(CmdError::usage(
-            "enroll needs --ssh for a verified registration; without a reachable channel use machine-initiated enrollment: stado fleet join on the machine, then stado fleet approve here",
-        ));
-    };
+    let values = [("name", name), ("ssh", destination)];
+    check_request(name, destination, kind)?;
     // The generation this whole run is conditional on: every check below, and
     // the key install and identity probe that follow them, were decided
     // against THIS document. If it has moved by the time the entry is
     // written, the decisions no longer hold and the operator has to see that.
-    let (document, expected_generation) = fetch_versioned_document().await?;
-    crate::cli::fleet::enroll::catalog::require_enroll_allowed(&document)?;
+    let (document, expected_generation) = fetch_versioned_document()
+        .await
+        .map_err(|error| REGISTRY_READ.raise(error, &values))?;
+    crate::cli::fleet::enroll::catalog::require_enroll_allowed(&document, name)?;
     if install_key {
-        crate::cli::fleet::enroll::catalog::require_adopt_allowed(&document)?;
+        crate::cli::fleet::enroll::catalog::require_adopt_allowed(&document, destination)?;
     }
     let takeover = crate::cli::fleet::enroll::legacy::allow_takeover(&document, name).await?;
     if takeover {
         if let Some(fleet) = fleet_name {
-            require_declared_fleet(&document, fleet)?;
+            require_declared_fleet(&document, name, fleet)?;
         }
     } else {
         preflight_enroll(&document, name, fleet_name)?;
     }
     let runner = crate::deploy::production_runner();
     if install_key {
-        crate::cli::fleet::key::install_first_contact(&runner, name, destination).await?;
+        crate::cli::fleet::key::install_first_contact(&runner, name, destination)
+            .await
+            .map_err(|error| KEY_INSTALL.raise(error, &values))?;
     }
     let (hostname, release_platform) = probe_identity(&runner, name, destination).await?;
     let mut next = crate::cli::fleet::enroll::legacy::register_verified(
@@ -221,14 +305,21 @@ pub async fn enrolled(request: EnrollRequest<'_>, quiet: bool) -> Result<Value, 
         takeover,
     )?;
     if let Some(fleet) = fleet_name {
-        next = assign_target(&next, name, fleet)?;
+        // The fleet was found declared in this same document before the
+        // probe, so what is left to refuse is a fleet list that does not
+        // read back after the edit.
+        next = assign_target(&next, name, fleet).map_err(|error| {
+            CmdError::declared(&FLEETS_MALFORMED, &[("answer", &error.to_string())])
+        })?;
     }
     // A machine declared shared before its janitor first runs there: the
     // declaration is what keeps that janitor out of its owner's files.
     if shared {
         next = declare_ownership(&next, name, crate::targets::HostOwnership::Shared)?;
     }
-    let generation = push_document_if(&next, &expected_generation).await?;
+    let generation = push_document_if(&next, &expected_generation)
+        .await
+        .map_err(|error| failures::write_failure(error, &values))?;
     say(&format!(
         "registered '{name}', verified as '{hostname}' (generation {generation})"
     ));
@@ -241,30 +332,38 @@ pub async fn enrolled(request: EnrollRequest<'_>, quiet: bool) -> Result<Value, 
         )
         .await;
         if let Err(exc) = bootstrapped {
+            let answer = exc.to_string();
             // The rollback's own expected generation: the re-read here is what
             // the removal is computed from, so it is also what the removal is
             // conditional on. A writer that lands in between leaves the entry
             // in place, said out loud, rather than having its edit erased by a
             // rollback that never saw it.
-            let (current, current_generation) = fetch_versioned_document().await?;
-            let rolled_back = if takeover {
-                crate::cli::fleet::enroll::legacy::rollback_registration(
-                    &current, &document, name, true,
-                )?
+            if let Err(rollback) = roll_back(&document, name, takeover).await {
+                return Err(CmdError::declared(
+                    &ROLLBACK_FAILED,
+                    &[
+                        ("name", name),
+                        ("answer", &answer),
+                        ("rollback", &rollback.to_string()),
+                    ],
+                ));
+            }
+            let cause = if exc.failure.is_some_and(|code| code.retryable()) {
+                &BOOTSTRAP_UNREACHABLE
             } else {
-                remove_target(&current, name)?
+                &BOOTSTRAP_FAILED
             };
-            push_document_if(&rolled_back, &current_generation).await?;
-            return Err(exc
-                .within("bootstrap failed")
-                .also(format!("the registration of '{name}' was rolled back")));
+            return Err(CmdError::declared(
+                cause,
+                &[("name", name), ("answer", &answer)],
+            ));
         }
     }
     // A bootstrapped machine has the Stado that runs the network, so it
     // joins it now: its preferred path becomes Stado's own before any
     // outside overlay a caller might otherwise reach it through.
     let joined = if bootstrap {
-        let receipt = network::join(name).await?;
+        let receipt = network::join(name, destination).await?;
         say(&format!(
             "'{name}' joined the Stado network; its preferred path is {}",
             receipt["paths"]["primary"]
@@ -299,4 +398,18 @@ pub async fn enrolled(request: EnrollRequest<'_>, quiet: bool) -> Result<Value, 
         "shared": shared,
         "offline_invite_spent": spent,
     }))
+}
+
+/// Undo the registration of `name` after its install failed: the entry is
+/// removed, or a taken-over legacy entry restored from `original`, against
+/// the registry as it is now and conditional on that read.
+async fn roll_back(original: &Value, name: &str, takeover: bool) -> Result<(), CmdError> {
+    let (current, current_generation) = fetch_versioned_document().await?;
+    let rolled_back = if takeover {
+        crate::cli::fleet::enroll::legacy::rollback_registration(&current, original, name, true)?
+    } else {
+        remove_target(&current, name)?
+    };
+    push_document_if(&rolled_back, &current_generation).await?;
+    Ok(())
 }

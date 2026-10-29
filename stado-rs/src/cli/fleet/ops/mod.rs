@@ -20,6 +20,7 @@ mod retire;
 
 pub use assignment::{assign, assign_target, unassign, unassign_target};
 pub use declare::{create, create_fleet};
+pub(crate) use enrollment::require_declared_fleet;
 pub use enrollment::{
     enroll, enrolled, preflight_enroll, register_target, remove_target, EnrollRequest,
 };

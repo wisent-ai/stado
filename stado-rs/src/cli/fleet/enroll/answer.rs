@@ -1,18 +1,50 @@
 //! Answering a join request on the control plane: `approve` turns it into a
 //! registered target, `reject` drops it.
+//!
+//! Every way `approve` fails is a declared cause of `fleet.approve`
+//! ([`super::failures::APPROVE`]), raised at the step that broke.
 
 use crate::cli::registry::{commit_document, fetch_document};
 use crate::cli::CmdError;
 use crate::queue::JobStorage;
 use serde_json::{json, Value};
 
-use crate::cli::fleet::ops::register_target;
+use crate::cli::fleet::ops::{register_target, require_declared_fleet};
 
 use super::catalog;
-use super::request::{
-    pending_request, release_platform, request_destination, request_invite_id, request_path,
-    request_target_name, target_name_for, STATUS_APPROVED,
+use super::failures::{
+    write_failure, FLEETS_MALFORMED, INVITE_UNSPENT, NAME_INVALID, PLATFORM_UNSUPPORTED,
+    REGISTRY_READ, REQUEST_DECIDED, REQUEST_INCOMPLETE, REQUEST_MISSING, REQUEST_STATUS_UNWRITTEN,
+    REQUEST_STORE, REQUEST_UNREADABLE,
 };
+use super::request::{
+    release_platform, request_destination, request_invite_id, request_path, request_target_name,
+    target_name_for, REQUESTS_PREFIX, STATUS_APPROVED, STATUS_PENDING,
+};
+
+/// The hostnames of the requests the store holds, for a refusal that names
+/// what can be approved.
+async fn pending_names(store: &JobStorage) -> String {
+    match store.list_blobs_with_meta(REQUESTS_PREFIX).await {
+        Ok(blobs) => {
+            let names: Vec<&str> = blobs
+                .iter()
+                .filter_map(|blob| {
+                    blob.name
+                        .strip_prefix(REQUESTS_PREFIX)
+                        .and_then(|name| name.strip_suffix(".json"))
+                        .filter(|name| !name.contains('/'))
+                })
+                .collect();
+            if names.is_empty() {
+                "none".to_string()
+            } else {
+                names.join(", ")
+            }
+        }
+        Err(error) => format!("the requests could not be listed ({error})"),
+    }
+}
 
 /// `stado fleet approve HOSTNAME [--fleet FLEET]` — turn a pending request
 /// into a registered target.
@@ -39,18 +71,64 @@ pub async fn approve(
     fleet_name: Option<&str>,
     as_json: bool,
 ) -> Result<bool, CmdError> {
-    let store = JobStorage::new().await?;
-    let text = store
+    // The hostname names the stored request's path, so a name of any other
+    // shape is refused before the store is asked.
+    if !crate::targets::is_target_name(hostname) {
+        return Err(CmdError::declared(
+            &NAME_INVALID,
+            &[
+                ("name", hostname),
+                ("suggestion", &target_name_for(hostname)),
+            ],
+        ));
+    }
+    let values = [("hostname", hostname), ("name", hostname)];
+    let unreachable = |error: CmdError| REQUEST_STORE.raise(error, &values);
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| unreachable(CmdError::from(error)))?;
+    let Some(text) = store
         .download_text(&request_path(hostname))
-        .await?
-        .ok_or_else(|| CmdError::missing(format!("no join request for '{hostname}'")))?;
+        .await
+        .map_err(|error| unreachable(CmdError::from(error)))?
+    else {
+        let pending = pending_names(&store).await;
+        return Err(CmdError::declared(
+            &REQUEST_MISSING,
+            &[("hostname", hostname), ("pending", &pending)],
+        ));
+    };
     let request: Value = serde_json::from_str(&text).map_err(|exc| {
-        CmdError::unreachable(format!(
-            "the stored join request for '{hostname}' is not JSON: {exc}"
-        ))
+        CmdError::declared(
+            &REQUEST_UNREADABLE,
+            &[("hostname", hostname), ("answer", &exc.to_string())],
+        )
     })?;
-    let request_hostname = pending_request(&request)
-        .map_err(CmdError::refused)?
+    let incomplete = |field: &str| {
+        CmdError::declared(
+            &REQUEST_INCOMPLETE,
+            &[
+                ("hostname", hostname),
+                ("field", field),
+                ("request", &request.to_string()),
+            ],
+        )
+    };
+    match request.get("status").and_then(Value::as_str) {
+        None => return Err(incomplete("status")),
+        Some(status) if status != STATUS_PENDING => {
+            return Err(CmdError::declared(
+                &REQUEST_DECIDED,
+                &[("hostname", hostname), ("status", status)],
+            ))
+        }
+        Some(_) => {}
+    }
+    let request_hostname = request
+        .get("hostname")
+        .and_then(Value::as_str)
+        .filter(|hostname| !hostname.is_empty())
+        .ok_or_else(|| incomplete("hostname"))?
         .to_string();
     // An invited request names the target the invite reserved and minted the
     // channel key for; only a request without one takes the machine's own
@@ -66,22 +144,25 @@ pub async fn approve(
     };
     let destination = request_destination(&request).map(str::to_string);
     let invite_id = request_invite_id(&request).map(str::to_string);
-    let document = fetch_document().await?;
+    let named = [("hostname", hostname), ("name", name.as_str())];
+    let document = fetch_document()
+        .await
+        .map_err(|error| REGISTRY_READ.raise(error, &named))?;
     let mut enrollment = Value::Null;
     let mut registered_generation = Value::Null;
     match &destination {
         Some(destination) => {
             if invite_id.is_some() {
-                catalog::require_invite_allowed(&document)?;
+                catalog::require_invited_approval(&document, &name, hostname)?;
             } else {
-                catalog::require_join_allowed(&document)?;
+                catalog::require_join_allowed(&document, &name)?;
             }
             // `install_key` is false: an invited machine put the fleet's public
             // key in its own authorized_keys as the invite's first act, so
             // there is nothing to install and no second channel to do it over.
             let enroll = crate::cli::fleet::ops::EnrollRequest {
                 name: &name,
-                ssh: Some(destination),
+                ssh: destination,
                 kind: &kind,
                 fleet: fleet_name,
                 bootstrap: true,
@@ -96,17 +177,27 @@ pub async fn approve(
             }
         }
         None => {
-            catalog::require_join_allowed(&document)?;
+            catalog::require_join_allowed(&document, &name)?;
             let request_os = request
                 .get("os")
                 .and_then(Value::as_str)
-                .ok_or_else(|| CmdError::refused("join request has no operating system"))?;
+                .ok_or_else(|| incomplete("operating system (os)"))?;
             let request_arch = request
                 .get("arch")
                 .and_then(Value::as_str)
-                .ok_or_else(|| CmdError::refused("join request has no architecture"))?;
-            let release_platform =
-                release_platform(request_os, request_arch).map_err(CmdError::refused)?;
+                .ok_or_else(|| incomplete("architecture (arch)"))?;
+            let release_platform = release_platform(request_os, request_arch).map_err(|_| {
+                CmdError::declared(
+                    &PLATFORM_UNSUPPORTED,
+                    &[("name", &name), ("os", request_os), ("arch", request_arch)],
+                )
+            })?;
+            // The fleet is checked against the document read here before
+            // anything is written, so a fleet nobody declared refuses the
+            // approval rather than a registration half done.
+            if let Some(fleet) = fleet_name {
+                require_declared_fleet(&document, &name, fleet)?;
+            }
             // Pure: the entry, and the fleet it is placed in, are a function of
             // the document they are written into and of the join request, which
             // is already decided. A lost race is answered by applying both to
@@ -120,11 +211,15 @@ pub async fn approve(
                     release_platform,
                 )?;
                 match fleet_name {
-                    Some(fleet) => crate::cli::fleet::ops::assign_target(&registered, &name, fleet),
+                    Some(fleet) => crate::cli::fleet::ops::assign_target(&registered, &name, fleet)
+                        .map_err(|error| {
+                            CmdError::declared(&FLEETS_MALFORMED, &[("answer", &error.to_string())])
+                        }),
                     None => Ok(registered),
                 }
             })
-            .await?;
+            .await
+            .map_err(|error| write_failure(error, &named))?;
             registered_generation = json!(generation);
             if !as_json {
                 println!(
@@ -140,16 +235,33 @@ pub async fn approve(
     }
     let mut decided = request;
     decided["status"] = Value::String(STATUS_APPROVED.to_string());
-    store
-        .upload_text(
-            &request_path(hostname),
-            &serde_json::to_string_pretty(&decided)?,
+    let unwritten = |answer: String| {
+        CmdError::declared(
+            &REQUEST_STATUS_UNWRITTEN,
+            &[("hostname", hostname), ("name", &name), ("answer", &answer)],
         )
-        .await?;
+    };
+    let decided_text =
+        serde_json::to_string_pretty(&decided).map_err(|error| unwritten(error.to_string()))?;
+    store
+        .upload_text(&request_path(hostname), &decided_text)
+        .await
+        .map_err(|error| unwritten(error.to_string()))?;
     // The invite has produced a registered machine; nothing is left for it to
     // do, whatever allowance it had left.
     if let Some(invite_id) = &invite_id {
-        crate::cli::fleet::invite::mark_spent(&store, invite_id).await?;
+        crate::cli::fleet::invite::mark_spent(&store, invite_id)
+            .await
+            .map_err(|error| {
+                CmdError::declared(
+                    &INVITE_UNSPENT,
+                    &[
+                        ("invite", invite_id),
+                        ("name", &name),
+                        ("answer", &error.to_string()),
+                    ],
+                )
+            })?;
     }
     // The agent first, then the host's own network, which makes the Stado
     // network its preferred path before any outside overlay.
