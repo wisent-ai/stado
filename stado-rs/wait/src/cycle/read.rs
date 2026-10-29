@@ -43,7 +43,7 @@ pub(super) fn holder(lock: &Path) -> Result<Option<u32>, String> {
             lock.display()
         )
     })?;
-    Ok(crate::open::running(pid).then_some(pid))
+    Ok(crate::open::running(pid)?.then_some(pid))
 }
 
 /// The command `pid` runs, as `ps -o command=` prints it: its arguments

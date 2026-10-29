@@ -180,7 +180,7 @@ fn awaited() -> Result<BTreeMap<u32, Vec<Resource>>, String> {
                 ))
             }
         };
-        if !crate::open::running(pid) {
+        if !crate::open::running(pid)? {
             match std::fs::remove_file(&file) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

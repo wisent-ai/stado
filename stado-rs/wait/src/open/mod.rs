@@ -226,7 +226,7 @@ pub fn listed() -> Result<Listing, RegisterError> {
 /// longer runs, whoever owns the pid now.
 #[cfg(unix)]
 pub(crate) fn writer_stands(pid: u32, written: SystemTime) -> Result<bool, String> {
-    if !running(pid) {
+    if !running(pid)? {
         return Ok(false);
     }
     let process = libc::pid_t::try_from(pid).map_err(|error| format!("pid {pid}: {error}"))?;
@@ -245,9 +245,7 @@ pub(crate) fn writer_stands(pid: u32, written: SystemTime) -> Result<bool, Strin
 /// naming the pid, as `birth_seconds` refuses its own.
 #[cfg(not(unix))]
 pub(crate) fn writer_stands(pid: u32, _written: SystemTime) -> Result<bool, String> {
-    Err(format!(
-        "whether pid {pid} still runs is unsupported on this operating system"
-    ))
+    running(pid)
 }
 
 /// kill(2)'s null signal, which delivers nothing and only checks the pid:
@@ -258,11 +256,21 @@ const NULL_SIGNAL: libc::c_int = 0;
 /// Whether a process with this pid exists: the null signal answers whether
 /// it could be delivered (EPERM means it exists, owned by another user).
 #[cfg(unix)]
-pub(crate) fn running(pid: u32) -> bool {
+pub(crate) fn running(pid: u32) -> Result<bool, String> {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return false;
+        return Ok(false);
     };
     // SAFETY: kill with the null signal sends no signal; it only checks the pid.
     let answered = unsafe { libc::kill(pid, NULL_SIGNAL) };
-    !answered.is_negative() || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    Ok(!answered.is_negative()
+        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+}
+
+/// Whether a process runs is read through kill(2), which only a unix system
+/// answers; elsewhere the question is refused naming the pid.
+#[cfg(not(unix))]
+pub(crate) fn running(pid: u32) -> Result<bool, String> {
+    Err(format!(
+        "whether pid {pid} still runs is unsupported on this operating system"
+    ))
 }

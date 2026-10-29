@@ -33,7 +33,11 @@ pub fn birth_seconds(pid: i32) -> Result<Option<u64>, String> {
         return Ok(Some(unsafe { info.assume_init() }.pbi_start_tvsec));
     }
     let error = std::io::Error::last_os_error();
-    let exists = u32::try_from(pid).is_ok_and(super::running);
+    let exists = match u32::try_from(pid) {
+        Ok(pid) => super::running(pid)?,
+        // A negative number names no process.
+        Err(_negative) => false,
+    };
     if error.raw_os_error() == Some(libc::ESRCH) || !exists {
         return Ok(None);
     }
