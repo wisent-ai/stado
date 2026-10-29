@@ -86,6 +86,14 @@ pub enum FleetCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Point a registered machine at the store this host reads: its resolver
+    /// key on the directory authority, its resolver adapter for the object
+    /// API, the fleet namespace's bearer and its `storage` configuration. The
+    /// step `bootstrap` takes for every remote target; its own store stays.
+    Attach {
+        /// Registered target name.
+        name: String,
+    },
     /// One-command onboarding: register a machine, optionally fleet it,
     /// optionally install the agent.
     Enroll {

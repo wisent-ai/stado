@@ -40,6 +40,16 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
         } => ops::assign(&target, &fleet, json).await,
         FleetCommands::Unassign { target, json } => ops::unassign(&target, json).await,
         FleetCommands::Delete { name, json } => ops::delete(&name, json).await,
+        FleetCommands::Attach { name } => {
+            let target = crate::cli::canonical_host(&name).await?;
+            crate::cli::fleet::attach::attach(
+                &target,
+                &crate::deploy::production_runner(),
+                &mut |line: &str| println!("{line}"),
+            )
+            .await?;
+            Ok(true)
+        }
         FleetCommands::Enroll {
             name,
             ssh,

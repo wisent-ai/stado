@@ -7,14 +7,15 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Added
 
-- **`stado bootstrap --target NAME` (and `fleet enroll --bootstrap`) attaches a machine that runs its
-  own standalone Stado to the fleet store:** after the binary is in place it authorizes the
-  machine's resolver key on the directory authority, declares the machine's resolver adapter for
-  the object API exactly as the bootstrapping host declares its own (ports the machine hands out),
-  writes the bearer of the fleet namespace to `~/.stado/queue-object-api-token`, and sets the
-  machine's `storage` to the store the bootstrapping host reads. Its device-local store stays at the
-  path its configuration names and is reported. Before, such a machine's `serve --auto` resolved
-  the name its own store gave it, refused the registered one, and published no beacon.
+- **`stado fleet attach NAME`, run by `stado bootstrap --target NAME` (and `fleet enroll
+  --bootstrap`), attaches a machine that runs its own standalone Stado to the fleet store:** it
+  authorizes the machine's resolver key on the directory authority, declares the machine's resolver
+  adapter for the object API exactly as this host declares its own (ports the machine hands out),
+  writes the bearer of the fleet namespace (the item `object_api.namespaces` names, read as named)
+  to `~/.stado/queue-object-api-token`, gives it this host's `ssh.keepalive_*`, and sets its
+  `storage` to the store this host reads. Its device-local store stays at the path its
+  configuration names and is reported. Before, such a machine's `serve --auto` resolved the name
+  its own store gave it, refused the registered one, and published no beacon.
 
 - **`stado host processes TARGET [--json]` names what each process on a host spent:** a saturated
   host could only be read with `top` or `ps`, which an agent session, a sandbox or the host-exec

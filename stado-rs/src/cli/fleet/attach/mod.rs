@@ -16,6 +16,8 @@
 //! not touched: it stays at the path its configuration names, as the
 //! machine's own object API root, and that path is reported.
 
+mod session;
+
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
@@ -115,7 +117,18 @@ pub(crate) async fn attach(
             ))
             .stating(FailureCode::Config)
         })?;
-    let secret = crate::cli::service::service_secret(&item, BEARER_FIELD).await?;
+    // Read as named: the namespace declaration names the item, and Stado's
+    // own reader reads it as the object API's verifier does, where a read by
+    // role finds nothing unless the item also carries a role tag.
+    let secret = crate::skarbiec::Client::stado()?
+        .read_declared_string(&item, BEARER_FIELD)
+        .await?
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            CmdError::missing(format!(
+                "{item} holds no {BEARER_FIELD} field, so the fleet namespace has no bearer to give"
+            ))
+        })?;
     let written =
         crate::deploy::service::write_token_file_on_host(target, TOKEN_FILE, &secret, runner)
             .await
@@ -133,6 +146,7 @@ pub(crate) async fn attach(
         "[attach] {}: bearer of namespace {} written to {TOKEN_FILE}",
         target.name, store.namespace
     ));
+    session::declare_keepalive(target, echo).await?;
     let local = machine_local_store(target, runner).await?;
     let storage = json!({
         "backend": crate::capabilities::StorageAdapter::StadoObject.id(),
