@@ -4,6 +4,7 @@
 
 mod compose;
 mod query;
+mod range;
 mod read;
 mod write;
 

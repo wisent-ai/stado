@@ -1,5 +1,11 @@
-//! The ranged fallback for a release body no single response carried.
+//! The ranged fallback for a release body no single response carried. Each
+//! range is read as a wait with the route's progress window
+//! ([`crate::cli::storage::product::api::read::body`]); a range that stops
+//! after some of its bytes arrived is asked again from the first byte it
+//! lacks, since it made progress. A range that brings no byte, and every
+//! error the release channel answers with, ends the download at once.
 
+use crate::cli::storage::product::api::read::body::{self, Ended};
 use crate::cli::storage::*;
 
 impl RemoteObjectApi {
@@ -7,13 +13,8 @@ impl RemoteObjectApi {
         &self,
         origin: url::Url,
     ) -> Result<Vec<u8>, CmdError> {
-        // Every error the release channel answers with ends the download at
-        // once with that cause: a range sent again after a refused
-        // connection, a cut body or a failed read only waited on the same
-        // answer again.
         let mut body = Vec::new();
-
-        'download: loop {
+        loop {
             let start = body.len();
             // The last byte of this chunk: a Range header names it inclusively.
             let Some(end) = (start..start.saturating_add(OBJECT_API_CHUNK_BYTES)).next_back()
@@ -41,38 +42,26 @@ impl RemoteObjectApi {
                 .stating(crate::primitives::failure::FailureCode::InfraDown));
             }
             let (end_exclusive, total) = partial_content_bounds(&response, start, "release GET")?;
-            body.reserve(total.saturating_sub(body.capacity()));
-
-            let mut response = response;
-            loop {
-                match response.chunk().await {
-                    Ok(Some(chunk)) => {
-                        if chunk.len() > end_exclusive.saturating_sub(body.len()) {
-                            return Err(CmdError::click(
-                                "Stado object API release GET sent bytes outside the requested \
-                             range",
-                            )
-                            .stating(crate::primitives::failure::FailureCode::InfraDown));
-                        }
-                        body.extend_from_slice(&chunk);
-                    }
-                    Ok(None) if body.len() != end_exclusive => {
-                        return Err(CmdError::click(format!(
-                            "public release GET range ended after {} of {end_exclusive} bytes",
-                            body.len()
-                        ))
-                        .stating(crate::primitives::failure::FailureCode::InfraDown));
-                    }
-                    Ok(None) if body.len() == total => return Ok(body),
-                    Ok(None) => continue 'download,
-                    Err(error) => {
-                        return Err(CmdError::click(format!(
-                            "public release GET range connection closed after {} bytes: {error}",
-                            body.len()
-                        ))
-                        .stating(crate::primitives::failure::FailureCode::InfraDown));
-                    }
+            body.reserve(total.saturating_sub(body.len()));
+            let what = format!("public release GET of {origin} ({total} bytes)");
+            let ended = body::read(response, &what, &mut body, Some(end_exclusive - start)).await?;
+            match ended {
+                Ended::Closed if body.len() == total => return Ok(body),
+                Ended::Closed if body.len() == end_exclusive => {}
+                Ended::Closed | Ended::Broken(_) if body.len() > start => {
+                    eprintln!(
+                        "stado: {what}: the range from byte {start} stopped after {} bytes; \
+                         asking for the rest from byte {}",
+                        body.len() - start,
+                        body.len()
+                    );
                 }
+                Ended::Closed => {
+                    return Err(CmdError::unreachable(format!(
+                        "{what}: the range from byte {start} ended with no byte of it"
+                    )))
+                }
+                Ended::Broken(said) => return Err(CmdError::unreachable(said)),
             }
         }
     }

@@ -1,5 +1,6 @@
 //! One release object read, and one release presence probe.
 
+use crate::cli::storage::product::api::read::body::{self, Ended};
 use crate::cli::storage::*;
 
 impl RemoteObjectApi {
@@ -77,40 +78,29 @@ impl RemoteObjectApi {
         }
 
         let total = declared_size(&response, "release GET")?;
-        let mut body = Vec::new();
-        if let Some(total) = total {
-            body.reserve(total);
-        }
-        let mut response = response;
-        loop {
-            match response.chunk().await {
-                Ok(Some(chunk)) => body.extend_from_slice(&chunk),
-                // The stream ending is not the object ending. The release
-                // route streams an unranged GET until its own window closes
-                // and then closes the body cleanly, with no length declared
-                // and no error to read: the darwin archive of 0.13.46 is
-                // 73,864,632 bytes and two reads of it here returned
-                // 22,925,186 and 15,318,446, both as `Ok`. A short object with
-                // a successful exit is worse than a failed download, because
-                // every caller downstream -- digest verification, archive
-                // extract, a host staging a release -- reports its own true
-                // finding about bytes that were never the object.
-                //
-                // Whole is provable only against a declared total, so that
-                // is the only thing accepted here. Anything else goes to the
-                // bounded byte-range reader, which asks for one chunk at a
-                // time and knows the total from every `Content-Range` it gets
-                // back.
-                Ok(None) if total == Some(body.len()) => return Ok(body),
-                Ok(None) => return self.get_release_in_ranges(origin).await,
-                Err(error) => {
-                    return Err(CmdError::unreachable(format!(
-                        "Stado object API release GET response body connection closed before \
-                         completion after {} bytes: {error}",
-                        body.len()
-                    )));
-                }
-            }
+        let mut body = match total {
+            Some(total) => Vec::with_capacity(total),
+            None => Vec::new(),
+        };
+        // The stream ending is not the object ending. The release route
+        // streams an unranged GET until its own window closes and then closes
+        // the body cleanly, with no length declared and no error to read: the
+        // darwin archive of 0.13.46 is 73,864,632 bytes and two reads of it
+        // here returned 22,925,186 and 15,318,446, both as `Ok`. A short
+        // object with a successful exit is worse than a failed download,
+        // because every caller downstream -- digest verification, archive
+        // extract, a host staging a release -- reports its own true finding
+        // about bytes that were never the object.
+        //
+        // Whole is provable only against a declared total, so that is the
+        // only thing accepted here. Anything else goes to the bounded
+        // byte-range reader, which asks for one chunk at a time and knows the
+        // total from every `Content-Range` it gets back.
+        let what = format!("release GET of {uri}");
+        match body::read(response, &what, &mut body, total).await? {
+            Ended::Closed if total == Some(body.len()) => Ok(body),
+            Ended::Closed => self.get_release_in_ranges(origin).await,
+            Ended::Broken(said) => Err(CmdError::unreachable(said)),
         }
     }
 

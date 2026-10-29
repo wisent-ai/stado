@@ -33,6 +33,13 @@ impl Dashboard {
         };
         let versioned = query_value(&values, "versioned").as_deref() == Some("true");
         let public_release_route = request.target().0 == "/api/release/object";
+        // A range of a stored object is read from the store as that range
+        // alone (`range`), never by reading the whole object to slice it.
+        if !versioned && !(object.is_release_archive() && public_release_route) {
+            if let Some(range) = request.header("range") {
+                return self.object_range(&object.to_string(), &path, range).await;
+            }
+        }
         let (bytes, version) = if versioned {
             let Some(value) = self.store.read_text_versioned(&path).await? else {
                 return Ok(send_json(

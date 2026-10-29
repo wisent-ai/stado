@@ -32,7 +32,7 @@ impl RemoteObjectApi {
 
     pub(in crate::cli::storage) async fn success_body(
         &self,
-        mut response: reqwest::Response,
+        response: reqwest::Response,
         operation: &str,
         bearer: Option<&str>,
     ) -> Result<Vec<u8>, CmdError> {
@@ -52,17 +52,14 @@ impl RemoteObjectApi {
             })?),
             None => Vec::new(),
         };
-        while let Some(chunk) = response.chunk().await.map_err(|error| {
-            CmdError::click(format!(
-                "Stado object API {operation} response body connection closed before completion \
-                 after {} bytes: {error}",
-                body.len()
-            ))
-            .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })? {
-            body.extend_from_slice(&chunk);
+        let what = format!("Stado object API {operation}");
+        match super::super::read::body::read(response, &what, &mut body, None).await? {
+            super::super::read::body::Ended::Closed => Ok(body),
+            super::super::read::body::Ended::Broken(said) => {
+                Err(CmdError::click(said)
+                    .stating(crate::primitives::failure::FailureCode::InfraDown))
+            }
         }
-        Ok(body)
     }
 
     pub(in crate::cli::storage) async fn response_error(
