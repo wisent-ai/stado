@@ -69,6 +69,10 @@ enum NativeCredentialOperations {
             .init(id: "destination-token", label: "Owner-only bearer file on selected host", option: "--token-file", required: true),
             .init(id: "check", label: "Check only; do not replace the selected host's file", option: "--check", flag: true, initial: "true"),
         ]),
+        .init(id: "token-remove", title: "Remove a bearer file whose grant is revoked", path: ["credentials", "token", "remove"], fields: [
+            .init(id: "consumer", label: "Exact consumer identity", required: true),
+            .init(id: "token-file", label: "Bearer file on selected host", option: "--token-file", required: true),
+        ]),
         .init(id: "acquisition-sync", title: "Synchronize acquisition scope catalogue", path: ["credentials", "scopes", "sync"],
             payload: .file(option: nil, label: "Acquisition scope catalogue contents", initial: "")),
         .init(id: "grant-add", title: "Grant a consumer one field of a role", path: ["credentials", "grant", "add"], fields: [

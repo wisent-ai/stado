@@ -157,6 +157,21 @@ pub enum CredentialTokenCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Take a bearer file off a host once the vault owner records no grant
+    /// for its consumer, and take its record out of the registry
+    /// (`targets[].bearers`). Refused while the grant stands, while the
+    /// registry records the file as another consumer's, and while the host's
+    /// configuration reads a bearer from it.
+    Remove {
+        consumer: String,
+        #[arg(long)]
+        host: String,
+        /// The bearer file on HOST, in the forms `sync --token-file` takes.
+        #[arg(long)]
+        token_file: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Vault-owner primitive used by `mint --token-item`: register ITEM#FIELD
     /// with `skarbiec grant issue` and keep it at STADO_TOKEN_DESTINATION.
     Register {

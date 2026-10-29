@@ -275,6 +275,7 @@ pub async fn vault_token_sync(
     let delivered_path = report["skarbiec"]["token_file"]
         .as_str()
         .filter(|path| !path.is_empty())
+        .map(str::to_owned)
         .ok_or_else(|| {
             CmdError::click("token delivery returned no verified file")
                 .stating(FailureCode::InfraDown)
@@ -287,6 +288,13 @@ pub async fn vault_token_sync(
                 .machine_readable(json_output),
         );
     }
+    // A check changes nothing, the registry included; a delivery is what the
+    // destination now holds, so the registry says so.
+    if !mode.verify_only {
+        record_held_bearer(&destination.target.name, consumer, &delivered_path)
+            .await
+            .map_err(|error| error.machine_readable(json_output))?;
+    }
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -295,6 +303,268 @@ pub async fn vault_token_sync(
             destination.target.name, status, source.target.name,
         );
         println!("Bearer file: {delivered_path}");
+    }
+    Ok(())
+}
+
+/// Record in the registry that `host` holds `consumer`'s bearer at `file`
+/// (`targets[].bearers`), so `stado registry host show` says which of the
+/// fleet's credentials sit on that host.
+pub(crate) async fn record_held_bearer(
+    host: &str,
+    consumer: &str,
+    file: &str,
+) -> Result<(), CmdError> {
+    let bearer = crate::targets::HeldBearer {
+        consumer: consumer.to_string(),
+        file: file.to_string(),
+    };
+    crate::cli::registry::commit_document(|document| {
+        crate::targets::with_held_bearer(document, host, &bearer).map_err(|cause| {
+            CmdError::click(cause).stating(crate::primitives::failure::FailureCode::Config)
+        })
+    })
+    .await
+    .map(drop)
+    .map_err(|error| {
+        error.within(format!(
+            "{host} holds the bearer of {consumer} at {file}, but the registry does not record \
+             it; run the same command again to record it"
+        ))
+    })
+}
+
+/// Removes one bearer file on the host it runs on, given its absolute path as
+/// `$1`: refused for a symbolic link, for anything but a regular file this
+/// account owns, and for a file whose directory resolves outside the
+/// account's home; a file already gone is said as `absent`.
+const REMOVE_BEARER: &str = r#"set -u
+file=$1
+if [ -L "$file" ]; then printf '%s is a symbolic link, not a bearer file; nothing was removed\n' "$file" >&2; exit 3; fi
+if [ ! -e "$file" ]; then printf 'absent\n'; exit 0; fi
+if [ ! -f "$file" ] || [ ! -O "$file" ]; then printf '%s is not a regular file this account owns; nothing was removed\n' "$file" >&2; exit 3; fi
+home=$(cd "$HOME" && pwd -P) || exit
+directory=$(cd "${file%/*}" && pwd -P) || exit
+case "$directory/" in "$home"/*) ;; *) printf '%s resolves to %s, outside the account home %s; nothing was removed\n' "$file" "$directory" "$home" >&2; exit 3;; esac
+rm -f -- "$file" || exit
+if [ -e "$file" ]; then printf '%s is still there after its removal\n' "$file" >&2; exit 1; fi
+printf 'removed\n'"#;
+
+/// The absolute path of a bearer file named the way `sync` names one: a bare
+/// name under `~/.stado`, a `~/` or `$HOME/` path, or an absolute path inside
+/// the account's `home`.
+fn bearer_path(home: &str, value: &str) -> Result<String, CmdError> {
+    let home = home.trim_end_matches('/');
+    let below_home = match ["~/", "$HOME/"]
+        .iter()
+        .find_map(|prefix| value.strip_prefix(prefix))
+    {
+        Some(rest) => rest.to_string(),
+        None if value.starts_with('/') => value
+            .strip_prefix(&format!("{home}/"))
+            .ok_or_else(|| {
+                CmdError::usage(format!(
+                    "token file {value} is outside the host account's home {home}; Stado places \
+                     bearer files only inside it"
+                ))
+            })?
+            .to_string(),
+        None if !value.contains('/') => format!(".stado/{value}"),
+        None => {
+            return Err(CmdError::usage(format!(
+                "token file {value} must be a bare name under ~/.stado, a ~/ path or an absolute \
+                 path inside the host account's home"
+            )))
+        }
+    };
+    if below_home
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(CmdError::usage(format!(
+            "token file {value} names an empty, `.` or `..` path component"
+        )));
+    }
+    Ok(format!("{home}/{below_home}"))
+}
+
+/// Take a bearer file off a host once the grant it opened is gone, and take
+/// its record out of the registry (`targets[].bearers`).
+///
+/// The counterpart of `sync`, which puts one there. A bearer that still opens
+/// a grant is a credential in use, so the file stays while the vault owner
+/// records any grant for CONSUMER, while the registry records the file as
+/// another consumer's, and while the host's own configuration names it as a
+/// bearer file it reads. A file already absent is the effect asked for.
+pub async fn vault_token_remove(
+    target: &str,
+    consumer: &str,
+    token_file: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    use crate::cli::host::machine::config::remote::{remote_config_output, RemoteConfigAction};
+    use crate::cli::host::secrets::vault::mirror::remote_skarbiec_json;
+    use crate::deploy::host_channel;
+    use crate::primitives::failure::FailureCode;
+
+    let readable = |error: CmdError| error.machine_readable(json_output);
+    vault_word("consumer", consumer).map_err(readable)?;
+    if token_file.trim().is_empty() {
+        return Err(readable(CmdError::usage("the token file must be named")));
+    }
+    let target = crate::cli::canonical_host(target).await.map_err(readable)?;
+    let owner = crate::cli::directory::active_host("skarbiec")
+        .await
+        .map_err(readable)?
+        .ok_or_else(|| {
+            readable(
+                CmdError::click(format!(
+                    "the service directory places skarbiec on no host, so whether a grant for \
+                     {consumer} still stands cannot be read; declare skarbiec's active host first"
+                ))
+                .stating(FailureCode::Config),
+            )
+        })?;
+    let (owner_target, listing) =
+        remote_skarbiec_json(&owner, &[String::from("grant"), String::from("list")])
+            .await
+            .map_err(readable)?;
+    let grants = listing.as_array().ok_or_else(|| {
+        readable(
+            CmdError::click(format!(
+                "{}: Skarbiec did not answer its grant list as an array",
+                owner_target.name
+            ))
+            .stating(FailureCode::InfraDown),
+        )
+    })?;
+    if grants
+        .iter()
+        .any(|grant| grant.get("consumer").and_then(Value::as_str) == Some(consumer))
+    {
+        return Err(readable(CmdError::refused(format!(
+            "{}'s vault still records a grant for {consumer}, so its bearer on {} is a credential \
+             in use; revoke the grant first (`stado credentials grant revoke {consumer} --host \
+             {}`), then remove the file",
+            owner_target.name, target.name, owner_target.name
+        ))));
+    }
+    let runner = crate::deploy::production_runner();
+    let home = host_channel::remote_home(&target, &runner)
+        .await
+        .map_err(|error| readable(CmdError::from(error)))?;
+    let path = bearer_path(&home, token_file).map_err(readable)?;
+    let registry = crate::targets::load_registry_auto()
+        .await
+        .map_err(|error| readable(CmdError::from(error)))?;
+    if let Some(held) = registry
+        .targets
+        .iter()
+        .find(|entry| entry.name == target.name)
+        .and_then(|entry| entry.extra.get(crate::targets::BEARERS_KEY))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|held| held.get("file").and_then(Value::as_str) == Some(path.as_str()))
+    {
+        if held.get("consumer").and_then(Value::as_str) != Some(consumer) {
+            return Err(readable(CmdError::refused(format!(
+                "the registry records {path} on {} as the bearer of {}, not of {consumer}; \
+                 nothing was removed",
+                target.name,
+                crate::cli::reporting::field(&held["consumer"])
+            ))));
+        }
+    }
+    let configuration = remote_config_output(&target, RemoteConfigAction::Show, &runner)
+        .await
+        .map_err(readable)?;
+    let configuration: Value = serde_json::from_str(&configuration).map_err(|error| {
+        readable(
+            CmdError::click(format!(
+                "{} answered its configuration read with something that is not JSON: {error}",
+                target.name
+            ))
+            .stating(FailureCode::InfraDown),
+        )
+    })?;
+    if let Some((key, _)) = configuration["resolved"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .find(|(key, value)| key.ends_with("token_file") && value.as_str() == Some(path.as_str()))
+    {
+        return Err(readable(CmdError::refused(format!(
+            "{}'s configuration reads its {key} bearer from {path}; nothing was removed",
+            target.name
+        ))));
+    }
+    let removed = host_channel::run_program(
+        &target,
+        &["/bin/sh", "-c", REMOVE_BEARER, "stado-token-remove", &path],
+        &runner,
+    )
+    .await
+    .map_err(|error| {
+        readable(
+            CmdError::click(format!("{}: bearer removal failed: {error}", target.name))
+                .stating(FailureCode::InfraDown),
+        )
+    })?;
+    if !removed.succeeded() {
+        return Err(readable(
+            CmdError::click(format!(
+                "{}: {path} was not removed (exit {}): {}",
+                target.name,
+                removed.code,
+                removed.stderr.trim()
+            ))
+            .stating(FailureCode::Refused),
+        ));
+    }
+    let status = match removed.stdout.trim() {
+        "removed" => "token_removed",
+        "absent" => "token_absent",
+        other => {
+            return Err(readable(
+                CmdError::click(format!(
+                    "{}: the bearer removal answered {other:?}, neither removed nor absent",
+                    target.name
+                ))
+                .stating(FailureCode::InfraDown),
+            ))
+        }
+    };
+    crate::cli::registry::commit_document(|document| {
+        crate::targets::without_held_bearer(document, &target.name, &path)
+            .map_err(|cause| CmdError::click(cause).stating(FailureCode::Config))
+    })
+    .await
+    .map_err(|error| {
+        readable(error.within(format!(
+            "{path} is off {}, but the registry still records it; run the same command again \
+             to take the record away",
+            target.name
+        )))
+    })?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target.name,
+                "consumer": consumer,
+                "token_file": path,
+                "status": status,
+                "grant_owner": owner_target.name,
+            }))?
+        );
+    } else if status == "token_removed" {
+        println!(
+            "{}: removed {path}, the bearer of {consumer}, whose grant {} no longer records",
+            target.name, owner_target.name
+        );
+    } else {
+        println!("{}: {path} is already absent", target.name);
     }
     Ok(())
 }

@@ -41,6 +41,7 @@ use crate::queue::{BlobBackend, StorageError, VersionedText};
 // re-exported by glob: `pub` items stay public, `pub(crate)` items stay
 // crate-visible, and the module's public surface is unchanged.
 
+mod bearers;
 mod builds;
 mod cache;
 mod fleet;
@@ -51,6 +52,7 @@ mod registry;
 mod target;
 mod validate;
 
+pub use bearers::*;
 pub use builds::*;
 pub use cache::*;
 pub use fleet::*;

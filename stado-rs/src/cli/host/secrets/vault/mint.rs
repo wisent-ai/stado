@@ -142,6 +142,11 @@ pub async fn vault_token_mint(
     if let Some(object) = report.as_object_mut() {
         object.remove("token");
     }
+    // A bearer written to a file on the vault owner is one that host holds.
+    if let Some(path) = report.get("token_file").and_then(Value::as_str) {
+        crate::cli::host::secrets::vault::token::record_held_bearer(&resolved.name, consumer, path)
+            .await?;
+    }
     if json_output {
         let mut metadata = json!({
             "target": resolved.name,

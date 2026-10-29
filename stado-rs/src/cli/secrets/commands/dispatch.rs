@@ -160,6 +160,12 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 )
                 .await
             }
+            CredentialTokenCommands::Remove {
+                consumer,
+                host,
+                token_file,
+                json,
+            } => super::host::vault_token_remove(&host, &consumer, &token_file, json).await,
             CredentialTokenCommands::Register {
                 skarbiec,
                 item,
