@@ -2,7 +2,7 @@
 //! the guards that decide whether a candidate may be taken at all.
 //!
 //! `reclaim` is here because it is the only place anything is removed, and
-//! `held`, `unit_named`, `process_absent` and `settled` are here because
+//! `held`, `unit_named`, `declared_named`, `process_absent` and `settled` are here because
 //! every stage below asks them rather than carrying its own answer.
 
 /// `lsof_holds PATH`: 0 when a process has PATH (or, for a directory,
@@ -92,6 +92,12 @@ process_absent() {
 # when the stage may take it. A dry run records nothing, so it names exactly
 # what the next apply would take.
 settled() {
+  # A declared tree is never a candidate, so it records no first look and a
+  # preview names the declaration that keeps it.
+  if declared_named "$1"; then
+    printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" "a registry service declaration names $declared_by; retained"
+    return 1
+  fi
   process_absent "$1"
   case $? in
     0) ;;
@@ -233,17 +239,42 @@ unit_named() {
   return 1
 }
 
+# A path a registry service declaration on this host names -- its program,
+# its unit file, an absolute argument -- or one that holds such a path, or
+# one such a path holds. The registry is what the fleet will start, restart
+# and converge from, so a tree it names is kept even when no unit file and no
+# process names it now: taking it would leave the declaration naming nothing.
+# The paths are read from the registry by the caller before this program is
+# built; a registry it cannot read refuses the whole reclamation there.
+declared_named() {
+  for declared in @DECLARED_PATHS@; do
+    case "$declared" in
+      "$1"|"$1"/*) declared_by="$declared"; return 0 ;;
+    esac
+    case "$1" in
+      "$declared"/*) declared_by="$declared"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # The only place anything is removed. A held or unit-named path is skipped
-# silently -- it is not a failure, it is the rule. A path whose unit scopes
-# could not be read is kept and reported as refused, since absence was never
-# proven. In dry-run mode the path is reported without being touched, so a
-# preview names exactly what an apply would take.
+# silently -- it is not a failure, it is the rule. A path a registry service
+# declaration names is kept and reported with the declared path, so a
+# preview says why a tree that looks superseded stays. A path whose unit
+# scopes could not be read is kept and reported as refused, since absence was
+# never proven. In dry-run mode the path is reported without being touched,
+# so a preview names exactly what an apply would take.
 reclaim() {
   if [ "$snapshot_read" != yes ]; then
     printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" "the process table could not be read ($(printf '%s' "$snapshot" | /usr/bin/tr '\t\n' '  ')); retained"
     return 1
   fi
   if held "$1"; then return 1; fi
+  if declared_named "$1"; then
+    printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" "a registry service declaration names $declared_by; retained"
+    return 1
+  fi
   unit_named "$1"
   case $? in
     1) ;;

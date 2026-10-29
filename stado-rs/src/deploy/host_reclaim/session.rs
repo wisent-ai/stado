@@ -145,6 +145,25 @@ pub async fn reclaim_host(
     // The janitor's `build_caches` cleaner walks the whole home under the
     // disk-full rule; this stage sweeps the same scope.
     let build_cache_roots = "\"$HOME\"".to_string();
+    // What the registry declares this host's services run is kept by every
+    // stage, whether or not a unit file or a process names it right now: the
+    // fleet starts, restarts and converges from those declarations. The
+    // target came from the registry, so a registry nobody could read has
+    // already refused the reclamation above; a `services` field that is not
+    // a list is refused here rather than read as declaring nothing.
+    if target
+        .extra
+        .get("services")
+        .is_some_and(|services| !services.is_array() && !services.is_null())
+    {
+        return Err(DeployError(format!(
+            "{}: targets[].services is not a list, so the trees its service declarations name \
+             cannot be read and none is reclaimed; correct it with `stado registry set`",
+            target.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::Config));
+    }
+    let declared = super::program::declared_paths(&target);
     let script = if host_channel::target_is_this_host(&target) {
         // A local reclaim must use the binary that owns this invocation.
         // Release capacity builds the corrected tree before installation;
@@ -164,6 +183,7 @@ pub async fn reclaim_host(
             live_jobs.as_deref(),
             &work_roots,
             &build_cache_roots,
+            &declared,
             Some(&current_stado),
         )?
     } else {
@@ -173,6 +193,7 @@ pub async fn reclaim_host(
             live_jobs.as_deref(),
             &work_roots,
             &build_cache_roots,
+            &declared,
         )?
     };
     let output = host_channel::run_script(&target, &script, runner).await?;

@@ -37,3 +37,10 @@ The version bump gathers them into the release's own file and removes this one.
   release trees of `delivery_leftovers` kept only what `current` names and the newest delivery,
   so a product whose `current` was its newest kept one version and an install that had to go back
   had nothing to go back to. Each version directory now also keeps the newest delivery after those.
+- **`stado space reclaim` keeps every tree the host's registry service declarations name:** a
+  stage kept a tree only while a process or a unit file named it, so a delivery tree the registry
+  still declared as a service's program (`targets[].services[].program`), with no unit file
+  naming it, was taken and the declaration was left naming nothing. Every stage now keeps a tree
+  that holds, or is held by, a declared `program`, unit `path` or absolute argument, and reports it
+  as `a registry service declaration names <path>; retained`; a `services` field that is not a
+  list refuses the reclamation.

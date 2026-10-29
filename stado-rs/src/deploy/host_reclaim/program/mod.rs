@@ -22,7 +22,8 @@ mod product_stages;
 mod rebuildable_stages;
 
 /// Substitution points in [`REMOTE_SCRIPT_TEMPLATE`]. Every value spliced in is
-/// a crate constant, never registry or operator data.
+/// a crate constant, except the host's work root and the paths its registry
+/// service declarations name, which are spliced as single-quoted words.
 const APPLY_MARK: &str = "@APPLY@";
 const STAGES_MARK: &str = "@STAGES@";
 const WC_WORDS_MARK: &str = "@WC_WORDS@";
@@ -39,6 +40,7 @@ const LOCAL_EVIDENCE_MODE_MARK: &str = "@LOCAL_EVIDENCE_MODE@";
 const LOCAL_EVIDENCE_ROOT_MARK: &str = "@LOCAL_EVIDENCE_ROOT@";
 const BUILD_CACHE_ROOTS_MARK: &str = "@BUILD_CACHE_ROOTS@";
 const UNIT_DIRECTORIES_MARK: &str = "@UNIT_DIRECTORIES@";
+const DECLARED_PATHS_MARK: &str = "@DECLARED_PATHS@";
 
 /// The fixed remote program.
 ///
@@ -87,18 +89,56 @@ fn unit_directory_words() -> String {
         .join(" ")
 }
 
+/// The absolute paths a target's registry service declarations name: each
+/// `services[]` entry's `program`, its unit file `path` and
+/// every absolute argument. A tree that holds one of them, or that one of
+/// them holds, is kept by every stage (`declared_named`).
+pub(crate) fn declared_paths(target: &crate::targets::ComputeTarget) -> Vec<String> {
+    let mut paths = Vec::new();
+    for service in target
+        .extra
+        .get("services")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let named = ["program", "path"]
+            .iter()
+            .filter_map(|field| service.get(*field).and_then(serde_json::Value::as_str))
+            .chain(
+                service
+                    .get("args")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str),
+            );
+        for path in named {
+            // An argument may carry its path after `=` (`--store=/…`).
+            let path = path.rsplit_once('=').map_or(path, |(_, value)| value);
+            let path = path.trim_end_matches('/');
+            if path.starts_with('/') && path.len() > 1 && !paths.iter().any(|known| known == path) {
+                paths.push(path.to_string());
+            }
+        }
+    }
+    paths
+}
+
 /// The remote-target program for one mode, with every substitution in place.
 ///
 /// Installed authoritative Stado candidates are quoted so `$HOME` expands on
 /// the target while each value stays one word. When the queue authority is
 /// readable it supplies the keep-list; otherwise each workdir must earn
-/// deletion from the two-pass local proof.
+/// deletion from the two-pass local proof. `declared_paths` are the paths the
+/// target's registry service declarations name ([`declared_paths`]).
 pub fn remote_script(
     apply: bool,
     stages: &[String],
     live_jobs: Option<&[String]>,
     work_roots: &str,
     build_cache_roots: &str,
+    declared_paths: &[String],
 ) -> Result<String, crate::deploy::DeployError> {
     remote_script_with_stado(
         apply,
@@ -106,6 +146,7 @@ pub fn remote_script(
         live_jobs,
         work_roots,
         build_cache_roots,
+        declared_paths,
         None,
     )
 }
@@ -116,6 +157,7 @@ pub(super) fn remote_script_with_stado(
     live_jobs: Option<&[String]>,
     work_roots: &str,
     build_cache_roots: &str,
+    declared_paths: &[String],
     current_stado: Option<&str>,
 ) -> Result<String, crate::deploy::DeployError> {
     // The janitor is the Stado the caller names; without one, every
@@ -165,5 +207,13 @@ pub(super) fn remote_script_with_stado(
         .replace(CLONE_ROOT_MARK, chromium_clones::CLONE_ROOT_NAME)
         .replace(CLONE_PREFIX_MARK, chromium_clones::CLONE_ENTRY_PREFIX)
         .replace(SUPERSEDED_ROOTS_MARK, &superseded)
-        .replace(UNIT_DIRECTORIES_MARK, &unit_directory_words()))
+        .replace(UNIT_DIRECTORIES_MARK, &unit_directory_words())
+        .replace(
+            DECLARED_PATHS_MARK,
+            &declared_paths
+                .iter()
+                .map(|path| shlex_quote(path.as_str()))
+                .collect::<Vec<String>>()
+                .join(" "),
+        ))
 }
