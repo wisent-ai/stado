@@ -47,6 +47,15 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- **`stado product install|update` of a Cargo surface compiles the revision it was given:** an
+  installation keeps one Cargo target per platform for every revision of a checkout, and Cargo
+  names a workspace crate by its path inside the workspace, so every revision's crates share their
+  names there and a crate is fresh when none of its sources is newer than its last compile. A
+  revision committed before another revision's later compile kept that compile's build: the install
+  of stado 460c2a55 failed clippy with `no field max_changed_lines on type SubmitPolicy` against a
+  stado-product built from b4433964d. Every file of the revision's cached source is now dated at the
+  last minute of 9999, as `stado host cargo` dates its delivered tree, so the revision's own crates
+  are compiled again under Cargo's lock; dependencies from registries stay compiled.
 - **A reviewed candidate no longer holds the head of the submit queue:** a harsh review before
   landing whose reviewer staged repairs, rewrote only the message, or ended with no round covering
   what it left kept the candidate queued at the head, so every `stado change run` ran the same

@@ -53,10 +53,17 @@ pub(super) fn step(
 
 /// A stable source for this revision, under its exact lockfile set, and one
 /// Cargo target directory for every revision of the checkout on this
-/// platform. A revision's own source directory keeps its workspace crates
-/// apart; the shared target keeps every dependency compiled once, so a new
-/// revision compiles only what changed instead of every crate from nothing.
-/// Cargo holds its own lock on the target while a build runs in it.
+/// platform: the shared target keeps every dependency from a registry
+/// compiled once. Cargo names a workspace crate by its path inside the
+/// workspace, so every revision's crates share their names in that target,
+/// and it calls one fresh when none of its sources is newer than its last
+/// compile. A revision committed before another revision's later compile
+/// therefore kept that compile's build of every crate it changed (an
+/// install of stado 460c2a55 compiled against a stado-product without the
+/// field the revision added). Every source file is dated last
+/// ([`date_last`]), so a revision's own crates are compiled again under
+/// Cargo's lock on the target, as `stado host cargo` dates its delivered
+/// tree.
 pub(super) fn cache(
     runtime: &Runtime,
     area: &Path,
@@ -95,6 +102,7 @@ pub(super) fn cache(
     } else {
         fs::rename(exported, &source)?;
     }
+    date_last(&source)?;
     #[cfg(unix)]
     std::os::unix::fs::symlink(&source, exported)?;
     #[cfg(not(unix))]
@@ -186,7 +194,32 @@ fn lockfiles(root: &Path, path: &Path, locks: &mut BTreeMap<String, String>) -> 
     Ok(())
 }
 
-/// Restore committed inputs without changing the mtimes of identical files.
+/// The latest time every platform's file times state: the last minute of
+/// the year 9999, the bound `touch -t` states and the time `stado host
+/// cargo` gives its delivered tree.
+const LAST_MINUTE: std::time::Duration = std::time::Duration::from_secs(253_402_300_740);
+
+/// Date every file under `directory` at [`LAST_MINUTE`], so no compile in a
+/// shared target is ever newer than these sources. Symbolic links keep
+/// their own times.
+fn date_last(directory: &Path) -> Result<()> {
+    let last = std::time::UNIX_EPOCH + LAST_MINUTE;
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            date_last(&entry.path())?;
+        } else if kind.is_file() {
+            fs::File::open(entry.path())
+                .and_then(|file| file.set_modified(last))
+                .with_context(|| format!("dating {} last", entry.path().display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Restore committed inputs without rewriting identical files ([`cache`]
+/// then dates every file last).
 /// The revision never changes within this source directory. Build products
 /// remain in place, while any build step's edits to committed files are undone.
 fn refresh(exported: &Path, source: &Path) -> Result<()> {
