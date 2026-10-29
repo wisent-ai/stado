@@ -23,8 +23,9 @@ use crate::network::{key, NetworkNode, Relay};
 
 #[derive(Debug, Args)]
 pub struct UpArgs {
-    /// The registry host this is; this machine's own registry entry when
-    /// omitted.
+    /// The registry host to join; this machine's own registry entry when
+    /// omitted. Another machine is joined by its own Stado, over its host
+    /// channel.
     #[arg(long)]
     host: Option<String>,
     /// A reachable `host:port` peers on other networks dial (a port this
@@ -91,6 +92,24 @@ pub(super) async fn up(args: UpArgs) -> Result<(), CmdError> {
         .iter()
         .map(|endpoint| endpoint_checked(endpoint))
         .collect::<Result<Vec<_>, _>>()?;
+    // `--host` is named against what this machine holds of the registry,
+    // before anything is minted: a host it does not declare is refused with
+    // nothing left behind, and another machine is joined by its own Stado.
+    if let Some(host) = args.host.as_deref() {
+        if let Ok((copy, notice)) =
+            crate::targets::registry_without_authority("naming the host `network up` joins").await
+        {
+            if copy.lookup(host).is_none() {
+                return Err(CmdError::missing(match notice {
+                    None => format!("the registry declares no host {host}"),
+                    Some(notice) => format!("the registry declares no host {host} ({notice})"),
+                }));
+            }
+            if let Some(other) = super::another_machine(&copy, host) {
+                return forwarded(&other, &args).await;
+            }
+        }
+    }
     let (keypair, created) = key::load_or_create().map_err(CmdError::declaration)?;
     let port = node_port()?;
     let registry = crate::targets::fetch_registry_remote()
@@ -228,25 +247,83 @@ pub(super) async fn up(args: UpArgs) -> Result<(), CmdError> {
         "paths": declared,
         "generation": generation,
     });
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&receipt)?);
-    } else {
-        println!(
-            "{host} is on the Stado network: node pid {} on port {}, key {}",
-            published.pid, published.port, node.public_key
-        );
-        println!(
-            "  endpoints: {}",
-            if node.endpoints.is_empty() {
-                "none (reached through a relay)".to_string()
-            } else {
-                node.endpoints.join(", ")
-            }
-        );
-        println!("  its own SSH server answered through the node: {banner}");
-        if let Some(declared) = receipt.get("paths").filter(|paths| !paths.is_null()) {
-            println!("  registry paths: {declared}; generation={generation}");
+    print_receipt(&receipt, args.json)
+}
+
+/// `network up` run on `host` by that host's own Stado over its host
+/// channel: the node, its key and its unit are that host's. Its receipt is
+/// said here as it would be there.
+async fn forwarded(host: &str, args: &UpArgs) -> Result<(), CmdError> {
+    let attach_retry = args.attach_retry_seconds.map(|seconds| seconds.to_string());
+    let mut arguments = vec!["network", "up", "--host", host, "--json"];
+    for endpoint in &args.endpoints {
+        arguments.extend(["--endpoint", endpoint.as_str()]);
+    }
+    if args.no_direct {
+        arguments.push("--no-direct");
+    }
+    if args.relay {
+        arguments.push("--relay");
+    }
+    if let Some(seconds) = attach_retry.as_deref() {
+        arguments.extend(["--attach-retry-seconds", seconds]);
+    }
+    let stdout = crate::cli::host::remote_stado_output(host, &arguments).await?;
+    let receipt: serde_json::Value = serde_json::from_str(&stdout).map_err(|error| {
+        CmdError::unreachable(format!(
+            "`stado network up` on {host} answered with something that is not its receipt \
+             ({error}): {}",
+            stdout.trim()
+        ))
+    })?;
+    print_receipt(&receipt, args.json)
+}
+
+/// Say a receipt: the document itself with `--json`, else its lines.
+fn print_receipt(receipt: &serde_json::Value, json: bool) -> Result<(), CmdError> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(receipt)?);
+        return Ok(());
+    }
+    let field = |key: &str| match receipt.get(key) {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    };
+    let endpoints: Vec<&str> = receipt
+        .get("endpoints")
+        .and_then(serde_json::Value::as_array)
+        .map(|endpoints| {
+            endpoints
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect()
+        })
+        .unwrap_or_default();
+    println!(
+        "{} is on the Stado network: node pid {} on port {}, key {}",
+        field("host"),
+        field("pid"),
+        field("port"),
+        field("public_key")
+    );
+    println!(
+        "  endpoints: {}",
+        if endpoints.is_empty() {
+            "none (reached through a relay)".to_string()
+        } else {
+            endpoints.join(", ")
         }
+    );
+    println!(
+        "  its own SSH server answered through the node: {}",
+        field("ssh_answered")
+    );
+    if let Some(paths) = receipt.get("paths").filter(|paths| !paths.is_null()) {
+        println!(
+            "  registry paths: {paths}; generation={}",
+            field("generation")
+        );
     }
     Ok(())
 }

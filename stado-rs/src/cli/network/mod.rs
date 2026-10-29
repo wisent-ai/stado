@@ -15,10 +15,11 @@ mod up;
 
 #[derive(Debug, Subcommand)]
 pub enum NetworkCommands {
-    /// Join this host to Stado's network: mint its key, measure its
-    /// endpoints, declare its node in the registry with its network address
-    /// as the preferred SSH path, install and start the node, and see it
-    /// answer.
+    /// Join a host to Stado's network: mint its key, measure its endpoints,
+    /// declare its node in the registry with its network address as the
+    /// preferred SSH path, install and start the node, and see it answer.
+    /// With `--host` naming another machine, that host's own Stado runs it
+    /// over its host channel.
     Up(up::UpArgs),
     /// This host's node and every declared peer: reached directly, through a
     /// relay, or not, with the cause.
@@ -88,6 +89,18 @@ async fn connect(host: &str, port: u16) -> Result<(), CmdError> {
     received.map_err(|error| {
         CmdError::unreachable(format!("the connection to {host}:{port} broke: {error}"))
     })
+}
+
+/// The registry host `host` names when `copy`, this machine's registry read
+/// without the authority, tells it apart from this machine: `network up
+/// --host` for another host runs on that host. A copy that cannot tell this
+/// machine apart answers `None`: the command runs here, where the registry
+/// the authority answers settles whether `--host` is this machine.
+pub(super) fn another_machine(copy: &crate::targets::Registry, host: &str) -> Option<String> {
+    let named = copy.lookup(host)?.name.clone();
+    let hostname = crate::providers::vast::system_hostname();
+    let this = copy.lookup_self(&hostname).ok()??;
+    (this.name != named).then_some(named)
 }
 
 /// The registry host this machine is: `--host`, else this machine's own

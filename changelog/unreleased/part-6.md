@@ -21,6 +21,9 @@ The version bump gathers them into the release's own file and removes this one.
   Stado; `stado fleet approve` prints the same step after `stado bootstrap --local`.
 - Stado Desktop: the console's `network` group runs `network status`, `up` and `down` on the API
   host.
+- `stado network up --host HOST` joins another machine: when this machine's registry copy tells
+  HOST apart from it, HOST's own installed Stado runs `network up` over its host channel (the
+  node, its key and its unit are that host's), and its receipt is printed here.
 
 ### Changed
 
