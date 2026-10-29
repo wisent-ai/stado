@@ -81,7 +81,7 @@ fn target_declares(
         return false;
     }
     match declaration.kind.as_str() {
-        "jeden-session" => true,
+        "jeden-session" | "omp-session" => true,
         "gui-automation" => target.release_platform == "darwin-arm64",
         "mobile-runtime" => target.mobile_runtime.is_some(),
         _ if declaration.product == "weles-worker" => {

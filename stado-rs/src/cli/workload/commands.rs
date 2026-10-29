@@ -11,14 +11,16 @@ use super::plan::{
     string_array,
 };
 use super::runners::{
-    list_sessions, mobile_runtime, run_gui_automation, run_weles_browser_task, run_weles_capture,
-    run_weles_diagnostics, run_weles_image_inspect, set_weles_recordings_dir, weles_activity,
-    weles_browser_runtime,
+    collect_results, list_sessions, mobile_runtime, run_gui_automation, run_weles_browser_task,
+    run_weles_capture, run_weles_diagnostics, run_weles_image_inspect, set_weles_recordings_dir,
+    weles_activity, weles_browser_runtime,
 };
 
+mod harness;
 mod interactive;
 mod status;
 
+use harness::HarnessCommands;
 use interactive::{attach, start, StartArguments};
 use status::status;
 
@@ -81,10 +83,15 @@ pub enum WorkloadCommands {
         /// Model route the session runs on; the harness default otherwise.
         #[arg(long)]
         model: Option<String>,
-        /// Upper bound on the session's steps. Nobody watches a detached
-        /// session, so its bound is the caller's to state; Stado picks none.
+        /// jeden-session's upper bound on the session's steps. Nobody
+        /// watches a detached session, so its bound is the caller's to
+        /// state; Stado picks none.
         #[arg(long)]
-        max_steps: u32,
+        max_steps: Option<u32>,
+        /// omp-session's upper bound on the session's time: seconds or a
+        /// duration such as 30m or 8h.
+        #[arg(long)]
+        max_time: Option<String>,
         /// Let the session write files in its workspace.
         #[arg(long)]
         allow_write: bool,
@@ -101,6 +108,20 @@ pub enum WorkloadCommands {
     /// List the detached sessions the fleet is running.
     Sessions {
         /// Emit the sessions as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// The harness a session kind declares, on one host: read it or carry
+    /// this machine's copy there.
+    #[command(subcommand)]
+    Harness(HarnessCommands),
+    /// Append the result lines a detached session wrote on its host to
+    /// DIR/<name>.jsonl, skipping every line DIR already holds.
+    Results {
+        job_id: String,
+        #[arg(long, value_name = "DIR")]
+        into: String,
+        /// Emit what was appended as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -141,6 +162,7 @@ pub async fn dispatch(command: WorkloadCommands) -> Result<(), CmdError> {
             task,
             model,
             max_steps,
+            max_time,
             allow_write,
             allow_command,
             priority,
@@ -153,6 +175,7 @@ pub async fn dispatch(command: WorkloadCommands) -> Result<(), CmdError> {
                 task: task.as_deref(),
                 model: model.as_deref(),
                 max_steps,
+                max_time: max_time.as_deref(),
                 allow_write,
                 allow_command,
                 priority,
@@ -161,6 +184,10 @@ pub async fn dispatch(command: WorkloadCommands) -> Result<(), CmdError> {
             .await
         }
         WorkloadCommands::Sessions { json } => list_sessions(json).await,
+        WorkloadCommands::Harness(command) => harness::dispatch(command).await,
+        WorkloadCommands::Results { job_id, into, json } => {
+            collect_results(&job_id, std::path::Path::new(&into), json).await
+        }
     }
 }
 

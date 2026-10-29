@@ -211,7 +211,7 @@ pub(super) fn batch_id(kind: &str) -> String {
 
 /// A caller-retained identity that also records which workspace the session
 /// works in; `stado workload sessions` reads the workspace back out of it.
-fn run_id(kind: &str, workspace: &str) -> String {
+pub(super) fn run_id(kind: &str, workspace: &str) -> String {
     let now = chrono::Utc::now().format("%Y%m%dT%H%M%S%3f");
     format!("workload-{kind}-{workspace}-{now}-{}", std::process::id())
 }

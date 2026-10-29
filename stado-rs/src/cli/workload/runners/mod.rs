@@ -7,7 +7,8 @@ mod weles;
 
 pub(crate) use gui::{gui_automation_status, run_gui_automation};
 pub(crate) use jeden::{
-    connect_jeden, current_workspace, list_sessions, start_detached, DetachedRequest,
+    collect_results, connect_jeden, current_workspace, harness_status, install_harness,
+    list_sessions, start_detached, start_omp, DetachedRequest, OmpRequest,
 };
 pub(crate) use weles::{
     mobile_runtime, recordings_status, run_weles_browser_task, run_weles_capture,

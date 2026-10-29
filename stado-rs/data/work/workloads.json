@@ -13,6 +13,17 @@
       "report": ["target", "workspace", "stdio_stream", "durable_session_ledger", "detached_job"]
     },
     {
+      "kind": "omp-session",
+      "product": "omp",
+      "interactive": false,
+      "registry_allowance": null,
+      "plan_schema": null,
+      "reservation": {"cpu_cores": 2, "ram_gb": 2, "vram_gb": 0},
+      "detachable": true,
+      "harness": {"program": "omp", "managed": ".stado/bin/omp"},
+      "report": ["target", "workspace", "detached_job", "results"]
+    },
+    {
       "kind": "weles-capture",
       "product": "weles-worker",
       "interactive": false,

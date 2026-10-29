@@ -9,7 +9,7 @@ use crate::cli::CmdError;
 use crate::cli::workload::catalog::{workload, DECLARATION_PATH};
 use crate::cli::workload::plan::place;
 use crate::cli::workload::runners::{
-    connect_jeden, current_workspace, start_detached, DetachedRequest,
+    connect_jeden, current_workspace, start_detached, start_omp, DetachedRequest, OmpRequest,
 };
 
 pub(super) async fn attach(
@@ -50,7 +50,8 @@ pub(super) struct StartArguments<'a> {
     pub workspace: Option<&'a str>,
     pub task: Option<&'a str>,
     pub model: Option<&'a str>,
-    pub max_steps: u32,
+    pub max_steps: Option<u32>,
+    pub max_time: Option<&'a str>,
     pub priority: i64,
     pub allow_write: bool,
     pub allow_command: bool,
@@ -74,13 +75,50 @@ pub(super) async fn start(arguments: StartArguments<'_>) -> Result<(), CmdError>
             "{kind} requires --task TEXT for a detached session"
         )));
     };
+    if kind == "omp-session" {
+        if arguments.max_steps.is_some() {
+            return Err(CmdError::usage(format!(
+                "{kind} is bounded by --max-time; OMP counts no steps, so drop --max-steps"
+            )));
+        }
+        let Some(max_time) = arguments.max_time else {
+            return Err(CmdError::usage(format!(
+                "{kind} requires --max-time DURATION (seconds, or 30m, 8h): nobody watches a \
+                 detached session, so its bound is the caller's to state"
+            )));
+        };
+        return start_omp(OmpRequest {
+            kind: declaration,
+            workspace: &workspace,
+            target: target.as_deref(),
+            task,
+            model: arguments.model,
+            max_time,
+            priority: arguments.priority,
+            allow_write: arguments.allow_write,
+            allow_command: arguments.allow_command,
+            json: arguments.json,
+        })
+        .await;
+    }
+    if arguments.max_time.is_some() {
+        return Err(CmdError::usage(format!(
+            "{kind} is bounded by --max-steps, not --max-time"
+        )));
+    }
+    let Some(max_steps) = arguments.max_steps else {
+        return Err(CmdError::usage(format!(
+            "{kind} requires --max-steps N: nobody watches a detached session, so its bound is \
+             the caller's to state"
+        )));
+    };
     start_detached(DetachedRequest {
         kind: declaration,
         workspace: &workspace,
         target: target.as_deref(),
         task,
         model: arguments.model,
-        max_steps: arguments.max_steps,
+        max_steps,
         priority: arguments.priority,
         allow_write: arguments.allow_write,
         allow_command: arguments.allow_command,

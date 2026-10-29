@@ -9,6 +9,7 @@
 mod attach;
 mod capacity;
 mod detached;
+mod omp;
 mod probe;
 mod sessions;
 
@@ -17,6 +18,7 @@ pub(super) use probe::probe_ready;
 
 pub(crate) use attach::connect_jeden;
 pub(crate) use detached::{start_detached, DetachedRequest};
+pub(crate) use omp::{collect_results, harness_status, install_harness, start_omp, OmpRequest};
 pub(crate) use sessions::list_sessions;
 
 use crate::cli::CmdError;

@@ -68,7 +68,21 @@ pub struct WorkloadKind {
     /// runtime never parks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub park_after_seconds: Option<u64>,
+    /// The coding-agent harness a session kind runs, when the fleet carries
+    /// it to the host rather than a product release installing it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<WorkloadHarness>,
     pub report: Vec<String>,
+}
+
+/// A harness program and where it lives on every host that runs the kind.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WorkloadHarness {
+    /// The program's name on this machine's `PATH`: the copy the operator
+    /// runs here is the one a host receives.
+    pub program: String,
+    /// Its path below the host account's home.
+    pub managed: String,
 }
 
 impl WorkloadKind {
