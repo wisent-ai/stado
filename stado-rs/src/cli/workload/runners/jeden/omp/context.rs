@@ -45,7 +45,11 @@ pub(super) async fn inputs(
         }
         document.push('\n');
     }
-    let key = format!("workload-sessions/{run_id}/{CONTEXT_FILE}");
+    // Under the queue's own `runs/` prefix, beside the inputs a release run
+    // or build stages: every object API grants the queue its canonical
+    // prefixes (`queue::copy::CANONICAL_PREFIXES`), and a key outside them is
+    // refused `object_grant_does_not_cover_key`.
+    let key = format!("runs/workload-session/{run_id}/{CONTEXT_FILE}");
     let store = crate::queue::submit::default_store("")
         .await
         .map_err(|error| {

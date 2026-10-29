@@ -25,3 +25,10 @@ The version bump gathers them into the release's own file and removes this one.
   another consumer's, and while the host's configuration reads a bearer from it; a symbolic link,
   a file another account owns and a path outside the account's home are never removed. A file
   already absent is reported as `token_absent`.
+
+### Fixed
+
+- **`stado workload start omp-session --context` publishes its instructions where the queue may
+  write:** the context went under `workload-sessions/`, a prefix no object API grants, so every
+  start with `--context` was refused `object_grant_does_not_cover_key`. It now goes under the
+  queue's own `runs/workload-session/<run>/`, beside the inputs release runs and builds stage.
