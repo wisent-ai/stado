@@ -36,7 +36,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use holds::{held, holders, Held};
-use read::{needing, ps};
+use read::{needing, ps, this_process};
 pub use resource::{Resource, ResourceKind};
 
 /// What follows the register directory's name in the graph's: the graph
@@ -254,13 +254,22 @@ impl Graph {
     }
 
     fn follow(&self, waiter: u32, resource: &Resource) -> Result<Option<Cycle>, String> {
+        let (command, needs) = if waiter == std::process::id() {
+            let (command, needs) = this_process()?;
+            (command.clone(), std::borrow::Cow::Borrowed(needs))
+        } else {
+            (
+                ps(waiter, "command")?,
+                std::borrow::Cow::Owned(needing(waiter)?),
+            )
+        };
         let mut links = vec![Link {
             pid: waiter,
-            command: ps(waiter, "command")?,
+            command,
             awaits: resource.clone(),
         }];
         let mut seen = BTreeSet::from([waiter]);
-        self.search(&mut links, &needing(waiter)?, &mut seen)
+        self.search(&mut links, &needs, &mut seen)
     }
 }
 

@@ -64,3 +64,21 @@ pub(super) fn needing(pid: u32) -> Result<BTreeSet<u32>, String> {
     }
     Ok(chain)
 }
+
+/// A process's `ps` command and the chain [`needing`] answers for it.
+pub(super) type Lineage = (Option<String>, BTreeSet<u32>);
+
+/// This process's command and its ancestor chain, read once per process.
+/// Every wait of this process asks the graph about the same chain, and each
+/// read is one `ps` per ancestor run inside the waiting task: on a busy host
+/// that cost seconds per wait, so concurrent waits of one task (an authority
+/// read racing its declared paths) started one after another and the read
+/// missed its bound before its last path was tried. An ancestor that exits
+/// later leaves its pid in the chain, where it holds nothing.
+pub(super) fn this_process() -> Result<&'static Lineage, String> {
+    static THIS: std::sync::LazyLock<Result<Lineage, String>> = std::sync::LazyLock::new(|| {
+        let pid = std::process::id();
+        Ok((ps(pid, "command")?, needing(pid)?))
+    });
+    THIS.as_ref().map_err(Clone::clone)
+}
