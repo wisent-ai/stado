@@ -409,6 +409,13 @@ path = "../tests/host_silence/silent_authority/main.rs"
 name = "host-silence-refused-dependency"
 path = "../tests/host_silence/refused_dependency.rs"
 
+# A copy of the built stado under a code identity macOS has never seen runs
+# the host process's passes and the host commands that walk the home, and the
+# unified log records no privacy request for protected data against it.
+[[test]]
+name = "privacy-tcc-quiet"
+path = "../tests/privacy/tcc_quiet.rs"
+
 # The host-silence store journeys and mcp-killed-child run a real fleet store on
 # a real Skarbiec (SKARBIEC names its binary); run with STADO_TEST_REQUEST_LIMITS
 # declared.

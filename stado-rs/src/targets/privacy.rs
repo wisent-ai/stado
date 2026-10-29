@@ -119,11 +119,27 @@ pub fn folders_for_this_program(
     }
 }
 
-/// The folders `grants` declare for any program on the host: what a walk
-/// Stado sends to that host as a script (`find`, `du`) may open, since the
-/// operator decided the fleet reads them there.
-pub fn declared_folders(grants: &[PrivacyGrant]) -> std::collections::BTreeSet<String> {
-    grants.iter().map(|grant| grant.folder.clone()).collect()
+/// The program macOS holds responsible for a shell Stado's SSH connection
+/// starts on a Mac: the SSH server's session program, which System Settings
+/// lists for Remote Login.
+pub const REMOTE_SESSION_PROGRAM: &str = "/usr/libexec/sshd-keygen-wrapper";
+
+/// The folders a walk Stado sends to a host as a script (`find`, `du`) may
+/// open: those `grants` declare for the program macOS holds responsible for
+/// that script — this executable when the host is this machine (`home` its
+/// user's home), [`REMOTE_SESSION_PROGRAM`] on another host. A folder
+/// declared for some other program is a question the responsible program
+/// was never declared to ask.
+pub fn folders_for_script(
+    grants: &[PrivacyGrant],
+    this_host: bool,
+    home: &Path,
+) -> std::collections::BTreeSet<String> {
+    if this_host {
+        folders_for_this_program(grants, home)
+    } else {
+        folders_for(grants, home, Path::new(REMOTE_SESSION_PROGRAM))
+    }
 }
 
 /// Check `targets[index].privacy_grants`: an array of `{program, folder,

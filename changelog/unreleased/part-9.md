@@ -14,8 +14,9 @@ The version bump gathers them into the release's own file and removes this one.
   `~/Downloads` to measure them; the janitor opened all three each pass to decide where Cargo
   builds; and `stado space report` ran one `du` over the whole home. Every walk of a home now
   refuses one list — `Pictures`, `Music`, `Movies`, `Library`, `.Trash`, and each of `Documents`,
-  `Desktop` and `Downloads` that `targets[].privacy_grants` does not declare (for the walking
-  program in the host process; for any program in a walk Stado sends to the host as a script) —
+  `Desktop` and `Downloads` that `targets[].privacy_grants` does not declare for the program macOS
+  holds responsible for the walk (the running Stado here, `/usr/libexec/sshd-keygen-wrapper` for a
+  script walk over SSH on another Mac) —
   and nothing is opened to find out whether macOS allows it. The beacon measures only declared
   folders (`not measured` for the rest), and the `du` inventory walks the home one top-level
   entry at a time so a refused one is never opened; `~/Library/Caches` is no longer an inventory

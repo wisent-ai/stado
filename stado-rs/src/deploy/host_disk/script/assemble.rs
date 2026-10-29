@@ -36,7 +36,9 @@ fn prune_word(darwin: bool, declared: &std::collections::BTreeSet<String>) -> St
 /// janitor's state and lock paths in place, the target's declared work
 /// root (`targets[].work_root`) measured beside its home, and its home walks
 /// refusing the privacy list less the folders `targets[].privacy_grants`
-/// declares. A grants entry that cannot be read is the error, naming it.
+/// declares for the program macOS holds responsible for the script (this
+/// executable here, the SSH session program elsewhere). A grants entry that
+/// cannot be read is the error, naming it.
 ///
 /// Assembled from the section constants rather than from per-scope text: a
 /// field two scopes share is produced by the same bytes in both, so the
@@ -44,9 +46,12 @@ fn prune_word(darwin: bool, declared: &std::collections::BTreeSet<String>) -> St
 /// than the full one. The sections are independent commands reading
 /// independent sources, so dropping one cannot alter another's output.
 pub fn remote_script_for(scope: DiskScope, target: &ComputeTarget) -> Result<String, DeployError> {
+    let this_host = host_channel::target_is_this_host(target);
     let declared = target
         .privacy_grants()
-        .map(|grants| crate::targets::declared_folders(&grants))
+        .map(|grants| {
+            crate::targets::folders_for_script(&grants, this_host, &crate::config_file::home_dir())
+        })
         .map_err(|error| DeployError(error.to_string()))?;
     // A host that declares no work root writes only under its home, so the
     // home's volume is the one measured.

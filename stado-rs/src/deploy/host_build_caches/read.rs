@@ -53,14 +53,19 @@ pub async fn run_on_host(
     // The refused roots are the target's, not this machine's: a Linux
     // operator reading a Mac still prunes the Mac's photo library. A local
     // target that declares no platform is this binary's platform. Of the
-    // consent-gated folders the walk enters only those the target declares.
+    // consent-gated folders the walk enters only those the target declares
+    // for the program macOS holds responsible for the walk.
     let darwin = if target.release_platform.is_empty() {
         target_is_local(target) && cfg!(target_os = "macos")
     } else {
         target.release_platform.starts_with("darwin")
     };
     let declared = match target.privacy_grants() {
-        Ok(grants) => crate::targets::declared_folders(&grants),
+        Ok(grants) => crate::targets::folders_for_script(
+            &grants,
+            target_is_local(target),
+            &crate::config_file::home_dir(),
+        ),
         Err(error) => {
             report.error = Some(error.to_string());
             return report;
