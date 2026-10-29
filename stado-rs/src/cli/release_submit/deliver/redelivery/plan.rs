@@ -147,6 +147,7 @@ pub(super) async fn plan_redelivery(
             &manifest.platforms[&delivery.platform].runner_platform,
             None,
             None,
+            None,
             &delivery.secret_env,
             &std::collections::BTreeMap::new(),
         )

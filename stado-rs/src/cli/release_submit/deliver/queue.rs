@@ -142,6 +142,7 @@ pub(super) async fn queue_delivery(
             &m.platforms[&d.platform].runner_platform,
             None,
             None,
+            None,
             &d.secret_env,
             &BTreeMap::new(),
         )

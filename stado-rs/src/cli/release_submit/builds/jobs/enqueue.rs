@@ -43,8 +43,16 @@ pub(crate) async fn enqueue(
     source_uri: &str,
     manifest_sha: &str,
     manifest_uri: &str,
-    prior_terminal_job_id: Option<&str>,
+    prior_failed: Option<&PlatformRun>,
 ) -> Result<PlatformRun, CmdError> {
+    // A rebuild after a terminal failure is placed anew, and the host the
+    // failed attempt ran on goes after every other fit builder of the
+    // platform: a build that failed for a fault of its host fails over to
+    // another one, and returns to it only when no other host can take it.
+    let prior_terminal_job_id = prior_failed.map(|run| run.job_id.as_str());
+    let failed_on = prior_failed
+        .map(|run| run.builder.as_str())
+        .filter(|host| !host.is_empty());
     // The fleet's daily ceiling. A release submits one build per platform,
     // and releases are most of the builds this fleet starts in a day. The
     // charge below asks and records in one registry generation, and
@@ -138,6 +146,7 @@ pub(crate) async fn enqueue(
                 fleet,
                 &recipe.runner_platform,
                 pinned,
+                failed_on,
                 history.scratch.as_ref(),
                 &recipe.secret_env,
                 &history.in_flight,
@@ -229,6 +238,7 @@ pub(crate) async fn enqueue(
             fleet,
             &recipe.runner_platform,
             Some(&request.builder),
+            None,
             history.scratch.as_ref(),
             &recipe.secret_env,
             &history.in_flight,

@@ -40,3 +40,5 @@ The version bump gathers them into the release's own file and removes this one.
   code, 69, which launchd and systemd both restart into the installed release, and no longer
   keeps that delivery in `~/.stado/serve-stops.jsonl` as a stop: every successful delivery used
   to read as a crash (exit 1) and could later count as the build stopping again.
+- A release rebuild after a failed platform attempt goes to another builder of the platform
+  first; the host the failed attempt ran on is chosen only when no other builder can take it.

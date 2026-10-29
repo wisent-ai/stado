@@ -64,10 +64,18 @@ fn local_identity(consumer: &str) -> &str {
 /// now (see [`super::history`]). They share one Cargo build directory there,
 /// and Cargo admits one at a time, so among hosts otherwise alike the one
 /// compiling fewer of them goes first. Delivery jobs pass an empty map.
+///
+/// `failed_on` is the host a rebuild's failed attempt ran on: it goes after
+/// every other host that may take the job, so a build fails over to another
+/// builder of its platform and returns to that host only when it is the one
+/// left. Delivery jobs and a saved placement pass `None`.
+// Each argument is one fact of the placement the caller already holds.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn builder(
     fleet: &Fleet,
     platform: &str,
     pinned: Option<&str>,
+    failed_on: Option<&str>,
     scratch: Option<&ScratchReceipt>,
     secret_env: &BTreeMap<String, String>,
     in_flight: &BTreeMap<String, usize>,
@@ -158,6 +166,7 @@ pub(crate) async fn builder(
             // this product; it ranks before every target that runs one.
             let sharing = in_flight.get(&target.name).copied();
             Some((
+                failed_on == Some(target.name.as_str()),
                 waiting_for_resources,
                 sharing,
                 interactive,
@@ -172,13 +181,14 @@ pub(crate) async fn builder(
             .cmp(&right.0)
             .then_with(|| left.1.cmp(&right.1))
             .then_with(|| left.2.cmp(&right.2))
-            .then_with(|| right.3.cmp(&left.3))
-            .then_with(|| left.4.name.cmp(&right.4.name))
+            .then_with(|| left.3.cmp(&right.3))
+            .then_with(|| right.4.cmp(&left.4))
+            .then_with(|| left.5.name.cmp(&right.5.name))
     });
     candidates
         .into_iter()
         .next()
-        .map(|(_, _, _, _, target, consumer)| (target.clone(), consumer))
+        .map(|(_, _, _, _, _, target, consumer)| (target.clone(), consumer))
         .ok_or_else(|| {
             // Name the store this looked in. Builders are selected from capacity
             // publications, not from the registry's platform declaration, so a host

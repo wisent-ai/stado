@@ -130,11 +130,10 @@ pub(crate) async fn enqueue_platforms(
         }
         if !build.platforms.contains_key(p) || build.platforms[p].state == PlatformRunState::Failed
         {
-            let prior_terminal_job_id = build
+            let prior_failed = build
                 .platforms
                 .get(p)
-                .filter(|platform| platform.state == PlatformRunState::Failed)
-                .map(|platform| platform.job_id.as_str());
+                .filter(|platform| platform.state == PlatformRunState::Failed);
             if fleet.is_none() {
                 match Fleet::read().await {
                     Ok(read) => fleet = Some(read),
@@ -156,7 +155,7 @@ pub(crate) async fn enqueue_platforms(
                 &source_input_uri,
                 &build.manifest_sha256,
                 &build.manifest_uri,
-                prior_terminal_job_id,
+                prior_failed,
             )
             .await
             {
