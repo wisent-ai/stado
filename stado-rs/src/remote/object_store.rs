@@ -182,6 +182,12 @@ pub fn release_namespace(namespace: &str) -> bool {
     ReleaseNamespace::parse(namespace).is_some()
 }
 
+/// The query a `DELETE` of a `sources` input carries when its publisher
+/// retires it: the object API removes a release-governed object for nothing
+/// else, and `stado release catalog input retire` sends it only after no
+/// product manifest names the input. Client and server read this one pair.
+pub const RETIRE_INPUT_QUERY: (&str, &str) = ("retire", "unreferenced-input");
+
 /// The release policy key this object is authorized against, or `None` when the
 /// object is not release-governed.
 ///

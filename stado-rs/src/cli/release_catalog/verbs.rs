@@ -61,6 +61,13 @@ pub(super) enum InputCommands {
     /// --cargo publishes Cargo.lock's private crates, --git-bundle the commit's
     /// history, --swiftpm a Swift package's committed resolution.
     Pin(publisher::PinInputArgs),
+    /// Remove a `stado://sources/` input no product's release manifest names:
+    /// every product checkout under --root is fetched and its origin/main
+    /// manifest read, and so is every release catalog entry; any reference,
+    /// or a manifest that cannot be read, refuses it. The object API retires
+    /// it under the product's publisher bearer; built releases are never
+    /// removed.
+    Retire(publisher::RetireInputArgs),
 }
 
 pub(super) async fn publisher(command: PublisherCommands) -> Result<(), CmdError> {
@@ -86,5 +93,6 @@ pub(super) async fn publisher(command: PublisherCommands) -> Result<(), CmdError
 pub(super) async fn input(command: InputCommands) -> Result<(), CmdError> {
     match command {
         InputCommands::Pin(args) => publisher::pin_input(args).await,
+        InputCommands::Retire(args) => publisher::retire_input(args).await,
     }
 }

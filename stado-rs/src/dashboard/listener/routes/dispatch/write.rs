@@ -1,5 +1,6 @@
 //! `PUT` and `DELETE`: the host beacon publication, the object write, and the
-//! one deletion a release coordinate may ever answer.
+//! two deletions a release coordinate may ever answer: the staged parts of an
+//! upload, and a `sources` input its publisher retires.
 
 use serde_json::json;
 
@@ -110,11 +111,31 @@ impl Dashboard {
             crate::remote::object_store::release_policy_key(object.namespace(), object.key())
         {
             if release_object_namespace(object.namespace()) {
-                let Some(target_key) = release_upload_target_key(object.key()) else {
-                    return send_json(
-                        http_status(reqwest::StatusCode::FORBIDDEN),
-                        &json!({"error": "release objects are immutable and cannot be deleted"}),
-                    );
+                let values = match parse_qs(query) {
+                    Ok(values) => values,
+                    Err(response) => return response,
+                };
+                let (parameter, retirement) = crate::remote::object_store::RETIRE_INPUT_QUERY;
+                let retiring = query_value(&values, parameter).as_deref() == Some(retirement);
+                let target_key = match release_upload_target_key(object.key()) {
+                    Some(target) => target,
+                    // A build input in `sources` that no product's manifest
+                    // names may be retired by its product's publisher:
+                    // `stado release catalog input retire` reads every
+                    // manifest before it asks. A built release never is.
+                    None if retiring
+                        && crate::remote::object_store::ReleaseNamespace::parse(
+                            object.namespace(),
+                        ) == Some(crate::remote::object_store::ReleaseNamespace::Sources) =>
+                    {
+                        object.key()
+                    }
+                    None => {
+                        return send_json(
+                            http_status(reqwest::StatusCode::FORBIDDEN),
+                            &json!({"error": "release objects are immutable and cannot be deleted"}),
+                        )
+                    }
                 };
                 authorize_release(self, request, target_key, false).await
             } else {

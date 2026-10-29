@@ -78,3 +78,15 @@ The version bump gathers them into the release's own file and removes this one.
   needed a second clean clone of it. The revision's tree, with its submodules and links resolved,
   is now materialized under the checkout's `.build/release-input` and resolved there, and the
   working tree may hold anything.
+- **`stado storage abort` discards the parts of an upload staged under the earlier part names:**
+  before the uploader named parts as composition reads them, it padded each index only to the
+  width of the part count (`000` of 514), and the object API's deletion authorizer recognised
+  only the current eight-digit names, so those parts read as immutable release objects and
+  nothing could remove them. Removal now reads both spellings; composition still reads only the
+  current one.
+- **`stado release catalog input retire <uri> --root <dir>` removes a sources input no manifest
+  names:** every product checkout under the root is fetched and its `origin/main` release
+  manifest read, and so is every release catalog entry; a reference, or a manifest that cannot
+  be read, refuses the retirement naming it. `--dry-run` reads and retires nothing. The object
+  API removes a `stado://sources/` object only for this request, under the product's publisher
+  bearer; built releases stay immutable.

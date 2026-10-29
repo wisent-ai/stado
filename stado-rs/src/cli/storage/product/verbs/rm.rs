@@ -48,7 +48,8 @@ pub(crate) async fn delete_object(uri: &str) -> Result<String, CmdError> {
         // those instead of leaving them unreachable.
         return Err(CmdError::refused(
             "release objects are immutable and cannot be deleted; to discard the staged parts of \
-             an interrupted upload use `stado storage abort <target-uri>`",
+             an interrupted upload use `stado storage abort <target-uri>`, and to retire a \
+             sources input no manifest names use `stado release catalog input retire <uri>`",
         ));
     }
     let uri = object.to_string();
@@ -58,6 +59,23 @@ pub(crate) async fn delete_object(uri: &str) -> Result<String, CmdError> {
         let store = JobStorage::for_object_uris().await?;
         store.delete_blob(&object.storage_path()).await?;
     }
+    Ok(uri)
+}
+
+/// Retire `uri`, a `sources` input the caller has found no product manifest
+/// naming, through the object API's retirement under the product's publisher
+/// bearer. Only the object API authorizes it, so a store reached without one
+/// is refused rather than written to directly.
+pub(crate) async fn retire_input_object(uri: &str) -> Result<String, CmdError> {
+    let object = crate::remote::object_store::ObjectRef::parse(uri)?;
+    let uri = object.to_string();
+    let remote = RemoteObjectApi::configured_for_object(&object)?.ok_or_else(|| {
+        CmdError::refused(format!(
+            "{uri} can be retired only through the Stado object API, which checks its \
+             publisher; this host reaches its store without one"
+        ))
+    })?;
+    remote.retire_input(&uri).await?;
     Ok(uri)
 }
 
