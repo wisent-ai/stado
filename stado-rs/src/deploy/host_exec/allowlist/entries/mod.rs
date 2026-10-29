@@ -1,7 +1,8 @@
-//! The table's entries, in four groups laid end to end.
+//! The table's entries, in groups laid end to end.
 
 mod connectivity;
 mod machine;
+mod privacy;
 mod readiness;
 mod services;
 
@@ -16,13 +17,15 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &ASSEMBLED;
 
 /// The groups the entries are declared in, in table order.
 ///
-/// Four component files rather than one array, because the table outgrew a
-/// file; the order here is the order the entries had when they shared one.
+/// Component files rather than one array, because the table outgrew a
+/// file; the order here is the order the entries had when they shared one,
+/// with the privacy reads after them.
 const GROUPS: &[&[ApprovedCommand]] = &[
     machine::MACHINE_READS,
     readiness::READINESS_READS,
     connectivity::CONNECTIVITY_READS,
     services::SERVICE_AND_RUNTIME_READS,
+    privacy::PRIVACY_READS,
 ];
 
 /// How many entries the groups hold between them.
@@ -41,7 +44,7 @@ const fn counted(groups: &[&[ApprovedCommand]]) -> usize {
 /// Every group end to end, so [`APPROVED_COMMANDS`] is one slice of entries
 /// exactly as it was while every entry sat in one array: an entry's position
 /// in the table is its position here, and nothing that reads the table has
-/// to know the entries are stored in four pieces.
+/// to know the entries are stored in pieces.
 const ASSEMBLED: [ApprovedCommand; TOTAL] = assembled();
 
 const fn assembled() -> [ApprovedCommand; TOTAL] {

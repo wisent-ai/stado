@@ -7,6 +7,10 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Added
 
+- **`stado host exec TARGET -- log show --last 1h --style compact --info --no-pager --process tccd`
+  reads a Mac's privacy prompts and refusals:** the last hour of tccd's retained log, which names
+  the process that asked for Documents, local network or Full Disk Access, so a prompt Stado raised
+  on a shared Mac is seen without asking its owner.
 - **A Mac claims no work on battery and stays awake while it runs work:** a shared laptop that ran
   fleet work on battery drained it, slept and dropped every job and route through it. The agent now
   publishes `power_source` and `battery_percent`, claims nothing with `admission_reason:
