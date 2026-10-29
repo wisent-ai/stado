@@ -38,7 +38,7 @@ struct SigningSection: View {
 
     var body: some View {
         Section("Native code signatures on the Stado API host") {
-            Text("Checks the installed executable identities, not macOS privacy grants. Repair signs recorded native files without resetting permissions or restarting services.")
+            Text("Checks the installed executable identities, not macOS privacy grants. Repair signs recorded native files without resetting permissions or restarting services. With no product named, Read signatures reads every installation recorded on the host and fails when any native file is ad-hoc or unsigned.")
                 .font(WisentTypeScale.caption())
             Text(endpointText)
                 .textSelection(.enabled)
@@ -50,7 +50,7 @@ struct SigningSection: View {
             }
             .disabled(working)
             Button("Read signatures") { Task { await run(apply: false) } }
-                .disabled(working || product.trimmingCharacters(in: .whitespaces).isEmpty || !fleetStore.isConfigured)
+                .disabled(working || !fleetStore.isConfigured)
             Button("Repair signatures…") { reviewing = true }
                 .disabled(working || product.trimmingCharacters(in: .whitespaces).isEmpty || !fleetStore.isConfigured)
             if working { ProgressView("Waiting for Stado…") }
@@ -80,7 +80,7 @@ struct SigningSection: View {
     private func run(apply: Bool) async {
         guard !working, let address = fleetStore.address else { return }
         let selectedProduct = product.trimmingCharacters(in: .whitespaces)
-        guard !selectedProduct.isEmpty else { return }
+        guard !apply || !selectedProduct.isEmpty else { return }
         let generation = fleetStore.requestGeneration
         let arguments = Self.arguments(product: selectedProduct, surface: surface, apply: apply)
         working = true
@@ -92,7 +92,10 @@ struct SigningSection: View {
                 authorizationToken: fleetStore.authorizationToken
             )
             guard generation == fleetStore.requestGeneration else { return }
-            run = SigningRun(product: selectedProduct, endpoint: address.displayString, receipt: result)
+            run = SigningRun(
+                product: selectedProduct.isEmpty ? "every recorded installation" : selectedProduct,
+                endpoint: address.displayString, receipt: result
+            )
             if !result.ok { problem = result.message }
         } catch {
             guard generation == fleetStore.requestGeneration else { return }
@@ -100,8 +103,12 @@ struct SigningSection: View {
         }
     }
 
-    /// `stado product signing report` reads; `reconcile` repairs the recorded paths.
+    /// `stado product signing report` reads, every recorded installation
+    /// when no product is named; `reconcile` repairs one product's paths.
     static func arguments(product: String, surface: String, apply: Bool) -> [String] {
-        ["product", "signing", apply ? "reconcile" : "report", product, "--surface", surface, "--json"]
+        if product.isEmpty && !apply {
+            return ["product", "signing", "report", "--json"]
+        }
+        return ["product", "signing", apply ? "reconcile" : "report", product, "--surface", surface, "--json"]
     }
 }

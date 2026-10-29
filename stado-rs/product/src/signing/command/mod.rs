@@ -82,33 +82,48 @@ pub fn run(name: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i32>
             })
             .collect::<Result<Vec<_>>>()?
     } else if matches!(action, Action::Report | Action::Reconcile) {
-        if args.positional.len() != 1 {
-            bail!("signing {name} requires one product");
-        }
-        let product = &args.positional[0];
-        let surface = args.optional("--surface")?.unwrap_or("cli");
-        let state = ProductState::load(runtime, product, surface)?
-            .context("product has no recorded installation")?;
+        let installations = match args.positional.as_slice() {
+            [product] => {
+                let surface = args.optional("--surface")?.unwrap_or("cli");
+                vec![ProductState::load(runtime, product, surface)?
+                    .context("product has no recorded installation")?]
+            }
+            // No product named: every installation recorded on this machine,
+            // so one read says which installed program carries a signature
+            // macOS keeps no identity for (ad-hoc), each build of which asks
+            // every privacy question again.
+            [] if action == Action::Report => {
+                let surface = args.optional("--surface")?;
+                crate::state::all(runtime)?
+                    .into_iter()
+                    .filter(|state| surface.is_none_or(|surface| state.surface == surface))
+                    .collect()
+            }
+            _ => bail!("signing {name} requires one product"),
+        };
         let mut seen = BTreeSet::new();
         let mut reports = Vec::new();
-        for path in state.installed_paths {
-            let path = path.canonicalize().unwrap_or(path);
-            if !seen.insert(path.clone()) {
-                continue;
-            }
-            let report = inspect(&path)?;
-            if action == Action::Reconcile && !acceptable(&report) {
-                reports.push(super::sign(
-                    &path,
-                    &identifier(
-                        product,
-                        path.file_name()
-                            .and_then(|s| s.to_str())
-                            .context("missing filename")?,
-                    )?,
-                    None,
-                )?);
-            } else {
+        for state in &installations {
+            for path in &state.installed_paths {
+                let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if !seen.insert(path.clone()) {
+                    continue;
+                }
+                let mut report = inspect(&path)?;
+                if action == Action::Reconcile && !acceptable(&report) {
+                    report = super::sign(
+                        &path,
+                        &identifier(
+                            &state.product,
+                            path.file_name()
+                                .and_then(|s| s.to_str())
+                                .context("missing filename")?,
+                        )?,
+                        None,
+                    )?;
+                }
+                report["product"] = json!(state.product);
+                report["surface"] = json!(state.surface);
                 reports.push(report);
             }
         }

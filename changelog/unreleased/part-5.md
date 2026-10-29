@@ -45,3 +45,10 @@ The version bump gathers them into the release's own file and removes this one.
 - An installation whose operator named a new signing identity says
   `<path>: signing identity <previous> -> <new> (the operator's named choice)` for each placed
   file, beside the receipt's `identity_changes`.
+
+### Added
+
+- `stado product signing report` without a product reads every installation recorded on the
+  machine, each row naming its product and surface, and exits 1 when any native file is not
+  stably signed (ad-hoc, unsigned), so one read names every installed program that asks the
+  privacy questions again on each build.
