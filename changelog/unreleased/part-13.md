@@ -52,3 +52,9 @@ The version bump gathers them into the release's own file and removes this one.
   the fleet, a host that cannot be read is named and does not stop the others, and the receipt
   carries `placement` with the verdict on each host; no host with room is refused naming every
   host and why. Stado Desktop's Fleet sandboxes take the host as optional.
+- **`stado product install` installs a Cargo surface again:** planning prerequisites read every
+  recipe's `manifest` as a release manifest, so a Cargo installation's `Cargo.toml` was parsed
+  as JSON and each install or `--plan` of one was refused with `parsing release manifest
+  most-rs/Cargo.toml … expected value at line 1 column 2` (Most's service, Skrzynka, Skryba and
+  every other Cargo recipe). Only a Stado release's manifest is read for verb contracts now; a
+  recipe of another kind declares no verbs.

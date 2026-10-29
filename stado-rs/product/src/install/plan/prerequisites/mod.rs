@@ -76,8 +76,16 @@ fn checkout(runtime: &Runtime, product: &Value, surface: &str) -> Result<PathBuf
     source::required_checkout(runtime, repository)
 }
 
+/// The release manifest a recipe's verb contract sits beside. Only a Stado
+/// release's `manifest` is one; a recipe of any other kind names the file
+/// its own build reads there (a Cargo installation's `Cargo.toml`), which
+/// is no release manifest, so such a recipe declares no verbs.
 fn manifest_path<'a>(product: &'a Value, surface: &str) -> Result<Option<&'a str>> {
-    Ok(crate::install::recipe(product, surface)?["manifest"].as_str())
+    let recipe = crate::install::recipe(product, surface)?;
+    if recipe["kind"] != "stado-release" {
+        return Ok(None);
+    }
+    Ok(recipe["manifest"].as_str())
 }
 
 /// The source revision an installation builds: the one its coordinate names,
