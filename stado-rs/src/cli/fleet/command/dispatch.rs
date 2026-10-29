@@ -61,13 +61,15 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             json,
         } => {
             ops::enroll(
-                &name,
-                Some(&ssh),
-                &kind,
-                fleet.as_deref(),
-                bootstrap,
-                install_key,
-                shared,
+                ops::EnrollRequest {
+                    name: &name,
+                    ssh: Some(&ssh),
+                    kind: &kind,
+                    fleet: fleet.as_deref(),
+                    bootstrap,
+                    install_key,
+                    shared,
+                },
                 json,
             )
             .await

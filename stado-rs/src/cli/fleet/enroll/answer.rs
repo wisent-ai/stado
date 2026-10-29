@@ -79,31 +79,20 @@ pub async fn approve(
             // `install_key` is false: an invited machine put the fleet's public
             // key in its own authorized_keys as the invite's first act, so
             // there is nothing to install and no second channel to do it over.
+            let enroll = crate::cli::fleet::ops::EnrollRequest {
+                name: &name,
+                ssh: Some(destination),
+                kind: &kind,
+                fleet: fleet_name,
+                bootstrap: true,
+                install_key: false,
+                shared: false,
+            };
             if as_json {
-                enrollment = crate::cli::fleet::ops::enrolled(
-                    &name,
-                    Some(destination),
-                    &kind,
-                    fleet_name,
-                    true,
-                    false,
-                    false,
-                    true,
-                )
-                .await?;
+                enrollment = crate::cli::fleet::ops::enrolled(enroll, true).await?;
                 registered_generation = enrollment["generation"].clone();
             } else {
-                crate::cli::fleet::ops::enroll(
-                    &name,
-                    Some(destination),
-                    &kind,
-                    fleet_name,
-                    true,
-                    false,
-                    false,
-                    false,
-                )
-                .await?;
+                crate::cli::fleet::ops::enroll(enroll, false).await?;
             }
         }
         None => {

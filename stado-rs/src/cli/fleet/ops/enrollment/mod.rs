@@ -133,27 +133,8 @@ fn require_declared_fleet(document: &Value, fleet: &str) -> Result<(), CmdError>
 /// With `as_json` the progress lines go to standard error and standard output
 /// carries one `{target, hostname, kind, fleet, generation, bootstrapped,
 /// offline_invite_spent}` document.
-pub async fn enroll(
-    name: &str,
-    ssh: Option<&str>,
-    kind: &str,
-    fleet_name: Option<&str>,
-    bootstrap: bool,
-    install_key: bool,
-    shared: bool,
-    as_json: bool,
-) -> Result<bool, CmdError> {
-    let answer = enrolled(
-        name,
-        ssh,
-        kind,
-        fleet_name,
-        bootstrap,
-        install_key,
-        shared,
-        as_json,
-    )
-    .await?;
+pub async fn enroll(request: EnrollRequest<'_>, as_json: bool) -> Result<bool, CmdError> {
+    let answer = enrolled(request, as_json).await?;
     if as_json {
         crate::cli::print_answer(&answer, true)?;
         return Ok(true);
@@ -161,23 +142,41 @@ pub async fn enroll(
     if let Some(invite_id) = answer["offline_invite_spent"].as_str() {
         println!("offline invite {invite_id} is spent");
     }
-    println!("enrolled '{name}' (kind={kind})");
+    println!("enrolled '{}' (kind={})", request.name, request.kind);
     Ok(true)
+}
+
+/// One machine to enroll, as `stado fleet enroll` names it.
+#[derive(Debug, Clone, Copy)]
+pub struct EnrollRequest<'a> {
+    /// The target name the machine is registered under.
+    pub name: &'a str,
+    /// The SSH destination it is verified through.
+    pub ssh: Option<&'a str>,
+    pub kind: &'a str,
+    /// The declared fleet it is placed in, if any.
+    pub fleet: Option<&'a str>,
+    /// Install Stado there once it is registered.
+    pub bootstrap: bool,
+    /// Put the fleet's public key there first (the `adopt` method).
+    pub install_key: bool,
+    /// Declare it a person's own computer (`targets[].ownership`).
+    pub shared: bool,
 }
 
 /// The enrollment itself, answering the document `enroll --json` prints.
 /// Progress lines go to standard output, or to standard error when `quiet`
 /// leaves standard output to the caller's one JSON answer.
-pub async fn enrolled(
-    name: &str,
-    ssh: Option<&str>,
-    kind: &str,
-    fleet_name: Option<&str>,
-    bootstrap: bool,
-    install_key: bool,
-    shared: bool,
-    quiet: bool,
-) -> Result<Value, CmdError> {
+pub async fn enrolled(request: EnrollRequest<'_>, quiet: bool) -> Result<Value, CmdError> {
+    let EnrollRequest {
+        name,
+        ssh,
+        kind,
+        fleet: fleet_name,
+        bootstrap,
+        install_key,
+        shared,
+    } = request;
     let say = |line: &str| {
         if quiet {
             eprintln!("{line}");
