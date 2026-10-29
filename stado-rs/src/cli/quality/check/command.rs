@@ -185,7 +185,7 @@ async fn pushed(
         .await
         .map_err(within)?;
         if *main {
-            crate::cli::change::push::lint(checkout, revision, (hosts, purposes))
+            crate::cli::change::push::lint(checkout, revision, report, (hosts, purposes))
                 .await
                 .map_err(within)?;
         }

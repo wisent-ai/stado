@@ -16,6 +16,7 @@ use std::path::Path;
 use super::git;
 use super::record::{self, State};
 use super::run::gates;
+use crate::cli::quality::Report;
 use crate::cli::CmdError;
 use crate::release_pipeline::PRODUCT_MANIFEST;
 
@@ -48,11 +49,13 @@ pub(crate) async fn landing(checkout: &Path, commit: &str) -> Result<Option<Stri
 /// Run the `lint` gates `commit` of `checkout` declares on the registry
 /// `hosts` named, else on those the placement chooses, as the session
 /// running this push asks for them (`purposes` named to Oko's admission),
-/// and refuse with every refused gate's own report. A commit that holds no
-/// release manifest, or declares no `lint` gate, has none to run.
+/// saying each step where the check's `report` goes, and refuse with every
+/// refused gate's own report. A commit that holds no release manifest, or
+/// declares no `lint` gate, has none to run.
 pub(crate) async fn lint(
     checkout: &Path,
     commit: &str,
+    report: Report,
     (hosts, purposes): (&[String], &[&str]),
 ) -> Result<(), CmdError> {
     let listed = git::git(
@@ -61,10 +64,10 @@ pub(crate) async fn lint(
     )
     .await?;
     if listed.is_empty() {
-        eprintln!(
+        report.say(&format!(
             "stado quality check: {commit} holds no {PRODUCT_MANIFEST}, so it declares no lint \
              gate to run before it reaches main"
-        );
+        ));
         return Ok(());
     }
     let plan = gates::plan(checkout, commit, gates::PUSHED)
@@ -75,17 +78,17 @@ pub(crate) async fn lint(
             ))
         })?;
     if plan.compiling.is_empty() {
-        eprintln!(
+        report.say(&format!(
             "stado quality check: {commit} of {} declares no lint gate to run before it \
              reaches main",
             plan.product
-        );
+        ));
         return Ok(());
     }
-    eprintln!(
+    report.say(&format!(
         "stado quality check: {commit} updates main, so its lint gates run on the fleet: {}",
         plan.names().join(", ")
-    );
+    ));
     let tree = git::git(checkout, &["rev-parse", &format!("{commit}^{{tree}}")]).await?;
     let session = crate::cli::release_loop::allowed::calling_session()
         .await
@@ -131,10 +134,10 @@ pub(crate) async fn lint(
         } else {
             "passed"
         };
-        eprintln!(
+        report.say(&format!(
             "stado quality check: {} ({}) for {} on {}: {how}",
             shard.gate, shard.kind, shard.platform, shard.host
-        );
+        ));
     }
     Ok(())
 }

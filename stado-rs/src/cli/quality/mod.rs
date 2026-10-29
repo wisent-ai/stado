@@ -157,7 +157,7 @@ pub(crate) enum Report {
 }
 
 impl Report {
-    fn say(self, line: &str) {
+    pub(crate) fn say(self, line: &str) {
         match self {
             Self::Stdout => println!("{line}"),
             Self::Stderr => eprintln!("{line}"),

@@ -23,15 +23,19 @@ pub(super) const CHAINED: &str = "pre-push.chained";
 /// any other, whatever the rest of the script says.
 const HEADER: &str = "#!/bin/sh\n# stado quality hooks: this checkout's pre-push gate.\n";
 
+/// The installed Stado's path under the home directory.
+fn installed_under_home() -> &'static str {
+    crate::deploy::host_exec::STADO_CLI
+        .strip_prefix("~/")
+        .unwrap_or(crate::deploy::host_exec::STADO_CLI)
+}
+
 /// The hook script: Git's ref updates on stdin go to the installed Stado's
 /// pre-push check, then to the chained hook when one is kept. The installed
 /// Stado is named from `$HOME` at run time, as a fleet host's gate script
 /// names it, so the hook neither carries this machine's home nor runs a
 /// build that happened to write it.
 pub(super) fn script() -> String {
-    let stado = crate::deploy::host_exec::STADO_CLI
-        .strip_prefix("~/")
-        .unwrap_or(crate::deploy::host_exec::STADO_CLI);
     format!(
         "{HEADER}\
          # Written by `stado quality hooks install`; `stado quality hooks status` reads it\n\
@@ -48,7 +52,7 @@ pub(super) fn script() -> String {
          send | \"$HOME\"/{} quality check --pre-push --if-declared\n\
          chained=\"${{0%/*}}/{CHAINED}\"\n\
          if [ -x \"$chained\" ]; then\n  send | \"$chained\" \"$@\"\nfi\n",
-        crate::deploy::shlex_quote(stado)
+        crate::deploy::shlex_quote(installed_under_home())
     )
 }
 
@@ -56,10 +60,7 @@ pub(super) fn script() -> String {
 /// hook naming a missing program refuses every push with "not found".
 pub(super) fn installed_stado() -> Result<PathBuf, CmdError> {
     let home = crate::config_file::home().map_err(CmdError::declaration)?;
-    let relative = crate::deploy::host_exec::STADO_CLI
-        .strip_prefix("~/")
-        .unwrap_or(crate::deploy::host_exec::STADO_CLI);
-    let path = home.join(relative);
+    let path = home.join(installed_under_home());
     if path.is_file() {
         return Ok(path);
     }
@@ -248,8 +249,11 @@ fn write(inspected: &Inspected) -> Result<(), String> {
         .join(format!("{HOOK}.stado-{}", std::process::id()));
     std::fs::write(&staged, script())
         .map_err(|error| format!("cannot write {}: {error}", staged.display()))?;
-    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
-        .map_err(|error| format!("cannot make {} executable: {error}", staged.display()))?;
+    std::fs::set_permissions(
+        &staged,
+        std::fs::Permissions::from_mode(crate::primitives::file_mode::program()),
+    )
+    .map_err(|error| format!("cannot make {} executable: {error}", staged.display()))?;
     renamed(&staged, &inspected.hook_path())
 }
 
