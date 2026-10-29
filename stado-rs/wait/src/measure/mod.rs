@@ -21,10 +21,14 @@
 //!
 //! An operation is what a wait waits on, read from the wait's structure:
 //! the program file a child runs and its subcommand, the first argument
-//! that is not an option (`proces git status`, `proces cargo check`; a
-//! program run with options only is its file alone), the method and origin
-//! of an HTTP request (`siec GET https://…`), and for every other wait its
-//! kind and what it waits for, exactly as the caller wrote it.
+//! that is neither an option nor an assignment (`proces git status`,
+//! `proces cargo check`; a program run with options only is its file
+//! alone), the method and origin of an HTTP request (`siec GET https://…`),
+//! and for every other wait its kind and what it waits for, exactly as the
+//! caller wrote it. A caller whose child takes an option's value before its
+//! subcommand (`git -C <checkout> status`) names the operation itself
+//! (`output_as`, `status_as`), since no reading of the arguments can tell a
+//! value from a subcommand.
 //!
 //! Opening a wait reads its operation's measurement and completing one may
 //! rewrite it ([`store`]): one small file read on every wait and a locked
@@ -43,27 +47,18 @@ pub(crate) fn operation(kind: Kind, what: &str) -> String {
 }
 
 /// The operation of a child `command` runs: its program file and its
-/// subcommand, the first argument that is none of: an option (it starts
-/// with `-`), a path that exists from where the child runs (an option's
-/// directory or file, as `git -C <checkout> status` gives one), or an
-/// assignment (`name=value`, as `git -c key=value` gives one).
+/// subcommand, the first argument that is neither an option (it starts with
+/// `-`) nor an assignment (`name=value`, as `git -c key=value` gives one).
 pub(crate) fn program(command: &std::process::Command) -> String {
     let program = command.get_program();
     let file = match std::path::Path::new(program).file_name() {
         Some(file) => file,
         None => program,
     };
-    let from = command.get_current_dir().map(std::path::Path::to_path_buf);
     let subcommand = command
         .get_args()
         .map(|argument| argument.to_string_lossy())
-        .find(|argument| {
-            let path = match &from {
-                Some(directory) => directory.join(argument.as_ref()),
-                None => std::path::PathBuf::from(argument.as_ref()),
-            };
-            !argument.starts_with('-') && !argument.contains('=') && !path.exists()
-        });
+        .find(|argument| !argument.starts_with('-') && !argument.contains('='));
     match subcommand {
         Some(subcommand) => format!(
             "{} {} {}",

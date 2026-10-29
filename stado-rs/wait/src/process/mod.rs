@@ -15,7 +15,9 @@ use crate::Kind;
 /// The waits these functions make, spelled as every product spells its
 /// mechanism. A child's wait is measured under the program it runs
 /// and its subcommand (`crate::measure::program`): `git status` and `git
-/// clone` are two operations, every `git status` one.
+/// clone` are two operations, every `git status` one. A caller that knows
+/// its child's operation better than its arguments say names it
+/// (`output_as`, `status_as`).
 mod wait {
     #[cfg(feature = "async")]
     use std::future::Future;
@@ -84,6 +86,20 @@ pub fn output(command: &mut std::process::Command) -> std::io::Result<std::proce
     wait::blocking(operation, what, place, || command.output())
 }
 
+/// [`output`] for a child whose operation its caller names: `operation`
+/// is what the wait is measured under, as `git status` for
+/// `git -C <checkout> status`, whose first argument that is not an option
+/// is the checkout.
+pub fn output_as(
+    command: &mut std::process::Command,
+    operation: impl Display,
+) -> std::io::Result<std::process::Output> {
+    let place = directory(command);
+    let what = command_line(command);
+    let operation = crate::measure::operation(Kind::Process, &operation.to_string());
+    wait::blocking(operation, what, place, || command.output())
+}
+
 /// The same for a `tokio` command: run it to its end and collect what it
 /// printed, saying so at both ends.
 #[cfg(feature = "async")]
@@ -103,6 +119,18 @@ pub fn status(command: &mut std::process::Command) -> std::io::Result<std::proce
     let place = directory(command);
     let what = command_line(command);
     let operation = crate::measure::program(command);
+    wait::blocking(operation, what, place, || command.status())
+}
+
+/// [`status`] for a child whose operation its caller names, as
+/// [`output_as`].
+pub fn status_as(
+    command: &mut std::process::Command,
+    operation: impl Display,
+) -> std::io::Result<std::process::ExitStatus> {
+    let place = directory(command);
+    let what = command_line(command);
+    let operation = crate::measure::operation(Kind::Process, &operation.to_string());
     wait::blocking(operation, what, place, || command.status())
 }
 

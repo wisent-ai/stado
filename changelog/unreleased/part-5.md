@@ -14,3 +14,9 @@ The version bump gathers them into the release's own file and removes this one.
   it opened and released the client on threads of its own. The client
   now releases its runtime by leaving a multi-threaded worker for the wait, shutting it down
   without waiting on a current-thread runtime, and dropping it anywhere else.
+- A child's wait is measured under its program and the first argument that is neither an option
+  nor an assignment again: an argument naming a path that exists no longer moves the subcommand,
+  so `cargo build` beside a `build/` directory or `git status` beside a file named `status` is
+  measured as its own operation, and no spawn stats its arguments. A caller whose child takes an
+  option's value before its subcommand (`git -C <checkout> status`) names the operation with the
+  new `stado_wait::output_as` or `status_as`.

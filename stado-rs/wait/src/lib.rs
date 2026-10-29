@@ -56,7 +56,7 @@ pub use cycle::{holds::hold, Resource, ResourceKind};
 #[cfg(feature = "http")]
 pub use http::{refusal, request, request_blocking, sdk, send, send_built};
 pub use measure::store as measured;
-pub use process::{child_output, output, output_with_input, status};
+pub use process::{child_output, output, output_as, output_with_input, status, status_as};
 #[cfg(feature = "async")]
 pub use process::{child_output_async, output_async, output_cancellable, status_async};
 
