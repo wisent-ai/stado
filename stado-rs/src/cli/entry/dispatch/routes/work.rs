@@ -41,17 +41,42 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                 pre_push,
                 purposes,
                 json,
-            } => {
-                crate::cli::quality::check(
-                    root.as_deref(),
-                    if_declared,
-                    revision.as_deref(),
-                    pre_push,
-                    &purposes,
-                    json,
-                )
-                .await
-            }
+                place,
+                target,
+                bundle,
+            } => match (bundle, place || target.is_some()) {
+                (Some(bundle), _) => {
+                    let purposes: Vec<&str> = purposes.iter().map(String::as_str).collect();
+                    crate::cli::quality::check_bundle(
+                        &bundle,
+                        revision.as_deref().unwrap_or_default(),
+                        &purposes,
+                        json,
+                    )
+                    .await
+                }
+                (None, true) => {
+                    crate::cli::quality::place(
+                        root.as_deref(),
+                        revision.as_deref(),
+                        target.as_deref(),
+                        &purposes,
+                        json,
+                    )
+                    .await
+                }
+                (None, false) => {
+                    crate::cli::quality::check(
+                        root.as_deref(),
+                        if_declared,
+                        revision.as_deref(),
+                        pre_push,
+                        &purposes,
+                        json,
+                    )
+                    .await
+                }
+            },
             QualityCommands::Tree {
                 root,
                 revision,

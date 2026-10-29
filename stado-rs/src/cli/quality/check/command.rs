@@ -19,7 +19,7 @@ const NOT_ANCESTOR: i32 = 1; // https://git-scm.com/docs/git-merge-base ("--is-a
 /// no main to build from but its own `HEAD`; a fetch from an `origin` that
 /// fails, and an ancestry check that answers neither yes nor no, are the
 /// error.
-fn built_revision(checkout: &Path) -> Result<String, CmdError> {
+pub(super) fn built_revision(checkout: &Path) -> Result<String, CmdError> {
     let head = git(checkout, &["rev-parse", "HEAD"])?;
     let dirty = !git(checkout, &["status", "--porcelain", "--untracked-files=no"])?.is_empty();
     if dirty
@@ -191,7 +191,7 @@ pub async fn command_tree(
     })
 }
 
-fn resolve(checkout: &Path, revision: &str) -> Result<String, CmdError> {
+pub(super) fn resolve(checkout: &Path, revision: &str) -> Result<String, CmdError> {
     git(
         checkout,
         &[

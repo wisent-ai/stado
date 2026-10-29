@@ -7,15 +7,6 @@ the repository's file-size limit.
 The version-bump commit moves them with `stado product changelog --version V`;
 `stado build submit` refuses a revision whose Unreleased section still holds entries.
 
-## Unreleased
-
-- A registry SSH path that names a host by its multicast DNS name (`<name>.local`)
-  now connects from a host whose resolver does not speak multicast DNS: Stado
-  asks the link itself (RFC 6762) when the system resolver answers nothing, and
-  a name neither answers is refused naming both answers. A Linux host without
-  nss-mdns could reach no fleet store through such a path, so its beacon and
-  capacity publications were refused while the tailnet path was down.
-
 ## Released
 
 - [0.23.67](changelog/0.23.67.md)
@@ -35,8 +26,13 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [Unreleased (part 1)](changelog/unreleased-part-1.md)
 - [Unreleased (part 2)](changelog/unreleased/part-2.md)
 ### Fixed
+- **The command-tree review no longer decides gates it does not own:** when `stado quality check` obtains no model judgment of a CLI's command tree (Brama or Oko's call does not answer), the review is reported as not run with its cause — `stado quality check: the <product> CLI command-tree review of <revision> was not run: <cause>; the gates above decided this check` — and the check passes or fails on its gates alone. The attestation fallback it replaced is gone. Journey: `tests/quality/command_tree/unjudged.rs`.
+- **A quality check no longer compiles every dependency again:** each gate and the candidate build of `stado quality check` run with `CARGO_BUILD_BUILD_DIR` set to one `cargo-build` directory in the checkout's build area under `~/.stado/products/builds`. Cargo named the build directory from the export's path, which changes with every run, so every check rebuilt from nothing. Finished artifacts stay in the export's `target`, where `stage` reads them.
+- **Azure sponsorship credit is read when Azure reports no balance:** the credits balance call answers 204 for a sponsorship grant. The billing section's `available_balance` is now the grant less the subscription's actual cost since the grant began, read from Cost Management. `balance_source` names the grant, the cost, the period and its scope, or why it could not be read. The credit gate decides a VM create or start on that balance.
+- **A fleet host reaches another by its `.local` name without multicast DNS:** A registry SSH path that names a host by its multicast DNS name (`<name>.local`) now connects from a host whose resolver does not speak multicast DNS: Stado asks the link itself (RFC 6762) when the system resolver answers nothing, and a name neither answers is refused naming both answers. A Linux host without nss-mdns could reach no fleet store through such a path, so its beacon and capacity publications were refused while the tailnet path was down.
 - **`stado release newest --plan` ignores non-directory entries:** regular files and symlinks are not checkout directories; an entry whose type cannot be read still refuses with its path and filesystem cause. Journey: `tests/release/newest/push-order.mjs`.
 ### Added
+- **A quality check runs as placed work on the fleet:** `stado quality check --place [--target NAME]` places the check of a committed revision on the fleet host with room for it and follows it to its end. The host is chosen from each host's capacity publication: it must be live, run the work (`placed_work`), and run no CI job (`ci_jobs_running`, counted from its process table); a machine whose registry role is `interactive` comes last. The check is an exclusive queue job, so a host runs one check at a time and the rest queue. A newer revision's check of the same product cancels the older one, queued or compiling, and a check of a revision already in flight follows that job. The revision travels as a Git bundle in the fleet store and the host runs `stado quality check --bundle KEY --revision REV`. Capacity publications now state `ci_jobs_running` (with `ci_jobs_unread` when the process table cannot be read) and `placed_work`. Stado Desktop's committed-gates check carries the same two choices. Journey: `tests/quality/placed.rs` (`cargo test --test scheduler -- quality_placed::`).
 - **A host lends its idle capacity to another Stado fleet:** `stado market`
   takes `--provider stado --peer NAME` beside `--provider vast`. `stado market
   peer add|edit|remove|list|show` declares the other fleet (its object API

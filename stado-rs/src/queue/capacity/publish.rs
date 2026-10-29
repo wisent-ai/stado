@@ -187,6 +187,24 @@ pub async fn publish_capacity(
                 .collect::<Vec<Value>>()
         })),
     );
+    // The CI jobs this host's own runners are executing, counted from its
+    // process table, so placed work stays off a host while it builds for CI;
+    // a table that cannot be read is published as unknown, with why.
+    match crate::providers::local::ci_jobs::running() {
+        Ok(running) => {
+            payload.insert("ci_jobs_running".into(), Value::from(running));
+        }
+        Err(cause) => {
+            payload.insert("ci_jobs_running".into(), Value::Null);
+            payload.insert("ci_jobs_unread".into(), Value::from(cause));
+        }
+    }
+    // The placed work this build runs when a placement pins it here, so no
+    // placement pins work to a host whose Stado cannot run it.
+    payload.insert(
+        "placed_work".into(),
+        Value::from(crate::placement::hosts::PLACED_WORK.to_vec()),
+    );
     // Names only, never values: the `item#field` references a job may project
     // here, so a coordinator does not pin a job this agent cannot resolve. Read
     // as the config holds them now, so a secret enrolled after this agent

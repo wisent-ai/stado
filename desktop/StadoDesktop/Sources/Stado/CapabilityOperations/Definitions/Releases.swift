@@ -34,6 +34,8 @@ enum NativeReleaseSourceOperations {
             .init(id: "revision", label: "Exact committed revision to check", option: "--revision", required: true),
             .init(id: "if-declared", label: "Report a committed declaration with no gates instead of refusing", option: "--if-declared", flag: true),
             .init(id: "purpose", label: "Open defect the check serves, named to Oko's admission before lint and test gates", option: "--purpose"),
+            .init(id: "place", label: "Run the check on the fleet host with room for it: one check per host, a newer revision's check cancelling the older one", option: "--place", flag: true),
+            .init(id: "target", label: "Registry target to place the check on (places it)", option: "--target"),
         ], mutates: false),
         // The one-off commands a model reads in a revision's built CLI, as a
         // list rather than a refusal: `remaining` is what is left to fold

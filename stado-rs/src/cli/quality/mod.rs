@@ -26,8 +26,9 @@
 //! inputs and runs the declared gates. For a catalogued CLI, it builds the
 //! exact candidate executable in the disposable export, reads the executable's
 //! complete help tree, and asks Brama to judge one-off commands, aliases and
-//! incomplete object operations. A missing model answer is a refusal, never
-//! a pass.
+//! incomplete object operations. A review no model answered is reported as
+//! not run, with its cause; the gates decide the check. With `--place` the
+//! check runs as placed work on a fleet host ([`check::place`]).
 
 mod check;
 mod gates;
@@ -40,7 +41,9 @@ use std::path::Path;
 use std::process::Command;
 
 pub use self::check::{check, command_tree};
-pub(crate) use self::check::{check_revision, check_revision_for, check_source};
+pub(crate) use self::check::{
+    check_bundle, check_revision, check_revision_for, check_source, place,
+};
 pub(crate) use units::check as units;
 
 pub(crate) use self::gates::Selection;

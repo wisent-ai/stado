@@ -176,6 +176,19 @@ pub(crate) enum QualityCommands {
         /// lint, message) on a refusal.
         #[arg(long)]
         json: bool,
+        /// Run the check as placed work on the fleet host the placement
+        /// chooses, not on this machine, and follow it to its end: a host
+        /// takes one check at a time, and a newer revision's check of the
+        /// same product cancels the older one, queued or running.
+        #[arg(long, conflicts_with_all = ["pre_push", "bundle", "if_declared"])]
+        place: bool,
+        /// Place the check on this registry target; implies --place.
+        #[arg(long, conflicts_with_all = ["pre_push", "bundle", "if_declared"])]
+        target: Option<String>,
+        /// Check --revision from the Git bundle the fleet store holds at this
+        /// key: what a placed check runs on its host.
+        #[arg(long, requires = "revision", conflicts_with_all = ["root", "pre_push", "if_declared"])]
+        bundle: Option<String>,
     },
     /// List the one-off commands of a product's CLI: build the committed
     /// revision's CLI as its installation builds it (no quality gate runs),

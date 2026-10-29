@@ -5,11 +5,10 @@
 //! afterwards, a model that wrapped the object in prose would fail the audit,
 //! and a violation could name a command the tree does not hold; the schema
 //! admits only the object, and only commands the tree holds. A reading that
-//! obtained no judgment (Oko's call
-//! did not run, or Brama did not answer it) is answered as
-//! [`Reading::Unanswered`] with its cause, so the audit can stand on the
-//! checked commit's attestation instead (`super::attested`); an answer that
-//! does not fit its schema is still the refusal.
+//! obtained no judgment (Oko's call did not run, or Brama did not answer it)
+//! is answered as [`Reading::Unanswered`] with its cause, and the check
+//! reports the review as not run; an answer that does not fit its schema is
+//! still the refusal.
 
 use std::collections::BTreeMap;
 

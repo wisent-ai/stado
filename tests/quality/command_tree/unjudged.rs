@@ -1,35 +1,19 @@
-//! A CLI command tree no model could judge stands on the checked commit's
-//! attestation, and only on one that stands.
+//! A CLI command tree no model could judge does not decide the check: the
+//! review is reported as not run, with its cause, and the gates decide.
 //!
 //! Oko is left off `PATH`, so the audit's model reading obtains no judgment.
-//! Two commits carrying HEAD's tree are made in the Stado checkout, reachable
-//! from no ref: one whose message carries every claim and trailer the
-//! installed Tama's commit standard requires, one whose message carries none.
-//! The real `stado quality check` passes the first, saying the tree was not
-//! judged and stands on its attestation, and refuses the second, naming the
-//! judgment's failure and that the attestation does not stand. Revisions,
-//! invocations, statuses and both streams are retained under
-//! `.build/quality-command-tree/`. Needs the release build toolchain and an
-//! installed Tama at `~/.stado/bin/tama`; a missing one fails the journey.
+//! A commit carrying HEAD's tree is made in the Stado checkout, reachable
+//! from no ref, with a message that attests nothing. The real `stado quality
+//! check` passes it, saying the command-tree review of that revision was not
+//! run and why. Revisions, invocations, statuses and both streams are
+//! retained under `.build/quality-command-tree/`. Needs the release build
+//! toolchain.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use serde_json::{json, Value};
-
-/// The installed Tama the product reads attestations with, from the
-/// operator's home.
-fn installed_tama() -> PathBuf {
-    let home = std::env::var_os("HOME").expect("HOME names the operator's home");
-    let tama = Path::new(&home).join(".stado/bin/tama");
-    assert!(
-        tama.is_file(),
-        "an unjudged command tree is read by the installed Tama at {}",
-        tama.display()
-    );
-    tama
-}
+use serde_json::json;
 
 /// `PATH` without every directory that holds an `oko`, so Oko's model call
 /// cannot run.
@@ -63,39 +47,6 @@ fn commit(root: &Path, area: &Path, name: &str, message: &str) -> String {
     )
 }
 
-/// The message of a commit attested as the installed Tama's commit standard
-/// asks: every claim, then one trailer of each kind it requires.
-fn attested_message(tama: &Path) -> String {
-    let output = Command::new(tama)
-        .args(["attestation", "standard", "--commit", "--json"])
-        .output()
-        .expect("run tama attestation standard");
-    assert!(output.status.success(), "{output:?}");
-    let standard: Value = serde_json::from_slice(&output.stdout).expect("the standard is JSON");
-    let claims: Vec<&str> = standard["claims"]
-        .as_array()
-        .expect("claims")
-        .iter()
-        .map(|claim| claim.as_str().expect("each claim is text"))
-        .collect();
-    let trailers: Vec<String> = standard["trailers"]["required"]
-        .as_array()
-        .expect("required trailers")
-        .iter()
-        .map(|required| {
-            format!(
-                "{}: the fixture carries HEAD's tree, so its patch is empty",
-                required["trailer"].as_str().expect("trailer name")
-            )
-        })
-        .collect();
-    format!(
-        "Fixture commit with HEAD's tree\n\n{}\n\n{}\n",
-        claims.join("\n"),
-        trailers.join("\n")
-    )
-}
-
 fn quality(root: &Path, home: &Path, path: &str, revision: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_stado"))
         .env("HOME", home)
@@ -113,39 +64,30 @@ fn quality(root: &Path, home: &Path, path: &str, revision: &str) -> Output {
 }
 
 #[test]
-fn unjudged_tree_stands_only_on_an_attestation_that_stands() {
+fn unjudged_tree_is_reported_as_not_reviewed_and_the_gates_decide() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("Stado checkout")
         .to_path_buf();
     let home = super::isolated_home(&root);
-    let bin = home.join(".stado/bin");
-    fs::create_dir_all(&bin).expect("isolated quality run area");
-    let tama = installed_tama();
-    std::os::unix::fs::symlink(&tama, bin.join("tama")).expect("place the installed Tama");
+    fs::create_dir_all(home.join(".stado/bin")).expect("isolated quality run area");
     let path = path_without_oko();
 
-    let attested = commit(&root, &home, "attested", &attested_message(&tama));
-    let unattested = commit(
+    let revision = commit(
         &root,
         &home,
         "unattested",
         "Fixture commit with HEAD's tree and no attestation\n",
     );
-    let passed = quality(&root, &home, &path, &attested);
-    let refused = quality(&root, &home, &path, &unattested);
+    let passed = quality(&root, &home, &path, &revision);
     let report = json!({
         "source_revision": super::git(&root, &["rev-parse", "HEAD"]),
         "binary": env!("CARGO_BIN_EXE_stado"),
-        "tama": tama,
         "path": path,
         "commands": [
-            {"argv": ["stado", "quality", "check", "--root", root, "--revision", attested],
+            {"argv": ["stado", "quality", "check", "--root", root, "--revision", revision],
              "exit_status": passed.status.code(), "stdout": String::from_utf8_lossy(&passed.stdout),
-             "stderr": String::from_utf8_lossy(&passed.stderr)},
-            {"argv": ["stado", "quality", "check", "--root", root, "--revision", unattested],
-             "exit_status": refused.status.code(), "stdout": String::from_utf8_lossy(&refused.stdout),
-             "stderr": String::from_utf8_lossy(&refused.stderr)}
+             "stderr": String::from_utf8_lossy(&passed.stderr)}
         ]
     });
     let report_path = home.join("report.json");
@@ -166,22 +108,12 @@ fn unjudged_tree_stands_only_on_an_attestation_that_stands() {
     );
     assert!(
         passed.status.success(),
-        "an attested tree was refused: {report}"
+        "an unjudged tree failed gates that passed: {report}"
     );
     assert!(
-        said.contains("CLI command tree was not judged")
-            && said.contains("CLI command-tree judgment through Brama failed")
-            && said.contains(&format!("stands on the attestation {attested} carries")),
-        "the pass does not say the tree stood on its attestation: {report}"
-    );
-    let refusal = String::from_utf8_lossy(&refused.stderr);
-    assert!(
-        !refused.status.success(),
-        "an unattested tree passed: {report}"
-    );
-    assert!(
-        refusal.contains("CLI command-tree judgment through Brama failed")
-            && refusal.contains(&format!("the attestation of {unattested} does not stand")),
-        "the refusal does not name the unjudged tree and the missing attestation: {report}"
+        said.contains(&format!(
+            "CLI command-tree review of {revision} was not run: CLI command-tree judgment through Brama failed"
+        )) && said.contains("the gates above decided this check"),
+        "the pass does not say the review was not run and why: {report}"
     );
 }

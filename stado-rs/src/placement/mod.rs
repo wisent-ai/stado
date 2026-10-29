@@ -1,4 +1,5 @@
-//! Declarative, registry-backed service placement groups.
+//! Declarative, registry-backed service placement groups, and the fleet host
+//! judgement placed work is pinned by ([`hosts`]).
 //!
 //! A profile names the logical services that move together, their lifecycle
 //! owner on each eligible host, the state files that travel, health probes,
@@ -8,6 +9,7 @@
 //! document so two operators cannot relocate services concurrently.
 
 mod document;
+pub mod hosts;
 mod model;
 mod runtime;
 mod validate;

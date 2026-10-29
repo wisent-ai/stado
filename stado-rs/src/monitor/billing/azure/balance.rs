@@ -241,6 +241,17 @@ pub(super) async fn azure_section_with(
         Some(detail) => detail["amount"].clone(),
         None => Value::Null,
     };
+    // A grant whose balance Azure does not report is read as the grant less
+    // its actual cost since it began ([`super::spent`]), both sources named;
+    // one that cannot be read leaves the balance unknown, with why.
+    let (amount, currency, balance_source) = if balance_reported {
+        (amount, currency, json!("credits balance"))
+    } else {
+        match super::spent::balance(client, arm_base, &token, grant, subscription).await {
+            Ok((available, stated, source)) => (json!(available), json!(stated), source),
+            Err(cause) => (Value::Null, currency, json!({ "unread": cause })),
+        }
+    };
     let credit_used = match (grant_amount.as_f64(), amount.as_f64()) {
         (Some(grant), Some(balance)) => json!(grant - balance),
         _ => Value::Null,
@@ -252,11 +263,12 @@ pub(super) async fn azure_section_with(
         "detail": if balance_reported {
             Value::Null
         } else {
-            json!("Azure returned no credit balance; subscription grant metadata remains authoritative")
+            json!("Azure returned no credit balance; the available balance is the grant less its actual cost since it began (balance_source)")
         },
         "available_balance": amount,
         "estimated_balance": estimated,
         "currency": currency,
+        "balance_source": balance_source,
         "expired_credit": expired,
         "pending_eligible_charges": pending,
         // A field Azure did not answer is null, as `json!` writes an absent
@@ -264,7 +276,7 @@ pub(super) async fn azure_section_with(
         "pending_credit_adjustments": props.pointer("/pendingCreditAdjustments/value"),
         "is_estimated_balance": props.get("isEstimatedBalance"),
         "credit_depleted": match config::billing_net_alert_usd() {
-            Ok(threshold) => json!(extract_amount(&props).as_f64().is_some_and(|balance| balance <= threshold)),
+            Ok(threshold) => json!(amount.as_f64().is_some_and(|balance| balance <= threshold)),
             Err(_) => Value::Null,
         },
         "net_alert_detail": config::billing_net_alert_usd().err(),

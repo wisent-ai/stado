@@ -8,6 +8,8 @@ mod commands;
 mod modules;
 pub use command::{check, command_tree};
 mod paths;
+mod placed;
+pub(crate) use placed::{check_bundle, place};
 mod secrets;
 pub(crate) use modules::check_source;
 use std::path::Path;
@@ -217,6 +219,24 @@ async fn check_tree(
             .map(|(name, value)| (name.as_str(), value.clone())),
     )
     .collect();
+    // Cargo builds every check of one checkout with one build directory
+    // under that checkout's build area: the export moves with each run, and
+    // a build directory named from the workspace path compiled every
+    // dependency again on every check. Only the build directory moves; the
+    // finished artifacts stay in the tree's own `target`, where the recipe's
+    // `stage` reads them. The area is Stado's, where the janitor reaches it,
+    // never in the checkout.
+    let build_dir = stado_product::common::runs::checkout_area(
+        &crate::config_file::expand_tilde("~"),
+        checkout,
+    )
+    .map_err(|error| CmdError::click(format!("{error:#}")))?
+    .join("cargo-build");
+    let mut contract = contract;
+    contract.push((
+        "CARGO_BUILD_BUILD_DIR",
+        build_dir.to_string_lossy().into_owned(),
+    ));
     for gate in &declared.gates {
         report.say(&format!("stado quality check: {}", gate.argv.join(" ")));
         // A format gate compiles nothing; every other kind compiles the tree,
@@ -267,7 +287,7 @@ async fn check_tree(
         if matches!(selection, Selection::CommandTree) {
             commands::inventory(&declared, tree, area, &contract, revision, report)?;
         } else {
-            commands::check(&declared, tree, area, &contract, checkout, revision, report)?;
+            commands::check(&declared, tree, area, &contract, revision, report)?;
         }
     }
     Ok(Some(declared.product))

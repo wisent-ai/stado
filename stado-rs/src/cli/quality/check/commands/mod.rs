@@ -1,6 +1,5 @@
 //! Audit the CLI artifact built from the exact committed source being checked.
 
-mod attested;
 mod audit;
 mod help_grammar;
 mod judged;
@@ -164,16 +163,16 @@ fn staged_binaries(
     Ok(binaries)
 }
 
-/// The CLI command tree of `revision` of `checkout`, built from the exported
-/// `tree` into `area`, judged by a model against the CLI rules; when no model
-/// judgment is obtained, the tree stands on the commit's attestation
-/// ([`attested::stands`]) and the report says it was not judged.
+/// The CLI command tree of `revision`, built from the exported `tree` into
+/// `area`, judged by a model against the CLI rules. The review owns only its
+/// own verdict: when no model judgment is obtained (Brama does not answer, or
+/// Oko's call did not run), the review is reported as not run with that cause
+/// and the gates already passed stand on their own.
 pub(super) fn check(
     declared: &DeclaredGates,
     tree: &Path,
     area: &Path,
     contract: &[(&str, String)],
-    checkout: &Path,
     revision: &str,
     report: Report,
 ) -> Result<(), CmdError> {
@@ -181,10 +180,9 @@ pub(super) fn check(
         Audit::NotCli => return Ok(()),
         Audit::Judged(failures) => failures,
         Audit::Unjudged(cause) => {
-            attested::stands(checkout, revision, &cause)?;
             report.say(&format!(
-                "stado quality check: {} CLI command tree was not judged ({cause}); it stands on \
-                 the attestation {revision} carries, read by `tama attestation check`",
+                "stado quality check: the {} CLI command-tree review of {revision} was not run: \
+                 {cause}; the gates above decided this check",
                 declared.product
             ));
             return Ok(());

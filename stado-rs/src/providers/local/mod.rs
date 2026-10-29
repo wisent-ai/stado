@@ -11,6 +11,7 @@
 
 pub mod accelerators;
 pub mod agent;
+pub mod ci_jobs;
 pub(crate) mod cloud;
 pub mod disk;
 pub mod disk_staging;

@@ -14,6 +14,8 @@ mod host_routine;
 mod lease;
 #[path = "../market/peer_declaration.rs"]
 mod market_peer;
+#[path = "../quality/placed.rs"]
+mod quality_placed;
 mod readopt;
 mod restart;
 mod sizing;

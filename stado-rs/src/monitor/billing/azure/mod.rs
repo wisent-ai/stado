@@ -3,6 +3,7 @@
 //! grant and billing-property reads it performs with that principal.
 
 mod balance;
+mod spent;
 
 use serde_json::{json, Value};
 
