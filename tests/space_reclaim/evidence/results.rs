@@ -28,8 +28,11 @@ fn dispatched_results_and_a_build_output_are_reclaimed_without_taking_release_re
     let result = store.join("results/journey/output.tar");
     let run = store.join("runs/probierz/journey/report.json");
     let release = store.join("runs/release-pipeline/stado/run/receipt.json");
+    // The queue's own run record and a placed check's source bundle.
+    let manifest = store.join("runs/example-run.json");
+    let bundle = store.join("runs/quality/example-product/example-revision.bundle");
     let pinned = store.join("results/artifacts/native-signing/input.tar");
-    for path in [&result, &run, &release, &pinned] {
+    for path in [&result, &run, &release, &manifest, &bundle, &pinned] {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, b"retained source bytes").unwrap();
     }
@@ -51,11 +54,14 @@ fn dispatched_results_and_a_build_output_are_reclaimed_without_taking_release_re
         b"retained source bytes",
         "{report}"
     );
-    assert_eq!(
-        fs::read(&pinned).unwrap(),
-        b"retained source bytes",
-        "{report}"
-    );
+    for kept in [&manifest, &bundle, &pinned] {
+        assert_eq!(
+            fs::read(kept).unwrap(),
+            b"retained source bytes",
+            "{} was taken: {report}",
+            kept.display()
+        );
+    }
     assert!(user_data.is_file(), "user data was taken: {report}");
 }
 

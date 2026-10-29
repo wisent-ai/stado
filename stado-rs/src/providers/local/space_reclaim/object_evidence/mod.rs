@@ -5,7 +5,8 @@
 //! cannot: a host refusing jobs never claims the job carrying the product's
 //! own retention command — the very work that would free the space. So the
 //! host's own janitor takes it under the disk-full rule: run and result
-//! evidence beneath the declared roots, but not pinned inputs or release records.
+//! evidence beneath the declared roots, but not pinned inputs, release
+//! records or the queue's own run records.
 
 use std::io::ErrorKind;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -23,10 +24,20 @@ pub const RESULTS_ROOT: &str = ".stado/local-storage/ecosystem/probierz/results"
 /// The directory the fleet keeps its pinned, digest-addressed build inputs
 /// in, wherever it appears. Nothing under it is run evidence.
 const PINNED_INPUT_DIRECTORY: &str = "native-signing";
-/// Stado's own release records directly under [`ROOT`]: every release run
-/// (`release-pipeline`), build record (`build`) and change batch
-/// (`release-changes`). These records are not disposable run evidence.
-const RELEASE_RECORD_DIRECTORIES: &[&str] = &["release-pipeline", "build", "release-changes"];
+/// Stado's own records in directories directly under [`ROOT`]: every release
+/// run (`release-pipeline`, `release-pipeline-unfinished`), build record
+/// (`build`), change batch (`release-changes`), the source bundle a placed
+/// quality check waits on (`quality`) and the context a queued workload
+/// session is started with (`workload-session`). These records are not
+/// disposable run evidence.
+const RELEASE_RECORD_DIRECTORIES: &[&str] = &[
+    "release-pipeline",
+    "release-pipeline-unfinished",
+    "build",
+    "release-changes",
+    "quality",
+    "workload-session",
+];
 
 /// Remove product evidence from both object-store prefixes. Each root is
 /// opened from the selected home without following links, and every scan and
@@ -117,7 +128,16 @@ fn scan_root(
                     continue;
                 }
             };
-            let kept = protected(relative, protect_release_records);
+            // A regular file directly under ROOT is the queue's own record of
+            // a run (`runs/<run_id>.json`, the retained-jobs index): products
+            // keep their evidence in directories beneath it. Deleting one
+            // left every submission refused with "run manifest … disappeared"
+            // and every finished run without the record its reaper retains
+            // outcomes into.
+            let queue_record = protect_release_records
+                && ifmt(info.st_mode as u32) == IFREG
+                && relative.components().count() == 1;
+            let kept = queue_record || protected(relative, protect_release_records);
             if ifmt(info.st_mode as u32) == IFDIR {
                 if kept {
                     met.skipped("stado_record_or_pinned_input_kept");
