@@ -26,18 +26,18 @@ pub struct DeployPlan {
     pub linux_unit: String,
     /// Install this plan as a system LaunchDaemon on Darwin, regardless of
     /// where the host's declaration or the per-login fallback would place it.
-    /// An always-on host with no graphical session has only `system` to run a
-    /// service in: its user-domain units die with the login that never comes,
-    /// and a plist left in `~/Library/LaunchAgents` there is a service that
-    /// runs whenever nobody needs it. `ensure_service` addresses the daemon
-    /// file when this is set; the privileged steps it needs are the ones
+    /// On a Mac whose recorded console is headless nobody answers the
+    /// questions macOS asks a LaunchAgent, and with nobody logged in its
+    /// per-login domain never exists; `system` is where its units run.
+    /// `ensure_service` addresses the daemon file when this is set; the
+    /// privileged steps it needs are the ones
     /// [`crate::deploy::service::ManagedService::privileged_command`] spells.
     ///
-    /// Set from the target by [`requires_daemon_domain`] at plan time, so
-    /// `deploy`, `ensure` and the autonomy reconciler cannot disagree about
-    /// the domain of the same unit on the same host. `service ensure
-    /// --as-daemon` still turns it on for a host whose declaration does not
-    /// yet say always-on; nothing turns it off.
+    /// Set from the target and the label by [`requires_daemon_domain`] at
+    /// plan time, so `deploy`, `ensure` and the autonomy reconciler cannot
+    /// disagree about the domain of the same unit on the same host. `service
+    /// ensure --as-daemon` still turns it on for a host that records no
+    /// headless console.
     pub force_daemon: bool,
 }
 
@@ -188,7 +188,7 @@ pub fn plan_deploy_labelled(
             REMOTE_USER_PLACEHOLDER,
         ),
         linux_unit: linux.content(remote_home),
-        force_daemon: requires_daemon_domain(target),
+        force_daemon: requires_daemon_domain(target, &label),
     };
     guard_heredoc(&plan.darwin_unit)?;
     guard_heredoc(&plan.darwin_daemon_unit)?;

@@ -142,7 +142,13 @@ async fn install_and_check(
         answered,
         detail: installed.version_line.clone(),
     };
-    let mut after = checks::run(target, true, runner).await;
+    // The install may have moved a unit (an agent into the system domain on
+    // a headless Mac) and recorded it from the host, so the after checks read
+    // the declarations as they are now: the authority snapshot this machine
+    // kept predates that write.
+    crate::cli::resolver::forget_recalled_registry();
+    let declared_now = crate::cli::canonical_host(&target.name).await?;
+    let mut after = checks::run(&declared_now, true, runner).await;
     let runs_source = now.revision.as_deref() == Some(source.commit.as_str()) && !now.dirty;
     after.insert(0, revision(&now, runs_source));
     report.checks("after", &after);

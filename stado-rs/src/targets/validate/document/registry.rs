@@ -115,6 +115,7 @@ pub(crate) fn validate_registry_body(
             }
         };
         validate_privacy_grants(&location, target, platform)?;
+        validate_console(&location, target, platform)?;
         if let Some(role) = target.get("role") {
             if !role.as_str().is_some_and(is_target_name) {
                 return Err(verr(

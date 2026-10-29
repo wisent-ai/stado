@@ -128,10 +128,10 @@ pub(super) async fn gates(host: &str, runner: &Runner) -> (State, String) {
 }
 
 /// Read a line from this terminal: the host's name typed back starts the
-/// upgrade.
-pub(super) async fn confirmed(host: &str) -> Result<bool, CmdError> {
+/// upgrade. `at` is where the dialogs above are answered.
+pub(super) async fn confirmed(host: &str, at: &str) -> Result<bool, CmdError> {
     use tokio::io::AsyncBufReadExt as _;
-    eprint!("Someone must be at {host} to answer the dialogs above. Type {host} to start: ");
+    eprint!("Someone must be at {at} to answer the dialogs above. Type {host} to start: ");
     let mut line = String::new();
     tokio::io::BufReader::new(tokio::io::stdin())
         .read_line(&mut line)

@@ -3,7 +3,6 @@
 //! follows when it is not — said before anything is built.
 
 use serde::Serialize;
-use serde_json::Value;
 
 use crate::cli::CmdError;
 use crate::deploy::host_privacy::local_network::{decisions_on_host, LocalNetwork};
@@ -112,42 +111,21 @@ pub(super) fn predict(
     })
 }
 
-/// The folders the host's latest beacon measured as open to its installed
-/// program, or why none were measured.
-async fn measured_folders(target: &ComputeTarget) -> Result<Vec<(String, String)>, String> {
-    let store = crate::cli::host::beacon_store()
-        .await
-        .map_err(|error| error.to_string())?;
-    let report = crate::monitor::host_health::load_host_health(&store, &target.name)
-        .await
-        .map_err(|error| error.to_string())?;
-    let Some(folders) = report
-        .beacon
-        .get("privacy")
-        .and_then(|block| block.get("folders"))
-        .and_then(Value::as_object)
-    else {
-        return Err("its latest beacon carries no privacy measurement".to_string());
-    };
-    let at = match report.beacon.get("reported_at").and_then(Value::as_str) {
-        Some(at) => at.to_string(),
-        None => "an unrecorded time".to_string(),
-    };
-    Ok(folders
-        .iter()
-        .filter(|(_, folder)| folder["state"] == "granted")
-        .map(|(key, _)| (key.clone(), at.clone()))
-        .collect())
-}
-
 /// Every dialog the upgrade will raise, on this Mac while it signs and on
 /// the host after the install, with the answer that keeps the host working.
-/// `notes` receives what could not be measured.
+///
+/// The new program opens a protected folder only where
+/// `targets[].privacy_grants` declares it for the program, or where the
+/// host's declared work root lies inside one: those are the folder dialogs.
+/// `daemon` says Stado's units run as launchd daemons on the host after the
+/// install, which macOS never asks about the local network; otherwise the
+/// Local Network dialog is said. `notes` receives what could not be read.
 pub(super) async fn dialogs(
     target: &ComputeTarget,
     installed: &Installed,
     identity: &Identity,
     join_network: bool,
+    daemon: bool,
     runner: &Runner,
     notes: &mut Vec<String>,
 ) -> Result<Vec<Dialog>, CmdError> {
@@ -180,27 +158,17 @@ pub(super) async fn dialogs(
             })
             .map(|grant| grant.reason.clone())
     };
-    let measured = match measured_folders(target).await {
-        Ok(measured) => measured,
-        Err(why) => {
-            notes.push(format!(
-                "{}: the folders open to its Stado were not measured ({why}); only declared \
-                 grants are listed",
-                target.name
-            ));
-            Vec::new()
-        }
-    };
+    let work_root = target
+        .work_root
+        .as_deref()
+        .and_then(|root| crate::targets::protected_folder_of(root).map(|folder| (root, folder)));
     for &(key, folder) in crate::targets::PRIVACY_FOLDERS {
-        let because = match (
-            declared(key),
-            measured.iter().find(|(measured, _)| measured == key),
-        ) {
+        let because = match (declared(key), work_root) {
             (Some(reason), _) => format!("targets[].privacy_grants declares it: {reason}"),
-            (None, Some((_, at))) => {
-                format!("the installed program holds this access now (beacon of {at})")
-            }
-            (None, None) => continue,
+            (None, Some((root, inside))) if inside == folder => format!(
+                "targets[].work_root is {root}, where the new program keeps the fleet's work"
+            ),
+            (None, _) => continue,
         };
         dialogs.push(Dialog {
             host: target.name.clone(),
@@ -209,6 +177,9 @@ pub(super) async fn dialogs(
             answer: "Allow".to_string(),
             because,
         });
+    }
+    if daemon {
+        return Ok(dialogs);
     }
     let (key, _) = crate::targets::LOCAL_NETWORK;
     let decided = match decisions_on_host(

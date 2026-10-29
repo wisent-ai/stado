@@ -108,14 +108,15 @@ pub async fn run_bootstrap(
         let Some(target) = target else {
             return Err("--local requires --target NAME".into());
         };
-        // `--local` installs on THIS machine, so this machine's own
-        // declaration decides the domain — for the agent, for a coordinator
-        // tick, and for the two internal daemons alike. An always-on host has
-        // no per-login domain, and a unit this path writes into
-        // `~/Library/LaunchAgents` there is one launchd never loads.
-        // An identity two targets claim is refused, not read as "no entry":
-        // read that way, an always-on host would get per-login units launchd
-        // never loads.
+        // `--local` installs this machine's host unit, so this machine's own
+        // declaration decides its domain: a Mac whose recorded console is
+        // headless runs it as a launchd daemon, which macOS never asks about
+        // the local network, where an agent would wait on a dialog nobody
+        // sees. An identity two targets claim is refused, not read as "no
+        // entry": read that way, a headless host would get an agent.
+        let host_unit = crate::deploy::service_catalog::host_unit().map_err(|cause| {
+            DeployError(cause).stating(crate::primitives::failure::FailureCode::Config)
+        })?;
         let daemon_domain = registry
             .lookup_self(&crate::providers::vast::system_hostname())
             .map_err(|error| {
@@ -124,7 +125,7 @@ pub async fn run_bootstrap(
                 ))
                 .stating(crate::primitives::failure::FailureCode::Config)
             })?
-            .is_some_and(crate::deploy::service::requires_daemon_domain);
+            .is_some_and(|this| crate::deploy::service::requires_daemon_domain(this, &host_unit));
         if let Some(t) = registry.lookup(target) {
             if t.is_provider(crate::capabilities::ProviderId::Local) {
                 // A machine Stado runs on is one host process: `stado serve`

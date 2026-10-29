@@ -153,12 +153,17 @@ async fn pass(
                 .map_err(click)?;
     }
     // A declared path is the service's durable domain choice. In particular,
-    // a LaunchAgent intentionally placed on an always-on Mac must not become
-    // a daemon again when ensure or the autonomy reconciler runs later.
+    // a LaunchAgent intentionally placed for a graphical workload must not
+    // become a daemon again when ensure or the autonomy reconciler runs
+    // later. Stado's own units are the exception: on a Mac whose recorded
+    // console is headless an agent of theirs waits on a macOS question nobody
+    // answers, so the plan's daemon wins over the declared agent there.
+    let stado_on_headless = plan.force_daemon && crate::deploy::service::is_stado_unit(&plan.label);
     if options.as_launch_agent
         || (existing
             .is_some_and(|declared| service::UnitDomain::from_path(&declared.path).is_per_login())
-            && !options.as_daemon)
+            && !options.as_daemon
+            && !stado_on_headless)
     {
         plan.force_daemon = false;
     } else {
@@ -215,14 +220,25 @@ async fn pass(
     }
     let (retired, mut predecessors) =
         predecessors::retire_before_ensure(&target, catalog_entry.as_ref(), &runner).await?;
+    let twin = moved::stop_agent(&target, &plan, &retired, &runner).await?;
     let outcome =
-        predecessors::ensure_or_reinstate(&target, options.name, &plan, &retired, &runner).await?;
+        match predecessors::ensure_or_reinstate(&target, options.name, &plan, &retired, &runner)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(refusal) => {
+                return Err(moved::restored(&target, &plan, twin.as_ref(), refusal, &runner).await)
+            }
+        };
 
     let mut record = service::record_from_ensure(&host, options.name, &outcome, &now());
     record.program = unit.program;
     record.args = unit.args;
     record.env = unit_env.into_iter().collect();
     record.systemd_unit = unit.systemd_unit;
+    if let Some(twin) = &twin {
+        moved::settle_agent(&target, &plan, twin, &record, &retired, &runner).await?;
+    }
     let persisted =
         persist_ensure_record(&record, &already, &replaced, &outcome, &plan, reason, &host).await;
     let audited = persisted.map_err(|mut error| {

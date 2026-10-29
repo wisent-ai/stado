@@ -4,65 +4,63 @@ use crate::deploy::service::*;
 // Declared domain against the domain the host can have
 // ---------------------------------------------------------------------------
 
-/// The `role` / `host_heuristic` word for a host that is expected to serve
-/// with nobody sitting at it.
-pub const ROLE_ALWAYS_ON: &str = "always-on";
-
 /// Does the registry say this host is meant to keep a graphical account alive?
 ///
-/// `always-on` describes uptime, not the absence of a graphical login.
-/// Declared graphical workloads still require their account's session
-/// domain; uptime alone must not move them into the system domain.
+/// A headless console says nobody answers a dialog there, not that no
+/// account session exists: a Mac can log an account in with no display
+/// attached. Declared graphical workloads still require that session's
+/// domain, so a headless console alone does not move their units into the
+/// system domain.
 pub fn declared_graphical(target: &ComputeTarget) -> bool {
     target.weles.as_ref().is_some_and(|policy| policy.enabled) || target.display_stream.is_some()
 }
 
-/// Does the registry itself say this host runs unattended?
-pub fn declared_always_on(target: &ComputeTarget) -> bool {
-    [target.role.as_deref(), target.host_heuristic.as_deref()]
-        .into_iter()
-        .flatten()
-        .any(|word| word == ROLE_ALWAYS_ON)
+/// Is `label` one of Stado's own units: the host unit the catalog names, or
+/// a unit named after it (`com.wisent.stado-network`)? A catalog that cannot
+/// be read names no unit.
+pub fn is_stado_unit(label: &str) -> bool {
+    match crate::deploy::service_catalog::host_unit() {
+        Ok(host) => label
+            .strip_prefix(host.as_str())
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('-')),
+        Err(_unreadable_catalog) => false,
+    }
 }
 
-/// Is the system domain the only declared launchd domain for this host?
+/// Must the unit `label` run in launchd's system domain on this host?
 ///
-/// An always-on Darwin target defaults to system services only when the same
-/// declaration does not assign it a persistent graphical workload. Linux uses
-/// systemd user lingering and does not have launchd domains.
-pub fn requires_daemon_domain(target: &ComputeTarget) -> bool {
-    declared_always_on(target)
-        && !declared_graphical(target)
-        && !target.release_platform.starts_with("linux")
+/// On a Mac whose recorded console is headless (`targets[].console`,
+/// measured by `stado host console record`), nobody answers the questions
+/// macOS asks before a program reaches the local network, and macOS asks a
+/// LaunchAgent and never a launchd daemon. Stado's own units reach other
+/// hosts and their network's peers, so they are daemons there whatever else
+/// the host runs. Every other unit is a daemon there unless the host declares
+/// a graphical workload, whose units need the account's session. A host with
+/// no recorded console, an attended one and a Linux host keep per-login
+/// units.
+pub fn requires_daemon_domain(target: &ComputeTarget, label: &str) -> bool {
+    target.declared_headless() && (is_stado_unit(label) || !declared_graphical(target))
 }
 
-/// The `/Users/<account>/...` prefix a per-account agent path carries. The
-/// account is load-bearing: a LaunchAgent's job runs as its owner, and the
-/// daemon spelling of the same unit only keeps running as that owner if it
-/// carries `UserName` (`local_install::daemon_plist_text`).
-const ACCOUNTS_PREFIX: &str = "/Users/";
-
-/// A unit declared in a launchd domain the host it is declared on cannot
-/// have.
+/// A unit declared in a launchd domain its host's recorded console rules out.
 ///
-/// A unit declared as a user LaunchAgent at
-/// `/Users/<user>/Library/LaunchAgents/...` on a host declared always-on in
-/// both `role` and `host_heuristic`, with no graphical session at all —
-/// `/dev/console` is root's, `who` prints nothing, and the login's own
-/// `launchctl list` holds no `com.wisent.*` label — names a domain that can
-/// never load it: `launchctl bootstrap user/<uid> <plist>` answers
-/// `Bootstrap failed: 5: Input/output error` and `gui/<uid>` does not exist.
-/// Every other always-on unit on such a host is a system LaunchDaemon under
-/// [`LAUNCHD_DAEMONS`].
+/// A unit declared as a LaunchAgent (`/Users/<user>/Library/LaunchAgents/...`)
+/// on a Mac whose recorded console is headless runs where macOS asks the
+/// person at the screen before it reaches the local network, and nobody is
+/// there to answer; with nobody logged in at all, launchd builds no
+/// `gui/<uid>` and the agent never loads. [`requires_daemon_domain`] says
+/// which units belong in the system domain there.
 ///
 /// The declaration is checkable without going anywhere: the path says the
-/// domain and the target says the host runs unattended. So this is a
-/// registry finding, reported by `stado registry doctor` and printed under
-/// `stado service list`, rather than a surprise the next `restart` produces.
+/// domain and the target records its console. So this is a registry
+/// finding, reported by `stado registry doctor` and printed under `stado
+/// service list`, rather than a dialog nobody sees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MisdeclaredDomain {
     /// Registry target the unit is declared on.
     pub host: String,
+    /// The declared service name `stado service ensure` takes.
+    pub name: String,
     /// The host's own name for the unit — the launchd label.
     pub unit: String,
     /// The unit-file path the declaration carries.
@@ -70,14 +68,12 @@ pub struct MisdeclaredDomain {
     /// The domain that path places the unit in, as [`UnitDomain::as_str`]
     /// spells it.
     pub declared_domain: &'static str,
-    /// The only domain this host can load a unit into.
+    /// The domain the unit belongs in on this host.
     pub loadable_domain: &'static str,
     /// Where the daemon spelling of this unit belongs.
     pub daemon_path: String,
-    /// The account the agent's job runs as, read out of the declared path;
-    /// `None` for a machine-wide `/Library/LaunchAgents` declaration, which
-    /// names no account at all.
-    pub account: Option<String>,
+    /// The recorded console's evidence, in the words an operator reads.
+    pub console: String,
 }
 
 impl MisdeclaredDomain {
@@ -88,69 +84,57 @@ impl MisdeclaredDomain {
     /// is carried by that fixed program and not by the document, so it is
     /// not a registry finding and correcting the document would not move it.
     pub fn detect(target: &ComputeTarget, service: &ManagedService) -> Option<Self> {
-        if service.source != SOURCE_REGISTRY || !requires_daemon_domain(target) {
+        let unit = service.unit_id().to_string();
+        if service.source != SOURCE_REGISTRY || !requires_daemon_domain(target, &unit) {
             return None;
         }
         let declared = UnitDomain::from_path(&service.path);
         if !declared.is_per_login() {
             return None;
         }
-        let unit = service.unit_id().to_string();
-        let account = service
-            .path
-            .strip_prefix(ACCOUNTS_PREFIX)
-            .and_then(|rest| rest.split('/').next())
-            .filter(|account| !account.is_empty())
-            .map(str::to_string);
+        let console = match target.console() {
+            Ok(Some(console)) => console.evidence(),
+            Ok(None) | Err(_) => return None,
+        };
         Some(Self {
             host: target.name.clone(),
+            name: service.name.clone(),
             daemon_path: format!("{LAUNCHD_DAEMONS}/{unit}.plist"),
             unit,
             path: service.path.clone(),
             declared_domain: declared.as_str(),
             loadable_domain: DOMAIN_SYSTEM,
-            account,
+            console,
         })
     }
 
-    /// The privileged command that puts this unit in the domain the host can
-    /// load, spelled the way `ENSURE_BODY` installs a daemon
-    /// (`install -m 644 -o root -g wheel`) so the file an operator writes by
-    /// hand and the file the fleet writes have the same owner and mode.
-    ///
-    /// `UserName` rides along wherever the declared path names an account:
-    /// root reads a plist in [`LAUNCHD_DAEMONS`], and a daemon without that key
-    /// would run the account's program as uid 0 against an account-owned
-    /// `~/.stado` — the exact trade `local_install::daemon_plist_text`
-    /// documents.
+    /// The command that moves this unit into the system domain:
+    /// `service ensure --as-daemon` installs the daemon, stops the agent,
+    /// reads the daemon until it answers, and only then removes the agent,
+    /// putting it back when the daemon does not answer.
     pub fn install_command(&self) -> String {
-        let install = format!(
-            "/usr/bin/install -m 644 -o root -g wheel {} {}",
-            self.path, self.daemon_path
-        );
-        let Some(account) = &self.account else {
-            return format!("sudo {install}");
-        };
         format!(
-            "sudo /bin/sh -c '{install} && /usr/bin/plutil -insert UserName -string {account} {}'",
-            self.daemon_path
+            "stado service ensure {} --host {} --as-daemon --reason \"nobody answers macOS at \
+             this host's screen\"",
+            self.name, self.host
         )
     }
 
     /// The one sentence both surfaces print: the unit, the domain it
-    /// declares, the domain the host can actually load, and the command that
-    /// closes the gap.
+    /// declares, the console that rules it out, and the command that closes
+    /// the gap.
     pub fn sentence(&self) -> String {
         format!(
-            "{} is declared in launchd's {} domain ({}), and {} is declared {ROLE_ALWAYS_ON}, so no \
-             account is logged in graphically there, launchd builds no gui/<uid>, and {} is the only \
-             domain that host can load a unit into; install it there with one privileged command on \
-             the host: {}",
+            "{} is declared in launchd's {} domain ({}), and {} records a headless console ({}), \
+             so macOS's questions to that agent are never answered; it belongs in the {} domain \
+             at {}: {}",
             self.unit,
             self.declared_domain,
             self.path,
             self.host,
+            self.console,
             self.loadable_domain,
+            self.daemon_path,
             self.install_command()
         )
     }
@@ -158,11 +142,13 @@ impl MisdeclaredDomain {
     pub fn to_json(&self) -> Value {
         json!({
             "host": self.host,
+            "name": self.name,
             "unit": self.unit,
             "path": self.path,
             "declared_domain": self.declared_domain,
             "loadable_domain": self.loadable_domain,
             "daemon_path": self.daemon_path,
+            "console": self.console,
             "install_command": self.install_command(),
             "detail": self.sentence(),
         })

@@ -11,6 +11,7 @@
 //! re-exported here, so `crate::cli::host::NAME` still resolves.
 
 mod checks;
+pub(crate) mod console;
 mod files;
 mod machine;
 mod secrets;

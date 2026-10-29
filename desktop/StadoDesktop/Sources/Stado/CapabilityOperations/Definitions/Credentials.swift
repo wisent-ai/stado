@@ -125,5 +125,14 @@ enum NativeCredentialOperations {
                 .init(id: "key", label: "Dotted configuration key", required: true),
                 .init(id: "service", label: "Managed service to reconcile (optional)", option: "--reload-service"),
             ], jsonOutput: false),
+        // `stado host console`: whether anybody answers a macOS dialog at the
+        // host, measured there and recorded as `targets[].console`. A
+        // headless record runs Stado's units as launchd daemons.
+        .init(id: "host-console-show", title: "Measure whether anybody can answer a dialog at the selected host, beside what the registry records", path: ["host", "console", "show"],
+            hostPlacement: .positional, mutates: false),
+        .init(id: "host-console-record", title: "Record the selected host's measured console (headless or attended)", path: ["host", "console", "record"],
+            hostPlacement: .positional),
+        .init(id: "host-console-unset", title: "Remove the selected host's recorded console", path: ["host", "console", "unset"],
+            hostPlacement: .positional),
     ]
 }

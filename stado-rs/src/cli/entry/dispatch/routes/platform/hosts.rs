@@ -6,7 +6,8 @@ use crate::cli::entry::spec::fleet::host::runs::{
     HostRunCommands,
 };
 use crate::cli::entry::spec::fleet::host::state::{
-    GpuPowerLimitCommands, HostBeaconCommands, HostGpuCommands, HostPortCommands, HostStateCommands,
+    GpuPowerLimitCommands, HostBeaconCommands, HostConsoleCommands, HostGpuCommands,
+    HostPortCommands, HostStateCommands,
 };
 use crate::cli::*;
 
@@ -38,6 +39,15 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             open,
             since,
         } => host::privacy(&target, json, open, since.as_deref()).await,
+        HostStateCommands::Console(HostConsoleCommands::Show { target, json }) => {
+            host::console::show(&target, json).await
+        }
+        HostStateCommands::Console(HostConsoleCommands::Record { target, json }) => {
+            host::console::record(&target, json).await
+        }
+        HostStateCommands::Console(HostConsoleCommands::Unset { target, json }) => {
+            host::console::unset(&target, json).await
+        }
         HostStateCommands::Reboot { target } => host::reboot(&target).await,
         HostStateCommands::User(HostUserCommands::Create {
             username,

@@ -81,6 +81,7 @@ pub mod host_backup_audit;
 pub mod host_build_caches;
 pub mod host_capability;
 pub mod host_channel;
+pub mod host_console;
 pub mod host_cron;
 pub mod host_delivery;
 pub mod host_disk;

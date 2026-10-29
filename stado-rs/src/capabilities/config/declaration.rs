@@ -143,6 +143,11 @@ pub const DECLARED_FIELDS: &[DeclaredField] = &[
         DeclarationSurface::RegistryTarget,
         "cli::host::checks::health::publish::privacy",
     ),
+    DeclaredField::read(
+        "console",
+        DeclarationSurface::RegistryTarget,
+        "deploy::service::requires_daemon_domain, cli::host::upgrade",
+    ),
     // The host's own refusal, next to what it can do: an excluded capability is a
     // policy answer ("may not run here") and not a measurement, so the matcher
     // reports it as a distinct reason rather than as a host that failed a probe.

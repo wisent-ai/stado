@@ -50,6 +50,17 @@ pub(crate) enum HostStateCommands {
         #[arg(long, value_name = "WINDOW")]
         since: Option<String>,
     },
+    /// Whether anybody can answer a question macOS shows at TARGET's screen:
+    /// who owns /dev/console and which display panels (the built-in one, or
+    /// a monitor that names itself) macOS reports online, measured on
+    /// the host and recorded as `targets[].console` (`headless` or
+    /// `attended`).
+    ///
+    /// On a Mac whose recorded console is headless, Stado's units run as
+    /// launchd daemons, which macOS never asks about the local network, and
+    /// `stado host upgrade` plans no dialog there.
+    #[command(subcommand)]
+    Console(HostConsoleCommands),
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
     /// Manage local macOS and Linux user accounts.
@@ -136,6 +147,39 @@ pub(crate) enum HostStateCommands {
     /// transaction's phases, steps and worker.
     #[command(subcommand)]
     Local(super::local::HostLocalCommands),
+}
+
+/// TARGET's console, measured on the host and recorded in the registry.
+#[derive(Subcommand)]
+pub(crate) enum HostConsoleCommands {
+    /// Measure TARGET's console and print it beside the recorded one.
+    /// Exits non-zero when they differ, or when TARGET measures headless and
+    /// records no console.
+    Show {
+        target: String,
+        /// Emit the measurement, the record and the verdict as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Measure TARGET's console and record the measurement as
+    /// `targets[].console`. A headless console is refused while the target
+    /// declares a privacy grant or a work root in Documents, Desktop or
+    /// Downloads, each a question nobody there answers.
+    Record {
+        target: String,
+        /// Emit the measurement and the registry generation as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove TARGET's recorded console; Stado then treats the host as
+    /// attended.
+    Unset {
+        target: String,
+        /// Emit whether a record was removed and the registry generation as
+        /// JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// TARGET's GPUs, as the fleet declares and reads them.

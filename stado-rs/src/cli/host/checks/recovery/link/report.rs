@@ -154,7 +154,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     // A headless host is not a fault, and the verdict rules do not learn about
     // this one. A headless host carrying a unit that only a logged-in screen
     // can start IS the fault, and it is the fault that stops work:
-    // control-host has three of them and a job that has waited days for
+    // a host with no session has units of that kind and a job that waits on
     // the capacity they would publish. The declaration half is
     // `deploy::service::misdeclared_domains` rather than a second opinion
     // about it; what is added here is the half that had to be read from the
@@ -163,8 +163,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         for misdeclared in crate::deploy::service::misdeclared_domains(resolved) {
             blockers.push(format!(
                 "nobody is logged in on the screen here, and {} is registered as a user service, \
-                 so this machine cannot start it; install it as a machine service with one \
-                 privileged command on the host: {}",
+                 so this machine cannot start it; move it into the system domain: {}",
                 misdeclared.unit,
                 misdeclared.install_command()
             ));

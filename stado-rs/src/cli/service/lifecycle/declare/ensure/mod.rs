@@ -7,6 +7,7 @@
 
 use super::*;
 
+mod moved;
 mod predecessors;
 pub(crate) mod program;
 mod route;

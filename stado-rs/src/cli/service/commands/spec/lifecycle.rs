@@ -147,8 +147,9 @@ pub enum LifecycleCommands {
         #[arg(long = "launchd-label")]
         launchd_label: Option<String>,
         /// Install a Darwin service as a per-login LaunchAgent even when the
-        /// target is declared always-on. The host must have a live gui/<uid>
-        /// domain; deployment refuses instead of falling back to a daemon.
+        /// target records a headless console. The host must have a live
+        /// gui/<uid> domain; deployment refuses instead of falling back to a
+        /// daemon.
         #[arg(long = "as-launch-agent")]
         as_launch_agent: bool,
         #[arg(long)]
@@ -180,7 +181,11 @@ pub enum LifecycleCommands {
     /// and a missing unit is installed. Repeated calls use the same declaration.
     ///
     /// Where the per-login launchd domain does not exist, ensure renders the
-    /// unit for the system domain under /Library/LaunchDaemons.
+    /// unit for the system domain under /Library/LaunchDaemons. When the
+    /// unit goes into the system domain while this login runs it as a
+    /// LaunchAgent, the agent is stopped first, the daemon is read until it
+    /// serves its declared port, and only then is the agent's file removed;
+    /// a daemon that does not answer is removed and the agent loaded again.
     ///
     /// An existing matching definition is restarted in place with
     /// `kickstart -k`. When launchd's retained Program or ProgramArguments
@@ -236,12 +241,12 @@ pub enum LifecycleCommands {
         reason: String,
         /// Install the unit as a system LaunchDaemon
         /// (`/Library/LaunchDaemons/<label>.plist`) instead of following the
-        /// declaration or the per-login fallback. Implied for a registry host
-        /// declared always-on on Darwin, where that is the only domain a
-        /// service stays alive in; pass it for a host whose declaration does
-        /// not say so yet. The privileged install and bootstrap steps run
-        /// under passwordless sudo, and a host without that grant is told
-        /// exactly which step was refused.
+        /// declaration or the per-login fallback. Implied on a Mac whose
+        /// recorded console is headless (`stado host console record`) for
+        /// Stado's own units, and for every other unit there unless the host
+        /// declares a graphical workload. The privileged install and
+        /// bootstrap steps run under passwordless sudo, and a host without
+        /// that grant is told exactly which step was refused.
         #[arg(long, conflicts_with = "as_launch_agent")]
         as_daemon: bool,
         /// Recreate a declared Darwin unit as a per-login Aqua LaunchAgent.

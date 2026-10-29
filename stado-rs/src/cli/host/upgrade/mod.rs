@@ -16,6 +16,7 @@
 
 mod apply;
 mod checks;
+mod console;
 mod identity;
 mod install;
 mod installed;
@@ -135,12 +136,16 @@ async fn run(request: &UpgradeRequest, report: &mut Report) -> Result<String, Cm
         State::Ok,
         format!("{verdict}: {}", identity.why),
     );
+    let console = console::read(&target, installed.darwin, report, &runner).await;
+    console::units(&target, &console, request.plan, report, &runner).await?;
+    let daemon = console.headless() || console::host_unit_is_daemon(&target)?;
     let mut notes = Vec::new();
     let dialogs = identity::dialogs(
         &target,
         &installed,
         &identity,
         request.join_network,
+        daemon,
         &runner,
         &mut notes,
     )
@@ -162,6 +167,22 @@ async fn run(request: &UpgradeRequest, report: &mut Report) -> Result<String, Cm
         report.say("dialogs", State::Ok, "no macOS dialog is expected");
     }
     report.dialogs = dialogs;
+    if let Some(refusal) = console::refuse_dialogs(&target, &console, &report.dialogs) {
+        return Err(refusal);
+    }
+    // Who must be there to answer: nobody when no dialog comes, the person
+    // at this Mac for its keychain, the person at the host for the rest.
+    let answered_at = if report.dialogs.is_empty() {
+        None
+    } else if report
+        .dialogs
+        .iter()
+        .any(|dialog| dialog.host == target.name)
+    {
+        Some(target.name.clone())
+    } else {
+        Some("this Mac".to_string())
+    };
     let (state, said) = reads::declarations(&target, &runner).await;
     report.say("declarations", state, said);
     let before = checks::run(&target, false, &runner).await;
@@ -170,14 +191,13 @@ async fn run(request: &UpgradeRequest, report: &mut Report) -> Result<String, Cm
     let (state, said) = reads::gates(&target.name, &runner).await;
     report.say("gates", state, said);
     if request.plan {
-        if identity.change {
+        if let Some(at) = &answered_at {
             report.say(
                 "terminal",
                 State::Planned,
                 format!(
-                    "the identity changes, so the upgrade runs only from a terminal, with \
-                     someone at {} to answer the dialogs above",
-                    target.name
+                    "the dialogs above need answers, so the upgrade runs only from a terminal, \
+                     with someone at {at} to answer them"
                 ),
             );
         }
@@ -196,16 +216,16 @@ async fn run(request: &UpgradeRequest, report: &mut Report) -> Result<String, Cm
             installed.version_line, source.commit
         ));
     }
-    if identity.change {
+    if let Some(at) = &answered_at {
         if !std::io::stdin().is_terminal() {
             return Err(CmdError::refused(format!(
-                "{} would change code identity ({}), so macOS will ask the person at {} the \
-                 questions listed above; this upgrade runs with no terminal for anyone to see \
-                 them; run it from a terminal with someone at {}; nothing was changed",
-                target.name, identity.why, target.name, target.name
+                "the upgrade of {} makes macOS ask the person at {at} the questions listed \
+                 above; this upgrade runs with no terminal for anyone to see them; run it from \
+                 a terminal with someone at {at}; nothing was changed",
+                target.name
             )));
         }
-        if !reads::confirmed(&target.name).await? {
+        if !reads::confirmed(&target.name, at).await? {
             return Err(CmdError::refused(format!(
                 "the host's name was not typed back, so the upgrade of {} did not start; \
                  nothing was changed",
@@ -220,6 +240,7 @@ async fn run(request: &UpgradeRequest, report: &mut Report) -> Result<String, Cm
         format!("{} (sha256 {})", built.path.display(), built.sha256),
     );
     let area = apply::work_area(&source)?;
+    console::record(&target, &console, report).await?;
     let install = install::Install {
         target: &target,
         source: &source,

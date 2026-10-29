@@ -26,7 +26,7 @@ use super::super::declare::ensure::run::ensure;
 use super::super::declare::ensure::EnsureOptions;
 
 /// The host, and the managed declaration this release will move — after the
-/// unit has been converged onto the always-on domain a release requires.
+/// unit has been converged onto the system domain its host's console requires.
 async fn release_convergence(
     options: &ServiceReleaseOptions<'_>,
 ) -> Result<(targets::ComputeTarget, Vec<ManagedService>), CmdError> {
@@ -38,11 +38,11 @@ async fn release_convergence(
             options.host, options.name
         )));
     };
-    if service::requires_daemon_domain(&target)
+    if service::requires_daemon_domain(&target, current.unit_id())
         && UnitDomain::from_path(&current.path).is_per_login()
     {
         let reason = format!(
-            "release {} {} requires an always-on system service",
+            "release {} {} runs where nobody answers macOS at the screen, as a system service",
             options.product, options.version
         );
         ensure(EnsureOptions {

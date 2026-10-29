@@ -28,16 +28,15 @@ pub struct InstallPlan {
     pub label: String,
     pub exec_args: Vec<String>,
     pub env: Vec<(String, String)>,
-    /// The account a system LaunchDaemon runs as, for a host with no
-    /// per-login launchd domain to load an agent into. `None` is the ordinary
-    /// per-login agent, and it is the only value on Linux.
+    /// The account a system LaunchDaemon runs as, for a Mac whose recorded
+    /// console is headless. `None` is the ordinary per-login agent, and it is
+    /// the only value on Linux.
     ///
-    /// An always-on mac is the whole reason. `launchctl bootstrap gui/<uid>`
-    /// cannot work where nobody logs in graphically, and the ladder this
+    /// macOS asks the person at the screen before a LaunchAgent reaches the
+    /// local network and never asks a launchd daemon, and where nobody logs
+    /// in, `launchctl bootstrap gui/<uid>` cannot work and the ladder this
     /// module walks instead — `user/<uid>`, `asuser gui/<uid>`, then a crontab
-    /// entry — ends in a process with no unit behind it. Units placed in a
-    /// user's `~/Library/LaunchAgents` on such a host never load, the active
-    /// coordinator among them, and then nothing reaps an expired worker lease.
+    /// entry — ends in a process with no unit behind it.
     /// [`crate::deploy::service::requires_daemon_domain`] answers it from the
     /// registry declaration.
     pub daemon: Option<String>,

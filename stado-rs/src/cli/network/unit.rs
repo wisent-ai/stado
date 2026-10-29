@@ -1,5 +1,5 @@
-//! The node's own unit: a launchd job (the system domain on an always-on Mac
-//! with no graphical session) or a systemd user unit, running
+//! The node's own unit: a launchd job (the system domain on a Mac whose
+//! recorded console is headless) or a systemd user unit, running
 //! `stado network serve` from this binary. It is separate from the agent's
 //! unit on purpose: a host whose agent is broken stays reachable over the
 //! network that is how the agent gets repaired.
@@ -126,7 +126,7 @@ fn plan(target: &ComputeTarget) -> Result<(InstallPlan, PathBuf), CmdError> {
     let mut env = crate::deploy::local_install::unit::env::install_env(&home, "network", "")
         .map_err(|error| CmdError::declaration(error.to_string()))?;
     env.push(("HOME".to_string(), home.to_string_lossy().into_owned()));
-    let daemon = if crate::deploy::service::requires_daemon_domain(target) {
+    let daemon = if crate::deploy::service::requires_daemon_domain(target, &label(UNIT)) {
         Some(account(&home)?)
     } else {
         None

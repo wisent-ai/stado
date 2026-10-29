@@ -97,14 +97,14 @@ impl EnsureOutcome {
 /// path, which lets the remote prelude find an existing agent file before it
 /// falls back to this login's `LaunchAgents`.
 ///
-/// The distinction is a repair, not a preference. An always-on host that
-/// nobody logs into graphically runs its declared services only while their
-/// plists sit in `/Library/LaunchDaemons`; the same plist under
-/// `~/Library/LaunchAgents` there names a job launchd cannot keep alive,
-/// because the per-login domain it loads into exists solely inside sessions
-/// nobody opens. `force_daemon` is how the plan carries that host fact
+/// The distinction is a repair, not a preference. A Mac whose recorded
+/// console is headless runs its declared services where nobody answers the
+/// questions macOS asks a LaunchAgent, and with nobody logged in the
+/// per-login domain an agent loads into does not exist; a plist in
+/// `/Library/LaunchDaemons` is asked nothing and always loads.
+/// `force_daemon` is how the plan carries that host fact
 /// ([`requires_daemon_domain`]), and how `service ensure --as-daemon` carries
-/// it for a host whose declaration has not caught up yet.
+/// it for a host that records no headless console.
 pub fn ensure_unit_path(plan: &DeployPlan) -> String {
     if plan.force_daemon {
         format!(
