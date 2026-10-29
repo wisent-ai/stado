@@ -28,6 +28,13 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- **`placement evacuate --drop-release-targets` names why a release-controlled route stays:** a
+  product whose only target is the host being emptied was refused with `stado release policy
+  remove` alone, although its route stayed only because `--profile-fixed-routes` could not draft
+  its profile (a unit with no file, no probe), which the run kept to itself. The refusal now adds
+  `or move its route: it stays on <host> because --profile-fixed-routes could not draft its
+  profile: <the draft's cause>`.
+
 - **A role move with `--with-authority` and `placement evacuate --authority` reach the
   destination's own object API at its real port:** the address was the catalog's host process
   `--bind` and `--port` taken as written, and the catalog names the port only as

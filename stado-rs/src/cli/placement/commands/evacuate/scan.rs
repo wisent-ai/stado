@@ -101,7 +101,8 @@ pub(super) fn rolled_out_on(document: &Value, host: &str) -> Vec<String> {
 /// standby declares B a target of it before the drop. `drafted` is the
 /// fixed routes given a profile in a run that stands B by: a check only
 /// drafts them, so their services are counted here as the run will place
-/// them.
+/// them. A product whose route the draft refused stays on `from`, and its
+/// refusal says so with the draft's own cause, which is what moves it.
 pub(super) fn release_drops(
     document: &Value,
     from: &str,
@@ -137,9 +138,24 @@ pub(super) fn release_drops(
             .iter()
             .any(|run| *run == product.as_str() || Some(*run) == service);
         if !elsewhere && !gains_target {
-            refusals.push(format!(
-                "--drop-release-targets: {from} is the only target of {product}; stop releasing it by release control with stado release policy remove {product}"
-            ));
+            let refused = format!(
+                "--drop-release-targets: {from} is the only target of {product}; stop releasing it \
+                 by release control with stado release policy remove {product}"
+            );
+            let stays = drafted
+                .into_iter()
+                .flat_map(|profiled| profiled.stays.iter())
+                .find(|stay| {
+                    stay["service"] == product.as_str() || stay["service"].as_str() == service
+                });
+            refusals.push(match stays {
+                Some(stay) => format!(
+                    "{refused}, or move its route: it stays on {from} because \
+                     --profile-fixed-routes could not draft its profile: {}",
+                    crate::cli::reporting::optional_text(stay["refused"].as_str())
+                ),
+                None => refused,
+            });
         }
     }
     products
