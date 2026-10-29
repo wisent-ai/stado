@@ -19,6 +19,7 @@ pub use stado_wait::Cancellation;
 pub mod notifications;
 pub mod sync;
 
+use std::future::Future;
 use std::path::PathBuf;
 
 use sea_orm::{DatabaseConnection, SqlxMySqlConnector, SqlxPostgresConnector, SqlxSqliteConnector};
@@ -124,8 +125,8 @@ async fn connect_under(
 ) -> Result<DatabaseConnection, Error> {
     let found = resolve::credentials_under(database, cancellation).await?;
     match found.pooler_url.split_once("://").map(|(scheme, _)| scheme) {
-        Some("mysql") => return connect_mysql(database, found).await,
-        Some("sqlite") => return connect_sqlite(database, found).await,
+        Some("mysql") => return connect_mysql(database, found, cancellation).await,
+        Some("sqlite") => return connect_sqlite(database, found, cancellation).await,
         Some("postgres" | "postgresql") => {}
         scheme => {
             return Err(Error::new(
@@ -165,38 +166,52 @@ async fn connect_under(
     let what = format!("connect to {}", database.name);
     let place = format!("{}#session_url", found.item);
     let connecting = PgPoolOptions::new().connect_with(options);
-    let pool = match cancellation {
-        Some(cancellation) => {
-            match stado_wait::until_cancellable(
-                stado_wait::Kind::Database,
-                what,
-                place,
-                cancellation,
-                connecting,
+    let pool = open_pool(what, place, cancellation, connecting)
+        .await?
+        .map_err(|error| {
+            Error::new(
+                "connect",
+                format!(
+                    "connecting to {} through {}#session_url failed: {error}",
+                    database.name, found.item
+                ),
             )
-            .await
-            {
-                Some(connected) => connected,
-                None => return Err(Error::new("connect", stado_wait::CANCELLED)),
-            }
-        }
-        None => stado_wait::until(stado_wait::Kind::Database, what, place, connecting).await,
-    }
-    .map_err(|error| {
-        Error::new(
-            "connect",
-            format!(
-                "connecting to {} through {}#session_url failed: {error}",
-                database.name, found.item
-            ),
-        )
-    })?;
+        })?;
     Ok(SqlxPostgresConnector::from_sqlx_postgres_pool(pool))
+}
+
+/// Wait for one pool connect through the one wait mechanism, under the
+/// caller's cancellation when it gave one. A cancelled connect is dropped
+/// before it answers, and the refusal names the step and `czekanie
+/// odwolane`; every engine opens its pool here, so none escapes the
+/// cancellation `connect_cancellable` promises.
+async fn open_pool<T, E>(
+    what: String,
+    place: String,
+    cancellation: Option<&Cancellation>,
+    connecting: impl Future<Output = Result<T, E>>,
+) -> Result<Result<T, E>, Error>
+where
+    E: std::error::Error,
+{
+    let Some(cancellation) = cancellation else {
+        return Ok(stado_wait::until(stado_wait::Kind::Database, what, place, connecting).await);
+    };
+    stado_wait::until_cancellable(
+        stado_wait::Kind::Database,
+        what,
+        place,
+        cancellation,
+        connecting,
+    )
+    .await
+    .ok_or_else(|| Error::new("connect", stado_wait::CANCELLED))
 }
 
 async fn connect_mysql(
     database: &FleetDatabase,
     found: resolve::Credentials,
+    cancellation: Option<&Cancellation>,
 ) -> Result<DatabaseConnection, Error> {
     let options: MySqlConnectOptions = found.pooler_url.parse().map_err(|error| {
         Error::new(
@@ -207,13 +222,13 @@ async fn connect_mysql(
     let options = options
         .ssl_mode(MySqlSslMode::VerifyIdentity)
         .ssl_ca_from_pem(found.ca_certificate.into_bytes());
-    let pool = stado_wait::until(
-        stado_wait::Kind::Database,
+    let pool = open_pool(
         format!("connect to {}", database.name),
         format!("{}#pooler_url", found.item),
+        cancellation,
         MySqlPoolOptions::new().connect_with(options),
     )
-    .await
+    .await?
     .map_err(|error| {
         Error::new(
             "connect",
@@ -232,6 +247,7 @@ async fn connect_mysql(
 async fn connect_sqlite(
     database: &FleetDatabase,
     found: resolve::Credentials,
+    cancellation: Option<&Cancellation>,
 ) -> Result<DatabaseConnection, Error> {
     let options: SqliteConnectOptions = found.pooler_url.parse().map_err(|error| {
         Error::new(
@@ -240,13 +256,13 @@ async fn connect_sqlite(
         )
     })?;
     let file = options.get_filename().display().to_string();
-    let pool = stado_wait::until(
-        stado_wait::Kind::Database,
+    let pool = open_pool(
         format!("open {}", database.name),
-        file.as_str(),
+        file.clone(),
+        cancellation,
         SqlitePoolOptions::new().connect_with(options.create_if_missing(false)),
     )
-    .await
+    .await?
         .map_err(|error| {
             Error::new(
                 "connect",

@@ -30,3 +30,7 @@ The version bump gathers them into the release's own file and removes this one.
   depended on an outside network provider's control plane. The default is now `web-edge`, which
   publishes through the `stado web` declaration that owns the hostname on the fleet's own
   declared edge. `tailscale-funnel` is still accepted when it is named.
+- **The database client's cancellation reaches every engine's connect:** `connect_cancellable`
+  passed the caller's cancellation to the credential resolver and to the Postgres pool, but a
+  MySQL or SQLite pool connect still waited without it. Every engine's pool now opens through
+  one wait that honours the cancellation and refuses with the step and `czekanie odwolane`.
