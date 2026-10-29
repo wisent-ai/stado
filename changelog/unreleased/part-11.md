@@ -5,6 +5,39 @@ The version bump gathers them into the release's own file and removes this one.
 
 ## Unreleased
 
+### Added
+
+- **`stado change`, the submit queue, one per repository:** `stado change submit CHECKOUT
+  --commit SHA [--defect ID]...` queues a commit an agent made on any `main`; `stado change run
+  CHECKOUT [--host NAME]... [--integrated DIR]` takes the repository's queued candidates oldest
+  first, one at a time, writes each candidate's own commits again on the remote `main` (no working
+  tree or index of the checkout is touched), runs the product's declared gates on the result —
+  the locks, module declarations and `format` gates here, every `lint` and `test` gate of every
+  declared platform on that platform's hosts at once (a Cargo gate as `stado host cargo` runs it,
+  any other exactly as the manifest declares its argv, in the delivered tree), a `cargo test`
+  gate that selects no target cut into one shard per test target, each compiling action asked of
+  Oko as the work of the agent session that submitted the candidate (`oko admit --session`) —
+  answers a shard that already passed on the same tree from its action cache, classifies the
+  change's risk from the product's catalog `submit` declaration (criticality, review paths,
+  changed lines, whether a compiling gate checks it), has a high-risk change reviewed by Tama's
+  harsh review before it lands and a low-risk one after, queues the reviewer's repairs once as a
+  follow-up candidate (a follow-up's own repairs are named for its author, not queued again),
+  pushes to `main` as a fast-forward (a `main` that moved takes the candidate back to the rebase),
+  and records each defect repaired in Oko and, with `--integrated`, as one backlog line per
+  defect; a register write that is refused is kept on the candidate. A candidate the pass cannot
+  judge (the remote, the fleet or the harsh review does not answer) stays queued and the pass
+  exits non-zero with the cause; one whose gates Oko's admission does not admit (a ruling, a
+  closed defect) or does not answer for stays queued while the candidates behind it run, and the
+  pass then exits non-zero naming it; a later pass also takes a candidate a stopped pass left
+  running. A change of a product whose catalog record declares no `submit` is refused, naming
+  the declaration to add, and so is a high-risk candidate that names no `--defect`, since the
+  harsh review is scoped to one. A host that cannot run its shard is left out of the pass and the
+  shard given to the platform's other hosts. `stado change status|list|cancel` read and withdraw
+  candidates. Stado Desktop's Queue screen carries the same five operations. The catalog gains
+  the optional per-product `submit` declaration (`criticality: critical|standard`,
+  `low_risk_max_changed_lines`, `review_paths`); Stado and Oko declare themselves `critical`,
+  Trends `standard` (low risk up to 40 changed lines outside its manifests and workflows).
+
 ### Fixed
 
 - **`stado host cargo` compiles the revision it was given:** the delivered export carries its

@@ -8,6 +8,7 @@
 //! the checkout's Cargo target before the removal. Everything one run did is
 //! one receipt.
 
+pub(super) mod gate;
 mod script;
 mod source;
 mod volume;
@@ -22,6 +23,7 @@ use crate::targets::ComputeTarget;
 
 use super::{remove_run_directory, validate_arguments, validate_binary_name, RUN_AREA};
 use source::{artifact, compiled, own_package, source};
+pub use source::{Artifact, HostCargoReceipt};
 
 /// The Cargo subcommands a host runs for a revision: the ones a quality gate
 /// and a release need, each always `--locked`.
@@ -55,55 +57,6 @@ pub struct HostCargoRequest {
     pub operation: CargoOperation,
     pub binaries: Vec<String>,
     pub arguments: Vec<String>,
-}
-
-/// One binary a build brought back: where it now is, its size and digest.
-#[derive(Debug, Serialize)]
-pub struct Artifact {
-    pub binary: String,
-    pub path: PathBuf,
-    pub bytes: u64,
-    pub sha256: String,
-}
-
-/// Everything one run did, as `--json` prints it.
-#[derive(Debug, Serialize)]
-pub struct HostCargoReceipt {
-    pub schema: &'static str,
-    pub target: String,
-    pub checkout: PathBuf,
-    pub commit: String,
-    /// SHA-256 of the archive the commit was exported from, the
-    /// `WISENT_SOURCE_SHA256` the build was given beside the commit.
-    pub archive_sha256: String,
-    pub manifest: String,
-    pub operation: CargoOperation,
-    pub binaries: Vec<String>,
-    pub arguments: Vec<String>,
-    pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
-    pub artifacts: Vec<Artifact>,
-    /// Free bytes on the volume holding the host's build cache before and
-    /// after, from `df -P` there ([`volume`]).
-    pub free_bytes_before: Option<u64>,
-    pub free_bytes_after: Option<u64>,
-    pub free_bytes_after_error: Option<String>,
-    /// The run directory the revision was delivered into; removed before
-    /// the receipt is written.
-    pub run_directory: String,
-}
-
-impl HostCargoReceipt {
-    /// The volume's free space this run took, in GiB: what the two readings
-    /// differ by, other writers on the volume included.
-    pub fn consumed_gib(&self) -> Option<f64> {
-        let (Some(before), Some(after)) = (self.free_bytes_before, self.free_bytes_after) else {
-            return None;
-        };
-        let gib = crate::providers::local::host_memory::constants::GIB as f64;
-        Some((before as f64 - after as f64) / gib)
-    }
 }
 
 /// Arguments that would take source or output selection away from this
@@ -167,6 +120,18 @@ pub async fn run(
     runner: &Runner,
 ) -> Result<HostCargoReceipt, DeployError> {
     validate(request)?;
+    execute(target, request, None, runner).await
+}
+
+/// [`run`]'s export, delivery, script and removal. With `gate`, the script
+/// runs that declared quality gate's argv in the delivered tree's root in
+/// place of the Cargo operation ([`gate::run`]).
+async fn execute(
+    target: &ComputeTarget,
+    request: &HostCargoRequest,
+    gate: Option<(&[String], &str, &str)>,
+    runner: &Runner,
+) -> Result<HostCargoReceipt, DeployError> {
     let (checkout, commit, manifest) = source(&request.manifest_path, &request.revision).await?;
     let before = volume::admit(target, runner).await?;
     let name = checkout
@@ -174,21 +139,35 @@ pub async fn run(
         .map(|name| name.to_string_lossy().into_owned())
         .ok_or_else(|| refused(format!("{} has no directory name", checkout.display())))?;
     let run_id = uuid::Uuid::new_v4().to_string();
-    // The Cargo target of the manifest's own crate, which every Cargo
-    // checkout ignores: the export lives there until it is delivered, and
-    // the binaries a build brings back stay there.
-    let crate_target = request
-        .manifest_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("target")
-        .join("host-cargo");
-    let export = crate_target.join(format!("export-{run_id}"));
+    // Where the export lives until it is delivered. A Cargo operation's is
+    // the Cargo target of the manifest's own crate, which every Cargo
+    // checkout ignores and where the binaries a build brings back stay. A
+    // gate's manifest is the release manifest, beside which no ignored
+    // target need exist, so its export goes to the checkout's build area
+    // under Stado's home, as a quality check's does, never in the checkout.
+    let area = match gate {
+        None => request
+            .manifest_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("target")
+            .join("host-cargo"),
+        Some(_) => stado_product::common::runs::checkout_area(
+            &crate::config_file::expand_tilde("~"),
+            &checkout,
+        )
+        .map_err(|error| DeployError(format!("{error:#}")).stating(FailureCode::Config))?
+        .join("host-gate"),
+    };
+    let export = area.join(format!("export-{run_id}"));
     let archive_sha256 = stado_product::export_committed_source(&checkout, &commit, &export)
         .map_err(|error| DeployError(format!("{error:#}")).stating(FailureCode::Config))?;
     // The package the run builds, read from the export the host gets: a
     // Cargo run that passes without compiling it judged another run's output.
-    let package = own_package(&export.join(&manifest), &request.arguments);
+    let package = gate
+        .is_none()
+        .then(|| own_package(&export.join(&manifest), &request.arguments))
+        .flatten();
     let destination = format!("{RUN_AREA}/{run_id}/{name}");
     let delivered = host_delivery::deliver_host(
         &target.name,
@@ -206,20 +185,25 @@ pub async fn run(
     let home = host_channel::remote_home(target, runner).await?;
     let run_directory = format!("{home}/{RUN_AREA}/{run_id}");
     let output = format!("{run_directory}/out");
-    let script = script::script(
-        target,
-        &format!("{home}/{destination}/{manifest}"),
-        &output,
-        (&commit, &archive_sha256),
-        request.operation,
-        &request.binaries,
-        &request.arguments,
-    )?;
+    let manifest_path = format!("{home}/{destination}/{manifest}");
+    let source_contract = (commit.as_str(), archive_sha256.as_str());
+    let script = match gate {
+        Some(declared) => script::gate(target, &manifest_path, &output, source_contract, declared)?,
+        None => script::script(
+            target,
+            &manifest_path,
+            &output,
+            source_contract,
+            request.operation,
+            &request.binaries,
+            &request.arguments,
+        )?,
+    };
     let ran = host_channel::run_script(target, &script, runner).await;
     let mut artifacts = Vec::new();
     let pulled = match &ran {
         Ok(result) if result.succeeded() && request.operation == CargoOperation::Build => {
-            let local = crate_target.join(&commit);
+            let local = area.join(&commit);
             let synced = host_delivery::sync_directory(
                 target,
                 &output,

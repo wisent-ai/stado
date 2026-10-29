@@ -15,6 +15,7 @@ enum NativeOperationCatalog {
         ("release-source", NativeReleaseSourceOperations.all),
         ("products", NativeProductOperations.all),
         ("queue", NativeQueueOperations.all),
+        ("change-queue", NativeChangeQueueOperations.all),
         ("credentials", NativeCredentialOperations.all),
         ("registry", NativeRegistryOperations.all),
         ("operator-contact", NativeOperatorContactOperations.all),

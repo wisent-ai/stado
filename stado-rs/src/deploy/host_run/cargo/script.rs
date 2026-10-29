@@ -28,11 +28,11 @@ pub(super) fn cache_root(target: &ComputeTarget) -> String {
     }
 }
 
-/// The whole script. `manifest_path` is the absolute manifest inside the run
-/// directory, `output` the run directory's `out` the built binaries are
-/// copied into, `source` the commit and the SHA-256 of the archive it was
-/// exported from; none of them is caller text, all were built by
-/// [`super::run`].
+/// The whole script of a Cargo operation. `manifest_path` is the absolute
+/// manifest inside the run directory, `output` the run directory's `out` the
+/// built binaries are copied into, `source` the commit and the SHA-256 of the
+/// archive it was exported from; none of them is caller text, all were built
+/// by [`super::run`].
 pub(super) fn script(
     target: &ComputeTarget,
     manifest_path: &str,
@@ -41,6 +41,53 @@ pub(super) fn script(
     operation: CargoOperation,
     binaries: &[String],
     arguments: &[String],
+) -> Result<String, DeployError> {
+    let mut script = prelude(target, manifest_path, output, source)?;
+    cargo(&mut script, output, operation, binaries, arguments);
+    Ok(script)
+}
+
+/// The whole script of one declared quality gate: the same prelude, then
+/// the release worker's contract a product's gate script reads
+/// (`WISENT_SOURCE_DIR` the delivered tree, `WISENT_OUTPUT_DIR` inside it,
+/// an empty `WISENT_INPUTS_DIR` in the run, `WISENT_VERSION` and
+/// `WISENT_PLATFORM` from `contract`), then the gate's argv exactly as the
+/// revision's release manifest declares it, run in the delivered tree's
+/// root (the manifest's directory).
+pub(super) fn gate(
+    target: &ComputeTarget,
+    manifest_path: &str,
+    output: &str,
+    source: (&str, &str),
+    (argv, version, platform): (&[String], &str, &str),
+) -> Result<String, DeployError> {
+    let mut script = prelude(target, manifest_path, output, source)?;
+    let inputs = format!(
+        "{}/inputs",
+        output.rsplit_once('/').map_or(output, |(run, _)| run)
+    );
+    script.push_str(&format!(
+        "export WISENT_SOURCE_DIR=\"$PWD\" WISENT_OUTPUT_DIR=\"$PWD/.wisent-output/quality-gate\" \
+         WISENT_INPUTS_DIR={} WISENT_VERSION={} WISENT_PLATFORM={}\n\
+         mkdir -p \"$WISENT_OUTPUT_DIR\" \"$WISENT_INPUTS_DIR\" || exit\n",
+        shlex_quote(&inputs),
+        shlex_quote(version),
+        shlex_quote(platform)
+    ));
+    let words: Vec<String> = argv.iter().map(|word| shlex_quote(word)).collect();
+    script.push_str(&format!("{}\nexit \"$?\"\n", words.join(" ")));
+    Ok(script)
+}
+
+/// What every run does before its work: the confined manifest, the source
+/// contract, a Stado-approved Cargo on `PATH`, the declared compiler cache,
+/// the host's shared target, every delivered file at the delivery's time,
+/// and the manifest's directory as the working directory.
+fn prelude(
+    target: &ComputeTarget,
+    manifest_path: &str,
+    output: &str,
+    source: (&str, &str),
 ) -> Result<String, DeployError> {
     let mut script = String::from("set -uo pipefail\numask 077\n");
     script.push_str(&confined_file_prelude(manifest_path, "-f", "manifest"));
@@ -110,6 +157,17 @@ pub(super) fn script(
     // host's default toolchain, whatever `rust-toolchain.toml` the revision
     // pins. Starting in the manifest's directory makes the pin the one used.
     script.push_str("cd \"${path%/*}\" || exit\n");
+    Ok(script)
+}
+
+/// The Cargo operation and the copy of a build's binaries into `output`.
+fn cargo(
+    script: &mut String,
+    output: &str,
+    operation: CargoOperation,
+    binaries: &[String],
+    arguments: &[String],
+) {
     if operation == CargoOperation::Clippy {
         // A pinned toolchain installed with the minimal profile carries no
         // Clippy; the component is added to that toolchain, never elsewhere.
@@ -148,5 +206,4 @@ pub(super) fn script(
         script.push_str("fi\n");
     }
     script.push_str("exit \"$status\"\n");
-    Ok(script)
 }

@@ -17,7 +17,7 @@
 //! declared, the pass pushes `main` of every checkout through the gates just
 //! installed and keeps each outcome. One pass runs at a time.
 
-pub(in crate::cli::ci) mod oko;
+pub(crate) mod oko;
 pub mod plan;
 pub mod state;
 mod status;

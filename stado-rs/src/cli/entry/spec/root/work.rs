@@ -62,6 +62,11 @@ pub(crate) enum WorkCommands {
     /// Rerun or watch one job.
     #[command(subcommand)]
     Job(job::JobCommands),
+
+    /// The submit queue, one per repository: queue a commit to land on its
+    /// main, run the queue, read and withdraw candidates.
+    #[command(subcommand)]
+    Change(crate::cli::change::ChangeCommands),
 }
 
 /// Worker options of `stado serve --worker`.

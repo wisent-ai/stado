@@ -1,13 +1,64 @@
 //! This machine's side of one run: the checkout, commit and manifest a
-//! request names, and the binaries a build brought back.
+//! request names, the binaries a build brought back, and the receipt of
+//! everything one run did.
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::deploy::DeployError;
 
-use super::{refused, Artifact};
+use super::{refused, CargoOperation};
+
+/// One binary a build brought back: where it now is, its size and digest.
+#[derive(Debug, Serialize)]
+pub struct Artifact {
+    pub binary: String,
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+/// Everything one run did, as `--json` prints it.
+#[derive(Debug, Serialize)]
+pub struct HostCargoReceipt {
+    pub schema: &'static str,
+    pub target: String,
+    pub checkout: PathBuf,
+    pub commit: String,
+    /// SHA-256 of the archive the commit was exported from, the
+    /// `WISENT_SOURCE_SHA256` the build was given beside the commit.
+    pub archive_sha256: String,
+    pub manifest: String,
+    pub operation: CargoOperation,
+    pub binaries: Vec<String>,
+    pub arguments: Vec<String>,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub artifacts: Vec<Artifact>,
+    /// Free bytes on the volume holding the host's build cache before and
+    /// after, from `df -P` there (`volume`).
+    pub free_bytes_before: Option<u64>,
+    pub free_bytes_after: Option<u64>,
+    pub free_bytes_after_error: Option<String>,
+    /// The run directory the revision was delivered into; removed before
+    /// the receipt is written.
+    pub run_directory: String,
+}
+
+impl HostCargoReceipt {
+    /// The volume's free space this run took, in GiB: what the two readings
+    /// differ by, other writers on the volume included.
+    pub fn consumed_gib(&self) -> Option<f64> {
+        let (Some(before), Some(after)) = (self.free_bytes_before, self.free_bytes_after) else {
+            return None;
+        };
+        let gib = crate::providers::local::host_memory::constants::GIB as f64;
+        Some((before as f64 - after as f64) / gib)
+    }
+}
 
 async fn git(directory: &Path, arguments: &[&str]) -> Result<String, DeployError> {
     let output = crate::wait::output_async(
@@ -33,17 +84,17 @@ async fn git(directory: &Path, arguments: &[&str]) -> Result<String, DeployError
 }
 
 /// The checkout holding `manifest`, the full commit `revision` names in it,
-/// and the manifest's path relative to the checkout.
+/// and the manifest's path relative to the checkout. The manifest is read
+/// from the commit, never from the working tree: a revision that adds or
+/// moves its `Cargo.toml` names a file the working tree may not hold, so
+/// only the nearest directory of the path that exists is resolved on disk
+/// (it finds the checkout), and the commit must hold the manifest itself.
 pub(super) async fn source(
     manifest: &Path,
     revision: &str,
 ) -> Result<(PathBuf, String, String), DeployError> {
-    let manifest = std::fs::canonicalize(manifest).map_err(DeployError::io(format!(
-        "the manifest {} cannot be read",
-        manifest.display()
-    )))?;
-    let directory = manifest.parent().unwrap_or(Path::new("/"));
-    let checkout = PathBuf::from(git(directory, &["rev-parse", "--show-toplevel"]).await?);
+    let (existing, rest) = existing_ancestor(manifest)?;
+    let checkout = PathBuf::from(git(&existing, &["rev-parse", "--show-toplevel"]).await?);
     let commit = git(
         &checkout,
         &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
@@ -55,7 +106,8 @@ pub(super) async fn source(
             checkout.display()
         ))
     })?;
-    let relative = manifest
+    let relative = existing
+        .join(rest)
         .strip_prefix(&checkout)
         .map_err(|_| {
             refused(format!(
@@ -66,7 +118,40 @@ pub(super) async fn source(
         })?
         .to_string_lossy()
         .into_owned();
+    git(
+        &checkout,
+        &["cat-file", "-e", &format!("{commit}:{relative}")],
+    )
+    .await
+    .map_err(|_| refused(format!("{commit} holds no {relative} to run Cargo with")))?;
     Ok((checkout, commit, relative))
+}
+
+/// The nearest ancestor of `path` that exists, resolved, and the part of
+/// `path` below it.
+fn existing_ancestor(path: &Path) -> Result<(PathBuf, PathBuf), DeployError> {
+    let mut rest = PathBuf::new();
+    let mut at = path;
+    loop {
+        match std::fs::canonicalize(at) {
+            Ok(resolved) if resolved.is_dir() => return Ok((resolved, rest)),
+            Ok(resolved) => {
+                let parent = resolved.parent().unwrap_or(Path::new("/")).to_path_buf();
+                let name = resolved.file_name().map_or(PathBuf::new(), PathBuf::from);
+                return Ok((parent, name.join(rest)));
+            }
+            Err(_) => {
+                let Some(name) = at.file_name() else {
+                    return Err(refused(format!(
+                        "no directory of {} exists on this machine to find its checkout from",
+                        path.display()
+                    )));
+                };
+                rest = PathBuf::from(name).join(rest);
+                at = at.parent().unwrap_or(Path::new(""));
+            }
+        }
+    }
 }
 
 /// One binary a build pulled into `directory`, with its size and digest.

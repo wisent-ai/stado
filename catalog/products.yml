@@ -550,6 +550,8 @@ products:
   family: wisent
   owner_repository: wisent-ai/stado
   description: Fleet control plane for queues, jobs, placement, leases, hosts, declared services, and the Wisent product catalog with every product's installation and signing.
+  submit:
+    criticality: critical
   roadmap:
   - title: Add AWS managed autoscaling
     status: planned
@@ -1199,6 +1201,8 @@ products:
   family: wisent
   owner_repository: wisent-ai/oko
   description: Catalogue and operational view of agent sessions and goals.
+  submit:
+    criticality: critical
   roadmap:
   - title: Ship the evidence-locked daily digest
     status: planned
@@ -2445,6 +2449,14 @@ products:
   family: wisent
   owner_repository: wisent-ai/trends
   description: Watches topics across public sources and reports which ones are rising, with the observations behind each verdict.
+  submit:
+    criticality: standard
+    low_risk_max_changed_lines: 40
+    review_paths:
+    - .wisent-release.json
+    - .github/
+    - Cargo.toml
+    - Cargo.lock
   roadmap: []
   integrations: []
   evidence:

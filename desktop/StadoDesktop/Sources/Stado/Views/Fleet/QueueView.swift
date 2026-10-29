@@ -50,6 +50,13 @@ struct QueueView: View {
                     operations: NativeQueueOperations.all)
                     .disabled(!fleetStore.isConfigured)
                     .padding(WisentDesign.Space.x4)
+                // The submit queue: a commit queued to land on its
+                // repository's main, a pass of that queue, and each
+                // candidate's verdict — the same `stado change` commands.
+                NativeCapabilityActions(host: scope, fleet: fleetStore,
+                    operations: NativeChangeQueueOperations.all)
+                    .disabled(!fleetStore.isConfigured)
+                    .padding(.horizontal, WisentDesign.Space.x4)
 
                 if let snapshot = store.snapshot {
                     zones(snapshot)

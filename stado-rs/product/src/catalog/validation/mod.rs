@@ -14,6 +14,7 @@ use std::collections::HashSet;
 mod public_status;
 mod roadmap;
 mod service;
+pub mod submit;
 
 /// The field parses as `T`, or the refusal names the field and the word.
 fn choice<'a, T: Deserialize<'a>>(value: &'a Value, field: &str) -> Result<T> {
@@ -209,6 +210,7 @@ pub fn validate(document: &Value) -> Result<()> {
         if let Some(checks) = product.get("public_status") {
             public_status::validate(id, checks)?;
         }
+        submit::validate(id, product)?;
     }
     for (id, target) in targets {
         if !ids.contains(target) {

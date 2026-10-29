@@ -28,6 +28,10 @@ use crate::cli::CmdError;
 
 use crate::deploy::host_exec::{installed_program, OKO_CLI, TAMA_CLI};
 
+mod asked;
+pub use asked::refusal_as;
+use asked::scope;
+
 /// The action class a ruling constrains that compiling a product is.
 pub const BUILD: &str = "build";
 /// The action class a ruling constrains that publishing a release is.
@@ -140,43 +144,15 @@ pub async fn refusal(action: &str, product: Option<&str>, purposes: &[&str]) -> 
     if admitted_above(&variable).await {
         return Ok(());
     }
-    let scope = match product {
-        Some(product) => format!("{action} of {product}"),
-        None => action.to_string(),
-    };
     // A consent the operator gave one session covers that session's work
     // only, so Oko is told which session runs this one.
     let session = calling_session().await.map_err(|cause| {
-        format!("{scope} is not run: the agent session it runs under could not be read ({cause})")
+        format!(
+            "{} is not run: the agent session it runs under could not be read ({cause})",
+            scope(action, product)
+        )
     })?;
-    let mut words = vec!["admit", action];
-    if let Some(product) = product {
-        words.extend(["--product", product]);
-    }
-    for purpose in purposes {
-        words.extend(["--purpose", *purpose]);
-    }
-    if let Some(session) = &session {
-        words.extend(["--session", session.as_str()]);
-    }
-    words.push("--json");
-    let answer = match decision(&words).await {
-        Decision::Allowed(reason) => reason,
-        Decision::Unanswered(Unanswered::Absent(cause)) => {
-            format!("no Oko is installed on this machine ({cause}), so no ruling governs {scope}")
-        }
-        Decision::Refused(reason) => {
-            return Err(format!(
-                "{scope} is not run: the operator's rulings do not allow it now ({reason})"
-            ))
-        }
-        Decision::Unanswered(Unanswered::Unread(cause)) => {
-            return Err(format!(
-                "{scope} is not run: Oko gave no admission decision, so whether the operator's \
-                 rulings allow it was never read ({cause})"
-            ))
-        }
-    };
+    let answer = refusal_as(action, product, purposes, session.as_deref()).await?;
     // Set before the operation starts anything, so every process it runs
     // inherits it (module doc).
     std::env::set_var(variable, format!("{} {}", std::process::id(), answer));
@@ -208,7 +184,7 @@ pub(crate) enum Unanswered {
 /// session holds this process or any of its ancestors (a command the operator
 /// runs himself), and none on a machine with no Tama installed, which records
 /// no session at all.
-async fn calling_session() -> Result<Option<String>, String> {
+pub(crate) async fn calling_session() -> Result<Option<String>, String> {
     let words = ["sessions", "self", "--json"];
     match installed_json(TAMA_CLI, &words).await {
         Ok(answer) => match &answer["session"] {

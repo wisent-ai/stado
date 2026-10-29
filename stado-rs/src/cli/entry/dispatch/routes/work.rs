@@ -16,6 +16,7 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
             terminate,
         } => cancel::run(job_id.as_deref(), queued, terminate).await,
         WorkCommands::Job(sub) => job::dispatch(sub).await,
+        WorkCommands::Change(sub) => crate::cli::change::dispatch(sub).await,
         WorkCommands::Results { job_id, output_dir } => results::run(&job_id, &output_dir).await,
         WorkCommands::Quality(sub) => match sub {
             QualityCommands::Parse { argv } => crate::cli::quality::parse(&argv),
