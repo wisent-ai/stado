@@ -32,6 +32,7 @@ pub mod directory;
 pub mod dns;
 pub mod doctor;
 pub mod entry;
+pub mod errors;
 pub mod fleet;
 pub mod host;
 pub mod hosts;

@@ -6065,7 +6065,7 @@ dependencies = [
 [[package]]
 name = "wisent-errors"
 version = "1.0.0"
-source = "git+https://github.com/wisent-ai/wisent-errors?rev=dc809f44cce81ac1b9b325f55fd9b2f3127930e9#dc809f44cce81ac1b9b325f55fd9b2f3127930e9"
+source = "git+https://github.com/wisent-ai/wisent-errors?rev=48b951d024b37972e53e60f98c2582e2f65fb92a#48b951d024b37972e53e60f98c2582e2f65fb92a"
 
 [[package]]
 name = "wit-bindgen"

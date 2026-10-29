@@ -94,6 +94,7 @@ pub async fn main_entry() -> i32 {
             } else {
                 None
             };
+            let declared = err.declared.as_deref();
             if err.json {
                 // The same sorted-keys rendering every `--json` command on
                 // this CLI already prints, so a caller parses one shape.
@@ -108,6 +109,8 @@ pub async fn main_entry() -> i32 {
                         "severity": code.severity().as_str(),
                         "summary": code.operator_summary(),
                         "message": message,
+                        "cause": declared.map(|declared| declared.cause),
+                        "remedy": declared.map(|declared| declared.remedy.as_str()),
                         "help": err.help,
                         "host_unit": host_unit,
                         "details": err.details,
@@ -115,6 +118,9 @@ pub async fn main_entry() -> i32 {
                 );
             } else {
                 eprintln!("Error: {message}");
+                if let Some(declared) = declared {
+                    eprintln!("fix: {}", declared.remedy);
+                }
                 if let Some(help) = err.help.as_deref() {
                     eprintln!("{help}");
                 }
@@ -122,6 +128,13 @@ pub async fn main_entry() -> i32 {
                     eprintln!("{host_unit}");
                 }
                 eprintln!("{}", crate::primitives::failure::operator_line(code));
+                if let Some(declared) = declared {
+                    let operation = point.strip_prefix("cli.").unwrap_or(point.as_str());
+                    eprintln!(
+                        "cause: {}; `stado errors show {operation}` lists every cause of this command",
+                        declared.cause
+                    );
+                }
             }
             crate::primitives::failure::log_failure(&point, &service, code, message);
             // Usage errors keep their own code: no amount of retrying fixes

@@ -43,6 +43,19 @@ pub struct CmdError {
     /// same findings for a reader. Boxed: every `Result` of the CLI carries
     /// this type, and the findings are rare.
     pub details: Option<Box<serde_json::Value>>,
+    /// The declared cause this failure is, when the operation that raised it
+    /// declares how it fails (`stado errors show <operation>`): the cause's
+    /// id and what fixes it, printed as `fix:` and carried as `cause` and
+    /// `remedy` in the `--json` envelope. Boxed for the same reason as
+    /// `details`.
+    pub declared: Option<Box<Declared>>,
+}
+
+/// The declared cause a failure is, and its fix with the values filled in.
+#[derive(Debug)]
+pub struct Declared {
+    pub cause: &'static str,
+    pub remedy: String,
 }
 
 /// click `ClickException`'s exit code: "it ran and failed", the C library's
@@ -57,6 +70,24 @@ impl CmdError {
         Self {
             message: Some(msg.into()),
             code: CLICK_ERROR_CODE,
+            ..Self::default()
+        }
+    }
+
+    /// One declared cause of an operation's failure catalogue, raised: the
+    /// sentence is what failed, why and the state observed, the fix travels
+    /// beside it, and the code and exit status are the ones the catalogue
+    /// declares, so the refusal, `stado errors show` and the documentation
+    /// cannot disagree.
+    pub fn declared(cause: &'static wisent_errors::Cause, values: &[(&str, &str)]) -> Self {
+        Self {
+            message: Some(cause.sentence(values)),
+            code: cause.exit_code(CLICK_ERROR_CODE),
+            failure: Some(cause.code),
+            declared: Some(Box::new(Declared {
+                cause: cause.id,
+                remedy: cause.fix(values),
+            })),
             ..Self::default()
         }
     }

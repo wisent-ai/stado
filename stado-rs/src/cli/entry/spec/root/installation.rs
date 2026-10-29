@@ -37,6 +37,14 @@ pub(crate) enum InstallationCommands {
         action: Option<CapabilityAction>,
     },
 
+    /// Every way an operation can fail, as the operation declares it: `list`
+    /// the operations with a failure catalogue, `show` one operation's causes
+    /// (what failed, why, the state shown, the fix, the code and exit status,
+    /// the test), `check` the catalogues and the source for generic error
+    /// messages.
+    #[command(subcommand)]
+    Errors(crate::cli::errors::ErrorsCommands),
+
     /// One operator snapshot: jobs, active workers, quota, budgets, burn and credits.
     Overview {
         /// Emit the complete machine-readable snapshot.

@@ -28,6 +28,7 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
                 capabilities::select(&family, &order)
             }
         },
+        InstallationCommands::Errors(command) => crate::cli::errors::dispatch(command),
         InstallationCommands::Overview { json } => overview::run(json).await,
         InstallationCommands::BlastRadius(args) => blast_radius::run(&args).await,
         InstallationCommands::Resources(command) => resources::dispatch(command).await,

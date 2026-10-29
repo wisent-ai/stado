@@ -1,0 +1,23 @@
+{
+  "stado-rs/src/cli/resources/executors/gcp/mod.rs": {
+    "operation failed": 1
+  },
+  "stado-rs/src/cli/workload/runners/weles/browser.rs": {
+    "did not succeed": 1
+  },
+  "stado-rs/src/credential_store/write.rs": {
+    "internal error": 1
+  },
+  "stado-rs/src/deploy/inference/process/mod.rs": {
+    "operation failed": 1
+  },
+  "stado-rs/src/deploy/inference/routes.rs": {
+    "operation failed": 1
+  },
+  "stado-rs/src/deploy/inference/support.rs": {
+    "operation failed": 1
+  },
+  "stado-rs/src/deploy/stream/mod.rs": {
+    "operation failed": 1
+  }
+}
