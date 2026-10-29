@@ -35,14 +35,94 @@ fn account(home: &Path) -> Result<String, CmdError> {
         })
 }
 
+/// The node's own copy of Stado, which its unit runs. A Stado install
+/// replaces `~/.stado/bin/stado`; the node keeps running this copy, so macOS
+/// keeps judging the node by the code identity it already decided Local
+/// Network for, and only `network up` places a new one.
+fn pinned_program(home: &Path) -> PathBuf {
+    home.join(".stado").join("libexec").join("stado-network")
+}
+
+/// What placing this binary as the node's program does to the code identity
+/// macOS decides Local Network by (its designated requirement).
+pub(super) enum Identity {
+    /// No node program is placed yet: macOS has never judged one here.
+    Fresh,
+    /// The placed program and this binary carry the same identity.
+    Same,
+    /// The identity changes from the first to the second.
+    Changed(String, String),
+}
+
+/// The designated requirement macOS keeps a decision under, or the
+/// signature's state when it has none worth keeping one under.
+fn requirement(program: &Path) -> Result<String, CmdError> {
+    let report = stado_product::inspect_signature(program).map_err(|error| {
+        CmdError::declaration(format!(
+            "the signature of {} cannot be read: {error:#}",
+            program.display()
+        ))
+    })?;
+    Ok(match report["requirement"].as_str() {
+        Some(requirement) => requirement.to_string(),
+        None => format!("a signature in state {}", report["state"]),
+    })
+}
+
+/// What placing this binary as the node's program changes.
+pub(super) fn identity_change() -> Result<Identity, CmdError> {
+    let placed = pinned_program(&home()?);
+    if !crate::primitives::presence::present(&placed)
+        .map_err(|error| CmdError::declaration(format!("{}: {error}", placed.display())))?
+    {
+        return Ok(Identity::Fresh);
+    }
+    let incoming = std::env::current_exe().map_err(|error| {
+        CmdError::declaration(format!(
+            "this binary cannot name its own path to compare with the node's: {error}"
+        ))
+    })?;
+    let (before, after) = (requirement(&placed)?, requirement(&incoming)?);
+    Ok(if before == after {
+        Identity::Same
+    } else {
+        Identity::Changed(before, after)
+    })
+}
+
+/// Place this binary as the node's program: staged beside it, then renamed
+/// over it, so a running node keeps the image it started from.
+fn place(home: &Path) -> Result<PathBuf, CmdError> {
+    let placed = pinned_program(home);
+    let incoming = std::env::current_exe().map_err(|error| {
+        CmdError::declaration(format!(
+            "this binary cannot name its own path for the node to run: {error}"
+        ))
+    })?;
+    let failed = |error: std::io::Error| {
+        CmdError::click(format!(
+            "the node's program {} could not be placed: {error}",
+            placed.display()
+        ))
+        .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+    };
+    if let Some(directory) = placed.parent() {
+        std::fs::create_dir_all(directory).map_err(failed)?;
+    }
+    let staged = placed.with_extension("incoming");
+    std::fs::copy(&incoming, &staged).map_err(failed)?;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "places a verified program over the node's, not a document"
+    )]
+    std::fs::rename(&staged, &placed).map_err(failed)?;
+    Ok(placed)
+}
+
 fn plan(target: &ComputeTarget) -> Result<(InstallPlan, PathBuf), CmdError> {
     let home = home()?;
     let os = LocalOs::detect().map_err(|error| CmdError::refused(error.to_string()))?;
-    let program = std::env::current_exe().map_err(|error| {
-        CmdError::declaration(format!(
-            "this binary cannot name its own path for the unit to run: {error}"
-        ))
-    })?;
+    let program = pinned_program(&home);
     let mut env = crate::deploy::local_install::unit::env::install_env(&home, "network", "")
         .map_err(|error| CmdError::declaration(error.to_string()))?;
     env.push(("HOME".to_string(), home.to_string_lossy().into_owned()));
@@ -68,9 +148,11 @@ fn plan(target: &ComputeTarget) -> Result<(InstallPlan, PathBuf), CmdError> {
     Ok((plan, home))
 }
 
-/// Write and load the unit, restarting a node already running.
+/// Place this binary as the node's program, then write and load the unit,
+/// restarting a node already running.
 pub(super) async fn install(target: &ComputeTarget) -> Result<String, CmdError> {
     let (plan, home) = plan(target)?;
+    place(&home)?;
     execute_plan(
         &plan,
         &home,
@@ -147,6 +229,15 @@ pub(super) async fn remove(target: &ComputeTarget) -> Result<String, CmdError> {
         return Err(CmdError::unreachable(format!(
             "the network node's unit {path_text} is still there after removal"
         )));
+    }
+    let placed = pinned_program(&home);
+    if let Err(error) = std::fs::remove_file(&placed) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(CmdError::click(format!(
+                "the node's program {} could not be removed: {error}",
+                placed.display()
+            )));
+        }
     }
     Ok(path_text)
 }

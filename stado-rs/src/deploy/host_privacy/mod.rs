@@ -10,7 +10,10 @@
 //! shown to the person at the keyboard (`AUTHREQ_PROMPTING`). The host joins
 //! the four by message id and sends back only the requests whose accessing
 //! or responsible program is the one asked about, so a day of every
-//! program's requests never crosses the connection.
+//! program's requests never crosses the connection. Local Network, which
+//! macOS decides outside TCC, is read by [`local_network`].
+
+pub mod local_network;
 
 use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::targets::ComputeTarget;

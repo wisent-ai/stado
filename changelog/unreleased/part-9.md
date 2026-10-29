@@ -39,3 +39,15 @@ The version bump gathers them into the release's own file and removes this one.
   program that is not Developer ID or Apple Development signed is refused, naming its signature
   state and `stado product install NAME --source-commit <commit on origin/main>`, and the
   installed program stays.
+
+- **The network node keeps the code identity macOS decided Local Network for:** its unit runs its
+  own copy of Stado, `~/.stado/libexec/stado-network`, which only `stado network up` places, so a
+  Stado install or a background restart of the node never makes macOS ask "find devices on your
+  local network" again. `network up` says before placing the copy which question macOS will ask
+  and why, and run with no terminal it refuses to change the identity of a node already placed,
+  naming `stado network up` at that Mac. `network down` removes the copy with the unit.
+- **`targets[].privacy_grants` declares Local Network** (`"folder": "local_network"`), and
+  `stado host privacy TARGET --since WINDOW` prints each such grant `granted`, `denied`, `pending`
+  or `not measured` from what macOS's `nehelper` logged for the program's code identifier;
+  `--json` carries the decisions under `local_network`. Stado Desktop's grant form offers Local
+  Network.

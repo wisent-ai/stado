@@ -1,11 +1,12 @@
-//! The protected folders a host's programs must be allowed to read: the
-//! registry key `targets[].privacy_grants`.
+//! The privacy decisions a host's programs need from macOS: the registry key
+//! `targets[].privacy_grants`.
 //!
 //! macOS decides per program whether it may open Documents, Desktop and
-//! Downloads, and keeps that decision until it is changed in System Settings.
-//! The decision itself is the person's at the keyboard (or a device-management
+//! Downloads, and whether it may reach devices on the local network, and
+//! keeps each decision until it is changed in System Settings. The decision
+//! itself is the person's at the keyboard (or a device-management
 //! profile's); what the fleet owns is the statement of which program needs
-//! which folder and why, so a host's measured access is judged against a
+//! which decision and why, so a host's measured access is judged against a
 //! declaration instead of against whatever was clicked last.
 
 use crate::targets::*;
@@ -20,14 +21,29 @@ pub const PRIVACY_FOLDERS: &[(&str, &str)] = &[
     ("downloads", "Downloads"),
 ];
 
-/// One declared grant: PROGRAM must be allowed to read FOLDER, for REASON.
+/// The declaration key of Local Network: reaching devices on the local
+/// network and answering their discovery (mDNS), which Stado's network node
+/// does. It is no folder, so no walk opens it and no beacon reads it; the
+/// host's log says what macOS decided (`stado host privacy --since`).
+pub const LOCAL_NETWORK: (&str, &str) = ("local_network", "Local Network");
+
+/// Every key a grant may declare: the folders, then Local Network.
+pub fn privacy_keys() -> impl Iterator<Item = (&'static str, &'static str)> {
+    PRIVACY_FOLDERS
+        .iter()
+        .copied()
+        .chain(std::iter::once(LOCAL_NETWORK))
+}
+
+/// One declared grant: PROGRAM must be allowed FOLDER (a protected folder,
+/// or Local Network), for REASON.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivacyGrant {
     /// The executable macOS judges: absolute, or under `~/` (the host user's
     /// home).
     pub program: String,
-    /// One of the [`PRIVACY_FOLDERS`] keys.
+    /// One of the [`privacy_keys`].
     pub folder: String,
     pub reason: String,
 }
@@ -50,8 +66,8 @@ impl PrivacyGrant {
                 "must be an executable's absolute path or a path under ~/".to_string(),
             ));
         }
-        if !PRIVACY_FOLDERS.iter().any(|(key, _)| *key == self.folder) {
-            let known: Vec<&str> = PRIVACY_FOLDERS.iter().map(|(key, _)| *key).collect();
+        if !privacy_keys().any(|(key, _)| key == self.folder) {
+            let known: Vec<&str> = privacy_keys().map(|(key, _)| key).collect();
             return Some(("folder", format!("must be one of {}", py_list_repr(&known))));
         }
         if self.reason.trim().is_empty() {

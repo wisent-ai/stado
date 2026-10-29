@@ -75,8 +75,8 @@ struct HostPrivacyGrantEditor: View {
             TextField("~/.local/bin/<product>", text: $program)
                 .textFieldStyle(.roundedBorder)
                 .font(WisentTypeScale.identifier())
-            Picker("Folder", selection: $folder) {
-                ForEach(HostPrivacy.folders) { option in
+            Picker("Grant", selection: $folder) {
+                ForEach(HostPrivacy.grantKinds) { option in
                     Text(option.name).tag(option.key)
                 }
             }

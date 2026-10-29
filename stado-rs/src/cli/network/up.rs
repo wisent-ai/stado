@@ -110,6 +110,12 @@ pub(super) async fn up(args: UpArgs) -> Result<(), CmdError> {
             }
         }
     }
+    // The node reaches hosts on the local network and answers their
+    // discovery, which macOS lets a program do only once the person at the
+    // Mac allowed it, per code identity. A node whose program would change
+    // identity is placed only with that person at a terminal, told first
+    // which question appears and why; a fresh node is told the same.
+    local_network_notice()?;
     let (keypair, created) = key::load_or_create().map_err(CmdError::declaration)?;
     let port = node_port()?;
     let registry = crate::targets::fetch_registry_remote()
@@ -248,6 +254,41 @@ pub(super) async fn up(args: UpArgs) -> Result<(), CmdError> {
         "generation": generation,
     });
     print_receipt(&receipt, args.json)
+}
+
+/// Say, before the node's program is placed, which Local Network question
+/// macOS will put to the person at this Mac and why; refuse to change the
+/// identity of a node already placed when nobody is at a terminal to answer
+/// it. Only macOS asks.
+fn local_network_notice() -> Result<(), CmdError> {
+    use std::io::IsTerminal as _;
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+    let question = "macOS will ask on this Mac: “stado” would like to find devices on your local \
+                    network. Allow it: the network node dials this fleet's hosts on the local \
+                    network and answers their discovery (mDNS), and declares that need as \
+                    `targets[].privacy_grants` local_network for ~/.stado/libexec/stado-network";
+    match super::unit::identity_change()? {
+        super::unit::Identity::Same => Ok(()),
+        super::unit::Identity::Fresh => {
+            eprintln!("stado network: {question}");
+            Ok(())
+        }
+        super::unit::Identity::Changed(before, after) => {
+            if !std::io::stdin().is_terminal() {
+                return Err(CmdError::refused(format!(
+                    "the network node's program would change code identity ({before} → \
+                     {after}), so macOS would ask the person at this Mac to allow Local Network \
+                     for it again, and this `network up` runs with no terminal for anyone to see \
+                     why; run `stado network up` at this Mac, which says which question appears \
+                     before it does"
+                )));
+            }
+            eprintln!("stado network: the node's program changes code identity ({before} → {after}); {question}");
+            Ok(())
+        }
+    }
 }
 
 /// `network up` run on `host` by that host's own Stado over its host

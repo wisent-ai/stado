@@ -31,8 +31,9 @@ use crate::targets::{ComputeTarget, PrivacyGrant, PRIVACY_FOLDERS as FOLDERS};
 const SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders";
 
-/// What the measuring program found when it opened one protected folder.
-/// The beacon carries it as `state`; readers parse it into this type.
+/// What the measuring program found when it opened one protected folder, or
+/// what macOS last decided about Local Network for a program. The beacon
+/// carries a folder's as `state`; readers parse it into this type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum FolderAccess {
@@ -43,6 +44,9 @@ enum FolderAccess {
     Denied,
     /// Any other failed read, with the operating system's error.
     Unreadable,
+    /// macOS put the Local Network question to the person at the keyboard
+    /// and logged no decision after it.
+    Pending,
     /// The grant is for a program other than the one that measured: macOS
     /// answers only the program asking.
     #[serde(rename = "not measured")]
@@ -147,10 +151,10 @@ impl Verdict<'_> {
     }
 }
 
-/// The folder `key` names in the beacon, or the key itself for a folder this
-/// build does not measure.
+/// The name of the folder or decision `key` declares, or the key itself for
+/// one this build does not know.
 fn folder_name(key: &str) -> &str {
-    match FOLDERS.iter().find(|(declared, _)| *declared == key) {
+    match crate::targets::privacy_keys().find(|(declared, _)| *declared == key) {
         Some((_, name)) => name,
         None => key,
     }
@@ -222,10 +226,40 @@ pub async fn privacy(
              the home its declared programs live in is not known: {block}"
         )));
     };
+    // Local Network is no folder the beacon opens: with `--since` the host's
+    // log says what macOS last decided for each program a grant names.
+    let local_network_programs: Vec<String> = grants
+        .iter()
+        .filter(|grant| grant.folder == crate::targets::LOCAL_NETWORK.0)
+        .map(|grant| grant.program_on(&home).to_string_lossy().into_owned())
+        .collect();
+    let local_network = match since {
+        Some(window) => crate::deploy::host_privacy::local_network::decisions_on_host(
+            resolved,
+            &local_network_programs,
+            window,
+            &crate::deploy::production_runner(),
+        )
+        .await
+        .map_err(CmdError::from)?,
+        None => Vec::new(),
+    };
     let mut verdicts: Vec<Verdict> = Vec::new();
     for grant in &grants {
         let path = grant.program_on(&home);
-        let state = if program.is_some_and(|program| path.as_path() == Path::new(program)) {
+        let state = if grant.folder == crate::targets::LOCAL_NETWORK.0 {
+            use crate::deploy::host_privacy::local_network::LocalNetwork;
+            match local_network
+                .iter()
+                .find(|decision| Path::new(&decision.program) == path.as_path())
+                .map(|decision| decision.state)
+            {
+                Some(LocalNetwork::Granted) => FolderAccess::Granted,
+                Some(LocalNetwork::Denied) => FolderAccess::Denied,
+                Some(LocalNetwork::Pending) => FolderAccess::Pending,
+                Some(LocalNetwork::NotMeasured) | None => FolderAccess::NotMeasured,
+            }
+        } else if program.is_some_and(|program| path.as_path() == Path::new(program)) {
             FolderAccess::of_entry(&grant.folder, &block["folders"][grant.folder.as_str()])?
         } else {
             FolderAccess::NotMeasured
@@ -298,7 +332,7 @@ pub async fn privacy(
                 "host": host, "reported_at": reported_at, "privacy": block,
                 "grants": grants, "settings_url": SETTINGS_URL,
                 "requests_since": since, "requests": requests,
-                "undeclared_requests": undeclared,
+                "undeclared_requests": undeclared, "local_network": local_network,
             }))?
         );
     } else {

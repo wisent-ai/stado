@@ -15,16 +15,38 @@
 //!
 //! The assertion reads the unified log: every request `tccd` recorded since
 //! the copy was signed whose accessing or responsible program is the copy.
-//! No request may reach protected data — none through `sandboxd` other
-//! than the Full Disk Access preflight that precedes every protected open,
-//! and none that showed a dialog. The copy is no program any
+//! macOS holds the app a command was started from responsible for it and
+//! for every child it starts, so each run of the copy is spawned disclaiming
+//! that responsibility, as launchd starts the host process: the copy is then
+//! the responsible program for its own opens and for the `find` and `du`
+//! its scripts run. No request may reach protected data — none through
+//! `sandboxd` other than the Full Disk Access preflight that precedes every
+//! protected open, and none that showed a dialog. The copy is no program any
 //! `targets[].privacy_grants` names, so even the consent-gated folders are
 //! declared for it nowhere.
 #![cfg(target_os = "macos")]
 
 use std::collections::BTreeMap;
+use std::ffi::CString;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, ExitStatus, Output, Stdio};
+
+use nix::libc;
+
+extern "C" {
+    /// libsystem's spawn attribute that makes the new process responsible
+    /// for itself, as launchd makes a job's program.
+    fn responsibility_spawnattrs_setdisclaim(
+        attrs: *mut libc::posix_spawnattr_t,
+        disclaim: libc::c_int,
+    ) -> libc::c_int;
+    /// libsystem's file action that starts the new process in a directory.
+    fn posix_spawn_file_actions_addchdir_np(
+        actions: *mut libc::posix_spawn_file_actions_t,
+        path: *const libc::c_char,
+    ) -> libc::c_int;
+}
 
 /// The Full Disk Access check `sandboxd` makes before every narrower one; on
 /// its own it shows no dialog.
@@ -67,11 +89,80 @@ impl Probe {
         Self { root, program }
     }
 
-    /// The copy, run in this account's own environment and home.
-    fn stado(&self, arguments: &[&str]) -> Output {
-        let mut command = Command::new(&self.program);
-        command.args(arguments).current_dir(&self.root);
-        run(&mut command)
+    /// The copy, run in this account's own environment and home, responsible
+    /// for itself and its children; its output is kept in the probe's
+    /// directory under `name`.
+    fn stado(&self, name: &str, arguments: &[&str]) -> Output {
+        let stdout = self.root.join(format!("{name}.out"));
+        let stderr = self.root.join(format!("{name}.err"));
+        let text = |value: &str| CString::new(value).expect("an argument holds no NUL");
+        let path = |path: &Path| text(path.to_str().expect("the probe path is UTF-8"));
+        let program = path(&self.program);
+        let mut argv: Vec<CString> = vec![program.clone()];
+        argv.extend(arguments.iter().map(|argument| text(argument)));
+        let mut argv_pointers: Vec<*mut libc::c_char> = argv
+            .iter()
+            .map(|argument| argument.as_ptr().cast_mut())
+            .collect();
+        argv_pointers.push(std::ptr::null_mut());
+        let environment: Vec<CString> = std::env::vars_os()
+            .map(|(key, value)| {
+                let mut pair = key.into_encoded_bytes();
+                pair.push(b'=');
+                pair.extend(value.into_encoded_bytes());
+                CString::new(pair).expect("an environment entry holds no NUL")
+            })
+            .collect();
+        let mut environment_pointers: Vec<*mut libc::c_char> = environment
+            .iter()
+            .map(|entry| entry.as_ptr().cast_mut())
+            .collect();
+        environment_pointers.push(std::ptr::null_mut());
+        let (null, out, err) = (text("/dev/null"), path(&stdout), path(&stderr));
+        let root = path(&self.root);
+        let mut pid: libc::pid_t = 0;
+        // SAFETY: every pointer handed to posix_spawn outlives the call, and
+        // the attribute and file-action objects are initialised before use
+        // and destroyed after it.
+        let spawned = unsafe {
+            let mut attrs: libc::posix_spawnattr_t = std::ptr::null_mut();
+            let mut actions: libc::posix_spawn_file_actions_t = std::ptr::null_mut();
+            assert_eq!(libc::posix_spawnattr_init(&mut attrs), 0);
+            assert_eq!(responsibility_spawnattrs_setdisclaim(&mut attrs, 1), 0);
+            assert_eq!(libc::posix_spawn_file_actions_init(&mut actions), 0);
+            let write = libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
+            libc::posix_spawn_file_actions_addopen(
+                &mut actions,
+                0,
+                null.as_ptr(),
+                libc::O_RDONLY,
+                0,
+            );
+            libc::posix_spawn_file_actions_addopen(&mut actions, 1, out.as_ptr(), write, 0o600);
+            libc::posix_spawn_file_actions_addopen(&mut actions, 2, err.as_ptr(), write, 0o600);
+            posix_spawn_file_actions_addchdir_np(&mut actions, root.as_ptr());
+            let spawned = libc::posix_spawn(
+                &mut pid,
+                program.as_ptr(),
+                &actions,
+                &attrs,
+                argv_pointers.as_ptr(),
+                environment_pointers.as_ptr(),
+            );
+            libc::posix_spawn_file_actions_destroy(&mut actions);
+            libc::posix_spawnattr_destroy(&mut attrs);
+            spawned
+        };
+        assert_eq!(spawned, 0, "the copy could not be spawned: errno {spawned}");
+        let mut status: libc::c_int = 0;
+        // SAFETY: `pid` is this process's own child, reaped exactly once.
+        let reaped = unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(reaped, pid, "the copy's exit could not be read");
+        Output {
+            status: ExitStatus::from_raw(status),
+            stdout: std::fs::read(&stdout).expect("read the copy's stdout"),
+            stderr: std::fs::read(&stderr).expect("read the copy's stderr"),
+        }
     }
 }
 
@@ -173,10 +264,32 @@ fn host_passes_and_host_commands_ask_macos_for_nothing_undeclared() {
     let probe = Probe::new();
     let start = now();
 
+    // The janitor's pass, as a preview: the same lock and walks, nothing
+    // removed. The build-cache walk must have run, or the home was never read.
+    let reclaim = json_of(
+        &probe.stado(
+            "reclaim",
+            &["space", "reclaim", "--local", "--dry-run", "--json"],
+        ),
+        "space reclaim --local --dry-run",
+    );
+    let walk = &reclaim["cleaners"]["build_caches"];
+    assert!(
+        walk["skipped"].get("walk_in_progress").is_none(),
+        "the build-cache walk did not run: another janitor holds its walk lock under \
+         ~/.cache/wisent-compute, so the home was not read: {walk}"
+    );
+    assert!(
+        walk["scanned_items"]
+            .as_i64()
+            .is_some_and(|items| items > 0),
+        "the build-cache walk read nothing of the home: {walk}"
+    );
+
     // The health beacon the host process publishes every interval; its
     // `host` is this machine's registry identity for the commands below.
     let beacon = json_of(
-        &probe.stado(&["host", "beacon", "collect"]),
+        &probe.stado("beacon", &["host", "beacon", "collect"]),
         "host beacon collect",
     );
     let host = beacon["host"]
@@ -193,36 +306,17 @@ fn host_passes_and_host_commands_ask_macos_for_nothing_undeclared() {
         );
     }
 
-    // The janitor's pass, as a preview: the same lock and walks, nothing
-    // removed. The build-cache walk must have run, or the home was never read.
-    let reclaim = json_of(
-        &probe.stado(&["space", "reclaim", "--local", "--dry-run", "--json"]),
-        "space reclaim --local --dry-run",
-    );
-    let walk = &reclaim["cleaners"]["build_caches"];
-    assert!(
-        walk["skipped"].get("walk_in_progress").is_none(),
-        "the build-cache walk did not run: another janitor holds its walk lock under \
-         ~/.cache/wisent-compute, so the home was not read: {walk}"
-    );
-    assert!(
-        walk["scanned_items"]
-            .as_i64()
-            .is_some_and(|items| items > 0),
-        "the build-cache walk read nothing of the home: {walk}"
-    );
-
     // The host commands that walk this host's home.
-    let report = probe.stado(&["space", "report", &host, "--json"]);
+    let report = probe.stado("space-report", &["space", "report", &host, "--json"]);
     json_of(&report, "space report");
-    let caches = probe.stado(&["host", "build-caches", &host]);
+    let caches = probe.stado("build-caches", &["host", "build-caches", &host]);
     assert!(
         caches.status.success(),
         "host build-caches exited {}: {}",
         caches.status,
         String::from_utf8_lossy(&caches.stderr)
     );
-    let spotlight = probe.stado(&["host", "spotlight", &host, "--json"]);
+    let spotlight = probe.stado("spotlight", &["host", "spotlight", &host, "--json"]);
     json_of(&spotlight, "host spotlight");
 
     let program = probe.program.to_str().expect("the probe path is UTF-8");

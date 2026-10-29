@@ -56,12 +56,20 @@ struct HostPrivacy: Decodable, Sendable {
     /// The folders in the order the command prints them, with their names.
     static let folders: [FolderName] = [documents, desktop, downloads]
 
+    /// Local Network: no folder the beacon measures, but a decision a grant
+    /// declares for the network node (`stado host privacy --since` reads it).
+    static let localNetwork = FolderName(key: "local_network", name: "Local Network")
+
+    /// Everything a grant may declare, in the order `targets[].privacy_grants`
+    /// accepts it.
+    static let grantKinds: [FolderName] = folders + [localNetwork]
+
     /// The declared grants macOS does not honour.
     var refusedGrants: [Grant] {
         grants.filter(\.refused)
     }
 
     static func name(of folder: String) -> String {
-        folders.first { $0.key == folder }?.name ?? folder
+        grantKinds.first { $0.key == folder }?.name ?? folder
     }
 }
