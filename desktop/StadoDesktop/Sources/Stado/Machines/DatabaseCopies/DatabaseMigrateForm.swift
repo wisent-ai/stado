@@ -22,7 +22,7 @@ struct DatabaseMigrateForm: View {
                 .font(WisentTypeScale.caption())
                 .foregroundStyle(WisentDesign.muted)
             LabeledContent("Port") {
-                TextField("the port the fleet server listens on", text: $port)
+                TextField("empty: the fleet host hands out a free one", text: $port)
                     .textFieldStyle(.roundedBorder)
             }
             LabeledContent("Host") {
@@ -37,7 +37,7 @@ struct DatabaseMigrateForm: View {
                         if await store.migrate(name: database, host: host, port: port) { dismiss() }
                     }
                 }
-                .disabled(port.trimmingCharacters(in: .whitespaces).isEmpty || store.isRunning)
+                .disabled(store.isRunning)
             }
         }
         .padding(WisentDesign.Space.x6)

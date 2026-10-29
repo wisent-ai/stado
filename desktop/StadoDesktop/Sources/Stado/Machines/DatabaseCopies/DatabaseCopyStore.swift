@@ -30,11 +30,15 @@ final class DatabaseCopyStore: ObservableObject {
         return arguments
     }
 
-    /// `stado database migrate NAME --to fleet --port PORT [--host HOST]
+    /// `stado database migrate NAME --to fleet [--port PORT] [--host HOST]
     /// --json`. A blank host leaves the choice to the CLI (the vault owner);
-    /// a blank port is passed blank, and the CLI refuses naming --port.
+    /// a blank port leaves it to the fleet host, which hands out a free one.
     nonisolated static func migrateArguments(name: String, host: String, port: String) -> [String] {
-        var arguments = ["database", "migrate", name, "--to", "fleet", "--port", port.trimmingCharacters(in: .whitespaces)]
+        var arguments = ["database", "migrate", name, "--to", "fleet"]
+        let port = port.trimmingCharacters(in: .whitespaces)
+        if !port.isEmpty {
+            arguments += ["--port", port]
+        }
         let host = host.trimmingCharacters(in: .whitespaces)
         if !host.isEmpty {
             arguments += ["--host", host]

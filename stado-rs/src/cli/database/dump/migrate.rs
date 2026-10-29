@@ -1,4 +1,4 @@
-//! `stado database migrate NAME --to fleet --port PORT [--host HOST]`: a
+//! `stado database migrate NAME --to fleet [--port PORT] [--host HOST]`: a
 //! declared Postgres database another provider hosts (a Supabase project, an
 //! external server) moved onto a fleet host Stado runs, with no vendor and
 //! no bill.
@@ -31,7 +31,7 @@ use super::super::DatabaseProvider;
 use super::tools::Connection;
 use super::{item_fields, restore, take};
 
-/// `stado database migrate NAME --to fleet --port PORT [--host HOST] [--json]`.
+/// `stado database migrate NAME --to fleet [--port PORT] [--host HOST] [--json]`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct MigrateArgs {
     /// Declared postgres database to move.
@@ -42,9 +42,10 @@ pub(crate) struct MigrateArgs {
     /// Fleet host the database is placed on (default: the vault owner).
     #[arg(long)]
     pub(in crate::cli::database) host: Option<String>,
-    /// Port the fleet database listens on: Stado assumes none.
+    /// Port the fleet database listens on; without it the fleet host hands
+    /// out a free one and the placement reports it.
     #[arg(long)]
-    pub(in crate::cli::database) port: u16,
+    pub(in crate::cli::database) port: Option<u16>,
     /// Emit machine-readable output.
     #[arg(long)]
     pub(in crate::cli::database) json: bool,
@@ -99,7 +100,7 @@ async fn store(owner: &Owner, item: &str, document: &Value) -> Result<(), CmdErr
 pub(in crate::cli::database) async fn migrate(
     name: &str,
     host: Option<&str>,
-    port: u16,
+    port: Option<u16>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     let owner = owner_vault::locate().await?;
@@ -151,7 +152,7 @@ pub(in crate::cli::database) async fn migrate(
                 name,
                 super::super::DEFAULT_ENGINE,
                 host,
-                Some(port),
+                port,
                 Some(major.as_str()),
             )
             .await;

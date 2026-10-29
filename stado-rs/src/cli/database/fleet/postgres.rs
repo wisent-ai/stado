@@ -63,14 +63,15 @@ pub(super) async fn place(
         ))
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
-    // Stado names no port: the placement's caller states the one the server
-    // listens on.
-    let port = port.ok_or_else(|| {
-        CmdError::usage(format!(
-            "placing the fleet database {name} on {here} needs --port: the port its Postgres \
-             listens on; Stado assumes none"
-        ))
-    })?;
+    // The port the caller states, else one this host hands out now on every
+    // interface, as the server listens on every interface; it is written to
+    // the configuration, the item and the report, so consumers read it there.
+    // A handed-out port comes from the system's ephemeral range and is not
+    // reserved, so the report says so and a unit that fails names it.
+    let (port, handed) = match port {
+        Some(port) => (port, false),
+        None => (handed_out(name, here)?, true),
+    };
     let password = format!(
         "{}{}",
         uuid::Uuid::new_v4().simple(),
@@ -160,8 +161,16 @@ pub(super) async fn place(
     )
     .await
     .map_err(|error| {
+        let handed_note = match handed {
+            true => format!(
+                "; its port {port} was handed out by {here} from the ephemeral range and is not reserved, so \
+                 another process may hold it (`lsof -nP -iTCP:{port}` on {here} names it); a placement whose port \
+                 must not move states it with --port"
+            ),
+            false => String::new(),
+        };
         let mut wrapped = CmdError::click(format!(
-            "{unit} is stored and {data_text} is initialised, but the unit {unit} was not installed: {error}"
+            "{unit} is stored and {data_text} is initialised, but the unit {unit} was not installed: {error}{handed_note}"
         ));
         wrapped.failure = error.failure;
         wrapped
@@ -172,6 +181,7 @@ pub(super) async fn place(
         "host": here,
         "address": address,
         "port": port,
+        "port_handed_out": handed,
         "data": data_text,
         "unit": unit,
         "item": unit,
@@ -217,4 +227,28 @@ fn append(path: &Path, text: &str) -> Result<(), CmdError> {
         .open(path)
         .and_then(|mut file| file.write_all(text.as_bytes()))
         .map_err(|error| CmdError::from(error).within(format!("append to {}", path.display())))
+}
+
+/// A port this host hands out free on every interface, for the fleet
+/// database `name`: the system chooses it, and the placement reports it.
+fn handed_out(name: &str, here: &str) -> Result<u16, CmdError> {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, u16::default()))
+        .map_err(|error| {
+            CmdError::unreachable(format!(
+                "{here} hands out no free port for the fleet database {name}: {error}; state one with --port"
+            ))
+        })?;
+    let port = listener
+        .local_addr()
+        .map(|address| address.port())
+        .map_err(|error| {
+            CmdError::unreachable(format!(
+                "the port {here} handed out for the fleet database {name} cannot be read back: {error}"
+            ))
+        })?;
+    eprintln!(
+        "{here}: no --port was stated for the fleet database {name}; the host handed out {port} from its ephemeral \
+         range, which is not reserved for it"
+    );
+    Ok(port)
 }
