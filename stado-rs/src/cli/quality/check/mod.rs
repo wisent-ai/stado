@@ -10,6 +10,7 @@ pub use command::{check, command_tree};
 mod paths;
 mod placed;
 pub(crate) use placed::{check_bundle, place};
+mod reach;
 mod secrets;
 pub(crate) use modules::check_source;
 use std::path::Path;
@@ -182,6 +183,11 @@ async fn check_tree(
         tree.display()
     ));
     modules::check(tree, checkout, revision)?;
+    report.say(&format!(
+        "stado quality check: checking that the lines {revision} adds reach no other product's \
+         service without its alternatives"
+    ));
+    reach::check(tree, checkout, revision, &declared.product)?;
     // A pin whose object was never stored, or was stored for a lock the
     // product has since moved past, is refused here, while the session that
     // pushed it can still repair it, instead of by the build that fetches it;

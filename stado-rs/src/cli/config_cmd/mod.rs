@@ -7,7 +7,7 @@
 //! key. This module holds only the dispatch that names them.
 
 mod document;
-mod keys;
+pub(crate) mod keys;
 mod show;
 
 use super::CmdError;

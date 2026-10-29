@@ -166,6 +166,10 @@ name = "public-status"
 path = "../tests/public_status/main.rs"
 
 [[test]]
+name = "capabilities-alternatives"
+path = "../tests/capabilities/alternatives.rs"
+
+[[test]]
 name = "service-directory-markers"
 path = "../tests/service_directory/markers.rs"
 [[test]]

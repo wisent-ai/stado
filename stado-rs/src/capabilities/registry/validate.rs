@@ -78,6 +78,29 @@ fn validate_product_catalog(problems: &mut Vec<String>) {
             }
         }
     }
+    // A family's alternatives are what `stado capabilities resolve` tries, so
+    // each must be a provider the catalog says implements that capability,
+    // named once: an alternative the catalog does not carry would be tried
+    // while `stado capabilities` said nothing implements it.
+    for family in crate::capabilities::alternatives::FAMILIES {
+        let mut named = BTreeSet::new();
+        for alternative in family.alternatives {
+            if !named.insert(alternative.provider) {
+                problems.push(format!(
+                    "capability family {} names alternative {} more than once",
+                    family.id, alternative.provider
+                ));
+            }
+            if capability_support(family.id, alternative.provider) != CapabilitySupport::Implemented
+            {
+                problems.push(format!(
+                    "capability family {} tries {}, which the catalog does not mark implemented \
+                     for {}",
+                    family.id, alternative.provider, family.id
+                ));
+            }
+        }
+    }
 }
 
 /// Static integrity audit for the catalog itself. This is intentionally

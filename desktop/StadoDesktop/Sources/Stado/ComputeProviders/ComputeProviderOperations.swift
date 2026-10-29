@@ -12,6 +12,17 @@ enum NativeComputeProviderOperations {
     static let all: [NativeCapabilityOperation] = [
         .init(id: "capabilities", title: "Read capability families and every provider's support",
             path: ["capabilities"], hostPlacement: .none, mutates: false),
+        .init(id: "capabilities-resolve", title: "Resolve the alternative that answers a product's need (inference, secrets, browser-automation, mail, transcripts), naming every one that did not",
+            path: ["capabilities", "resolve"], hostPlacement: .none, fields: [
+                .init(id: "family", label: "Family", required: true, choices: ["inference", "secrets", "browser-automation", "mail", "transcripts"], initial: "inference"),
+                .init(id: "consumer", label: "Consumer (the product asking)", option: "--consumer", required: true),
+                .init(id: "failed", label: "An alternative that refused the caller, proven again now (blank: none)", option: "--failed"),
+            ]),
+        .init(id: "capabilities-select", title: "Choose the order a family's alternatives are tried in",
+            path: ["capabilities", "select"], hostPlacement: .none, fields: [
+                .init(id: "family", label: "Family", required: true, choices: ["inference", "secrets", "browser-automation", "mail", "transcripts"], initial: "inference"),
+                .init(id: "order", label: "Alternatives in order, comma-separated", option: "--order", required: true),
+            ], jsonOutput: false),
         .init(id: "instances", title: "List live agent machines (one provider, or every enabled one)",
             path: ["instances", "list"], hostPlacement: .none, fields: [
                 .init(id: "provider", label: "Provider (blank: every entry in providers)", option: "--provider"),

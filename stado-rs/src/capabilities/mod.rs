@@ -13,6 +13,7 @@
 //! `registry` the runtime routing table with its audit. Every name stays
 //! reachable as `crate::capabilities::<name>`.
 
+pub mod alternatives;
 mod catalog;
 mod config;
 mod registry;

@@ -1,6 +1,6 @@
 //! Where the installation, account and local-upkeep verbs land.
 
-use crate::cli::entry::spec::root::installation::InstallationCommands;
+use crate::cli::entry::spec::root::installation::{CapabilityAction, InstallationCommands};
 use crate::cli::setup::onboarding;
 use crate::cli::work::autonomy;
 use crate::cli::*;
@@ -12,9 +12,22 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
             import_registry,
             json,
         } => onboarding::run(reset, import_registry, json).await,
-        InstallationCommands::Capabilities { capability, json } => {
-            capabilities::run(capability.as_deref(), json)
-        }
+        InstallationCommands::Capabilities {
+            capability,
+            json,
+            action,
+        } => match action {
+            None => capabilities::run(capability.as_deref(), json),
+            Some(CapabilityAction::Resolve {
+                family,
+                consumer,
+                failed,
+                json,
+            }) => capabilities::resolve(&family, &consumer, &failed, json).await,
+            Some(CapabilityAction::Select { family, order }) => {
+                capabilities::select(&family, &order)
+            }
+        },
         InstallationCommands::Overview { json } => overview::run(json).await,
         InstallationCommands::BlastRadius(args) => blast_radius::run(&args).await,
         InstallationCommands::Resources(command) => resources::dispatch(command).await,

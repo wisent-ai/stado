@@ -1,5 +1,6 @@
 //! The register of configuration keys the control plane reads itself.
 
+use crate::capabilities::alternatives;
 use crate::capabilities::config::ConfigField;
 
 use super::fields::{
@@ -75,4 +76,12 @@ pub const CONTROL_CONFIG: &[ConfigField] = &[
     INTEGRATION_CLIENTS_CONFIG,
     INTEGRATION_PROVIDERS_CONFIG,
     BACKEND_MESSAGING_SKARBIEC_ITEMS_CONFIG,
+    alternatives::INFERENCE_ORDER_CONFIG,
+    alternatives::INFERENCE_ENDPOINT_URL_CONFIG,
+    alternatives::INFERENCE_ENDPOINT_MODEL_CONFIG,
+    alternatives::INFERENCE_ENDPOINT_KEY_ROLE_CONFIG,
+    alternatives::SECRETS_ORDER_CONFIG,
+    alternatives::BROWSER_AUTOMATION_ORDER_CONFIG,
+    alternatives::MAIL_ORDER_CONFIG,
+    alternatives::TRANSCRIPTS_ORDER_CONFIG,
 ];

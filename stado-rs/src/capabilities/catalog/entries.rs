@@ -210,6 +210,36 @@ define_capabilities! {
             ProviderId::Azure => (Planned, "", "No Azure Key Vault adapter"),
             ProviderId::Aws => (Planned, "", "No AWS Secrets Manager adapter"),
             ProviderId::Local => (Implemented, "skarbiec::Client", "Local consumers use scoped Skarbiec grants"),
+            ProviderId::OwnerFile => (Implemented, "credential_store", "The owner-only file store credentials.store names as file://PATH, the alternative to Skarbiec"),
+        ]
+    },
+    Inference => {
+        id: "inference",
+        summary: "Answer a product's model requests: Brama, or the model endpoint the operator declares when Brama does not answer.",
+        providers: provider_rows![
+            ProviderId::Brama => (Implemented, "capabilities::alternatives + service directory route brama", "The authenticated model gateway, reached through the service directory"),
+            ProviderId::ModelEndpoint => (Implemented, "capabilities::alternatives", "Any OpenAI-compatible endpoint capabilities.inference.endpoint.url names, asked for capabilities.inference.endpoint.model, its key the item playing role capabilities.inference.endpoint.key_role"),
+        ]
+    },
+    BrowserAutomation => {
+        id: "browser-automation",
+        summary: "Drive a browser for a product's web workflow; only Weles drives one.",
+        providers: provider_rows![
+            ProviderId::Weles => (Implemented, "capabilities::alternatives + weles program", "The one browser boundary; without it the workflow is named as unreachable"),
+        ]
+    },
+    Mail => {
+        id: "mail",
+        summary: "Read and send a product's mail.",
+        providers: provider_rows![
+            ProviderId::Skrzynka => (Implemented, "capabilities::alternatives + skrzynka program", "Organization mailboxes Skrzynka keeps"),
+        ]
+    },
+    Transcripts => {
+        id: "transcripts",
+        summary: "Read agent-session transcripts a product works from.",
+        providers: provider_rows![
+            ProviderId::TranscriptLake => (Implemented, "capabilities::alternatives + transcript-lake program", "The privacy-masked transcript archive"),
         ]
     },
     Build => {

@@ -15,7 +15,7 @@ use crate::cli::CmdError;
 /// destination used to mean hand-editing the deployment's JSON. The document
 /// is validated before it is written and the write is atomic, so a rejected
 /// value leaves the running configuration exactly as it was.
-pub(super) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
+pub(crate) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
     let path = config_file::config_path()
         .map_err(CmdError::from)?
         .ok_or_else(|| {

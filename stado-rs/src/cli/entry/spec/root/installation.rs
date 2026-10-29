@@ -24,13 +24,17 @@ pub(crate) enum InstallationCommands {
         json: bool,
     },
 
-    /// List Stado capability families, variants, providers and active selections.
+    /// List Stado capability families, variants, providers and active selections;
+    /// resolve the alternative that answers a product's need, or select a family's order.
+    #[command(args_conflicts_with_subcommands = true)]
     Capabilities {
         /// Restrict output to one capability family.
         capability: Option<String>,
         /// Emit the versioned machine-readable catalog.
         #[arg(long)]
         json: bool,
+        #[command(subcommand)]
+        action: Option<CapabilityAction>,
     },
 
     /// One operator snapshot: jobs, active workers, quota, budgets, burn and credits.
@@ -84,6 +88,40 @@ pub(crate) enum InstallationCommands {
     /// what was published; `serve` is the public status page that reads it.
     #[command(name = "availability", subcommand)]
     PublicStatus(PublicStatusCommands),
+}
+
+/// What a product does with a family of alternatives: ask which one answers,
+/// or choose the order they are tried in.
+#[derive(Subcommand)]
+pub(crate) enum CapabilityAction {
+    /// The first alternative of FAMILY, in the selected order, proven to
+    /// answer CONSUMER, with every one before it that did not; exits with the
+    /// infra_down code and names each alternative's product, route and cause
+    /// when none answers. A proof stands for the refresh interval this host's
+    /// resolver declares; `--failed` proves the named alternative again now.
+    Resolve {
+        /// The family: inference, secrets, browser-automation, mail or transcripts.
+        family: String,
+        /// The product asking, as the service directory names its consumer.
+        #[arg(long)]
+        consumer: String,
+        /// An alternative that refused the caller after it was handed out;
+        /// proven again before it is handed out once more. Repeat for several.
+        #[arg(long = "failed")]
+        failed: Vec<String>,
+        /// Print the answer, or the refusal's details, as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write FAMILY's order to `capabilities.<family>.order` in the config
+    /// file; each name must be one of the family's alternatives, once.
+    Select {
+        /// The family whose order is chosen.
+        family: String,
+        /// The alternatives in the order they are tried, comma-separated or repeated.
+        #[arg(long, value_delimiter = ',', required = true)]
+        order: Vec<String>,
+    },
 }
 
 /// The published component status: asked, read, and served as a page.
