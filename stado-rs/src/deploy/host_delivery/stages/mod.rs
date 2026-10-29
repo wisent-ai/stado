@@ -90,7 +90,16 @@ pub(super) async fn transfer(
     plan: &DeliveryPlan,
     runner: &Runner,
 ) -> Result<(), DeployError> {
-    let mut argv = vec!["rsync".to_string(), "-a".to_string()];
+    // The delivered tree belongs to the account that receives it: `-a`
+    // keeps the sender's owner and group, which rsync applies when the
+    // receiving account is root, and the commit step then refused its own
+    // staging path as not owned by the approved account.
+    let mut argv = vec![
+        "rsync".to_string(),
+        "-a".to_string(),
+        "--no-owner".to_string(),
+        "--no-group".to_string(),
+    ];
     let stdin = if let Some(file_list) = &plan.file_list {
         // rsync deliberately drops `-r` from `-a` when `--files-from` is
         // present; spell it back in so selected nested source trees remain
