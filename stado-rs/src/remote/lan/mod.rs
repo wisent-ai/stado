@@ -10,6 +10,10 @@
 //! fleet store and published nothing. Asking the link itself (RFC 6762)
 //! makes the declared LAN path work on every host, whatever its resolver.
 
+mod denied;
+
+pub(crate) use denied::local_network;
+
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;

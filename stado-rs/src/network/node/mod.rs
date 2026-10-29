@@ -1,9 +1,11 @@
 //! `stado network serve`: this host's network node. It listens on the port
 //! `stado network up` recorded, admits only peers whose key the registry
 //! declares for a fleet host, and opens for them a port this host's own
-//! registry SSH paths name. A relay node also carries connections to other
-//! hosts; every other node keeps a standing attachment to each relay its
-//! registry copy declares, so a host no peer can dial is still reached.
+//! registry SSH paths name. For a process of its own host it opens a
+//! connection to another host's port (./reach.rs). A relay node also carries
+//! connections to other hosts; every other node keeps a standing attachment
+//! to each relay its registry copy declares, so a host no peer can dial is
+//! still reached.
 
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -18,6 +20,7 @@ use super::{peers, Answer, Request};
 mod attach;
 pub mod declaration;
 mod hub;
+mod reach;
 pub mod serving;
 
 pub(crate) use hub::Hub;
@@ -196,7 +199,7 @@ pub(crate) async fn handle<S: Stream>(stream: S, context: Arc<Context>) -> Resul
     };
     let request: Request = session.receive().await?;
     let hub = match (&request, &context.hub) {
-        (Request::Probe | Request::Open { .. }, _) => None,
+        (Request::Probe | Request::Open { .. } | Request::Reach { .. }, _) => None,
         (_, Some(hub)) => Some(hub),
         (_, None) => {
             let reason = format!(
@@ -237,6 +240,9 @@ pub(crate) async fn handle<S: Stream>(stream: S, context: Arc<Context>) -> Resul
                 })
                 .await?;
             splice(session.into_plain(), target).await
+        }
+        (Request::Reach { host, port }, _) => {
+            reach::carry(session, &peer, &context.host, &host, port).await
         }
         (Request::Relay { host }, Some(hub)) => {
             hub.carry(session, &host, &peer, &context.host).await

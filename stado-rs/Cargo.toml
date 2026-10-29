@@ -195,6 +195,10 @@ name = "network-refusals"
 path = "../tests/network/refusals.rs"
 
 [[test]]
+name = "network-local-network"
+path = "../tests/network/local_network.rs"
+
+[[test]]
 name = "alerts-operator-contact"
 path = "../tests/alerts/operator_contact.rs"
 

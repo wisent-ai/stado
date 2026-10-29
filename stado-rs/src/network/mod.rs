@@ -98,6 +98,11 @@ pub(crate) enum Request {
     Attach,
     /// The dial-back a relay asked an attached host for.
     Accept { token: String },
+    /// Open `port` on registry host `host`'s loopback for a process of the
+    /// responder's own host: the node makes the connection, so it leaves
+    /// the host as the node's program, under the Local Network permission
+    /// macOS keeps for it across installs.
+    Reach { host: String, port: u16 },
 }
 
 /// The responder's one answer before data flows.

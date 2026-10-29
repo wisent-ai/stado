@@ -151,14 +151,37 @@ async fn open(
                     .map_err(|cause| {
                         anyhow::anyhow!("connect and verify SSH host {destination}: {cause}")
                     })?;
-            client::connect(config, &addresses[..], peer)
-                .await
-                .with_context(|| match crate::remote::tailnet::unreachable_because(host) {
-                    Some(cause) => format!(
-                        "connect and verify SSH host {destination}: the tailnet carries no traffic to it, {cause}"
+            // The socket is opened here, not inside russh, so a connect that
+            // fails is read for macOS refusing this binary the local network,
+            // which answers as a missing route.
+            let unreached = |cause: String| {
+                match crate::remote::tailnet::unreachable_because(host) {
+                    Some(tailnet) => anyhow::anyhow!(
+                        "connect SSH host {destination}: {cause}; the tailnet carries no traffic to it, {tailnet}"
                     ),
-                    None => format!("connect and verify SSH host {destination}"),
-                })?
+                    None => anyhow::anyhow!("connect SSH host {destination}: {cause}"),
+                }
+            };
+            let socket = match tokio::net::TcpStream::connect(&addresses[..]).await {
+                Ok(socket) => socket,
+                Err(error) => {
+                    let denied = crate::remote::lan::local_network(&error, &addresses).await;
+                    return Err(unreached(match denied {
+                        Some(denied) => format!("{error}: {denied}"),
+                        None => error.to_string(),
+                    }));
+                }
+            };
+            if config.nodelay {
+                socket.set_nodelay(true).map_err(|error| {
+                    anyhow::anyhow!(
+                        "connect SSH host {destination}: TCP_NODELAY cannot be set: {error}"
+                    )
+                })?;
+            }
+            client::connect_stream(config, socket, peer)
+                .await
+                .with_context(|| format!("verify SSH host {destination}"))?
         }
     };
     let mut session = Session::new(handle);

@@ -3,6 +3,7 @@
 
 use serde_json::{json, Value};
 
+use crate::doctor::fleet::hosts::local_network::LOCAL_NETWORK_ID;
 use crate::doctor::fleet::hosts::placement::PLACEMENT_ID;
 use crate::doctor::fleet::hosts::shape::SHAPE_ID;
 use crate::doctor::fleet::releases::channel::RELEASE_ID;
@@ -93,8 +94,14 @@ impl RunScope {
     pub(in crate::doctor) fn includes(self, id: &str) -> bool {
         match self {
             Self::Full => true,
+            // A deployment's preflight is about the plane it deploys to, not
+            // the machine and binary it was started from.
             Self::DeploymentPreflight => {
-                id != RELEASE_ID && id != INTEGRITY_ID && id != PLACEMENT_ID && id != SHAPE_ID
+                id != RELEASE_ID
+                    && id != INTEGRITY_ID
+                    && id != PLACEMENT_ID
+                    && id != SHAPE_ID
+                    && id != LOCAL_NETWORK_ID
             }
             Self::ReleaseVerification => id == RELEASE_ID,
         }

@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
+use crate::deploy::{host_channel, shlex_quote, CommandOutput, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 /// The report line naming one program's code identifier.
@@ -50,13 +50,25 @@ pub struct Decision {
     pub at: Option<String>,
 }
 
+/// Which stretch of a host's log the read covers.
+pub enum Window<'a> {
+    /// The last span, as `log show --last` takes it (`30m`, `2h`, `1d`).
+    Last(&'a str),
+    /// From a moment in the host's local time, `YYYY-MM-DD HH:MM:SS`.
+    Since(&'a str),
+}
+
 /// The program the host runs: each program's identifier, then `nehelper`'s
-/// Local Network lines of the last `since`, the newest per identifier.
-fn script(programs: &[String], since: &str) -> String {
+/// Local Network lines of `window`, the newest per identifier.
+fn script(programs: &[String], window: &Window) -> String {
     let quoted: Vec<String> = programs
         .iter()
         .map(|program| shlex_quote(program))
         .collect();
+    let window = match window {
+        Window::Last(span) => format!("--last {span}"),
+        Window::Since(start) => format!("--start {}", shlex_quote(start)),
+    };
     format!(
         r#"for program in {programs}; do
   # stderr: codesign's own display of the program; the identifier line is read
@@ -64,7 +76,7 @@ fn script(programs: &[String], since: &str) -> String {
   identifier=$(/usr/bin/codesign -dv "$program" 2>&1 | /usr/bin/sed -n 's/^Identifier=//p')
   printf '{PROGRAM_MARK}\t%s\t%s\n' "$program" "$identifier"
 done
-{{ /usr/bin/log show --last {since} --style compact --predicate 'process == "nehelper" AND eventMessage CONTAINS[c] "local network"'; printf 'STADO_LOG_STATUS %s\n' "$?"; }} |
+{{ /usr/bin/log show {window} --style compact --predicate 'process == "nehelper" AND eventMessage CONTAINS[c] "local network"'; printf 'STADO_LOG_STATUS %s\n' "$?"; }} |
   /usr/bin/awk '
     /^STADO_LOG_STATUS / {{ status = $2; next }}
     {{
@@ -148,15 +160,73 @@ pub async fn decisions_on_host(
     if programs.is_empty() {
         return Ok(Vec::new());
     }
-    let output = host_channel::run_script(target, &script(programs, since), runner).await?;
+    let output =
+        host_channel::run_script(target, &script(programs, &Window::Last(since)), runner).await?;
+    judged(output, &target.name)
+}
+
+/// What this machine's `nehelper` last decided about Local Network for each
+/// of `programs` since `start` (local time, `YYYY-MM-DD HH:MM:SS`), read
+/// here by the same script a host runs.
+async fn decisions_here(
+    programs: &[String],
+    start: &str,
+    runner: &Runner,
+) -> Result<Vec<Decision>, DeployError> {
+    let output = runner(CommandSpec {
+        argv: vec!["/bin/bash".to_string(), "-s".to_string()],
+        stdin: Some(script(programs, &Window::Since(start))),
+    })
+    .await
+    .map_err(DeployError::unreachable)?;
+    judged(output, "this machine")
+}
+
+/// The binary this process runs and what macOS last decided about Local
+/// Network for it since it was placed: the decision every connection this
+/// process opens to a LAN peer is judged by.
+pub struct RunningBinary {
+    pub program: String,
+    /// When the binary was placed, in this machine's local time.
+    pub placed: String,
+    pub decision: Decision,
+}
+
+/// [`RunningBinary`] for this process. The log is read from the moment the
+/// binary was placed, so an older binary's decision under the same code
+/// identifier does not stand in for this one's; a binary or placement time
+/// that cannot be read, or a log read that fails, is refused with its cause.
+pub async fn running_binary(runner: &Runner) -> Result<RunningBinary, String> {
+    let binary = std::env::current_exe()
+        .map_err(|error| format!("which binary this is cannot be read: {error}"))?;
+    let program = binary.to_string_lossy().into_owned();
+    let placed = std::fs::metadata(&binary)
+        .and_then(|metadata| metadata.modified())
+        .map_err(|error| format!("when {program} was placed cannot be read: {error}"))?;
+    let placed = chrono::DateTime::<chrono::Local>::from(placed)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    let decision = decisions_here(std::slice::from_ref(&program), &placed, runner)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("the Local Network read named nothing for {program}"))?;
+    Ok(RunningBinary {
+        program,
+        placed,
+        decision,
+    })
+}
+
+/// The decisions a finished read reports, or why `place`'s read failed.
+fn judged(output: CommandOutput, place: &str) -> Result<Vec<Decision>, DeployError> {
     if !output.succeeded() {
         return Err(DeployError(format!(
-            "the Local Network read on {} exited {}: {}",
-            target.name,
+            "the Local Network read on {place} exited {}: {}",
             output.code,
             output.detail().trim()
         )));
     }
-    parse(&output.stdout, &output.stderr)
-        .map_err(|cause| DeployError(format!("{}: {cause}", target.name)))
+    parse(&output.stdout, &output.stderr).map_err(|cause| DeployError(format!("{place}: {cause}")))
 }
