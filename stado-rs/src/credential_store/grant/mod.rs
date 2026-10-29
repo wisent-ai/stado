@@ -6,7 +6,7 @@
 //! someone widens that consumer's grant, and until this module existed the only
 //! thing that could do it was an operator running a script by hand.
 //!
-//! `skarbiec token-mint` writes a whole grant, not a delta: it replaces the
+//! `skarbiec grant issue` writes a whole grant, not a delta: it replaces the
 //! stored capability list and, unless it is handed the current bearer, mints a
 //! new one and keeps only the new hash. For a consumer like `local-operator`,
 //! which already carries a four-figure capability list, minting by hand is how a
@@ -49,7 +49,7 @@ const ACTION: &str = "read";
 /// nothing**: an item written a minute ago, or one that has sat in the vault
 /// for weeks, answers `HTTP 403: consumer not authorized to read item field`
 /// until its fields are granted. Minting a token by hand does not close that
-/// gap safely, since `skarbiec token-mint` replaces a capability list instead
+/// gap safely, since `skarbiec grant issue` replaces a capability list instead
 /// of adding to it, and for a consumer holding hundreds of capabilities that
 /// is how a fleet loses its credentials.
 ///
