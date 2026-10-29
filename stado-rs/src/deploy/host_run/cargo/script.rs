@@ -51,7 +51,8 @@ pub(super) fn script(
 /// the release worker's contract a product's gate script reads
 /// (`WISENT_SOURCE_DIR` the delivered tree, `WISENT_OUTPUT_DIR` inside it,
 /// an empty `WISENT_INPUTS_DIR` in the run, `WISENT_VERSION` and
-/// `WISENT_PLATFORM` from `contract`), then the gate's argv exactly as the
+/// `WISENT_PLATFORM` from `contract`), the host's installed Stado as
+/// `STADO_BIN` and first on `PATH`, then the gate's argv exactly as the
 /// revision's release manifest declares it, run in the delivered tree's
 /// root (the manifest's directory).
 pub(super) fn gate(
@@ -73,6 +74,16 @@ pub(super) fn gate(
         shlex_quote(&inputs),
         shlex_quote(version),
         shlex_quote(platform)
+    ));
+    // A gate that calls Stado back (`stado release gate …`) runs the host's
+    // installed Stado, as a release worker's job runs the worker's own
+    // (`STADO_BIN`); the prelude's `PATH` holds no `~/.stado/bin`.
+    let stado = host_exec::STADO_CLI
+        .strip_prefix("~/")
+        .unwrap_or(host_exec::STADO_CLI);
+    script.push_str(&format!(
+        "export STADO_BIN=\"$HOME\"/{}\nexport PATH=\"${{STADO_BIN%/*}}:$PATH\"\n",
+        shlex_quote(stado)
     ));
     let words: Vec<String> = argv.iter().map(|word| shlex_quote(word)).collect();
     script.push_str(&format!("{}\nexit \"$?\"\n", words.join(" ")));

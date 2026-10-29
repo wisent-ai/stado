@@ -40,6 +40,12 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- **A declared gate the submit queue runs on a fleet host finds Stado:** `stado change run` ran a
+  gate whose argv calls Stado (Trends' `stado release gate app check …`) in host cargo's prelude,
+  whose `PATH` holds no `~/.stado/bin`, so it exited 127 `stado: command not found` on every host
+  and refused the candidate for the host's environment. A declared gate now runs with the host's
+  installed Stado as `STADO_BIN` and its directory first on `PATH`, as a release worker's job runs
+  the worker's own Stado.
 - **`stado host cargo` compiles the revision it was given:** the delivered export carries its
   commit's time on every file and the host's Cargo target is shared by every run, so a revision
   committed before that target's last compile kept the earlier revision's build of each workspace
