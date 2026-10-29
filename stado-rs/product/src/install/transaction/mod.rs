@@ -107,6 +107,12 @@ pub fn commit(
                 &placement.destination,
                 product,
             )? {
+                eprintln!(
+                    "{}: signing identity {} -> {} (the operator's named choice)",
+                    placement.destination.display(),
+                    change["previous"].as_str().unwrap_or_default(),
+                    change["new"].as_str().unwrap_or_default()
+                );
                 identity_changes
                     .insert(placement.destination.to_string_lossy().into_owned(), change);
             }

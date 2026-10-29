@@ -42,3 +42,6 @@ The version bump gathers them into the release's own file and removes this one.
   to read as a crash (exit 1) and could later count as the build stopping again.
 - A release rebuild after a failed platform attempt goes to another builder of the platform
   first; the host the failed attempt ran on is chosen only when no other builder can take it.
+- An installation whose operator named a new signing identity says
+  `<path>: signing identity <previous> -> <new> (the operator's named choice)` for each placed
+  file, beside the receipt's `identity_changes`.
