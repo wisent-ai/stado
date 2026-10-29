@@ -1,8 +1,17 @@
 //! The host jobs this process runs: starting a claimed job as a child shell,
 //! recording the end of every child that exited, and failing a running record
 //! no live worker holds.
+//!
+//! A host job runs as a fleet worker runs a job: in a directory of its own
+//! (`~/.stado/host-store/work/<job-id>`), under its job identity
+//! (`WC_JOB_ID`, `WC_JOB_STARTED_AT`, `STADO_BIN`), and what it leaves in that
+//! directory's `output/` is kept in the host store under `status/<job-id>/output/`
+//! when it ends, where `stado artifacts` against the host store reads it. A
+//! routine that hands back its receipt as an artifact therefore works the same
+//! from the host store as from the fleet store.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use chrono::{DateTime, Utc};
@@ -11,10 +20,11 @@ use crate::models::Job;
 use crate::queue::runs::{COMPLETED, FAILED, RUNNING};
 use crate::queue::JobStorage;
 
-/// A job this process started, and the child running it.
+/// A job this process started, the child running it, and its directory.
 pub(super) struct Running {
     pub(super) job: Job,
     pub(super) child: tokio::process::Child,
+    work: PathBuf,
 }
 
 /// Claim `job` and start its command; `None` when a cancellation or another
@@ -33,12 +43,20 @@ pub(super) async fn start(
     }
     let mut claimed = job.clone();
     claimed.started_at = Some(crate::models::isoformat_utc(Utc::now()));
-    let logs = super::root()
-        .map_err(|error| error.to_string())?
-        .join("logs");
+    let root = super::root().map_err(|error| error.to_string())?;
+    let logs = root.join("logs");
+    let work = work_of(&job.job_id)?;
     let opened = std::fs::create_dir_all(&logs)
         .map_err(|error| format!("cannot create {}: {error}", logs.display()))
         .and_then(|()| {
+            std::fs::create_dir_all(&work)
+                .map_err(|error| format!("cannot create {}: {error}", work.display()))
+        })
+        .and_then(|()| {
+            std::env::current_exe()
+                .map_err(|error| format!("this Stado's own program cannot be named: {error}"))
+        })
+        .and_then(|stado| {
             let path = logs.join(format!("{}.log", job.job_id));
             let output = std::fs::OpenOptions::new()
                 .create(true)
@@ -48,12 +66,19 @@ pub(super) async fn start(
             let errors = output
                 .try_clone()
                 .map_err(|error| format!("cannot share {} with stderr: {error}", path.display()))?;
-            Ok((output, errors))
+            Ok((stado, output, errors))
         });
-    let spawned = opened.and_then(|(output, errors)| {
-        tokio::process::Command::new("/bin/sh")
+    let spawned = opened.and_then(|(stado, output, errors)| {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        crate::providers::local::slots::apply_job_runtime_environment(
+            &mut command,
+            &claimed,
+            &stado,
+        );
+        command
             .arg("-c")
             .arg(crate::providers::local::build_job_command(job))
+            .current_dir(&work)
             .stdin(Stdio::null())
             .stdout(output)
             .stderr(errors)
@@ -64,8 +89,18 @@ pub(super) async fn start(
         Ok(child) => Ok(Some(Running {
             job: claimed,
             child,
+            work,
         })),
         Err(error) => {
+            // Nothing ran in the tree, so there is nothing to keep from it.
+            let error = match std::fs::remove_dir_all(&work) {
+                Ok(()) => error,
+                Err(left) if left.kind() == std::io::ErrorKind::NotFound => error,
+                Err(left) => format!(
+                    "{error}; its work tree {} was not removed: {left}",
+                    work.display()
+                ),
+            };
             claimed.error = Some(error.clone());
             claimed.failed_at = Some(crate::models::isoformat_utc(Utc::now()));
             store
@@ -99,18 +134,28 @@ pub(super) async fn settle(
         };
         let mut job = held.job;
         let now = crate::models::isoformat_utc(Utc::now());
-        let to = match status {
-            Ok(status) if status.success() => {
+        let kept = finish_work(store, &job, &held.work, log).await;
+        let to = match (status, kept) {
+            (Ok(status), Ok(())) if status.success() => {
                 job.completed_at = Some(now);
                 COMPLETED
             }
-            Ok(status) => {
+            (Ok(status), Ok(())) => {
                 job.error = Some(format!("the command ended with {status}"));
                 job.failed_at = Some(now);
                 FAILED
             }
-            Err(error) => {
-                job.error = Some(format!("the child's exit could not be read: {error}"));
+            (Ok(status), Err(cause)) => {
+                job.error = Some(format!("the command ended with {status}, but {cause}"));
+                job.failed_at = Some(now);
+                FAILED
+            }
+            (Err(error), kept) => {
+                let mut cause = format!("the child's exit could not be read: {error}");
+                if let Err(also) = kept {
+                    cause.push_str(&format!("; {also}"));
+                }
+                job.error = Some(cause);
                 job.failed_at = Some(now);
                 FAILED
             }
@@ -163,6 +208,16 @@ pub(super) async fn reap(store: &JobStorage, running: &BTreeMap<String, Running>
                 }
             },
         };
+        // What the stopped worker's job left is kept and its tree removed,
+        // as for a job whose end this process saw.
+        let mut cause = cause;
+        let finished = match work_of(&job.job_id) {
+            Ok(work) => finish_work(store, &job, &work, log).await,
+            Err(error) => Err(format!("its work tree cannot be named: {error}")),
+        };
+        if let Err(also) = finished {
+            cause.push_str(&format!("; {also}"));
+        }
         job.error = Some(cause.clone());
         job.failed_at = Some(crate::models::isoformat_utc(now));
         match store.move_job(&job, RUNNING, FAILED).await {
@@ -173,4 +228,46 @@ pub(super) async fn reap(store: &JobStorage, running: &BTreeMap<String, Running>
             )),
         }
     }
+}
+
+/// The directory a host job runs in.
+fn work_of(job_id: &str) -> Result<PathBuf, String> {
+    Ok(super::root()
+        .map_err(|error| error.to_string())?
+        .join("work")
+        .join(job_id))
+}
+
+/// Keep what an ended job left in its work tree's `output/`, then remove the
+/// tree, so the host store holds no tree per fired routine. A tree whose
+/// output could not be kept stays for inspection and the answer says where;
+/// a tree that could not be removed is said in the log, its output already
+/// kept. A job whose tree was never made (it ended before its start made it)
+/// has nothing to keep.
+async fn finish_work(
+    store: &JobStorage,
+    job: &Job,
+    work: &Path,
+    log: fn(&str),
+) -> Result<(), String> {
+    if !crate::primitives::presence::present(work).map_err(|error| error.to_string())? {
+        return Ok(());
+    }
+    let output = work.join("output");
+    crate::providers::local::slots::upload_output(store, job, &output)
+        .await
+        .map_err(|error| {
+            format!(
+                "its output in {} was not kept ({error}); its work tree stays there for inspection",
+                output.display()
+            )
+        })?;
+    if let Err(error) = std::fs::remove_dir_all(work) {
+        log(&format!(
+            "host routines: {}: its output is kept, but its work tree {} was not removed: {error}",
+            job.job_id,
+            work.display()
+        ));
+    }
+    Ok(())
 }

@@ -7,6 +7,12 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Added
 
+- **A host routine runs under its job identity and keeps its output:** the host store's runner
+  started a routine with no directory or job identity and kept nothing it produced, so a routine
+  that needs `WC_JOB_ID` or hands back its receipt as an artifact failed or left no receipt. Each
+  host job now runs in `~/.stado/host-store/work/<job-id>` with the fleet worker's job environment
+  and its `output/` is kept under `status/<job-id>/output/` in the host store when it ends.
+
 - **`stado host exec TARGET -- log show --last 1h --style compact --info --no-pager --process tccd`
   reads a Mac's privacy prompts and refusals:** the last hour of tccd's retained log, which names
   the process that asked for Documents, local network or Full Disk Access, so a prompt Stado raised

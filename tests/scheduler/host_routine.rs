@@ -50,7 +50,7 @@ fn a_host_routine_fires_and_runs_while_the_fleet_store_does_not_answer() {
         "create",
         "--cron",
         "* * * * *",
-        "echo host-routine-ran",
+        "echo host-routine-ran; mkdir -p output; printf '%s' \"$WC_JOB_ID\" > output/identity.txt",
     ]);
     let listed: Value =
         serde_json::from_str(&deployment.cli(&["schedule", "list", "--json"])).unwrap();
@@ -134,6 +134,25 @@ fn a_host_routine_fires_and_runs_while_the_fleet_store_does_not_answer() {
     assert!(
         log.contains("host-routine-ran"),
         "the routine's command ran: {log}"
+    );
+    // It ran under its job identity, and what it left in output/ is kept in
+    // the host store where the job's artifacts are read.
+    let kept = host_store
+        .join("status")
+        .join(&id)
+        .join("output")
+        .join("identity.txt");
+    let identity = fs::read_to_string(&kept)
+        .unwrap_or_else(|error| panic!("{} holds the routine's output: {error}", kept.display()));
+    deployment.report["kept_output"] = json!(identity);
+    assert_eq!(identity, id, "the routine ran under its own job identity");
+    // The job's work tree is removed once its output is kept, so the host
+    // store does not grow a tree per fired routine.
+    let tree = host_store.join("work").join(&id);
+    assert!(
+        !tree.exists(),
+        "the routine's work tree {} was left behind",
+        tree.display()
     );
     deployment.pass();
 }

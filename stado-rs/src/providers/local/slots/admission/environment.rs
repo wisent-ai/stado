@@ -85,14 +85,16 @@ pub(crate) fn inherit_safe_agent_environment(command: &mut tokio::process::Comma
 }
 
 /// Keep runtime fan-out inside the resources the scheduler reserved, and name
-/// the Stado program that runs the job: the agent itself, so a job that calls
-/// Stado back (to upload what it produced) runs the same program rather than
-/// guessing where one is installed.
+/// the job and the Stado program that runs it: `WC_JOB_ID` is the identity a
+/// job reports under, and the agent itself is the program, so a job that
+/// calls Stado back (to upload what it produced) runs the same program rather
+/// than guessing where one is installed.
 pub(crate) fn apply_job_runtime_environment(
     command: &mut tokio::process::Command,
     job: &Job,
     stado: &std::path::Path,
 ) {
+    command.env("WC_JOB_ID", &job.job_id);
     // Correlate observations with the claimed execution, not a previous retry.
     if let Some(started_at) = job.started_at.as_deref() {
         command.env("WC_JOB_STARTED_AT", started_at);

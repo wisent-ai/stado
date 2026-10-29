@@ -205,7 +205,6 @@ pub async fn start_slot(
         .arg("-c")
         .arg(&full_command)
         .current_dir(&work_dir)
-        .env("WC_JOB_ID", &job.job_id)
         .env("WC_ARTIFACT_INPUTS_JSON", &artifact_inputs_json)
         .env("WC_ARTIFACT_INPUTS_FILE", &artifact_inputs_file)
         .envs(
