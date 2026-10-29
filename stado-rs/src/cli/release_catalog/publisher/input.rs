@@ -41,11 +41,12 @@ pub(in crate::cli::release_catalog) struct PinInputArgs {
     /// Use with stado web quality/build --git-input NAME=OWNER/REPOSITORY.git.
     #[arg(long)]
     git_bundle: bool,
-    /// Resolve the Swift package in --source as its committed
-    /// Package.resolved pins it and publish that resolution (`.build/`
-    /// checkouts, repositories, artifacts and workspace state) as an archive
-    /// the release script unpacks into the source before building offline.
-    /// Package.swift and Package.resolved must be committed unchanged.
+    /// Resolve the Swift package --source holds at --revision as that
+    /// commit's Package.resolved pins it and publish that resolution
+    /// (`.build/` checkouts, repositories, artifacts and workspace state) as
+    /// an archive the release script unpacks into the source before building
+    /// offline. The package is resolved from the commit's own tree, so the
+    /// source's working tree may hold anything.
     #[arg(long, conflicts_with_all = ["paths", "cargo", "git_bundle"])]
     swiftpm: bool,
     #[arg(long)]
@@ -156,29 +157,18 @@ pub(in crate::cli::release_catalog) async fn pin_input(args: PinInputArgs) -> Re
             cargo_archive.sha256.clone(),
         )
     } else if *swiftpm {
-        let committed = |when: &str| {
-            git(
-                source,
-                &[
-                    "diff",
-                    "--exit-code",
-                    &commit,
-                    "--",
-                    "Package.swift",
-                    "Package.resolved",
-                ],
-            )
-            .map_err(|error| {
-                CmdError::usage(format!(
-                    "Package.swift or Package.resolved of {} differs from {commit} {when}, so the \
-                     resolution would not be the committed one; nothing was published: {error}",
-                    source.display()
-                ))
-            })
-        };
-        committed("before resolving")?;
-        swiftpm_archive = swiftpm::export(source, &checkout.join(".build/release-input"))?;
-        committed("after resolving")?;
+        // The commit's tree, not the source's working tree: what is
+        // resolved is exactly what the revision commits, whatever the
+        // checkout is in the middle of.
+        let scratch = checkout.join(".build/release-input");
+        let package = tree::materialized(source, &commit, &scratch)?;
+        swiftpm_archive = swiftpm::export(package.path(), &scratch)?;
+        package.close().map_err(|error| {
+            CmdError::click(format!(
+                "cannot remove the committed tree of {commit} under {}: {error}; no input was published",
+                scratch.display()
+            ))
+        })?;
         let digest = stado_product::common::sha256(swiftpm_archive.path()).map_err(|error| {
             CmdError::click(format!("cannot hash SwiftPM resolution input: {error:#}"))
         })?;

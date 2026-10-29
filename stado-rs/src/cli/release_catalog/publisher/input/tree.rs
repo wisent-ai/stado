@@ -46,6 +46,21 @@ pub(super) fn export(
     Ok(archive)
 }
 
+/// `source` at `commit`, with its submodules and links resolved as
+/// [`export`] archives them, as a folder under `scratch` that is removed when
+/// the answer is dropped or closed.
+pub(super) fn materialized(
+    source: &Path,
+    commit: &str,
+    scratch: &Path,
+) -> Result<tempfile::TempDir, CmdError> {
+    std::fs::create_dir_all(scratch)?;
+    let root = tempfile::tempdir_in(scratch)?;
+    materialize(source, commit, root.path(), &[])?;
+    resolve_links(root.path())?;
+    Ok(root)
+}
+
 /// `repository` at `commit` (only `paths` of it when any are named), and each
 /// submodule it records, unpacked under `destination`.
 fn materialize(

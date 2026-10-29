@@ -67,3 +67,9 @@ The version bump gathers them into the release's own file and removes this one.
   process that had just started published no beacon for half an hour. A cadenced read now covers
   the time since this process last compared the unit (its first read, the declared
   `WC_HEALTH_INTERVAL_SECONDS`); one-off inspections keep the hour.
+- **`stado release catalog input pin --swiftpm` resolves the commit's own tree:** it resolved the
+  source checkout's working tree and refused when that tree's `Package.swift` or
+  `Package.resolved` differed from the revision, so pinning a commit of a checkout in active use
+  needed a second clean clone of it. The revision's tree, with its submodules and links resolved,
+  is now materialized under the checkout's `.build/release-input` and resolved there, and the
+  working tree may hold anything.
