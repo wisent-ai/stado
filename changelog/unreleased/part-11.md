@@ -17,3 +17,8 @@ The version bump gathers them into the release's own file and removes this one.
   A Cargo run that exits 0 without Cargo naming the manifest's own package as compiled or checked
   is refused instead of passed: `<host>: cargo <operation> of <commit> exited 0 without compiling
   or checking <package>, so its verdict is another run's output; run it again`.
+- **A product operation turned away for the disk janitor's turn says retrying helps:** without
+  `--wait`, `stado product install` (and every building product operation) found the janitor
+  asking running work for its turn and refused as a rule, `retrying will not help`, exit 1, though
+  the turn ends once the pass has run. It is now a retryable wait: exit 69, `retry later`, and the
+  sentence says to run it again once that pass has run or with `--wait`.

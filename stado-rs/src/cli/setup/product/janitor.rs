@@ -61,13 +61,18 @@ pub(super) async fn janitor_hold(
     }
     let waits = matches!(arguments.try_get_one::<bool>("wait"), Ok(Some(true)));
     if !waits {
-        return Err(CmdError::refused(format!(
+        // The turn is transient: it ends when the pass it waits for has run.
+        // It is stated as a wait an unchanged retry gets past (exit 69,
+        // "retry later"), never as a rule refusing the request, which told
+        // the caller that retrying would not help.
+        return Err(CmdError::click(format!(
             "{holder} builds into a directory the disk janitor reclaims, and the janitor has \
              asked running work for its turn; nothing was exported or built. It waits on: {}. \
-             With --wait the operation waits for that work, runs the janitor's pass and then \
-             builds",
+             Run it again once that pass has run, or with --wait to wait for that work, run \
+             the janitor's pass and then build",
             janitor::workload_holders()
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::RateLimit));
     }
     loop {
         janitor::wait_for_janitor_turn(&holder).map_err(unheld)?;
