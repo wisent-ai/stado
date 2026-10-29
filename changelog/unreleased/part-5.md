@@ -52,3 +52,6 @@ The version bump gathers them into the release's own file and removes this one.
   machine, each row naming its product and surface, and exits 1 when any native file is not
   stably signed (ad-hoc, unsigned), so one read names every installed program that asks the
   privacy questions again on each build.
+- `stado waits measured [--over SECONDS] [--json]` lists every operation that completed a wait on
+  the machine with its longest completed wait, longest first: the one place to see which builds,
+  child processes and requests take long, and whether a repair made one shorter.

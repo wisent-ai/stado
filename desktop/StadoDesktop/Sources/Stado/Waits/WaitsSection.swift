@@ -14,6 +14,7 @@ struct WaitsSection: View {
     @State private var working = false
     @State private var cycles: [String]?
     @State private var holdings: [String]?
+    @State private var measured: [String]?
 
     var body: some View {
         Section("Open waits on the Stado API host") {
@@ -56,6 +57,14 @@ struct WaitsSection: View {
                 LabeledContent("Held resources", value: String(holdings.count))
                 ForEach(holdings, id: \.self) { holding in
                     Text(holding).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                }
+            }
+            Button("Read measured waits") { Task { await readMeasured() } }
+                .disabled(working || !fleetStore.isConfigured)
+            if let measured {
+                LabeledContent("Measured operations", value: String(measured.count))
+                ForEach(measured, id: \.self) { row in
+                    Text(row).font(WisentTypeScale.identifier()).textSelection(.enabled)
                 }
             }
             if let receipt {
@@ -189,6 +198,45 @@ struct WaitsSection: View {
                     throw WaitsReadFailure("stado waits holds --json listed a holding without its pid and resource: \(row)")
                 }
                 return "process \(pid) holds \(resource)"
+            }
+        } catch {
+            guard generation == fleetStore.requestGeneration else { return }
+            problem = error.localizedDescription
+        }
+    }
+
+    /// `stado waits measured --json`: every operation whose waits completed
+    /// on the host with its longest completed wait, longest first. A pure
+    /// read, so it is sent without confirmation.
+    @MainActor
+    private func readMeasured() async {
+        guard !working, let address = fleetStore.address else { return }
+        let generation = fleetStore.requestGeneration
+        working = true
+        problem = nil
+        defer { working = false }
+        do {
+            let result = try await fleetStore.client.run(
+                arguments: ["waits", "measured", "--json"], confirmsMutation: false, at: address,
+                authorizationToken: fleetStore.authorizationToken
+            )
+            guard generation == fleetStore.requestGeneration else { return }
+            receipt = result
+            measured = nil
+            guard result.ok else {
+                problem = result.message
+                return
+            }
+            guard let document = try JSONSerialization.jsonObject(with: Data(result.standardOutput.utf8)) as? [String: Any],
+                  let rows = document["measured"] as? [[String: Any]]
+            else {
+                throw WaitsReadFailure("stado waits measured --json answered a document without measured: \(result.standardOutput)")
+            }
+            measured = try rows.map { row in
+                guard let operation = row["operation"] as? String, let seconds = row["longest_seconds"] as? Double else {
+                    throw WaitsReadFailure("stado waits measured --json listed an operation without its name and seconds: \(row)")
+                }
+                return String(format: "%.3fs  %@", seconds, operation)
             }
         } catch {
             guard generation == fleetStore.requestGeneration else { return }

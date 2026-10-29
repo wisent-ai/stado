@@ -7,9 +7,11 @@
 //! wait-for graph, and `stado waits close` removes one. `stado waits hold`,
 //! `release` and `holds` record what a process holds in that graph, and
 //! `stado waits cycles` names the wait cycles standing on this machine:
-//! waits none of which can end.
+//! waits none of which can end. `stado waits measured` lists how long the
+//! longest completed wait of each operation took here.
 
 mod holds;
+mod measured;
 
 use serde_json::{json, Value};
 
@@ -39,7 +41,7 @@ fn rows(waits: &[Open]) -> Value {
     )
 }
 
-/// `stado waits [open|close|hold|release|holds|cycles]`.
+/// `stado waits [open|close|hold|release|holds|cycles|measured]`.
 pub(crate) fn dispatch(action: Option<WaitsAction>, as_json: bool) -> Result<(), CmdError> {
     match action {
         None => run(as_json),
@@ -67,6 +69,7 @@ pub(crate) fn dispatch(action: Option<WaitsAction>, as_json: bool) -> Result<(),
         Some(WaitsAction::Release { id, json }) => holds::release(&id, json || as_json),
         Some(WaitsAction::Holds { json }) => holds::list(json || as_json),
         Some(WaitsAction::Cycles { json }) => cycles(json || as_json),
+        Some(WaitsAction::Measured { over, json }) => measured::list(over, json || as_json),
     }
 }
 

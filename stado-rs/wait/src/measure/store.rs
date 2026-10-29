@@ -69,6 +69,39 @@ pub(crate) fn longest(operation: &str) -> Result<Option<Duration>, String> {
     }
 }
 
+/// Every operation that completed a wait on this machine, with the longest
+/// completed wait on it, longest first: the one place a reader sees which
+/// operations take long here. A record is a file named by its digest alone;
+/// the lock files and the files written beside a record before its rename
+/// carry an extension and are not records.
+pub fn kept() -> Result<Vec<(String, Duration)>, String> {
+    let directory = directory()?;
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("listing {}: {error}", directory.display())),
+    };
+    let mut kept = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|error| format!("listing {}: {error}", directory.display()))?
+            .path();
+        if path.extension().is_some() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .map_err(|error| format!("reading {}: {error}", path.display()))?;
+        let took = parse(&path, &text)?;
+        let operation = match text.trim_end().split_once(' ') {
+            Some((_, operation)) => operation.to_owned(),
+            None => return Err(format!("{} names no operation", path.display())),
+        };
+        kept.push((operation, took));
+    }
+    kept.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    Ok(kept)
+}
+
 /// Keep `took` as the longest completed wait on `operation` when it is
 /// longer than the one kept.
 pub(crate) fn record(operation: &str, took: Duration) -> Result<(), String> {

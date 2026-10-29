@@ -184,4 +184,18 @@ pub(crate) enum WaitsAction {
         #[arg(long)]
         json: bool,
     },
+    /// Every operation that completed a wait on this machine with the
+    /// longest completed wait on it, longest first: the measurement each
+    /// later wait on that operation is due by, and the one place to see
+    /// which operations take long here. With --over SECONDS only those
+    /// whose longest wait exceeded it. It only reads; nothing changes.
+    Measured {
+        /// Only operations whose longest completed wait exceeded this many
+        /// seconds.
+        #[arg(long)]
+        over: Option<u64>,
+        /// Emit the measurements as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
