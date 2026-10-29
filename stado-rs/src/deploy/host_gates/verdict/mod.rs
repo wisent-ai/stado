@@ -8,8 +8,10 @@
 mod join;
 mod memory;
 mod payload;
+mod presence;
 mod report;
 
 pub use join::assemble;
 pub use memory::MemoryGate;
+pub use presence::Presence;
 pub use report::{gates_section, to_report};

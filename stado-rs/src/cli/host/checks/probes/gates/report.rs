@@ -64,6 +64,10 @@ pub(super) fn print_report(gates: &HostGates) {
         println!("blockers: {}", gates.blockers.join(", "));
     }
     println!(
+        "presence: {}",
+        crate::deploy::host_gates::Presence::of(gates).line()
+    );
+    println!(
         "disk:     {} free, {} used, {} until the {}% disk-full threshold",
         gigabytes(gates.free_gb),
         observed(gates.used_percent.map(|used| format!("{used}%"))),

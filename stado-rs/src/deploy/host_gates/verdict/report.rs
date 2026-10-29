@@ -83,6 +83,10 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
     );
     report.insert("memory".to_string(), gates.memory.to_value());
     report.insert(
+        "presence".to_string(),
+        super::Presence::of(gates).to_value(),
+    );
+    report.insert(
         "capacity".to_string(),
         json!({
             "published_at": gates.published_at,

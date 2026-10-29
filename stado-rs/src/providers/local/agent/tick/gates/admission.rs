@@ -103,6 +103,11 @@ pub(crate) async fn publish_and_admit(
             Some(crate::providers::local::space_reclaim::CLEANUP_LOCK_ERROR)
         }
     };
+    // A host on battery claims nothing: work drains it until it sleeps and
+    // drops every job. While it holds work it is kept awake on mains.
+    let power = crate::providers::local::host_power::read();
+    power.publish(agent_diag);
+    crate::providers::local::host_power::awake::hold_while(!slots.is_empty(), log_fn);
     // A drain asked of this worker ([`crate::providers::local::agent::drain`])
     // admits nothing more, and the publication says so with the same reason.
     let drain = crate::providers::local::agent::drain::requested();
@@ -112,6 +117,8 @@ pub(crate) async fn publish_and_admit(
         Some("drain_requested")
     } else if pressure_active {
         Some("disk_pressure_active")
+    } else if power.on_mains == Some(false) {
+        Some(crate::providers::local::host_power::ON_BATTERY)
     } else {
         lock_reason
     };

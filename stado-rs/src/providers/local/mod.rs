@@ -17,6 +17,7 @@ pub mod disk;
 pub mod disk_staging;
 pub mod helpers;
 pub mod host_memory;
+pub mod host_power;
 pub mod host_routines;
 pub mod probe;
 pub mod slots;

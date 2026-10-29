@@ -41,7 +41,7 @@ mod words;
 pub use gates::{HostGates, WaitingJob};
 pub(crate) use read::observe;
 pub use read::{read_host_gates, DiagnosticRead, ReadState};
-pub use verdict::{assemble, gates_section, to_report};
+pub use verdict::{assemble, gates_section, to_report, Presence};
 pub use words::{
     AGENT_DECLARED_NOT_LOADED, AGENT_STORE_DEVICE_ONLY, AGENT_STORE_UNKNOWN,
     AGENT_STORE_UNREADABLE, CAPACITY_PUBLICATION_STALE, CLEANUP_IN_PROGRESS,
