@@ -52,6 +52,23 @@ pub(super) fn answer<T: Send + 'static>(
     }
 }
 
+/// Tokio panics ("Cannot drop a runtime in a context where blocking is not
+/// allowed") when a runtime is dropped inside another runtime's async
+/// context, as every async CLI or service holding a client is. On a
+/// multi-threaded worker the drop leaves the worker for the wait, as
+/// [`answer`] does; on a current-thread runtime, which cannot be left, the
+/// runtime is shut down without waiting for its worker; on any other thread
+/// it is dropped, waiting for it.
+pub(super) fn release(runtime: Runtime) {
+    match Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(move || drop(runtime))
+        }
+        Ok(_) => runtime.shutdown_background(),
+        Err(_) => drop(runtime),
+    }
+}
+
 pub(super) const STOPPED: &str = "the fleet database task stopped before it answered";
 
 /// [`answer`] for one statement or transaction step of the database named

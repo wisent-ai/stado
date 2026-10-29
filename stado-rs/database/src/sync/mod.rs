@@ -16,6 +16,7 @@ mod transaction;
 mod waiting;
 
 use std::future::Future;
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 use sea_orm::{
@@ -31,7 +32,7 @@ pub use transaction::Tx;
 
 use crate::FleetDatabase;
 use stado_wait::Cancellation;
-use waiting::{answer, stopped, wait, Answer, STOPPED};
+use waiting::{answer, release, stopped, wait, Answer, STOPPED};
 
 /// The statement in the dialect of the database it runs on: Postgres, MySQL
 /// or SQLite, as the connection's backend says.
@@ -47,10 +48,18 @@ pub trait Run {
 }
 
 pub struct Client {
-    pub(super) runtime: Runtime,
+    /// Released by `waiting::release`, never by its own drop: see `impl Drop`.
+    pub(super) runtime: ManuallyDrop<Runtime>,
     pub(super) connection: DatabaseConnection,
     /// The database's Stado name, where each statement's wait says it waits.
     pub(super) name: String,
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        // SAFETY: the runtime is taken once, here, and never read again.
+        release(unsafe { ManuallyDrop::take(&mut self.runtime) });
+    }
 }
 
 impl Client {
@@ -95,22 +104,26 @@ impl Client {
                 None => crate::connect(&fleet).await,
             }
         }) {
-            Answer::Answered(connection) => connection?,
-            Answer::Cancelled => {
-                return Err(crate::Error::new("connect", stado_wait::CANCELLED));
-            }
-            Answer::Stopped => {
-                return Err(crate::Error::new(
-                    "connect",
-                    "the connecting task stopped before it answered",
-                ));
-            }
+            Answer::Answered(connection) => connection,
+            Answer::Cancelled => Err(crate::Error::new("connect", stado_wait::CANCELLED)),
+            Answer::Stopped => Err(crate::Error::new(
+                "connect",
+                "the connecting task stopped before it answered",
+            )),
         };
-        Ok(Self {
-            runtime,
-            connection,
-            name: database.name.clone(),
-        })
+        match connection {
+            Ok(connection) => Ok(Self {
+                runtime: ManuallyDrop::new(runtime),
+                connection,
+                name: database.name.clone(),
+            }),
+            // A refused connection releases its runtime the same way, so the
+            // caller sees the refusal instead of Tokio's panic.
+            Err(error) => {
+                release(runtime);
+                Err(error)
+            }
+        }
     }
 
     /// One statement or step on this client's runtime.
