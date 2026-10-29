@@ -107,6 +107,14 @@ pub fn for_installation(
         &["rev-parse", "--verify", &format!("{wanted}^{{commit}}")],
     )
     .with_context(|| format!("{wanted} names no commit in {}", root.display()))?;
+    if git(root, &["ls-tree", "--name-only", &commit, "--", &relative])?.is_empty() {
+        return Err(Uncommitted {
+            catalog: file.clone(),
+            root: root.to_path_buf(),
+            commit,
+        }
+        .into());
+    }
     let text = git(root, &["show", &format!("{commit}:{relative}")])
         .with_context(|| format!("{} holds no {relative} at {commit}", root.display()))?;
     let document: Value = serde_yaml::from_str(&text)
@@ -122,3 +130,31 @@ pub fn for_installation(
         },
     ))
 }
+
+/// A catalog an installation was given that its checkout's commit does not
+/// hold: an installation executes the committed catalog, never a file on
+/// disk, so an uncommitted one is refused before anything is read or built.
+/// `stado product status` and `catalog` read the file itself; only an
+/// installation needs it committed.
+#[derive(Debug)]
+pub struct Uncommitted {
+    pub catalog: std::path::PathBuf,
+    pub root: std::path::PathBuf,
+    pub commit: String,
+}
+
+impl std::fmt::Display for Uncommitted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "the catalog {} is not committed in {} at {}; an installation executes the \
+             committed catalog, never the file on disk, so nothing was read or built. Commit it \
+             and install again, or name a committed catalog with --catalog",
+            self.catalog.display(),
+            self.root.display(),
+            self.commit
+        )
+    }
+}
+
+impl std::error::Error for Uncommitted {}

@@ -169,11 +169,10 @@ pub fn credential_field(role: &str, field: &str) -> Result<String> {
         format!("stado credentials get --role {role} --field {field} could not be started")
     })?;
     if !output.status.success() {
-        bail!(
-            "stado credentials get --role {role} --field {field} exited {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        // Its exit code travels with it: a Stado that could not reach Skarbiec
+        // exits with the retry code, which the caller reports as retryable.
+        let what = format!("stado credentials get --role {role} --field {field}");
+        return Err(CommandFailed::exited(&what, &output).into());
     }
     let value = String::from_utf8(output.stdout)?
         .trim_end_matches(['\r', '\n'])

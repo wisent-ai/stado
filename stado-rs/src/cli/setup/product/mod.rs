@@ -219,23 +219,45 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
 }
 
 /// Product failures carry their classification in the cause chain. A retained
-/// installation bound to another host is a refused lifecycle transition; a
-/// build of a committed manifest its own Cargo.lock does not cover is the
-/// committed source refusing, which no retry changes.
-/// Otherwise the first IO or JSON cause decides; wording is never classified.
+/// installation bound to another host, and a source commit no canonical
+/// branch carries, are the request refusing itself; a build of a committed
+/// manifest its own Cargo.lock does not cover, a repository with no canonical
+/// checkout, and a catalog an installation was given that its checkout has
+/// not committed, are the declared state refusing, which no retry
+/// changes. A child (`stado credentials get` reading the signing credential
+/// from a Skarbiec that does not answer) that exited with the fleet's retry
+/// exit code said that what it needs is unreachable now. Otherwise the first
+/// IO or JSON cause decides; wording is never classified.
 fn product_failure_code(error: &anyhow::Error) -> crate::primitives::failure::FailureCode {
     for cause in error.chain() {
         if cause
             .downcast_ref::<stado_product::cargo_lock::UnlockedManifest>()
             .is_some()
+            || cause
+                .downcast_ref::<stado_product::MissingCheckout>()
+                .is_some()
+            || cause
+                .downcast_ref::<stado_product::catalog::committed::Uncommitted>()
+                .is_some()
         {
             return crate::primitives::failure::FailureCode::Config;
         }
         if cause
             .downcast_ref::<stado_product::InstallationHostConflict>()
             .is_some()
+            || cause
+                .downcast_ref::<stado_product::NotCanonical>()
+                .is_some()
         {
             return crate::primitives::failure::FailureCode::Refused;
+        }
+        if cause
+            .downcast_ref::<stado_product::common::CommandFailed>()
+            .is_some_and(|failed| {
+                failed.code == Some(crate::primitives::failure::FailureCode::RETRY_EXIT)
+            })
+        {
+            return crate::primitives::failure::FailureCode::InfraDown;
         }
         if let Some(io) = cause.downcast_ref::<std::io::Error>() {
             return crate::cli::entry::error::io_failure_code(io.kind());

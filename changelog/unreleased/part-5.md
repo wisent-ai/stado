@@ -29,3 +29,10 @@ The version bump gathers them into the release's own file and removes this one.
   `stado ci plan set` takes the cadence as `--every SECONDS` (required); a plan declared without
   one fires nothing until declared again, and `stado ci plan show` prints the cadence and when
   the next pass is due.
+- `stado product install` attributes the refusals it used to report as `unknown; retrying will
+  not help`: a source commit neither main carries is `refused` and says how to make it
+  installable; a repository with no canonical checkout, and a `--catalog` file its checkout has
+  not committed, are `config` (the latter refused before anything is read, naming the file, the
+  checkout and the commit, where it used to surface as git's `exists on disk, but not in`); and a
+  signing credential read whose `stado credentials get` exited with the retry code because
+  Skarbiec did not answer is `infra_down`, exit 69.

@@ -36,6 +36,9 @@ pub mod swift_cache;
 pub mod word;
 
 pub use install::plan::conflict::InstallationHostConflict;
+/// A source that cannot be installed as asked: no canonical checkout for
+/// the repository, or a commit no canonical branch carries.
+pub use source::{MissingCheckout, NotCanonical};
 
 /// Declare again the lasting state an installation's recipe declares through
 /// Stado, for a service its install path did not declare it for, and whether

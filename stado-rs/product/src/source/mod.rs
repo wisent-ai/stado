@@ -1,3 +1,5 @@
+mod canonical;
+pub use canonical::NotCanonical;
 mod index;
 pub(crate) use index::WorkspaceIndex;
 mod provenance;
@@ -266,10 +268,7 @@ pub fn canonical_commit(root: &Path, commit: &str) -> Result<CanonicalCommit> {
             on_origin: false,
         });
     }
-    bail!(
-        "neither origin/main nor {}'s main carries {commit}; only canonical source is installed",
-        root.display()
-    );
+    Err(NotCanonical::new(commit, root).into())
 }
 
 pub fn advance(root: &Path, fetch: bool) -> Result<()> {
