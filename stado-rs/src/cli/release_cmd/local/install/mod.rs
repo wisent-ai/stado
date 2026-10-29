@@ -61,10 +61,27 @@ pub(in crate::cli::release_cmd) async fn install_local(
         None
     };
     let stado_version = delivered_version.clone().filter(|_| name == "stado");
-    let archive = declared("WISENT_RELEASE_ARCHIVE")?
-        .ok_or_else(|| CmdError::click("WISENT_RELEASE_ARCHIVE is not set; this command is the delivery contract's local endpoint").stating(crate::primitives::failure::FailureCode::Config))?;
-    let expected = declared("WISENT_RELEASE_SHA256")?
-        .ok_or_else(|| CmdError::click("WISENT_RELEASE_SHA256 is not set; this command is the delivery contract's local endpoint").stating(crate::primitives::failure::FailureCode::Config))?;
+    // `--archive`/`--sha256` name the archive an operator delivered; without
+    // them the delivery worker's environment does.
+    let (archive, expected) = match (&args.archive, &args.sha256) {
+        (Some(archive), Some(sha256)) => (archive.to_string_lossy().into_owned(), sha256.clone()),
+        _ => (
+            declared("WISENT_RELEASE_ARCHIVE")?.ok_or_else(|| {
+                CmdError::click(
+                    "WISENT_RELEASE_ARCHIVE is not set and --archive names no archive; this \
+                     command is the delivery contract's local endpoint",
+                )
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })?,
+            declared("WISENT_RELEASE_SHA256")?.ok_or_else(|| {
+                CmdError::click(
+                    "WISENT_RELEASE_SHA256 is not set and --sha256 names no digest; this \
+                     command is the delivery contract's local endpoint",
+                )
+                .stating(crate::primitives::failure::FailureCode::Config)
+            })?,
+        ),
+    };
     install_archive(
         name.clone(),
         &args.member,

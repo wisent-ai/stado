@@ -24,6 +24,10 @@ The version bump gathers them into the release's own file and removes this one.
 - `stado network up --host HOST` joins another machine: when this machine's registry copy tells
   HOST apart from it, HOST's own installed Stado runs `network up` over its host channel (the
   node, its key and its unit are that host's), and its receipt is printed here.
+- `stado release local install --archive PATH --sha256 HEX` installs an archive an operator
+  delivered with `stado host run deliver`, run on the host with `stado host run attach`, which
+  carries arguments and no environment; without them the delivery worker's
+  `WISENT_RELEASE_ARCHIVE` and `WISENT_RELEASE_SHA256` still name it.
 
 ### Changed
 

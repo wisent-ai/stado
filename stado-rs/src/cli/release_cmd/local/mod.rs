@@ -23,8 +23,11 @@ pub use restore::ReleaseRestoreLocalArgs;
 /// installed over ssh died on the first host without Remote Login. The
 /// archive path and digest come from the delivery worker's environment
 /// (`WISENT_RELEASE_ARCHIVE`, `WISENT_RELEASE_SHA256`), the same contract
-/// the retired python installer read. This command replaced the last
-/// load-bearing installer script.
+/// the retired python installer read, or from `--archive` and `--sha256`
+/// for an archive an operator delivered himself (`stado host run deliver`)
+/// and installs with `stado host run attach`, which carries arguments and no
+/// environment. This command replaced the last load-bearing installer
+/// script.
 #[derive(Args)]
 pub struct ReleaseInstallLocalArgs {
     /// Archive member to install, e.g. bin/stado.
@@ -34,6 +37,12 @@ pub struct ReleaseInstallLocalArgs {
     /// basename.
     #[arg(long, default_value = "")]
     name: String,
+    /// The release archive to install, in place of WISENT_RELEASE_ARCHIVE.
+    #[arg(long, requires = "sha256")]
+    archive: Option<PathBuf>,
+    /// The SHA-256 the archive must have, in place of WISENT_RELEASE_SHA256.
+    #[arg(long, requires = "archive")]
+    sha256: Option<String>,
 }
 
 #[derive(Args)]
