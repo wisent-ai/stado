@@ -79,7 +79,7 @@ try {
   success(run(skarbiec, ['init', 'database-grant-journey']));
   success(run(stado, ['config', 'set', 'secrets.skarbiec.vault_file', vault]));
   for (const item of ['grant-seed', 'grant-journey-database']) {
-    success(run(skarbiec, ['set-json', item], JSON.stringify({
+    success(run(skarbiec, ['set', item], JSON.stringify({
       schema: 'skarbiec.item.v2', kind: 'bundle', context: {},
       fields: { value: randomBytes(32).toString('hex') },
     }), false));
