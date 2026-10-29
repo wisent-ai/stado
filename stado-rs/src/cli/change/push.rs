@@ -40,7 +40,7 @@ pub(crate) async fn landing(checkout: &Path, commit: &str) -> Result<Option<Stri
                 .landed
                 .as_ref()
                 .is_some_and(|landed| landed.commit == commit),
-            State::Queued | State::Refused | State::Cancelled => false,
+            State::Queued | State::Refused | State::Repaired | State::Cancelled => false,
         })
         .map(|candidate| candidate.id))
 }

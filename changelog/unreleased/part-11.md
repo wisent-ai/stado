@@ -37,9 +37,39 @@ The version bump gathers them into the release's own file and removes this one.
   the optional per-product `submit` declaration (`criticality: critical|standard`,
   `low_risk_max_changed_lines`, `review_paths`); Stado and Oko declare themselves `critical`,
   Trends `standard` (low risk up to 40 changed lines outside its manifests and workflows).
+- **The submit queue refuses a change too big to review whole:** the catalog `submit` declaration
+  gains `max_changed_lines`, the most lines (added plus removed) one change of the product may
+  change. `stado change submit` refuses a commit whose own commits change more past their merge
+  base with `main`: `<commit> changes <n> lines in <f> files past its merge base <base> with main,
+  more than the <max> one change of <product> may (its catalog submit.max_changed_lines); split it
+  into changes of at most <max> lines and submit each`, and a product whose declaration states no
+  number. Stado and Oko declare 2000, Trends 400.
 
 ### Fixed
 
+- **A reviewed candidate no longer holds the head of the submit queue:** a harsh review before
+  landing whose reviewer staged repairs, rewrote only the message, or ended with no round covering
+  what it left kept the candidate queued at the head, so every `stado change run` ran the same
+  review again first (an hour for a 50-commit chain) and no candidate behind it moved. Such a
+  candidate is now `repaired`: its record names the reviewer's commit and tree (`repairs`), and
+  that commit (the reviewed one when nothing was staged) is queued at the tail as its follow-up,
+  carrying the same defects; a message-only repair is the reviewer's message over the reviewed
+  tree, whose gates the action cache answers. A follow-up whose own review ends that way is
+  refused, naming the commit for its author. `stado change list --state repaired` lists them.
+- **The harsh review judges a candidate as written by the session that submitted it:** Tama took
+  the author of a tree no harsh-review queue entry names to be the session invoking the review,
+  which was the session running the pass, so a candidate the queue reviewed for another session
+  was judged as that runner's own. Before the review the candidate is entered in Oko's harsh-review
+  queue (`oko review harsh enqueue`) as staged by its submitting session (the operator when none
+  did). Oko keeps one open entry per author, so when the author's earlier entry still waits for
+  its round the review runs anyway and its record begins with why the author was not entered.
+- **A high-risk change that names no defect is refused at submit:** `stado change submit` took
+  `--defect` as optional, and `stado change run` refused such a candidate as `names no defect`
+  only after all its gates had run. A candidate the risk rules already call high over its own
+  commits and declared gates (a critical product, a review path, more lines than
+  `low_risk_max_changed_lines`, no compiling gate) and that names no defect is now refused at
+  submit: `<commit> is high risk (<reasons>), so it is reviewed before it lands, and that review is
+  scoped to the defect it repairs; submit it with --defect ID`.
 - **A declared gate the submit queue runs on a fleet host finds Stado:** `stado change run` ran a
   gate whose argv calls Stado (Trends' `stado release gate app check …`) in host cargo's prelude,
   whose `PATH` holds no `~/.stado/bin`, so it exited 127 `stado: command not found` on every host

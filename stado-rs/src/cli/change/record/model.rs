@@ -21,6 +21,11 @@ pub enum State {
     Landed,
     /// A gate, the rebase, the review or a declaration refused it.
     Refused,
+    /// Its harsh review before landing staged repairs (of the tree or the
+    /// message), or ended with no round covering what it left: it left the
+    /// head of the queue, and what the reviewer left is queued at the tail
+    /// as the candidate its `repairs` names.
+    Repaired,
     /// Withdrawn by `stado change cancel` before it landed.
     Cancelled,
 }
@@ -32,6 +37,7 @@ impl State {
             Self::Running => "running",
             Self::Landed => "landed",
             Self::Refused => "refused",
+            Self::Repaired => "repaired",
             Self::Cancelled => "cancelled",
         }
     }
@@ -42,6 +48,7 @@ impl State {
             Self::Running,
             Self::Landed,
             Self::Refused,
+            Self::Repaired,
             Self::Cancelled,
         ];
         all.into_iter()
@@ -49,10 +56,23 @@ impl State {
             .ok_or_else(|| {
                 CmdError::usage(format!(
                     "--state {word} is not a candidate state; the states are queued, running, \
-                     landed, refused and cancelled"
+                     landed, refused, repaired and cancelled"
                 ))
             })
     }
+}
+
+/// What a harsh review before landing left of a candidate, queued as a
+/// candidate of its own at the tail of the queue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Repairs {
+    /// The commit the reviewer's tree and message make on the reviewed
+    /// commit, or the reviewed commit itself when it staged nothing.
+    pub commit: String,
+    /// The tree the reviewer left.
+    pub tree: String,
+    /// The candidate it is queued as.
+    pub queued_as: String,
 }
 
 /// The candidate's own commits written again on the remote tip.
@@ -167,6 +187,10 @@ pub struct Candidate {
     pub landed: Option<Landed>,
     #[serde(default)]
     pub refusal: Option<String>,
+    /// For a `repaired` candidate, what its review left and where it is
+    /// queued.
+    #[serde(default)]
+    pub repairs: Option<Repairs>,
     #[serde(default)]
     pub integrated: Vec<Integrated>,
     /// Each register write (Oko, the backlog file) that was refused, in its

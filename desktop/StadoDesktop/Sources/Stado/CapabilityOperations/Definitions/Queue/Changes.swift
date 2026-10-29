@@ -11,7 +11,7 @@ enum NativeChangeQueueOperations {
         .init(id: "change-submit", title: "Queue a commit to land on its repository's main", path: ["change", "submit"], hostPlacement: .none, fields: [
             .init(id: "checkout", label: "The repository's checkout on the machine of the selected Stado endpoint", required: true),
             .init(id: "commit", label: "Commit to land (one the checkout holds, or one origin gives by its id)", option: "--commit", required: true),
-            .init(id: "defects", label: "Oko defects the commit repairs, one per line (the first scopes the harsh review)", option: "--defect", multiple: true),
+            .init(id: "defects", label: "Oko defects the commit repairs, one per line (the first scopes the harsh review; a high-risk change must name one)", option: "--defect", multiple: true),
         ]),
         .init(id: "change-run", title: "Run one pass of a repository's submit queue: rebase, gates on the fleet, review, land", path: ["change", "run"], hostPlacement: .none, fields: [
             .init(id: "checkout", label: "The repository's checkout on the machine of the selected Stado endpoint", required: true),
@@ -23,7 +23,7 @@ enum NativeChangeQueueOperations {
         ], mutates: false),
         .init(id: "change-list", title: "List the submit queue's candidates, oldest first", path: ["change", "list"], hostPlacement: .none, fields: [
             .init(id: "checkout", label: "A repository's checkout (blank lists every repository)"),
-            .init(id: "state", label: "Only this state: queued, running, landed, refused or cancelled", option: "--state"),
+            .init(id: "state", label: "Only this state: queued, running, landed, refused, repaired or cancelled", option: "--state"),
         ], mutates: false),
         .init(id: "change-cancel", title: "Withdraw a queued or running submit queue candidate", path: ["change", "cancel"], hostPlacement: .none, fields: [
             .init(id: "id", label: "Candidate id, whole or a unique prefix", required: true),

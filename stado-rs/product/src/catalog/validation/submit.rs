@@ -1,22 +1,26 @@
-//! A product's `submit` declaration: how the submit queue (`stado change`)
-//! classifies a change of it before the change lands.
+//! A product's `submit` declaration: how big one change of it may be, and
+//! how the submit queue (`stado change`) classifies a change of it before
+//! the change lands.
 //!
 //! ```yaml
 //! submit:
 //!   criticality: standard          # or critical
+//!   max_changed_lines: 2000          # every product
 //!   low_risk_max_changed_lines: 400  # standard only
 //!   review_paths:
 //!   - .wisent-release.json
 //!   - .github/
 //! ```
 //!
-//! Every change of a `critical` product is high risk. A change of a
-//! `standard` product is high risk when it changes more lines than its
-//! `low_risk_max_changed_lines` or touches a `review_paths` entry (the path
-//! itself, or anything below an entry ending in `/`). A high-risk change is
-//! reviewed before it lands; every other change lands first and is
-//! reviewed after. The numbers and paths are the product's declaration; the
-//! queue keeps none of its own.
+//! A candidate that changes more lines than `max_changed_lines` is refused
+//! when it is submitted, so a change is split before its review rather than
+//! reviewed whole. Every change of a `critical` product is high risk. A
+//! change of a `standard` product is high risk when it changes more lines
+//! than its `low_risk_max_changed_lines` or touches a `review_paths` entry
+//! (the path itself, or anything below an entry ending in `/`). A high-risk
+//! change is reviewed before it lands; every other change lands first and
+//! is reviewed after. The numbers and paths are the product's declaration;
+//! the queue keeps none of its own.
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -46,6 +50,12 @@ impl Criticality {
 #[serde(deny_unknown_fields)]
 pub struct SubmitPolicy {
     pub criticality: Criticality,
+    /// The most lines (added plus removed) one candidate may change; a
+    /// larger one is refused at submit, to be split. A declaration without
+    /// it is valid in the catalog, and the queue refuses its submissions
+    /// until it is declared.
+    #[serde(default)]
+    pub max_changed_lines: Option<usize>,
     /// Declared by a `standard` product only: a critical one reviews every
     /// change first, whatever its size.
     #[serde(default)]
@@ -84,6 +94,19 @@ pub(super) fn validate(id: &str, product: &Value) -> Result<()> {
     let Some(policy) = policy(id, product)? else {
         return Ok(());
     };
+    if policy.max_changed_lines == Some(0) {
+        bail!("{id}: submit.max_changed_lines is 0, so no change of it could land");
+    }
+    if let (Some(max), Some(low_risk)) =
+        (policy.max_changed_lines, policy.low_risk_max_changed_lines)
+    {
+        if low_risk > max {
+            bail!(
+                "{id}: submit.low_risk_max_changed_lines {low_risk} is above max_changed_lines \
+                 {max}; no change that size is ever submitted"
+            );
+        }
+    }
     match (policy.criticality, policy.low_risk_max_changed_lines) {
         (Criticality::Standard, None) => bail!(
             "{id}: submit declares criticality standard and no low_risk_max_changed_lines, so no \

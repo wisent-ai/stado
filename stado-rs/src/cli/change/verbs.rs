@@ -82,6 +82,7 @@ pub fn enqueue(
         landing: None,
         landed: None,
         refusal: None,
+        repairs: None,
         integrated: Vec::new(),
         unrecorded: Vec::new(),
     };
@@ -105,6 +106,9 @@ pub async fn submit(path: &str, commit: &str, defects: &[String]) -> Result<Cand
             "{commit} is already on {repository}'s main ({tip}); there is nothing to land"
         )));
     }
+    // A change too big to review whole is split, and a high-risk one names
+    // its defect, before it takes a place.
+    super::run::admit(&checkout, &commit, &tip, defects).await?;
     // Its gates are the submitting session's work, so Oko is later asked
     // about that session, whichever process runs the queue.
     let session = crate::cli::release_loop::allowed::calling_session()
@@ -210,6 +214,12 @@ pub fn print(candidate: &Candidate) {
         println!(
             "  review {} of {}: {}",
             review.when, review.tree, review.verdict
+        );
+    }
+    if let Some(repairs) = &candidate.repairs {
+        println!(
+            "  repairs {} (tree {}) queued as candidate {}",
+            repairs.commit, repairs.tree, repairs.queued_as
         );
     }
     if let Some(refusal) = &candidate.refusal {

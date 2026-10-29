@@ -27,7 +27,9 @@ pub(crate) enum ChangeCommands {
     /// Queue a commit to land on its repository's main: the commit is
     /// written again on the remote main, checked with the product's
     /// declared gates, reviewed as its risk requires and pushed by `stado
-    /// change run`.
+    /// change run`. A commit that changes more lines than its product's
+    /// catalog `submit.max_changed_lines` is refused here, to be split, and
+    /// so is a high-risk one that names no `--defect`.
     Submit {
         /// The repository's checkout on this machine.
         checkout: String,
@@ -36,8 +38,8 @@ pub(crate) enum ChangeCommands {
         #[arg(long)]
         commit: String,
         /// An Oko defect the commit repairs; repeat for several. The first
-        /// scopes the harsh review, and each is recorded repaired when the
-        /// change lands.
+        /// scopes the harsh review, so a high-risk change must name one; each
+        /// is recorded repaired when the change lands.
         #[arg(long = "defect")]
         defects: Vec<String>,
         #[arg(long)]
@@ -45,11 +47,13 @@ pub(crate) enum ChangeCommands {
     },
     /// Run one pass of the checkout's repository's queue: carry every
     /// queued candidate, and every one a stopped pass left running, oldest
-    /// first, to landed or refused. Exits 0 when every candidate reached a
-    /// verdict; a candidate the pass could not judge (the remote or the
-    /// fleet did not answer, Oko's admission did not answer or did not
-    /// admit its gates, the harsh review could not be run) stays queued and
-    /// the pass exits non-zero with the cause.
+    /// first, to landed, refused or repaired (its review before landing
+    /// repaired it, or recorded no round over what its reviewer left: what
+    /// the review left is queued at the tail). Exits 0 when every candidate
+    /// reached a verdict; a candidate the pass could not judge (the remote
+    /// or the fleet did not answer, Oko's admission did not answer or did
+    /// not admit its gates, the harsh review could not be run) stays queued
+    /// and the pass exits non-zero with the cause.
     Run {
         /// The repository's checkout on this machine.
         checkout: String,
@@ -78,16 +82,16 @@ pub(crate) enum ChangeCommands {
         /// A repository's checkout on this machine; every repository
         /// without it.
         checkout: Option<String>,
-        /// Only candidates in this state: queued, running, landed, refused
-        /// or cancelled.
+        /// Only candidates in this state: queued, running, landed, refused,
+        /// repaired or cancelled.
         #[arg(long)]
         state: Option<String>,
         #[arg(long)]
         json: bool,
     },
     /// Withdraw a candidate: a queued one at once, a running one before its
-    /// pass takes the next step. A landed, refused or cancelled candidate
-    /// is refused.
+    /// pass takes the next step. A landed, refused, repaired or cancelled
+    /// candidate is refused.
     Cancel {
         /// The candidate's id, whole or a unique prefix.
         id: String,

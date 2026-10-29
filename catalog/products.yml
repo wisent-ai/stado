@@ -552,6 +552,7 @@ products:
   description: Fleet control plane for queues, jobs, placement, leases, hosts, declared services, and the Wisent product catalog with every product's installation and signing.
   submit:
     criticality: critical
+    max_changed_lines: 2000
   roadmap:
   - title: Add AWS managed autoscaling
     status: planned
@@ -1203,6 +1204,7 @@ products:
   description: Catalogue and operational view of agent sessions and goals.
   submit:
     criticality: critical
+    max_changed_lines: 2000
   roadmap:
   - title: Ship the evidence-locked daily digest
     status: planned
@@ -2451,6 +2453,7 @@ products:
   description: Watches topics across public sources and reports which ones are rising, with the observations behind each verdict.
   submit:
     criticality: standard
+    max_changed_lines: 400
     low_risk_max_changed_lines: 40
     review_paths:
     - .wisent-release.json

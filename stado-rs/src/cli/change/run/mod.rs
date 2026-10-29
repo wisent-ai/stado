@@ -10,19 +10,25 @@
 //! the queue's own, and recorded ([`integration`]). A `main` that moved
 //! before the push takes the candidate back to the rebase, so what lands
 //! is always exactly what the gates checked. A pass that cannot reach a
-//! verdict because the remote, the fleet or the harsh review does not
-//! answer puts the candidate back in the queue and ends with that cause.
-//! One whose gates Oko's admission does not admit, or does not answer for,
-//! is put back in the queue and held for the rest of the pass, which
-//! carries the candidates behind it and then ends naming it. A refused
-//! candidate is a verdict, and the pass goes on. A landed candidate stays
-//! landed whatever its review after landing meets.
+//! verdict because the remote, the fleet or the harsh review cannot be
+//! run puts the candidate back in the queue and ends with that cause. One
+//! whose gates Oko's admission does not admit, or does not answer for, is
+//! put back in the queue and held for the rest of the pass, which carries
+//! the candidates behind it and then ends naming it. One whose review
+//! before landing repaired it, or ended with no round covering what its
+//! reviewer left, leaves the head as `repaired`, and what the review left
+//! is queued at the tail ([`verdict`]), so no pass runs the same review at
+//! the head again. A refused candidate is a verdict, and the pass goes on.
+//! A landed candidate stays landed whatever its review after landing
+//! meets.
 
+mod author;
 pub(super) mod gates;
 mod integration;
 mod rebase;
 mod review;
 mod risk;
+mod submission;
 mod verdict;
 
 use std::path::Path;
@@ -33,7 +39,9 @@ use crate::cli::change::git::{self, Pushed};
 use crate::cli::change::record::{self, Candidate, Landed, State};
 use crate::cli::CmdError;
 use rebase::Rewritten;
-use verdict::{cancelled, follow_up, refuse};
+use verdict::{cancelled, follow_up, refuse, requeue};
+
+pub(super) use submission::admit;
 
 /// Run the queue of the repository whose checkout is `checkout`.
 pub async fn run(
@@ -207,15 +215,20 @@ async fn land(
                 .unwrap_or("its reviewer gave no answer")
                 .to_string();
             candidate.reviews.push(review);
+            let why =
+                format!("the harsh review before landing did not admit it ({verdict}: {said})");
+            if verdict == review::REPAIRED || verdict == review::NO_ROUND {
+                // Off the head: what the review left goes to the tail, so
+                // the next pass carries the candidates behind it first.
+                let left = repaired.unwrap_or_else(|| review::Repair {
+                    commit: rebased.commit.clone(),
+                    tree: rebased.tree.clone(),
+                });
+                requeue(candidate, left, why)?;
+                return Ok(());
+            }
             if verdict != review::ADMITTED {
-                let follow = follow_up(candidate, repaired)?;
-                refuse(
-                    candidate,
-                    format!(
-                        "the harsh review before landing did not admit it ({verdict}: \
-                         {said}){follow}"
-                    ),
-                );
+                refuse(candidate, why);
                 return Ok(());
             }
         }
