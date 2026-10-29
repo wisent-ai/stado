@@ -65,6 +65,12 @@ pub async fn dispatch(command: NetworkCommands) -> Result<(), CmdError> {
     }
 }
 
+/// `stado network up --host HOST`, as another command runs it for a host it
+/// has just brought a Stado to (`stado host upgrade --join-network`).
+pub(crate) async fn up_host(host: &str) -> Result<(), CmdError> {
+    up::up(up::UpArgs::for_host(host)).await
+}
+
 async fn connect(host: &str, port: u16) -> Result<(), CmdError> {
     let name = match crate::network::network_host(host) {
         Some(name) => name,

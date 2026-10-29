@@ -43,6 +43,13 @@ pub struct ReleaseInstallLocalArgs {
     /// The SHA-256 the archive must have, in place of WISENT_RELEASE_SHA256.
     #[arg(long, requires = "archive")]
     sha256: Option<String>,
+    /// The designated requirement the caller showed the person at this Mac
+    /// from a terminal of its own before it ran this install over the host
+    /// channel (`stado host upgrade`). A candidate that changes the installed
+    /// program's code identity to exactly this requirement is installed
+    /// without a terminal here; any other change is still refused.
+    #[arg(long, value_name = "REQUIREMENT")]
+    announced_identity: Option<String>,
 }
 
 #[derive(Args)]

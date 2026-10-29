@@ -12,7 +12,7 @@ use super::refusal::ExecRefusal;
 
 pub use arguments::{home_rooted, PROBIERZ_RUN_ROOT_CREATE};
 pub use candidates::{cargo_candidates, installed_program, program_candidates, PROGRAM_CANDIDATES};
-pub use entries::APPROVED_COMMANDS;
+pub use entries::{APPROVED_COMMANDS, MACOS_TCC_LOG_READ};
 pub use programs::{
     ADB_PROGRAM, APPIUM_PROGRAM, GIT_PROGRAM, KIMI_CLI, NODE_PROGRAM, OKO_CLI, SKARBIEC_CLI,
     STADO_CLI, TAMA_CLI, TMUX_PROGRAM,

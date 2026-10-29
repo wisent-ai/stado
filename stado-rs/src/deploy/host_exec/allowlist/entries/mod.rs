@@ -7,6 +7,7 @@ mod readiness;
 mod services;
 
 use super::ApprovedCommand;
+pub use privacy::MACOS_TCC_LOG_READ;
 
 /// The allowlist.
 ///

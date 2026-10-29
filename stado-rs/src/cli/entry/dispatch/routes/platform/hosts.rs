@@ -146,6 +146,28 @@ async fn runs(command: HostRunCommands) -> Result<(), CmdError> {
             })
             .await
         }
+        HostRunCommands::Upgrade {
+            target,
+            source_commit,
+            builder,
+            signing_keychain,
+            signing_identity,
+            join_network,
+            plan,
+            json,
+        } => {
+            host::upgrade(host::UpgradeRequest {
+                target,
+                source_commit,
+                builder,
+                signing_keychain,
+                signing_identity,
+                join_network,
+                plan,
+                json,
+            })
+            .await
+        }
         HostRunCommands::Run(HostManagedRunCommands::Attach {
             target,
             program,

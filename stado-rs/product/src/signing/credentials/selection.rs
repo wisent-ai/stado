@@ -22,7 +22,7 @@ pub struct Chosen {
 /// The identities `security find-identity -v -p codesigning` lists, as
 /// (SHA-1, name): each line is `  <n>) <SHA-1> "<name>"`, so the digest is the
 /// last word before the quoted name.
-fn listed(listing: &str) -> Vec<(&str, &str)> {
+pub(super) fn listed(listing: &str) -> Vec<(&str, &str)> {
     let mut certificates = Vec::new();
     for line in listing.lines() {
         let Some((prefix, rest)) = line.split_once('"') else {

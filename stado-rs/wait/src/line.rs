@@ -43,6 +43,16 @@ pub(crate) fn chain(error: &dyn std::error::Error) -> String {
     text
 }
 
+/// The words each of the three lines a wait writes begins with: when it
+/// begins, when it ends with what it waited for, and when it fails.
+const OPENINGS: [&str; 3] = ["czekam: ", "koniec czekania: ", "blad czekania: "];
+
+/// Whether `line`, read from another program's stderr, is one of the lines
+/// a wait wrote rather than something the program itself said.
+pub fn announced(line: &str) -> bool {
+    OPENINGS.iter().any(|opening| line.starts_with(opening))
+}
+
 /// One line on stderr, in a single write. A stderr that cannot be written
 /// has nowhere to say so.
 pub(crate) fn write(line: &str) {

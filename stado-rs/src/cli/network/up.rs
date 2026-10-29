@@ -49,6 +49,21 @@ pub struct UpArgs {
     json: bool,
 }
 
+impl UpArgs {
+    /// `up --host HOST` with every endpoint measured on that host and no
+    /// relay: what a host joins with when nothing else was asked.
+    pub(super) fn for_host(host: &str) -> Self {
+        Self {
+            host: Some(host.to_string()),
+            endpoints: Vec::new(),
+            no_direct: false,
+            relay: false,
+            attach_retry_seconds: None,
+            json: false,
+        }
+    }
+}
+
 fn endpoint_checked(endpoint: &str) -> Result<String, CmdError> {
     match endpoint.rsplit_once(':') {
         Some((host, port))

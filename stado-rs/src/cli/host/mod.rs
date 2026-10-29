@@ -15,6 +15,9 @@ mod files;
 mod machine;
 mod secrets;
 pub(crate) mod spotlight;
+mod upgrade;
+
+pub use crate::cli::host::upgrade::{upgrade, UpgradeRequest};
 
 pub use crate::cli::host::checks::health::health;
 pub use crate::cli::host::checks::health::ports::port_owner;

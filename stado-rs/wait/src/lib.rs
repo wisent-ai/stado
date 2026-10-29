@@ -43,7 +43,7 @@ pub mod cycle;
 pub mod external;
 #[cfg(feature = "http")]
 mod http;
-mod line;
+pub mod line;
 pub mod open;
 mod process;
 // When a wait is due, measured from the waits on its operation that ended.

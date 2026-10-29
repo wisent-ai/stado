@@ -166,6 +166,55 @@ impl Choice {
     pub fn requires_signature(&self) -> bool {
         self.require_signature
     }
+
+    /// The team the signature this choice makes will be anchored to, and
+    /// where its identity comes from, read from the same source
+    /// [`Source::resolve`] picks, in the same order, without reading a
+    /// private key: a PEM pair's or role's certificate, else the identity a
+    /// named keychain or the search list holds. Two named sources are
+    /// refused as `resolve` refuses them.
+    pub fn team(&self) -> Result<super::Team> {
+        if !cfg!(target_os = "macos") {
+            bail!("macOS code signing requires a Darwin host");
+        }
+        let certificate = environment(CERTIFICATE_VARIABLE)?;
+        let role = environment(ROLE_VARIABLE)?;
+        let keychain = self.keychain()?;
+        let chosen: Vec<&str> = [
+            certificate.as_ref().map(|_| CERTIFICATE_VARIABLE),
+            role.as_ref().map(|_| ROLE_VARIABLE),
+            keychain.as_ref().map(|_| KEYCHAIN_VARIABLE),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if let [first, second, ..] = chosen.as_slice() {
+            bail!(
+                "{first} and {second} each name a signing source; name one: the signing \
+                 identity comes from exactly one place"
+            );
+        }
+        let role_team = |role: &str, chosen_by: &str| {
+            let pem = secret(role, "certificate")?;
+            super::team::certificate_team(&pem, &format!("role {role} ({chosen_by})"))
+        };
+        if let Some(pem) = certificate {
+            return super::team::certificate_team(&pem, CERTIFICATE_VARIABLE);
+        }
+        if let Some(role) = role {
+            return role_team(&role, ROLE_VARIABLE);
+        }
+        let identity = self.identity(None)?;
+        if keychain.is_some() || identity.is_some() {
+            return super::team::keychain_team(keychain.as_deref(), identity.as_deref());
+        }
+        let fleet = crate::build().signing_role;
+        if fleet.is_empty() {
+            super::team::keychain_team(None, None)
+        } else {
+            role_team(fleet, "the fleet's default signing role")
+        }
+    }
 }
 
 impl Source {

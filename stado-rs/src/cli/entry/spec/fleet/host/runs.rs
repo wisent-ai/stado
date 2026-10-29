@@ -74,6 +74,51 @@ pub(crate) enum HostRunCommands {
         #[arg(last = true)]
         arguments: Vec<String>,
     },
+    /// Bring TARGET's installed Stado to a newer committed revision: build
+    /// it for TARGET's platform, sign it here with the stable identity,
+    /// deliver it, install it with TARGET's new Stado, and confront every
+    /// check that answered before with TARGET again.
+    ///
+    /// The revision is origin/main's tip, fetched without asking anyone for
+    /// a credential, or `--source-commit`, which origin/main must carry; one
+    /// older than the revision TARGET runs is refused. A signature that
+    /// changes the installed program's code identity makes macOS ask the
+    /// person at TARGET again for every privacy decision it keeps for it, so
+    /// then the upgrade runs only from a terminal, names each dialog and
+    /// its answer first, and starts when the host's name is typed back.
+    /// After the install, a check that answered before and no longer does
+    /// puts the kept previous program back and says so. `--plan` reads and
+    /// reports every step and changes nothing.
+    Upgrade {
+        target: String,
+        /// The commit to install instead of origin/main's tip; origin/main
+        /// must carry it.
+        #[arg(long, value_name = "COMMIT")]
+        source_commit: Option<String>,
+        /// The registry host that compiles the revision; this machine when
+        /// it shares TARGET's release platform, else TARGET.
+        #[arg(long, value_name = "HOST")]
+        builder: Option<String>,
+        /// Sign with this keychain of yours instead of the fleet's signing
+        /// role.
+        #[arg(long, value_name = "KEYCHAIN")]
+        signing_keychain: Option<String>,
+        /// The identity to sign with, by its name or SHA-1, from
+        /// `--signing-keychain` or the keychain search list.
+        #[arg(long, value_name = "IDENTITY")]
+        signing_identity: Option<String>,
+        /// After the install, join TARGET to Stado's network (`stado network
+        /// up --host TARGET`, run by TARGET's new Stado).
+        #[arg(long)]
+        join_network: bool,
+        /// Read and report every step; build, sign, deliver and install
+        /// nothing.
+        #[arg(long)]
+        plan: bool,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Read TARGET's crontab, and optionally prune one entry from it.
     ///
     /// The periodic table is the one place a fleet host can declare a

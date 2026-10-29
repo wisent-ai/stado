@@ -186,6 +186,24 @@ enum NativeReleaseSourceOperations {
             .init(id: "manifest-path", label: "Absolute Cargo.toml path below the account's ~/.stado/work/runs", option: "--manifest-path", required: true),
             .init(id: "bin", label: "Declared Cargo binary target", option: "--bin", required: true),
         ]),
+        // `stado host upgrade`: the plan reads every step and changes
+        // nothing; the upgrade itself refuses with its own sentence when the
+        // code identity changes, because that needs a terminal with someone
+        // at the host to answer the dialogs the plan lists.
+        .init(id: "host-upgrade-plan", title: "Plan the upgrade of the selected host's Stado (dialogs, checks; changes nothing)", path: ["host", "upgrade"], hostPlacement: .positional, fields: [
+            .init(id: "source-commit", label: "Commit origin/main carries (blank installs origin/main's tip)", option: "--source-commit"),
+            .init(id: "builder", label: "Registry host that compiles it (blank: this machine when it shares the host's platform)", option: "--builder"),
+            .init(id: "signing-keychain", label: "Your own signing keychain (blank signs with the fleet's role)", option: "--signing-keychain"),
+            .init(id: "signing-identity", label: "Signing identity name or SHA-1 (optional)", option: "--signing-identity"),
+            .init(id: "join-network", label: "Join Stado's network after the install", option: "--join-network", flag: true),
+        ], fixedArguments: ["--plan"], mutates: false),
+        .init(id: "host-upgrade", title: "Upgrade the selected host's Stado to a newer committed revision, rolling back when a check stops answering", path: ["host", "upgrade"], hostPlacement: .positional, fields: [
+            .init(id: "source-commit", label: "Commit origin/main carries (blank installs origin/main's tip)", option: "--source-commit"),
+            .init(id: "builder", label: "Registry host that compiles it (blank: this machine when it shares the host's platform)", option: "--builder"),
+            .init(id: "signing-keychain", label: "Your own signing keychain (blank signs with the fleet's role)", option: "--signing-keychain"),
+            .init(id: "signing-identity", label: "Signing identity name or SHA-1 (optional)", option: "--signing-identity"),
+            .init(id: "join-network", label: "Join Stado's network after the install", option: "--join-network", flag: true),
+        ]),
         .init(id: "build-status", title: "Read a build and what each platform's job did", path: ["build", "status"], hostPlacement: .none, fields: [
             .init(id: "build", label: "Build ID from build submit or build list", required: true),
         ], mutates: false),

@@ -90,6 +90,7 @@ pub(in crate::cli::release_cmd) async fn install_local(
         &expected,
         stado_version,
         true,
+        args.announced_identity.as_deref(),
     )
     .await?;
     // Stado's own declaration is written inside `install_archive`, after its
@@ -105,6 +106,8 @@ pub(in crate::cli::release_cmd) async fn install_local(
 /// feeds it the delivery contract's archive; `release local restore` feeds it an archive an
 /// earlier delivery retained on this host, and does not declare the version
 /// because the declaration lives in the registry it is restoring access to.
+/// `announced_identity` is the code identity the caller already announced to
+/// the person at this Mac (`--announced-identity`); none from a restore.
 pub(in crate::cli::release_cmd) async fn install_archive(
     name: String,
     member: &str,
@@ -112,6 +115,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     expected: &str,
     stado_version: Option<String>,
     declare: bool,
+    announced_identity: Option<&str>,
 ) -> Result<(), CmdError> {
     use sha2::Digest as _;
     if let Some(version) = stado_version.as_deref() {
@@ -230,7 +234,7 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // program the release path signed is placed here, and one that changes
     // the installed program's identity only with someone at a terminal.
     if let Err(refusal) = identity::refuse_unstable(candidate, &name, archive)
-        .and_then(|()| identity::refuse_changed(&destination, candidate, &name))
+        .and_then(|()| identity::refuse_changed(&destination, candidate, &name, announced_identity))
     {
         discard_stages(&staged, release_version_stage.as_deref());
         return Err(refusal);

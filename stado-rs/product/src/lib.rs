@@ -62,6 +62,16 @@ pub use cargo::private_sources::{
 /// question again.
 pub use signing::{acceptable as signature_acceptable, inspect as inspect_signature};
 
+/// Signing one program for a host other than this one (`stado host
+/// upgrade`): the choice of keychain and identity a command line made, the
+/// team its signature will be anchored to (read before anything is signed),
+/// the stable code identifier a product's program carries, and the signature
+/// itself.
+pub use signing::{
+    identifier as code_identifier, sign_with as sign_program, Choice as SigningChoice,
+    Team as SigningTeam,
+};
+
 use std::sync::OnceLock;
 
 /// The Stado build executing these operations.

@@ -42,3 +42,30 @@ The version bump gathers them into the release's own file and removes this one.
   renamed `recover-daemons` and made it end every gpg child stranded on the stopped agent; the
   payload still called the old name, so on a 0.4.16 vault owner the repair could not run, and on
   0.4.15 it replaced the daemons while the stuck gpg children kept every item read waiting.
+
+- **`stado host upgrade TARGET` brings a host's Stado to a newer committed revision:** a host
+  whose own Stado cannot read the registry authority, or holds no checkout to build from, had no
+  product path to a newer release, so each one was upgraded by a hand-written sequence. The verb
+  fetches origin/main without asking for a credential (or takes `--source-commit`, which
+  origin/main must carry), refuses a revision older than or beside the one the host runs, builds
+  it on a host of the target's release platform (`--builder`, else this machine when it shares
+  that platform, else the target), signs it here with the fleet's signing role or
+  `--signing-keychain`/`--signing-identity`, delivers it into a run of its own, lets the
+  incoming program judge the host's configuration (`config validate`) and install it
+  (`release local install`), and reads the registry, the host's own registry read, its vault
+  (`skarbiec doctor`) and every declared service at its port before and after. A check that
+  answered before and no longer does puts the kept previous program back and says so. When the
+  signature changes the program's code identity, the verb lists each macOS dialog the host and
+  this Mac will show with its answer, runs only from a terminal, and starts when the host's
+  name is typed back. `--join-network` joins the host to Stado's network afterwards; `--plan`
+  reads and reports every step and changes nothing. Stado Desktop has both the plan and the
+  upgrade.
+- **`release local install --announced-identity REQUIREMENT`:** an install over the host
+  channel that changes the installed program's code identity was refused for want of a terminal
+  even when the caller had told the person at the Mac what macOS would ask; it now installs when
+  the candidate's designated requirement is exactly the one the caller announced, and refuses any
+  other change as before.
+- **`release local restore --kept-previous SHA256`** puts `~/.stado/bin/stado.previous`, the
+  program the last install replaced, back byte for byte when it has that digest, and recycles
+  the units running the image it replaces: the rollback for a host whose previous Stado no
+  delivery retained as an archive.

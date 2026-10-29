@@ -12,6 +12,11 @@
 //! the same checked install and reader convergence as `release local install`, so the
 //! restored binary validates this host's configuration before it replaces
 //! anything. Run it on the host with `stado host run attach`.
+//!
+//! `--kept-previous SHA256` restores without an archive: it puts back the
+//! `stado.previous` the last install kept when it is the program with that
+//! digest, for a host whose previous Stado no delivery retained
+//! (`stado host upgrade` rolls back with it).
 
 use clap::Args;
 
@@ -24,8 +29,8 @@ pub struct ReleaseRestoreLocalArgs {
     /// Exact retained Stado version to reinstall.
     #[arg(
         long,
-        required_unless_present = "previous",
-        conflicts_with = "previous"
+        required_unless_present_any = ["previous", "kept_previous"],
+        conflicts_with_all = ["previous", "kept_previous"]
     )]
     version: Option<String>,
     /// Reinstall the release this host ran before the installed one: the
@@ -33,8 +38,78 @@ pub struct ReleaseRestoreLocalArgs {
     /// target `~/.stado/bin/stado.previous` that install keeps and reclaim
     /// never removes. For a host whose installed Stado cannot serve and whose
     /// operator cannot name the last good version from a record it holds.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "kept_previous")]
     previous: bool,
+    /// Put back `~/.stado/bin/stado.previous`, the program the last install
+    /// replaced, byte for byte, when its SHA-256 is this digest, and recycle
+    /// the units that run the image it replaces. For a host whose previous
+    /// Stado no delivery retained as an archive: `stado host upgrade` rolls
+    /// back with it. The program ran here before, so its signature and its
+    /// reading of this host's configuration are not judged again.
+    #[arg(long, value_name = "SHA256")]
+    kept_previous: Option<String>,
+}
+
+/// The command every line of a kept-program restore is prefixed with.
+const VERB: &str = "release local restore";
+
+/// Put the kept `stado.previous` back as `stado` when it is the program
+/// whose digest the caller recorded before it replaced it, and recycle every
+/// unit still executing the image it replaces.
+async fn restore_kept(expected: &str) -> Result<(), CmdError> {
+    if !crate::deploy::host_release::is_sha256(expected) {
+        return Err(CmdError::usage(format!(
+            "{VERB} --kept-previous {expected:?} is not a lowercase SHA-256"
+        )));
+    }
+    let directory = crate::config_file::expand_tilde("~")
+        .join(".stado")
+        .join("bin");
+    let kept = directory.join("stado.previous");
+    let destination = directory.join("stado");
+    let actual = crate::primitives::digest::sha256_file(&kept)
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{VERB} --kept-previous: the kept program cannot be read: {error}; nothing was \
+                 put back"
+            ))
+            .stating(crate::cli::entry::error::io_failure_code(error.kind()))
+        })?
+        .sha256;
+    if actual != expected {
+        return Err(CmdError::refused(format!(
+            "{VERB} --kept-previous: {} has sha256 {actual}, not {expected}, so it is not the \
+             program the caller replaced; nothing was put back",
+            kept.display()
+        )));
+    }
+    let names = ["stado".to_string()];
+    let mut log = |message: &str| println!("{VERB}: {message}");
+    let in_flight = crate::self_update::ReplacementInFlight::begin(&directory, &names, &mut log);
+    // Put back whole and durably, as an install's own rollback does, so a
+    // host that loses power meanwhile starts one whole program.
+    crate::primitives::document::persist_copy(
+        &destination,
+        &kept,
+        crate::primitives::file_mode::program(),
+    )
+    .map_err(|error| {
+        CmdError::unreachable(format!(
+            "{VERB}: cannot put {} back from {}: {error}",
+            destination.display(),
+            kept.display()
+        ))
+    })?;
+    crate::self_update::recycle_replaced_units(VERB, &directory, &names, &mut log)
+        .await
+        .map_err(CmdError::unreachable)?;
+    drop(in_flight);
+    println!(
+        "{VERB}: put {} back from {} (sha256 {expected})",
+        destination.display(),
+        kept.display()
+    );
+    Ok(())
 }
 
 pub(in crate::cli::release_cmd) async fn restore_local(
@@ -42,6 +117,9 @@ pub(in crate::cli::release_cmd) async fn restore_local(
 ) -> Result<(), CmdError> {
     use sha2::Digest as _;
 
+    if let Some(expected) = args.kept_previous.as_deref() {
+        return restore_kept(expected).await;
+    }
     let platform = crate::self_update::platform_triple_short()
         .map_err(|error| CmdError::declaration(error.to_string()))?;
     let retained = crate::config_file::expand_tilde("~")
@@ -53,7 +131,8 @@ pub(in crate::cli::release_cmd) async fn restore_local(
         (None, true) => previous_retained(&retained, platform)?,
         _ => {
             return Err(CmdError::usage(
-                "release local restore takes exactly one of --version VERSION or --previous",
+                "release local restore takes exactly one of --version VERSION, --previous or \
+                 --kept-previous SHA256",
             ))
         }
     };
@@ -182,6 +261,7 @@ pub(in crate::cli::release_cmd) async fn restore_local(
         &digest,
         Some(version.to_string()),
         false,
+        None,
     )
     .await
 }
@@ -199,6 +279,7 @@ pub(super) async fn restore_previous() -> Result<String, CmdError> {
     restore_local(&ReleaseRestoreLocalArgs {
         version: Some(version.clone()),
         previous: false,
+        kept_previous: None,
     })
     .await?;
     Ok(version)

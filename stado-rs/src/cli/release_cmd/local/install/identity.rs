@@ -58,11 +58,14 @@ pub(super) fn refuse_unstable(candidate: &Path, name: &str, archive: &str) -> Re
 
 /// On a Mac, the candidate replacing an installed program under another
 /// designated requirement: refused with no terminal (a delivery, a host
-/// channel), and with one the questions macOS will ask again are said first.
+/// channel) unless the caller announced exactly the candidate's requirement
+/// to the person at this Mac from a terminal of its own (`announced`), and
+/// with a terminal the questions macOS will ask again are said first.
 pub(super) fn refuse_changed(
     installed: &Path,
     candidate: &Path,
     name: &str,
+    announced: Option<&str>,
 ) -> Result<(), CmdError> {
     use std::io::IsTerminal as _;
     if !cfg!(target_os = "macos") {
@@ -80,12 +83,29 @@ pub(super) fn refuse_changed(
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
+        if announced == Some(after.as_str()) {
+            eprintln!(
+                "{name}: the installed program changes code identity ({before} → {after}), as \
+                 the caller announced from its own terminal; macOS will ask on this Mac again for \
+                 each privacy decision it keeps for {} the next time the host process reaches \
+                 for it",
+                installed.display()
+            );
+            return Ok(());
+        }
+        let announced = match announced {
+            Some(announced) => format!(
+                "; the caller announced the identity {announced}, which is not the candidate's"
+            ),
+            None => String::new(),
+        };
         return Err(CmdError::refused(format!(
             "{name} would change code identity ({before} → {after}), so macOS would ask the \
              person at this Mac again for every privacy decision it keeps for {} \
              (`targets[].privacy_grants`, `stado host privacy <this host>`), from the background \
-             process that runs it; this install runs with no terminal for anyone to see why; run \
-             it at this Mac",
+             process that runs it; this install runs with no terminal for anyone to see \
+             why{announced}; run it at this Mac, or with `stado host upgrade <this host>` from a \
+             terminal, which announces the identity first",
             installed.display()
         )));
     }
