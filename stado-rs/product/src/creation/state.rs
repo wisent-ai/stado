@@ -1,6 +1,6 @@
 use crate::common::{lock, Runtime};
 use anyhow::{bail, Context, Result};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::{json, Value};
 use std::{
     fs::{self, File},
@@ -9,17 +9,70 @@ use std::{
 
 pub struct Journal {
     connection: Connection,
-    _writer: File,
+    /// The writer lock; a journal opened by [`Journal::read`] holds none.
+    _writer: Option<File>,
+}
+
+/// The journal directory, and whether it is the default one.
+fn root(runtime: &Runtime) -> Result<(PathBuf, bool)> {
+    let explicit = std::env::var_os("STADO_PRODUCT_STATE_DIR").map(PathBuf::from);
+    let default = explicit.is_none();
+    let root = explicit.unwrap_or_else(|| runtime.home.join(".local/state/stado/product"));
+    if !root.is_absolute() {
+        bail!("STADO_PRODUCT_STATE_DIR must be absolute");
+    }
+    Ok((root, default))
+}
+
+fn database(root: &std::path::Path) -> Result<PathBuf> {
+    let path = root.join("creation.sqlite3");
+    if path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        bail!("creation database cannot be a symlink");
+    }
+    Ok(path)
 }
 
 impl Journal {
-    pub fn open(runtime: &Runtime) -> Result<Self> {
-        let explicit = std::env::var_os("STADO_PRODUCT_STATE_DIR").map(PathBuf::from);
-        let default = explicit.is_none();
-        let root = explicit.unwrap_or_else(|| runtime.home.join(".local/state/stado/product"));
-        if !root.is_absolute() {
-            bail!("STADO_PRODUCT_STATE_DIR must be absolute");
+    /// The journal as it stands, read-only and without the writer lock, for
+    /// a plan: `None` when no request was ever journaled here. Nothing is
+    /// created, moved or locked.
+    pub fn read(runtime: &Runtime) -> Result<Option<Self>> {
+        let (root, default) = root(runtime)?;
+        let former = runtime.home.join(".local/state/wisent-products");
+        let root = if default && !root.exists() && former.join("creation.sqlite3").is_file() {
+            former
+        } else {
+            root
+        };
+        let path = database(&root)?;
+        if !path.is_file() {
+            return Ok(None);
         }
+        let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("reading creation journal {}", path.display()))?;
+        let journal = Self {
+            connection,
+            _writer: None,
+        };
+        journal.schema()?;
+        Ok(Some(journal))
+    }
+
+    fn schema(&self) -> Result<()> {
+        if self
+            .get("schema_version")?
+            .is_some_and(|version| version != 1)
+        {
+            bail!("unsupported product creation journal schema");
+        }
+        Ok(())
+    }
+
+    pub fn open(runtime: &Runtime) -> Result<Self> {
+        let (root, default) = root(runtime)?;
         // Requests created while this code was the `wisent-products` program
         // live under its name; they move once, so `--status` and `--resume`
         // keep answering for them.
@@ -57,25 +110,14 @@ impl Journal {
         }
         let writer = lock(&root.join("creation.lock"))
             .context("creation_busy: another lifecycle operation owns the journal")?;
-        let path = root.join("creation.sqlite3");
-        if path
-            .symlink_metadata()
-            .is_ok_and(|metadata| metadata.file_type().is_symlink())
-        {
-            bail!("creation database cannot be a symlink");
-        }
+        let path = database(&root)?;
         let connection = Connection::open(path)?;
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS records(key TEXT PRIMARY KEY, data TEXT NOT NULL);")?;
         let journal = Self {
             connection,
-            _writer: writer,
+            _writer: Some(writer),
         };
-        if journal
-            .get("schema_version")?
-            .is_some_and(|version| version != 1)
-        {
-            bail!("unsupported product creation journal schema");
-        }
+        journal.schema()?;
         journal.put("schema_version", &json!(1))?;
         Ok(journal)
     }

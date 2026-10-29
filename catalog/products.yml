@@ -102,7 +102,7 @@ products:
     repository: wisent-ai/jeden
   - kind: desktop
     repository: wisent-ai/jeden-desktop
-  - kind: mobile
+  - kind: ios
     repository: wisent-ai/jeden-ios
   installations:
   - surface: cli
@@ -989,7 +989,7 @@ products:
   surfaces:
   - kind: desktop
     repository: wisent-ai/byk-desktop
-  - kind: mobile
+  - kind: ios
     repository: wisent-ai/byk-ios
   - kind: web
     repository: wisent-ai/wisent-trade
@@ -1233,7 +1233,7 @@ products:
     repository: wisent-ai/oko
   - kind: service
     repository: wisent-ai/oko
-  - kind: mobile
+  - kind: ios
     repository: wisent-ai/oko-ios
   - kind: desktop
     repository: wisent-ai/oko-desktop
@@ -1756,7 +1756,7 @@ products:
     repository: wisent-ai/wisent-app
   - kind: android
     repository: wisent-ai/wisent-android
-  - kind: mobile
+  - kind: ios
     repository: wisent-ai/wisent-ios-main
     onboarding_id: wisent-ios
   - kind: cli
@@ -1865,7 +1865,7 @@ products:
   surfaces:
   - kind: web
     repository: lbartoszcze/humanmaxx-web
-  - kind: mobile
+  - kind: ios
     repository: lbartoszcze/humanmaxx-ios
   - kind: service
     repository: lbartoszcze/humanmaxx-supabase
@@ -1907,7 +1907,7 @@ products:
   surfaces:
   - kind: web
     repository: lbartoszcze/peptomaxx-web
-  - kind: mobile
+  - kind: ios
     repository: lbartoszcze/peptomaxx-ios
   - kind: cli
     repository: lbartoszcze/peptomaxx-web

@@ -56,11 +56,28 @@ enum NativeProductOperations {
         .init(id: "create", title: "Provision a preview product and its private repositories", path: ["product", "create"], hostPlacement: .none, fields: [
             .init(id: "allow-create", label: "Authorize private repository creation", option: "--allow-create", flag: true),
         ], payload: .file(option: "--request", label: "Creation request JSON", initial: "{\n}\n")),
+        // Every check create makes, with reads only: the request's fields,
+        // the catalog, GitHub (`gh api`), the checkout paths and the
+        // integration grant; the answer is what create would provision and
+        // register, or the refusal naming the field. A plan that create
+        // could not carry out ends as refused with its blocker.
+        .init(id: "create-plan", title: "Show what a creation request would provision (creates nothing)", path: ["product", "create"], hostPlacement: .none, payload: .file(option: "--plan", label: "Creation request JSON", initial: "{\n}\n"), mutates: false),
         .init(id: "create-status", title: "Read a provisioning request's durable result", path: ["product", "create"], hostPlacement: .none, fields: [
             .init(id: "request", label: "Request ID", option: "--status", required: true),
         ], mutates: false),
         .init(id: "create-resume", title: "Resume a provisioning request", path: ["product", "create"], hostPlacement: .none, fields: [
             .init(id: "request", label: "Request ID", option: "--resume", required: true),
+            .init(id: "allow-create", label: "Authorize private repository creation", option: "--allow-create", flag: true),
+        ]),
+        .init(id: "surface-add-plan", title: "Show what adding a repository surface to a product would provision (creates nothing)", path: ["product", "surface", "add"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Existing catalog product", required: true),
+            .init(id: "kind", label: "Surface kind", option: "--kind", required: true, choices: ["cli", "desktop", "web", "service", "ios", "android"], initial: "ios"),
+            .init(id: "repository", label: "New repository OWNER/NAME", option: "--repository", required: true),
+        ], fixedArguments: ["--plan"], mutates: false),
+        .init(id: "surface-add", title: "Provision a private repository and add it to a product as a surface", path: ["product", "surface", "add"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Existing catalog product", required: true),
+            .init(id: "kind", label: "Surface kind", option: "--kind", required: true, choices: ["cli", "desktop", "web", "service", "ios", "android"], initial: "ios"),
+            .init(id: "repository", label: "New repository OWNER/NAME", option: "--repository", required: true),
             .init(id: "allow-create", label: "Authorize private repository creation", option: "--allow-create", flag: true),
         ]),
         .init(id: "sync-plan", title: "Show what reconciling installed surfaces would do (changes nothing)", path: ["product", "sync"], hostPlacement: .none, fields: [

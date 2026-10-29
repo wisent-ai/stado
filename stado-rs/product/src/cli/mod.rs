@@ -284,9 +284,20 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
                 .context("Python release operation is missing")?,
             &arguments,
         ),
-        "swift" => crate::native::run(arguments, &runtime),
+        "swift" => match arguments.get_one::<String>("operation").map(String::as_str) {
+            Some("api") => crate::surface::run(&arguments, &runtime),
+            _ => crate::native::run(arguments, &runtime),
+        },
         "editor" => crate::native::serve_editor(arguments, &runtime),
-        "surface" => crate::surface::run(&arguments, &runtime),
+        "surface" => {
+            let (action, arguments) = arguments
+                .remove_subcommand()
+                .context("surface operation is missing")?;
+            match action.as_str() {
+                "add" => crate::creation::surface::run(arguments, &runtime),
+                other => anyhow::bail!("unknown surface operation {other}"),
+            }
+        }
         "documentation" => {
             let (action, arguments) = arguments
                 .remove_subcommand()

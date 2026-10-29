@@ -206,16 +206,10 @@ pub fn npm() -> Command {
 
 pub fn surface() -> Command {
     Command::new("surface")
-        .about("Refuse a Swift package revision whose version tag disagrees with what it did to the library's public API, as swift api-digester reads it against the released tag")
-        .arg(value(
-            "package-path",
-            "Package directory; defaults to the current directory",
-        ))
-        .arg(value(
-            "module",
-            "The library module to read; defaults to the manifest's single library product",
-        ))
-        .arg(flag("json", "Print the dumps, the digester's diagnosis and the verdict"))
+        .about("The repository surfaces of a catalog product")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(super::registry::surface_add())
 }
 
 pub fn documentation() -> Command {

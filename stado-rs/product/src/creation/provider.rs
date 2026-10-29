@@ -3,7 +3,16 @@ use serde_json::{json, Value};
 use stado_wait as wait;
 use std::{fs, io::Read, path::PathBuf};
 
-pub fn ensure(repository: &str, request_id: &str, description: &str) -> Result<Value> {
+/// The Wisent Integrations origin and caller grant that provision a
+/// repository, read from `STADO_PRODUCT_INTEGRATION_URL` and the owner-only
+/// file `STADO_PRODUCT_INTEGRATION_TOKEN_FILE` names. Reading them contacts
+/// nothing; only [`ensure`] does.
+pub struct Integration {
+    pub origin: String,
+    token: String,
+}
+
+pub fn integration() -> Result<Integration> {
     let origin = std::env::var("STADO_PRODUCT_INTEGRATION_URL")
         .context("STADO_PRODUCT_INTEGRATION_URL must name an HTTPS integration origin")?;
     let origin = origin.trim_end_matches('/');
@@ -22,7 +31,12 @@ pub fn ensure(repository: &str, request_id: &str, description: &str) -> Result<V
             "STADO_PRODUCT_INTEGRATION_TOKEN_FILE must name the owner-only caller grant",
         )?,
     );
-    let metadata = path.symlink_metadata()?;
+    let metadata = path.symlink_metadata().with_context(|| {
+        format!(
+            "STADO_PRODUCT_INTEGRATION_TOKEN_FILE names {}, which cannot be read",
+            path.display()
+        )
+    })?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         bail!(
             "integration caller grant must be an owner-only regular file: {}",
@@ -36,11 +50,21 @@ pub fn ensure(repository: &str, request_id: &str, description: &str) -> Result<V
             bail!("integration caller grant must be owned by this user and inaccessible to other users");
         }
     }
-    let token = fs::read_to_string(path)?;
+    let token = fs::read_to_string(&path)
+        .with_context(|| format!("reading integration caller grant {}", path.display()))?;
     let token = token.trim();
     if token.is_empty() || token.contains('\n') || token.contains('\r') {
         bail!("integration caller grant is empty or malformed");
     }
+    Ok(Integration {
+        origin: origin.to_owned(),
+        token: token.to_owned(),
+    })
+}
+
+pub fn ensure(repository: &str, request_id: &str, description: &str) -> Result<Value> {
+    let Integration { origin, token } = integration()?;
+    let token = token.as_str();
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()?;

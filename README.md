@@ -93,10 +93,12 @@ decides where and when to run it, then records what happened.
 - a loopback mobile-egress proxy whose upstream sockets are pinned to a named
   tether interface and whose process lifecycle is managed as a Stado service;
 - the canonical Wisent product catalog, `catalog/products.yml`, and every
-  product's lifecycle through `stado product`: registry changes, installation,
-  update, rollback, removal, native Apple signing, scheduled updates, and
-  canonical Cargo and Swift source builds
-  ([product catalog](https://stado.wisent.com/docs/products)).
+  product's lifecycle through `stado product`: creating a product and adding a
+  repository surface to one (each with a plan that creates nothing), registry
+  changes, installation, update, rollback, removal, native Apple signing,
+  scheduled updates, and canonical Cargo and Swift source builds
+  ([product catalog](https://stado.wisent.com/docs/products),
+  [creating a product](https://stado.wisent.com/docs/products/creation)).
 
 ### Explicit non-goals for 0.5
 

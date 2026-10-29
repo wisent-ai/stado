@@ -138,6 +138,14 @@ pub fn creation() -> Command {
     Command::new("create")
         .about("Provision private repositories and a preview product through Wisent Integrations")
         .arg(value("request", "Creation request JSON file"))
+        .arg(
+            value(
+                "plan",
+                "Check this creation request JSON file with reads only and print what create \
+                 would provision and register; creates nothing and needs no --allow-create",
+            )
+            .conflicts_with("allow-create"),
+        )
         .arg(value(
             "status",
             "Read the durable result for this request ID",
@@ -145,12 +153,58 @@ pub fn creation() -> Command {
         .arg(value("resume", "Resume this exact durable request ID"))
         .group(
             ArgGroup::new("operation")
-                .args(["request", "status", "resume"])
+                .args(["request", "plan", "status", "resume"])
                 .required(true),
         )
         .arg(flag(
             "allow-create",
             "Authorize the requested private repository creation",
         ))
-        .arg(flag("json", "Print the durable provisioning state"))
+        .arg(flag(
+            "json",
+            "Print the durable provisioning state; with --plan, the plan as JSON",
+        ))
+}
+
+/// `stado product surface add`: one more repository surface for a product
+/// the catalog holds, provisioned the way `create` provisions each one.
+pub fn surface_add() -> Command {
+    Command::new("add")
+        .about(
+            "Provision one private repository for an existing catalog product and record it \
+             as that product's surface of KIND, the way create provisions each repository; \
+             run it again to resume one that stopped",
+        )
+        .arg(
+            positional("PRODUCT")
+                .required(true)
+                .help("An existing catalog product"),
+        )
+        .arg(
+            value(
+                "kind",
+                "Surface kind: cli, desktop, web, service, ios or android",
+            )
+            .required(true)
+            .value_parser(|word: &str| {
+                crate::creation::Surface::parse(word).map(|_| word.to_owned())
+            }),
+        )
+        .arg(value("repository", "The new repository, OWNER/NAME").required(true))
+        .arg(
+            flag(
+                "plan",
+                "Check with reads only and print what would be provisioned and recorded; \
+                 creates nothing",
+            )
+            .conflicts_with("allow-create"),
+        )
+        .arg(flag(
+            "allow-create",
+            "Authorize the private repository creation",
+        ))
+        .arg(flag(
+            "json",
+            "Print the plan or the provisioning result as JSON",
+        ))
 }

@@ -2,7 +2,44 @@ use super::state::Journal;
 use crate::{common::capture, source::git};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+/// Where `repository`'s canonical checkout goes, refused when that path is
+/// another request's or exists without this request having made it; the
+/// flag says whether this request already claimed it. Reads only.
+pub fn target(
+    journal: Option<&Journal>,
+    request: &str,
+    repository: &str,
+    workspace: &Path,
+) -> Result<(PathBuf, bool)> {
+    let name = repository
+        .split_once('/')
+        .context("repository requires OWNER/NAME")?
+        .1;
+    let path = workspace.join(name);
+    let owner = match journal {
+        Some(journal) => journal.get(&format!("checkout/{repository}"))?,
+        None => None,
+    };
+    if owner.as_ref().is_some_and(|owner| owner != request) {
+        bail!(
+            "canonical checkout {} belongs to another creation request",
+            path.display()
+        );
+    }
+    if owner.is_none() && path.symlink_metadata().is_ok() {
+        bail!(
+            "canonical checkout already exists and was not created by this request: {}",
+            path.display()
+        );
+    }
+    Ok((path, owner.is_some()))
+}
 
 pub fn ensure(
     journal: &Journal,
@@ -10,26 +47,8 @@ pub fn ensure(
     repository: &str,
     workspace: &Path,
 ) -> Result<Value> {
-    let name = repository
-        .split_once('/')
-        .context("repository requires OWNER/NAME")?
-        .1;
-    let path = workspace.join(name);
-    let claim = format!("checkout/{repository}");
-    let owner = journal.get(&claim)?;
-    if owner.as_ref().is_some_and(|owner| owner != request) {
-        bail!(
-            "canonical checkout {} belongs to another creation request",
-            path.display()
-        );
-    }
-    if owner.is_none() {
-        if path.symlink_metadata().is_ok() {
-            bail!(
-                "canonical checkout already exists and was not created by this request: {}",
-                path.display()
-            );
-        }
+    let (path, claimed) = target(Some(journal), request, repository, workspace)?;
+    if !claimed {
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         {
@@ -37,7 +56,7 @@ pub fn ensure(
             builder.mode(0o700);
         }
         builder.create(&path)?;
-        journal.put(&claim, &json!(request))?;
+        journal.put(&format!("checkout/{repository}"), &json!(request))?;
     }
     if path.symlink_metadata()?.file_type().is_symlink()
         || path.canonicalize()?.parent() != Some(workspace)
