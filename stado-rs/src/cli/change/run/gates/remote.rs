@@ -29,6 +29,9 @@ struct Shared {
     refused: AtomicBool,
     /// The version a declared gate is told the release would cut.
     version: String,
+    /// The history records a release build's archive carries beside the
+    /// commit's files, given to every declared gate.
+    records: Vec<(&'static str, Vec<u8>)>,
 }
 
 fn poisoned<T>(_: T) -> CmdError {
@@ -74,12 +77,24 @@ pub async fn run(
     for line in &placed.said {
         eprintln!("stado change run: placement: {line}");
     }
+    // A declared gate reads the source a release build reads, history
+    // records included (a version gate checks its baseline's provenance).
+    let declared = waiting
+        .values()
+        .flatten()
+        .any(|planned| matches!(planned.work, Work::Declared(_)));
+    let records = if declared {
+        crate::cli::release_submit::history_records(checkout, commit)?
+    } else {
+        Vec::new()
+    };
     let shared = Shared {
         waiting: Mutex::new(waiting),
         done: Mutex::new(done),
         lost: Mutex::new(Vec::new()),
         refused: AtomicBool::new(false),
         version: plan.version.clone(),
+        records,
     };
     let mut workers: Vec<(&str, &ComputeTarget)> = placed
         .by_platform
@@ -161,6 +176,7 @@ async fn worker(
                 &checkout.join(&planned.manifest),
                 commit,
                 (declared, shared.version.as_str(), platform),
+                &shared.records,
                 &runner,
             )
             .await

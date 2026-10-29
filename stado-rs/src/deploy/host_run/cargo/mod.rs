@@ -120,16 +120,18 @@ pub async fn run(
     runner: &Runner,
 ) -> Result<HostCargoReceipt, DeployError> {
     validate(request)?;
-    execute(target, request, None, runner).await
+    execute(target, request, None, &[], runner).await
 }
 
 /// [`run`]'s export, delivery, script and removal. With `gate`, the script
 /// runs that declared quality gate's argv in the delivered tree's root in
-/// place of the Cargo operation ([`gate::run`]).
+/// place of the Cargo operation ([`gate::run`]), and `records` are written
+/// into the export beside the commit's files.
 async fn execute(
     target: &ComputeTarget,
     request: &HostCargoRequest,
     gate: Option<(&[String], &str, &str)>,
+    records: &[(&str, Vec<u8>)],
     runner: &Runner,
 ) -> Result<HostCargoReceipt, DeployError> {
     let (checkout, commit, manifest) = source(&request.manifest_path, &request.revision).await?;
@@ -162,6 +164,17 @@ async fn execute(
     let export = area.join(format!("export-{run_id}"));
     let archive_sha256 = stado_product::export_committed_source(&checkout, &commit, &export)
         .map_err(|error| DeployError(format!("{error:#}")).stating(FailureCode::Config))?;
+    for (path, bytes) in records {
+        let file = export.join(path);
+        let written = file
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&file, bytes));
+        written.map_err(|error| {
+            DeployError(format!("{} was not written: {error}", file.display()))
+                .stating(FailureCode::Config)
+        })?;
+    }
     // The package the run builds, read from the export the host gets: a
     // Cargo run that passes without compiling it judged another run's output.
     let package = gate

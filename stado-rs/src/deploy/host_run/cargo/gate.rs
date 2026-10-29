@@ -2,10 +2,12 @@
 //! exactly as the revision's release manifest declares its argv: the same
 //! committed-source export, delivery, toolchain prelude, shared Cargo target
 //! and removal as a Cargo operation ([`super::run`]), with the export kept
-//! in the checkout's build area under Stado's home and the gate's argv run
-//! in the delivered tree's root in place of the Cargo command. Its caller,
-//! the submit queue, reads the argv from the manifest the revision commits,
-//! the one a release worker runs, never from text a person typed.
+//! in the checkout's build area under Stado's home, the history records a
+//! release build's archive carries beside the commit's files written into
+//! it, and the gate's argv run in the delivered tree's root in place of the
+//! Cargo command. Its caller, the submit queue, reads the argv from the
+//! manifest the revision commits, the one a release worker runs, never from
+//! text a person typed.
 
 use std::path::Path;
 
@@ -41,13 +43,16 @@ pub fn validate(manifest: &Path, argv: &[String]) -> Result<(), DeployError> {
 
 /// Run `argv`, a quality gate `manifest` (the checkout's release manifest)
 /// declares, over `revision` on `target`, with the release worker's
-/// contract for `version` and `platform`; the gate's own failure is the
+/// contract for `version` and `platform` and `records` (each a path in the
+/// source and its bytes: the verified baseline provenance a release build's
+/// archive carries) in the delivered tree; the gate's own failure is the
 /// receipt's `exit_code`.
 pub async fn run(
     target: &ComputeTarget,
     manifest: &Path,
     revision: &str,
     (argv, version, platform): (&[String], &str, &str),
+    records: &[(&str, Vec<u8>)],
     runner: &Runner,
 ) -> Result<HostGateReceipt, DeployError> {
     validate(manifest, argv)?;
@@ -60,7 +65,8 @@ pub async fn run(
         binaries: Vec::new(),
         arguments: Vec::new(),
     };
-    let ran = execute(target, &request, Some((argv, version, platform)), runner).await?;
+    let gate = Some((argv, version, platform));
+    let ran = execute(target, &request, gate, records, runner).await?;
     Ok(HostGateReceipt {
         target: ran.target,
         commit: ran.commit,

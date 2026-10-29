@@ -42,7 +42,9 @@ pub(crate) use crate::cli::release_submit::run::checkout::{
     committed_file, committed_file_if_present, git_text, head_commit, resolve_commit, snapshot,
     uncommitted_paths,
 };
-pub(crate) use crate::cli::release_submit::run::provenance::write_records;
+pub(crate) use crate::cli::release_submit::run::provenance::{
+    records as history_records, write_records,
+};
 pub(crate) use crate::cli::release_submit::run::reports::{
     matching_runs, recent_runs, recorded_runs, RecordedRun, RunFilter,
 };

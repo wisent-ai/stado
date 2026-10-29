@@ -46,6 +46,10 @@ The version bump gathers them into the release's own file and removes this one.
   and refused the candidate for the host's environment. A declared gate now runs with the host's
   installed Stado as `STADO_BIN` and its directory first on `PATH`, as a release worker's job runs
   the worker's own Stado.
+  A declared gate also reads the history records a release build's archive carries beside the
+  commit's files (`.wisent-provenance/baseline.json` and the published diff), so an application's
+  version gate no longer refuses every candidate with `the source archive carries no verified
+  baseline provenance`.
 - **`stado host cargo` compiles the revision it was given:** the delivered export carries its
   commit's time on every file and the host's Cargo target is shared by every run, so a revision
   committed before that target's last compile kept the earlier revision's build of each workspace

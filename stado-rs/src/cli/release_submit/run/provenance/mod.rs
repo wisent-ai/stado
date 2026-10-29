@@ -36,8 +36,9 @@ const PEELED: &str = "^{}";
 /// Every history record a release build needs and cannot compute from files
 /// alone, with the path it sits at in the source tree: the verified baseline
 /// provenance and the published diff. A record that does not apply to this
-/// commit is left out.
-fn records(root: &Path, commit: &str) -> Result<Vec<(&'static str, Vec<u8>)>, CmdError> {
+/// commit is left out. A gate the submit queue runs on a fleet host is
+/// given the same records ([`crate::deploy::host_run::gate`]).
+pub(crate) fn records(root: &Path, commit: &str) -> Result<Vec<(&'static str, Vec<u8>)>, CmdError> {
     let records = [
         (PROVENANCE_PATH, record(root, commit)?),
         (
