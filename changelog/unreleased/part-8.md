@@ -46,6 +46,15 @@ The version bump gathers them into the release's own file and removes this one.
   its host. It appends to `DIR/<name>.jsonl` every line that file does not already hold, so
   repeated runs while the session works add only what is new.
 
+### Fixed
+
+- **`stado credentials token mint` refuses a retired agent identity:** it minted a grant for a
+  consumer such as `stado-local-agent`, and only the host's own configuration refused it later,
+  after the bearer had been minted and delivered. The mint now refuses with `credentials token mint
+  refuses consumer <name>: "<name>" is a retired agent identity that no host's configuration
+  accepts; use "stado" locally or a new scoped *-agent consumer`, which is the same rule the
+  configuration check applies.
+
 ### Removed
 
 - `stado host run build`: `stado host cargo … build` replaces it. The old verb compiled with the

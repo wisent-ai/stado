@@ -35,6 +35,11 @@ pub async fn vault_token_mint(
     json_output: bool,
 ) -> Result<(), CmdError> {
     vault_word("consumer", consumer)?;
+    if let Some(refusal) = crate::config_file::retired_consumer_refusal(consumer) {
+        return Err(CmdError::usage(format!(
+            "credentials token mint refuses consumer {consumer}: {refusal}"
+        )));
+    }
     vault_word("audience", audience)?;
     if let Some(item) = token_item {
         vault_word("token item", item)?;

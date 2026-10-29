@@ -56,14 +56,42 @@ pub(in crate::config_file::validation) fn retired_identities(
         }
     }
     if let Some(consumer) = get_in(root, "agent.skarbiec.consumer") {
-        let accepted = consumer.as_str().is_some_and(|name| {
-            name == "stado"
-                || (name.ends_with("-agent") && !RETIRED_AGENT_CONSUMERS.contains(&name))
-        });
-        if !accepted {
-            problems.push(format!(
-                "agent.skarbiec.consumer is {consumer}; use \"stado\" locally or a scoped *-agent grant on rented machines"
-            ));
+        let refusal = match consumer.as_str() {
+            Some(name) => agent_consumer_refusal(name),
+            None => Some(format!("agent.skarbiec.consumer is {consumer}, not a name")),
+        };
+        if let Some(refusal) = refusal {
+            problems.push(refusal);
         }
+    }
+}
+
+/// Why `name` cannot be a workload agent's Skarbiec consumer, or `None` when
+/// it can: `stado` on a local host, or a scoped `*-agent` grant that is not a
+/// retired identity.
+fn agent_consumer_refusal(name: &str) -> Option<String> {
+    if let Some(retired) = retired_consumer_refusal(name) {
+        Some(retired)
+    } else if name == "stado" || name.ends_with("-agent") {
+        None
+    } else {
+        Some(format!(
+            "agent.skarbiec.consumer is \"{name}\"; use \"stado\" locally or a scoped *-agent \
+             grant on rented machines"
+        ))
+    }
+}
+
+/// Why `name` is a retired Skarbiec identity no host accepts, or `None`.
+/// `credentials token mint` asks this before minting, so a consumer no host
+/// would run with is never created.
+pub(crate) fn retired_consumer_refusal(name: &str) -> Option<String> {
+    if RETIRED_AGENT_CONSUMERS.contains(&name) {
+        Some(format!(
+            "\"{name}\" is a retired agent identity that no host's configuration accepts; use \
+             \"stado\" locally or a new scoped *-agent consumer"
+        ))
+    } else {
+        None
     }
 }

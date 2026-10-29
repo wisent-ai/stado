@@ -16,6 +16,8 @@ mod helpers;
 mod planes;
 mod providers;
 
+pub(crate) use planes::retired_consumer_refusal;
+
 /// Structural validation of a config dict; returns a list of problems.
 pub fn validate(data: &Value) -> Vec<String> {
     let mut problems = crate::capabilities::validate_catalog();

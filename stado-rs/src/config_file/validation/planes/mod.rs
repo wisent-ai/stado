@@ -8,6 +8,7 @@ mod products;
 mod verifiers;
 
 pub(super) use grants::{messaging, workload_secret_fields};
+pub(crate) use identities::retired_consumer_refusal;
 pub(super) use identities::retired_identities;
 pub(super) use products::{database_api, object_api, release_api, web_api};
 pub(super) use verifiers::{integration, machine_api, rate_limit, service_api};

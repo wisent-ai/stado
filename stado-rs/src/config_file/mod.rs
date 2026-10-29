@@ -36,6 +36,7 @@ pub(crate) use discovery::{expand_tilde, home, home_dir, home_text};
 pub(crate) use readers::variable;
 pub use readers::{field_value, get, get_fresh, resolve, resolve_list};
 pub(crate) use replace::replace;
+pub(crate) use validation::retired_consumer_refusal;
 pub use validation::validate;
 
 /// Environment variable naming an explicit config file path.
