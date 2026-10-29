@@ -26,10 +26,12 @@ async fn shown(target: &ComputeTarget, runner: &Runner) -> Result<Value, CmdErro
     })
 }
 
-/// Give a machine that runs on defaults alone a configuration file, with
-/// its own `config init`, so the declarations attaching writes have a file
-/// to land in: a standalone Stado refuses every `config set` until one
-/// exists. A machine that has one keeps it as it is.
+/// Give a machine whose fleet configuration file is absent one, with its
+/// own `config init` run as every fleet command reads and writes the host's
+/// configuration, so the declarations attaching writes have a file to land
+/// in: `config set` refuses until one exists. A standalone Stado's own
+/// file elsewhere in its home is left as it is. A machine that has the file
+/// keeps it as it is.
 pub(super) async fn ensure_file(
     target: &ComputeTarget,
     runner: &Runner,
@@ -38,29 +40,17 @@ pub(super) async fn ensure_file(
     if !shown(target, runner).await?["file"].is_null() {
         return Ok(());
     }
-    let home = crate::deploy::host_channel::remote_home(target, runner)
-        .await
-        .map_err(CmdError::from)?;
-    let program = format!("{home}/.stado/bin/stado");
-    let output = crate::deploy::host_channel::run_program(
+    let shown = crate::cli::host::remote_config_output(
         target,
-        &[program.as_str(), "config", "init"],
+        crate::cli::host::RemoteConfigAction::Init,
         runner,
     )
-    .await
-    .map_err(CmdError::from)?;
-    if !output.succeeded() {
-        return Err(CmdError::click(format!(
-            "{}: it has no configuration file and `stado config init` there failed: {}",
-            target.name,
-            crate::deploy::host_channel::whole_failure(&output)
-        ))
-        .stating(FailureCode::InfraDown));
-    }
+    .await?;
+    let document: Value = serde_json::from_str(&shown).unwrap_or(Value::Null);
     echo(&format!(
-        "[attach] {}: it had no configuration file; `stado config init` wrote {}",
+        "[attach] {}: it had no fleet configuration file; `stado config init` wrote {}",
         target.name,
-        output.stdout.trim()
+        document["file"].as_str().unwrap_or("one")
     ));
     Ok(())
 }

@@ -18,6 +18,9 @@ pub(crate) enum RemoteConfigAction<'a> {
     Show,
     Set { key: &'a str, value: &'a str },
     Unset { key: &'a str },
+    /// Write the configuration template at the file every fleet command
+    /// reads on the host, which a host running on defaults lacks.
+    Init,
 }
 
 pub(super) async fn remote_config(
@@ -87,6 +90,10 @@ pub(crate) async fn remote_config_output(
                  \"$binary\" config unset \"$key\"",
                 STANDARD.encode(key.as_bytes())
             ),
+        ),
+        RemoteConfigAction::Init => (
+            "config init".to_string(),
+            "\"$binary\" config init".to_string(),
         ),
     };
     let output = configuration_command(target, &command, &operation, runner).await?;
