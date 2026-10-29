@@ -9,6 +9,7 @@ import Foundation
 enum NativeOperationCatalog {
     static let groups: [(name: String, operations: [NativeCapabilityOperation])] = [
         ("routes", NativeRouteOperations.all),
+        ("network", NativeNetworkOperations.all),
         ("space", NativeSpaceOperations.all),
         ("host-release", NativeHostReleaseOperations.all),
         ("release-source", NativeReleaseSourceOperations.all),

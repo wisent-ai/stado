@@ -39,6 +39,7 @@ pub mod inference;
 pub mod instances;
 pub mod integrations;
 pub mod job;
+pub mod network;
 pub mod overview;
 pub mod placement;
 pub mod public_status;

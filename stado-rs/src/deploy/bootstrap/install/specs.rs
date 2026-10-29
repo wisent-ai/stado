@@ -8,13 +8,14 @@ use super::script::remote_install_script;
 
 /// Python `_run_ssh` argv: `ssh -o StrictHostKeyChecking=accept-new TARGET CMD`.
 pub fn ssh_argv(ssh_target: &str, command: &str) -> Vec<String> {
-    vec![
+    let mut argv = vec![
         "ssh".to_string(),
         "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
-        crate::deploy::host_access::ssh_destination(ssh_target),
-        command.to_string(),
-    ]
+    ];
+    argv.extend(crate::deploy::host_access::ssh_destination_args(ssh_target));
+    argv.push(command.to_string());
+    argv
 }
 
 /// The release-binary download + path-resolution command, for the exact

@@ -32,6 +32,7 @@ pub mod mail;
 pub mod mcp;
 pub mod models;
 pub mod monitor;
+pub mod network;
 pub mod observations;
 pub mod placement;
 pub mod primitives;

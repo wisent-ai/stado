@@ -44,15 +44,72 @@ fn matches(patterns: &HostPatterns, host: &str) -> Result<bool> {
     }
 }
 
-pub(super) fn verify(home: &Path, host: &str, presented: &PublicKeyOrCertificate) -> Result<()> {
-    let public_key = presented.public_key();
-    let mut accepted = false;
-    for path in [
+/// The files OpenSSH reads host keys from, the user's first.
+fn known_hosts_files(home: &Path) -> [std::path::PathBuf; 4] {
+    [
         home.join(".ssh/known_hosts"),
         home.join(".ssh/known_hosts2"),
         "/etc/ssh/ssh_known_hosts".into(),
         "/etc/ssh/ssh_known_hosts2".into(),
-    ] {
+    ]
+}
+
+/// [`verify`] for a connection whose transport already proved the machine
+/// (Stado's network admits a node only by the key the registry declares for
+/// its host): a host key never recorded under `host` is learned into the
+/// user's known_hosts. A name that has an entry keeps OpenSSH's rules, so a
+/// changed or revoked key is still refused.
+pub(super) fn verify_or_learn(
+    home: &Path,
+    host: &str,
+    presented: &PublicKeyOrCertificate,
+) -> Result<()> {
+    let refused = match verify(home, host, presented) {
+        Ok(()) => return Ok(()),
+        Err(refused) => refused,
+    };
+    for path in known_hosts_files(home) {
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        };
+        for entry in KnownHosts::new(&text) {
+            let entry = entry.with_context(|| format!("parse {}", path.display()))?;
+            if matches(entry.host_patterns(), host)? {
+                return Err(refused.context(format!(
+                    "{} already records {host}, so its key is not learned over the Stado network",
+                    path.display()
+                )));
+            }
+        }
+    }
+    ensure!(
+        presented.certificate().is_none(),
+        "SSH host {host} presents a certificate no recorded authority signs; certificates are not learned"
+    );
+    let line = presented
+        .public_key()
+        .to_openssh()
+        .context("encode the SSH host key")?;
+    let path = home.join(".ssh/known_hosts");
+    if let Some(directory) = path.parent() {
+        std::fs::create_dir_all(directory)
+            .with_context(|| format!("create {}", directory.display()))?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    std::io::Write::write_all(&mut file, format!("{host} {line}\n").as_bytes())
+        .with_context(|| format!("record {host}'s host key in {}", path.display()))
+}
+
+pub(super) fn verify(home: &Path, host: &str, presented: &PublicKeyOrCertificate) -> Result<()> {
+    let public_key = presented.public_key();
+    let mut accepted = false;
+    for path in known_hosts_files(home) {
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,

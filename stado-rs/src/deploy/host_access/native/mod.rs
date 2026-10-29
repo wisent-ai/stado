@@ -19,13 +19,20 @@ pub(crate) struct Peer {
     host: String,
     home: PathBuf,
     reverse: Option<reverse::Ports>,
+    /// The transport already proved this machine by its registry network
+    /// key, so a host key never seen under its network name is learned.
+    authenticated: bool,
 }
 
 impl client::Handler for Peer {
     type Error = anyhow::Error;
 
     async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool> {
-        trust::verify(&self.home, &self.host, key)?;
+        if self.authenticated {
+            trust::verify_or_learn(&self.home, &self.host, key)?;
+        } else {
+            trust::verify(&self.home, &self.host, key)?;
+        }
         Ok(true)
     }
 
@@ -115,24 +122,44 @@ async fn open(
         config::SSH_PORT => host.to_ascii_lowercase(),
         other => format!("[{}]:{other}", host.to_ascii_lowercase()),
     };
+    let network = crate::network::network_host(host).map(str::to_string);
     let peer = Peer {
         host: trusted_as,
         home: home.clone(),
         reverse,
+        authenticated: network.is_some(),
     };
-    // A `.local` name this machine's resolver cannot answer is asked of the
-    // link itself, so a declared LAN path works on a host without mDNS.
-    let addresses = crate::remote::lan::socket_addrs(host, port)
-        .await
-        .map_err(|cause| anyhow::anyhow!("connect and verify SSH host {destination}: {cause}"))?;
-    let handle = client::connect(config::client(long_lived || reverse.is_some())?, &addresses[..], peer)
-        .await
-        .with_context(|| match crate::remote::tailnet::unreachable_because(host) {
-            Some(cause) => format!(
-                "connect and verify SSH host {destination}: the tailnet carries no traffic to it, {cause}"
-            ),
-            None => format!("connect and verify SSH host {destination}"),
-        })?;
+    let config = config::client(long_lived || reverse.is_some())?;
+    let handle = match network {
+        // A host on Stado's own network is reached through its node.
+        Some(name) => {
+            let stream = crate::network::dial(&name, port).await.map_err(|cause| {
+                anyhow::anyhow!("connect SSH host {destination} over the Stado network: {cause}")
+            })?;
+            client::connect_stream(config, stream, peer)
+                .await
+                .with_context(|| format!("verify SSH host {destination} over the Stado network"))?
+        }
+        None => {
+            // A `.local` name this machine's resolver cannot answer is asked
+            // of the link itself, so a declared LAN path works on a host
+            // without mDNS.
+            let addresses =
+                crate::remote::lan::socket_addrs(host, port)
+                    .await
+                    .map_err(|cause| {
+                        anyhow::anyhow!("connect and verify SSH host {destination}: {cause}")
+                    })?;
+            client::connect(config, &addresses[..], peer)
+                .await
+                .with_context(|| match crate::remote::tailnet::unreachable_because(host) {
+                    Some(cause) => format!(
+                        "connect and verify SSH host {destination}: the tailnet carries no traffic to it, {cause}"
+                    ),
+                    None => format!("connect and verify SSH host {destination}"),
+                })?
+        }
+    };
     let mut session = Session::new(handle);
     let identity = if reverse.is_none() {
         auth::configured_identity(&home)

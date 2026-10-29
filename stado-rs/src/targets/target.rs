@@ -126,6 +126,11 @@ pub struct ComputeTarget {
     /// reader, the exact shape `host_software` was written to remove.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mobile_runtime: Option<MobileRuntime>,
+    /// This host's node on Stado's own network (`stado network up`): its
+    /// public key, the endpoints peers dial and whether it relays. Absent
+    /// for a host that has not joined the network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<crate::network::NetworkNode>,
     /// Required version of each stado-managed binary under `~/.stado/bin`,
     /// keyed by binary name (`stado`, `skarbiec`) and holding the bare
     /// version number (`0.5.1`), never a prefixed banner like

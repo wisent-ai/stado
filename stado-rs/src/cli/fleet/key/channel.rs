@@ -12,15 +12,15 @@ pub async fn channel_argv(
     command: &str,
 ) -> Result<(Vec<String>, KeyFile), CmdError> {
     let key = ssh_key::materialize(target).await?;
-    let argv = ssh_key::add_identity(
-        vec![
-            "ssh".to_string(),
-            "-o".to_string(),
-            "StrictHostKeyChecking=accept-new".to_string(),
-            destination.to_string(),
-            command.to_string(),
-        ],
-        &key,
-    )?;
+    let mut argv = vec![
+        "ssh".to_string(),
+        "-o".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
+    ];
+    argv.extend(crate::deploy::host_access::ssh_destination_args(
+        destination,
+    ));
+    argv.push(command.to_string());
+    let argv = ssh_key::add_identity(argv, &key)?;
     Ok((argv, key))
 }

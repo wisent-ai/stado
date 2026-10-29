@@ -160,9 +160,11 @@ pub async fn approve(
     if let Some(invite_id) = &invite_id {
         crate::cli::fleet::invite::mark_spent(&store, invite_id).await?;
     }
-    let install_with = destination
-        .is_none()
-        .then(|| format!("stado bootstrap --local --target '{name}'"));
+    // The agent first, then the host's own network, which makes the Stado
+    // network its preferred path before any outside overlay.
+    let install_with = destination.is_none().then(|| {
+        format!("stado bootstrap --local --target '{name}' && stado network up --host '{name}'")
+    });
     if as_json {
         let answer = json!({
             "approved": request_hostname,
@@ -180,7 +182,9 @@ pub async fn approve(
         println!("invite {invite_id} is spent");
     }
     if let Some(install_with) = install_with {
-        println!("install the agent on the machine: {install_with}");
+        println!(
+            "install the agent on the machine and join it to the Stado network: {install_with}"
+        );
     }
     Ok(true)
 }

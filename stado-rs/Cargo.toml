@@ -106,6 +106,11 @@ wisent-errors = { git = "https://github.com/wisent-ai/wisent-errors", rev = "dc8
 stado-product = { path = "product" }
 mdns-sd = "0.21"
 stado-wait = { version = "0.1.0", path = "wait" }
+# The Noise handshake and transport of Stado's own host network
+# (`src/network`): IK over X25519, ChaCha20-Poly1305 and BLAKE2s, the
+# construction WireGuard uses. The primitives come from this vetted library;
+# the protocol on top is Stado's.
+snow = "0.10"
 
 # The local store's change watch (queue/local_file/change) is the kernel's own
 # directory notification: kqueue on macOS, inotify on Linux. Each platform
@@ -179,6 +184,10 @@ path = "../tests/service_directory/held/main.rs"
 [[test]]
 name = "config-init"
 path = "../tests/config/init.rs"
+
+[[test]]
+name = "network-refusals"
+path = "../tests/network/refusals.rs"
 
 [[test]]
 name = "alerts-operator-contact"

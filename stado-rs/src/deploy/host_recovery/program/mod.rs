@@ -109,14 +109,15 @@ pub fn remote_script_with_stable_binds(
 /// ssh argv for a recovery pass: BatchMode, then StrictHostKeyChecking. The
 /// connection ends when the network or the far side says so.
 pub fn ssh_argv(ssh_target: &str) -> Vec<String> {
-    vec![
+    let mut argv = vec![
         "ssh".to_string(),
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
-        crate::deploy::host_access::ssh_destination(ssh_target),
-        "/bin/bash".to_string(),
-        "-s".to_string(),
-    ]
+    ];
+    argv.extend(crate::deploy::host_access::ssh_destination_args(ssh_target));
+    argv.push("/bin/bash".to_string());
+    argv.push("-s".to_string());
+    argv
 }

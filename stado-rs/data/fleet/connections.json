@@ -3,23 +3,27 @@
   "connection_providers": [
     {
       "name": "primary",
-      "summary": "The preferred destination of the host's own SSH entry; always tried first and never carries a priority."
+      "summary": "The preferred destination of the host's own SSH entry; always tried first and never carries a priority. `stado network up` makes it the host's Stado network address, <host>.stado.internal."
     },
     {
       "name": "lan",
-      "summary": "The address the host answers on inside its own local network."
+      "summary": "The address the host answers on inside its own local network: its multicast DNS name or a private address."
+    },
+    {
+      "name": "direct",
+      "summary": "A public address or name the host answers SSH on without any overlay."
     },
     {
       "name": "tailscale",
-      "summary": "The host's Tailscale address, reachable wherever both machines are signed into the same tailnet."
+      "summary": "The host's Tailscale address, reachable wherever both machines are signed into the same tailnet. An outside provider: optional, never required."
     },
     {
       "name": "nebula",
-      "summary": "The host's Nebula overlay address, reached through the fleet's own lighthouse."
+      "summary": "The host's address on a Nebula overlay the operator runs. An outside network: optional, never required."
     },
     {
       "name": "wireguard",
-      "summary": "The host's WireGuard address inside the tunnel the fleet configures itself."
+      "summary": "The host's address inside a WireGuard tunnel the operator runs. An outside network: optional, never required."
     }
   ]
 }

@@ -10,6 +10,7 @@ use crate::cli::fleet::fleets::{find_fleet, parse_fleets};
 
 use super::assignment::assign_target;
 
+mod network;
 mod probe;
 use probe::probe_identity;
 
@@ -241,6 +242,21 @@ pub async fn enrolled(
                 .also(format!("the registration of '{name}' was rolled back")));
         }
     }
+    // A bootstrapped machine has the Stado that runs the network, so it
+    // joins it now: its preferred path becomes Stado's own before any
+    // outside overlay a caller might otherwise reach it through.
+    let joined = if bootstrap {
+        let receipt = network::join(name).await?;
+        say(&format!(
+            "'{name}' joined the Stado network; its preferred path is {}",
+            receipt["paths"]["primary"]
+                .as_str()
+                .map_or("unchanged", |primary| primary)
+        ));
+        Some(receipt)
+    } else {
+        None
+    };
     // An offline invite is closed by exactly this: the operator got the address
     // from the machine's owner and registered the name. The registration
     // already stands, so a store that cannot be reached now is a warning, not a
@@ -261,6 +277,7 @@ pub async fn enrolled(
         "fleet": fleet_name,
         "generation": generation,
         "bootstrapped": bootstrap,
+        "network": joined,
         "offline_invite_spent": spent,
     }))
 }

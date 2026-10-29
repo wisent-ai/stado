@@ -128,15 +128,16 @@ pub fn remote_command(
 /// The ssh argv `provision_users` runs: BatchMode, then
 /// StrictHostKeyChecking.
 pub fn ssh_argv(ssh_target: &str, command: &str) -> Vec<String> {
-    vec![
+    let mut argv = vec![
         "ssh".to_string(),
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
-        crate::deploy::host_access::ssh_destination(ssh_target),
-        command.to_string(),
-    ]
+    ];
+    argv.extend(crate::deploy::host_access::ssh_destination_args(ssh_target));
+    argv.push(command.to_string());
+    argv
 }
 
 /// Python `_parse_status`: the LAST valid marker line wins

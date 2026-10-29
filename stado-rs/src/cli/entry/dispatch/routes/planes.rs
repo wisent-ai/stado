@@ -14,5 +14,6 @@ pub(crate) async fn dispatch(command: PlaneCommands) -> Result<(), CmdError> {
             }
             served
         }
+        PlaneCommands::Network(command) => crate::cli::network::dispatch(command).await,
     }
 }

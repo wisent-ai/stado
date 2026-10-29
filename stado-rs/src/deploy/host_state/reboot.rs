@@ -40,15 +40,16 @@ fn resolve_target<'a>(
 /// ssh argv for a graceful reboot; option set matches
 /// `host_recovery::ssh_argv` so both commands ride the identical channel.
 pub fn ssh_reboot_argv(ssh_target: &str) -> Vec<String> {
-    vec![
+    let mut argv = vec![
         "ssh".to_string(),
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
-        crate::deploy::host_access::ssh_destination(ssh_target),
-        "sudo -n /sbin/shutdown -r now".to_string(),
-    ]
+    ];
+    argv.extend(crate::deploy::host_access::ssh_destination_args(ssh_target));
+    argv.push("sudo -n /sbin/shutdown -r now".to_string());
+    argv
 }
 
 /// `stado host reboot TARGET` — request a graceful reboot on one canonical
