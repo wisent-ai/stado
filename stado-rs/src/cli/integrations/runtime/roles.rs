@@ -5,8 +5,15 @@
 //! cannot tell an option from words inside another option's value, so a
 //! pattern argument such as `'x --resolver'` would read as a resolver role;
 //! parsing the real vector cannot make that mistake.
+//!
+//! The vector being read was written by whichever build started the process
+//! or rendered the unit, which is usually an older one. An option a later
+//! build removed is still on those hosts, so it is carried as opaque text
+//! beside the line rather than refused: refusing it made every unit holding a
+//! removed option unreadable to every newer build, and no upgrade could then
+//! retire it. Only the options this build declares decide roles.
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use crate::cli::CmdError;
 
@@ -19,12 +26,84 @@ struct ServeLine {
     args: ServeArgs,
 }
 
+/// A serve vector as this build reads it: the line its own options make, and
+/// every option it does not declare, kept verbatim (with the value that
+/// follows it) because an earlier build wrote it.
+struct ReadServeLine {
+    line: ServeLine,
+    opaque: Vec<String>,
+}
+
+/// Read `words` (`serve` first) as this build's serve line. Options this
+/// build does not declare are set aside as opaque text: `serve` takes no
+/// positional argument, so a word after such an option that is not itself an
+/// option can only be that option's value and goes with it. What remains is
+/// parsed by serve's own definition, and a vector that still does not parse
+/// (a declared option with a value it refuses, a missing required option) is
+/// clap's own reason, never read as running no role.
+fn read_serve_line(words: &[&str]) -> Result<ReadServeLine, String> {
+    let command = ServeLine::command();
+    let declared = |name: &str| {
+        command.get_arguments().find(|argument| {
+            argument.get_long() == Some(name)
+                || argument
+                    .get_all_aliases()
+                    .is_some_and(|aliases| aliases.contains(&name))
+        })
+    };
+    let mut kept: Vec<&str> = Vec::with_capacity(words.len());
+    let mut opaque = Vec::new();
+    let mut rest = words.iter().copied();
+    if let Some(first) = rest.next() {
+        kept.push(first);
+    }
+    let mut rest = rest.peekable();
+    while let Some(word) = rest.next() {
+        let Some(option) = word.strip_prefix("--").filter(|option| !option.is_empty()) else {
+            kept.push(word);
+            continue;
+        };
+        let (name, inline_value) = match option.split_once('=') {
+            Some((name, _)) => (name, true),
+            None => (option, false),
+        };
+        match declared(name) {
+            Some(argument) => {
+                kept.push(word);
+                if !inline_value && argument.get_action().takes_values() {
+                    if let Some(value) = rest.next() {
+                        kept.push(value);
+                    }
+                }
+            }
+            None => {
+                let mut text = word.to_string();
+                if !inline_value {
+                    if let Some(value) = rest.next_if(|next| !next.starts_with('-')) {
+                        text.push(' ');
+                        text.push_str(value);
+                    }
+                }
+                opaque.push(text);
+            }
+        }
+    }
+    let line = ServeLine::try_parse_from(&kept).map_err(|error| {
+        format!(
+            "`{}` cannot be read by this build's serve: {error}",
+            words.join(" ")
+        )
+    })?;
+    Ok(ReadServeLine { line, opaque })
+}
+
 /// Print `STADO_SERVE_ROLES` and the role options process `pid` was started
 /// with, then `STADO_SERVE_ROLE_PATHS` with the program, root or destination
 /// each path-carrying role names, one `--option=value` per field. A process
 /// that is not `stado serve` has no roles and prints both markers with
 /// nothing after them; a vector `serve` would refuse is an error, never a
-/// guess.
+/// guess. Options an earlier build wrote and this one does not declare are
+/// named on stderr, read as no role.
 pub(crate) fn print_roles(pid: u32) -> Result<(), CmdError> {
     // A vector that cannot be read belongs to a process that is gone, which
     // is not_found, or to one the kernel would not describe, which is the
@@ -40,13 +119,17 @@ pub(crate) fn print_roles(pid: u32) -> Result<(), CmdError> {
     let words: Vec<&str> = argv.iter().map(String::as_str).collect();
     let (roles, paths) = if let [_program, serve @ ..] = words.as_slice() {
         if serve.first() == Some(&"serve") {
-            let line = ServeLine::try_parse_from(serve).map_err(|error| {
-                CmdError::click(format!(
-                    "PID {pid} runs a serve line this build cannot read: {error}"
-                ))
-                .stating(crate::primitives::failure::FailureCode::Config)
+            let read = read_serve_line(serve).map_err(|error| {
+                CmdError::click(format!("PID {pid} runs a serve line that {error}"))
+                    .stating(crate::primitives::failure::FailureCode::Config)
             })?;
-            (roles(&line.args), role_paths(&line.args))
+            if !read.opaque.is_empty() {
+                eprintln!(
+                    "stado: PID {pid} carries options this build does not declare, read as no role: {}",
+                    read.opaque.join(" ")
+                );
+            }
+            (roles(&read.line.args), role_paths(&read.line.args))
         } else {
             (Vec::new(), Vec::new())
         }
@@ -68,20 +151,13 @@ pub(crate) fn print_roles(pid: u32) -> Result<(), CmdError> {
 /// repeats it inside the one process. This is Stado's knowledge of its own
 /// commands, and it is how a unit running one of them is matched to the role
 /// that replaced it without any list of unit names. Empty for a line that is
-/// no Stado role, including a command this build no longer has; a serve line
-/// this build cannot read is an error with clap's own reason, never read as
-/// running no role.
+/// no Stado role, including a command this build no longer has. A serve line
+/// is read by [`read_serve_line`]: an option this build no longer declares is
+/// read as no role, and a line that still does not parse is clap's reason,
+/// never read as running no role.
 pub(crate) fn command_roles(words: &[&str]) -> Result<Vec<&'static str>, String> {
     Ok(match words {
-        ["serve", ..] => match ServeLine::try_parse_from(words) {
-            Ok(line) => roles(&line.args),
-            Err(error) => {
-                return Err(format!(
-                    "`{}` cannot be read by this build's serve: {error}",
-                    words.join(" ")
-                ))
-            }
-        },
+        ["serve", ..] => roles(&read_serve_line(words)?.line.args),
         ["product", rest @ ..] if product_verb(rest) == Some("sync") => {
             vec!["--product-sync-interval-seconds"]
         }
@@ -98,17 +174,12 @@ pub(crate) fn command_roles(words: &[&str]) -> Result<Vec<&'static str>, String>
 /// ([`crate::deploy::role_lock::serve_role`]): `serve`, or `serve--<target>`
 /// for a line serving one worker target. Two lines with the same lock are
 /// the same process's, never two beside each other. `None` for a line that
-/// is not `serve`; a serve line this build cannot read is clap's reason.
+/// is not `serve`; a serve line is read by [`read_serve_line`].
 pub(crate) fn serve_lock(words: &[&str]) -> Result<Option<String>, String> {
     if words.first() != Some(&"serve") {
         return Ok(None);
     }
-    let line = ServeLine::try_parse_from(words).map_err(|error| {
-        format!(
-            "`{}` cannot be read by this build's serve: {error}",
-            words.join(" ")
-        )
-    })?;
+    let line = read_serve_line(words)?.line;
     let target = line.args.worker.target.as_deref();
     Ok(Some(crate::deploy::role_lock::serve_role(target)))
 }

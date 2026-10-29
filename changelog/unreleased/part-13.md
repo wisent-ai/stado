@@ -58,3 +58,11 @@ The version bump gathers them into the release's own file and removes this one.
   most-rs/Cargo.toml … expected value at line 1 column 2` (Most's service, Skrzynka, Skryba and
   every other Cargo recipe). Only a Stado release's manifest is read for verb contracts now; a
   recipe of another kind declares no verbs.
+- **A unit holding an option a later build removed no longer blocks every upgrade:** a newer
+  Stado read each running `stado serve` unit's argument vector with its own parser, so a unit
+  rendered by an older build with an option since removed (`--disk-cleanup`) was refused as
+  `cannot be read by this build's serve: unexpected argument`, `product update stado` could not
+  retire it (`the units stado replaces could not be read, so none was retired`) and the host
+  could never be upgraded. The serve line is now read from the options this build declares;
+  an option it does not declare is set aside with its value as opaque text, read as no role, and
+  `host` role reports name it on stderr. A line that still does not parse is refused as before.
