@@ -38,6 +38,35 @@ const PRICE_CURRENCY: &str = "USD";
 /// balance, the machine's hourly price, the operator's floor ruling and
 /// where each was read.
 pub(super) async fn admit(operation: &str, vm_size: &str) -> Result<(), ProviderError> {
+    admit_burn(operation, vm_size, 0.0).await.map(drop)
+}
+
+/// What the gate read when it admitted a machine: the balance, the hour of
+/// the new machine with where it was priced, the hourly burn of the machines
+/// already running beside it, and the floor.
+pub(crate) struct Admitted {
+    pub(crate) balance: f64,
+    pub(crate) hourly: f64,
+    pub(crate) priced: String,
+    pub(crate) running_hourly: f64,
+    pub(crate) floor: floor::Floor,
+}
+
+impl Admitted {
+    /// The balance left after one more hour of every machine counted.
+    pub(crate) fn after_hour(&self) -> f64 {
+        self.balance - self.hourly - self.running_hourly
+    }
+}
+
+/// [`admit`] for a machine started beside others that already burn
+/// `running_hourly` USD an hour: one hour of all of them is taken from the
+/// balance, and what remains must stay above the floor.
+pub(crate) async fn admit_burn(
+    operation: &str,
+    vm_size: &str,
+    running_hourly: f64,
+) -> Result<Admitted, ProviderError> {
     let floor = floor::usable(operation)
         .await
         .map_err(ProviderError::Value)?;
@@ -48,15 +77,30 @@ pub(super) async fn admit(operation: &str, vm_size: &str) -> Result<(), Provider
     let (hourly, priced) = hourly(operation, vm_size)
         .await
         .map_err(ProviderError::Value)?;
-    if balance - hourly <= floor.amount {
+    let admitted = Admitted {
+        balance,
+        hourly,
+        priced,
+        running_hourly,
+        floor,
+    };
+    if admitted.after_hour() <= admitted.floor.amount {
+        let beside = if running_hourly > 0.0 {
+            format!(
+                " and one hour of the machines already running ({running_hourly} {PRICE_CURRENCY})"
+            )
+        } else {
+            String::new()
+        };
         return Err(ProviderError::Value(format!(
             "{operation} is refused: the Azure credit balance {balance} {PRICE_CURRENCY} less one hour of {vm_size} \
-             ({hourly} {PRICE_CURRENCY}, {priced}) is not above the floor {}; how long the machine would run is not \
-             known when it starts",
-            floor.named()
+             ({hourly} {PRICE_CURRENCY}, {}){beside} is not above the floor {}; how long the machine would run \
+             is not known when it starts",
+            admitted.priced,
+            admitted.floor.named()
         )));
     }
-    Ok(())
+    Ok(admitted)
 }
 
 /// The gate's balance-against-floor decision on one read of the Azure

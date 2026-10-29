@@ -48,10 +48,12 @@
 
 mod arm;
 mod builders;
+pub mod cloud_host;
 pub(crate) mod credit;
 pub mod network;
 mod power;
 mod provider;
+pub mod public;
 
 pub use arm::{ArmClient, AzureError, ARM_API_BASE};
 pub use builders::{parse_image_urn, vm_body, MANAGED_TAG, MANAGED_TAG_VALUE};

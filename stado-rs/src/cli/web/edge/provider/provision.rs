@@ -5,10 +5,12 @@ use serde_json::{json, Value};
 
 use super::super::declaring::{checked_declaration, record};
 use super::super::{CADDYFILE_ON_EDGE, EDGE_CLOUD_INIT, HOST_UNIT};
-use super::requests::{interface_body, network_path, public_ip_body, security_group_body};
-use super::{refusal, unwind, CmdError};
+use super::{refusal, CmdError, EDGE_ROLE_TAG};
 use crate::config;
 use crate::providers::azure;
+use crate::providers::azure::public::{
+    interface_body, network_path, public_ip_body, security_group_body, unwind, Inbound,
+};
 
 /// Create the edge VM `name` in `region` at `size`, booting `image` on a
 /// `disk_gb` GiB OS disk: every one of them the operator's, none assumed.
@@ -72,6 +74,7 @@ pub(in crate::cli::web::edge) async fn provision(
         "networkInterfaces",
         &interface_name,
     );
+    let tags = azure::public::tags(EDGE_ROLE_TAG, name);
     // Reverse creation order is the rollback order, so this list is the order
     // resources are appended to it.
     let mut created: Vec<(String, String)> = Vec::new();
@@ -79,7 +82,7 @@ pub(in crate::cli::web::edge) async fn provision(
     client
         .put_lro(
             &address_path,
-            &public_ip_body(region, name),
+            &public_ip_body(region, &tags),
             &format!("create public IP {address_name}"),
         )
         .await
@@ -131,10 +134,30 @@ pub(in crate::cli::web::edge) async fn provision(
         }
     };
 
+    // 80 is not optional: Let's Encrypt's HTTP-01 challenge arrives there,
+    // and so does every redirect to HTTPS. Nothing opens 22: the host channel
+    // reaches the edge like every other fleet host.
+    let internet = ["Internet".to_string()];
+    let rules = [
+        Inbound {
+            name: "allow-http",
+            port: "80",
+            sources: &internet,
+            destination_groups: &[],
+            priority: 300,
+        },
+        Inbound {
+            name: "allow-https",
+            port: "443",
+            sources: &internet,
+            destination_groups: &[],
+            priority: 310,
+        },
+    ];
     let group = match client
         .put_lro(
             &group_path,
-            &security_group_body(region, name),
+            &security_group_body(region, &tags, &rules),
             &format!("create network security group {group_name}"),
         )
         .await
@@ -173,7 +196,7 @@ pub(in crate::cli::web::edge) async fn provision(
     let interface = match client
         .put_lro(
             &interface_path,
-            &interface_body(region, &subnet_id, &group_id, &address_id),
+            &interface_body(region, &subnet_id, &group_id, &address_id, &[], &tags),
             &format!("create NIC {interface_name}"),
         )
         .await

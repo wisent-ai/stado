@@ -1,7 +1,7 @@
-//! `stado cloud login|roles repair --provider <provider>`: durable operator
-//! authentication and role repair for a cloud provider. The command is named
-//! for what it does; the provider is an argument, and Azure is the one this
-//! module implements.
+//! `stado cloud login|roles repair|host --provider <provider>`: durable
+//! operator authentication, role repair, and the fleet hosts Stado rents
+//! for a cloud provider ([`host`]). The command is named for what it does;
+//! the provider is an argument, and Azure is the one this module implements.
 //!
 //! Azure `login` uses authorization-code + PKCE against the target tenant.
 //! `domain_hint=live.com` preserves the Microsoft-account federation used by
@@ -19,6 +19,7 @@ pub enum CloudProvider {
 
 use super::CmdError;
 
+pub(crate) mod host;
 mod resources;
 mod session;
 
@@ -46,6 +47,12 @@ pub enum CloudCommands {
     Roles {
         #[command(subcommand)]
         command: CloudRoleCommands,
+    },
+    /// Fleet hosts rented from the cloud under the operator's credit floor:
+    /// create, list, delete, and reap the idle ones.
+    Host {
+        #[command(subcommand)]
+        command: host::CloudHostCommands,
     },
 }
 
@@ -122,6 +129,7 @@ pub async fn dispatch(command: CloudCommands) -> Result<(), CmdError> {
             let CloudProvider::Azure = args.provider;
             repair_rbac(args).await
         }
+        CloudCommands::Host { command } => host::dispatch(command).await,
     }
 }
 

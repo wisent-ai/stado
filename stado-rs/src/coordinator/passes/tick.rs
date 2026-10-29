@@ -230,6 +230,11 @@ pub async fn run_tick(
         }
         Err(error) => log(&format!("run-reaper: cleanup degraded: {error}")),
     }
+    // Cloud hosts the fleet rents are returned once they stand idle past the
+    // minutes each declares, and the fleet's current addresses are the only
+    // ones admitted to them. Nothing happens in a profile without Azure or
+    // without a declared cloud host; a refused pass is logged, never fatal.
+    crate::cli::azure::host::reap_pass(log).await;
     if with_billing {
         // Billing-credits collector. Global (not per-provider), runs last
         // and is fully fault-isolated internally: each source's exact error

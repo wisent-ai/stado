@@ -78,9 +78,31 @@ pub(super) async fn since(
             "aggregation": {"totalCost": {"name": "Cost", "function": "Sum"}},
         },
     });
-    let response = crate::wait::request(client.post(&url).bearer_auth(token).json(&body))
-        .await
-        .map_err(|error| format!("the Cost Management query {url} did not answer: {error}"))?;
+    // Cost Management throttles its query API and names, on every 429, how
+    // long the caller is to wait in its `x-ms-ratelimit-*-retry-after`
+    // headers (or `Retry-After`); that wait is held and the query asked
+    // again. A 429 that names no wait is refused with its body.
+    let response = loop {
+        let response = crate::wait::request(client.post(&url).bearer_auth(token).json(&body))
+            .await
+            .map_err(|error| format!("the Cost Management query {url} did not answer: {error}"))?;
+        if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+            break response;
+        }
+        let Some(wait) = stated_retry_seconds(response.headers()) else {
+            let text = crate::primitives::http::refused_body(response).await;
+            return Err(format!(
+                "the Cost Management query {url} answered HTTP 429 and named no retry wait: {text}"
+            ));
+        };
+        let waiting = crate::wait::begin(
+            crate::wait::Kind::Network,
+            format!("the {wait}s Cost Management stated before the next query"),
+            &url,
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+        waiting.done();
+    };
     let status = response.status();
     if !status.is_success() {
         let text = crate::primitives::http::refused_body(response).await;
@@ -126,4 +148,22 @@ pub(super) async fn since(
         total += amount;
     }
     Ok((total, stated))
+}
+
+/// The longest wait, in whole seconds, a throttled Cost Management answer
+/// names: its `x-ms-ratelimit-microsoft.costmanagement-*-retry-after`
+/// headers (one per quota it counts against) and `Retry-After`
+/// (<https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/manage-automation#error-code-429---call-count-has-exceeded-rate-limits>).
+/// `None` when it names none in seconds.
+fn stated_retry_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            let name = name.as_str();
+            name == "retry-after"
+                || (name.starts_with("x-ms-ratelimit-microsoft.costmanagement-")
+                    && name.ends_with("-retry-after"))
+        })
+        .filter_map(|(_, value)| value.to_str().ok()?.trim().parse::<u64>().ok())
+        .max()
 }

@@ -1,0 +1,37 @@
+#cloud-config
+# A Stado cloud host: the build toolchain `stado host cargo` compiles with,
+# installed once at first boot. `@USER@` is the deployment's VM user
+# (`azure.vm_username`), the account Stado's host channel signs in as.
+#
+# SSH admits keys only: the VM is created with password authentication
+# disabled, and this drop-in keeps sshd itself refusing passwords and
+# keyboard-interactive sign-in whatever the image ships.
+ssh_pwauth: false
+package_update: true
+packages:
+  - build-essential
+  - pkg-config
+  - libssl-dev
+  - clang
+  - cmake
+  - protobuf-compiler
+  - git
+  - rsync
+  - curl
+  - ca-certificates
+  - unzip
+  - nodejs
+  - npm
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-stado-key-only.conf
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+runcmd:
+  - [systemctl, reload, ssh]
+  # rustup in the account's own home (~/.cargo/bin/cargo, a path the host
+  # channel's Cargo candidates name); each revision's rust-toolchain.toml
+  # chooses its toolchain, and rustup's own default serves a crate without one.
+  - [su, "-", "@USER@", "-c", "curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"]

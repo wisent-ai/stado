@@ -85,15 +85,6 @@ const EDGE_CLOUD_INIT: &str = "#cloud-config\n\
                                # `stado service deploy` from a published release, so nothing is\n\
                                # provisioned from cloud-init.\n";
 
-/// The Network resource-provider version this file's ARM calls are made
-/// against.
-///
-/// [`crate::providers::azure::network`] pins the same version for the NIC it builds for an agent
-/// VM, and holds it privately. An edge NIC carries a public address and an
-/// edge-only security group, neither of which that body can express, so these
-/// bodies are built here — and the version has to be named here with them.
-const NETWORK_API_VERSION: &str = "2023-09-01";
-
 /// The unit the edge runs under: the host's one Stado process.
 const HOST_UNIT: &str = "com.wisent.stado";
 

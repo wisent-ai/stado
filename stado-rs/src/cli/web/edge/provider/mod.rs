@@ -1,53 +1,18 @@
 //! The provider API calls: what the edge is made of on Azure, and what it
-//! takes to remove one of those resources and know it is gone.
+//! takes to remove one of those resources and know it is gone. The request
+//! bodies, the verified delete and the rollback are the ones every public
+//! Azure VM is built from ([`crate::providers::azure::public`]).
 
 use super::{mutate_web, CmdError};
-use crate::providers::azure;
 
 mod provision;
 mod removal;
-mod requests;
 
 pub(in crate::cli::web::edge) use provision::provision;
 pub(in crate::cli::web::edge) use removal::remove;
 
-/// Delete one ARM resource, follow Azure's own long-running operation to its
-/// end, and confirm reading it answers 404.
-///
-/// A public address cannot be removed while the interface still references
-/// it, so a rollback that fired three deletes at once would leave the address
-/// behind — billed, unattached, and belonging to nothing. `get_allow_404`
-/// returning `None` is the only evidence that the resource is actually gone;
-/// a resource Azure still returns after its delete operation finished is an
-/// error naming it.
-async fn discard(client: &azure::ArmClient, path: &str, description: &str) -> Result<(), String> {
-    client
-        .delete_allow_404(path, description)
-        .await
-        .map_err(|error| error.to_string())?;
-    match client.get_allow_404(path, description).await {
-        Ok(None) => Ok(()),
-        Ok(Some(_)) => Err(format!(
-            "Azure finished deleting {description} ({path}) and still returns it"
-        )),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-/// Remove, in reverse creation order, what a failed provision created.
-///
-/// Every failure is collected rather than propagated: the caller is already
-/// returning Azure's own refusal, and what an operator needs added to it is
-/// the list of resources that are still there.
-async fn unwind(client: &azure::ArmClient, created: &[(String, String)]) -> Vec<String> {
-    let mut leftovers = Vec::new();
-    for (path, description) in created.iter().rev() {
-        if let Err(error) = discard(client, path, description).await {
-            leftovers.push(error);
-        }
-    }
-    leftovers
-}
+/// The `wisent_role` tag every edge resource carries.
+const EDGE_ROLE_TAG: &str = "web-edge";
 
 /// Azure's refusal, plus whatever the rollback could not remove.
 fn refusal(context: &str, error: impl ToString, leftovers: &[String]) -> CmdError {

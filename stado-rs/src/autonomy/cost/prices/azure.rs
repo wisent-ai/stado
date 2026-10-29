@@ -120,10 +120,13 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
             };
             // A free meter prices nothing, and only pay-as-you-go Linux
             // capacity is compared: reservations, dev/test and Windows
-            // licences price something else.
+            // licences price something else, and so does a size's Cloud
+            // Services (classic) role, which the API lists under the same
+            // `armSkuName` but a product that is not "Virtual Machines …".
             let priced = rate.is_normal() && rate.is_sign_positive();
             let windows = product.split(' ').any(|word| word == "Windows");
-            if !priced || price_type != "Consumption" || windows {
+            let machine = product.starts_with("Virtual Machines ");
+            if !priced || price_type != "Consumption" || windows || !machine {
                 continue;
             }
             let description = product.to_string();

@@ -5,10 +5,10 @@ use serde_json::json;
 
 use super::super::declaring::declared;
 use super::super::serving::stado_routes;
-use super::requests::network_path;
-use super::{discard, CmdError};
+use super::CmdError;
 use crate::config;
 use crate::providers::azure;
+use crate::providers::azure::public::{discard, network_path};
 
 /// Undo [`super::provision::provision`], and be the one command that does.
 ///

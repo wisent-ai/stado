@@ -30,7 +30,9 @@ pub use validate::{
     validate_arguments, validate_binary_name, validate_run_descendant, validate_run_directory,
 };
 
-const RUN_AREA: &str = ".stado/work/runs";
+/// Where every managed run lives below the target account's home; a cloud
+/// host with nothing here runs no Stado-delivered work.
+pub(crate) const RUN_AREA: &str = ".stado/work/runs";
 const SIGNAL_AREA: &str = ".stado/work/run-signals";
 const PATH_REFUSAL: &str =
     "must be an absolute path below the target account's $HOME/.stado/work/runs, with no '.' or '..' component";
