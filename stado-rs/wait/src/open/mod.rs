@@ -21,7 +21,7 @@
 //! said on stderr beside the wait's own line, naming the file and the cause.
 
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 mod birth;
 pub use birth::birth_seconds;
@@ -224,6 +224,7 @@ pub fn listed() -> Result<Listing, RegisterError> {
 /// runs: a process holds the pid and was born no later than the record. One
 /// born after it was handed the pid when the writer ended, so the writer no
 /// longer runs, whoever owns the pid now.
+#[cfg(unix)]
 pub(crate) fn writer_stands(pid: u32, written: SystemTime) -> Result<bool, String> {
     if !running(pid) {
         return Ok(false);
@@ -233,18 +234,30 @@ pub(crate) fn writer_stands(pid: u32, written: SystemTime) -> Result<bool, Strin
         return Ok(false);
     };
     let written = written
-        .duration_since(UNIX_EPOCH)
+        .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| format!("the record of pid {pid} is dated before the epoch: {error}"))?
         .as_secs();
     Ok(born <= written)
 }
 
+/// Whether a writer still runs is read from kill(2) and the process's birth
+/// time, which only a unix system answers; elsewhere the question is refused
+/// naming the pid, as `birth_seconds` refuses its own.
+#[cfg(not(unix))]
+pub(crate) fn writer_stands(pid: u32, _written: SystemTime) -> Result<bool, String> {
+    Err(format!(
+        "whether pid {pid} still runs is unsupported on this operating system"
+    ))
+}
+
 /// kill(2)'s null signal, which delivers nothing and only checks the pid:
 /// https://pubs.opengroup.org/onlinepubs/9699919799/functions/kill.html
+#[cfg(unix)]
 const NULL_SIGNAL: libc::c_int = 0;
 
 /// Whether a process with this pid exists: the null signal answers whether
 /// it could be delivered (EPERM means it exists, owned by another user).
+#[cfg(unix)]
 pub(crate) fn running(pid: u32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
