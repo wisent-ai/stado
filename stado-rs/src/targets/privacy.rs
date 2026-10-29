@@ -82,6 +82,50 @@ impl ComputeTarget {
     }
 }
 
+/// The folders `grants` declare for `program` on a host whose user home is
+/// `home`: the consent-gated folders a walk that program runs may open.
+/// macOS decides per program, so a folder declared for another program is
+/// one this program must not open — opening it is the question nobody
+/// declared. Paths are compared as written and as resolved, so a program
+/// started through a link matches the grant naming its file.
+pub fn folders_for(
+    grants: &[PrivacyGrant],
+    home: &Path,
+    program: &Path,
+) -> std::collections::BTreeSet<String> {
+    let resolved = std::fs::canonicalize(program).ok();
+    grants
+        .iter()
+        .filter(|grant| {
+            let declared = grant.program_on(home);
+            declared == program
+                || resolved.as_ref().is_some_and(|resolved| {
+                    std::fs::canonicalize(&declared).ok().as_ref() == Some(resolved)
+                })
+        })
+        .map(|grant| grant.folder.clone())
+        .collect()
+}
+
+/// [`folders_for`] the executable this process runs. A process that cannot
+/// name its own executable is admitted into no folder.
+pub fn folders_for_this_program(
+    grants: &[PrivacyGrant],
+    home: &Path,
+) -> std::collections::BTreeSet<String> {
+    match std::env::current_exe() {
+        Ok(program) => folders_for(grants, home, &program),
+        Err(_unnamed) => std::collections::BTreeSet::new(),
+    }
+}
+
+/// The folders `grants` declare for any program on the host: what a walk
+/// Stado sends to that host as a script (`find`, `du`) may open, since the
+/// operator decided the fleet reads them there.
+pub fn declared_folders(grants: &[PrivacyGrant]) -> std::collections::BTreeSet<String> {
+    grants.iter().map(|grant| grant.folder.clone()).collect()
+}
+
 /// Check `targets[index].privacy_grants`: an array of `{program, folder,
 /// reason}` on a darwin host, each grant well formed and no program and
 /// folder declared twice.

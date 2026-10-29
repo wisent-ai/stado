@@ -98,15 +98,21 @@ pub const SCAN: &str = "build_caches";
 /// tree again; a preview, or a pass with no state directory, remembers
 /// nothing.
 ///
+/// The walk never opens a [`privacy_protected_parts`] folder; of the
+/// consent-gated ones it walks only `walked_folders`, the folders this
+/// host's `targets[].privacy_grants` declares for the running program.
+///
 /// The walk runs under its own lock in `lock_dir`, not under the janitor's
 /// exclusive cleanup lock, so running workloads keep their holds while it
 /// reads the disk; each removal takes the cleanup lock as `writer` for that
 /// one cache. A walk another janitor is making now leaves the root unwalked
 /// under `walk_in_progress`.
+#[allow(clippy::too_many_arguments)] // each input is a distinct declared fact the walk is judged by
 pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
     home: &Path,
     enforcing: bool,
     deletable: Option<&Path>,
+    walked_folders: &BTreeSet<String>,
     state_dir: Option<&Path>,
     lock_dir: &Path,
     writer: &str,
@@ -128,7 +134,7 @@ pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
     // Declaring Cargo's build directory writes the account's own Cargo
     // configuration, which on a shared host is its owner's, not Stado's.
     if deletable.is_none() {
-        placement::place_cargo_builds(home, report);
+        placement::place_cargo_builds(home, walked_folders, report);
     }
     let admitted = if enforcing {
         crate::deploy::host_scan::admit_relief(SCAN).map(|_relief| true)
@@ -196,7 +202,7 @@ pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
             deletable,
             root_dev: root_info.st_dev,
             reserved: reserved_roots(home),
-            privacy: privacy_protected_roots(home),
+            privacy: privacy_protected_roots(home, walked_folders),
             gated,
             frontier,
             memory,

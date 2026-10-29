@@ -91,6 +91,7 @@ pub mod host_inventory;
 pub mod host_link;
 pub mod host_object_relocate;
 pub mod host_precheck_runner;
+pub mod host_privacy;
 pub mod host_reclaim;
 pub mod host_recovery;
 pub mod host_release;

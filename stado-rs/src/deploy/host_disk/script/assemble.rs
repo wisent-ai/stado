@@ -21,27 +21,36 @@ pub fn background_section() -> String {
     )
 }
 
-/// The refused list of one platform as one quoted, newline-separated word.
-fn prune_word(darwin: bool) -> String {
+/// The refused list of one platform as one quoted, newline-separated word,
+/// walking the consent-gated folders in `declared`.
+fn prune_word(darwin: bool, declared: &std::collections::BTreeSet<String>) -> String {
     shlex_quote(
-        &crate::providers::local::space_reclaim::build_caches::privacy_protected_parts(darwin)
-            .join("\n"),
+        &crate::providers::local::space_reclaim::build_caches::privacy_protected_parts(
+            darwin, declared,
+        )
+        .join("\n"),
     )
 }
 
 /// The remote program carrying exactly the sections SCOPE consumes, with the
-/// janitor's state and lock paths in place, and the target's declared work
-/// root (`targets[].work_root`) measured beside its home.
+/// janitor's state and lock paths in place, the target's declared work
+/// root (`targets[].work_root`) measured beside its home, and its home walks
+/// refusing the privacy list less the folders `targets[].privacy_grants`
+/// declares. A grants entry that cannot be read is the error, naming it.
 ///
 /// Assembled from the section constants rather than from per-scope text: a
 /// field two scopes share is produced by the same bytes in both, so the
 /// cheap script cannot report a different `usage`, `state` or `snapshots`
 /// than the full one. The sections are independent commands reading
 /// independent sources, so dropping one cannot alter another's output.
-pub fn remote_script_for(scope: DiskScope, work_root: Option<&str>) -> String {
+pub fn remote_script_for(scope: DiskScope, target: &ComputeTarget) -> Result<String, DeployError> {
+    let declared = target
+        .privacy_grants()
+        .map(|grants| crate::targets::declared_folders(&grants))
+        .map_err(|error| DeployError(error.to_string()))?;
     // A host that declares no work root writes only under its home, so the
     // home's volume is the one measured.
-    let work_root = match work_root {
+    let work_root = match target.work_root.as_deref() {
         Some(root) => shlex_quote(root),
         None => String::new(),
     };
@@ -49,7 +58,7 @@ pub fn remote_script_for(scope: DiskScope, work_root: Option<&str>) -> String {
     if scope == DiskScope::UsageOnly {
         script.push_str(DISK_USAGE_SECTION);
         script.push_str(VOLUMES_SECTION);
-        return script.replace(WORK_ROOT_MARK, &work_root);
+        return Ok(script.replace(WORK_ROOT_MARK, &work_root));
     }
     if scope != DiskScope::StateOnly {
         script.push_str(DISK_USAGE_SECTION);
@@ -77,7 +86,7 @@ pub fn remote_script_for(scope: DiskScope, work_root: Option<&str>) -> String {
         }
         script.push_str(INVENTORY_SECTION);
     }
-    script
+    Ok(script
         .replace(WORK_ROOT_MARK, &work_root)
         .replace(
             "__CLONE_CONTAINER__",
@@ -95,6 +104,6 @@ pub fn remote_script_for(scope: DiskScope, work_root: Option<&str>) -> String {
             LOCK_PATH_MARK,
             &shlex_quote(&space_reclaim::lock_relative_path()),
         )
-        .replace("__DARWIN_PRUNE__", &prune_word(true))
-        .replace("__OTHER_PRUNE__", &prune_word(false))
+        .replace("__DARWIN_PRUNE__", &prune_word(true, &declared))
+        .replace("__OTHER_PRUNE__", &prune_word(false, &declared)))
 }

@@ -52,15 +52,24 @@ pub async fn run_on_host(
     }
     // The refused roots are the target's, not this machine's: a Linux
     // operator reading a Mac still prunes the Mac's photo library. A local
-    // target that declares no platform is this binary's platform.
+    // target that declares no platform is this binary's platform. Of the
+    // consent-gated folders the walk enters only those the target declares.
     let darwin = if target.release_platform.is_empty() {
         target_is_local(target) && cfg!(target_os = "macos")
     } else {
         target.release_platform.starts_with("darwin")
     };
-    let prune =
-        crate::providers::local::space_reclaim::build_caches::privacy_protected_parts(darwin);
-    let command = remote_command(root, days, apply, force, prune);
+    let declared = match target.privacy_grants() {
+        Ok(grants) => crate::targets::declared_folders(&grants),
+        Err(error) => {
+            report.error = Some(error.to_string());
+            return report;
+        }
+    };
+    let prune = crate::providers::local::space_reclaim::build_caches::privacy_protected_parts(
+        darwin, &declared,
+    );
+    let command = remote_command(root, days, apply, force, &prune);
     // The walk runs until it ends; its own exit and output are the answer.
     let result = if target_is_local(target) {
         let spec = CommandSpec::new(vec!["/bin/sh".to_string(), "-c".to_string(), command]);

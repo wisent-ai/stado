@@ -22,15 +22,19 @@ pub(crate) enum HostStateCommands {
     /// host's, collect this host's, or publish one collected elsewhere.
     #[command(subcommand)]
     Beacon(HostBeaconCommands),
-    /// What macOS lets TARGET's Stado process read: Documents, Desktop and
-    /// Downloads, each `granted`, `denied`, `absent` or `unreadable`, beside
-    /// the grants `targets[].privacy_grants` declares for TARGET.
+    /// What macOS lets TARGET's Stado process read of the folders
+    /// `targets[].privacy_grants` declares for it — Documents, Desktop and
+    /// Downloads, each `granted`, `denied`, `absent`, `unreadable` or `not
+    /// measured` (a folder no grant declares for the program is never opened)
+    /// — and, with `--since`, every privacy request macOS recorded against
+    /// that program in the window.
     ///
-    /// Read from TARGET's latest beacon, which the host process measures
-    /// itself. Exits non-zero when a declared grant is denied, naming the
-    /// program, the folder, the declared reason and the System Settings pane
-    /// that allows it; a folder no grant declares is reported and fails
-    /// nothing.
+    /// The folders are read from TARGET's latest beacon, which the host
+    /// process measures itself; the requests from TARGET's unified log,
+    /// through its declared connection. Exits non-zero when a declared grant
+    /// is denied, naming the program, the folder, the declared reason and the
+    /// System Settings pane that allows it, and when a request reached for
+    /// protected data no grant declares, naming its service and time.
     Privacy {
         target: String,
         /// Emit the measurement as JSON.
@@ -40,6 +44,11 @@ pub(crate) enum HostStateCommands {
         /// only for the machine running this command.
         #[arg(long)]
         open: bool,
+        /// Also list the privacy requests TARGET's unified log recorded
+        /// against its Stado program in this window: a whole number and m, h
+        /// or d (`1d` is the last day).
+        #[arg(long, value_name = "WINDOW")]
+        since: Option<String>,
     },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },

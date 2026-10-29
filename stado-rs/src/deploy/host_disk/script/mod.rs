@@ -129,17 +129,55 @@ const INVENTORY_SECTION: &str = r#"if [ "$(/usr/bin/uname 2>/dev/null || /bin/un
       printf 'STADO_CLONE_ROOT\t%s/__CLONE_CONTAINER__/__CLONE_ROOT__\n' "$clone_container"
     fi
   fi
-  # Every root below the home is answered from one du of the home, walked
-  # once at the deepest depth any of them asks for: a first pass over the
-  # specs only measures that depth, the second reports. Walking the home and
-  # then each of its subtrees again read the same trees several times over.
+  # Every root below the home is answered from one walk of the home, at the
+  # deepest depth any of them asks for: a first pass over the specs only
+  # measures that depth, the second reports. Walking the home and then each
+  # of its subtrees again read the same trees several times over. The home
+  # is walked one top-level entry at a time so that an entry on the privacy
+  # list is never opened (a `du` of the whole home reads the photo and media
+  # libraries, and macOS asks the person at the keyboard about each); the
+  # home's own row is the sum of the entries walked, on the home's volume.
+  inventory_prune=__DARWIN_PRUNE__
+  # stderr: a home that cannot be stated; the walk then measures nothing.
+  home_device=$(/usr/bin/stat -f %d "$HOME" 2>/dev/null)
+  home_walk() {
+    walk_total=0
+    for entry in "$HOME"/* "$HOME"/.[!.]* "$HOME"/..?*; do
+      [ -e "$entry" ] || [ -L "$entry" ] || continue
+      part=${entry#"$HOME"/}
+      refused=
+      saved_ifs=$IFS
+      IFS='
+'
+      for refused_part in $inventory_prune; do
+        [ "$part" = "$refused_part" ] && refused=yes
+      done
+      IFS=$saved_ifs
+      [ -z "$refused" ] || continue
+      if [ -d "$entry" ] && [ ! -L "$entry" ]; then
+        # stderr: an entry removed while the home is walked; it is left out.
+        [ "$(/usr/bin/stat -f %d "$entry" 2>/dev/null)" = "$home_device" ] || continue
+        # stderr: du meets folders this account may not read (other users');
+        # it goes on and the sizes it read are the answer.
+        entry_rows=$($background /usr/bin/du -xk -d "$(($1 - 1))" "$entry" 2>/dev/null)
+        [ -n "$entry_rows" ] || continue
+        printf '%s\n' "$entry_rows"
+        entry_blocks=$(printf '%s\n' "$entry_rows" | /usr/bin/tail -n 1 | /usr/bin/cut -f1)
+      else
+        # stderr: a file removed while the home is walked; it counts nothing.
+        entry_blocks=$(/usr/bin/du -k -d 0 "$entry" 2>/dev/null | /usr/bin/cut -f1)
+      fi
+      walk_total=$((walk_total + ${entry_blocks:-0}))
+    done
+    printf '%s\t%s\n' "$walk_total" "$HOME"
+  }
   home_depth=
   home_listing=
   for pass in depth report; do
-  if [ "$pass" = report ] && [ -n "$home_depth" ]; then
-    home_listing=$($background /usr/bin/du -xk -d "$home_depth" "$HOME" 2>/dev/null)
+  if [ "$pass" = report ] && [ -n "$home_depth" ] && [ -n "$home_device" ]; then
+    home_listing=$(home_walk "$home_depth")
   fi
-  for spec in "$HOME:2" "/private/var:2" "/private/var/folders:5" "$HOME/.local/share:4" "$HOME/.local/state:4" "$HOME/Library/Caches:3" "$HOME/.cargo/git:3" "$HOME/.stado/local-storage:4" "$HOME/.stado/local-backup:4"; do
+  for spec in "$HOME:2" "/private/var:2" "/private/var/folders:5" "$HOME/.local/share:4" "$HOME/.local/state:4" "$HOME/.cargo/git:3" "$HOME/.stado/local-storage:4" "$HOME/.stado/local-backup:4"; do
     root=${spec%:*}
     depth=${spec##*:}
     [ -d "$root" ] || continue

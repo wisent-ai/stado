@@ -104,6 +104,20 @@ pub(crate) async fn cleanup_once(
         .ok()
         .and_then(|data| resolve_target(data, &report.hostname).ok());
     let deletable = deletable_root(target.as_ref(), &home, &mut report);
+    // The consent-gated folders the walk may open: only those this host's
+    // entry declares for this program. A host whose entry cannot be read
+    // declares none, and its walk opens none.
+    let walked_folders = match target
+        .as_ref()
+        .map(crate::targets::ComputeTarget::privacy_grants)
+    {
+        Some(Ok(grants)) => crate::targets::folders_for_this_program(&grants, &home),
+        Some(Err(error)) => {
+            report.add_error("build_caches", &JanitorError::value(&error.to_string()));
+            std::collections::BTreeSet::new()
+        }
+        None => std::collections::BTreeSet::new(),
+    };
     // The build-cache walk reads the whole home, for minutes on a full
     // developer host. Run under the exclusive lock it refused every running
     // workload's hold for as long as it read, so a host whose pressure the
@@ -115,6 +129,7 @@ pub(crate) async fn cleanup_once(
         &home,
         !preview,
         deletable.as_deref(),
+        &walked_folders,
         persist,
         &state_dir,
         writer.as_str(),

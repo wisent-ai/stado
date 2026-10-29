@@ -271,8 +271,12 @@ async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
                 &crate::providers::local::host_memory::read_host_memory(),
             )),
         );
-        // What macOS lets this process read, measured by this process.
-        object.insert("privacy".to_string(), super::privacy::measure());
+        // What macOS lets this process read of the folders declared for it,
+        // measured by this process; an undeclared folder is never opened.
+        object.insert(
+            "privacy".to_string(),
+            super::privacy::measure(&home, &target),
+        );
         // One process per role: the roles held on this host now, and the
         // Stado role processes nothing accounts for — a second copy of a
         // role, a build run from a checkout, a program since removed, a

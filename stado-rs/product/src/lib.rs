@@ -51,6 +51,14 @@ pub use cargo::private_sources::{
     export as export_private_cargo_sources, INPUT_NAME as PRIVATE_CARGO_INPUT_NAME,
 };
 
+/// The code-signing report of one file, as `stado product install` judges a
+/// program it places, and whether that report is one macOS keeps a single
+/// identity for across builds (a Developer ID or Apple Development
+/// signature, or no native code at all). An ad-hoc signature is not: every
+/// build is a new program to macOS, and each one asks every privacy
+/// question again.
+pub use signing::{acceptable as signature_acceptable, inspect as inspect_signature};
+
 use std::sync::OnceLock;
 
 /// The Stado build executing these operations.

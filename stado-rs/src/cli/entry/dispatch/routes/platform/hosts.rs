@@ -32,9 +32,12 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
         HostStateCommands::Beacon(HostBeaconCommands::Collect { publish }) => {
             host::collect_beacon(publish).await
         }
-        HostStateCommands::Privacy { target, json, open } => {
-            host::privacy(&target, json, open).await
-        }
+        HostStateCommands::Privacy {
+            target,
+            json,
+            open,
+            since,
+        } => host::privacy(&target, json, open, since.as_deref()).await,
         HostStateCommands::Reboot { target } => host::reboot(&target).await,
         HostStateCommands::User(HostUserCommands::Create {
             username,

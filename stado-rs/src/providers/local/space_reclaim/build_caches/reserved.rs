@@ -2,11 +2,13 @@
 //! the HuggingFace hub cache and the weles recordings root (each swept by its
 //! own cleaner), cargo's package registry, and the running executable — plus,
 //! on macOS, the personal locations the operating system puts behind a
-//! consent dialog.
+//! consent dialog, which no walk of a home opens unless the host declares it.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::providers::local::space_reclaim::STATE_DIR_PARTS;
+use crate::targets::PRIVACY_FOLDERS;
 
 /// Roots the build-cache cleaner must never delete even when they carry a
 /// valid tag, plus (by prefix) everything beneath them.
@@ -76,71 +78,67 @@ pub(super) fn reserved_roots(home: &Path) -> Vec<PathBuf> {
     roots
 }
 
-/// The macOS locations a build tool never writes a tagged cache into, and
-/// which cost a privacy prompt or a network download to look inside.
+/// The home-relative top-level folders no walk of a home opens, for the
+/// platform the walk runs on: on macOS the locations the operating system
+/// puts behind a privacy decision, minus the consent-gated folders
+/// (`Documents`, `Desktop`, `Downloads`) named in `admitted`.
 ///
-/// `$HOME` is this cleaner's root, so the walk reaches `~/Pictures`
-/// like any other directory — and from an always-on agent it does: `tccd`
-/// records `kTCCServicePhotos` requests attributed to
-/// `~/.stado/bin/stado` while the pass was walking. macOS answers such a
-/// request by asking the person at the keyboard, so an unattended cleaner
-/// scanning a photo library produces a dialog nobody asked for, and produces
-/// it again for every code identity that asks. The scan cannot win anything
-/// there either: the media libraries are bundles their own applications
-/// manage, and no build tool tags them with `CACHEDIR.TAG`.
+/// Opening one of them is what makes macOS ask. `tccd` records the request
+/// against the walking program and, when that program has no decision yet,
+/// shows the person at the keyboard a dialog — "would like to access Apple
+/// Music, your music and video activity, and your media library", "… your
+/// photos", "… files in your Documents folder". An unattended pass has
+/// nobody to answer it, a decision is kept per code identity, so every
+/// differently signed build asks again, and a walk can win nothing there:
 ///
-/// `Library/Mobile Documents` and `Library/CloudStorage` are worse than
-/// useless: their entries can be evicted placeholders, and reading one
-/// downloads it. A disk cleaner that fills the disk to look for free space is
-/// the opposite of the capability.
+/// - `Pictures`, `Music` and `Movies` hold the Photos, Music and TV
+///   libraries, bundles their own applications manage; no build tool tags
+///   them with `CACHEDIR.TAG`.
+/// - `Library` is the operating system's and every application's private
+///   state: the Photos syndication library (`Library/Photos`), the media
+///   library (`Library/iTunes`), Contacts, Calendars, Reminders, Mail,
+///   Messages, Safari, other applications' containers, and the iCloud and
+///   file-provider folders whose evicted entries download when read. No
+///   build tool writes a tagged cache under it; the cleaners that own a root
+///   there (the compiler cache's store, Playwright's browsers) open that root
+///   by its declared path, never by walking.
+/// - `.Trash` is the operator's undo, not build output.
+/// - `Documents`, `Desktop` and `Downloads` are consent-gated and may hold
+///   real build trees (this fleet keeps its checkouts under `~/Documents`).
+///   A walk opens one only when the host's registry entry declares it in
+///   `targets[].privacy_grants`: the operator then decided the fleet reads it,
+///   and the one question macOS asks is the one he declared.
 ///
-/// `Library/Group Containers` and `Library/Containers` are sandboxed
-/// applications' own data. macOS gates reading another application's
-/// container behind a consent prompt, and their trees carry iCloud-backed
-/// content (Final Cut's `com.apple.CloudContent`, for one) whose every open
-/// waits on the file provider: one pass spent over an hour opening those
-/// directories, holding the cleanup lock while the signed release delivery
-/// the disk-pressure rule admits waited behind it. No build tool writes a
-/// tagged cache there. `Library/Developer/CoreSimulator` is the same kind of
-/// tree: each simulated device's whole file system, which the next pass on
-/// the same laptop spent its time opening instead.
+/// Every part is one top-level name below the home, so a walk refuses it by
+/// comparing the first component; nothing below a part is ever opened.
 ///
-/// `Documents`, `Desktop` and `Downloads` are deliberately NOT here. They are
-/// consent-gated too, but real build trees live in them — this fleet's own
-/// checkouts are under `~/Documents` — so the honest cost is one grant
-/// decision for a stably signed binary, not a permanent blind spot.
-///
-/// The list is given as home-relative parts, for the platform a walk runs
-/// on. This is the one list: the janitor's own walk reads it through
-/// [`privacy_protected_roots`], and the build-cache verdict script that
-/// `stado space report` sends to a host reads it through
-/// `STADO_CACHE_PRUNE`. Two lists drift: the janitor refusing
-/// `~/Library/CloudStorage` while the verdict's `find` walks straight into a
-/// synced-drive `.tmp` and reports the whole host as `scan-failed`.
-pub fn privacy_protected_parts(darwin: bool) -> &'static [&'static str] {
-    if darwin {
-        &[
-            "Pictures",
-            "Music",
-            "Movies",
-            ".Trash",
-            "Library/Mobile Documents",
-            "Library/CloudStorage",
-            "Library/Group Containers",
-            "Library/Containers",
-            "Library/Developer/CoreSimulator",
-        ]
-    } else {
+/// This is the one list. The janitor's own walk reads it through
+/// [`privacy_protected_roots`]; the build-cache verdict that `stado host
+/// build-caches` and `stado host spotlight` run on a host, and the census and
+/// `du` inventory `stado space report` runs, read it as the prune words their
+/// scripts receive. A second list drifts: the janitor refusing a folder while
+/// a report's `find` walks straight into it.
+pub fn privacy_protected_parts(darwin: bool, admitted: &BTreeSet<String>) -> Vec<&'static str> {
+    if !darwin {
         // No operating system outside macOS gates these directories behind a
         // consent dialog, and a Linux build host may legitimately keep a
         // tagged tree in any of them.
-        &[]
+        return Vec::new();
     }
+    let mut parts = vec!["Pictures", "Music", "Movies", ".Trash", "Library"];
+    parts.extend(
+        PRIVACY_FOLDERS
+            .iter()
+            .filter(|(key, _)| !admitted.contains(*key))
+            .map(|(_, name)| *name),
+    );
+    parts
 }
 
-/// The refused roots under one home, for the platform this binary runs on.
-pub(super) fn privacy_protected_roots(home: &Path) -> Vec<PathBuf> {
-    privacy_protected_parts(cfg!(target_os = "macos"))
+/// The refused roots under one home, for the platform this binary runs on,
+/// with the consent-gated folders in `admitted` walked.
+pub(super) fn privacy_protected_roots(home: &Path, admitted: &BTreeSet<String>) -> Vec<PathBuf> {
+    privacy_protected_parts(cfg!(target_os = "macos"), admitted)
         .iter()
         .map(|part| home.join(part))
         .collect()

@@ -1,20 +1,23 @@
-//! Where Cargo builds on a host whose janitor may not read a folder that holds
-//! checkouts.
+//! Where Cargo builds on a host whose janitor does not walk a folder that
+//! holds checkouts.
 //!
 //! A checkout's `target/` is a tagged cache this cleaner reclaims, but only
-//! where the janitor may read. macOS keeps `~/Documents`, where the fleet's
-//! checkouts live, from a program the operator did not grant it, so every
-//! build there grew a tree no pass could reach while the disk filled. When a
-//! consent-gated folder refuses this process, Cargo's build directory — the
-//! intermediate artifacts, the bulk of every build — is declared in Cargo's
-//! own configuration under its home, which Cargo tags with `CACHEDIR.TAG` and
-//! this cleaner reclaims. A configuration that already declares a build
-//! directory is the operator's choice and is left as it is; one that exists
-//! without it is not rewritten, and the pass says so.
+//! where the janitor walks. macOS keeps `~/Documents`, where the fleet's
+//! checkouts live, behind a privacy decision, and the walk opens such a
+//! folder only when `targets[].privacy_grants` declares it for the running
+//! program; elsewhere every build there grew a tree no pass could reach while
+//! the disk filled. When a consent-gated folder is not walked, Cargo's build
+//! directory — the intermediate artifacts, the bulk of every build — is
+//! declared in Cargo's own configuration under its home, which Cargo tags
+//! with `CACHEDIR.TAG` and this cleaner reclaims. A configuration that
+//! already declares a build directory is the operator's choice and is left
+//! as it is; one that exists without it is not rewritten, and the pass says
+//! so.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::providers::local::space_reclaim::{consent, CleanupReport, JanitorError};
+use crate::providers::local::space_reclaim::{CleanupReport, JanitorError};
 
 /// Cargo's own template for a per-workspace build directory under its home:
 /// https://doc.rust-lang.org/cargo/reference/config.html#buildbuild-dir
@@ -33,13 +36,17 @@ fn cargo_config(home: &Path) -> PathBuf {
     .join("config.toml")
 }
 
-/// A consent-gated folder this process may not read, if there is one.
-fn refused_folder(home: &Path) -> Option<PathBuf> {
-    consent::gated_folders(home).into_iter().find(|folder| {
-        std::fs::read_dir(folder).is_err_and(|error| {
-            cfg!(target_os = "macos") && error.raw_os_error() == Some(nix::libc::EPERM)
-        })
-    })
+/// A consent-gated folder the walk does not enter, if there is one: one no
+/// grant declares for the running program. It is judged from the declaration
+/// alone, since opening the folder to see is the question macOS would ask.
+fn refused_folder(home: &Path, admitted: &BTreeSet<String>) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    crate::targets::PRIVACY_FOLDERS
+        .iter()
+        .find(|(key, _)| !admitted.contains(*key))
+        .map(|(_, name)| home.join(name))
 }
 
 fn write_declaration(config: &Path, folder: &Path) -> std::io::Result<()> {
@@ -49,16 +56,20 @@ fn write_declaration(config: &Path, folder: &Path) -> std::io::Result<()> {
     std::fs::write(
         config,
         format!(
-            "# Written by the Stado janitor: {} refuses it, so checkouts there build\n\
-             # into Cargo's home, where a pass can reclaim the tagged tree.\n\
+            "# Written by the Stado janitor: it does not walk {}, so checkouts there\n\
+             # build into Cargo's home, where a pass can reclaim the tagged tree.\n\
              [build]\n{BUILD_DIR_KEY} = \"{BUILD_DIR}\"\n",
             folder.display()
         ),
     )
 }
 
-pub(super) fn place_cargo_builds(home: &Path, report: &mut CleanupReport) {
-    let Some(folder) = refused_folder(home) else {
+pub(super) fn place_cargo_builds(
+    home: &Path,
+    admitted: &BTreeSet<String>,
+    report: &mut CleanupReport,
+) {
+    let Some(folder) = refused_folder(home, admitted) else {
         return;
     };
     let config = cargo_config(home);

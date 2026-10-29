@@ -3,15 +3,14 @@
 //!
 //! `~/Desktop`, `~/Documents` and `~/Downloads` are consent-gated: the first
 //! `open` under one of them by a process without the grant makes macOS ask
-//! the person at the keyboard, and the syscall blocks until they answer. An
-//! agent asking that question from its janitor thread can sit inside `openat`
-//! for hours: the pass holds its exclusive lock the whole time, every
-//! admission on the host reports `cleanup_in_progress`, and a required
-//! release delivery sits queued while `host gates` says the host is claiming.
-//! A cleaner walking
-//! the fleet's own checkouts under `~/Documents` is the declared policy, and
-//! the grant is one decision for a stably signed binary; what must not happen
-//! is the wait for that decision costing the host.
+//! the person at the keyboard, and the syscall blocks until they answer. A
+//! walk opens one only when the host's `targets[].privacy_grants` declares
+//! it for the walking program (`privacy_protected_parts` refuses every other),
+//! and even a declared folder's question must not hold the janitor: an
+//! agent asking it from its janitor thread can sit inside `openat` for
+//! hours, the pass holds its exclusive lock the whole time, every admission
+//! on the host reports `cleanup_in_progress`, and a required release
+//! delivery sits queued while `host gates` says the host is claiming.
 //!
 //! The first open under each gated folder is therefore made on a helper
 //! thread, and the pass does not wait for it: the folder is `pending`, the
@@ -56,13 +55,14 @@ fn consents() -> MutexGuard<'static, BTreeMap<PathBuf, Consent>> {
     }
 }
 
-/// The folders under `home` macOS gates behind a consent dialog and this
-/// cleaner still walks, because build trees live in them.
+/// The folders under `home` macOS gates behind a consent dialog, the ones
+/// `targets[].privacy_grants` can declare ([`crate::targets::PRIVACY_FOLDERS`]):
+/// a walk that was admitted into one opens it through the helper.
 #[cfg(target_os = "macos")]
 pub fn gated_folders(home: &Path) -> Vec<PathBuf> {
-    ["Desktop", "Documents", "Downloads"]
+    crate::targets::PRIVACY_FOLDERS
         .iter()
-        .map(|part| home.join(part))
+        .map(|(_, name)| home.join(name))
         .collect()
 }
 

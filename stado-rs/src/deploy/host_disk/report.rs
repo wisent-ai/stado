@@ -122,7 +122,7 @@ pub async fn disk_read(
 ) -> Result<DiskRead, DeployError> {
     let gates = host_channel::run_script(
         target,
-        &super::remote_script_for(super::DiskScope::GateInputs, target.work_root.as_deref()),
+        &super::remote_script_for(super::DiskScope::GateInputs, target)?,
         runner,
     )
     .await?;
@@ -145,7 +145,7 @@ pub async fn disk_read(
     let (output, attribution) = match skipped {
         Some(detail) => (gates, Some(detail)),
         None => {
-            let script = super::remote_script_for(scope, target.work_root.as_deref());
+            let script = super::remote_script_for(scope, target)?;
             match host_channel::run_script(target, &script, runner).await {
                 Ok(output) if output.code == 0 => (output, None),
                 Ok(output) => (

@@ -237,7 +237,7 @@ async fn disk_read(
     scope: host_disk::DiskScope,
     runner: &Runner,
 ) -> Result<host_disk::DiskReading, DeployError> {
-    let script = host_disk::remote_script_for(scope, target.work_root.as_deref());
+    let script = host_disk::remote_script_for(scope, target)?;
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.succeeded() {
         return Err(DeployError(format!(
