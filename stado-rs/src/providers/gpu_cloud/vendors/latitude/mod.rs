@@ -105,11 +105,22 @@ impl Api {
     }
 }
 
-/// A Latitude server's `attributes.status`, as Latitude lists it; a status
-/// outside the list is a server still coming up.
+/// A Latitude virtual machine's `attributes.status`: the capitalized values
+/// the Retrieve VM reference lists (Running, Starting, Stopped, Stopping,
+/// Failed, Off, Error, Rebooting, Deleting, Destroying, Configuring network,
+/// Scheduling, Scheduled, Provisioning), each read as the variant of that
+/// exact spelling. The reference calls the set open, so a value it does not
+/// list yet is read as a machine still coming up and never as a word match.
 #[derive(serde::Deserialize)]
 enum Status {
     Running,
+    Starting,
+    Rebooting,
+    #[serde(rename = "Configuring network")]
+    ConfiguringNetwork,
+    Scheduling,
+    Scheduled,
+    Provisioning,
     Stopping,
     Stopped,
     Off,
@@ -125,11 +136,17 @@ impl From<Status> for MachineState {
     fn from(status: Status) -> Self {
         match status {
             Status::Running => Self::Running,
+            Status::Starting
+            | Status::Rebooting
+            | Status::ConfiguringNetwork
+            | Status::Scheduling
+            | Status::Scheduled
+            | Status::Provisioning
+            | Status::Other => Self::Provisioning,
             Status::Stopping => Self::Stopping,
             Status::Stopped | Status::Off => Self::Stopped,
             Status::Deleting | Status::Destroying => Self::Terminating,
             Status::Failed | Status::Error => Self::Failed,
-            Status::Other => Self::Provisioning,
         }
     }
 }
