@@ -26,6 +26,11 @@ The version bump gathers them into the release's own file and removes this one.
   authorizer read the shared eight-digit part name, so composition refused every chunked upload
   with `chunk 0 is outside the target upload` — `stado release catalog input pin --swiftpm`
   among them. Parts are now named by the one shared spelling.
+- **`stado quality check` gives a gate the history records the release build gives it:** the
+  check exported the revision with no `.wisent-provenance/` records, so an application's version
+  gate (`stado release gate app check`) refused every check with `the source archive carries no
+  verified baseline provenance`. The check now writes the verified baseline provenance and the
+  published diff into its export, made the same way the release snapshot makes them.
 
 ### Added
 

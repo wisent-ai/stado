@@ -95,6 +95,10 @@ async fn export_check(
     ));
     let sha256 = stado_product::export_committed_source(checkout, revision, &scratch)
         .map_err(|error| CmdError::unreachable(format!("cannot export {revision}: {error:#}")))?;
+    // The history records the release snapshot adds to its archive (verified
+    // baseline provenance, published diff), so a gate that reads them, an
+    // application's version gate for one, judges the tree its release builds.
+    crate::cli::release_submit::write_records(&scratch, checkout, revision)?;
     let inputs_area = run_area.join("inputs");
     let verdict = check_tree(
         &scratch,

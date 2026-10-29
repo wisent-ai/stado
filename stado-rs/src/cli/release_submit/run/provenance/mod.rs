@@ -33,14 +33,11 @@ const TIER: &str = "git-archive:";
 const REMOTE: &str = "origin";
 const PEELED: &str = "^{}";
 
-/// Add every history record a release build needs and cannot compute from
-/// files alone: the verified baseline provenance and the published diff.
-/// A record that does not apply to this commit is not written.
-pub(crate) fn append_records<W: std::io::Write>(
-    files: &mut tar::Builder<W>,
-    root: &Path,
-    commit: &str,
-) -> Result<(), CmdError> {
+/// Every history record a release build needs and cannot compute from files
+/// alone, with the path it sits at in the source tree: the verified baseline
+/// provenance and the published diff. A record that does not apply to this
+/// commit is left out.
+fn records(root: &Path, commit: &str) -> Result<Vec<(&'static str, Vec<u8>)>, CmdError> {
     let records = [
         (PROVENANCE_PATH, record(root, commit)?),
         (
@@ -48,10 +45,19 @@ pub(crate) fn append_records<W: std::io::Write>(
             published_diff::record(root, commit)?,
         ),
     ];
-    for (path, record) in records {
-        let Some(record) = record else {
-            continue;
-        };
+    Ok(records
+        .into_iter()
+        .filter_map(|(path, record)| record.map(|record| (path, record)))
+        .collect())
+}
+
+/// Add [`records`] to the release snapshot's archive.
+pub(crate) fn append_records<W: std::io::Write>(
+    files: &mut tar::Builder<W>,
+    root: &Path,
+    commit: &str,
+) -> Result<(), CmdError> {
+    for (path, record) in records(root, commit)? {
         let mut header = tar::Header::new_gnu();
         header.set_size(record.len() as u64);
         // The epoch and the root owner, so the archive's bytes depend on its
@@ -59,6 +65,21 @@ pub(crate) fn append_records<W: std::io::Write>(
         crate::primitives::archive::stamp(&mut header, crate::primitives::file_mode::shared_read());
         header.set_cksum();
         files.append_data(&mut header, path, &record[..])?;
+    }
+    Ok(())
+}
+
+/// Write [`records`] into `tree`, an exported copy of `commit`, so a check
+/// over that tree reads the same history records the release build reads
+/// from its archive: without them an application's version gate refused
+/// every `stado quality check` for want of `.wisent-provenance/baseline.json`.
+pub(crate) fn write_records(tree: &Path, root: &Path, commit: &str) -> Result<(), CmdError> {
+    for (path, record) in records(root, commit)? {
+        let target = tree.join(path);
+        if let Some(folder) = target.parent() {
+            std::fs::create_dir_all(folder)?;
+        }
+        std::fs::write(&target, &record)?;
     }
     Ok(())
 }
