@@ -77,6 +77,17 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
+    /// What each process on TARGET spent since the reading before: CPU
+    /// seconds (its own and its reaped children's), resident memory and bytes
+    /// read from and written to storage, read from the kernel by the host's
+    /// own Stado. The first reading on a host says it has nothing to compare
+    /// with yet.
+    Processes {
+        target: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Check TARGET's ssh reachability AND health-beacon age as one verdict.
     Ping {
         target: String,

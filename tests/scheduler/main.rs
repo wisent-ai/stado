@@ -10,6 +10,8 @@ mod contributions;
 mod deployment;
 #[path = "../host_activity/journey.rs"]
 mod host_activity;
+#[path = "../host_processes/journey.rs"]
+mod host_processes;
 mod host_routine;
 mod lease;
 #[path = "../market/peer_declaration.rs"]

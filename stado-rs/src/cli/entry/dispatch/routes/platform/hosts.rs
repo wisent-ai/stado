@@ -87,6 +87,7 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             apply,
             json,
         } => crate::cli::host::spotlight::spotlight(&target, apply, json).await,
+        HostStateCommands::Processes { target, json } => host::processes(&target, json).await,
         HostStateCommands::Ping { target, json } => host::ping(&target, json).await,
         HostStateCommands::Gates {
             host: target,

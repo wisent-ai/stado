@@ -98,12 +98,15 @@ fn grown(now: u64, earlier: Option<u64>) -> u64 {
 /// started in the interval.
 fn load(pid: i32, now: &Counters, earlier: Option<&Counters>) -> ProcessLoad {
     let cpu = Duration::from_nanos(grown(now.cpu_ns, earlier.map(|before| before.cpu_ns)));
-    let children = match (now.children_cpu_ns, earlier.map(|before| before.children_cpu_ns)) {
+    let children = match (
+        now.children_cpu_ns,
+        earlier.map(|before| before.children_cpu_ns),
+    ) {
         (Some(after), Some(Some(before))) => Some(Duration::from_nanos(after - before)),
         (Some(after), None) => Some(Duration::from_nanos(after)),
         _ => None,
     };
-    let disk_before: Option<Result<DiskBytes, String>> = earlier.map(|before| before.disk.clone());
+    let disk_before: Option<&Result<DiskBytes, String>> = earlier.map(|before| &before.disk);
     let (disk_read_bytes, disk_written_bytes, disk_unreadable) = match (&now.disk, disk_before) {
         (Ok(after), Some(Ok(before))) => (
             Some(after.read - before.read),

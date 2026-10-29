@@ -2,6 +2,7 @@
 
 pub(in crate::cli::host) mod gates;
 pub(in crate::cli::host) mod inventory;
+pub(in crate::cli::host) mod processes;
 pub(in crate::cli::host) mod vitals;
 
 use serde_json::Value;

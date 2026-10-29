@@ -277,6 +277,14 @@ async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
             "privacy".to_string(),
             super::privacy::measure(&home, &target),
         );
+        // What each process spent since the reading before, so a saturated
+        // host's beacon names its causes; a failed read is published as the
+        // cause instead of an empty list.
+        let processes = match crate::providers::local::host_processes::read_and_compare() {
+            Ok(report) => serde_json::to_value(report)?,
+            Err(cause) => json!({ "unread": cause }),
+        };
+        object.insert("processes".to_string(), processes);
         // One process per role: the roles held on this host now, and the
         // Stado role processes nothing accounts for — a second copy of a
         // role, a build run from a checkout, a program since removed, a

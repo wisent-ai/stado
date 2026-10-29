@@ -7,6 +7,16 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Added
 
+- **`stado host processes TARGET [--json]` names what each process on a host spent:** a saturated
+  host could only be read with `top` or `ps`, which an agent session, a sandbox or the host-exec
+  allowlist can be refused, and `ps` counts CPU in whole seconds. The host's own Stado now reads
+  every process's CPU seconds, the CPU of children it reaped, resident memory and bytes read from
+  and written to storage from the kernel, and reports each against the reading it kept before,
+  with the interval measured; the first run says it has nothing to compare with yet. Every beacon
+  carries the same report as `processes` (`{"unread": <cause>}` when the kernel refused the
+  listing). Real test: `cargo test --manifest-path stado-rs/Cargo.toml --test scheduler --
+  host_processes::`.
+
 - **A host routine runs under its job identity and keeps its output:** the host store's runner
   started a routine with no directory or job identity and kept nothing it produced, so a routine
   that needs `WC_JOB_ID` or hands back its receipt as an artifact failed or left no receipt. Each

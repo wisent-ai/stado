@@ -58,7 +58,9 @@ fn counters(process: &Path, page: u64) -> Result<Counters, Unread> {
         .split_whitespace()
         .next()
         .ok_or_else(|| Unread::Refused(format!("{} is empty", schedstat.display())))
-        .and_then(|first| number(first, &schedstat.display().to_string()).map_err(Unread::Refused))?;
+        .and_then(|first| {
+            number(first, &schedstat.display().to_string()).map_err(Unread::Refused)
+        })?;
     let program = read_file(&process.join("comm"))?.trim().to_string();
     let statm = process.join("statm");
     let pages = read_file(&statm)?;
@@ -67,7 +69,9 @@ fn counters(process: &Path, page: u64) -> Result<Counters, Unread> {
     let resident = fields
         .next()
         .ok_or_else(|| Unread::Refused(format!("{} has no resident field", statm.display())))
-        .and_then(|resident| number(resident, &statm.display().to_string()).map_err(Unread::Refused))?;
+        .and_then(|resident| {
+            number(resident, &statm.display().to_string()).map_err(Unread::Refused)
+        })?;
     let io = process.join("io");
     let disk = match read_file(&io) {
         Ok(text) => Ok(DiskBytes {
