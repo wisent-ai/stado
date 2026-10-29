@@ -70,8 +70,8 @@ pub struct Relay {
     pub attach_retry_seconds: u64,
 }
 
-/// The registry host a network name addresses: `mini.stado.internal` names
-/// `mini`. `None` for every name outside [`DOMAIN`].
+/// The registry host a network name addresses: `example-host.stado.internal`
+/// names `example-host`. `None` for every name outside [`DOMAIN`].
 pub fn network_host(host: &str) -> Option<&str> {
     let trimmed = host.trim_end_matches('.');
     let split = trimmed.len().checked_sub(DOMAIN.len())?;

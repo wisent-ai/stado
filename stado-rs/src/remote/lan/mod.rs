@@ -3,12 +3,11 @@
 //! does not speak multicast DNS.
 //!
 //! A macOS host answers `.local` names through its own resolver; a Linux
-//! host without nss-mdns does not, so a registry path that names the
-//! always-on Mac as `charles@<name>.local` failed on such a host with
-//! "Temporary failure in name resolution" while both machines sat on one
-//! LAN. With the tailnet path down too, that host's Stado could reach no
-//! fleet store and published nothing. Asking the link itself (RFC 6762)
-//! makes the declared LAN path work on every host, whatever its resolver.
+//! host without nss-mdns does not, so a registry path that names a host as
+//! `<user>@<name>.local` fails there with "Temporary failure in name
+//! resolution" even when both machines share one LAN. Asking the link itself
+//! (RFC 6762) makes the declared LAN path work on every host, whatever its
+//! resolver.
 
 mod denied;
 
