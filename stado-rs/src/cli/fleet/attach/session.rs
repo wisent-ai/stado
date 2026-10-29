@@ -33,7 +33,10 @@ pub(super) async fn declare_keepalive(
             .stating(FailureCode::Config));
         }
         crate::cli::host::write_host_config(&target.name, key, value).await?;
-        echo(&format!("[attach] {}: {key} = {value}, as this host declares it", target.name));
+        echo(&format!(
+            "[attach] {}: {key} = {value}, as this host declares it",
+            target.name
+        ));
     }
     Ok(())
 }

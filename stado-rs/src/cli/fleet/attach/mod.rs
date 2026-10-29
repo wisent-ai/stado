@@ -16,6 +16,7 @@
 //! not touched: it stays at the path its configuration names, as the
 //! machine's own object API root, and that path is reported.
 
+mod config;
 mod session;
 
 use serde_json::{json, Value};
@@ -146,8 +147,11 @@ pub(crate) async fn attach(
         "[attach] {}: bearer of namespace {} written to {TOKEN_FILE}",
         target.name, store.namespace
     ));
+    // The local store is read before anything is written: `config init`
+    // writes its template, whose local path is the default one.
+    let local = config::local_store(target, runner).await?;
+    config::ensure_file(target, runner, echo).await?;
     session::declare_keepalive(target, echo).await?;
-    let local = machine_local_store(target, runner).await?;
     let storage = json!({
         "backend": crate::capabilities::StorageAdapter::StadoObject.id(),
         "local": { "path": local },
@@ -163,34 +167,6 @@ pub(crate) async fn attach(
         target.name, store.url, store.namespace
     ));
     Ok(())
-}
-
-/// The device-local store path the machine's configuration names now.
-async fn machine_local_store(target: &ComputeTarget, runner: &Runner) -> Result<String, CmdError> {
-    let shown = crate::cli::host::remote_config_output(
-        target,
-        crate::cli::host::RemoteConfigAction::Show,
-        runner,
-    )
-    .await?;
-    let document: Value = serde_json::from_str(&shown).map_err(|error| {
-        CmdError::click(format!(
-            "{} answered its configuration read with something that is not JSON ({error})",
-            target.name
-        ))
-        .stating(FailureCode::InfraDown)
-    })?;
-    document["resolved"]["wc_local_storage_path"]
-        .as_str()
-        .filter(|path| !path.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "{}: its configuration names no local storage path to keep",
-                target.name
-            ))
-            .stating(FailureCode::InfraDown)
-        })
 }
 
 /// The adapter `resolver` declares for `service` and `consumer`.
