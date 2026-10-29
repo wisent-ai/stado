@@ -73,6 +73,13 @@ pub fn perform(
     let is_dependency = !stack.is_empty();
     let enclosing = stack.clone();
     let revision = plan::prerequisites::revision(runtime, product, surface, coordinate)?;
+    // An unpinned source build builds the revision chosen above, never the
+    // canonical checkout's head; finishing a retained build keeps the build
+    // it retained.
+    let source_commit = match coordinate {
+        None if runtime.finishing.as_deref() != Some(id) => Some(revision.as_str()),
+        _ => source_commit,
+    };
     stack.push(Enclosing::new(id, surface, &revision));
     let result = (|| {
         let required = plan::prerequisites::requirements(

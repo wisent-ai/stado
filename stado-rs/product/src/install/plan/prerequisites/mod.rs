@@ -15,6 +15,7 @@ use std::{fs, path::PathBuf};
 mod chain;
 mod contract;
 mod enclosing;
+mod unpinned;
 pub use chain::chain;
 use contract::{first_provider, manifest, provides};
 use enclosing::handed;
@@ -79,19 +80,24 @@ fn manifest_path<'a>(product: &'a Value, surface: &str) -> Result<Option<&'a str
     Ok(crate::install::recipe(product, surface)?["manifest"].as_str())
 }
 
+/// The source revision an installation builds: the one its coordinate names,
+/// else the product's published revision ([`unpinned::choose`]), never its
+/// checkout's head and never an ancestor of what is installed; the choice
+/// and its reason are said on standard error.
 pub fn revision(
     runtime: &Runtime,
     product: &Value,
     surface: &str,
     coordinate: Option<crate::install::Coordinate<'_>>,
 ) -> Result<String> {
-    match coordinate {
-        Some(coordinate) => Ok(coordinate.revision().to_owned()),
-        None => source::git(
-            &checkout(runtime, product, surface)?,
-            &["rev-parse", "HEAD"],
-        ),
+    if let Some(coordinate) = coordinate {
+        return Ok(coordinate.revision().to_owned());
     }
+    let id = catalog::text(product, "id")?;
+    let root = checkout(runtime, product, surface)?;
+    let (revision, why) = unpinned::choose(runtime, id, surface, &root)?;
+    eprintln!("{id}/{surface}: no source coordinate was named, so it builds {revision}: {why}");
+    Ok(revision)
 }
 
 fn green(runtime: &Runtime, product: &str, surface: &str) -> Result<String> {
