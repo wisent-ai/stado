@@ -90,3 +90,6 @@ The version bump gathers them into the release's own file and removes this one.
   be read, refuses the retirement naming it. `--dry-run` reads and retires nothing. The object
   API removes a `stado://sources/` object only for this request, under the product's publisher
   bearer; built releases stay immutable.
+- **`stado space reclaim`'s `tagged_build_caches` stage prunes the privacy list too:** its `find`
+  over the home opened `Library`, `Pictures` and the rest, the one home walk the list did not
+  reach; it now refuses the same folders every other walk refuses.

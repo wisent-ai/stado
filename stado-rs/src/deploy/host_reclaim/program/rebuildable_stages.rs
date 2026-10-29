@@ -169,10 +169,36 @@ before=$(free_kb)
 # declared root is walked, so a tag at any depth is found; `find` follows no
 # symlink, a tag nested inside a cache taken earlier in the walk is gone by
 # the time it is reached, and the argv/lsof guards keep a build in flight
-# untouched.
+# untouched. The walk prunes the one privacy list (`privacy_protected_parts`)
+# under each root, as every walk of a home does: opening one of those
+# folders is a question macOS puts to the person at the keyboard.
+build_cache_prune=@BUILD_CACHE_PRUNE@
+tagged_caches() {
+  set --
+  tagged_ifs=$IFS
+  IFS='
+'
+  for part in $build_cache_prune; do
+    [ -n "$part" ] || continue
+    if [ $# -eq 0 ]; then
+      set -- -path "$cache_root/$part"
+    else
+      set -- "$@" -o -path "$cache_root/$part"
+    fi
+  done
+  IFS=$tagged_ifs
+  if [ $# -gt 0 ]; then
+    # stderr: find meets caches removed by their builds while walked; the tags
+    # it found are the answer.
+    /usr/bin/find "$cache_root" \( "$@" \) -prune -o -type f -name CACHEDIR.TAG -print 2>/dev/null
+  else
+    # stderr: as above.
+    /usr/bin/find "$cache_root" -type f -name CACHEDIR.TAG 2>/dev/null
+  fi
+}
 for cache_root in @BUILD_CACHE_ROOTS@; do
   [ -d "$cache_root" ] || continue
-  for tag in $(/usr/bin/find "$cache_root" -type f -name CACHEDIR.TAG 2>/dev/null); do
+  for tag in $(tagged_caches); do
     entry=$(/usr/bin/dirname "$tag")
     [ -d "$entry" ] || continue
     if [ -L "$entry" ]; then continue; fi

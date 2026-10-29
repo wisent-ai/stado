@@ -196,6 +196,25 @@ pub async fn reclaim_host(
             &declared,
         )?
     };
+    // The tagged-cache walk of the home prunes the one privacy list for the
+    // target's platform, admitting only the consent-gated folders the target
+    // declares for the program macOS holds responsible for this script.
+    let this_host = host_channel::target_is_this_host(&target);
+    let darwin = if target.release_platform.is_empty() {
+        this_host && cfg!(target_os = "macos")
+    } else {
+        target.release_platform.starts_with("darwin")
+    };
+    let walked = target
+        .privacy_grants()
+        .map(|grants| {
+            crate::targets::folders_for_script(&grants, this_host, &crate::config_file::home_dir())
+        })
+        .map_err(|error| DeployError(error.to_string()))?;
+    let prune = crate::providers::local::space_reclaim::build_caches::privacy_protected_parts(
+        darwin, &walked,
+    );
+    let script = script.replace("@BUILD_CACHE_PRUNE@", &shlex_quote(&prune.join("\n")));
     let output = host_channel::run_script(&target, &script, runner).await?;
     if !output.succeeded() {
         return Err(DeployError::unreachable(host_channel::last_error_line(

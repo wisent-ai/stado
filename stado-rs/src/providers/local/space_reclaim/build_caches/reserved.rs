@@ -114,10 +114,11 @@ pub(super) fn reserved_roots(home: &Path) -> Vec<PathBuf> {
 ///
 /// This is the one list. The janitor's own walk reads it through
 /// [`privacy_protected_roots`]; the build-cache verdict that `stado host
-/// build-caches` and `stado host spotlight` run on a host, and the census and
-/// `du` inventory `stado space report` runs, read it as the prune words their
-/// scripts receive. A second list drifts: the janitor refusing a folder while
-/// a report's `find` walks straight into it.
+/// build-caches` and `stado host spotlight` run on a host, the census and
+/// `du` inventory `stado space report` runs, and the `tagged_build_caches`
+/// stage of `stado space reclaim` read it as the prune words their scripts
+/// receive. A second list drifts: the janitor refusing a folder while a
+/// report's `find` walks straight into it.
 pub fn privacy_protected_parts(darwin: bool, admitted: &BTreeSet<String>) -> Vec<&'static str> {
     if !darwin {
         // No operating system outside macOS gates these directories behind a
