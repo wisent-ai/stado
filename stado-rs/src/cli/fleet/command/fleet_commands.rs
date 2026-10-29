@@ -110,6 +110,12 @@ pub enum FleetCommands {
         /// already in authorized_keys there.
         #[arg(long)]
         install_key: bool,
+        /// Declare the machine shared: a person's own computer that also runs
+        /// fleet work. Its janitor then deletes only inside Stado's own tree
+        /// (`~/.stado`) and reports every other cache, build tree and snapshot
+        /// it would have reclaimed (`targets[].ownership`).
+        #[arg(long)]
+        shared: bool,
         /// Install the agent on the machine after registering it.
         #[arg(long)]
         bootstrap: bool,

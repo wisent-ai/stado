@@ -11,7 +11,9 @@ use crate::cli::fleet::fleets::{find_fleet, parse_fleets};
 use super::assignment::assign_target;
 
 mod network;
+mod ownership;
 mod probe;
+use ownership::declare_ownership;
 use probe::probe_identity;
 
 /// Register a target without an ssh destination (`ssh: null`) — the
@@ -138,9 +140,20 @@ pub async fn enroll(
     fleet_name: Option<&str>,
     bootstrap: bool,
     install_key: bool,
+    shared: bool,
     as_json: bool,
 ) -> Result<bool, CmdError> {
-    let answer = enrolled(name, ssh, kind, fleet_name, bootstrap, install_key, as_json).await?;
+    let answer = enrolled(
+        name,
+        ssh,
+        kind,
+        fleet_name,
+        bootstrap,
+        install_key,
+        shared,
+        as_json,
+    )
+    .await?;
     if as_json {
         crate::cli::print_answer(&answer, true)?;
         return Ok(true);
@@ -162,6 +175,7 @@ pub async fn enrolled(
     fleet_name: Option<&str>,
     bootstrap: bool,
     install_key: bool,
+    shared: bool,
     quiet: bool,
 ) -> Result<Value, CmdError> {
     let say = |line: &str| {
@@ -209,6 +223,11 @@ pub async fn enrolled(
     )?;
     if let Some(fleet) = fleet_name {
         next = assign_target(&next, name, fleet)?;
+    }
+    // A machine declared shared before its janitor first runs there: the
+    // declaration is what keeps that janitor out of its owner's files.
+    if shared {
+        next = declare_ownership(&next, name, crate::targets::HostOwnership::Shared)?;
     }
     let generation = push_document_if(&next, &expected_generation).await?;
     say(&format!(
@@ -278,6 +297,7 @@ pub async fn enrolled(
         "generation": generation,
         "bootstrapped": bootstrap,
         "network": joined,
+        "shared": shared,
         "offline_invite_spent": spent,
     }))
 }

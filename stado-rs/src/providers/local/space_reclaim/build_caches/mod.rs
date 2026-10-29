@@ -106,6 +106,7 @@ pub const SCAN: &str = "build_caches";
 pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
     home: &Path,
     enforcing: bool,
+    deletable: Option<&Path>,
     state_dir: Option<&Path>,
     lock_dir: &Path,
     writer: &str,
@@ -124,7 +125,11 @@ pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
             return;
         }
     };
-    placement::place_cargo_builds(home, report);
+    // Declaring Cargo's build directory writes the account's own Cargo
+    // configuration, which on a shared host is its owner's, not Stado's.
+    if deletable.is_none() {
+        placement::place_cargo_builds(home, report);
+    }
     let admitted = if enforcing {
         crate::deploy::host_scan::admit_relief(SCAN).map(|_relief| true)
     } else {
@@ -188,6 +193,7 @@ pub(in crate::providers::local::space_reclaim) fn scan_build_caches(
         let mut walk = Walk {
             home,
             enforcing,
+            deletable,
             root_dev: root_info.st_dev,
             reserved: reserved_roots(home),
             privacy: privacy_protected_roots(home),

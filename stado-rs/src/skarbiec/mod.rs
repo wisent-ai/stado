@@ -27,6 +27,8 @@ pub mod roles;
 mod tokens;
 pub mod validate;
 mod verifiers;
+mod write_verb;
+pub(crate) use write_verb::write_verb;
 
 pub use client::Client;
 pub use error::SkarbiecError;

@@ -111,11 +111,11 @@ pub(crate) async fn store_vault_item(
 /// whose own output is a single JSON document.
 ///
 /// With `if_absent` the owner's Skarbiec creates the item only when no live
-/// item has that id (`set-json --if-absent`, decided and written under one
+/// item has that id (`--if-absent` of Skarbiec's write, decided and written under one
 /// vault generation, so of two concurrent creators only one writes); an
 /// existing item is left as it is and reported with `created: false`.
 ///
-/// `tags` sets the item's tag list (`set-json --tags`); `None` leaves an
+/// `tags` sets the item's tag list (`--tags` of the write); `None` leaves an
 /// existing item's tags as they are.
 pub(crate) async fn write_vault_item(
     target: &str,
@@ -155,13 +155,34 @@ pub(crate) async fn write_vault_item(
     let tool_path = skarbiec_tool_path(&home);
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
+    // The write command is the one this host's Skarbiec lists: releases
+    // before the rename answer `set-json`, later ones `set`.
+    let help = crate::deploy::host_channel::run_program(
+        &resolved,
+        &[
+            "/usr/bin/env",
+            tool_path.as_str(),
+            skarbiec.as_str(),
+            "--help",
+        ],
+        &runner,
+    )
+    .await
+    .map_err(CmdError::from)?;
+    let verb = crate::skarbiec::write_verb(&help.stdout).map_err(|cause| {
+        CmdError::click(format!(
+            "{}: {skarbiec} cannot be asked to store {item}: {cause}",
+            resolved.name
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown)
+    })?;
     let mut invocation = vec![
         "/usr/bin/env",
         tool_path.as_str(),
         gnupg_environment.as_str(),
         vault_environment.as_str(),
         skarbiec.as_str(),
-        "set-json",
+        verb,
         item,
         "--type",
         item_type,
@@ -185,7 +206,7 @@ pub(crate) async fn write_vault_item(
     .map_err(CmdError::from)?;
     if !stored.succeeded() {
         return Err(CmdError::click(format!(
-            "{}: Skarbiec set failed for {item}: {}",
+            "{}: Skarbiec {verb} failed for {item}: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&stored, "remote command failed")
         ))
@@ -197,7 +218,7 @@ pub(crate) async fn write_vault_item(
     // Skarbiec older than `--if-absent`, which the host's release replaces.
     let unanswered = |cause: String| {
         CmdError::click(format!(
-            "{}: Skarbiec set-json for {item} did not say whether it created the item \
+            "{}: Skarbiec {verb} for {item} did not say whether it created the item \
              ({cause}); it printed: {}",
             resolved.name,
             stored.stdout.trim()

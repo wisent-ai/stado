@@ -24,7 +24,10 @@ use crate::providers::local::space_reclaim::janitor::pass::once::finish::{
     finish, preserve_previous_report,
 };
 use crate::providers::local::space_reclaim::janitor::pass::run_with_lock;
-use crate::providers::local::space_reclaim::janitor::policy::fetch_canonical_registry;
+use crate::providers::local::space_reclaim::janitor::policy::ownership::deletable_root;
+use crate::providers::local::space_reclaim::janitor::policy::{
+    fetch_canonical_registry, resolve_target,
+};
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
 use crate::providers::local::space_reclaim::janitor::state::report::build::{epoch_now, utc_now};
 use crate::providers::local::space_reclaim::janitor::state::report::CleanupReport;
@@ -94,6 +97,13 @@ pub(crate) async fn cleanup_once(
     let registry = fetch_canonical_registry().await;
     report.charge_store_wait(store_wait);
     let asked = asked::ask(&home, &mut report).await;
+    // What this pass may delete follows the ownership this host's entry
+    // declares: on a shared host, only Stado's own tree.
+    let target = registry
+        .as_ref()
+        .ok()
+        .and_then(|data| resolve_target(data, &report.hostname).ok());
+    let deletable = deletable_root(target.as_ref(), &home, &mut report);
     // The build-cache walk reads the whole home, for minutes on a full
     // developer host. Run under the exclusive lock it refused every running
     // workload's hold for as long as it read, so a host whose pressure the
@@ -104,6 +114,7 @@ pub(crate) async fn cleanup_once(
     build_caches::scan_build_caches(
         &home,
         !preview,
+        deletable.as_deref(),
         persist,
         &state_dir,
         writer.as_str(),
@@ -179,6 +190,7 @@ pub(crate) async fn cleanup_once(
         &state_dir,
         lock,
         registry,
+        deletable.as_deref(),
         asked,
         report,
         started,

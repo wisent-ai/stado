@@ -15,6 +15,10 @@ use super::install::{
     ssh_argv, WC_BIN_DEFAULT,
 };
 
+/// The route the installer fetches release objects from, which the release
+/// origin must publish.
+const RELEASE_OBJECT_PATH: &str = "/api/release/object";
+
 /// Provision one registry target (Python `_provision`'s shape, Rust
 /// binaries). Echoes the `[skip]`/`[install]`/`[unit]`/`[ok]` lines; `Err`
 /// carries the failure message (the caller in [`run`](super::dispatch::run) prints it as
@@ -79,7 +83,12 @@ pub async fn provision_target(
                     target.name,
                     host_channel::whole_failure(&installed)
                 ));
-                runner(install_spec(&ssh_target, expected_version))
+                let origin = release_origin().await?;
+                echo(&format!(
+                    "[install] {}: from the release origin {origin}",
+                    target.name
+                ));
+                runner(install_spec(&ssh_target, &origin, expected_version))
                     .await
                     .map_err(DeployError::unreachable)?
             }
@@ -94,7 +103,12 @@ pub async fn provision_target(
                  declare --host {} --binary stado --version X.Y.Z` pins the host instead)",
                 target.name, target.name
             ));
-            runner(install_spec(&ssh_target, &configured))
+            let origin = release_origin().await?;
+            echo(&format!(
+                "[install] {}: from the release origin {origin}",
+                target.name
+            ));
+            runner(install_spec(&ssh_target, &origin, &configured))
                 .await
                 .map_err(DeployError::unreachable)?
         };
@@ -115,8 +129,19 @@ pub async fn provision_target(
         (platform, bin)
     };
 
-    // Both platforms receive the dedicated workload-agent grant; a host
-    // without one declines every job that declares a secret.
+    // A machine that carried its own standalone Stado reads its own store
+    // until it is pointed at the fleet's; the host unit installed below
+    // resolves its registry target from that store.
+    if !dry_run {
+        crate::cli::fleet::attach::attach(target, runner, echo)
+            .await
+            .map_err(|error| DeployError {
+                message: error.to_string(),
+                failure: error.failure,
+            })?;
+    }
+    // Both platforms receive the dedicated workload-agent grant this host
+    // declares; a host without one declines every job that declares a secret.
     // The home the host's own shell states, never /root or /home/<user>
     // derived from the ssh user; a dry run does not reach the host, so its
     // preview names the shell's $HOME.
@@ -126,13 +151,24 @@ pub async fn provision_target(
         host_channel::remote_home(target, runner).await?
     };
     let grant = if dry_run {
-        AgentGrant::declared(&remote_home)
+        Some(AgentGrant::declared(&remote_home))
+    } else if let Some(reason) = agent_grant::undeclared() {
+        echo(&format!(
+            "[grant] {}: no dedicated workload-agent grant is handed over ({reason}); the host \
+             runs the jobs that declare no secret and leaves the ones that do queued for a host \
+             that can resolve them",
+            target.name
+        ));
+        None
     } else {
-        provision_agent_grant(&ssh_target, &remote_home, runner).await?
+        Some(provision_agent_grant(&ssh_target, &remote_home, runner).await?)
     };
     let command = format!(
         "{}{} bootstrap --local --target {}",
-        grant.shell_prefix(),
+        grant
+            .as_ref()
+            .map(AgentGrant::shell_prefix)
+            .unwrap_or_default(),
         shlex_quote(&stado_bin),
         shlex_quote(&target.name)
     );
@@ -177,4 +213,23 @@ pub async fn provision_target(
     }
     echo(&format!("[ok]   {}: host unit installed", target.name));
     Ok(())
+}
+
+/// The HTTPS origin that publishes the fleet's release objects, as the
+/// registry's `public_origins` declares it: the installer downloads from the
+/// fleet's own publication, never from a configured address that may name a
+/// site that serves no release at all.
+async fn release_origin() -> Result<String, DeployError> {
+    let document = crate::cli::registry::fetch_document()
+        .await
+        .map_err(|error| DeployError {
+            message: format!("the registry naming the release origin could not be read: {error}"),
+            failure: error.failure,
+        })?;
+    crate::public_origin::publishing(&document, RELEASE_OBJECT_PATH)
+        .map(|origin| origin.origin())
+        .map_err(|cause| {
+            DeployError(format!("no release origin to install from: {cause}"))
+                .stating(crate::primitives::failure::FailureCode::Config)
+        })
 }

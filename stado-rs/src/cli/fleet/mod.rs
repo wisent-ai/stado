@@ -16,6 +16,7 @@
 
 mod command;
 
+pub(crate) mod attach;
 pub mod doctor;
 pub mod enroll;
 pub mod expansion;

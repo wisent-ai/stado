@@ -47,6 +47,7 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
             fleet,
             bootstrap,
             install_key,
+            shared,
             json,
         } => {
             ops::enroll(
@@ -56,6 +57,7 @@ async fn execute(command: FleetCommands) -> Result<bool, CmdError> {
                 fleet.as_deref(),
                 bootstrap,
                 install_key,
+                shared,
                 json,
             )
             .await

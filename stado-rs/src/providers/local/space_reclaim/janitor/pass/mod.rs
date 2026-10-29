@@ -26,7 +26,9 @@ use crate::providers::local::space_reclaim::rule::read_fleet_volume;
 /// The post-lock half of a pass. Split out so tests can inject the canonical
 /// registry document and a fabricated home without touching the store or the
 /// real `$HOME`. `_lock` holds the exclusive run lock through candidate
-/// enumeration and deletion; `asked` is what the queue answered before it.
+/// enumeration and deletion; `asked` is what the queue answered before it;
+/// `deletable` is the one tree it may delete in, `None` for all of the host
+/// ([`deletable_root`](super::policy::ownership::deletable_root)).
 ///
 /// Below the rule's threshold an enforcing pass deletes nothing and reports
 /// `healthy_noop`. At or above it, every cleaner runs with nothing held back.
@@ -38,6 +40,7 @@ pub(crate) async fn run_with_lock(
     state_dir: &Path,
     _lock: ExclusiveLock,
     registry: Result<Value, JanitorError>,
+    deletable: Option<&Path>,
     asked: Asked,
     mut report: CleanupReport,
     started: Instant,
@@ -78,6 +81,7 @@ pub(crate) async fn run_with_lock(
         .and_then(|weles| weles.recordings_dir.clone());
     let inputs = PassInputs {
         enforcing: !preview,
+        deletable,
         declared_release_versions: declared_release_versions.as_ref(),
         weles_recordings_dir: weles_recordings_dir.as_deref(),
         asked: &asked,

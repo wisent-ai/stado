@@ -27,6 +27,9 @@ pub(super) struct Walk<'a> {
     pub(super) home: &'a Path,
     /// Whether a tagged cache is removed or only counted.
     pub(super) enforcing: bool,
+    /// The one tree a cache may be removed from, `None` for the whole home:
+    /// on a shared host, Stado's own; a cache outside it is counted and kept.
+    pub(super) deletable: Option<&'a Path>,
     /// `st_dev` of the scan root. A mount point inside the tree is refused
     /// rather than descended: an external disk or a network share mounted
     /// under a tagged directory is not what the build tool declared

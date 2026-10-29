@@ -14,6 +14,7 @@ use crate::providers::local::space_reclaim::janitor::pass::lock::file::LockState
 use crate::providers::local::space_reclaim::janitor::pass::lock::ownership::{
     acquire_lock_state, retired_locks_active,
 };
+use crate::providers::local::space_reclaim::janitor::policy::ownership;
 use crate::providers::local::space_reclaim::{free_bytes, CleanupReport, JanitorError};
 
 impl<'a> Walk<'a> {
@@ -63,6 +64,10 @@ impl<'a> Walk<'a> {
         };
         report.builds.expected_bytes += expected;
         if !self.enforcing {
+            return Ok(());
+        }
+        if !ownership::may_delete(self.deletable, absolute) {
+            report.skip_builds(ownership::NOT_STADO_OWNED, 1);
             return Ok(());
         }
         // The walk found this cache without excluding running workloads, so

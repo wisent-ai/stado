@@ -14,7 +14,8 @@ const ITEM_SCHEMA: &str = "skarbiec.item.v2";
 
 /// Write one item into an explicit vault through its owner.
 ///
-/// `set-json` takes a canonical payload and validates it: the kind must be one
+/// The write (`set`, or `set-json` in the releases before the rename, as the
+/// binary's own command table says) takes a canonical payload and validates it: the kind must be one
 /// Skarbiec declares, every key in `fields` must be one that kind allows, and
 /// anything descriptive belongs in `context`. So `ssh-key` is not a kind — it is
 /// a `key-pair` whose fingerprint and key type are context — and passing the
@@ -38,9 +39,20 @@ pub fn store_json(
         "fields": fields,
         "context": context,
     });
+    let help =
+        crate::wait::output(std::process::Command::new(binary).arg("--help")).map_err(|error| {
+            SkarbiecError::Deployment(format!("skarbiec --help could not run: {error}"))
+        })?;
+    let verb =
+        crate::skarbiec::write_verb(&String::from_utf8_lossy(&help.stdout)).map_err(|cause| {
+            SkarbiecError::Deployment(format!(
+                "{} cannot be asked to store {item}: {cause}",
+                binary.display()
+            ))
+        })?;
     let output = crate::wait::output_with_input(
         std::process::Command::new(binary)
-            .arg("set-json")
+            .arg(verb)
             .arg(item)
             .arg("--type")
             .arg(item_type)
@@ -50,7 +62,7 @@ pub fn store_json(
         payload.to_string().as_bytes(),
     )
     .map_err(|error| {
-        SkarbiecError::Deployment(format!("skarbiec set-json {item} could not run: {error}"))
+        SkarbiecError::Deployment(format!("skarbiec {verb} {item} could not run: {error}"))
     })?;
     if !output.status.success() {
         return Err(SkarbiecError::Deployment(format!(

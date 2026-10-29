@@ -2,6 +2,7 @@
 //! name and its Weles recordings directory, and the release versions the
 //! fleet declares. Nothing about cleanup itself is declared there.
 
+pub(crate) mod ownership;
 pub(crate) mod roots;
 
 use serde_json::{Map, Value};

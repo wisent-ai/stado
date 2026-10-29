@@ -87,6 +87,7 @@ pub async fn approve(
                     fleet_name,
                     true,
                     false,
+                    false,
                     true,
                 )
                 .await?;
@@ -98,6 +99,7 @@ pub async fn approve(
                     &kind,
                     fleet_name,
                     true,
+                    false,
                     false,
                     false,
                 )

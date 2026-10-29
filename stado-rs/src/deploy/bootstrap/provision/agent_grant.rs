@@ -68,6 +68,42 @@ impl AgentGrant {
     }
 }
 
+/// Why this host declares no dedicated workload-agent grant to hand a
+/// remote host, or `None` when it declares one: `agent.skarbiec.consumer`
+/// and `agent.skarbiec.token_file`, distinct from the control plane's own
+/// consumer and bearer file. Read from this host's configuration rather than
+/// held to one consumer name, which refused every bootstrap from a host that
+/// had not declared that exact name.
+pub(super) fn undeclared() -> Option<String> {
+    let grant_path = crate::config::agent_skarbiec_token_file();
+    let agent_consumer = crate::config::agent_skarbiec_consumer();
+    let control_path = crate::config::skarbiec_token_file();
+    // Two declarations name the same file when both resolve to one path. A
+    // path that does not resolve on this host (an agent host receives its
+    // grant by platform handoff) names no file the other could be, so the
+    // declared spellings are compared instead.
+    let same_path = match (
+        std::fs::canonicalize(grant_path),
+        std::fs::canonicalize(control_path),
+    ) {
+        (Ok(agent), Ok(control)) => agent == control,
+        (_agent_unresolved, _control_unresolved) => grant_path == control_path,
+    };
+    if grant_path.is_empty() {
+        Some("agent.skarbiec.token_file is empty".to_string())
+    } else if agent_consumer == crate::config::skarbiec_consumer() {
+        Some(format!(
+            "agent.skarbiec.consumer is {agent_consumer:?}, the control plane's own consumer"
+        ))
+    } else if same_path {
+        Some(format!(
+            "agent.skarbiec.token_file {grant_path} is the control plane's own bearer file"
+        ))
+    } else {
+        None
+    }
+}
+
 /// Validate this control plane's dedicated agent grant against the vault,
 /// copy the bearer to the remote host under `remote_home`, and return the
 /// declaration the remote agent must run with.
@@ -82,28 +118,10 @@ pub(super) async fn provision_agent_grant(
     let grant_path = crate::config::agent_skarbiec_token_file();
     let agent_consumer = crate::config::agent_skarbiec_consumer();
     let agent_url = crate::config::agent_skarbiec_url();
-    let control_path = crate::config::skarbiec_token_file();
-    // Two declarations name the same file when both resolve to one path. A
-    // path that does not resolve on this host (an agent host receives its
-    // grant by platform handoff) names no file the other could be, so the
-    // declared spellings are compared instead: a declaration that repeats
-    // the control plane's own path is still refused.
-    let same_path = match (
-        std::fs::canonicalize(grant_path),
-        std::fs::canonicalize(control_path),
-    ) {
-        (Ok(agent), Ok(control)) => agent == control,
-        (_agent_unresolved, _control_unresolved) => grant_path == control_path,
-    };
-    if grant_path.is_empty()
-        || same_path
-        || agent_consumer != "stado-local-agent"
-        || agent_consumer == crate::config::skarbiec_consumer()
-    {
-        return Err(DeployError(
-            "remote bootstrap requires consumer stado-local-agent and a distinct agent token_file"
-                .to_string(),
-        )
+    if let Some(reason) = undeclared() {
+        return Err(DeployError(format!(
+            "remote bootstrap hands over only a dedicated agent grant: {reason}"
+        ))
         .stating(crate::primitives::failure::FailureCode::Config));
     }
     if let Some(cause) = crate::config::agent_skarbiec_url_absent() {

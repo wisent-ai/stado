@@ -19,13 +19,13 @@ pub fn ssh_argv(ssh_target: &str, command: &str) -> Vec<String> {
 }
 
 /// The release-binary download + path-resolution command, for the exact
-/// Stado `version` the caller chose: the host's own declaration when it has
+/// Stado `version` the caller chose (the host's own declaration when it has
 /// one, so the binary installed is the one the host is then measured
-/// against.
-pub fn install_spec(ssh_target: &str, version: &str) -> CommandSpec {
+/// against), fetched from `origin`, the fleet's declared release origin.
+pub fn install_spec(ssh_target: &str, origin: &str, version: &str) -> CommandSpec {
     CommandSpec::new(ssh_argv(
         ssh_target,
-        &remote_install_script(&crate::config::stado_api_url(), version),
+        &remote_install_script(origin, version),
     ))
 }
 
