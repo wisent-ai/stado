@@ -7,15 +7,17 @@ mod linux;
 
 /// The prologue every branch reads: the host's own init system, the validated
 /// label, the bounded event predicate, the domain scope the caller asked
-/// for, and whether launchd's event log is read for this unit (`read`),
+/// for, whether launchd's event log is read for this unit (`read`),
 /// carried from the previous read (`carry`), or read only when the unit is
-/// not as it was (`same:<key>`, the key the previous read printed).
+/// not as it was (`same:<key>`, the key the previous read printed), and the
+/// `log show --last` window a read covers.
 const HEAD: &str = "set -u
 os=$(/usr/bin/uname -s)
 label=@LABEL@
 predicate=@PREDICATE@
 scope=@SCOPE@
 events=@EVENTS@
+window=@WINDOW@
 uid=$(/usr/bin/id -u)
 found=no
 ";
@@ -32,14 +34,15 @@ printf 'STADO_LABEL_DONE\\t%s\\n' \"$found\"
 /// non-secret routing variables, one internally consistent running-image
 /// identity, and a bounded exact-label event tail leave the host.
 ///
-/// `label`, `predicate` and `events` arrive already shell-quoted; `scope` is
-/// one of the three domain words. Substitution happens here so no caller
-/// assembles this program itself.
+/// `label`, `predicate`, `events` and `window` arrive already shell-quoted;
+/// `scope` is one of the three domain words. Substitution happens here so no
+/// caller assembles this program itself.
 pub(super) fn label_print_script(
     label: &str,
     predicate: &str,
     scope: &str,
     events: &str,
+    window: &str,
 ) -> String {
     format!(
         "{HEAD}{}{}{}{TAIL}",
@@ -51,4 +54,5 @@ pub(super) fn label_print_script(
     .replace("@PREDICATE@", predicate)
     .replace("@SCOPE@", scope)
     .replace("@EVENTS@", events)
+    .replace("@WINDOW@", window)
 }

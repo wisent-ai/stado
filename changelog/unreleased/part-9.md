@@ -57,3 +57,8 @@ The version bump gathers them into the release's own file and removes this one.
   nobody watching. On a Mac, `release local install` and `restore` refuse, with no terminal, a
   program whose designated requirement differs from the installed one's, naming both; at a
   terminal they say first that macOS will ask again for the declared grants.
+- **The beacon reads launchd's event log only over the time since it last looked at a unit:**
+  each changed unit read an hour of the log, many minutes per unit on a busy Mac, so a host
+  process that had just started published no beacon for half an hour. A cadenced read now covers
+  the time since this process last compared the unit (its first read, the declared
+  `WC_HEALTH_INTERVAL_SECONDS`); one-off inspections keep the hour.

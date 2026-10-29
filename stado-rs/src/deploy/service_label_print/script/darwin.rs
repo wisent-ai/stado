@@ -155,7 +155,7 @@ if [ \"$os\" = Darwin ]; then
       printf 'STADO_LABEL_EVENT_STATUS\\tcarried: the unit is as it was at the previous read\\n'
     elif [ -x /usr/bin/log ]; then
       {
-        $background /usr/bin/log show --last 1h --style compact --predicate \"$predicate\" 2>&1
+        $background /usr/bin/log show --last \"$window\" --style compact --predicate \"$predicate\" 2>&1
         printf 'STADO_LABEL_EVENT_EXIT\\t%s\\n' \"$?\"
       } |
         STADO_LABEL=\"$label\" STADO_QUALIFIED=\"$domain/$label\" LC_ALL=C /usr/bin/awk '
