@@ -38,3 +38,7 @@ The version bump gathers them into the release's own file and removes this one.
   Retail Prices API lists both under the same `armSkuName`, and the credit gate took the higher
   one (5.696 instead of 2.752 USD an hour for `Standard_D64as_v5`). Only products named
   `Virtual Machines …` are quoted now.
+- **`stado repair skarbiec --step crypto` runs Skarbiec's `keyring recover`:** Skarbiec 0.4.16
+  renamed `recover-daemons` and made it end every gpg child stranded on the stopped agent; the
+  payload still called the old name, so on a 0.4.16 vault owner the repair could not run, and on
+  0.4.15 it replaced the daemons while the stuck gpg children kept every item read waiting.

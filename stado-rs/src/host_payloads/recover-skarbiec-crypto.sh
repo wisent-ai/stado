@@ -22,12 +22,14 @@
 # that never end answers exactly that, names no lock and no timeout, and was
 # refused recovery while it held every reader of the fleet.
 #
-# The repair itself is Skarbiec's own: `skarbiec recover-daemons` replaces
-# the account's keyboxd, gpg-agent and scdaemon through gpgconf and releases
-# a keyring lock whose holder can no longer let go — a dead or reused pid, a
-# lock written under another host name, a GnuPG program that held it past
-# gpg's own wait — the same repair the vault runs for itself after a failed
-# read, run here for the case where the vault's own run never reached it.
+# The repair itself is Skarbiec's own: `skarbiec keyring recover` replaces
+# the account's keyboxd, gpg-agent and scdaemon through gpgconf, ends every
+# gpg child of the account's Skarbiec processes that was waiting on the
+# stopped agent, and releases a keyring lock whose holder can no longer let
+# go — a dead or reused pid, a lock written under another host name, a GnuPG
+# program that held it past gpg's own wait — the same repair the vault runs
+# for itself after a failed read, run here for the case where the vault's own
+# run never reached it.
 set -eu
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
@@ -143,9 +145,9 @@ skarbiec="$HOME/.stado/bin/skarbiec"
 # (GNUPGHOME when the login shell carries it): what it signalled, what each
 # daemon held and which lock it released are its own lines, kept in this
 # payload's output. It needs no vault and no unlock material.
-"$skarbiec" recover-daemons || {
+"$skarbiec" keyring recover || {
   status=$?
-  printf '%s\n' "skarbiec recover-daemons exited $status on this host; its own lines above say which daemon or lock it could not act on" >&2
+  printf '%s\n' "skarbiec keyring recover exited $status on this host; its own lines above say which daemon or lock it could not act on" >&2
   exit "$status"
 }
 
