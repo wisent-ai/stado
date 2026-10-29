@@ -60,17 +60,45 @@ pub fn mutate(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value>
     let original = fs::read_to_string(&runtime.catalog)?;
     let mut document: Value = serde_yaml::from_str(&original)?;
     catalog::validate(&document)?;
-    let products = document["products"]
-        .as_array_mut()
-        .context("products must be a list")?;
-    let position = products.iter().position(|product| product["id"] == id);
     if action == "rm" {
+        let products = document["products"]
+            .as_array_mut()
+            .context("products must be a list")?;
+        let position = products.iter().position(|product| product["id"] == id);
         products.remove(position.with_context(|| format!("no product {id}; nothing was removed"))?);
         document::commit(&runtime.catalog, &original, &document, id, true)?;
         return Ok(
             json!({"action": "rm", "id": id, "written": [runtime.catalog], "removed": true}),
         );
     }
+    let record = apply(action, id, &args, &mut document)?;
+    document::commit(&runtime.catalog, &original, &document, id, false)?;
+    Ok(json!({"action": action, "id": id, "written": [runtime.catalog], "record": record}))
+}
+
+/// The record `registry add` or `registry set` would write, validated with
+/// the whole catalog as it would stand; nothing is locked or written.
+pub fn preview(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value> {
+    let mut document = catalog::load(&runtime.catalog)?;
+    let id = match action {
+        "add" => args.required("--id")?.to_owned(),
+        _ => match args.positional.as_slice() {
+            [id] => id.clone(),
+            _ => bail!("registry {action} requires one product ID"),
+        },
+    };
+    slug(&id)?;
+    let record = apply(action, &id, &args, &mut document)?;
+    catalog::validate(&document)?;
+    Ok(record)
+}
+
+/// Apply `registry add|set` to `document` and return the product record.
+fn apply(action: &str, id: &str, args: &Arguments, document: &mut Value) -> Result<Value> {
+    let products = document["products"]
+        .as_array_mut()
+        .context("products must be a list")?;
+    let position = products.iter().position(|product| product["id"] == id);
     let mut record = match action {
         "add" => {
             if position.is_some() {
@@ -86,12 +114,12 @@ pub fn mutate(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value>
         .clone(),
         _ => bail!("unknown registry command {action}"),
     };
-    set_field(&mut record, &args, "--name", "name")?;
-    set_field(&mut record, &args, "--status", "status")?;
-    set_field(&mut record, &args, "--visibility", "visibility")?;
-    set_field(&mut record, &args, "--family", "family")?;
-    set_field(&mut record, &args, "--owner-repository", "owner_repository")?;
-    set_field(&mut record, &args, "--description", "description")?;
+    set_field(&mut record, args, "--name", "name")?;
+    set_field(&mut record, args, "--status", "status")?;
+    set_field(&mut record, args, "--visibility", "visibility")?;
+    set_field(&mut record, args, "--family", "family")?;
+    set_field(&mut record, args, "--owner-repository", "owner_repository")?;
+    set_field(&mut record, args, "--description", "description")?;
     if args.has("--evidence") {
         record["evidence"] = json!(args.many("--evidence"));
     }
@@ -222,8 +250,7 @@ pub fn mutate(action: &str, args: Arguments, runtime: &Runtime) -> Result<Value>
     } else {
         products.push(record.clone());
     }
-    document::commit(&runtime.catalog, &original, &document, id, false)?;
-    Ok(json!({"action": action, "id": id, "written": [runtime.catalog], "record": record}))
+    Ok(record)
 }
 
 fn set_field(record: &mut Value, args: &Arguments, option: &str, field: &str) -> Result<()> {

@@ -1,4 +1,4 @@
-//! `stado product surface`: does the next tag of a Swift package agree with
+//! `stado product swift api`: does the next tag of a Swift package agree with
 //! what the change did to its public API?
 //!
 //! The released surface is the toolchain's dump of the library module built
@@ -113,7 +113,7 @@ fn verdict(change: Change, released: Version, declared: Option<Version>) -> Resu
 /// scratch is tagged with `CACHEDIR.TAG`: the next check builds it again.
 fn scratch(home: &Path, package: &Path) -> Result<std::path::PathBuf> {
     let scratch = crate::common::runs::checkout_area(home, package)?.join("surface");
-    crate::common::tag_cache(&scratch, "stado product surface")?;
+    crate::common::tag_cache(&scratch, "stado product swift api")?;
     Ok(scratch)
 }
 
@@ -154,8 +154,23 @@ fn check(home: &Path, package: &Path, module: Option<&str>, report: &mut Value) 
     verdict(change, released, declared)
 }
 
-/// Run `stado product surface`, returning the exit status.
+/// Run `stado product swift api`, returning the exit status.
 pub fn run(arguments: &clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
+    for argument in ["editor-workspace", "archive", "forward"] {
+        if arguments.contains_id(argument)
+            && arguments.value_source(argument) == Some(clap::parser::ValueSource::CommandLine)
+        {
+            anyhow::bail!(
+                "stado product swift api reads --package-path, --module and --json only; {} \
+                 belongs to another swift operation",
+                if argument == "forward" {
+                    "a forwarded SwiftPM argument".to_owned()
+                } else {
+                    format!("--{argument}")
+                }
+            );
+        }
+    }
     let package = match arguments.get_one::<String>("package-path") {
         Some(path) => absolute(Path::new(path))?,
         None => std::env::current_dir()?,
@@ -188,7 +203,7 @@ pub fn run(arguments: &clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
         }
         match &outcome {
             Ok(message) => println!("{message}"),
-            Err(error) => eprintln!("stado product surface: {error:#}"),
+            Err(error) => eprintln!("stado product swift api: {error:#}"),
         }
     }
     Ok(code)
