@@ -75,8 +75,8 @@ pub const LEASE_EXPIRED_REASON: &str = "worker lease expired";
 pub struct ReaperSummary {
     /// Running jobs moved back to `queue/` on their first lease expiry.
     pub requeued: usize,
-    /// Running jobs moved to `failed/` on their second lease expiry (or
-    /// with the restart budget already spent).
+    /// Running jobs moved to `failed/` on their second lease expiry, or at
+    /// their first when their submitter starts its own launches.
     pub failed: usize,
     /// Release jobs completed from a verified canonical receipt and archive
     /// after their worker lease expired.

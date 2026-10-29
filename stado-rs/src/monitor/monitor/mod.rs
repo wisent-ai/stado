@@ -9,10 +9,12 @@
 //!   FAILED            -> finalize failure path + alert
 //!   preempted (Spot)  -> instance is TERMINATED but the Job is otherwise healthy.
 //!                       Delete the GCE instance, increment preempt_count, requeue.
-//!                       preempt_count is separate from restarts so a Spot-heavy
-//!                       job doesn't burn the restart budget on preemptions alone.
+//!                       A preemption is not a loss of the job's own kind, so it
+//!                       never ends the job.
 //!   instance gone OR
-//!   stale heartbeat   -> requeue (counted against restarts).
+//!   stale heartbeat   -> requeue, or fail when the same kind of loss already
+//!                       put the job back once (`Job::restart_refusal`); no
+//!                       restart count decides it.
 //!
 //! The components are the passes this file already ran: [`running`] holds the
 //! per-running-job pass plus the ghost-VM delete it performs, [`reaper`] the

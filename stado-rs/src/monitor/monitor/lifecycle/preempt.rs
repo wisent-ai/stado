@@ -1,6 +1,5 @@
-//! The Spot move: back to the queue against a preempt counter rather than
-//! the restart budget, so a Spot-heavy job cannot spend its restarts on
-//! preemptions alone.
+//! The Spot move: back to the queue, tallied on the preempt counter and never
+//! recorded as the job's own loss, so preemptions alone never end a job.
 
 use chrono::Utc;
 

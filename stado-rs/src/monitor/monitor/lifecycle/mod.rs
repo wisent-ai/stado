@@ -3,9 +3,9 @@
 //! Every move here re-reads the running document ([`current`]) and pins its
 //! version, so a worker whose lease renewal lands first wins the race instead
 //! of being requeued while it is still executing. The three verdicts differ
-//! only in what they charge the move to: [`restart`] the restart budget,
-//! [`preempt`] the Spot preempt counter, and [`orphan`] the dead local@ host
-//! no VM reaper visits.
+//! only in what they record the move against: [`restart`] the job's own loss
+//! (a second loss of the same kind ends it), [`preempt`] the Spot preempt
+//! counter, and [`orphan`] the dead local@ host no VM reaper visits.
 
 mod current;
 mod orphan;
