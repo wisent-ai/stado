@@ -11,6 +11,7 @@
 //! job's output directory, where `stado workload results` reads them.
 
 mod command;
+mod context;
 mod harness;
 mod results;
 
@@ -36,6 +37,7 @@ pub(crate) struct OmpRequest<'a> {
     pub task: &'a str,
     pub model: Option<&'a str>,
     pub max_time: &'a str,
+    pub context: &'a [std::path::PathBuf],
     pub priority: i64,
     pub allow_write: bool,
     pub allow_command: bool,
@@ -137,6 +139,7 @@ pub(crate) async fn start_omp(request: OmpRequest<'_>) -> Result<(), CmdError> {
         });
         let run_id = run_id(kind, request.workspace);
         let secret_env = secrets.clone();
+        let resolved_input_artifacts = context::inputs(&run_id, request.context).await?;
         let options = SubmitOptions {
             batch_id: batch_id(kind),
             run_id: run_id.clone(),
@@ -145,6 +148,7 @@ pub(crate) async fn start_omp(request: OmpRequest<'_>) -> Result<(), CmdError> {
             cpu_cores: reservation.cpu_cores,
             memory_gb: reservation.ram_gb.ceil() as i64,
             secret_env,
+            resolved_input_artifacts,
             // The model is reached over HTTP; a task that names one must not
             // be sized onto an accelerator by the submit-time reading.
             resolved_hardware: Some(ResolvedHardwareProjection {

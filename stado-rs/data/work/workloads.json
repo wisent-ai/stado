@@ -26,7 +26,7 @@
         "gateway": {
           "service": "omp-auth-gateway",
           "consumer": "omp-session",
-          "providers": ["anthropic", "openai-codex"],
+          "providers": ["anthropic"],
           "token_variable": "OMP_SESSION_GATEWAY_TOKEN"
         },
         "secrets": {

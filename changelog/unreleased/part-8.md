@@ -31,7 +31,10 @@ The version bump gathers them into the release's own file and removes this one.
   resolves its loopback route for the declared consumer, and each declared provider is routed
   there with the gateway bearer the job is handed in `harness.secrets`. The harness's agent
   directory lives in the job's work tree, so nothing is written into the host account's own
-  harness configuration and no provider credential reaches the host.
+  harness configuration and no provider credential reaches the host. `--context FILE`, which can
+  be repeated, gives the session its starting instructions. The files are read here in order,
+  published to the job store as the harness's own `AGENTS.md`, and declared as the job's input,
+  so the host's agent writes them into the session's agent directory before it starts.
 - **`stado workload harness status|install KIND --target HOST`:** the harness a session kind
   declares (`harness` in `data/work/workloads.json`). `install` carries this machine's copy to the
   host's managed path through a managed run, checks it there with its own `--version`, and

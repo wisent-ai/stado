@@ -28,7 +28,7 @@ pub(crate) const RESULTS_DIRECTORY: &str = "output/results";
 /// tree: its settings, model routes and session store live and end with the
 /// job, so nothing the session does is written into the host account's own
 /// harness configuration.
-const AGENT_DIRECTORY: &str = "harness-agent";
+pub(super) const AGENT_DIRECTORY: &str = "harness-agent";
 
 /// The model gateway and the harness's agent directory, as shell: the host's
 /// own Stado resolves the gateway's address for the declared consumer, and

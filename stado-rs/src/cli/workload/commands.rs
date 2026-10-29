@@ -92,6 +92,10 @@ pub enum WorkloadCommands {
         /// duration such as 30m or 8h.
         #[arg(long)]
         max_time: Option<String>,
+        /// omp-session: a file of instructions the session starts with, in
+        /// its harness's own context; repeat for several, read in order.
+        #[arg(long = "context", value_name = "FILE")]
+        context: Vec<std::path::PathBuf>,
         /// Let the session write files in its workspace.
         #[arg(long)]
         allow_write: bool,
@@ -163,6 +167,7 @@ pub async fn dispatch(command: WorkloadCommands) -> Result<(), CmdError> {
             model,
             max_steps,
             max_time,
+            context,
             allow_write,
             allow_command,
             priority,
@@ -176,6 +181,7 @@ pub async fn dispatch(command: WorkloadCommands) -> Result<(), CmdError> {
                 model: model.as_deref(),
                 max_steps,
                 max_time: max_time.as_deref(),
+                context: &context,
                 allow_write,
                 allow_command,
                 priority,

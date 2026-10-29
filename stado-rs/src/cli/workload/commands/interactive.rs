@@ -52,6 +52,7 @@ pub(super) struct StartArguments<'a> {
     pub model: Option<&'a str>,
     pub max_steps: Option<u32>,
     pub max_time: Option<&'a str>,
+    pub context: &'a [std::path::PathBuf],
     pub priority: i64,
     pub allow_write: bool,
     pub allow_command: bool,
@@ -94,6 +95,7 @@ pub(super) async fn start(arguments: StartArguments<'_>) -> Result<(), CmdError>
             task,
             model: arguments.model,
             max_time,
+            context: arguments.context,
             priority: arguments.priority,
             allow_write: arguments.allow_write,
             allow_command: arguments.allow_command,
@@ -104,6 +106,11 @@ pub(super) async fn start(arguments: StartArguments<'_>) -> Result<(), CmdError>
     if arguments.max_time.is_some() {
         return Err(CmdError::usage(format!(
             "{kind} is bounded by --max-steps, not --max-time"
+        )));
+    }
+    if !arguments.context.is_empty() {
+        return Err(CmdError::usage(format!(
+            "{kind} reads its instructions from its workspace; --context is omp-session's"
         )));
     }
     let Some(max_steps) = arguments.max_steps else {
