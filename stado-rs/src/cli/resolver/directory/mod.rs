@@ -118,7 +118,7 @@ pub(super) async fn emit_snapshot() -> Result<(), CmdError> {
 /// holds is past its declared max-stale.
 pub(in crate::cli::resolver) async fn held_snapshot(
 ) -> Result<((Value, String, u64), Option<String>), CmdError> {
-    use crate::cli::resolver::report::published::{published_state, publisher_running, state_path};
+    use crate::cli::resolver::report::published::{published_state, publisher_stale, state_path};
     use crate::primitives::failure::FailureCode;
     let refused = |detail: String| CmdError::click(detail).stating(FailureCode::InfraDown);
     let Some(published) = published_state() else {
@@ -131,10 +131,10 @@ pub(in crate::cli::resolver) async fn held_snapshot(
             None => "HOME is unset, so the resolver's published state cannot be found".to_string(),
         }));
     };
-    if !publisher_running(&published) {
+    if let Some(stale) = publisher_stale(&published) {
         return Err(refused(format!(
-            "the resolver that published its state (pid {}) is not running, so no registry \
-             generation is held here to answer from",
+            "the resolver state names pid {} and no registry generation is held here to \
+             answer from: {stale}",
             published.pid
         )));
     }

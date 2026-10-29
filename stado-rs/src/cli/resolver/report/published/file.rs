@@ -94,14 +94,23 @@ pub(in crate::cli::resolver) fn published_state() -> Option<PublishedState> {
 /// from its pid alone, which the system hands on once it exits. A lock that
 /// cannot be read is said on stderr and answers that no publisher runs.
 pub(crate) fn publisher_running(state: &PublishedState) -> bool {
+    publisher_stale(state).is_none()
+}
+
+/// Why the state's publisher is not known to run, naming the pid it checked
+/// and the lock it checked it by; `None` while that pid holds the lock.
+pub(crate) fn publisher_stale(state: &PublishedState) -> Option<String> {
     let Some(path) = state_path() else {
-        return false;
+        return Some("HOME is unset, so the resolver's lifetime lock cannot be found".to_string());
     };
     match lifetime::held_by(&path, state.pid) {
-        Ok(held) => held,
+        Ok(stale) => stale,
         Err(cause) => {
             eprintln!("stado resolver state: whether its publisher runs cannot be read: {cause}");
-            false
+            Some(format!(
+                "whether pid {} still runs cannot be read: {cause}",
+                state.pid
+            ))
         }
     }
 }

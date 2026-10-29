@@ -5,7 +5,7 @@
 mod file;
 mod lifetime;
 
-pub(crate) use file::{publish, publisher_running};
+pub(crate) use file::{publish, publisher_running, publisher_stale};
 pub(in crate::cli::resolver) use file::{published_state, state_path};
 
 use std::time::Duration;

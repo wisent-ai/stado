@@ -45,6 +45,10 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- **A stale resolver state names the pid it checked and how:** "the resolver that published its state
+  (pid N) is not running" was printed even while that pid ran, when it was a Stado from before the
+  lifetime lock and so held none. The refusal now names the lock file and what it showed: absent,
+  held by no process, or held by another pid.
 - **`stado registry push - --last-known-good` hands the fleet registry to a standalone Stado being
   attached:** it refused every host whose copy named no authority, which is every standalone Stado,
   so an attached machine kept its own registry, resolved the name that registry gave it and never

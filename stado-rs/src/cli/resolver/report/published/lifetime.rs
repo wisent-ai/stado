@@ -79,24 +79,41 @@ fn holder_of(file: &mut File) -> Result<String, String> {
 }
 
 /// Whether the process holding the lifetime lock beside `state` is the one
-/// whose pid is `publisher`: `Ok(false)` when no resolver holds it (no lock
-/// file, or one this reader could take), and when a different resolver
-/// holds it and has not published yet.
-pub(super) fn held_by(state: &Path, publisher: u32) -> Result<bool, String> {
+/// whose pid is `publisher`: `Ok(None)` when it is, else `Ok(Some(why))`,
+/// naming the lock file and what it showed: no lock file (a publisher that
+/// predates the lock, or none since it was removed), a lock this reader
+/// could take (no process holds it), or a lock another pid holds.
+pub(super) fn held_by(state: &Path, publisher: u32) -> Result<Option<String>, String> {
     let path = lock_path(state);
     let mut file = match File::open(&path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Some(format!(
+                "no lifetime lock {} exists, which pid {publisher} would hold for as long as it \
+                 runs; a resolver from a Stado older than that lock leaves none, so whether it \
+                 runs is not known from here",
+                path.display()
+            )))
+        }
         Err(error) => return Err(format!("opening {}: {error}", path.display())),
     };
     match file.try_lock_shared() {
         // Taken by this reader: nobody holds it, and dropping the file
         // releases it again.
-        Ok(()) => Ok(false),
+        Ok(()) => Ok(Some(format!(
+            "its lifetime lock {} is held by no process, so pid {publisher} has exited",
+            path.display()
+        ))),
         Err(TryLockError::WouldBlock) => {
             let holder =
                 holder_of(&mut file).map_err(|cause| format!("{}: {cause}", path.display()))?;
-            Ok(holder == publisher.to_string())
+            Ok((holder != publisher.to_string()).then(|| {
+                format!(
+                    "its lifetime lock {} is held by pid {holder}, not by pid {publisher} that \
+                     published the state; that resolver has not published yet",
+                    path.display()
+                )
+            }))
         }
         Err(TryLockError::Error(error)) => Err(format!("locking {}: {error}", path.display())),
     }
