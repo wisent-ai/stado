@@ -14,6 +14,10 @@ use super::CargoOperation;
 /// reused by the next instead of a fresh multi-gigabyte target per run.
 const TARGET_LEAF: &str = "host-build/cargo-target";
 
+/// The latest time `touch -t [[CC]YY]MMDDhhmm` states, on macOS and on
+/// Linux alike: the last minute of the year 9999, the format's own bound.
+const LATEST_TOUCH_TIME: &str = "999912312359";
+
 /// The build cache root on `target`: its declared work root's, or the one
 /// under the account's `~/.stado` when the registry declares none, as the
 /// host's own agent and release worker read it.
@@ -89,11 +93,16 @@ pub(super) fn script(
     // Cargo calls a crate fresh when no source is newer than its last
     // compile, so a revision committed before that compile kept the earlier
     // revision's build of every crate it shares a path with, and a gate
-    // judged code it was never given. Every delivered file takes the
-    // delivery's time instead; dependencies from registries stay compiled.
+    // judged code it was never given. Giving the files the delivery's time is
+    // not enough: a run of another revision that holds the target's lock
+    // while this one waits compiles after that time, and this run then finds
+    // its crates fresh again. Every delivered file therefore takes the latest
+    // time `touch -t` can state, so no compile is ever newer than this run's
+    // sources and Cargo rebuilds the revision's own crates under its lock;
+    // dependencies from registries stay compiled.
     let run_root = output.rsplit_once('/').map_or(output, |(root, _)| root);
     script.push_str(&format!(
-        "find {} -type f -exec touch -c {{}} + || exit\n",
+        "find {} -type f -exec touch -c -t {LATEST_TOUCH_TIME} {{}} + || exit\n",
         shlex_quote(run_root)
     ));
     // rustup picks the toolchain from the directory it is started in, never

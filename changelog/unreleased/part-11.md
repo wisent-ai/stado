@@ -11,4 +11,6 @@ The version bump gathers them into the release's own file and removes this one.
   commit's time on every file and the host's Cargo target is shared by every run, so a revision
   committed before that target's last compile kept the earlier revision's build of each workspace
   crate, and a check, clippy or test of it judged code it was never given. Every delivered file now
-  takes the delivery's time; dependencies from registries stay compiled.
+  takes the latest time `touch -t` states, so no compile — not even one of another revision that
+  held the target's lock while this run waited — is newer than its sources; dependencies from
+  registries stay compiled.
