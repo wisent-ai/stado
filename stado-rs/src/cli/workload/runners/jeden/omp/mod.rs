@@ -28,10 +28,6 @@ use crate::queue::submit::{
     submit_batch, ResolvedHardwareProjection, SubmitOptions, CPU_MACHINE_TYPE,
 };
 
-/// The fleet's GitHub credential, as the role it plays: the session pushes
-/// its commits with it, and the host's agent hands it over as a job secret.
-const GITHUB_ROLE: &str = "github";
-
 /// Everything one `omp-session` start is asked for.
 pub(crate) struct OmpRequest<'a> {
     pub kind: &'a WorkloadKind,
@@ -68,6 +64,35 @@ async fn origin(workspace: &str) -> Result<String, CmdError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// The job secrets the declaration hands a session, as the role and field
+/// the host's agent reads each from. A reference that is not `role#field` is
+/// refused before anything is queued.
+fn job_secrets(
+    kind: &str,
+    harness: &crate::cli::workload::catalog::WorkloadHarness,
+) -> Result<std::collections::BTreeMap<String, crate::models::JobSecretRef>, CmdError> {
+    harness
+        .secrets
+        .iter()
+        .map(|(name, reference)| {
+            let (role, field) = reference.split_once('#').ok_or_else(|| {
+                CmdError::declaration(format!(
+                    "workload kind '{kind}' declares secret {name} as {reference:?}, not \
+                     role#field; fix it in {}",
+                    crate::cli::workload::DECLARATION_PATH
+                ))
+            })?;
+            Ok((
+                name.clone(),
+                crate::models::JobSecretRef {
+                    role: role.to_string(),
+                    field: field.to_string(),
+                },
+            ))
+        })
+        .collect()
+}
+
 pub(crate) async fn start_omp(request: OmpRequest<'_>) -> Result<(), CmdError> {
     let kind = request.kind.kind.as_str();
     request.kind.require_detachable()?;
@@ -90,6 +115,7 @@ pub(crate) async fn start_omp(request: OmpRequest<'_>) -> Result<(), CmdError> {
         .stating(crate::primitives::failure::FailureCode::Config)
     })?;
     let reservation = request.kind.reservation()?;
+    let secrets = job_secrets(kind, harness)?;
     let origin = origin(request.workspace).await?;
     let checkout = checkout_path(request.workspace);
     let capacity = live_capacity().await?;
@@ -102,7 +128,7 @@ pub(crate) async fn start_omp(request: OmpRequest<'_>) -> Result<(), CmdError> {
         let command = command::session_command(&command::Session {
             checkout: &checkout,
             origin: &origin,
-            managed: &harness.managed,
+            harness,
             task: request.task,
             model: request.model,
             max_time: request.max_time,
@@ -110,14 +136,7 @@ pub(crate) async fn start_omp(request: OmpRequest<'_>) -> Result<(), CmdError> {
             allow_command: request.allow_command,
         });
         let run_id = run_id(kind, request.workspace);
-        let mut secret_env = std::collections::BTreeMap::new();
-        secret_env.insert(
-            "GITHUB_TOKEN".to_string(),
-            crate::models::JobSecretRef {
-                role: GITHUB_ROLE.to_string(),
-                field: "value".to_string(),
-            },
-        );
+        let secret_env = secrets.clone();
         let options = SubmitOptions {
             batch_id: batch_id(kind),
             run_id: run_id.clone(),

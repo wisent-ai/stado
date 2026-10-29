@@ -3,7 +3,7 @@
 //! `stado-rs/data/work/workloads.json` is the declaration; nothing else in the
 //! crate parses it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
@@ -83,6 +83,22 @@ pub struct WorkloadHarness {
     pub program: String,
     /// Its path below the host account's home.
     pub managed: String,
+    /// Where the harness's model requests go.
+    pub gateway: HarnessGateway,
+    /// The job secrets a session is handed, each `NAME` read by the host's
+    /// agent from the item playing `role#field`.
+    pub secrets: BTreeMap<String, String>,
+}
+
+/// The model gateway a session reaches through the service directory: the
+/// service and the consumer the host's resolver routes it for, the harness
+/// providers sent to it, and the variable its bearer arrives in.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HarnessGateway {
+    pub service: String,
+    pub consumer: String,
+    pub providers: Vec<String>,
+    pub token_variable: String,
 }
 
 impl WorkloadKind {

@@ -20,7 +20,20 @@
       "plan_schema": null,
       "reservation": {"cpu_cores": 2, "ram_gb": 2, "vram_gb": 0},
       "detachable": true,
-      "harness": {"program": "omp", "managed": ".stado/bin/omp"},
+      "harness": {
+        "program": "omp",
+        "managed": ".stado/bin/omp",
+        "gateway": {
+          "service": "omp-auth-gateway",
+          "consumer": "omp-session",
+          "providers": ["anthropic", "openai-codex"],
+          "token_variable": "OMP_SESSION_GATEWAY_TOKEN"
+        },
+        "secrets": {
+          "OMP_SESSION_GATEWAY_TOKEN": "omp-session-gateway#token",
+          "GITHUB_TOKEN": "github#value"
+        }
+      },
       "report": ["target", "workspace", "detached_job", "results"]
     },
     {

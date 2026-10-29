@@ -26,7 +26,12 @@ The version bump gathers them into the release's own file and removes this one.
   the fleet's GitHub credential, which the host's agent hands over as a job secret and git reads
   through an environment-declared credential helper. It writes result lines into
   `$STADO_SESSION_RESULTS/<name>.jsonl` below the job's output. `stado job watch` follows it and
-  `stado cancel` stops it. `--max-steps` stays `jeden-session`'s bound.
+  `stado cancel` stops it. `--max-steps` stays `jeden-session`'s bound. The harness's model
+  requests go to the gateway the declaration names (`harness.gateway`): the host's own Stado
+  resolves its loopback route for the declared consumer, and each declared provider is routed
+  there with the gateway bearer the job is handed in `harness.secrets`. The harness's agent
+  directory lives in the job's work tree, so nothing is written into the host account's own
+  harness configuration and no provider credential reaches the host.
 - **`stado workload harness status|install KIND --target HOST`:** the harness a session kind
   declares (`harness` in `data/work/workloads.json`). `install` carries this machine's copy to the
   host's managed path through a managed run, checks it there with its own `--version`, and
