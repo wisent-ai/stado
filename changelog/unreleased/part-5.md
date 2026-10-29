@@ -20,3 +20,12 @@ The version bump gathers them into the release's own file and removes this one.
   measured as its own operation, and no spawn stats its arguments. A caller whose child takes an
   option's value before its subcommand (`git -C <checkout> status`) names the operation with the
   new `stado_wait::output_as` or `status_as`.
+- The delivery routine runs again on the host that declares it. Its pass was fired only from the
+  coordinator's tick, which a host serving with `--release-interval-seconds` but no
+  `--coordinator` never runs, so a plan declared there ran one pass and none after. Every serve
+  that coordinates or reconciles releases now fires a pass once the plan's cadence has passed
+  since the last pass was attempted (a pass the operator's rulings refused included), never
+  while a pass holds the lock, and says once why it fires none.
+  `stado ci plan set` takes the cadence as `--every SECONDS` (required); a plan declared without
+  one fires nothing until declared again, and `stado ci plan show` prints the cadence and when
+  the next pass is due.

@@ -79,8 +79,9 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
                     purpose,
                     steps,
                     push,
+                    every,
                     json,
-                }) => ci::delivery::plan::set(&purpose, &steps, push, json).await,
+                }) => ci::delivery::plan::set(&purpose, &steps, push, every, json).await,
                 CiCommands::Plan(CiPlanCommands::Show { json }) => ci::delivery::plan::show(json),
                 CiCommands::Plan(CiPlanCommands::Clear) => ci::delivery::plan::clear(),
             }

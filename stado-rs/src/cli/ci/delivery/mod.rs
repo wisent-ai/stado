@@ -197,11 +197,14 @@ async fn pass(plan: &Plan, current: &mut State, checked: &Record) -> Result<Outc
 
 /// `stado ci run [--json]`: one pass of the routine: the main check over
 /// every new commit of each step's `main`, then the installs. A refused step
-/// exits non-zero after the state and the defects are written. A pass the
-/// operator's rulings forbid ([`plan::admitted`]) is refused before it takes
-/// the routine's lock, checks or installs anything or writes the state.
+/// exits non-zero after the state and the defects are written. The attempt
+/// is kept first ([`state::attempted`]), so the plan's cadence counts it
+/// whatever happens next. A pass the operator's rulings forbid
+/// ([`plan::admitted`]) is refused before it takes the routine's lock,
+/// checks or installs anything or writes the state.
 pub async fn run(json: bool) -> Result<(), CmdError> {
     let plan = plan::declared()?;
+    state::attempted(Utc::now())?;
     plan::admitted(&plan.steps, &plan.purpose, "stado ci run").await?;
     let Some(_held) = state::lock()? else {
         let current = state::read()?;

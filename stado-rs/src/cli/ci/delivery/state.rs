@@ -111,6 +111,35 @@ pub fn write(state: &State) -> Result<(), CmdError> {
     document::write(&path()?, state, STATE).map_err(CmdError::click)
 }
 
+/// When a pass was last attempted, beside the state with the extension
+/// `attempt.json` (`delivery-state.attempt.json`): every `stado ci run` keeps
+/// it before the operator's rulings are asked, so a pass they refuse, which
+/// writes no state, still counts toward the plan's cadence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Attempt {
+    at: DateTime<Utc>,
+}
+
+const ATTEMPT: &str = "delivery attempt";
+
+fn attempt_path() -> Result<PathBuf, CmdError> {
+    Ok(path()?.with_extension("attempt.json"))
+}
+
+/// Keep `at` as the start of the newest attempted pass.
+pub fn attempted(at: DateTime<Utc>) -> Result<(), CmdError> {
+    document::write(&attempt_path()?, &Attempt { at }, ATTEMPT).map_err(CmdError::click)
+}
+
+/// The start of the newest pass, attempted or run: the plan's cadence
+/// counts from it. None when no pass was ever attempted here.
+pub fn last_started() -> Result<Option<DateTime<Utc>>, CmdError> {
+    let attempt: Option<Attempt> =
+        document::read(&attempt_path()?, ATTEMPT).map_err(CmdError::click)?;
+    let ran = read()?.last_pass.map(|pass| pass.started_at);
+    Ok([attempt.map(|attempt| attempt.at), ran].into_iter().flatten().max())
+}
+
 /// The lock one pass holds for its whole run, beside the state: `None` when
 /// another pass holds it. The holder writes its pid and start beside the
 /// lock, so a reader that finds it held can name who holds it.

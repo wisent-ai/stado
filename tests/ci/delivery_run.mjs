@@ -9,7 +9,9 @@
 // 1. A pass with no plan is refused naming `stado ci plan set`.
 // 2. A relative checkout, a checkout that holds no git checkout and a step
 //    named twice are refused, and no plan is written.
-// 3. The plan is declared without --push and read back.
+// 3. The plan is declared without --push, with a cadence (none is refused),
+//    and read back: `stado ci plan show` names the cadence and, before any
+//    pass, when the next one is due.
 // 4. A pass checks the step's main and installs its last green commit: the
 //    state names the step delivered at that revision with no push, or
 //    refused with its refusals and the defects recorded for them in Oko.
@@ -107,18 +109,21 @@ const key = `${product}:${surface}`;
 try {
   refused(['ci', 'run'], /no delivery plan is declared at .*stado ci plan set/);
 
-  refused(['ci', 'plan', 'set', '--purpose', purpose, '--step', `${key}:relative/checkout`], /names the checkout relative\/checkout relatively/);
+  const every = ['--every', String(Number.MAX_SAFE_INTEGER)];
+  refused(['ci', 'plan', 'set', '--purpose', purpose, '--step', step], /--every/);
+  refused(['ci', 'plan', 'set', '--purpose', purpose, ...every, '--step', `${key}:relative/checkout`], /names the checkout relative\/checkout relatively/);
   const empty = join(output, 'not-a-checkout');
   mkdirSync(empty);
-  refused(['ci', 'plan', 'set', '--purpose', purpose, '--step', `${key}:${empty}`], /holds no git checkout/);
-  refused(['ci', 'plan', 'set', '--purpose', purpose, '--step', step, '--step', step], /is named twice/);
+  refused(['ci', 'plan', 'set', '--purpose', purpose, ...every, '--step', `${key}:${empty}`], /holds no git checkout/);
+  refused(['ci', 'plan', 'set', '--purpose', purpose, ...every, '--step', step, '--step', step], /is named twice/);
   assert.ok(!existsSync(environment.STADO_DELIVERY_PLAN), 'a refused plan was written');
 
-  const declared = JSON.parse(ok(['ci', 'plan', 'set', '--purpose', purpose, '--step', step, '--json']));
+  const declared = JSON.parse(ok(['ci', 'plan', 'set', '--purpose', purpose, ...every, '--step', step, '--json']));
   assert.deepEqual(declared.steps, [{ product, surface, checkout }]);
   assert.equal(declared.purpose, purpose, 'the plan does not keep its purpose');
   assert.equal(declared.push, false, 'a plan declared without --push pushes');
   assert.deepEqual(JSON.parse(ok(['ci', 'plan', 'show', '--json'])).steps, declared.steps);
+  assert.match(ok(['ci', 'plan', 'show']), /a pass begins every \d+ s\s+next pass due at /);
 
   const main = git(['rev-parse', '--verify', 'refs/heads/main']);
   const originBefore = git(['rev-parse', 'refs/remotes/origin/main']);

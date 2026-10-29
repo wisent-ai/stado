@@ -46,7 +46,7 @@
 
 mod beside;
 mod daemon;
-mod delivery;
+pub(crate) mod delivery;
 mod grant;
 mod passes;
 

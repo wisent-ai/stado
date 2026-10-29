@@ -172,9 +172,10 @@ pub async fn reconcile_once(
 }
 
 /// The resident release role: a full pass over every product, then the finish
-/// of ready submissions, once per declared period. A pass that outlasts the
-/// period starts the next one at once and skips the ticks it missed, the
-/// cadence every other resident role of `stado serve` keeps.
+/// of ready submissions, then the delivery routine's pass when this host
+/// declares a plan whose cadence has passed, once per declared period. A pass
+/// that outlasts the period starts the next one at once and skips the ticks
+/// it missed, the cadence every other resident role of `stado serve` keeps.
 pub async fn agent(target_name: &str, interval: NonZeroU64) -> Result<(), CmdError> {
     let mut schedule = tokio::time::interval(Duration::from_secs(interval.get()));
     schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -197,5 +198,11 @@ pub async fn agent(target_name: &str, interval: NonZeroU64) -> Result<(), CmdErr
             }
             Err(reason) => eprintln!("stado release agent finish pass failed: {reason}"),
         }
+        crate::coordinator::delivery::fire_due(say);
     }
+}
+
+/// One line of the release role's log.
+fn say(line: &str) {
+    eprintln!("stado release agent {line}");
 }

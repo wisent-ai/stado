@@ -13,7 +13,9 @@
 // when all four are:
 // - refused: `stado ci plan set` is refused quoting the refusal and writes no
 //   plan, and `stado ci run` over a plan already on disk is refused the same
-//   way, before anything is built, and writes no state;
+//   way, before anything is built, and writes no state; the refused pass is
+//   still kept as an attempt, so `stado ci plan show` puts the next pass a
+//   whole cadence later instead of due at once, as a serve's tick reads it;
 // - allowed: the plan is declared and keeps its purpose, and `stado ci run`
 //   over it reaches the step's install without any build or install being
 //   refused by a ruling (the install it starts inherits both admissions, so
@@ -47,6 +49,7 @@ const environment = {
   STADO_DELIVERY_PLAN: join(output, 'delivery-plan.json'),
   STADO_DELIVERY_STATE: join(output, 'delivery-state.json'),
 };
+const attemptFile = join(output, 'delivery-state.attempt.json');
 const report = {
   started_at: new Date().toISOString(),
   revision: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(),
@@ -63,6 +66,7 @@ function spawn(program, args) {
 function journey(purpose) {
   rmSync(environment.STADO_DELIVERY_PLAN, { force: true });
   rmSync(environment.STADO_DELIVERY_STATE, { force: true });
+  rmSync(attemptFile, { force: true });
   const answer = action => {
     const verdict = spawn(okoBinary, ['admit', action, '--product', product, '--purpose', purpose]);
     return { allowed: exitedCleanly(verdict), said: (verdict.stderr || verdict.stdout).trim() };
@@ -73,7 +77,10 @@ function journey(purpose) {
   const test = answer('test');
   const allowed = [build, install, compile, test].every(answered => answered.allowed);
   report.answers[purpose] = { build, install, compile, test, allowed };
-  const declare = ['ci', 'plan', 'set', '--purpose', purpose, '--step', step, '--json'];
+  // Far longer than the journey runs, yet small enough that a pass start
+  // plus the cadence is still a time the clock holds.
+  const cadence = String(Date.now());
+  const declare = ['ci', 'plan', 'set', '--purpose', purpose, '--every', cadence, '--step', step, '--json'];
   if (allowed) {
     const declared = spawn(stadoBinary, declare);
     assert.ok(exitedCleanly(declared), declared.stderr);
@@ -103,12 +110,18 @@ function journey(purpose) {
     push: false,
     purpose,
     declared_at: new Date().toISOString(),
+    every_seconds: Number(cadence),
   }));
   const pass = spawn(stadoBinary, ['ci', 'run']);
   assert.ok(!exitedCleanly(pass), `a pass the rulings forbid for ${purpose} ran`);
   assert.ok(pass.stderr.includes('stado ci run is refused'), pass.stderr);
   assert.ok(pass.stderr.includes(ruling), `the refusal does not quote Oko's: ${pass.stderr}`);
   assert.ok(!existsSync(environment.STADO_DELIVERY_STATE), 'a refused pass wrote the state');
+  assert.ok(existsSync(attemptFile), 'a refused pass was not kept as an attempt');
+  const shown = spawn(stadoBinary, ['ci', 'plan', 'show']);
+  assert.ok(exitedCleanly(shown), shown.stderr);
+  const due = new Date(shown.stdout.match(/next pass due at (.+)/)[1]);
+  assert.ok(due > new Date(), `after a refused pass the next one is due at once: ${shown.stdout}`);
 }
 
 try {

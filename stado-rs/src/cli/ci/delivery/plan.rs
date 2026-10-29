@@ -3,6 +3,7 @@
 //! whose `main` it installs from. The operator declares it with `stado ci
 //! plan set`; nothing is guessed in its place.
 
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -60,6 +61,11 @@ pub struct Plan {
     /// before purposes existed has none and is refused until declared anew.
     pub purpose: String,
     pub declared_at: DateTime<Utc>,
+    /// The seconds from the start of one pass to the start of the next
+    /// (`--every`); a plan declared before cadences existed has none, and no
+    /// pass is fired for it until it is declared again.
+    #[serde(default)]
+    pub every_seconds: Option<NonZeroU64>,
 }
 
 impl Plan {
@@ -199,15 +205,25 @@ fn print(plan: &Plan, json: bool) -> Result<(), CmdError> {
         true => println!("  then push main of every checkout"),
         false => println!("  no push: declared without --push"),
     }
+    match plan.every_seconds {
+        Some(every) => println!("  a pass begins every {every} s"),
+        None => println!("  no cadence declared: no pass is fired until --every is declared"),
+    }
     Ok(())
 }
 
 /// `stado ci plan set --purpose DEFECT --step PRODUCT:SURFACE:CHECKOUT …
-/// [--push] [--json]`. A plan whose installs the operator's rulings forbid
-/// now for that purpose is refused before it is written, quoting the ruling
-/// ([`admitted`]): a declared plan is what a scheduled `stado ci run`
-/// installs.
-pub async fn set(purpose: &str, steps: &[String], push: bool, json: bool) -> Result<(), CmdError> {
+/// --every SECONDS [--push] [--json]`. A plan whose installs the operator's
+/// rulings forbid now for that purpose is refused before it is written,
+/// quoting the ruling ([`admitted`]): a declared plan is what the pass every
+/// `stado serve` of this host fires at its cadence installs.
+pub async fn set(
+    purpose: &str,
+    steps: &[String],
+    push: bool,
+    every: NonZeroU64,
+    json: bool,
+) -> Result<(), CmdError> {
     let purpose = purpose.trim();
     if purpose.is_empty() {
         return Err(CmdError::usage(
@@ -240,14 +256,22 @@ pub async fn set(purpose: &str, steps: &[String], push: bool, json: bool) -> Res
         push,
         purpose: purpose.to_string(),
         declared_at: Utc::now(),
+        every_seconds: Some(every),
     };
     document::write(&path()?, &plan, PLAN).map_err(CmdError::click)?;
     print(&plan, json)
 }
 
-/// `stado ci plan show [--json]`.
+/// `stado ci plan show [--json]`: the plan, then when its next pass is due.
 pub fn show(json: bool) -> Result<(), CmdError> {
-    print(&declared()?, json)
+    let plan = declared()?;
+    print(&plan, json)?;
+    let last = super::state::last_started()?;
+    if !json {
+        let due = crate::coordinator::delivery::next_due(&plan, last)?;
+        println!("  next pass due at {due}");
+    }
+    Ok(())
 }
 
 /// `stado ci plan clear`: the routine installs nothing until a plan is
