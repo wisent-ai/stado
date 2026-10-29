@@ -92,7 +92,8 @@ printf 'STADO_RECLAIM_STAGE\tforeign_home_trees\t%s\t%s\n' "$before" "$(free_kb)
 fi
 
 # One directory of versions: keep what `current` resolves to, keep a pinned
-# version, keep the newest, take the settled unheld rest. A function because the
+# version, keep the newest and the newest after those (the version a rollback
+# returns to), take the settled unheld rest. A function because the
 # same rules have to hold for the services root, for every superseded delivery
 # root a product declares, and for the delivered-release trees below -- three
 # copies would be three policies, and only one of them would be the tested one.
@@ -128,11 +129,20 @@ sweep_versions() {
   # the glob IS the set. A version whose age cannot be read leaves the newest
   # unknown, and then this product gives up nothing.
   newest_by_age "$sweep_stage" version_tree "$product"/* || return 0
+  kept_newest="$newest"
+  # The version a rollback returns to: the newest delivery that is neither
+  # `current`'s nor the newest. Without it a product whose `current` is its
+  # newest delivery kept exactly one version, and an install that had to go
+  # back had nothing left to go back to.
+  newest_by_age "$sweep_stage" rollback_tree "$product"/* || return 0
+  rollback="$newest"
+  newest="$kept_newest"
   for tree in "$product"/*; do
     version_tree "$tree" || continue
     [ "$tree" = "$keep" ] && continue
     case "$pins" in *" ${tree##*/} "*) continue ;; esac
     [ "$tree" = "$newest" ] && continue
+    [ "$tree" = "$rollback" ] && continue
     settled "$tree" "$sweep_stage" || continue
     reclaim "$tree" "$sweep_stage"
   done
@@ -142,6 +152,13 @@ sweep_versions() {
 version_tree() {
   [ -d "$1" ] && [ ! -L "$1" ] || return 1
   case "$1" in */current) return 1 ;; esac
+}
+
+# A delivered version that is neither `current`'s nor the newest: the
+# candidates for the rollback version `sweep_versions` keeps.
+rollback_tree() {
+  version_tree "$1" || return 1
+  [ "$1" != "$keep" ] && [ "$1" != "$kept_newest" ]
 }
 
 if stage_enabled delivered_trees; then
