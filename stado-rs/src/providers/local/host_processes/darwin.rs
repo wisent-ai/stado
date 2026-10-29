@@ -119,7 +119,8 @@ fn program(pid: c_int) -> Result<String, Errno> {
     let spare = path.spare_capacity_mut();
     let room = u32::try_from(spare.len()).map_err(|_too_large| Errno::EOVERFLOW)?;
     // SAFETY: the buffer has `room` writable bytes.
-    let length = Errno::result(unsafe { libc::proc_pidpath(pid, spare.as_mut_ptr().cast(), room) })?;
+    let length =
+        Errno::result(unsafe { libc::proc_pidpath(pid, spare.as_mut_ptr().cast(), room) })?;
     let length = usize::try_from(length).map_err(|_negative| Errno::EOVERFLOW)?;
     // SAFETY: the kernel wrote `length` bytes of the path.
     unsafe { path.set_len(length) };

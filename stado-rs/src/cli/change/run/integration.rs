@@ -6,7 +6,6 @@ use std::path::Path;
 
 use crate::cli::change::record::{Candidate, Integrated};
 
-
 /// The integration line of each defect `candidate` landed, and Oko's record
 /// of each repaired; a refused register write is kept in `unrecorded`.
 pub async fn record(candidate: &mut Candidate, integrated: Option<&Path>) {

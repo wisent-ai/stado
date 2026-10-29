@@ -13,7 +13,10 @@ fn path() -> Result<PathBuf, String> {
     let home = crate::config_file::home().map_err(|cause| {
         format!("there is no Stado state directory to keep the process reading in: {cause}")
     })?;
-    Ok(home.join(".stado").join("state").join("host-processes.json"))
+    Ok(home
+        .join(".stado")
+        .join("state")
+        .join("host-processes.json"))
 }
 
 /// The reading kept last, or `None` when this host has kept none yet.
@@ -47,6 +50,10 @@ pub(super) fn keep(reading: &Reading) -> Result<(), String> {
         .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
     let text = serde_json::to_string(reading)
         .map_err(|error| format!("the process reading does not serialize: {error}"))?;
-    crate::targets::write_atomic(&path, &text)
-        .map_err(|error| format!("cannot keep the process reading at {}: {error}", path.display()))
+    crate::targets::write_atomic(&path, &text).map_err(|error| {
+        format!(
+            "cannot keep the process reading at {}: {error}",
+            path.display()
+        )
+    })
 }

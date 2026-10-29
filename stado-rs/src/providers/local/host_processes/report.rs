@@ -171,7 +171,7 @@ pub fn compare(earlier: &Reading, now: &Reading) -> Result<ProcessesReport, Stri
         }
         processes.push(load(*pid, after, before));
     }
-    processes.sort_by(|a, b| b.spent.cmp(&a.spent));
+    processes.sort_by_key(|process| std::cmp::Reverse(process.spent));
     Ok(ProcessesReport {
         state: "compared",
         interval_seconds: Some(Duration::from_nanos(interval).as_secs_f64()),
