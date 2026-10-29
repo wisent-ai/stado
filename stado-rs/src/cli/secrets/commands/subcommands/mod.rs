@@ -246,8 +246,12 @@ pub enum CredentialVaultCommands {
     /// another registered host: register the new owner, rotate the vault to
     /// it on the host that owns it now, move the placement profile that
     /// carries Skarbiec, declare the vault on the destination, and prove the
-    /// destination reads every live item. A failed move rotates the vault
-    /// back to its previous owner. Without --apply nothing changes.
+    /// destination reads every live item. A placement move that fails after
+    /// this run rotated the vault rotates it back to its previous owner; a
+    /// vault the new owner already held is not rotated, so nothing is rotated
+    /// back. Once the placement carried the vault it is not moved back: a
+    /// later failure names what stands, so that step is finished from there.
+    /// Without --apply nothing changes.
     Move {
         /// The registered host that becomes the vault owner.
         #[arg(long)]
