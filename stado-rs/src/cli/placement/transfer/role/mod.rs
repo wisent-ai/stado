@@ -90,7 +90,7 @@ pub(in crate::cli::placement) async fn prepare_role(
         carry::ensure_source_takes_fenced_commit(&document, &source, runner).await?;
     }
     let destination = target(&parsed, to_host)?.clone();
-    let served = served_address()?;
+    let served = served_address(&destination).await?;
     if with_authority {
         carry::ensure_destination_store_answers(&served, to_host).await?;
     }

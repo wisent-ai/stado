@@ -28,6 +28,16 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- **A role move with `--with-authority` and `placement evacuate --authority` reach the
+  destination's own object API at its real port:** the address was the catalog's host process
+  `--bind` and `--port` taken as written, and the catalog names the port only as
+  `$STADO_LISTEN_PORT`, so the check asked `http://<loopback>:$STADO_LISTEN_PORT`, was refused as
+  an invalid URL, and refused every authority move. The address is now the catalog's line
+  resolved for the destination: a `$STADO_LISTEN_PORT` port is the one the service directory
+  records for it, refused by name when it records none, and a literal port is used as written;
+  a `--port` that is no port is refused. That address becomes the route's endpoint after the
+  move.
+
 - **`stado workload start omp-session --context` publishes its instructions where the queue may
   write:** the context went under `workload-sessions/`, a prefix no object API grants, so every
   start with `--context` was refused `object_grant_does_not_cover_key`. It now goes under the

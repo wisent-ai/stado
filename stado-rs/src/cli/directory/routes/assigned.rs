@@ -23,7 +23,7 @@ use crate::targets::ComputeTarget;
 const PORT_PLACEHOLDER: &str = "$STADO_LISTEN_PORT";
 
 /// Whether the entry's program, arguments or environment take a port.
-fn names_port(entry: &CatalogService) -> bool {
+pub(crate) fn names_port(entry: &CatalogService) -> bool {
     entry.program.contains(PORT_PLACEHOLDER)
         || entry.args.iter().any(|arg| arg.contains(PORT_PLACEHOLDER))
         || entry

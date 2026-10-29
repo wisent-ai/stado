@@ -5,6 +5,7 @@
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
+use crate::targets::ComputeTarget;
 
 /// The route of `service` checked for a role move from its active host to
 /// `to_host`; the source host's name.
@@ -46,16 +47,37 @@ pub(super) fn checked_route(
     Ok(source.to_string())
 }
 
-/// The address every host's Stado serves its object API on, from the
-/// catalog's host process (`--bind`, `--port`): after the move it is the
-/// active host's endpoint, where every caller's tunnel ends.
-pub(super) fn served_address() -> Result<String, CmdError> {
+/// The address the destination's Stado serves its object API on, from the
+/// catalog's host process (`--bind`, `--port`) resolved for `destination`.
+/// A catalog that names the port as `$STADO_LISTEN_PORT` takes the one the
+/// service directory records for that host; a literal port is used as
+/// written. After the move it is the active host's endpoint, where every
+/// caller's tunnel ends. A placeholder the directory records no port for is
+/// refused by name, as is a `--port` that is no port; neither reaches a URL.
+pub(super) async fn served_address(destination: &ComputeTarget) -> Result<String, CmdError> {
     let host = crate::deploy::service_catalog::host_process().map_err(CmdError::declaration)?;
+    let recorded = crate::cli::directory::recorded_listen_port(&host, &destination.name).await?;
+    if recorded.is_none() && crate::cli::directory::names_port(&host) {
+        return Err(CmdError::missing(format!(
+            "the service directory records no listen port for the host Stado process ({}) on {}, \
+             so the address it serves the object API on is not known; publish the destination's \
+             directory entry first",
+            host.name, destination.name
+        )));
+    }
+    let home = crate::config_file::home_text().map_err(CmdError::declaration)?;
+    let (_, arguments, _) = crate::deploy::service_catalog::resolve_entry(
+        &host,
+        &home,
+        &destination.release_platform,
+        &destination.name,
+        recorded,
+    );
     let option = |name: &str| {
-        let mut arguments = host.args.iter();
-        arguments
+        let mut words = arguments.iter();
+        words
             .find(|argument| *argument == name)
-            .and_then(|_option| arguments.next())
+            .and_then(|_option| words.next())
             .cloned()
             .ok_or_else(|| {
                 CmdError::declaration(format!(
@@ -63,11 +85,13 @@ pub(super) fn served_address() -> Result<String, CmdError> {
                 ))
             })
     };
-    Ok(format!(
-        "http://{}:{}",
-        option("--bind")?,
-        option("--port")?
-    ))
+    let port = option("--port")?;
+    if port.parse::<u16>().is_err() {
+        return Err(CmdError::declaration(format!(
+            "the catalog's host Stado process names --port {port}, which is no port"
+        )));
+    }
+    Ok(format!("http://{}:{port}", option("--bind")?))
 }
 
 /// `current` with `to_host` as `service`'s active host under the next
