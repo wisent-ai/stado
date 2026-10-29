@@ -63,6 +63,10 @@ pub struct ProductState {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// The surfaces a product installation is recorded for, one receipt each
+/// under `~/.stado/products/<product>/<surface>.json`.
+pub const SURFACES: [&str; 3] = ["cli", "desktop", "service"];
+
 pub fn path(runtime: &Runtime, product: &str, surface: &str) -> Result<PathBuf> {
     slug(product)?;
     slug(surface)?;

@@ -24,17 +24,30 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         return sweep::run(arguments, runtime);
     }
     let args = Arguments::from_matches(arguments);
-    let [id] = args.positional.as_slice() else {
-        bail!("{action} requires exactly one product");
-    };
     let mut runtime = runtime.clone();
     runtime.wait_for_writer = args.has("--wait");
     runtime.signing = crate::signing::Choice::from_arguments(&args)?;
     runtime.finishing = handoff::finishing(action, &args.positional);
     let runtime = &runtime;
+    let host = args.optional("--host")?;
+    // `remove` without --surface (cli::lifecycle::changes) uninstalls whole
+    // products, one or several, in one command.
+    if action == "remove" && !args.has("--surface") {
+        let document = catalog::current(runtime)?;
+        let removed =
+            transaction::lifecycle::remove_products(runtime, &document, &args.positional, host)?;
+        emit(&serde_json::json!({ "removed": removed }))?;
+        return Ok(libc::EXIT_SUCCESS);
+    }
+    let [id] = args.positional.as_slice() else {
+        bail!(
+            "{action} --surface takes exactly one product, and {} were named; `stado product \
+             remove` without --surface takes several",
+            args.positional.len()
+        );
+    };
     // clap's `--surface` parser (cli::lifecycle::surface) refused any other.
     let surface = args.required("--surface")?;
-    let host = args.optional("--host")?;
     // clap declares --release-version and --source-commit only on the verbs
     // that build (cli::lifecycle), so no other verb can carry them here.
     let coordinate = match (

@@ -49,6 +49,10 @@ enum NativeProductOperations {
         .init(id: "registry-check-claims", title: "Check every rival claim's source again", path: ["product", "registry", "check-claims"], hostPlacement: .none, fields: [
             .init(id: "product", label: "Product", required: true),
         ], fixedArguments: ["--json"], mutates: false),
+        .init(id: "remove", title: "Uninstall products: every surface this machine records as installed", path: ["product", "remove"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Products, one per line", required: true, multiple: true),
+            .init(id: "host", label: "Service host (blank uses the host its receipt records)", option: "--host"),
+        ], fixedArguments: ["--json"]),
         .init(id: "create", title: "Provision a preview product and its private repositories", path: ["product", "create"], hostPlacement: .none, fields: [
             .init(id: "allow-create", label: "Authorize private repository creation", option: "--allow-create", flag: true),
         ], payload: .file(option: "--request", label: "Creation request JSON", initial: "{\n}\n")),

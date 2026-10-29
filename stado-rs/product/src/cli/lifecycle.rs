@@ -4,7 +4,7 @@ use clap::{Arg, ArgAction, ArgGroup, Command};
 
 fn surface(required: bool) -> Arg {
     value("surface", "Product installation surface")
-        .value_parser(["cli", "desktop", "service"])
+        .value_parser(crate::state::SURFACES)
         .required(required)
 }
 
@@ -106,7 +106,21 @@ pub fn changes() -> Vec<Command> {
              holding its lock, with its step",
             Shape::Reads,
         ),
-        installation("remove", "Remove only owned paths and the declared service surface", Shape::Changes),
+        installation(
+            "remove",
+            "Remove only owned paths and the declared service surface; without --surface, \
+             every surface each named product records as installed on this machine",
+            Shape::Changes,
+        )
+        .mut_arg("positional", |arg| {
+            arg.num_args(1..)
+                .help("One product with --surface; one or more products without it")
+        })
+        .mut_arg("surface", |arg| {
+            arg.required(false).help(
+                "Product installation surface; every installed surface of each product when omitted",
+            )
+        }),
         installation("rollback", "Restore exact retained installation bytes without rebuilding", Shape::Changes),
     ]
 }
