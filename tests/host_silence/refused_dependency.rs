@@ -43,7 +43,10 @@ impl Run {
                 std::env::var_os("PATH").expect("PATH names the programs stado runs"),
             )
             .env("HOME", &self.root)
-            .env("STADO_CONFIG", concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"))
+            .env(
+                "STADO_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/config/empty.json"),
+            )
             .env("TMPDIR", self.root.join("tmp"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -175,8 +178,11 @@ fn a_body_cut_short_ends_the_get_after_one_request() {
         "a body cut short is a failed GET: {said}"
     );
     assert!(
-        said.contains(&format!("after {} of {} bytes", first_word().len(), BODY.len()))
-            || said.contains("connection closed before completion"),
+        said.contains(&format!(
+            "after {} of {} bytes",
+            first_word().len(),
+            BODY.len()
+        )) || said.contains("connection closed before completion"),
         "the cut is the cause, with the bytes it reached: {said}"
     );
     let seen = requests.lock().expect("the request log is not poisoned");

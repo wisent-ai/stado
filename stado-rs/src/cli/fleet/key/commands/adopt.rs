@@ -99,7 +99,11 @@ async fn run_first_contact(destination: &str, line: String) -> Result<CommandOut
         ))
     })?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(CommandOutput { code, stdout, stderr })
+    Ok(CommandOutput {
+        code,
+        stdout,
+        stderr,
+    })
 }
 
 /// One SSH invocation for first contact: no identity file, so OpenSSH resolves

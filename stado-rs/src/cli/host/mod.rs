@@ -57,8 +57,8 @@ pub(crate) use crate::cli::host::machine::config::remote::{
 };
 pub(crate) use crate::cli::host::machine::config::write_host_config;
 pub use crate::cli::host::machine::releases::activate::activate_staged_release;
-pub(crate) use crate::cli::host::machine::releases::platform::{cargo, HostCargoArguments};
 pub use crate::cli::host::machine::releases::platform::run_attached;
+pub(crate) use crate::cli::host::machine::releases::platform::{cargo, HostCargoArguments};
 pub use crate::cli::host::machine::releases::provenance::report::provenance;
 pub use crate::cli::host::machine::releases::versions::declare_version;
 pub use crate::cli::host::machine::releases::versions::promote::promote_version;

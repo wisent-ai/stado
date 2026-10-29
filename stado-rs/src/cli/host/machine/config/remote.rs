@@ -16,8 +16,13 @@ fi\n";
 
 pub(crate) enum RemoteConfigAction<'a> {
     Show,
-    Set { key: &'a str, value: &'a str },
-    Unset { key: &'a str },
+    Set {
+        key: &'a str,
+        value: &'a str,
+    },
+    Unset {
+        key: &'a str,
+    },
     /// Write the configuration template at the file every fleet command
     /// reads on the host, which a host running on defaults lacks.
     Init,
