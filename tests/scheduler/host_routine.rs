@@ -144,10 +144,7 @@ fn selected_store_keeps_replay_and_refusals_local() {
     const CASE: &str = "host_routine::selected_store_keeps_replay_and_refusals_local";
     if let Some(home) = std::env::var_os(CHILD) {
         let home = std::path::PathBuf::from(home);
-        let allowed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join(".build/z")
+        let allowed = crate::deployment::deployments_root()
             .canonicalize()
             .unwrap();
         let home = home.canonicalize().unwrap();

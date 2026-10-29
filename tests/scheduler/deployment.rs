@@ -1,6 +1,14 @@
 //! One isolated Stado deployment for a scheduler journey: its own HOME,
-//! config and local store under the repository's ignored `.build/`, the real
+//! config and local store under Cargo's `CARGO_TARGET_TMPDIR`, the real
 //! `stado` binary, and a report of every command, exit status and output.
+//!
+//! The temporary directory Cargo hands an integration test lives in the
+//! build's own target, so a fleet host compiling into the target on its
+//! declared work root runs the deployment's worker there too; rooted beside
+//! the delivered source instead, it sat on the host's root volume and the
+//! worker refused work under that volume's low watermark. A target whose
+//! path leaves no room for the deployment's sockets keeps the repository's
+//! ignored `.build/` instead.
 
 use serde_json::{json, Value};
 use std::fs::{self, File};
@@ -21,18 +29,33 @@ pub struct Deployment {
     environment: Vec<(String, String)>,
 }
 
+/// The longest socket path a deployment opens below its HOME, and the most
+/// a Unix socket path holds on macOS: `sun_path` is 104 bytes with its NUL.
+const SOCKET_BELOW_HOME: &str = "/.stado/release-proxy.sock";
+const SOCKET_PATH_MAX: usize = 103;
+
+/// Where every deployment of this test binary is rooted: Cargo's temporary
+/// directory when a HOME below it (four hex digits) still fits the socket a
+/// deployment opens, else the repository's ignored `.build/`.
+pub fn deployments_root() -> PathBuf {
+    let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("z");
+    if target.as_os_str().len() + "/ffff".len() + SOCKET_BELOW_HOME.len() <= SOCKET_PATH_MAX {
+        return target;
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join(".build/z")
+}
+
 impl Deployment {
     /// `config init` in a fresh run directory named after the journey.
     pub fn start(name: &'static str) -> Self {
-        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
         // A Unix socket path is at most 104 bytes on macOS, so HOME is the
         // run directory itself under a short name: one 16-bit field of a
         // random UUID in hex. A directory already holding that name is
         // refused rather than reused.
-        let parent = repository.join(".build/z");
+        let parent = deployments_root();
         fs::create_dir_all(&parent).unwrap();
         let root = parent.join(format!("{:x}", uuid::Uuid::new_v4().as_fields().1));
         if let Err(error) = fs::create_dir(&root) {
