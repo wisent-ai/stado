@@ -50,6 +50,15 @@ fn immutable(image: &str) -> bool {
 }
 
 impl Spec {
+    /// What a host must have free to take this sandbox when Stado chooses
+    /// the host: its declared cores, RAM and GPUs.
+    pub(super) fn demand(&self) -> super::run::Demand {
+        super::run::Demand {
+            cpus: self.cpus.get(),
+            memory_bytes: self.memory_bytes.get(),
+            gpus: self.gpus.map_or(0, NonZeroU32::get),
+        }
+    }
     /// The create program for this spec, or the refusal of what is not
     /// declared as it must be; nothing reaches the host before it.
     pub(super) fn program(self) -> Result<String, CmdError> {

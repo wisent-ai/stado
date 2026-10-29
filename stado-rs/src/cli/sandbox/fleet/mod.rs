@@ -1,13 +1,14 @@
-//! Fleet-owned gVisor sandboxes on registered Linux hosts.
+//! Fleet-owned gVisor sandboxes on registered Linux hosts, placed by Stado
+//! when the caller names no host ([`run`]).
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, shlex_quote};
+use crate::deploy::shlex_quote;
 use clap::{Args, Subcommand};
-use serde_json::{json, Value};
 use std::num::{NonZeroU32, NonZeroU64};
 mod build;
 mod egress;
 mod passed;
 mod programs;
+mod run;
 
 #[derive(Args)]
 pub struct Host {
@@ -16,9 +17,18 @@ pub struct Host {
     host: String,
 }
 #[derive(Args)]
+pub struct Where {
+    /// Registered Linux host; no cloud machine is rented. Without it,
+    /// `create` places the sandbox on the host with the most room for its
+    /// limits, `list` reads every host, and the others find the host that
+    /// keeps the named sandbox.
+    #[arg(long)]
+    host: Option<String>,
+}
+#[derive(Args)]
 pub struct Named {
     #[command(flatten)]
-    host: Host,
+    host: Where,
     /// Lowercase letters, digits and hyphens, beginning with a letter.
     name: String,
 }
@@ -26,8 +36,9 @@ pub struct Named {
 pub enum FleetCommands {
     /// Read Docker, gVisor and cgroup prerequisites without changing the host.
     Inventory(Host),
-    /// Read managed sandboxes, never unrelated containers.
-    List(Host),
+    /// Read managed sandboxes, never unrelated containers; every host's
+    /// without --host.
+    List(Where),
     /// Create a sandbox with caller-declared enforced resource limits.
     Create {
         #[command(flatten)]
@@ -96,82 +107,23 @@ pub enum FleetCommands {
 }
 use build::valid_name;
 pub async fn dispatch(command: FleetCommands) -> Result<(), CmdError> {
-    let (host, operation, script) = prepare(command).await?;
-    let registry = host_channel::canonical_registry().await?;
-    let target = host_channel::resolve_target(&registry, &host)?;
-    if !target.release_platform.starts_with("linux-") {
-        return Err(CmdError::refused(format!("{host}: fleet sandboxes require Linux with Docker, cgroup v2 and gVisor runsc; observed platform {}", target.release_platform)));
-    }
-    let runner = crate::deploy::production_runner();
-    let output = host_channel::run_script(target, &script, &runner).await?;
-    let mut result: Option<Value> = output
-        .stdout
-        .lines()
-        .rev()
-        .find_map(|line| line.strip_prefix("STADO_SANDBOX\t"))
-        .map(serde_json::from_str)
-        .transpose()
-        .map_err(|error| {
-            CmdError::refused(format!(
-                "{host}: {operation} returned an unreadable sandbox receipt: {error}"
-            ))
-        })?;
-    if operation == "list" && output.succeeded() {
-        let sandboxes = output
-            .stdout
-            .lines()
-            .filter(|line| !line.starts_with("STADO_SANDBOX\t") && !line.trim().is_empty())
-            .map(serde_json::from_str::<Value>)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                CmdError::refused(format!(
-                    "{host}: Docker returned an unreadable sandbox listing: {error}"
-                ))
-            })?;
-        result = Some(json!({"sandboxes":sandboxes}));
-    }
-    let kernel_limits = output
-        .stdout
-        .lines()
-        .rev()
-        .find_map(|line| line.strip_prefix("STADO_SANDBOX_LIMITS\t"))
-        .map(serde_json::from_str::<Value>)
-        .transpose()
-        .map_err(|error| {
-            CmdError::refused(format!(
-                "{host}: {operation} returned unreadable kernel resource observations: {error}"
-            ))
-        })?;
-    let report = json!({"schema":"stado.fleet-sandbox.v1", "host":host,
-        "operation":operation, "ok":output.succeeded(), "exit_code":output.code,
-        "stdout":output.stdout, "stderr":output.stderr, "result":result,
-        "kernel_limits":kernel_limits});
-    println!("{}", serde_json::to_string_pretty(&report)?);
-    if !output.succeeded() {
-        return Err(CmdError::refused(format!(
-            "{host}: sandbox {operation} failed with exit {}; stderr: {}; stdout: {}",
-            output.code,
-            output.stderr.trim(),
-            output.stdout.trim()
-        )));
-    }
-    if result.is_none() {
-        return Err(CmdError::refused(format!(
-            "{host}: sandbox {operation} exited without an observed-state receipt"
-        )));
-    }
-    Ok(())
+    run::run(prepare(command).await?).await
 }
-async fn prepare(command: FleetCommands) -> Result<(String, &'static str, String), CmdError> {
+async fn prepare(command: FleetCommands) -> Result<run::Request, CmdError> {
+    // Where `create` may go and what `fork` makes decide the host when the
+    // caller names none.
+    let mut demand = None;
+    let mut fork_to = None;
     let (host, name, operation, body) = match command {
         FleetCommands::Inventory(host) => (
-            host.host,
+            Some(host.host),
             None,
             "inventory",
             programs::inventory().to_string(),
         ),
         FleetCommands::List(host) => (host.host, None, "list", programs::list().to_string()),
         FleetCommands::Create { named, spec } => {
+            demand = Some(spec.demand());
             (named.host.host, Some(named.name), "create", spec.program()?)
         }
         FleetCommands::Update {
@@ -258,7 +210,9 @@ async fn prepare(command: FleetCommands) -> Result<(String, &'static str, String
             if !valid_name(&to) || to == named.name {
                 return Err(CmdError::usage("--to must name a new sandbox other than the source: a lowercase letter, then lowercase letters, digits and hyphens; nothing was forked"));
             }
-            (named.host.host, Some(named.name), "fork", build::fork(&to))
+            let script = build::fork(&to);
+            fork_to = Some(to);
+            (named.host.host, Some(named.name), "fork", script)
         }
     };
     if let Some(name) = &name {
@@ -275,9 +229,12 @@ async fn prepare(command: FleetCommands) -> Result<(String, &'static str, String
         ),
         None => "set -euo pipefail\n".to_string(),
     };
-    Ok((
+    Ok(run::Request {
         host,
+        script: format!("{header}{}\n{body}", programs::PRELUDE),
+        name,
         operation,
-        format!("{header}{}\n{body}", programs::PRELUDE),
-    ))
+        demand,
+        fork_to,
+    })
 }

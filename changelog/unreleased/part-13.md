@@ -40,3 +40,15 @@ The version bump gathers them into the release's own file and removes this one.
   request timed out`, `the request failed after it was sent`) and the whole chain of causes,
   such as an unknown certificate issuer, an expired or mismatched certificate, or a refused
   connection.
+
+- **`stado sandbox fleet` places and finds sandboxes across the fleet without `--host`:** every
+  fleet sandbox operation named its host, so work went where the caller pinned it, not where
+  there was room. `--host` is now optional on every operation but `inventory`. `create` reads
+  every registered Linux host at once with one read-only program (gVisor `runsc`, cgroup v2,
+  `--nvproxy`, `nproc`, `MemAvailable`, `MemTotal`, NVIDIA GPUs, and the limits its running
+  fleet sandboxes hold) and puts the sandbox on a host with the declared cores, RAM and GPUs
+  free, the one with the most free RAM first; every named operation runs on the host that keeps
+  the sandbox; `list` lists every host's sandboxes with their host. A name is kept unique across
+  the fleet, a host that cannot be read is named and does not stop the others, and the receipt
+  carries `placement` with the verdict on each host; no host with room is refused naming every
+  host and why. Stado Desktop's Fleet sandboxes take the host as optional.
