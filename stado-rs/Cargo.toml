@@ -401,6 +401,10 @@ path = "../tests/host_silence/lost_refusal.rs"
 name = "host-silence-silent-authority"
 path = "../tests/host_silence/silent_authority/main.rs"
 
+[[test]]
+name = "host-silence-refused-dependency"
+path = "../tests/host_silence/refused_dependency.rs"
+
 # The host-silence store journeys and mcp-killed-child run a real fleet store on
 # a real Skarbiec (SKARBIEC names its binary); run with STADO_TEST_REQUEST_LIMITS
 # declared.
