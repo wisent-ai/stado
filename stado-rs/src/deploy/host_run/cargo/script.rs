@@ -84,6 +84,18 @@ pub(super) fn script(
         "export CARGO_TARGET_DIR={}/{TARGET_LEAF}\nmkdir -p \"$CARGO_TARGET_DIR\" || exit\n",
         cache_root(target)
     ));
+    // The delivered tree is a `git archive` export, so every file carries its
+    // commit's time, and the host's one Cargo target is shared by every run.
+    // Cargo calls a crate fresh when no source is newer than its last
+    // compile, so a revision committed before that compile kept the earlier
+    // revision's build of every crate it shares a path with, and a gate
+    // judged code it was never given. Every delivered file takes the
+    // delivery's time instead; dependencies from registries stay compiled.
+    let run_root = output.rsplit_once('/').map_or(output, |(root, _)| root);
+    script.push_str(&format!(
+        "find {} -type f -exec touch -c {{}} + || exit\n",
+        shlex_quote(run_root)
+    ));
     // rustup picks the toolchain from the directory it is started in, never
     // from `--manifest-path`: started from the home it compiled with the
     // host's default toolchain, whatever `rust-toolchain.toml` the revision
