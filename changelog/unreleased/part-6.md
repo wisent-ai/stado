@@ -27,3 +27,12 @@ The version bump gathers them into the release's own file and removes this one.
 - The connection vocabulary (`stado-rs/data/fleet/connections.json`) names `direct` and says that
   Tailscale, Nebula and WireGuard are outside networks the operator runs, not ones the fleet
   configures.
+- Every Stado install runs the incoming binary's `config validate` (after `config migrate`) before
+  it replaces the running one: `stado product install stado`, `stado release local install` with
+  or without a version, and the remote activation of a host delivery. `config validate` reports a
+  host whose resolver needs `ssh.keepalive_seconds` and `ssh.keepalive_count_max`, and every
+  keepalive refusal names the exact `stado config set` commands.
+- The host Stado process (`com.wisent.stado`) runs the resolver role on every host. The registry
+  authority answers every other host's registry read from its resolver's held generation, so an
+  authority without it refused every read with "the resolver that published its state … is not
+  running".

@@ -654,7 +654,8 @@ products:
     - $HOME/.stado/local-storage
     - --health-interval-seconds
     - '${declared:health_interval_seconds}'
-    summary: The one Stado process per host; serves the object API for registry, queue and release state from the host's local store, publishes the host's health beacon at the interval the host's registry entry declares as health_interval_seconds, while its other roles use the storage the host's config names.
+    - --resolver
+    summary: The one Stado process per host; serves the object API for registry, queue and release state from the host's local store, publishes the host's health beacon at the interval the host's registry entry declares as health_interval_seconds, and runs the host's resolver, which on the registry authority holds the generation every other host's registry read is answered from, while its other roles use the storage the host's config names.
     directory_service: stado-object-api
     answering:
       method: GET

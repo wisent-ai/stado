@@ -41,7 +41,11 @@ fn declaring_commands() -> String {
         .into_iter()
         .filter(|key| declared(*key).is_none())
         .map(|(env, name)| {
-            let value = if name == KEEPALIVE_SECONDS.1 { "SECONDS" } else { "COUNT" };
+            let value = if name == KEEPALIVE_SECONDS.1 {
+                "SECONDS"
+            } else {
+                "COUNT"
+            };
             format!("`stado config set {name} {value}` (or env {env})")
         })
         .collect::<Vec<_>>()
