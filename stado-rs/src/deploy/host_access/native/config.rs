@@ -34,6 +34,34 @@ fn declared(key: (&str, &str)) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
+/// The commands that declare keepalive, each key this host has not declared,
+/// in the words every refusal of it uses.
+fn declaring_commands() -> String {
+    [KEEPALIVE_SECONDS, KEEPALIVE_COUNT_MAX]
+        .into_iter()
+        .filter(|key| declared(*key).is_none())
+        .map(|(env, name)| {
+            let value = if name == KEEPALIVE_SECONDS.1 { "SECONDS" } else { "COUNT" };
+            format!("`stado config set {name} {value}` (or env {env})")
+        })
+        .collect::<Vec<_>>()
+        .join(" and ")
+}
+
+/// Why this host's configuration cannot carry the long-lived sessions it
+/// runs, or `None` when it can. A host runs one when a resolver has
+/// published here: its tunnel to the registry authority lives as long as the
+/// resolver. `stado config validate` reports it, so an incoming Stado
+/// refuses to replace a binary on a host whose resolver it would stop.
+pub(crate) fn long_lived_refusal() -> Option<String> {
+    crate::cli::resolver::readiness_marker()?;
+    let refused = client(true).err()?;
+    Some(format!(
+        "this host runs a resolver, whose tunnel to its registry authority is a long-lived SSH \
+         session: {refused:#}"
+    ))
+}
+
 /// The client settings of a session; `long_lived` is a session that outlives
 /// any one command (a reverse forward, the resolver's authority tunnel).
 pub(super) fn client(long_lived: bool) -> Result<Arc<russh::client::Config>> {
@@ -43,18 +71,16 @@ pub(super) fn client(long_lived: bool) -> Result<Arc<russh::client::Config>> {
         (Some(interval), Some(count)) => (interval, count),
         (None, None) if !long_lived => return Ok(Arc::new(russh::client::Config::default())),
         _ => bail!(
-            "SSH keepalive is not declared: a {} needs both {} (env {}) and {} (env {}), \
-             since without them a peer that stops answering never ends the session; \
-             declare them with `stado config set`",
+            "SSH keepalive is not declared: a {} needs both {} and {}, since without them a \
+             peer that stops answering never ends the session; declare it with {}",
             if long_lived {
                 "long-lived session (a reverse forward or the resolver's authority tunnel)"
             } else {
                 "session with either key set"
             },
             KEEPALIVE_SECONDS.1,
-            KEEPALIVE_SECONDS.0,
             KEEPALIVE_COUNT_MAX.1,
-            KEEPALIVE_COUNT_MAX.0,
+            declaring_commands(),
         ),
     };
     let seconds: NonZeroU64 = interval.parse().with_context(|| {

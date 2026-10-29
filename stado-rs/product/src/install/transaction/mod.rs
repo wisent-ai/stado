@@ -140,6 +140,11 @@ pub fn commit(
         .filter(|placement| !placement.symbolic)
     {
         crate::callers::refuse_removed(runtime, &placement.destination, &placement.source)?;
+        // The program running this installation is replaced only by one that
+        // accepts this host's configuration and what its roles need of it.
+        if crate::callers::configuration::replaces_running_program(&placement.destination) {
+            crate::callers::configuration::refuse_unaccepted(&placement.source, product)?;
+        }
     }
     // An unfinished installation recorded what it retires; one that recorded
     // nothing retires nothing, and a receipt to replace retires what the new

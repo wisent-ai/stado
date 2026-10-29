@@ -3,7 +3,6 @@
 
 mod activation;
 mod attestation;
-mod config_gate;
 mod unit_migration;
 
 use std::path::{Path, PathBuf};
@@ -198,21 +197,25 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     }
     // An incoming Stado reads this host's configuration with its own rules,
     // and a rule the configuration does not meet closes the served
-    // boundaries only once that binary runs. Stado 0.22.0 replaced the
-    // control host's binary and every boundary of its object API answered
-    // `503 object authorization unavailable`, leaving nothing through which
-    // Stado could read, repair or roll itself back. So the incoming binary
-    // validates the configuration first, after its own migrations, and one it
-    // refuses is not installed.
+    // boundaries only once that binary runs. So the incoming binary judges
+    // this host first, after its own migrations, and one it refuses is not
+    // installed — whether or not the delivery names a version
+    // (`stado_product::callers::configuration`).
+    let candidate = if root_already_current {
+        &destination
+    } else {
+        &staged
+    };
+    if stado_product::callers::configuration::replaces_running_program(&destination) {
+        if let Err(refusal) =
+            stado_product::callers::configuration::refuse_unaccepted(candidate, &name)
+        {
+            discard_stages(&staged, release_version_stage.as_deref());
+            return Err(CmdError::refused(format!("{refusal:#}")));
+        }
+    }
     let resident_host = if stado_version.is_some() {
-        let candidate = if root_already_current {
-            &destination
-        } else {
-            &staged
-        };
-        let admission = config_gate::admit(candidate, &name)
-            .and_then(|()| unit_migration::admit(candidate, &destination, &name, &home));
-        match admission {
+        match unit_migration::admit(candidate, &destination, &name, &home) {
             Ok(host) => host,
             Err(refusal) => {
                 discard_stages(&staged, release_version_stage.as_deref());

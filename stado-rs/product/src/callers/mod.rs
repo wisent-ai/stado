@@ -13,6 +13,8 @@
 //! and the command, so the dependent is updated first instead of breaking
 //! after the swap.
 
+pub mod configuration;
+
 use crate::common::{atomic_json, Runtime};
 use crate::state;
 use anyhow::{bail, Context, Result};

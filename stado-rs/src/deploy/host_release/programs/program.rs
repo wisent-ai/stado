@@ -227,6 +227,20 @@ if [ "$read_version_state" != reported ] || [ "$read_version_value" != "$version
   say verify staged_version_mismatch
   exit 1
 fi
+# The incoming Stado judges this host's configuration, and what its running
+# roles need of it, before it replaces the running one, after its own
+# migration: a release whose rules the host does not meet would close the
+# host's boundaries (its resolver, its object API) only once it runs.
+if [ "$binary" = stado ] && ! verdict=$("$staged_path" config validate 2>&1); then
+  migration=$("$staged_path" config migrate 2>&1) \
+    || migration="$migration (config migrate exited non-zero)"
+  if ! verdict=$("$staged_path" config validate 2>&1); then
+    printf 'the incoming stado refuses this host configuration: %s\nits migration answered: %s\n' \
+      "$verdict" "$migration" >&2
+    say verify configuration_refused
+    exit 1
+  fi
+fi
 say verify ok
 
 /bin/mkdir -p "$bin_dir"
