@@ -7,6 +7,15 @@ the repository's file-size limit.
 The version-bump commit moves them with `stado product changelog --version V`;
 `stado build submit` refuses a revision whose Unreleased section still holds entries.
 
+## Unreleased
+
+- A registry SSH path that names a host by its multicast DNS name (`<name>.local`)
+  now connects from a host whose resolver does not speak multicast DNS: Stado
+  asks the link itself (RFC 6762) when the system resolver answers nothing, and
+  a name neither answers is refused naming both answers. A Linux host without
+  nss-mdns could reach no fleet store through such a path, so its beacon and
+  capacity publications were refused while the tailnet path was down.
+
 ## Released
 
 - [0.23.67](changelog/0.23.67.md)

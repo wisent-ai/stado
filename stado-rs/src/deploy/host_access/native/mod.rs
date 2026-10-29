@@ -120,7 +120,12 @@ async fn open(
         home: home.clone(),
         reverse,
     };
-    let handle = client::connect(config::client(long_lived || reverse.is_some())?, (host, port), peer)
+    // A `.local` name this machine's resolver cannot answer is asked of the
+    // link itself, so a declared LAN path works on a host without mDNS.
+    let addresses = crate::remote::lan::socket_addrs(host, port)
+        .await
+        .map_err(|cause| anyhow::anyhow!("connect and verify SSH host {destination}: {cause}"))?;
+    let handle = client::connect(config::client(long_lived || reverse.is_some())?, &addresses[..], peer)
         .await
         .with_context(|| match crate::remote::tailnet::unreachable_because(host) {
             Some(cause) => format!(
