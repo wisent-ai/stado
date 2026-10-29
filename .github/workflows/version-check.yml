@@ -409,15 +409,11 @@ jobs:
         working-directory: stado-rs
 
       - name: Prove this binary's versioning rule against the shared fixtures
-        # The verdict below comes from the binary under judgement, so its port of
-        # the rule is checked first against AutoVersion's own fixtures at the pinned
-        # coordinate: every class, next version and refusal must be reproduced.
-        run: |
-          set -euo pipefail
-          curl -fsSL -o "$RUNNER_TEMP/autoversion-fixtures.md" \
-            https://raw.githubusercontent.com/lbartoszcze/AutoVersion/v0.1.0/FIXTURES.md
-          stado-rs/target/release/stado release gate conformance \
-            --fixtures "$RUNNER_TEMP/autoversion-fixtures.md"
+        # The verdict below comes from the binary under judgement, so the
+        # AutoVersion crate it is built with is checked first against
+        # AutoVersion's own fixtures at that crate's revision, which the binary
+        # names itself: every class, next version and refusal must be reproduced.
+        run: stado-rs/target/release/stado release gate conformance
 
       - name: Read the public surface
         # No import, no source scan: the embedded surface reader asks the artifact itself and

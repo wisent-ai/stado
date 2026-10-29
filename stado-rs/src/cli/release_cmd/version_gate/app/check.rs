@@ -117,7 +117,7 @@ fn provenance(root: &Path, marker: &str, released: &str) -> Read<()> {
 pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
     let fixtures = conformance::pinned().map_err(|error| error.to_string())?;
     if !conformance::run(&fixtures)? {
-        return Err("this port does not reproduce AutoVersion's fixtures".into());
+        return Err("the AutoVersion crate this Stado is built with does not reproduce every case of AutoVersion's fixtures at its revision; the failing cases are printed above".into());
     }
     let load = surface::tree(root);
     let candidate = surface::of(&load, sources)?;

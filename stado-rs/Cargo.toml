@@ -49,6 +49,10 @@ hex = "0.4"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The fleet's versioning rule, shared with every product that versions by
+# surface; the rule alone, without the Python surface reader. The release
+# gate's conformance check reads the fixtures at this same revision.
+autoversion = { git = "https://github.com/lbartoszcze/AutoVersion", rev = "f7dde3c1461a292d72d8f956fc815f01a4ee4dca", default-features = false }
 regex = "1"
 # Release tag order by SemVer precedence (https://semver.org), pre-release identifiers included.
 semver = "1"

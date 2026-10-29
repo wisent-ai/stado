@@ -1,11 +1,13 @@
-//! Run AutoVersion's shared fixtures against this crate's port of the rule.
+//! Run AutoVersion's shared fixtures against the AutoVersion crate Stado
+//! builds with.
 //!
 //! `FIXTURES.md` holds the cases in its first fenced block: every `classify`
 //! case must yield exactly the recorded class, next version, removed and
-//! added names; every `refuse` case exactly the recorded refusal. A port that
-//! misses one is not a port of the rule, and its verdicts are not trusted.
-//! `pinned` reads the fixtures at the one tag this port follows, so a caller
-//! (a product's workflow, `app-check`) never spells the coordinate itself.
+//! added names; every `refuse` case exactly the recorded refusal. A rule that
+//! misses one is not the fleet's rule, and its verdicts are not trusted.
+//! `pinned` reads the fixtures at the revision of the crate Stado builds
+//! with, so a caller (a product's workflow, `app-check`) never spells the
+//! coordinate itself.
 
 use std::process::Command;
 
@@ -14,10 +16,11 @@ use serde_json::Value;
 use super::rule::decide;
 use crate::cli::CmdError;
 
-const FIXTURES_URL: &str =
-    "https://raw.githubusercontent.com/lbartoszcze/AutoVersion/v0.1.0/FIXTURES.md";
+/// The fixtures at the AutoVersion revision `Cargo.toml` pins the crate to;
+/// the two move together, so the fixtures prove the rule Stado runs.
+const FIXTURES_URL: &str = "https://raw.githubusercontent.com/lbartoszcze/AutoVersion/f7dde3c1461a292d72d8f956fc815f01a4ee4dca/docs/FIXTURES.md";
 
-/// AutoVersion's FIXTURES.md at the tag this port follows. Each failure
+/// AutoVersion's FIXTURES.md at the revision Stado builds with. Each failure
 /// states its class: no `curl` to start is this machine's environment
 /// (`config`); a failed fetch or bytes that are not text are the network or
 /// the remote file (`infra_down`), which a later run can get past.

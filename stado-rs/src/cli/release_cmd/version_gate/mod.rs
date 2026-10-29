@@ -4,8 +4,8 @@
 //!
 //! - `surface` reads the top-level commands a binary advertises;
 //! - `baseline` derives the published surface from verified release bytes;
-//! - `decide` is the fleet's versioning rule (AutoVersion SPEC v0.1.0), and
-//!   `conformance` proves it against AutoVersion's shared fixtures;
+//! - `decide` is the fleet's versioning rule, the AutoVersion crate's, and
+//!   `conformance` proves that crate against AutoVersion's shared fixtures;
 //! - `semver reaches` compares a declared version with the required one;
 //! - `modules unreachable` finds `.rs` files no `mod` declaration reaches;
 //! - `app surface`, `app baseline` and `app check` are the same gate for an
@@ -66,9 +66,10 @@ pub enum VersionGateCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Reproduce every case of AutoVersion's FIXTURES.md with this port;
-    /// fails when any class, next version or refusal differs. Without
-    /// --fixtures, the file at the tag this port follows is read.
+    /// Reproduce every case of AutoVersion's FIXTURES.md with the AutoVersion
+    /// crate this Stado is built with; fails when any class, next version or
+    /// refusal differs. Without --fixtures, the file at the crate's revision
+    /// is read.
     Conformance {
         #[arg(long)]
         fixtures: Option<PathBuf>,
