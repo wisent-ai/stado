@@ -54,6 +54,11 @@
       "roots_from": "the account's home directory"
     },
     {
+      "name": "cargo_build_dirs",
+      "description": "Cargo's per-workspace build directories ($CARGO_HOME/build/<xx>/<hash>, the build-dir the janitor declares for checkouts it does not walk), tagged or not, each taken whole once no process names it or holds a file below it on two applies and it did not change in between.",
+      "roots": ["~/.cargo/build"]
+    },
+    {
       "name": "chromium_clones",
       "description": "Stale macOS Chromium code-signing clones.",
       "roots": [],

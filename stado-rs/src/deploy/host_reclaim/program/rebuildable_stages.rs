@@ -209,5 +209,31 @@ done
 printf 'STADO_RECLAIM_STAGE\ttagged_build_caches\t%s\t%s\n' "$before" "$(free_kb)"
 fi
 
+if stage_enabled cargo_build_dirs; then
+before=$(free_kb)
+# Cargo's per-workspace build directories under its home: the build-dir the
+# janitor declares for every checkout it does not walk
+# (`{cargo-cache-home}/build/{workspace-path-hash}`), one `build/<xx>/<hash>`
+# directory per workspace, tagged by Cargo or not. Everything in one is
+# Cargo's own output for that workspace and comes back with its next build,
+# so the disk-full rule (everything rebuildable goes) takes it whole once it
+# is unused: no process names it or holds a file below it, on this look and
+# on an earlier apply's look, and it did not change in between (`settled`).
+# No age stands in for that proof. Only the two fixed levels are listed;
+# nothing inside a build directory is walked.
+cargo_build_home=${CARGO_HOME:-$HOME/.cargo}
+for shard in "$cargo_build_home"/build/*; do
+  [ -d "$shard" ] || continue
+  if [ -L "$shard" ]; then continue; fi
+  for entry in "$shard"/*; do
+    [ -d "$entry" ] || continue
+    if [ -L "$entry" ]; then continue; fi
+    settled "$entry" cargo_build_dirs || continue
+    reclaim "$entry" cargo_build_dirs
+  done
+done
+printf 'STADO_RECLAIM_STAGE\tcargo_build_dirs\t%s\t%s\n' "$before" "$(free_kb)"
+fi
+
 printf 'STADO_RECLAIM_FREE\tafter\t%s\n' "$(free_kb)"
 "#;

@@ -93,3 +93,7 @@ The version bump gathers them into the release's own file and removes this one.
 - **`stado space reclaim`'s `tagged_build_caches` stage prunes the privacy list too:** its `find`
   over the home opened `Library`, `Pictures` and the rest, the one home walk the list did not
   reach; it now refuses the same folders every other walk refuses.
+- **`stado space reclaim --stage cargo_build_dirs`** takes Cargo's per-workspace build directories
+  under `$CARGO_HOME/build` (the build-dir the janitor declares for checkouts it does not walk),
+  tagged or not, each whole once no process names it or holds a file below it on two applies and
+  it did not change in between. Only the two fixed levels are listed; nothing inside is walked.
