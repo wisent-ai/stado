@@ -51,3 +51,9 @@ The version bump gathers them into the release's own file and removes this one.
   or `not measured` from what macOS's `nehelper` logged for the program's code identifier;
   `--json` carries the decisions under `local_network`. Stado Desktop's grant form offers Local
   Network.
+- **A Stado install that changes the installed program's code identity is made at the Mac:** macOS
+  keeps every privacy decision per designated requirement, so an install under another identity
+  made the always-on host process ask again for each declared need (Documents, for one) with
+  nobody watching. On a Mac, `release local install` and `restore` refuse, with no terminal, a
+  program whose designated requirement differs from the installed one's, naming both; at a
+  terminal they say first that macOS will ask again for the declared grants.

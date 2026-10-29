@@ -3,6 +3,7 @@
 
 mod activation;
 mod attestation;
+mod identity;
 mod unit_migration;
 
 use std::path::{Path, PathBuf};
@@ -226,8 +227,11 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // macOS keeps every privacy decision under the program's signing
     // identity. An ad-hoc build is a new program to it on every install, so
     // each one asks the person at the keyboard every question again; only a
-    // program the release path signed is placed here.
-    if let Err(refusal) = refuse_unstable_identity(candidate, &name, archive) {
+    // program the release path signed is placed here, and one that changes
+    // the installed program's identity only with someone at a terminal.
+    if let Err(refusal) = identity::refuse_unstable(candidate, &name, archive)
+        .and_then(|()| identity::refuse_changed(&destination, candidate, &name))
+    {
         discard_stages(&staged, release_version_stage.as_deref());
         return Err(refusal);
     }
@@ -305,34 +309,6 @@ pub(in crate::cli::release_cmd) async fn install_archive(
         declare_delivered_version(&name, version).await?;
     }
     Ok(())
-}
-
-/// Refuse a native program whose signature is not one stable Apple identity
-/// (`stado_product::signature_acceptable`), naming its state and the command
-/// that installs a signed release.
-fn refuse_unstable_identity(candidate: &Path, name: &str, archive: &str) -> Result<(), CmdError> {
-    let report = stado_product::inspect_signature(candidate).map_err(|error| {
-        CmdError::click(format!(
-            "the signature of {name} from {archive} cannot be read: {error:#}"
-        ))
-    })?;
-    if stado_product::signature_acceptable(&report) {
-        return Ok(());
-    }
-    let state = match report["state"].as_str() {
-        Some(state) => state.to_string(),
-        None => report["state"].to_string(),
-    };
-    let detail = match report["error"].as_str() {
-        Some(detail) => format!(": {detail}"),
-        None => String::new(),
-    };
-    Err(CmdError::refused(format!(
-        "{name} from {archive} is not signed with a stable identity ({state}{detail}); macOS \
-         keeps its privacy decisions per signing identity, so it would be a new program there \
-         and ask the person at the keyboard every question again; install a signed release \
-         with `stado product install {name} --source-commit <commit on origin/main>`"
-    )))
 }
 
 /// Remove the staged program and the staged release version a refused
