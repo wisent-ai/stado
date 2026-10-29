@@ -140,6 +140,18 @@ pub(crate) async fn install(
     let harness = declared(kind)?;
     let (path, here) = local_harness(harness).await?;
     let target = crate::cli::canonical_host(target).await?;
+    // The copy carried is this machine's program, built for this machine's
+    // platform; a host on another platform could not run it.
+    let platform =
+        crate::cli::fleet::enroll::release_platform(std::env::consts::OS, std::env::consts::ARCH)
+            .map_err(CmdError::refused)?;
+    if target.release_platform != platform {
+        return Err(CmdError::refused(format!(
+            "{} declares release platform {:?} and this machine's {} is built for {platform}; \
+             install the harness from a {} machine of the fleet",
+            target.name, target.release_platform, harness.program, target.release_platform
+        )));
+    }
     let runner = crate::deploy::production_runner();
     let previous = host_version(&target, &harness.managed).await?;
     if previous.as_deref() != Some(here.as_str()) {

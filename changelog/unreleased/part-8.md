@@ -38,7 +38,10 @@ The version bump gathers them into the release's own file and removes this one.
 - **`stado workload harness status|install KIND --target HOST`:** the harness a session kind
   declares (`harness` in `data/work/workloads.json`). `install` carries this machine's copy to the
   host's managed path through a managed run, checks it there with its own `--version`, and
-  replaces the old copy with one rename on the host's volume.
+  replaces the old copy with one rename on the host's volume. A host whose declared
+  `release_platform` is not this machine's is refused before anything is copied: `<HOST> declares
+  release platform "<P>" and this machine's <program> is built for <Q>; install the harness from
+  a <P> machine of the fleet`.
 - **`stado workload results JOB --into DIR`:** reads the result lines a detached session wrote on
   its host. It appends to `DIR/<name>.jsonl` every line that file does not already hold, so
   repeated runs while the session works add only what is new.
