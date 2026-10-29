@@ -17,6 +17,7 @@
 //! machine's own object API root, and that path is reported.
 
 mod config;
+mod registry;
 mod session;
 
 use serde_json::{json, Value};
@@ -166,6 +167,10 @@ pub(crate) async fn attach(
         "[attach] {}: storage is the fleet store {} (namespace {}); its own store stays at {local}",
         target.name, store.url, store.namespace
     ));
+    // Read again: the resolver declaration above advanced the registry, and
+    // the copy handed over is what the machine's resolver starts from.
+    let current = crate::cli::registry::fetch_document().await?;
+    registry::hand_over(target, &current, runner, echo).await?;
     Ok(())
 }
 

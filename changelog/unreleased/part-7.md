@@ -35,6 +35,12 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- **`stado registry push - --last-known-good` hands the fleet registry to a standalone Stado being
+  attached:** it refused every host whose copy named no authority, which is every standalone Stado,
+  so an attached machine kept its own registry, resolved the name that registry gave it and never
+  started the resolver that reaches the fleet. It now takes a document that names another host as
+  authority and lists this host, on a copy without a service directory, and `stado fleet attach`
+  ends by handing the machine the fleet registry this way.
 - **`stado fleet enroll NAME --ssh DEST --install-key` enrolls a machine that has no fleet key yet:**
   Skarbiec answers the fleet's reader the same 403 for an item it may not read and for an item that
   does not exist, and enroll took that 403 as fatal. It now asks the vault owner's item list: an

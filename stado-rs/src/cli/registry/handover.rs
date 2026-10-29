@@ -29,40 +29,40 @@ pub(in crate::cli::registry) async fn push_last_known_good(
     source: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let unanswered =
-        match crate::cli::resolver::authority_snapshot().await {
-            Ok(Some(_)) => {
-                return Err(CmdError::click(
-                    "the registry authority answers; a registry it would serve is pushed through \
+    let unanswered = match crate::cli::resolver::authority_snapshot().await {
+        Ok(Some(_)) => {
+            return Err(CmdError::click(
+                "the registry authority answers; a registry it would serve is pushed through \
                  it, without --last-known-good",
-                )
-                .stating(FailureCode::Refused))
-            }
-            Ok(None) => return Err(CmdError::click(
-                "this host is the registry authority, or keeps no copy naming one, so there is \
-                 no silent authority to hand a registry past; push it to the store, without \
-                 --last-known-good",
             )
-            .stating(FailureCode::Refused)),
-            Err(error) => error.to_string(),
-        };
+            .stating(FailureCode::Refused))
+        }
+        Ok(None) => joining(document)?,
+        Err(error) => error.to_string(),
+    };
     let handed = directory_generation(document).map_err(|cause| {
         CmdError::click(format!("{source}: {cause}")).stating(FailureCode::Config)
     })?;
     let kept = kept_last_good_document()
         .map_err(|cause| CmdError::click(cause).stating(FailureCode::Config))?;
-    if let Some(copy) = &kept {
-        let held = directory_generation(copy).map_err(|cause| {
+    // A copy with no service directory (a standalone Stado's) holds no
+    // generation to roll back.
+    let held = kept
+        .as_ref()
+        .map(service_resolution::directory)
+        .transpose()
+        .map_err(|cause| {
             CmdError::click(format!("this host's last-known-good copy: {cause}"))
                 .stating(FailureCode::Config)
-        })?;
-        if handed <= held {
-            return Err(CmdError::click(format!(
-                "{source} carries service directory generation {handed}, not above the {held} \
-                 this host's last-known-good copy holds; a copy is never rolled back"
-            ))
-            .stating(FailureCode::Refused));
-        }
+        })?
+        .flatten()
+        .map(|directory| directory.generation);
+    if let Some(held) = held.filter(|held| handed <= *held) {
+        return Err(CmdError::click(format!(
+            "{source} carries service directory generation {handed}, not above the {held} \
+             this host's last-known-good copy holds; a copy is never rolled back"
+        ))
+        .stating(FailureCode::Refused));
     }
     // The copy is the document this write replaces, so it tells a fault the
     // copy already held from one this document brings, as a store push does.
@@ -93,6 +93,53 @@ pub(in crate::cli::registry) async fn push_last_known_good(
         );
     }
     Ok(())
+}
+
+/// Why a host whose copy names no remote authority may still take `document`:
+/// it keeps no copy, or a copy that declares no service directory (a
+/// standalone Stado being attached to a fleet), and `document` names another
+/// host as its authority and this host as one of its targets. Such a host
+/// has no authority to ask, which is the state `fleet attach` ends. A host
+/// that is the authority of its copy, or that `document` itself names as
+/// authority or does not list, is refused.
+fn joining(document: &Value) -> Result<String, CmdError> {
+    let refused = |why: String| {
+        CmdError::click(format!(
+            "{why}, so there is no silent authority to hand a registry past; push it to the \
+             store, without --last-known-good"
+        ))
+        .stating(FailureCode::Refused)
+    };
+    let kept = crate::cli::resolver::kept_last_good_document()
+        .map_err(|cause| CmdError::click(cause).stating(FailureCode::Config))?;
+    let copy_has_directory = kept
+        .as_ref()
+        .map(service_resolution::directory)
+        .transpose()
+        .map_err(|cause| CmdError::click(cause).stating(FailureCode::Config))?
+        .flatten()
+        .is_some();
+    if copy_has_directory {
+        return Err(refused(
+            "this host is the registry authority of its last-known-good copy".to_string(),
+        ));
+    }
+    let authority = service_resolution::directory(document)
+        .map_err(|cause| CmdError::click(cause).stating(FailureCode::Config))?
+        .ok_or_else(|| refused("the document declares no service directory".to_string()))?
+        .authority
+        .target;
+    let this_host = crate::cli::resolver::current_target(document)
+        .map_err(|cause| refused(format!("the document does not list this host: {cause}")))?;
+    if authority == this_host {
+        return Err(refused(format!(
+            "the document names this host {this_host} its registry authority"
+        )));
+    }
+    Ok(format!(
+        "this host {this_host} kept no fleet registry, so it had no authority to ask; the \
+         document names {authority}"
+    ))
 }
 
 fn directory_generation(document: &Value) -> Result<u64, String> {
