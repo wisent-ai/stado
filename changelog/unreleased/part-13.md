@@ -25,3 +25,8 @@ The version bump gathers them into the release's own file and removes this one.
   same request provisioned on an earlier run is its own, so `--resume` still works.
 - **Stado's roadmap names OpenRouter as a way to sell tokens:** the catalog's roadmap for Stado
   carries *Become an inference provider on OpenRouter*, and `/docs/earning` says what it needs.
+- **`stado web origin declare` defaults to our own publication:** with no `--publication`, a
+  public origin was declared `tailscale-funnel`, so the default way to make a fleet name public
+  depended on an outside network provider's control plane. The default is now `web-edge`, which
+  publishes through the `stado web` declaration that owns the hostname on the fleet's own
+  declared edge. `tailscale-funnel` is still accepted when it is named.
