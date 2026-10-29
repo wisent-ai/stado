@@ -77,7 +77,8 @@ The version bump gathers them into the release's own file and removes this one.
   the candidate's `landing`, and the pre-push check lets that exact commit through without
   running its gates again. The hosts come from their capacity publications; `--host HOST`
   names them by hand, and a push no host can take is refused naming the queue, whose pass
-  names its hosts.
+  names its hosts. A Stado that cannot read the queue's records (a newer queue wrote a state it
+  does not know) says so and runs the commit's gates, instead of refusing every push.
 
 - **A resident unit that starts Stado with an option it refuses is rendered again by that Stado:**
   a unit written by an older release, or edited by hand, made the installed executable exit on

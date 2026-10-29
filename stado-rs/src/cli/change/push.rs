@@ -30,10 +30,24 @@ pub(crate) fn updates_main(remote_ref: &str) -> bool {
 /// The id of the candidate of `checkout`'s repository whose recorded
 /// landing is `commit`: a running candidate whose pass is pushing that exact
 /// commit, or a landed one that landed it. None when the queue never
-/// recorded it.
+/// recorded it, and none, said on stderr, when this Stado cannot read the
+/// queue's records (a newer queue wrote a state this build does not know):
+/// the commit's gates then run, which refuses nothing the gates admit,
+/// where refusing the read refused every push, the queue's own included.
 pub(crate) async fn landing(checkout: &Path, commit: &str) -> Result<Option<String>, CmdError> {
     let repository = git::repository(checkout).await?;
-    Ok(record::list(Some(&repository))?
+    let candidates = match record::list(Some(&repository)) {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            eprintln!(
+                "stado quality check: this Stado cannot read the submit queue's records of \
+                 {repository} ({error}), so whether the queue recorded {commit} as its landing \
+                 is not known; its gates run"
+            );
+            return Ok(None);
+        }
+    };
+    Ok(candidates
         .into_iter()
         .find(|candidate| match candidate.state {
             State::Running => candidate.landing.as_deref() == Some(commit),
