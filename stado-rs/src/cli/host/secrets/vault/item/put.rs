@@ -111,11 +111,11 @@ pub(crate) async fn store_vault_item(
 /// whose own output is a single JSON document.
 ///
 /// With `if_absent` the owner's Skarbiec creates the item only when no live
-/// item has that id (`set --if-absent`, decided and written under one
+/// item has that id (`set-json --if-absent`, decided and written under one
 /// vault generation, so of two concurrent creators only one writes); an
 /// existing item is left as it is and reported with `created: false`.
 ///
-/// `tags` sets the item's tag list (`set --tags`); `None` leaves an
+/// `tags` sets the item's tag list (`set-json --tags`); `None` leaves an
 /// existing item's tags as they are.
 pub(crate) async fn write_vault_item(
     target: &str,
@@ -161,7 +161,7 @@ pub(crate) async fn write_vault_item(
         gnupg_environment.as_str(),
         vault_environment.as_str(),
         skarbiec.as_str(),
-        "set",
+        "set-json",
         item,
         "--type",
         item_type,
@@ -197,7 +197,7 @@ pub(crate) async fn write_vault_item(
     // Skarbiec older than `--if-absent`, which the host's release replaces.
     let unanswered = |cause: String| {
         CmdError::click(format!(
-            "{}: Skarbiec set for {item} did not say whether it created the item \
+            "{}: Skarbiec set-json for {item} did not say whether it created the item \
              ({cause}); it printed: {}",
             resolved.name,
             stored.stdout.trim()

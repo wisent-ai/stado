@@ -14,6 +14,35 @@ pub(super) struct ApiShape {
     pub inherited_listener: bool,
 }
 
+/// Retire the API-listener predecessors of the host Stado unit before this
+/// process takes its role lock: what `run` does when another process holds
+/// that role.
+///
+/// A predecessor unit (the API under its old label) runs `stado serve` too,
+/// so it holds the very role lock this process takes. Taken first, the lock
+/// refused the start naming that predecessor, while the takeover that
+/// retires it runs only once the listener is prepared, after the lock: the
+/// host's unit then restarted beside its predecessor without end and never
+/// served. This is that same takeover, for the root the declared store
+/// serves, run before the lock; it retires nothing unless this process is
+/// the host Stado unit's own main process.
+pub(super) async fn take_over_held_role(storage: Option<&ServerStorage>) -> Result<(), CmdError> {
+    let served_root = match storage {
+        Some(storage) => storage.local_root().map_err(|error| {
+            let mut wrapped = CmdError::click(format!("API storage root is unusable: {error}"));
+            wrapped.failure = CmdError::from(error).failure;
+            wrapped
+        })?,
+        None => None,
+    };
+    crate::deploy::service::take_over_on_start(served_root.as_deref())
+        .await
+        .map_err(|error| {
+            CmdError::click(format!("serve {error}"))
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
+        })
+}
+
 pub(super) struct PreparedApi {
     listener: crate::dashboard::PreparedListener,
     store: JobStorage,

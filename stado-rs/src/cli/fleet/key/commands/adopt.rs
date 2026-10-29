@@ -1,11 +1,11 @@
 //! First contact: the `adopt` enrollment method.
 
 use crate::cli::CmdError;
-use crate::deploy::{CommandSpec, Runner};
+use crate::deploy::{CommandOutput, Runner};
 use crate::primitives::failure::FailureCode;
 
 use super::super::rotate;
-use super::super::store::{authorized_keys_line, configured_client, item_id};
+use super::super::store::{authorized_keys_line, configured_client, item_id, CHANNEL_FIELDS};
 
 // ---------------------------------------------------------------------------
 // First contact: the `adopt` enrollment method
@@ -61,15 +61,46 @@ line=$(cat)
 umask 077
 dir="$HOME/.ssh"
 file="$dir/authorized_keys"
-mkdir -p "$dir" 2>/dev/null || { echo "STADO_ADOPT_WRITE_FAILED cannot create $dir"; exit 3; }
-chmod 700 "$dir" 2>/dev/null
-touch "$file" 2>/dev/null || { echo "STADO_ADOPT_WRITE_FAILED cannot create $file"; exit 3; }
-chmod 600 "$file" 2>/dev/null
-if grep -qxF "$line" "$file" 2>/dev/null; then echo STADO_ADOPT_PRESENT; exit 0; fi
-printf '%s\n' "$line" >> "$file" 2>/dev/null || { echo "STADO_ADOPT_WRITE_FAILED cannot append to $file"; exit 3; }
-grep -qxF "$line" "$file" 2>/dev/null || { echo "STADO_ADOPT_WRITE_FAILED $file does not carry the line after the append"; exit 3; }
+detail=$(mkdir -p "$dir" 2>&1) || { echo "STADO_ADOPT_WRITE_FAILED cannot create $dir: $detail"; exit 3; }
+detail=$(chmod 700 "$dir" 2>&1) || { echo "STADO_ADOPT_WRITE_FAILED cannot make $dir owner-only: $detail"; exit 3; }
+detail=$(touch "$file" 2>&1) || { echo "STADO_ADOPT_WRITE_FAILED cannot create $file: $detail"; exit 3; }
+detail=$(chmod 600 "$file" 2>&1) || { echo "STADO_ADOPT_WRITE_FAILED cannot make $file owner-only: $detail"; exit 3; }
+if grep -qxF "$line" "$file"; then echo STADO_ADOPT_PRESENT; exit 0; fi
+detail=$(printf '%s\n' "$line" 2>&1 >> "$file") || { echo "STADO_ADOPT_WRITE_FAILED cannot append to $file: $detail"; exit 3; }
+grep -qxF "$line" "$file" || { echo "STADO_ADOPT_WRITE_FAILED $file does not carry the line after the append"; exit 3; }
 echo STADO_ADOPT_INSTALLED
 "#;
+
+/// Run first contact's ssh with `line` on its stdin, in this process's own
+/// process group, never through the deploy runner, which starts every child
+/// as the leader of a fresh group: a child
+/// outside the terminal's foreground group that opens `/dev/tty` for the
+/// password prompt is stopped by the kernel (SIGTTOU), and the enroll then
+/// waited on a stopped ssh with no prompt shown and nothing that would ever
+/// end it.
+async fn run_first_contact(destination: &str, line: String) -> Result<CommandOutput, CmdError> {
+    let argv = first_contact_argv(destination);
+    let started = tokio::task::spawn_blocking(move || {
+        let mut command = std::process::Command::new(&argv[0]);
+        command.args(&argv[1..]);
+        crate::wait::output_with_input(&mut command, line.as_bytes())
+    })
+    .await
+    .map_err(|exc| CmdError::unreachable(format!("ssh to {destination} did not run: {exc}")))?;
+    let output = started.map_err(|exc| {
+        CmdError::unreachable(format!("ssh to {destination} could not be started: {exc}"))
+    })?;
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let code = output.status.code().ok_or_else(|| {
+        CmdError::unreachable(format!(
+            "ssh to {destination} ended with {} and returned no exit code; stderr: {}",
+            output.status,
+            stderr.trim()
+        ))
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    Ok(CommandOutput { code, stdout, stderr })
+}
 
 /// One SSH invocation for first contact: no identity file, so OpenSSH resolves
 /// the credential itself, and `BatchMode=no` so it may ask the operator.
@@ -154,9 +185,7 @@ fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutpu
 /// makes "there is a usable key" a fact before anything is sent to the machine.
 async fn ensure_public_key(runner: &Runner, target: &str) -> Result<String, CmdError> {
     let id = item_id(target);
-    let stored = configured_client()?
-        .read_declared_string(&id, "public_key")
-        .await?;
+    let stored = stored_public_key(&id).await?;
     if let Some(public_key) = stored.filter(|value| !value.trim().is_empty()) {
         return Ok(public_key.trim().to_string());
     }
@@ -176,6 +205,52 @@ async fn ensure_public_key(runner: &Runner, target: &str) -> Result<String, CmdE
         })
 }
 
+/// The public half the channel's reader can read; `None` when the vault
+/// owner holds no such item, so the caller mints one.
+///
+/// Skarbiec answers a consumer the same 403 for an item it may not read and
+/// for an item that does not exist, so it does not reveal which items exist.
+/// Read as a refusal, that 403 stopped every enroll of a machine that had no
+/// key yet, which is exactly the machine `--install-key` is for. The vault
+/// owner's own listing tells the two apart: an absent item is minted; a
+/// present one is a mint cut off between storing the item and granting the
+/// channel's reader (a killed `fleet invite create`, a lost host channel), and
+/// that idempotent grant, naming only this target's own channel item, is
+/// completed and the read made again. A reader still refused after it is the
+/// refusal that stands.
+async fn stored_public_key(id: &str) -> Result<Option<String>, CmdError> {
+    let client = configured_client()?;
+    let refused = match client.read_declared_string(id, "public_key").await {
+        Ok(stored) => return Ok(stored),
+        Err(error) if error.status() == Some(reqwest::StatusCode::FORBIDDEN.as_u16()) => error,
+        Err(error) => return Err(CmdError::from(error)),
+    };
+    let (owner, _) = crate::cli::release_catalog::fleet_hosts().await?;
+    let held = crate::cli::host::owner_item_ids(&owner)
+        .await
+        .map_err(|listing| {
+            listing.within(format!(
+                "the fleet's reader was refused {id} ({refused}), and the vault owner {owner}'s \
+                 item list, which says whether it exists, could not be read"
+            ))
+        })?;
+    if !held.contains(id) {
+        eprintln!(
+            "{id} is not in the vault owner {owner}'s item list (the fleet's reader was \
+             refused it: {refused})"
+        );
+        return Ok(None);
+    }
+    eprintln!(
+        "{id} is in the vault owner {owner}'s vault, but the fleet's reader may not read it \
+         ({refused}): a mint stopped before granting it, so the grant is completed now"
+    );
+    crate::cli::host::settle_consumer_reads(id, CHANNEL_FIELDS)
+        .await
+        .map_err(|grant| grant.within(format!("{id} could not be made readable")))?;
+    Ok(client.read_declared_string(id, "public_key").await?)
+}
+
 /// `fleet enroll NAME --ssh DEST --install-key` — the `adopt` method's first
 /// contact: put the fleet's PUBLIC key into the machine's authorized_keys over
 /// a session the operator can already open by other means, so that every later
@@ -191,13 +266,7 @@ pub async fn install_first_contact(
 ) -> Result<AdoptOutcome, CmdError> {
     let public_key = ensure_public_key(runner, target).await?;
     let line = authorized_keys_line(&public_key, &item_id(target));
-    let spec = CommandSpec {
-        argv: first_contact_argv(destination),
-        stdin: Some(format!("{line}\n")),
-    };
-    let output = runner(spec).await.map_err(|exc| {
-        CmdError::unreachable(format!("ssh to {destination} could not be started: {exc}"))
-    })?;
+    let output = run_first_contact(destination, format!("{line}\n")).await?;
     if !output.ok() {
         return Err(first_contact_failure(destination, &output));
     }

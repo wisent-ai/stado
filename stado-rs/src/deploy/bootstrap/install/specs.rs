@@ -17,16 +17,17 @@ pub fn ssh_argv(ssh_target: &str, command: &str) -> Vec<String> {
     ]
 }
 
-/// The release-binary download + path-resolution command.
-pub fn install_spec(ssh_target: &str) -> CommandSpec {
+/// The release-binary download + path-resolution command, for the exact
+/// Stado `version` the caller chose: the host's own declaration when it has
+/// one, so the binary installed is the one the host is then measured
+/// against.
+pub fn install_spec(ssh_target: &str, version: &str) -> CommandSpec {
     CommandSpec::new(ssh_argv(
         ssh_target,
-        &remote_install_script(
-            &crate::config::stado_api_url(),
-            &crate::config::stado_release_version(),
-        ),
+        &remote_install_script(&crate::config::stado_api_url(), version),
     ))
 }
+
 /// Resolve an installed Stado binary when it is the registry's exact desired
 /// version, or a newer version recorded by `release local install`'s durable
 /// handoff marker. The latter preserves a qualified candidate without trusting

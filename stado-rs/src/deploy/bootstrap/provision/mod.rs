@@ -74,21 +74,27 @@ pub async fn provision_target(
                 // no marker, a marker naming another version, or a marked
                 // version not newer than the registry's.
                 echo(&format!(
-                    "[install] {}: the installed stado is not reused ({}); download bootstrap \
-                     release binaries",
+                    "[install] {}: the installed stado is not reused ({}); download stado \
+                     {expected_version}, the version the registry declares for this host",
                     target.name,
                     host_channel::whole_failure(&installed)
                 ));
-                runner(install_spec(&ssh_target))
+                runner(install_spec(&ssh_target, expected_version))
                     .await
                     .map_err(DeployError::unreachable)?
             }
         } else {
+            // No declaration on the host: the configured release
+            // (`release.version`), said with its source, since a stale
+            // configured pin is otherwise only visible as a download 404.
+            let configured = crate::config::stado_release_version();
             echo(&format!(
-                "[install] {}: no stado version is declared; download release binaries",
-                target.name
+                "[install] {}: the registry declares no stado version for this host; download \
+                 stado {configured}, the configured release.version (`stado release version \
+                 declare --host {} --binary stado --version X.Y.Z` pins the host instead)",
+                target.name, target.name
             ));
-            runner(install_spec(&ssh_target))
+            runner(install_spec(&ssh_target, &configured))
                 .await
                 .map_err(DeployError::unreachable)?
         };

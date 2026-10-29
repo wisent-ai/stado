@@ -55,6 +55,15 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         ))
     })?;
     let role = crate::deploy::role_lock::serve_role(args.worker.target.as_deref());
+    // A held role on an API start may be this unit's own predecessor, which
+    // only the API's takeover retires; it runs before the lock, or the lock
+    // refuses the start the takeover exists for.
+    if serve_api
+        && !args.inherited_listener
+        && crate::deploy::role_lock::holder(&home, &role)?.is_some()
+    {
+        api::take_over_held_role(args.api_storage.as_ref()).await?;
+    }
     let _role = crate::deploy::role_lock::take(&home, &role, &program)?;
     let mutates_worker_environment =
         args.run_worker && (args.worker.auto || args.worker.target.is_none());

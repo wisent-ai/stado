@@ -14,7 +14,7 @@ const ITEM_SCHEMA: &str = "skarbiec.item.v2";
 
 /// Write one item into an explicit vault through its owner.
 ///
-/// `set` takes a canonical payload and validates it: the kind must be one
+/// `set-json` takes a canonical payload and validates it: the kind must be one
 /// Skarbiec declares, every key in `fields` must be one that kind allows, and
 /// anything descriptive belongs in `context`. So `ssh-key` is not a kind — it is
 /// a `key-pair` whose fingerprint and key type are context — and passing the
@@ -40,7 +40,7 @@ pub fn store_json(
     });
     let output = crate::wait::output_with_input(
         std::process::Command::new(binary)
-            .arg("set")
+            .arg("set-json")
             .arg(item)
             .arg("--type")
             .arg(item_type)
@@ -50,7 +50,7 @@ pub fn store_json(
         payload.to_string().as_bytes(),
     )
     .map_err(|error| {
-        SkarbiecError::Deployment(format!("skarbiec set {item} could not run: {error}"))
+        SkarbiecError::Deployment(format!("skarbiec set-json {item} could not run: {error}"))
     })?;
     if !output.status.success() {
         return Err(SkarbiecError::Deployment(format!(

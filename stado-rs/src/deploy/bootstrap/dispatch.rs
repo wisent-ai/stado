@@ -12,34 +12,42 @@ use crate::targets::{ComputeTarget, Registry};
 
 use super::provision::provision_target;
 
-/// Python `run`: provision every target, echoing per-target failures as
-/// `[err]  {name}: {exc}` and continuing.
+/// Provision every target, echoing each failure as `[err]  {name}: {exc}`
+/// and going on to the next, then answer whether all of them were
+/// provisioned: a run that echoed a failure and answered success let `fleet
+/// enroll --bootstrap` report a machine enrolled whose install had failed.
 pub async fn run(
     targets: &[&ComputeTarget],
     dry_run: bool,
     runner: &Runner,
     echo: &mut dyn FnMut(&str),
-) {
+) -> Result<(), DeployError> {
+    let mut failed = Vec::new();
     for target in targets {
         if let Err(exc) = provision_target(target, dry_run, runner, echo).await {
             echo(&format!("[err]  {}: {exc}", target.name));
+            failed.push((target.name.as_str(), exc));
         }
     }
+    provisioned(targets.len(), failed)
 }
 
 /// Production remote bootstrap: every SSH/SCP operation carries the
 /// registry target's scoped private key. The key exists only for this target
-/// provision and is deleted when the keyed runner is dropped.
+/// provision and is deleted when the keyed runner is dropped. Failures are
+/// answered as [`run`] answers them.
 async fn run_with_target_keys(
     targets: &[&ComputeTarget],
     runner: &Runner,
     echo: &mut dyn FnMut(&str),
-) {
+) -> Result<(), DeployError> {
+    let mut failed = Vec::new();
     for target in targets {
         let key = match ssh_key::materialize(target.channel_key()).await {
             Ok(key) => Arc::new(key),
             Err(exc) => {
                 echo(&format!("[err]  {}: {exc}", target.name));
+                failed.push((target.name.as_str(), exc));
                 continue;
             }
         };
@@ -57,8 +65,30 @@ async fn run_with_target_keys(
         });
         if let Err(exc) = provision_target(target, false, &keyed_runner, echo).await {
             echo(&format!("[err]  {}: {exc}", target.name));
+            failed.push((target.name.as_str(), exc));
         }
     }
+    provisioned(targets.len(), failed)
+}
+
+/// Success when no target failed; otherwise one refusal naming each failed
+/// target with its own cause, of the class of the first failure.
+fn provisioned(total: usize, failed: Vec<(&str, DeployError)>) -> Result<(), DeployError> {
+    let Some(failure) = failed.first().map(|(_, exc)| exc.failure) else {
+        return Ok(());
+    };
+    let causes: Vec<String> = failed
+        .iter()
+        .map(|(name, exc)| format!("{name}: {exc}"))
+        .collect();
+    Err(DeployError {
+        message: format!(
+            "bootstrap failed on {} of {total} target(s): {}",
+            failed.len(),
+            causes.join("; ")
+        ),
+        failure,
+    })
 }
 
 /// Python `run_bootstrap`: top-level dispatcher used by `stado bootstrap`.
@@ -143,11 +173,10 @@ pub async fn run_bootstrap(
         None => registry.local_targets(),
     };
     if dry_run {
-        run(&targets, true, runner, echo).await;
+        run(&targets, true, runner, echo).await
     } else {
-        run_with_target_keys(&targets, runner, echo).await;
+        run_with_target_keys(&targets, runner, echo).await
     }
-    Ok(())
 }
 
 /// A [`TokenFetcher`] that always yields an empty token (dry-run tests and

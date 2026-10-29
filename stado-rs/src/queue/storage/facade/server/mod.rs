@@ -41,6 +41,19 @@ impl ServerStorage {
             backup: None,
         }
     }
+
+    /// The local root this declaration serves, resolved as the API's store
+    /// resolves it; `None` when its primary is not a local store.
+    pub(crate) fn local_root(&self) -> Result<Option<String>, StorageError> {
+        if self.primary.adapter() != Some(StorageAdapter::Local) {
+            return Ok(None);
+        }
+        Ok(Some(
+            LocalBackend::resolved_root(&self.primary.path)?
+                .to_string_lossy()
+                .into_owned(),
+        ))
+    }
 }
 
 impl fmt::Display for ServerStorage {
@@ -54,6 +67,7 @@ impl JobStorage {
     /// Bind only the API to these endpoints. Reads never fail over from its
     /// authoritative primary; the worker keeps its own configured storage.
     pub async fn for_server_storage(profile: ServerStorage) -> Result<Self, StorageError> {
+        let root = profile.local_root()?;
         let ServerStorage {
             mut primary,
             backup,
@@ -63,14 +77,10 @@ impl JobStorage {
                 "the Stado API server requires a direct authoritative primary; a stado endpoint names an API, not its backing store".into(),
             ));
         }
-        let local_path = if primary.adapter() == Some(StorageAdapter::Local) {
-            primary.path = LocalBackend::resolved_root(&primary.path)?
-                .to_string_lossy()
-                .into_owned();
-            Some(Arc::from(primary.path.as_str()))
-        } else {
-            None
-        };
+        if let Some(root) = &root {
+            primary.path = root.clone();
+        }
+        let local_path = root.as_deref().map(Arc::from);
         let backend = primary.build().await.map_err(|error| {
             StorageError::Other(format!(
                 "constructing API primary {}: {error}",
