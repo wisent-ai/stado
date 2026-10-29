@@ -38,10 +38,42 @@ pub(crate) enum HostRunCommands {
         command: Vec<String>,
     },
     /// A managed run tree below `$HOME/.stado/work/runs` on TARGET: deliver
-    /// its inputs, build its declared binary, attach to one of its programs,
-    /// or remove it.
+    /// its inputs, attach to one of its programs, or remove it.
     #[command(subcommand)]
     Run(HostManagedRunCommands),
+    /// Run one Cargo operation on a committed revision on TARGET.
+    ///
+    /// The revision is exported from the canonical checkout holding
+    /// MANIFEST_PATH (no uncommitted edit is read), delivered into a fresh
+    /// managed run on TARGET and compiled there `--locked` with the
+    /// revision's own `rust-toolchain.toml`, the declared compiler cache and
+    /// the host's one shared Cargo target in its build cache. `build` is
+    /// `--release` and brings each `--bin` back to
+    /// `<manifest directory>/target/host-cargo/<commit>/`. The run is removed
+    /// afterwards whatever Cargo answered; the exit status is Cargo's.
+    Cargo {
+        target: String,
+        #[arg(value_enum)]
+        operation: HostCargoOperation,
+        /// The crate's Cargo.toml inside its canonical checkout.
+        #[arg(long)]
+        manifest_path: String,
+        /// The commit to run, as the checkout names it.
+        #[arg(long)]
+        revision: String,
+        /// A binary target; repeat for each. Required by `build`, which
+        /// brings each one back.
+        #[arg(long = "bin")]
+        binaries: Vec<String>,
+        /// One receipt: commit, Cargo's streams and exit status, the
+        /// binaries brought back with their digests, and the free space the
+        /// run took.
+        #[arg(long)]
+        json: bool,
+        /// Further Cargo arguments, after `--`.
+        #[arg(last = true)]
+        arguments: Vec<String>,
+    },
     /// Read TARGET's crontab, and optionally prune one entry from it.
     ///
     /// The periodic table is the one place a fleet host can declare a
@@ -137,6 +169,16 @@ pub(crate) enum CompilerCacheOperation {
     Remove,
 }
 
+/// The Cargo operation `stado host cargo` runs, always `--locked`.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub(crate) enum HostCargoOperation {
+    /// A release build whose binaries come back to this machine.
+    Build,
+    Check,
+    Clippy,
+    Test,
+}
+
 /// TARGET's Stado configuration file, the one `stado config` keeps locally.
 #[derive(Subcommand)]
 pub(crate) enum HostConfigCommands {
@@ -198,24 +240,6 @@ pub(crate) enum HostManagedRunCommands {
         #[arg(long, value_name = "PATH")]
         files_from: Option<String>,
         /// Emit the delivery receipt as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Build one declared Cargo binary inside a delivered managed run tree.
-    ///
-    /// The command is fixed to `cargo build --locked --release`; only the
-    /// manifest and binary name vary. The manifest must resolve below the
-    /// selected account's `$HOME/.stado/work/runs`. Check source through
-    /// `stado product cargo check` before submitting a release build.
-    Build {
-        target: String,
-        /// Absolute Cargo.toml path inside a delivered managed run.
-        #[arg(long)]
-        manifest_path: String,
-        /// Declared Cargo binary target to build.
-        #[arg(long = "bin")]
-        binary: String,
-        /// Capture Cargo's stdout, stderr, and exit status in one JSON receipt.
         #[arg(long)]
         json: bool,
     },

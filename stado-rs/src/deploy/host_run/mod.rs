@@ -1,4 +1,4 @@
-//! Build and attached execution inside one target account's managed run area.
+//! Cargo and attached execution inside one target account's managed run area.
 //!
 //! The caller names only a registry target and paths below that target's
 //! `$HOME/.stado/work/runs`. Paths are checked once before host resolution for
@@ -7,20 +7,24 @@
 //! file of the wrong kind before a compiler or program starts.
 //!
 //! Layout: `validate` holds the lexical refusals applied to caller text,
-//! `build` the release build or its compile-only check, `attached` the attached execution and its
-//! signal forwarding, `remove` the recursive removal of one run directory.
-//! This module owns the managed-area constants, the timeouts, and the
-//! host-side confinement prelude the build and attached scripts share.
+//! `cargo` one Cargo operation on a committed revision delivered into a run
+//! of its own, `attached` the attached execution and its signal forwarding,
+//! `remove` the recursive removal of one run directory. This module owns the
+//! managed-area constants, the timeouts, and the host-side confinement
+//! prelude the Cargo and attached scripts share.
 
 use super::shlex_quote;
 
 mod attached;
-mod build;
+mod cargo;
 mod remove;
 mod validate;
 
 pub use attached::{run_attached, AttachedOutcome};
-pub use build::{build, BuildOutcome};
+pub use cargo::{
+    run as cargo, validate as validate_cargo, Artifact, CargoOperation, HostCargoReceipt,
+    HostCargoRequest,
+};
 pub use remove::{remove_run_directory, RemoveRunDirectoryOutcome};
 pub use validate::{
     validate_arguments, validate_binary_name, validate_run_descendant, validate_run_directory,
@@ -31,7 +35,7 @@ const SIGNAL_AREA: &str = ".stado/work/run-signals";
 const PATH_REFUSAL: &str =
     "must be an absolute path below the target account's $HOME/.stado/work/runs, with no '.' or '..' component";
 
-/// Host-side confinement shared by build and attached execution. `kind_test`
+/// Host-side confinement shared by Cargo and attached execution. `kind_test`
 /// is fixed by this module (`-f` or `-x`), never caller text.
 fn confined_file_prelude(path: &str, kind_test: &str, role: &str) -> String {
     let path = shlex_quote(path);

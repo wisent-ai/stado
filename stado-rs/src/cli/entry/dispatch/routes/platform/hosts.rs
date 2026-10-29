@@ -122,12 +122,26 @@ async fn runs(command: HostRunCommands) -> Result<(), CmdError> {
             files_from,
             json,
         }) => host::deliver(&target, &source, &destination, files_from.as_deref(), json).await,
-        HostRunCommands::Run(HostManagedRunCommands::Build {
+        HostRunCommands::Cargo {
             target,
+            operation,
             manifest_path,
-            binary,
+            revision,
+            binaries,
             json,
-        }) => host::build(&target, &manifest_path, &binary, json).await,
+            arguments,
+        } => {
+            host::cargo(host::HostCargoArguments {
+                target: &target,
+                operation,
+                manifest_path: &manifest_path,
+                revision: &revision,
+                binaries,
+                arguments,
+                json,
+            })
+            .await
+        }
         HostRunCommands::Run(HostManagedRunCommands::Attach {
             target,
             program,
