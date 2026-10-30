@@ -120,6 +120,7 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         "status" => {
             let mut report = status::inspect(runtime, product, surface, host)?;
             report["operation"] = super::operation::running(runtime, id, surface)?;
+            report["update_policy"] = super::policy::Policy::load(&runtime.home)?.describe(id);
             report
         }
         "install" => build(runtime)?,

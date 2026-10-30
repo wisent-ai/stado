@@ -94,6 +94,7 @@ pub fn augment(command: Command) -> Command {
         )
         .subcommand(lifecycle::locks())
         .subcommand(lifecycle::sync())
+        .subcommand(lifecycle::policy())
         .subcommand(lifecycle::signing())
         .subcommand(
             Command::new("paths")
@@ -172,6 +173,12 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
         "rollback" => crate::install::run(&action, arguments, &runtime),
         "sync" => crate::install::run(&action, arguments, &runtime),
         "locks" => lifecycle::report_locks(&runtime, arguments.get_flag("json")),
+        "policy" => {
+            let (action, arguments) = arguments
+                .remove_subcommand()
+                .context("policy operation is missing")?;
+            crate::install::policy::run(&action, arguments, &runtime)
+        }
         "signing" => {
             let (action, arguments) = arguments
                 .remove_subcommand()

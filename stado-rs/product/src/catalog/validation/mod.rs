@@ -139,6 +139,24 @@ pub fn validate(document: &Value) -> Result<()> {
                     }
                 }
             }
+            if let Some(health) = recipe.get("health") {
+                let words = health.as_array().with_context(|| {
+                    format!(
+                        "{id}.{surface}.health is {health}, not an argv array, so product sync \
+                         cannot run it after an update; write it as [\"<binary>\", \"--version\"]"
+                    )
+                })?;
+                if words.is_empty()
+                    || words
+                        .iter()
+                        .any(|word| word.as_str().is_none_or(str::is_empty))
+                {
+                    bail!(
+                        "{id}.{surface}.health holds an empty word, so its command cannot be run; \
+                         name one of the installation's binaries (or stado) and its arguments"
+                    );
+                }
+            }
         }
         if status != ProductStatus::Preview {
             for surface in surfaces {

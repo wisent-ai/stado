@@ -121,13 +121,24 @@ fn take(path: &Path, mode: Take, product_scope: bool) -> Result<File> {
             .with_context(|| format!("waiting for {} was refused", path.display()))?
             .with_context(|| format!("waiting for {} failed", path.display()))?;
     }
-    if let Some(previous) = record::read(path, expected)? {
-        let observed = previous.observed_start()?;
-        eprintln!(
-            "reclaiming released lock {}: guarded product {:?}, recorded product {:?}, pid {} born {:?}, observed {:?}, command {:?}, phase {}, step {:?}; no process was signalled",
-            path.display(), expected, previous.product, previous.pid,
-            previous.started_at, observed, previous.command, previous.phase, previous.step
-        );
+    // The lock is ours now, so no process holds it: a record that cannot be
+    // read was left by a writer that is gone, and refusing it would refuse
+    // every later taker of a lock nobody holds.
+    match record::read(path, expected) {
+        Ok(Some(previous)) => {
+            let observed = previous.observed_start()?;
+            eprintln!(
+                "reclaiming released lock {}: guarded product {:?}, recorded product {:?}, pid {} born {:?}, observed {:?}, command {:?}, phase {}, step {:?}; no process was signalled",
+                path.display(), expected, previous.product, previous.pid,
+                previous.started_at, observed, previous.command, previous.phase, previous.step
+            );
+        }
+        Ok(None) => {}
+        Err(error) => eprintln!(
+            "reclaiming released lock {}: its holder record cannot be read ({error:#}); the lock \
+             was free, so no process holds it, and the record is written again for this process",
+            path.display()
+        ),
     }
     let taken = chrono::Utc::now().to_rfc3339();
     let pid = i32::try_from(std::process::id())?;

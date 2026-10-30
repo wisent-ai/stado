@@ -36,6 +36,8 @@ pub mod swift_cache;
 pub mod word;
 
 pub use install::plan::conflict::InstallationHostConflict;
+/// An update policy the operator wrote that cannot be followed.
+pub use install::policy::InvalidPolicy;
 /// A source that cannot be installed as asked: no canonical checkout for
 /// the repository, or a commit no canonical branch carries.
 pub use source::{MissingCheckout, NotCanonical};

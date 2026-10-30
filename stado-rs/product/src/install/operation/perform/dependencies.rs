@@ -97,6 +97,49 @@ pub(super) fn install(request: Request<'_>, stack: &mut Vec<Enclosing>) -> Resul
             dependencies.push(json!({"product": dependency_id, "surface": dependency_surface, "checked": false, "reason": reason}));
             continue;
         }
+        // A product this host's update policy holds is installed, repaired
+        // or rebuilt by no one but the operator, as a dependency least of
+        // all: no dependent's installation runs its installation. One whose
+        // receipt says installed is used as it is, whatever state its files
+        // are in; one that is not installed (removed, or never installed
+        // here) is not installed for it: a dependent with the catalogue's
+        // alternative goes on without it, one bound to it is refused naming
+        // the hold.
+        let policy = crate::install::policy::Policy::load(&runtime.home)?;
+        if let crate::install::policy::Verdict::Held(hold) =
+            policy.verdict(dependency_id, chrono::Local::now().time())
+        {
+            let installed =
+                crate::state::ProductState::load(runtime, dependency_id, dependency_surface)?
+                    .is_some_and(|state| state.status.complete());
+            if installed {
+                eprintln!(
+                    "{id}: uses {dependency_node} as it is installed, without checking or \
+                     rebuilding it: {hold}"
+                );
+                dependencies.push(
+                    json!({"product": dependency_id, "surface": dependency_surface,
+                    "checked": false, "held": hold, "used_as_installed": true}),
+                );
+                continue;
+            }
+            match dependency["alternative"].as_str() {
+                Some(alternative) => {
+                    eprintln!(
+                        "{id}: installed without {dependency_node}, which is not installed as a \
+                         dependency: {hold}; {alternative}"
+                    );
+                    dependencies.push(json!({"product": dependency_id, "surface": dependency_surface,
+                        "checked": false, "without": true, "held": hold, "alternative": alternative}));
+                    continue;
+                }
+                None => bail!(
+                    "{id}/{surface} needs {dependency_node}, and {hold}; the catalogue gives {id} \
+                     no alternative to it, so {id} is not installed either. Release the hold, or \
+                     install {id} where {dependency_id} may run"
+                ),
+            }
+        }
         crate::common::mark_step(
             lock,
             &format!("dependency {dependency_id}/{dependency_surface}"),

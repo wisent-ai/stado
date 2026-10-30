@@ -19,12 +19,27 @@ pub fn prepare(
     source_commit: Option<&str>,
 ) -> Result<Prepared> {
     let kind = text(recipe, "kind")?;
-    if source_commit.is_some() && (surface == "desktop" || kind != "stado-release") {
-        bail!(
-            "--source-commit applies to a stado-release recipe, which builds an exported \
-             commit; a {surface} {kind} installation builds the checkout's own commit"
-        );
-    }
+    // Every recipe but stado-release builds the checkout's own commit, which
+    // the installation advanced to origin/main when it was clean and behind.
+    // The revision the installation chose (or was named) is built only when
+    // the checkout stands on it; anything else would install a revision
+    // nobody chose under the chosen one's name.
+    let source_commit = match source_commit {
+        Some(commit) if surface == "desktop" || kind != "stado-release" => {
+            let head = source::git(root, &["rev-parse", "HEAD"])?;
+            if head != commit {
+                bail!(
+                    "a {surface} {kind} installation builds its checkout's own commit, and \
+                     {} stands on {head}, not {commit}, the revision this installation is to \
+                     build; it is advanced to origin/main only when it has no tracked edits and \
+                     is behind it, so commit or discard the edits there, or check out {commit}",
+                    root.display()
+                );
+            }
+            None
+        }
+        other => other,
+    };
     if surface == "desktop" {
         return build::desktop(runtime, product, recipe, root);
     }

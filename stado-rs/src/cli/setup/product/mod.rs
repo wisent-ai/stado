@@ -229,6 +229,14 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
 /// exit code said that what it needs is unreachable now. Otherwise the first
 /// IO or JSON cause decides; wording is never classified.
 fn product_failure_code(error: &anyhow::Error) -> crate::primitives::failure::FailureCode {
+    // An update policy that cannot be followed is attached as context, which
+    // anyhow finds through the error itself and never as a link of its chain.
+    if error
+        .downcast_ref::<stado_product::InvalidPolicy>()
+        .is_some()
+    {
+        return crate::primitives::failure::FailureCode::Config;
+    }
     for cause in error.chain() {
         if cause
             .downcast_ref::<stado_product::cargo_lock::UnlockedManifest>()

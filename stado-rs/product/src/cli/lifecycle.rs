@@ -167,7 +167,12 @@ pub fn report_locks(runtime: &crate::common::Runtime, as_json: bool) -> anyhow::
 
 pub fn sync() -> Command {
     Command::new("sync")
-        .about("Reconcile installed surfaces against canonical origin/main")
+        .about(
+            "Reconcile installed surfaces against canonical origin/main, as this host's update \
+             policy (`stado product policy`) allows: an automatic product is installed, a held \
+             one is reported held, one outside its window is deferred, and an installation that \
+             fails its readiness check is rolled back to the one before it",
+        )
         .arg(surface(true))
         .arg(value("host", "Stado host for service surfaces"))
         .arg(flag(
@@ -187,6 +192,60 @@ pub fn sync() -> Command {
             "json",
             "Print each product's final decision and error",
         ))
+}
+
+/// `stado product policy`: this host's update policy, which `sync` follows.
+pub fn policy() -> Command {
+    let rule = |command: Command| {
+        command
+            .arg(
+                value(
+                    "mode",
+                    "automatic: sync installs it by itself; held: sync never does",
+                )
+                .value_parser(["automatic", "held"])
+                .required(true),
+            )
+            .arg(value(
+                "window",
+                "Local hours HH:MM-HH:MM an automatic installation may run in; an end before \
+                 the start runs past midnight",
+            ))
+            .arg(value(
+                "reason",
+                "Why the product is held or limited; required for held",
+            ))
+    };
+    Command::new("policy")
+        .about(
+            "This host's update policy: per product whether `stado product sync` installs a \
+             newer canonical revision by itself (automatic, optionally only inside a window) or \
+             holds it, kept in ~/.stado/products/update-policy.json; without the file every \
+             product is automatic",
+        )
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            Command::new("show")
+                .about("Print the policy, its default and every product rule, as JSON")
+                .arg(flag("json", "Print the policy as JSON (the only form)")),
+        )
+        .subcommand(rule(
+            Command::new("set")
+                .about("Set one product's rule, or the default with --default")
+                .arg(positional("PRODUCT"))
+                .arg(flag(
+                    "default",
+                    "Set the rule every product without its own follows",
+                ))
+                .arg(flag("json", "Print the policy as JSON (the only form)")),
+        ))
+        .subcommand(
+            Command::new("remove")
+                .about("Remove one product's own rule, so it follows the default")
+                .arg(positional("PRODUCT").required(true))
+                .arg(flag("json", "Print the policy as JSON (the only form)")),
+        )
 }
 
 pub fn signing() -> Command {

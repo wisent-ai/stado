@@ -84,10 +84,23 @@ enum NativeProductOperations {
             .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
             .init(id: "host", label: "Stado host for service surfaces", option: "--host"),
         ], fixedArguments: ["--dry-run"], mutates: false),
-        .init(id: "sync", title: "Reconcile installed surfaces against canonical origin/main", path: ["product", "sync"], hostPlacement: .none, fields: [
+        .init(id: "sync", title: "Reconcile installed surfaces against canonical origin/main, as the update policy allows", path: ["product", "sync"], hostPlacement: .none, fields: [
             .init(id: "surface", label: "Surface: cli, desktop or service", option: "--surface", required: true, initial: "cli"),
             .init(id: "host", label: "Stado host for service surfaces", option: "--host"),
             .init(id: "fetch", label: "Fetch canonical origins first", option: "--fetch", flag: true),
+        ]),
+        // The host's update policy the hourly product sync follows: which
+        // products install by themselves, in which hours, and which are held.
+        .init(id: "policy-show", title: "Show this host's update policy", path: ["product", "policy", "show"], hostPlacement: .none, mutates: false),
+        .init(id: "policy-set", title: "Set a product's update rule: automatic, held, or automatic inside a window", path: ["product", "policy", "set"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product (empty with Default set)"),
+            .init(id: "default", label: "Set the default every other product follows", option: "--default", flag: true),
+            .init(id: "mode", label: "Mode", option: "--mode", required: true, choices: ["automatic", "held"], initial: "automatic"),
+            .init(id: "window", label: "Local hours HH:MM-HH:MM (automatic only)", option: "--window"),
+            .init(id: "reason", label: "Reason (required for held)", option: "--reason"),
+        ]),
+        .init(id: "policy-remove", title: "Remove a product's own update rule, so it follows the default", path: ["product", "policy", "remove"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Product", required: true),
         ]),
         // The answer carries the lock holder or its post-placement operation,
         // including the recorded step, pid and observed process state.

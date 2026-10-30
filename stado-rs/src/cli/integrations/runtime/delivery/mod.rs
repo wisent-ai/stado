@@ -38,9 +38,22 @@ pub(super) fn component_stopped() {
     WAKE.notify_one();
 }
 
-/// `stado product`, as the CLI defines it.
-fn product_command() -> clap::Command {
-    stado_product::cli::augment(clap::Command::new("product"))
+/// The search path a sync pass runs with: the directories installations place
+/// programs into (`~/.stado/bin`, `~/.local/bin`) ahead of what this process
+/// inherited. A unit's path is the fleet's declared one, which names neither,
+/// so every installed program read as "not on PATH" and an update that placed
+/// its files correctly was judged not ready.
+fn pass_search_path(home: &Path) -> Result<std::ffi::OsString, CmdError> {
+    let mut directories = vec![home.join(".stado/bin"), home.join(".local/bin")];
+    if let Some(inherited) = std::env::var_os("PATH") {
+        directories.extend(std::env::split_paths(&inherited));
+    }
+    std::env::join_paths(directories).map_err(|error| {
+        CmdError::declaration(format!(
+            "product sync cannot build its search path from {} and this process's PATH: {error}",
+            home.display()
+        ))
+    })
 }
 
 /// The workspace the host process's product sync reads and builds from: a
@@ -73,34 +86,28 @@ fn program_identity(program: &Path) -> Result<(u64, SystemTime), CmdError> {
     Ok((metadata.len(), modified))
 }
 
-/// One `stado product sync` pass over `surface`, reported on stderr.
-async fn sync_pass(workspace: String, surface: String) {
-    let line = vec![
-        "product".to_string(),
-        "--workspace".to_string(),
-        workspace,
-        "sync".to_string(),
-        "--surface".to_string(),
-        surface.clone(),
-        "--fetch".to_string(),
-        "--clone-missing".to_string(),
-    ];
-    let outcome = tokio::task::spawn_blocking(move || {
-        let matches = product_command()
-            .try_get_matches_from(line)
-            .map_err(|error| anyhow::anyhow!("{error}"))?;
-        stado_product::cli::run(matches, crate::cli::setup::product::build())
-    })
-    .await;
-    match outcome {
-        Ok(Ok(status)) if status == nix::libc::EXIT_SUCCESS => {}
-        Ok(Ok(status)) => {
+/// One `stado product sync` pass over `surface`, run by `program` as a child
+/// process and reported on stderr. A pass is its own process so a lock or
+/// file it holds ends with it, and its own stderr lines (what it installed,
+/// held, deferred or rolled back) land in this service's log.
+async fn sync_pass(program: &Path, workspace: &Path, surface: &str, path: &std::ffi::OsStr) {
+    let mut command = tokio::process::Command::new(program);
+    command
+        .arg("product")
+        .arg("--workspace")
+        .arg(workspace)
+        .args(["sync", "--surface", surface, "--fetch", "--clone-missing"])
+        .env("PATH", path)
+        .kill_on_drop(true);
+    match crate::wait::status_async(&mut command).await {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
             eprintln!("[stado serve product-sync] {surface} sync exited with status {status}")
         }
-        Ok(Err(error)) => {
-            eprintln!("[stado serve product-sync] {surface} sync failed: {error:#}")
-        }
-        Err(error) => eprintln!("[stado serve product-sync] {surface} sync stopped: {error}"),
+        Err(error) => eprintln!(
+            "[stado serve product-sync] {surface} sync could not be started as {}: {error}",
+            program.display()
+        ),
     }
 }
 
@@ -113,7 +120,13 @@ pub(super) async fn product_sync(period: Duration, surfaces: Vec<String>) -> Res
     let started_as = program_identity(&program)?;
     let mut schedule = tokio::time::interval(period);
     schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let workspace = product_sync_workspace().to_string_lossy().into_owned();
+    let workspace = product_sync_workspace();
+    let home = crate::config_file::home().map_err(|cause| {
+        CmdError::declaration(format!(
+            "product sync cannot find this account's home, where products are installed: {cause}"
+        ))
+    })?;
+    let path = pass_search_path(&home)?;
     loop {
         if !STOPPED.load(Ordering::SeqCst) {
             tokio::select! {
@@ -122,7 +135,7 @@ pub(super) async fn product_sync(period: Duration, surfaces: Vec<String>) -> Res
             }
         }
         for surface in &surfaces {
-            sync_pass(workspace.clone(), surface.clone()).await;
+            sync_pass(&program, &workspace, surface, &path).await;
         }
         if program_identity(&program)? != started_as {
             // Delivered: the service ends successfully so its init system

@@ -7,6 +7,26 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Added
 
+- **`stado product policy show|set|remove`, the host's update policy:** per product (or as the
+  default) whether `stado product sync` installs a newer origin/main by itself (`automatic`,
+  optionally only inside a local `--window HH:MM-HH:MM`) or holds it (`held`, with a required
+  `--reason`), kept in `~/.stado/products/update-policy.json`; without the file every product is
+  automatic. Sync rows carry the rule as `policy` and say `held` or `deferred` with the release
+  command; `stado product status --json` reports it as `update_policy`; Stado Desktop → Products
+  shows, sets and removes it. A policy that cannot be followed is refused as `[config]`.
+- **An update product sync made that fails its check is rolled back:** after installing, sync
+  checks the receipt's readiness and the recipe's new `health` argv; a failure restores the
+  installation before it (`rolled-back`), records the revision in `SURFACE.refused` so later
+  passes hold it while origin/main stays there, and the next commit installs as usual.
+- **A held product is never installed as another product's dependency:** one whose receipt says
+  installed is used as it is, without checking or rebuilding it (its program deleted by hand, its
+  recipe changed); one that is not installed is skipped for a dependent the catalogue gives an
+  alternative, and refuses a dependent bound to it, naming the hold and its reason.
+- **A dependency sync rolled back is not rebuilt for its dependent:** a rolled-back installation
+  (the predecessor put back whole) read as incomplete to a dependent's installation, so the
+  dependent the same pass installed next rebuilt the dependency at the very revision sync had just
+  refused for failing its readiness check. A rolled-back installation is now complete to its
+  dependents, as an installed one is.
 - **Adding a machine to the fleet declares every way it fails:** `stado fleet enroll`, `stado
   fleet join` and `stado fleet approve` raise only declared causes (`fleet.enroll` 57, `fleet.join`
   10, `fleet.approve` 63), each naming what failed, why, the state observed and what fixes it, with
@@ -118,6 +138,16 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Changed
 
+- **Product sync installs again after a writer left `sync.lock` unreadable:** sync wrote a
+  second record over the lock's own and could leave zero bytes before it, which refused every
+  later pass; it now keeps only the lock's record, and a free lock whose record cannot be read is
+  reclaimed with the cause on stderr.
+- **`stado serve`'s product sync runs each pass as a child process** with `~/.stado/bin` and
+  `~/.local/bin` ahead of the unit's path, so what an installation placed there reads as ready.
+- **An installation without a coordinate builds the revision it chose for every recipe:** a
+  recipe that builds its checkout's commit (`local-build`, `npm`, `cargo`, desktop) was refused
+  as if `--source-commit` had been given; it now builds when the checkout stands on the chosen
+  revision and names the checkout and both commits otherwise.
 - **A running `cargo` build keeps its build directory.** The janitor's guard locked only
   `.cargo-lock`, but a Cargo build-dir laid out apart from the artifacts is held through
   `.cargo-build-lock` (and a target through `.cargo-artifact-lock`), so a pass took directories

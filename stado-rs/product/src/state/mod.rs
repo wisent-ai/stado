@@ -35,6 +35,12 @@ impl InstallStatus {
     pub fn interrupted(self) -> bool {
         matches!(self, Self::Installing | Self::Removing | Self::RollingBack)
     }
+
+    /// A whole installation stands: one placed by an install, or the
+    /// predecessor a rollback put back.
+    pub fn complete(self) -> bool {
+        matches!(self, Self::Installed | Self::RolledBack)
+    }
 }
 
 impl std::fmt::Display for InstallStatus {

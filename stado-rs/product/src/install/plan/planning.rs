@@ -73,7 +73,11 @@ pub(in super::super) fn decision(
     let Some(installed) = existing else {
         return Ok(build("dependency has no installed receipt".to_owned()));
     };
-    if installed.status != crate::state::InstallStatus::Installed {
+    // A rollback leaves a complete installation (the predecessor, placed
+    // whole and recorded `rolled_back`): rebuilding it for a dependent would
+    // install again the very revision that rollback took out, the one
+    // `product sync` refused for failing its readiness check.
+    if !installed.status.complete() {
         return Ok(build("dependency installation is not complete".to_owned()));
     }
     if installed.recipe != *request.selected || installed.host.as_deref() != request.host {
