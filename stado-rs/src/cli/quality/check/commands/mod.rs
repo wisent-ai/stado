@@ -126,12 +126,21 @@ fn discover(
     Ok(Reading::Answered(()))
 }
 
+/// Every executable the CLI release stages, the commands whose `--help` the
+/// audit reads. The member the manifest's runtime declares as its `launcher`
+/// is not one: release control runs it with the binary, port and runtime
+/// directory it assigns, and a launcher run bare by the audit refuses for want
+/// of them (Skarbiec's `bin/start` exited 1 on `SKARBIEC_BIN`).
 fn staged_binaries(
     output: &Path,
     stage: &BTreeMap<String, String>,
+    launcher: Option<&str>,
 ) -> Result<Vec<PathBuf>, CmdError> {
     let mut binaries = Vec::new();
-    for source in stage.keys() {
+    for (source, member) in stage {
+        if launcher == Some(member.as_str()) {
+            continue;
+        }
         let path = output.join(source);
         let metadata = std::fs::symlink_metadata(&path).map_err(|cause| {
             CmdError::click(format!(

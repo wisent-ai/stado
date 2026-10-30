@@ -7,11 +7,12 @@
 //! worker's unpacked archive there is no `.git`, so the gate could only
 //! refuse. The snapshot therefore adds one file at `PUBLISHED_DIFF_PATH`:
 //! the newest tag `origin` serves whose commit is an ancestor of the
-//! candidate and is not the candidate itself, and the diff from that commit
-//! to the candidate, with its digest, so a gate can refuse a record that was
-//! edited or truncated. A candidate is never its own baseline: a tag on the
-//! candidate commit would make the diff empty and the gate would judge
-//! nothing.
+//! candidate and is not the candidate itself, and the exact bytes of the diff
+//! from that commit to the candidate (`diff` when they are UTF-8,
+//! `diff_base64` when they are not) with their digest, so a gate can refuse a
+//! record that was edited or truncated, and anyone can check it against `git
+//! diff`. A candidate is never its own baseline: a tag on the candidate
+//! commit would make the diff empty and the gate would judge nothing.
 
 use std::path::Path;
 
@@ -19,7 +20,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::origin_tag_commits;
-use crate::cli::release_submit::run::checkout::git_text;
+use crate::cli::release_submit::run::checkout::{git, git_text};
 use crate::cli::CmdError;
 
 /// Where the record sits inside the source archive.
@@ -86,12 +87,18 @@ fn baseline(root: &Path, commit: &str) -> Result<Option<(String, String)>, CmdEr
 }
 
 /// The record to archive, or `None` when no published tag lies below the
-/// candidate.
+/// candidate. `sha256` is the digest of exactly the bytes `git diff` gave,
+/// and those bytes are published unaltered: as `diff` when they are UTF-8,
+/// and as `diff_base64` when they are not, which a committed binary file git
+/// reads as text (a compressed test vector) makes them. Refusing such a diff
+/// refused releasing any product that commits one (Skarbiec 0.4.16's inflate
+/// vectors); rewriting it would attest bytes git never produced.
 pub(crate) fn record(root: &Path, commit: &str) -> Result<Option<Vec<u8>>, CmdError> {
+    use base64::Engine as _;
     let Some((tag, base)) = baseline(root, commit)? else {
         return Ok(None);
     };
-    let diff = git_text(
+    let diff = git(
         root,
         &[
             "diff",
@@ -107,13 +114,19 @@ pub(crate) fn record(root: &Path, commit: &str) -> Result<Option<Vec<u8>>, CmdEr
         &["diff", "--name-only", "--no-renames", &base, commit],
     )?;
     let paths = names.lines().map(str::to_owned).collect::<Vec<_>>();
-    let document = json!({
+    let mut document = json!({
         "baseline_tag": tag,
         "baseline_commit": base,
         "source_commit": commit,
         "paths": paths,
-        "sha256": hex::encode(Sha256::digest(diff.as_bytes())),
-        "diff": diff,
+        "sha256": hex::encode(Sha256::digest(&diff)),
     });
+    match String::from_utf8(diff) {
+        Ok(text) => document["diff"] = json!(text),
+        Err(bytes) => {
+            document["diff_base64"] =
+                json!(base64::engine::general_purpose::STANDARD.encode(bytes.as_bytes()))
+        }
+    }
     Ok(Some(serde_json::to_vec_pretty(&document)?))
 }

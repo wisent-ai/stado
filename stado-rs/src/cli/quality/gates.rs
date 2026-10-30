@@ -58,6 +58,11 @@ pub(super) struct DeclaredGates {
     /// The exact CLI artifact the release builds, and its staged members.
     pub(super) build: Vec<String>,
     pub(super) stage: std::collections::BTreeMap<String, String>,
+    /// The staged member the manifest's runtime declares as its launcher
+    /// (`runtime.launcher`, e.g. `bin/start`): a program release control runs
+    /// with the binary, port and runtime directory it assigns, never a
+    /// command a user runs, so the CLI audit does not read its `--help`.
+    pub(super) launcher: Option<String>,
     pub(super) env: std::collections::BTreeMap<String, String>,
     /// The recipe's `secret_env`, `NAME` to `role#field`: a gate needs the
     /// value the release worker would put in its environment, so a check
@@ -196,6 +201,10 @@ pub(super) fn declared_gates(
         web_version: version.clone().filter(|_version| web),
         build: recipe.build.argv.clone(),
         stage: recipe.stage.clone(),
+        launcher: manifest
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.launcher.clone()),
         env: recipe.env.clone(),
         secret_env: recipe.secret_env.clone(),
         platform: platform.to_owned(),
@@ -244,6 +253,7 @@ fn non_release_gates(
         gates,
         build: Vec::new(),
         stage: std::collections::BTreeMap::new(),
+        launcher: None,
         env: std::collections::BTreeMap::new(),
         secret_env: std::collections::BTreeMap::new(),
         web_version: None,

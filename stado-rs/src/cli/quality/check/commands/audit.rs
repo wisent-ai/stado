@@ -57,7 +57,7 @@ pub(super) fn audit(
     })?;
     let mut command_tree = BTreeMap::new();
     let mut unjudged = None;
-    for binary in staged_binaries(&output, &declared.stage)? {
+    for binary in staged_binaries(&output, &declared.stage, declared.launcher.as_deref())? {
         let mut path = Vec::new();
         if let Reading::Unanswered(cause) = discover(&binary, &mut path, None, &mut command_tree)? {
             if unjudged.is_none() {

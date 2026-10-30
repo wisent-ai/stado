@@ -9,7 +9,9 @@ use flate2::{Compression, GzBuilder};
 
 use crate::cli::CmdError;
 
-fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, CmdError> {
+/// `git` output as bytes, for output that may hold any bytes (a diff of a
+/// committed binary file git reads as text).
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, CmdError> {
     let o = crate::wait::output(
         Command::new("git")
             .args(args)
