@@ -95,6 +95,8 @@ pub struct CleanupReport {
     pub delivered_releases: CleanerReport,
     /// The compiler cache's store.
     pub compiler_cache: CleanerReport,
+    /// Scratch trees their creators registered as the fleet's to remove.
+    pub registered_scratch: CleanerReport,
     pub lock_busy: bool,
     /// Private operator evidence captured when shared holders prevent a pass.
     /// The public beacon deliberately omits process and operation identities.

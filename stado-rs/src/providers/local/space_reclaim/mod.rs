@@ -30,6 +30,7 @@ pub mod job_outputs;
 pub mod local_snapshots;
 pub mod object_evidence;
 pub mod queue_workdirs;
+pub mod registered_scratch;
 pub mod release_store;
 pub mod rule;
 pub mod safefs;

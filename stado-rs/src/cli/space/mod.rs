@@ -7,11 +7,13 @@ mod candidates;
 mod coverage;
 mod ops;
 mod report;
+mod scratch;
 mod volume;
 mod work_root;
 
 use ops::{reclaim, relocate, remove_file, retire_file};
 use report::{print_json, report};
+pub use scratch::SpaceScratchCommands;
 pub use volume::SpaceVolumeCommands;
 
 #[derive(Subcommand)]
@@ -39,6 +41,11 @@ pub enum SpaceCommands {
         min_bytes: u64,
         #[arg(long)]
         json: bool,
+    },
+    /// The scratch register: trees a job, an agent or a verb made on this machine and the janitor may remove once its owner session has ended.
+    Scratch {
+        #[command(subcommand)]
+        command: SpaceScratchCommands,
     },
     /// Reclaim only fleet-declared stages, previewing unless --apply is present.
     Reclaim {
@@ -182,6 +189,7 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
         SpaceCommands::Candidates { min_bytes, json } => {
             candidates::candidates(min_bytes, json).await
         }
+        SpaceCommands::Scratch { command } => scratch::scratch(command),
         SpaceCommands::Reclaim {
             target,
             local,

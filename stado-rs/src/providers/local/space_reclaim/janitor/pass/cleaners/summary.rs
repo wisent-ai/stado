@@ -21,6 +21,7 @@ fn deleted_items(report: &CleanupReport) -> i64 {
         &report.agent_logs,
         &report.delivered_releases,
         &report.compiler_cache,
+        &report.registered_scratch,
     ]
     .iter()
     .map(|cleaner| cleaner.deleted_items)

@@ -420,6 +420,46 @@ impl Walker<'_> {
         total
     }
 
+    /// The trees registered in the scratch register, each its own row: the
+    /// janitor takes one once its owner session has ended.
+    fn registered(&mut self) {
+        let states = match super::registered_scratch::states(self.inputs.home) {
+            Ok(states) => states,
+            Err(error) => {
+                self.unmeasured.push(Unmeasured {
+                    path: super::registered_scratch::register_path(self.inputs.home),
+                    reason: error.to_string(),
+                });
+                return;
+            }
+        };
+        for state in states {
+            let Some(bytes) = state.bytes else { continue };
+            self.excluded.push(state.entry.path.clone());
+            let note = if state.owner_running {
+                format!(
+                    "registered by {} ({}); kept while its owner session {} runs",
+                    state.entry.creator, state.entry.purpose, state.entry.owner_session
+                )
+            } else {
+                format!(
+                    "registered by {} ({}); its owner session {} has ended, so the janitor takes \
+                     it at the rule",
+                    state.entry.creator, state.entry.purpose, state.entry.owner_session
+                )
+            };
+            self.push(Candidate {
+                path: state.entry.path,
+                bytes,
+                class: Class::AgentOutput,
+                safety: Safety::Scratch,
+                producer: state.entry.creator,
+                cleaner: Some(super::registered_scratch::CLEANER),
+                note,
+            });
+        }
+    }
+
     /// The fixed areas, Cargo's inputs and its build directories, each its
     /// own row; every one becomes a root the home walk does not enter.
     fn areas(&mut self) {
@@ -696,6 +736,7 @@ pub fn survey(inputs: &Inputs<'_>) -> Result<Survey, String> {
         small: [0; 3],
         user_area_bytes: 0,
     };
+    walker.registered();
     walker.areas();
     walker.excluded.push(home.join(STADO_TREE));
     walker

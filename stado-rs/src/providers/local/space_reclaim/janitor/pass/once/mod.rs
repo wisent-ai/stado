@@ -138,6 +138,16 @@ pub(crate) async fn cleanup_once(
         writer.as_str(),
         &mut report,
     );
+    // What jobs, agents and Stado verbs registered as theirs to lose, once
+    // the session that owns each tree has ended. It is the fleet's by its
+    // creator's registration, so a shared host takes it too.
+    crate::providers::local::space_reclaim::registered_scratch::scan_registered_scratch(
+        &home,
+        &state_dir,
+        !preview,
+        writer.as_str(),
+        &mut report,
+    );
     build_caches::scan_build_caches(
         &home,
         !preview,

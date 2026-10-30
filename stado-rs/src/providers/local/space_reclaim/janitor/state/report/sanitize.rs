@@ -11,7 +11,8 @@ use crate::providers::local::space_reclaim::janitor::state::read_state;
 use crate::providers::local::space_reclaim::janitor::STATE_VERSION;
 use crate::providers::local::space_reclaim::{
     agent_logs, backup_twins, build_caches, chromium_clones, compiler_cache, delivered_releases,
-    job_outputs, local_snapshots, object_evidence, queue_workdirs, release_store, rule, weles,
+    job_outputs, local_snapshots, object_evidence, queue_workdirs, registered_scratch,
+    release_store, rule, weles,
 };
 
 // ---------------------------------------------------------------------------
@@ -172,6 +173,7 @@ pub fn sanitize_report(value: Option<&Value>, lock_busy: bool) -> Value {
             agent_logs::CLEANER,
             delivered_releases::CLEANER,
             compiler_cache::CLEANER,
+            registered_scratch::CLEANER,
         ];
         Value::Object(
             names

@@ -16,6 +16,7 @@ mod product_hold;
 mod retirement;
 #[path = "guards/rollback_target.rs"]
 mod rollback_target;
+mod scratch;
 mod sourcekit;
 mod space;
 mod workdirs;

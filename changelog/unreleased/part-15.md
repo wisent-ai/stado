@@ -65,6 +65,16 @@ The version bump gathers them into the release's own file and removes this one.
 - **The janitor records what it removed** in `~/.cache/wisent-compute/reclaimed.jsonl`: one line
   per tree (path, bytes, freed bytes) and one per other cleaner per pass (items, bytes). A damaged
   line is refused by `space candidates` naming the line and the fix.
+- **`stado space scratch register|list|forget`: the scratch register.** A job, an agent or a verb
+  registers a tree it made (an export under a checkout's `.build/`, say) with its creator, purpose,
+  owner session and owner process; at the 80% rule the janitor's new `registered_scratch` cleaner
+  removes every registered tree whose owner process has ended, least recently changed first, keeps
+  the rest (`owner_session_running`), records each removal in `reclaimed.jsonl` and forgets the
+  row. A tree that was never registered is never taken. `space candidates` ranks registered trees
+  as automatic agent output. A path outside the home, inside `~/.stado`, the janitor's state or
+  `~/.ssh`, a link, a path through a link or with `.`/`..`, an absent tree, a registration
+  without `--owner-pid` and a damaged register are refused naming them and the fix; the register
+  keeps the tree's real path, and a tree that no longer resolves to it is kept, not removed.
 
 ### Changed
 
