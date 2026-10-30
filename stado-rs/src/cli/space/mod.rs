@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 
 use super::{host, CmdError};
 
+mod candidates;
 mod coverage;
 mod ops;
 mod report;
@@ -18,6 +19,24 @@ pub enum SpaceCommands {
     /// Read disk, memory, inventory, build caches, and janitor state as one report.
     Report {
         target: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Rank what holds this machine's disk as the next cleanup candidates, and list what the janitor removed.
+    ///
+    /// Reads only; nothing is deleted. Agent output comes first (tagged build
+    /// trees, Cargo's build directories, job work trees, harness logs, a
+    /// checkout's build areas), then caches (compiler, model and package
+    /// caches), then the user's own large files and folders. Each row names
+    /// its size, who produced it, how it comes back (`rebuildable`,
+    /// `refetchable`, `scratch`, `user_owned`), and whether the janitor's
+    /// pass at the disk-full rule takes it (`automatic`) or it is only a
+    /// `proposal`. User data is always a proposal.
+    Candidates {
+        /// List only items of at least this many bytes; smaller ones are
+        /// counted in each class's total.
+        #[arg(long, default_value_t = 1 << 30)]
+        min_bytes: u64,
         #[arg(long)]
         json: bool,
     },
@@ -160,6 +179,9 @@ pub enum SpaceFileLocalCommands {
 pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
     match command {
         SpaceCommands::Report { target, json } => report(&target, json).await,
+        SpaceCommands::Candidates { min_bytes, json } => {
+            candidates::candidates(min_bytes, json).await
+        }
         SpaceCommands::Reclaim {
             target,
             local,

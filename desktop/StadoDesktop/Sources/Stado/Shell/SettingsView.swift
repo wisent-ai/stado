@@ -66,6 +66,7 @@ struct SettingsView: View {
             }
 
             WaitsSection(fleetStore: fleetStore)
+            CandidatesSection(fleetStore: fleetStore)
             BuildTreesSection(fleetStore: fleetStore)
             SigningSection(fleetStore: fleetStore)
 

@@ -50,6 +50,21 @@ The version bump gathers them into the release's own file and removes this one.
   refused since <time> (Stado <version>): <error>` where it said only `nothing published`; a host
   with no record is named as one whose worker never ran under a Stado that keeps one. `--json`
   carries it as `publication_attempt`.
+- **`stado space candidates [--min-bytes N] [--json]`** ranks what holds this machine's disk as
+  the next cleanup candidates: agent output first (tagged build trees, Cargo build directories, job
+  work trees, harness logs, a checkout's `.build`/`.build-*`/`target`), then caches (compiler,
+  model, package, Xcode), then the owner's own large files and folders (a game library among them)
+  as proposals only. Each row has its bytes, producer, safety (`rebuildable`, `refetchable`,
+  `scratch`, `user_owned`), whether the janitor's pass takes it (`automatic`) or only proposes it,
+  and the cumulative bytes; the answer says how much must go to be under the 80% rule and lists
+  the janitor's newest removals. Desktop shows it in Settings, "Cleanup candidates on the API host".
+- **The janitor's pass at the 80% rule takes Cargo's build directories itself
+  (`cargo_build_dirs`):** every `$CARGO_HOME/build/<xx>/<hash>`, tagged or not, whole, unless a
+  build holds a `.cargo-lock` in it (`held_by_build`) or Stado runs from it; before, only the fleet
+  stage `space reclaim --stage cargo_build_dirs` did, and a laptop at the rule kept tens of GiB.
+- **The janitor records what it removed** in `~/.cache/wisent-compute/reclaimed.jsonl`: one line
+  per tree (path, bytes, freed bytes) and one per other cleaner per pass (items, bytes). A damaged
+  line is refused by `space candidates` naming the line and the fix.
 
 ### Changed
 

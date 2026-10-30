@@ -7,6 +7,7 @@
 
 #[path = "guards/build_lock.rs"]
 mod build_lock;
+mod candidates;
 #[path = "guards/failed_release.rs"]
 mod failed_release;
 mod native;

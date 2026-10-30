@@ -75,6 +75,8 @@ pub struct CleanupReport {
     pub hf: CleanerReport,
     pub weles: CleanerReport,
     pub builds: CleanerReport,
+    /// Cargo's per-workspace build directories under its home.
+    pub cargo_builds: CleanerReport,
     pub clones: CleanerReport,
     pub workdirs: CleanerReport,
     pub job_outputs: CleanerReport,

@@ -89,6 +89,15 @@ pub(crate) async fn run_with_lock(
     if let Err(exc) = run_cleaners(home, &inputs, &mut report).await {
         report.add_error("runtime", &exc);
     }
+    // What the cleaners took, in the janitor's removal record; a preview
+    // took nothing.
+    if let Some(state_dir) = persist {
+        if let Err(exc) = crate::providers::local::space_reclaim::candidates::ledger::record_pass(
+            state_dir, &report,
+        ) {
+            report.add_error("removal_record", &exc);
+        }
+    }
     match read_fleet_volume(home) {
         Ok(after) => select_outcome(!preview, &mut report, after),
         Err(exc) => {

@@ -7,9 +7,10 @@ use std::path::Path;
 
 use nix::sys::stat::FileStat;
 
-use crate::providers::local::space_reclaim::build_caches::held;
 use crate::providers::local::space_reclaim::build_caches::remove::remove_tree;
 use crate::providers::local::space_reclaim::build_caches::walk::Walk;
+use crate::providers::local::space_reclaim::build_caches::{held, SCAN};
+use crate::providers::local::space_reclaim::candidates::ledger;
 use crate::providers::local::space_reclaim::janitor::pass::lock::file::LockState;
 use crate::providers::local::space_reclaim::janitor::pass::lock::ownership::{
     acquire_lock_state, retired_locks_active,
@@ -102,10 +103,17 @@ impl<'a> Walk<'a> {
         let before = free_bytes(self.home)?;
         match remove_tree(parent_fd, name, dir_fd, self.root_dev) {
             Ok(()) => {
-                let after = free_bytes(self.home)?;
-                report.builds.actual_free_delta_bytes += (after - before).max(0);
+                let freed = (free_bytes(self.home)? - before).max(0);
+                report.builds.actual_free_delta_bytes += freed;
                 self.memory.removed(absolute);
                 report.builds.deleted_items += 1;
+                // The janitor's removal record names the tree it took; a
+                // record that cannot be written is said beside the pass.
+                if let Err(error) =
+                    ledger::record_tree(self.lock_dir, SCAN, self.writer, absolute, expected, freed)
+                {
+                    report.add_error("removal_record", &error);
+                }
             }
             // A partially removed tree is reported, not retried: whatever
             // refused (an unwritable subdirectory, a vanished entry, a

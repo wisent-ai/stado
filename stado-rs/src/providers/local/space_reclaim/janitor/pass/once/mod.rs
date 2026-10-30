@@ -125,6 +125,19 @@ pub(crate) async fn cleanup_once(
     // own lock instead, and takes the exclusive lock for each cache it
     // removes; a cache a workload holds stays for a later pass.
     report.scanned = true;
+    // Cargo's per-workspace build directories under its home: the build-dir
+    // the walk below declares for checkouts it cannot read. Each is taken
+    // whole under the exclusive lock for that one directory, like a tagged
+    // cache, before the walk would descend into an untagged one and find
+    // nothing it may take.
+    build_caches::scan_cargo_build_dirs(
+        &home,
+        !preview,
+        deletable.as_deref(),
+        &state_dir,
+        writer.as_str(),
+        &mut report,
+    );
     build_caches::scan_build_caches(
         &home,
         !preview,

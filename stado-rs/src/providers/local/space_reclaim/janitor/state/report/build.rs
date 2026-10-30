@@ -13,8 +13,8 @@ use crate::providers::local::space_reclaim::janitor::state::report::{
 use crate::providers::local::space_reclaim::janitor::STATE_VERSION;
 use crate::providers::local::space_reclaim::rule::{self, VolumeReading};
 use crate::providers::local::space_reclaim::{
-    agent_logs, backup_twins, chromium_clones, compiler_cache, delivered_releases, job_outputs,
-    local_snapshots, object_evidence, queue_workdirs, release_store,
+    agent_logs, backup_twins, build_caches, chromium_clones, compiler_cache, delivered_releases,
+    job_outputs, local_snapshots, object_evidence, queue_workdirs, release_store,
 };
 use crate::targets;
 
@@ -42,6 +42,7 @@ impl CleanupReport {
             hf: CleanerReport::default(),
             weles: CleanerReport::default(),
             builds: CleanerReport::default(),
+            cargo_builds: CleanerReport::default(),
             clones: CleanerReport::default(),
             workdirs: CleanerReport::default(),
             job_outputs: CleanerReport::default(),
@@ -99,6 +100,15 @@ impl CleanupReport {
     /// `_skip` for the build-cache cleaner (no Python original).
     pub fn skip_builds(&mut self, reason: &str, count: i64) {
         *self.builds.skipped.entry(reason.to_string()).or_default() += count;
+    }
+
+    /// `_skip` for the Cargo build-directory cleaner.
+    pub fn skip_cargo_builds(&mut self, reason: &str, count: i64) {
+        *self
+            .cargo_builds
+            .skipped
+            .entry(reason.to_string())
+            .or_default() += count;
     }
 
     /// `_skip` for the Chromium clone cleaner (no Python original).
@@ -180,6 +190,7 @@ impl CleanupReport {
                 "weles_recordings": cleaner(&self.weles),
                 "build_caches": cleaner(&self.builds),
                 chromium_clones::CLEANER: cleaner(&self.clones),
+                build_caches::CARGO_BUILD_DIRS: cleaner(&self.cargo_builds),
                 queue_workdirs::CLEANER: cleaner(&self.workdirs),
                 job_outputs::CLEANER: cleaner(&self.job_outputs),
                 backup_twins::CLEANER: cleaner(&self.backup_twins),

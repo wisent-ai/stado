@@ -43,7 +43,7 @@ use crate::targets::PRIVACY_FOLDERS;
 /// volume, which is exactly the kind of host that arms a disk janitor.
 ///
 /// [`CACHEDIR_SIGNATURE`]: crate::deploy::host_build_caches::CACHEDIR_SIGNATURE
-fn cargo_home(home: &Path) -> PathBuf {
+pub(super) fn cargo_home(home: &Path) -> PathBuf {
     match std::env::var_os("CARGO_HOME") {
         Some(value) if !value.is_empty() => PathBuf::from(value),
         _ => home.join(".cargo"),
@@ -70,6 +70,10 @@ pub(super) fn reserved_roots(home: &Path) -> Vec<PathBuf> {
         home.join("weles").join("recordings"),
     ];
     roots.extend(cargo_inputs(home));
+    // Cargo's build directories have their own cleaner, which takes each
+    // workspace's directory whole whether or not Cargo tagged it
+    // ([`super::cargo_build_dirs`]); the walk does not count them twice.
+    roots.push(cargo_home(home).join("build"));
     // A CLI running out of a tagged build tree must not unlink its own
     // executable while it is restoring the host's ability to do work.
     if let Ok(executable) = std::env::current_exe() {

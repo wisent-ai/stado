@@ -10,6 +10,7 @@ fn deleted_items(report: &CleanupReport) -> i64 {
         &report.hf,
         &report.weles,
         &report.builds,
+        &report.cargo_builds,
         &report.clones,
         &report.workdirs,
         &report.job_outputs,

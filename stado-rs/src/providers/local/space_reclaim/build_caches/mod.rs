@@ -29,11 +29,14 @@
 //! Layout: [`reserved`] holds the roots this cleaner may never reclaim
 //! whatever their tag says, [`walk`] the level-order inventory and the
 //! verdict on each tagged directory it reaches, [`remove`] the deletion
-//! itself, and [`placement`] where Cargo builds when a folder holding
-//! checkouts refuses this process. This module owns the listing and identity
-//! primitives all of them share, the depth limit that is also the descriptor
-//! budget, and the cleaner entry point [`scan_build_caches`].
+//! itself, [`placement`] where Cargo builds when a folder holding checkouts
+//! refuses this process, and [`cargo_build_dirs`] the cleaner that takes the
+//! build directories that placement puts under Cargo's home. This module
+//! owns the listing and identity primitives all of them share, the depth
+//! limit that is also the descriptor budget, and the cleaner entry point
+//! [`scan_build_caches`].
 
+mod cargo_build_dirs;
 mod held;
 pub mod memory;
 mod placement;
@@ -53,6 +56,8 @@ use super::{consent, euid, ifmt, safefs, CleanupReport, JanitorError};
 use reserved::{privacy_protected_roots, reserved_roots};
 use walk::Walk;
 
+pub(super) use cargo_build_dirs::scan_cargo_build_dirs;
+pub use cargo_build_dirs::{cargo_build_root, CARGO_BUILD_DIRS};
 pub use reserved::privacy_protected_parts;
 
 /// The one identity comparison this module needs: a directory opened with

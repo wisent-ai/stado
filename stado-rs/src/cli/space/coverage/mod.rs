@@ -18,5 +18,5 @@ mod paths;
 mod render;
 mod section;
 
-pub use render::print_coverage;
+pub use render::{gib, print_coverage};
 pub use section::section;

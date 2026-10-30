@@ -66,6 +66,11 @@ pub const CLEANERS: &[Cleaner] = &[
         sweeps: "directories carrying a build tool's own CACHEDIR.TAG anywhere under the home",
     },
     Cleaner {
+        name: super::build_caches::CARGO_BUILD_DIRS,
+        root: ".cargo/build",
+        sweeps: "Cargo's per-workspace build directories ($CARGO_HOME/build/<xx>/<hash>), tagged or not, each whole unless a build holds its lock",
+    },
+    Cleaner {
         name: super::chromium_clones::CLEANER,
         root: "",
         sweeps: "the operating system's per-launch code-signing clones",
