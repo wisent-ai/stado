@@ -97,6 +97,8 @@ pub struct CleanupReport {
     pub compiler_cache: CleanerReport,
     /// Scratch trees their creators registered as the fleet's to remove.
     pub registered_scratch: CleanerReport,
+    /// Xcode's per-project build directories under DerivedData.
+    pub xcode_derived_data: CleanerReport,
     pub lock_busy: bool,
     /// Private operator evidence captured when shared holders prevent a pass.
     /// The public beacon deliberately omits process and operation identities.

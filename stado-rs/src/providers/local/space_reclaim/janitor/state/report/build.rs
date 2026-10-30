@@ -15,7 +15,7 @@ use crate::providers::local::space_reclaim::rule::{self, VolumeReading};
 use crate::providers::local::space_reclaim::{
     agent_logs, backup_twins, build_caches, chromium_clones, compiler_cache, delivered_releases,
     job_outputs, local_snapshots, object_evidence, queue_workdirs, registered_scratch,
-    release_store,
+    release_store, xcode_derived_data,
 };
 use crate::targets;
 
@@ -56,6 +56,7 @@ impl CleanupReport {
             delivered_releases: CleanerReport::default(),
             compiler_cache: CleanerReport::default(),
             registered_scratch: CleanerReport::default(),
+            xcode_derived_data: CleanerReport::default(),
             lock_busy: false,
             workload_holds: Vec::new(),
             active_job_count,
@@ -203,6 +204,7 @@ impl CleanupReport {
                 delivered_releases::CLEANER: cleaner(&self.delivered_releases),
                 compiler_cache::CLEANER: cleaner(&self.compiler_cache),
                 registered_scratch::CLEANER: cleaner(&self.registered_scratch),
+                xcode_derived_data::CLEANER: cleaner(&self.xcode_derived_data),
             })
         } else {
             Value::Null

@@ -148,6 +148,16 @@ pub(crate) async fn cleanup_once(
         writer.as_str(),
         &mut report,
     );
+    // Xcode's per-project build directories, each taken whole unless a
+    // running process holds it.
+    crate::providers::local::space_reclaim::xcode_derived_data::scan_xcode_derived_data(
+        &home,
+        !preview,
+        deletable.as_deref(),
+        &state_dir,
+        writer.as_str(),
+        &mut report,
+    );
     build_caches::scan_build_caches(
         &home,
         !preview,

@@ -75,6 +75,12 @@ The version bump gathers them into the release's own file and removes this one.
   `~/.ssh`, a link, a path through a link or with `.`/`..`, an absent tree, a registration
   without `--owner-pid` and a damaged register are refused naming them and the fix; the register
   keeps the tree's real path, and a tree that no longer resolves to it is kept, not removed.
+- **The janitor takes Xcode's per-project build directories at the 80% rule
+  (`xcode_derived_data`):** each `~/Library/Developer/Xcode/DerivedData/<project>-<hash>` whole,
+  unless a running process has a file in it open (`lsof`) or names it (`held_by_process`); when
+  either table cannot be read it takes none (`process_table_unread`). `ModuleCache.noindex`,
+  archives and device support are never touched. Each removal is in `reclaimed.jsonl`, and `space
+  candidates` ranks each project directory as automatic agent output.
 
 ### Changed
 

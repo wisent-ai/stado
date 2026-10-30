@@ -35,6 +35,7 @@ pub mod release_store;
 pub mod rule;
 pub mod safefs;
 pub mod weles;
+pub mod xcode_derived_data;
 
 pub use janitor::pass::cleaners::budget::ScanCount;
 pub use janitor::pass::lock::workload::{

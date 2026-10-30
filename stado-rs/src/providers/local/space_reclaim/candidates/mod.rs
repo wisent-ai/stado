@@ -223,14 +223,6 @@ const AREAS: &[Area] = &[
         note: "the owner's games; Steam uninstalls one, and nothing in Stado deletes them",
     },
     Area {
-        root: "Library/Developer/Xcode/DerivedData",
-        class: Class::Cache,
-        safety: Safety::Rebuildable,
-        producer: "Xcode build products",
-        cleaner: None,
-        note: "Xcode builds it again",
-    },
-    Area {
         root: "Library/Caches/ms-playwright",
         class: Class::Cache,
         safety: Safety::Refetchable,
@@ -506,6 +498,47 @@ impl Walker<'_> {
                 cleaner,
                 note,
             });
+        }
+        // Xcode's per-project build directories: `~/Library` is no walk's,
+        // so each is listed from its fixed root.
+        let derived = home.join(super::xcode_derived_data::ROOT);
+        if let Ok(projects) = std::fs::read_dir(&derived) {
+            for project in projects.flatten() {
+                if !project
+                    .file_type()
+                    .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+                {
+                    continue;
+                }
+                let path = project.path();
+                let bytes = self.plain_bytes(&path);
+                let automatic = project
+                    .file_name()
+                    .to_str()
+                    .is_some_and(super::xcode_derived_data::project_directory);
+                let (cleaner, note) = if automatic {
+                    self.automatic(
+                        &path,
+                        Some(super::xcode_derived_data::CLEANER),
+                        "one project's Xcode build directory; the janitor takes it whole unless a \
+                         running process holds it",
+                    )
+                } else {
+                    (
+                        None,
+                        "Xcode's shared module cache; Xcode builds it again".to_string(),
+                    )
+                };
+                self.push(Candidate {
+                    path,
+                    bytes,
+                    class: Class::AgentOutput,
+                    safety: Safety::Rebuildable,
+                    producer: "Xcode / xcodebuild (DerivedData)".to_string(),
+                    cleaner,
+                    note,
+                });
+            }
         }
         let build = cargo_build_root(home);
         if let Some(cargo) = build.parent() {

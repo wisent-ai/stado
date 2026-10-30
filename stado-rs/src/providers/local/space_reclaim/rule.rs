@@ -121,6 +121,11 @@ pub const CLEANERS: &[Cleaner] = &[
         sweeps: "published release versions no host declares and this host has not installed",
     },
     Cleaner {
+        name: super::xcode_derived_data::CLEANER,
+        root: super::xcode_derived_data::ROOT,
+        sweeps: "Xcode's per-project build directories (DerivedData/<project>-<hash>), each whole unless a running process has a file in it open or names it; archives and device support are never touched",
+    },
+    Cleaner {
         name: "weles_recordings",
         root: "weles/recordings",
         sweeps: "Weles run recordings, uploaded or not",
