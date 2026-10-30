@@ -181,15 +181,16 @@ fn tail(text: &str) -> String {
 }
 
 /// Run `plan` over `commit` (tree `tree`) of `checkout` on the pool of
-/// `hosts`, as work of the agent session `session` that submitted it.
+/// `hosts`, as work admitted as `admission` says.
 pub async fn run(
     checkout: &Path,
     commit: &str,
     tree: &str,
     plan: &Plan,
     hosts: &[String],
-    (purposes, session): (&[&str], Option<&str>),
+    admission: &Admission<'_>,
 ) -> Result<Outcome, CmdError> {
+    let purposes = admission.purposes;
     let mut shards = Vec::new();
     let gate = "locks, modules and format gates";
     let argv: Vec<String> = ["stado", "quality", "check", "--pre-push"]
@@ -244,15 +245,78 @@ pub async fn run(
             refusal: Some(report),
         });
     }
-    let (remote, refusal) =
-        compiling(checkout, commit, tree, plan, hosts, (purposes, session)).await?;
+    let (remote, refusal) = compiling(checkout, commit, tree, plan, hosts, admission).await?;
     shards.extend(remote);
     Ok(Outcome { shards, refusal })
 }
 
+/// Whom Oko's admission is asked about for the compiling gates.
+pub struct Admission<'a> {
+    /// The open defects the gates serve (`oko admit … --purpose`).
+    pub purposes: &'a [&'a str],
+    /// The agent session whose work the gates are: a candidate's submitter,
+    /// the session that pushed; none for the operator's own.
+    pub session: Option<&'a str>,
+    /// Whether the gates are the resident pass's own run, which no session
+    /// asked for: such a pass is asked first with no session, the run the
+    /// operator's consents held to the fleet's daily build admit
+    /// (`<action>[:<product>]@fleet-budget`), and as `session`'s work only
+    /// when those do not.
+    pub resident: bool,
+}
+
+/// Oko's admission of `action` of `product` for `admission`: Ok, or the
+/// refusal naming every answer Oko gave and what would admit it.
+async fn admitted(action: &str, product: &str, admission: &Admission<'_>) -> Result<(), String> {
+    let ask = |session| {
+        crate::cli::release_loop::allowed::refusal_as(
+            action,
+            Some(product),
+            admission.purposes,
+            session,
+        )
+    };
+    if !admission.resident {
+        return ask(admission.session).await.map(drop).map_err(|refused| {
+            format!(
+                "{refused}; this run was started inside an agent session, so its gates were \
+                 asked as {}'s work and never as the fleet's daily build, which only a run under \
+                 no agent session asks for: the resident pass of the submit queue (the host \
+                 routine running `stado change run`)",
+                admission.session.unwrap_or("the operator")
+            )
+        });
+    }
+    let fleet = match ask(None).await {
+        Ok(_) => return Ok(()),
+        Err(refused) => refused,
+    };
+    let Some(session) = admission.session else {
+        return Err(fleet_refusal(action, product, &fleet));
+    };
+    ask(Some(session)).await.map(drop).map_err(|own| {
+        format!(
+            "{}; nor as the work of its submitter, session {session}: {own}",
+            fleet_refusal(action, product, &fleet)
+        )
+    })
+}
+
+/// The resident pass's refusal: what Oko said for a run no session asked,
+/// and the consent subject that admits it, which only a ruling of the
+/// operator binds.
+fn fleet_refusal(action: &str, product: &str, said: &str) -> String {
+    format!(
+        "{said}; the resident pass asked with no session, as the fleet's daily build, and no \
+         consent of the operator held to the fleet's build budget covers {action} of {product}: \
+         a ruling of his bound to `{action}:{product}@fleet-budget` (or `{action}@fleet-budget`) \
+         admits it, and `oko rulings constraints` lists what stands now"
+    )
+}
+
 /// Every compiling shard of `plan` over `commit` (tree `tree`) of
 /// `checkout`, run or answered by the action cache on the pool of `hosts`
-/// once Oko admitted each action they take as work of `session`, and the
+/// once Oko admitted each action they take for `admission`, and the
 /// refusal naming every shard that refused with the end of its report.
 pub async fn compiling(
     checkout: &Path,
@@ -260,11 +324,12 @@ pub async fn compiling(
     tree: &str,
     plan: &Plan,
     hosts: &[String],
-    (purposes, session): (&[&str], Option<&str>),
+    admission: &Admission<'_>,
 ) -> Result<(Vec<Shard>, Option<String>), CmdError> {
     // Each action the compiling gates take is asked of Oko once, as the work
     // of the session that asked for the gates (a candidate's submitter, the
-    // session that pushed), never as the queue's own.
+    // session that pushed), never as the work of a session running the
+    // pass; the resident pass is asked first as itself ([`Admission`]).
     let mut asked = BTreeSet::new();
     for planned in &plan.compiling {
         let action = if planned.kind == GateKind::Test {
@@ -275,19 +340,14 @@ pub async fn compiling(
         if !asked.insert(action) {
             continue;
         }
-        crate::cli::release_loop::allowed::refusal_as(
-            action,
-            Some(&plan.product),
-            purposes,
-            session,
-        )
-        .await
-        .map_err(|refused| {
-            CmdError::refused(format!(
-                "{refused}; gate {} ({}) for {} was not run",
-                planned.gate, planned.kind, planned.platform
-            ))
-        })?;
+        admitted(action, &plan.product, admission)
+            .await
+            .map_err(|refused| {
+                CmdError::refused(format!(
+                    "{refused}; gate {} ({}) for {} was not run",
+                    planned.gate, planned.kind, planned.platform
+                ))
+            })?;
     }
     let remote = remote::run(checkout, commit, tree, plan, hosts).await?;
     let refusal = remote

@@ -14,7 +14,7 @@ enum NativeChangeQueueOperations {
             .init(id: "defects", label: "Oko defects the commit repairs, one per line (the first scopes the harsh review; a high-risk change must name one)", option: "--defect", multiple: true),
         ]),
         .init(id: "change-run", title: "Run one pass of a repository's submit queue: rebase, gates on the fleet, review, land", path: ["change", "run"], hostPlacement: .none, fields: [
-            .init(id: "checkout", label: "The repository's checkout on the machine of the selected Stado endpoint", required: true),
+            .init(id: "checkout", label: "The repository's checkout on the machine of the selected Stado endpoint (blank runs every repository with a waiting candidate)"),
             .init(id: "hosts", label: "Registry hosts that run the compiling gates, one per line (blank chooses them from their capacity)", option: "--host", multiple: true),
             .init(id: "integrated", label: "Directory whose <product>.jsonl gets one line per landed defect (blank records in Oko only)", option: "--integrated"),
         ]),

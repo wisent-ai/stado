@@ -45,18 +45,25 @@ pub(crate) enum ChangeCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Run one pass of the checkout's repository's queue: carry every
-    /// queued candidate, and every one a stopped pass left running, oldest
-    /// first, to landed, refused or repaired (its review before landing
-    /// repaired it, or recorded no round over what its reviewer left: what
-    /// the review left is queued at the tail). Exits 0 when every candidate
-    /// reached a verdict; a candidate the pass could not judge (the remote
-    /// or the fleet did not answer, Oko's admission did not answer or did
-    /// not admit its gates, the harsh review could not be run) stays queued
-    /// and the pass exits non-zero with the cause.
+    /// Run one pass of the checkout's repository's queue, or, without a
+    /// checkout, of every repository with a candidate waiting for a pass,
+    /// each from the checkout its candidate was submitted from (the resident
+    /// pass the installation declares as a host routine): carry every
+    /// queued candidate, and every running one whose pass is gone (its
+    /// repository's pass lock is free), oldest first, to landed, refused or
+    /// repaired (its review before landing repaired it, or recorded no round
+    /// over what its reviewer left: what the review left is queued at the
+    /// tail). Exits 0 when every candidate reached a verdict; a candidate
+    /// the pass could not judge (the remote or the fleet did not answer,
+    /// Oko's admission did not answer or did not admit its gates, the harsh
+    /// review could not be run) stays queued with what it waits on, and the
+    /// pass exits non-zero with the cause. A pass under no agent session
+    /// asks Oko's admission first as the fleet's daily build, then as each
+    /// candidate's submitter.
     Run {
-        /// The repository's checkout on this machine.
-        checkout: String,
+        /// The repository's checkout on this machine; every repository with
+        /// a waiting candidate without it.
+        checkout: Option<String>,
         /// Run the compiling gates on these registry hosts, by name; repeat
         /// for several. Without it the hosts are chosen from their capacity
         /// publications, as a placed quality check chooses them.
@@ -123,18 +130,23 @@ pub(crate) async fn dispatch(command: ChangeCommands) -> Result<(), CmdError> {
             integrated,
             json,
         } => {
-            let path = verbs::checkout(&checkout)
-                .await
-                .map_err(|error| error.machine_readable(json))?;
             let integrated = integrated.map(std::path::PathBuf::from);
-            let carried = run::run(&path, &hosts, integrated.as_deref())
-                .await
-                .map_err(|error| error.machine_readable(json))?;
+            let (carried, scope) = match checkout {
+                Some(checkout) => {
+                    let path = verbs::checkout(&checkout)
+                        .await
+                        .map_err(|error| error.machine_readable(json))?;
+                    let carried = run::run(&path, &hosts, integrated.as_deref()).await;
+                    (carried, path.display().to_string())
+                }
+                None => (
+                    run::run_all(&hosts, integrated.as_deref()).await,
+                    "any repository of this machine's queue".to_string(),
+                ),
+            };
+            let carried = carried.map_err(|error| error.machine_readable(json))?;
             if carried.is_empty() && !json {
-                println!(
-                    "no candidate of {} is queued; nothing to run",
-                    path.display()
-                );
+                println!("no candidate of {scope} waits for a pass; nothing to run");
                 return Ok(());
             }
             answer(&carried, json)
@@ -142,7 +154,9 @@ pub(crate) async fn dispatch(command: ChangeCommands) -> Result<(), CmdError> {
         ChangeCommands::Status { id, json } => {
             let candidate = record::find(&id).map_err(|error| error.machine_readable(json))?;
             if json {
-                print_json(&serde_json::to_value(&candidate)?);
+                let mut value = serde_json::to_value(&candidate)?;
+                value["waits"] = serde_json::json!(verbs::waits(&candidate));
+                print_json(&value);
             } else {
                 verbs::print(&candidate);
             }

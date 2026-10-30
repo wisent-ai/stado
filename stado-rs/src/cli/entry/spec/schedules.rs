@@ -72,6 +72,11 @@ pub struct ScheduleCreateArgs {
     /// Emit the persisted schedule as JSON.
     #[arg(long)]
     pub(crate) json: bool,
+    /// Declare the schedule in this host's own store (`~/.stado/host-store`)
+    /// rather than the fleet store: a host routine, fired and run by this
+    /// host's `stado serve --worker` whether or not the fleet store answers.
+    #[arg(long)]
+    pub(crate) host_store: bool,
     /// 5-field cron expression, e.g. "0 2 * * *" (daily 02:00).
     #[arg(long, required = true)]
     pub(crate) cron: String,

@@ -112,30 +112,28 @@ pub(crate) async fn lint(
                  could not be read ({cause})"
             ))
         })?;
-    let (shards, refusal) = gates::compiling(
-        checkout,
-        commit,
-        &tree,
-        &plan,
-        hosts,
-        (purposes, session.as_deref()),
-    )
-    .await
-    .map_err(|error| {
-        // A Git hook names no hosts, so a fleet with no host free for the
-        // gates is answered with the path that names them: the queue.
-        if hosts.is_empty()
-            && error.failure == Some(crate::primitives::failure::FailureCode::InfraDown)
-        {
-            return error.also(format!(
-                "a push names no hosts, so land {commit} through the submit queue, whose pass \
+    let admission = gates::Admission {
+        purposes,
+        session: session.as_deref(),
+        resident: false,
+    };
+    let (shards, refusal) = gates::compiling(checkout, commit, &tree, &plan, hosts, &admission)
+        .await
+        .map_err(|error| {
+            // A Git hook names no hosts, so a fleet with no host free for the
+            // gates is answered with the path that names them: the queue.
+            if hosts.is_empty()
+                && error.failure == Some(crate::primitives::failure::FailureCode::InfraDown)
+            {
+                return error.also(format!(
+                    "a push names no hosts, so land {commit} through the submit queue, whose pass \
                  takes them: `stado change submit {checkout} --commit {commit}`, then `stado \
                  change run {checkout} --host HOST`",
-                checkout = checkout.display()
-            ));
-        }
-        error
-    })?;
+                    checkout = checkout.display()
+                ));
+            }
+            error
+        })?;
     if let Some(why) = refusal {
         return Err(CmdError::refused(format!(
             "{commit} does not reach main: {why}\nRepair the source the refusal names, commit \

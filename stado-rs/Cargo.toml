@@ -247,6 +247,10 @@ name = "scheduler"
 path = "../tests/scheduler/main.rs"
 
 [[test]]
+name = "change-queue-pass"
+path = "../tests/change/queue_pass.rs"
+
+[[test]]
 name = "host-configuration-journey"
 path = "../tests/host_health/configuration.rs"
 

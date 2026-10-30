@@ -21,6 +21,16 @@ The version bump gathers them into the release's own file and removes this one.
   `--markdown` for the documentation page), and `check` is the new `error-standard` quality gate:
   it refuses a catalogue that is not one and an error message holding a generic sentence ("did not
   succeed", "operation failed") beyond `stado-rs/errors-baseline.json`, which may only shrink.
+- **The submit queue runs by itself:** the Stado CLI installation declares a host routine
+  (`stado schedule create --host-store`, every ten minutes, overlap skipped) running `stado change
+  run` with no checkout, which carries every repository of this machine's queue that has a
+  candidate waiting, each from the checkout its candidate was submitted from. Nobody ran the pass
+  before: it ran inside agent sessions, whose end killed it, its reviewer and the candidate it
+  carried. `stado schedule create --host-store` declares any routine into this host's own store.
+- **Each candidate without a verdict says what it waits on:** `stado change list` and `status`
+  print `waits on: <the next pass | a pass | the remote | Oko's admission of its gates | a host for
+  its gates | a harsh review round>` with the command that unblocks it, and `--json` carries it as
+  `waits`; the record keeps the step as `waits_on`.
 
 ### Changed
 
@@ -29,3 +39,16 @@ The version bump gathers them into the release's own file and removes this one.
   declares are refused with exit 2; `approve` refuses a fleet nobody declared before writing.
 - **A stored join request that is not JSON is `config`, exit 1,** not a retryable outage (exit 69):
   retrying never repairs it; `stado fleet reject` and a new `join` do.
+- **A candidate left running by a pass that is gone is resumed and named:** a pass records itself
+  on the candidate it carries; a running candidate whose repository's pass lock is free (the lock
+  the kernel releases when the pass's process ends, killed or not) is listed as `waits on: a pass;
+  the pass that carried it (pid N) is gone …`, and the next pass resumes it.
+- **The resident pass asks Oko as the fleet's daily build:** a pass under no agent session asks
+  `oko admit compile|test` with no session first, the run the operator's `@fleet-budget` consents
+  admit, then as the submitter's work; its refusal names the subject that would admit it
+  (`<action>:<product>@fleet-budget`). A pass inside a session still asks as the submitter only and
+  says so.
+- **A fleet store that does not answer no longer stops the queue's gates:** when the hosts'
+  capacity publications cannot be read, this host runs the gates of its own platform and the
+  registry's hosts of the other platforms run theirs unjudged, each said with the store's error, so
+  a repair of the fleet store can land through the queue.

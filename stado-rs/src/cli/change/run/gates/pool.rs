@@ -4,7 +4,13 @@
 //! placement, as `stado host cargo HOST` is. Otherwise the pool is read
 //! from each host's capacity publication (`placement::hosts::judge`, the
 //! placed quality check's judgement): admitted and waiting hosts take
-//! shards, refused ones do not, and every verdict is said.
+//! shards, refused ones do not, and every verdict is said. When the fleet
+//! store the publications are kept in cannot be read, the pool is this
+//! host first and every other host the registry names as it stands,
+//! unjudged, said with the store's error: the queue that lands a repair of
+//! the fleet store must not wait on that store, and a host that cannot run
+//! its shard (its disk at the threshold, unreachable) is left out of the
+//! pass as any host is.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,13 +33,51 @@ pub async fn pool(named: &[String], platforms: &BTreeSet<String>) -> Result<Pool
     let mut said = Vec::new();
     if named.is_empty() {
         let (registry, targets) = hosts::fleet_hosts(None).await?;
-        for verdict in hosts::judge(&registry, targets, WORK).await? {
-            said.push(verdict.describe());
-            if !matches!(verdict.standing, Standing::Refused(_)) {
-                by_platform
-                    .entry(verdict.target.release_platform.clone())
-                    .or_default()
-                    .push(verdict.target);
+        match hosts::judge(&registry, targets.clone(), WORK).await {
+            Ok(verdicts) => {
+                for verdict in verdicts {
+                    said.push(verdict.describe());
+                    if !matches!(verdict.standing, Standing::Refused(_)) {
+                        by_platform
+                            .entry(verdict.target.release_platform.clone())
+                            .or_default()
+                            .push(verdict.target);
+                    }
+                }
+            }
+            Err(unread) => {
+                let (here, others): (Vec<ComputeTarget>, Vec<ComputeTarget>) = targets
+                    .into_iter()
+                    .partition(crate::deploy::host_channel::target_is_this_host);
+                for target in here {
+                    said.push(format!(
+                        "{} ({}) is this host and runs the gates of its platform first, without \
+                         the fleet's placement, since the hosts' capacity publications could not \
+                         be read: {unread}",
+                        target.name, target.release_platform
+                    ));
+                    by_platform
+                        .entry(target.release_platform.clone())
+                        .or_default()
+                        .push(target);
+                }
+                for target in others {
+                    said.push(format!(
+                        "{} ({}) runs gates of its platform unjudged, since the hosts' capacity \
+                         publications could not be read",
+                        target.name, target.release_platform
+                    ));
+                    by_platform
+                        .entry(target.release_platform.clone())
+                        .or_default()
+                        .push(target);
+                }
+                if by_platform.is_empty() {
+                    return Err(unread.also(
+                        "and the registry names no host this machine can reach in the fleet's \
+                         place; name hosts with --host, or let the fleet store answer again",
+                    ));
+                }
             }
         }
     } else {

@@ -5,9 +5,12 @@
 //! the names of one repository sort oldest first, which is the queue's
 //! order. A repository's pass holds `<owner>/<name>.lock` for its whole run,
 //! so one repository's candidates are rebased, checked and landed one at a
-//! time. `stado change cancel` asks for a candidate's withdrawal with a file
-//! of its own, `<owner>/<name>/<id>.cancel`, which the pass reads before
-//! each step: a running candidate's record has one writer, its pass.
+//! time; the kernel releases that lock when the pass's process ends however
+//! it ends, so a running candidate whose repository's lock is free is one a
+//! pass that is gone left behind, and the next pass resumes it. `stado
+//! change cancel` asks for a candidate's withdrawal with a file of its own,
+//! `<owner>/<name>/<id>.cancel`, which the pass reads before each step: a
+//! running candidate's record has one writer, its pass.
 
 mod model;
 
@@ -167,5 +170,32 @@ pub fn lock(repository: &str) -> Result<Option<std::fs::File>, CmdError> {
             "cannot lock {}: {error}",
             path.display()
         ))),
+    }
+}
+
+/// This process, as the pass that carries a candidate.
+pub fn this_pass() -> Pass {
+    Pass {
+        pid: std::process::id(),
+        started_at: Utc::now(),
+    }
+}
+
+/// Whether a pass of `repository` runs now on this machine: its lock is
+/// held. The kernel releases the lock of a process that ends however it
+/// ends, so a free lock is a pass that is gone, killed or not.
+pub fn pass_running(repository: &str) -> Result<bool, CmdError> {
+    Ok(lock(repository)?.is_none())
+}
+
+/// Whether `candidate` waits for a pass: queued, or running with no pass
+/// holding its repository's lock (one that was killed, or whose machine
+/// restarted). A lock that cannot be read is taken as held, so no second
+/// pass is started over it.
+pub fn waits_for_pass(candidate: &Candidate) -> bool {
+    match candidate.state {
+        State::Queued => true,
+        State::Running => matches!(pass_running(&candidate.repository), Ok(false)),
+        State::Landed | State::Refused | State::Repaired | State::Cancelled => false,
     }
 }

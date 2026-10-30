@@ -634,6 +634,16 @@ products:
       - '{release_archive}'
       - --sha256
       - '{release_archive_sha256}'
+    - - stado
+      - schedule
+      - create
+      - --id
+      - '{install_id:change-queue}'
+      - --converge
+      - --host-store
+      - --cron
+      - '*/10 * * * *'
+      - '"$STADO_BIN" change run'
   - surface: service
     kind: stado-release
     repository: wisent-ai/stado

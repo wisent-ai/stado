@@ -62,6 +62,45 @@ impl State {
     }
 }
 
+/// The step of its pass a queued candidate waits on: the step that could
+/// not reach a verdict, so the pass put it back in the queue. `stado change
+/// list` and `status` name it with the command that unblocks it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WaitsOn {
+    /// `origin` did not answer a fetch or a push, or Git could not read the
+    /// candidate's commits.
+    Remote,
+    /// Oko's admission did not admit, or did not answer for, its gates.
+    Admission,
+    /// Its gates found no host to run them, or the local check could not
+    /// run.
+    Gate,
+    /// Its harsh review before landing recorded no round: the reviewer
+    /// could not be run, or it was stopped before it recorded one.
+    ReviewRound,
+}
+
+impl WaitsOn {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Remote => "remote",
+            Self::Admission => "admission",
+            Self::Gate => "gate",
+            Self::ReviewRound => "review round",
+        }
+    }
+}
+
+/// The process of the pass carrying a running candidate, as it recorded
+/// itself: whether that pass still runs is read from the repository's pass
+/// lock, which the kernel releases when the process ends.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Pass {
+    pub pid: u32,
+    pub started_at: DateTime<Utc>,
+}
+
 /// What a harsh review before landing left of a candidate, queued as a
 /// candidate of its own at the tail of the queue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +226,12 @@ pub struct Candidate {
     pub landed: Option<Landed>,
     #[serde(default)]
     pub refusal: Option<String>,
+    /// For a queued candidate a pass put back: the step it waits on.
+    #[serde(default)]
+    pub waits_on: Option<WaitsOn>,
+    /// For a running candidate: the pass carrying it.
+    #[serde(default)]
+    pub pass: Option<Pass>,
     /// For a `repaired` candidate, what its review left and where it is
     /// queued.
     #[serde(default)]

@@ -86,6 +86,16 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.next_due_at = isoformat_utc(next_due);
     let id_retained = args.id.is_some();
     let declared: Result<Declared, Declaring> = async {
+        if args.host_store {
+            // A host routine is kept on this host alone, so there is no
+            // fleet declaration held here to deliver first, and no fleet
+            // store to wait for.
+            let store = crate::providers::local::host_routines::open()
+                .map_err(|error| Declaring::Refused(CmdError::from(error)))?;
+            return Ok(declare(&store, &sched, id_retained, args.converge)
+                .await
+                .map_err(|error| Declaring::Refused(CmdError::from(error)))??);
+        }
         let store = JobStorage::new().await?;
         super::held::deliver(&store).await??;
         Ok(declare(&store, &sched, id_retained, args.converge).await??)
