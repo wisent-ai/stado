@@ -86,6 +86,26 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
         "presence".to_string(),
         super::Presence::of(gates).to_value(),
     );
+    // The host's own word on its last attempt to reach the fleet store,
+    // null when it keeps none: what `capacity` cannot show for a host whose
+    // store refuses it.
+    report.insert(
+        "publication_attempt".to_string(),
+        match &gates.publication_attempt {
+            Some(attempt) => json!({
+                "at": attempt.at.to_rfc3339(),
+                "outcome": match attempt.outcome {
+                    crate::queue::capacity::attempt::Outcome::Published => "published",
+                    crate::queue::capacity::attempt::Outcome::Refused => "refused",
+                },
+                "step": attempt.step,
+                "error": attempt.error,
+                "refused_since": attempt.refused_since.map(|since| since.to_rfc3339()),
+                "stado_version": attempt.stado_version,
+            }),
+            None => Value::Null,
+        },
+    );
     report.insert(
         "capacity".to_string(),
         json!({

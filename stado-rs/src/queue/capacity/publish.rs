@@ -223,9 +223,14 @@ pub async fn publish_capacity(
     );
     let body = super::super::python_json_dumps(&Value::Object(payload))?;
     let started = std::time::Instant::now();
-    store
+    let uploaded = store
         .upload_text(&format!("{CAPACITY_PREFIX}{consumer_id}.json"), &body)
-        .await?;
+        .await;
+    match &uploaded {
+        Ok(()) => super::attempt::published("capacity publication"),
+        Err(error) => super::attempt::refused("capacity publication", &error.to_string()),
+    }
+    uploaded?;
     let mut last = LAST_PUBLISH.lock().map_err(|error| {
         StorageError::Other(format!(
             "the last capacity write time cannot be kept: {error}"

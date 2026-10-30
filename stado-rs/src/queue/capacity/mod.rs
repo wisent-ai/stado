@@ -34,6 +34,7 @@ use serde_json::{Map, Value};
 use super::storage::JobStorage;
 use super::StorageError;
 
+pub mod attempt;
 mod publications;
 mod publish;
 mod readers;

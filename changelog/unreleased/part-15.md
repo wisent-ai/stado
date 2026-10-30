@@ -42,6 +42,14 @@ The version bump gathers them into the release's own file and removes this one.
   admit it. Tama's harsh review is one adapter, run only when no round is recorded; without Tama
   the candidate waits on `a review round over commit <sha> by a session that is not its author`,
   naming this command.
+- **A host whose worker cannot reach the fleet store says why in `stado host gates`:** every
+  capacity write, every agent start and every tick that met a store that did not answer leaves its
+  outcome on the host in `~/.stado/logs/capacity-publication.json` (step, time, the store's words,
+  since when it refuses, the Stado version). `host gates` reads it over the host channel, which needs
+  no store, and prints `its worker cannot reach the fleet store: its <step> at <time> was refused,
+  refused since <time> (Stado <version>): <error>` where it said only `nothing published`; a host
+  with no record is named as one whose worker never ran under a Stado that keeps one. `--json`
+  carries it as `publication_attempt`.
 
 ### Changed
 

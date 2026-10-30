@@ -57,6 +57,13 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
                 format!("{host}: effective storage configuration"),
             ),
             ("storage", backend.clone()),
+            (
+                "publication_attempt",
+                format!(
+                    "{host}: ~/.stado/{}",
+                    crate::queue::capacity::attempt::RECORD
+                ),
+            ),
             ("capacity", "capacity/".to_string()),
             ("queue", "queue/".to_string()),
         ] {
@@ -92,7 +99,7 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
     };
     // Free space must survive a slow janitor, snapshot, or configuration read.
     // These scopes reuse the same producer sections as the normal disk report.
-    let (usage, state, agent, storage) = tokio::join!(
+    let (usage, state, agent, storage, attempt) = tokio::join!(
         observe(
             "disk_usage",
             format!(
@@ -120,6 +127,15 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         observe("storage", backend.clone(), async {
             JobStorage::new().await.map_err(DeployError::from)
         }),
+        observe(
+            "publication_attempt",
+            format!(
+                "{}: ~/.stado/{}",
+                target.name,
+                crate::queue::capacity::attempt::RECORD
+            ),
+            host_read(&route, publication_attempt(target, runner))
+        ),
     );
     let state_observed = state.0.is_some();
     // A state read that failed leaves an empty reading; its failure is in
@@ -187,8 +203,13 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         publication_observed,
     );
     gates.waiting_jobs = waiting;
+    gates.publication_attempt = attempt.0.flatten();
     attach_declines(&mut gates);
     gates.complete = observations.iter().all(DiagnosticRead::complete);
+    // The attempt record explains a silent host; it decides nothing, so a
+    // record that is absent, unreadable or not read never makes the verdict
+    // incomplete. Its read is reported beside the others all the same.
+    observations.push(attempt.1);
     gates.observations = observations;
     if !gates.complete {
         gates.claiming = false;
@@ -279,5 +300,40 @@ async fn agent_store_backend(
         .ok_or_else(|| {
             DeployError("host configuration contains no resolved.wc_storage_backend".to_string())
                 .stating(crate::primitives::failure::FailureCode::Config)
+        })
+}
+
+/// The host's own record of its worker's last attempt to reach the fleet
+/// store ([`crate::queue::capacity::attempt`]), read over the host channel,
+/// which needs no store; none when the host keeps no record (no worker ran
+/// there since a Stado that keeps one was installed).
+async fn publication_attempt(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<Option<crate::queue::capacity::attempt::Attempt>, DeployError> {
+    let script = format!(
+        "set -eu\nrecord=\"$HOME/.stado/{}\"\nif test -f \"$record\"; then /bin/cat \"$record\"; fi\n",
+        crate::queue::capacity::attempt::RECORD
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    if !output.succeeded() {
+        return Err(DeployError(format!(
+            "reading {}'s capacity publication record exited {}: {} {}",
+            target.name, output.code, output.stderr, output.stdout
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    }
+    if output.stdout.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(&output.stdout)
+        .map(Some)
+        .map_err(|error| {
+            DeployError(format!(
+                "{}'s capacity publication record is not one ({error}): {}",
+                target.name,
+                output.stdout.trim()
+            ))
+            .stating(crate::primitives::failure::FailureCode::Config)
         })
 }

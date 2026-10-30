@@ -209,6 +209,7 @@ pub fn assemble(
         pressure_source,
         local_disk_unread,
         published_diagnostics: payload.and_then(|value| value.get("diag")).cloned(),
+        publication_attempt: None,
     };
     super::memory::apply(&mut gates, payload, publication_current);
     // No live publication is where a memory diagnosis matters most, and it is

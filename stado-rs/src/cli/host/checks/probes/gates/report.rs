@@ -196,9 +196,45 @@ pub(super) fn print_report(gates: &HostGates) {
                 }
             }
         }
-        None => {
-            println!("capacity: nothing published for this host, so the scheduler cannot see it")
-        }
+        None => match &gates.publication_attempt {
+            Some(attempt)
+                if attempt.outcome == crate::queue::capacity::attempt::Outcome::Refused =>
+            {
+                println!(
+                    "capacity: nothing published for this host, so the scheduler cannot see it; \
+                     its worker cannot reach the fleet store: its {} at {} was refused{} (Stado \
+                     {}): {}",
+                    attempt.step,
+                    attempt.at,
+                    attempt
+                        .refused_since
+                        .map_or(String::new(), |since| format!(", refused since {since}")),
+                    attempt.stado_version,
+                    attempt
+                        .error
+                        .as_deref()
+                        .unwrap_or("the store gave no words")
+                )
+            }
+            Some(attempt) => println!(
+                "capacity: nothing published for this host here, though its worker's last \
+                 capacity write was accepted by the store its own configuration names ({}) at {} \
+                 (Stado {}); compare that store with the one this control plane reads ({}), and \
+                 the record's time with now",
+                gates.agent_store_backend.as_deref().unwrap_or("not read"),
+                attempt.at,
+                attempt.stado_version,
+                gates.fleet_store_backend
+            ),
+            None => println!(
+                "capacity: nothing published for this host, so the scheduler cannot see it; the \
+                 account this command reaches it as keeps no record of a publication attempt \
+                 (~/.stado/{}): its worker has not run under a Stado that keeps one (upgrade it, \
+                 or start its worker), or it runs with another home than this account's (a unit \
+                 whose environment sets no HOME; set HOME in the unit)",
+                crate::queue::capacity::attempt::RECORD
+            ),
+        },
     }
     // The consequence beside the cause: what this host's refusal is starving,
     // oldest first, so "blocked" has a size and an age.

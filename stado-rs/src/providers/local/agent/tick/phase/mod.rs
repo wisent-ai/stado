@@ -57,6 +57,7 @@ macro_rules! tick_phase {
             Err(error) => {
                 let error: anyhow::Error = error.into();
                 if $crate::providers::local::agent::tick::phase::store_unavailable(&error) {
+                    $crate::queue::capacity::attempt::refused("tick", &format!("{error:#}"));
                     $log(&format!(
                         "tick did not run: the fleet store did not answer ({error:#}); the next \
                          poll runs again"

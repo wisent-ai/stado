@@ -130,6 +130,10 @@ pub struct HostGates {
     /// none: beside `disk_pressure_unresolved`, it names what to repair.
     pub local_disk_unread: Option<String>,
     pub published_diagnostics: Option<serde_json::Value>,
+    /// The host's own record of its worker's last attempt to reach the
+    /// fleet store, read over the host channel: the cause beside a host that
+    /// publishes nothing, which the store cannot show.
+    pub publication_attempt: Option<crate::queue::capacity::attempt::Attempt>,
 }
 
 /// One queued job a non-claiming host is starving.

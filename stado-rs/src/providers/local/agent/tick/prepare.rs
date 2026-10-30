@@ -112,6 +112,7 @@ pub(super) async fn start_when_store_answers(
         match start(kind, gpu_type, total_vram_gb, poll, log_fn).await {
             Ok(started) => return Ok(started),
             Err(error) if super::phase::store_unavailable(&error) => {
+                crate::queue::capacity::attempt::refused("agent start", &format!("{error:#}"));
                 log_fn(&format!(
                     "the agent did not start: the fleet store did not answer ({error:#}); the \
                      next poll tries again"
