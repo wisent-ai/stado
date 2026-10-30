@@ -105,6 +105,30 @@ pub(crate) enum ChangeCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Record a review round over a queued or running candidate by the
+    /// agent session this command runs in, as its harness names it (`tama
+    /// sessions self`, else the transcript `PI_SESSION_FILE` names); the
+    /// session that submitted the candidate is refused, and so is a command
+    /// no session runs. The round is over the commit the next pass lands
+    /// (the candidate written again on `main` by the last pass, else its own
+    /// commit) and that commit's tree: its findings and improvements, each a
+    /// file holding a JSON array. At the review before landing, each
+    /// reviewer's newest round over the same tree counts: any finding refuses
+    /// the candidate naming it, rounds that all found nothing admit it. Tama's
+    /// harsh review runs only when no round over the tree is recorded.
+    Review {
+        /// The candidate's id, whole or a unique prefix.
+        id: String,
+        /// A file holding a JSON array of every finding, [] when none.
+        #[arg(long)]
+        findings: std::path::PathBuf,
+        /// A file holding a JSON array of what the change suggests would
+        /// further improve the codebase, [] when nothing.
+        #[arg(long)]
+        improvements: std::path::PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn print_json(value: &serde_json::Value) {
@@ -179,6 +203,39 @@ pub(crate) async fn dispatch(command: ChangeCommands) -> Result<(), CmdError> {
         ChangeCommands::Cancel { id, json } => {
             let candidate = verbs::cancel(&id).map_err(|error| error.machine_readable(json))?;
             answer(&[candidate], json)
+        }
+        ChangeCommands::Review {
+            id,
+            findings,
+            improvements,
+            json,
+        } => {
+            let (candidate, round) = verbs::review(&id, &findings, &improvements)
+                .await
+                .map_err(|error| error.machine_readable(json))?;
+            if json {
+                print_json(&serde_json::json!({
+                    "candidate": candidate.id,
+                    "round": serde_json::to_value(&round)?,
+                }));
+            } else {
+                let decides = if round.findings.is_empty() {
+                    "it found nothing, so the next pass admits that tree unless another \
+                     reviewer's newest round over it found something"
+                        .to_string()
+                } else {
+                    format!(
+                        "it found {} finding(s), so the next pass refuses that tree naming them",
+                        round.findings.len()
+                    )
+                };
+                println!(
+                    "recorded a review round by session {} over commit {} (tree {}) of \
+                     candidate {}; {decides}",
+                    round.reviewer_session, round.commit, round.tree, candidate.id
+                );
+            }
+            Ok(())
         }
     }
 }

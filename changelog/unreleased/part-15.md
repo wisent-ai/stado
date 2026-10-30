@@ -31,6 +31,17 @@ The version bump gathers them into the release's own file and removes this one.
   print `waits on: <the next pass | a pass | the remote | Oko's admission of its gates | a host for
   its gates | a harsh review round>` with the command that unblocks it, and `--json` carries it as
   `waits`; the record keeps the step as `waits_on`.
+- **`stado change review ID --findings FILE --improvements FILE`:** records a review round over a
+  queued or running candidate beside its record (`<id>.rounds/`), by the agent session the command
+  runs in as its harness names it (`tama sessions self`, else the transcript `PI_SESSION_FILE`
+  names), never a name typed; the submitting session and a command no session runs are refused. The
+  round is over the commit the next pass lands (the candidate as the last pass wrote it on `main`)
+  and keeps its tree: a round over a tree a moved `main` replaced decides nothing. At the review
+  before landing each reviewer's newest round over the tree counts, so one reviewer never clears
+  another's findings: any finding refuses the candidate naming it, and rounds that all found nothing
+  admit it. Tama's harsh review is one adapter, run only when no round is recorded; without Tama
+  the candidate waits on `a review round over commit <sha> by a session that is not its author`,
+  naming this command.
 
 ### Changed
 

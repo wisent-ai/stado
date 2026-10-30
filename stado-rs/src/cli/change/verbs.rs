@@ -1,7 +1,7 @@
 //! The verbs that read and change the queue without running it: `submit`
 //! records a candidate, `status` and `list` read candidates, `cancel`
-//! withdraws one. Each answers in text, or as JSON with `--json`, from the
-//! same record.
+//! withdraws one, `review` records a review round over one. Each answers in
+//! text, or as JSON with `--json`, from the same record.
 
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::cli::change::git;
-use crate::cli::change::record::{self, Candidate, State, WaitsOn};
+use crate::cli::change::record::{self, Candidate, Round, State, WaitsOn};
 use crate::cli::CmdError;
 
 /// The absolute top of the Git work tree holding the directory `path` names.
@@ -147,6 +147,111 @@ pub fn cancel(id: &str) -> Result<Candidate, CmdError> {
     Ok(candidate)
 }
 
+/// `stado change review ID --findings FILE --improvements FILE`: record a
+/// review round over the candidate by the agent session this command runs
+/// in, as the harness names it (`calling_session`), never a name the caller
+/// types, and never the session that submitted it (`operator` when none
+/// did). The round is over the commit the next pass lands, the candidate
+/// written again on `main` by the last pass (its own commit before any
+/// pass), and keeps that commit's tree, which is what it admits. Each file
+/// is a JSON array. The round is kept beside the candidate, never in its
+/// record, so a pass carrying it is not disturbed.
+pub async fn review(
+    id: &str,
+    findings: &Path,
+    improvements: &Path,
+) -> Result<(Candidate, Round), CmdError> {
+    let candidate = record::find(id)?;
+    if !matches!(candidate.state, State::Queued | State::Running) {
+        return Err(CmdError::refused(format!(
+            "candidate {} is {}, so no review of it can decide anything; review a queued or \
+             running candidate (`stado change list --state queued`)",
+            candidate.id,
+            candidate.state.word()
+        )));
+    }
+    let reviewer = crate::cli::release_loop::allowed::calling_session()
+        .await
+        .map_err(|cause| {
+            CmdError::refused(format!(
+                "the agent session recording this round could not be read ({cause}), so whose \
+                 round it is is not known; run `stado change review` from the reviewer's own \
+                 session shell"
+            ))
+        })?
+        .ok_or_else(|| {
+            CmdError::refused(format!(
+                "no agent session runs this command (neither `tama sessions self` nor the \
+                 harness's {} names one), so the round would be nobody's; a round is recorded \
+                 from the reviewing agent session's own shell",
+                crate::cli::release_loop::allowed::SESSION_FILE
+            ))
+        })?;
+    let author = candidate.session.as_deref().unwrap_or("operator");
+    let (commit, tree) = match &candidate.rebased {
+        Some(rebased) => (rebased.commit.clone(), rebased.tree.clone()),
+        None => (
+            candidate.commit.clone(),
+            git::git(
+                &candidate.checkout,
+                &["rev-parse", &format!("{}^{{tree}}", candidate.commit)],
+            )
+            .await?,
+        ),
+    };
+    if reviewer == author {
+        return Err(CmdError::refused(format!(
+            "session {reviewer} submitted candidate {}, so it cannot review it: a round counts \
+             only from a reviewer that is not the author; have another session read `git -C {} \
+             show {commit}` and record its round",
+            candidate.id,
+            candidate.checkout.display(),
+        )));
+    }
+    let round = Round {
+        commit,
+        tree,
+        reviewer_session: reviewer,
+        at: Utc::now(),
+        findings: listed(findings, "--findings", "every finding, [] when none")?,
+        improvements: listed(
+            improvements,
+            "--improvements",
+            "what the change suggests would further improve the codebase, [] when nothing",
+        )?,
+    };
+    record::save_round(&candidate, &round)?;
+    Ok((candidate, round))
+}
+
+/// The JSON array in `path`, the file `option` names, holding `what`.
+fn listed(path: &Path, option: &str, what: &str) -> Result<Vec<Value>, CmdError> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        CmdError::usage(format!(
+            "{option} {} cannot be read ({error}); give a file holding a JSON array of {what}",
+            path.display()
+        ))
+    })?;
+    let kind = match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Array(items)) => return Ok(items),
+        Ok(Value::Object(_)) => "an object",
+        Ok(Value::String(_)) => "a string",
+        Ok(Value::Number(_)) => "a number",
+        Ok(Value::Bool(_)) => "a boolean",
+        Ok(Value::Null) => "null",
+        Err(error) => {
+            return Err(CmdError::usage(format!(
+                "{option} {} is not JSON ({error}); write a JSON array of {what}",
+                path.display()
+            )))
+        }
+    };
+    Err(CmdError::usage(format!(
+        "{option} {} holds {kind}, not a JSON array; write a JSON array of {what}",
+        path.display()
+    )))
+}
+
 /// `stado change list`: the candidates of `checkout`'s repository (every
 /// repository's without one), in `state` when named.
 pub async fn list(path: Option<&str>, state: Option<&str>) -> Result<Vec<Candidate>, CmdError> {
@@ -244,10 +349,16 @@ pub fn waits(candidate: &Candidate) -> Option<String> {
                  host of that platform back to publishing capacity"
             ),
             Some(WaitsOn::ReviewRound) => format!(
-                "waits on: a harsh review round over its tree by a reviewer that is not its \
-                 author; the reviewer was not run, or was stopped before `tama reviews harsh \
-                 record`; unblock: `{run}` from no agent session (the resident pass), so the \
-                 end of a session never stops its reviewer"
+                "waits on: a review round over commit {commit} by a session that is not its \
+                 author ({author}); unblock: a reviewer reads `git -C {checkout} show {commit}` \
+                 and, from its own session's shell, records `stado change review {id} --findings \
+                 FILE --improvements FILE`, then `{run}`",
+                commit = candidate
+                    .rebased
+                    .as_ref()
+                    .map_or(candidate.commit.as_str(), |rebased| rebased.commit.as_str()),
+                author = candidate.session.as_deref().unwrap_or("operator"),
+                id = candidate.id,
             ),
         },
     };

@@ -60,6 +60,59 @@ pub fn cancel_requested(candidate: &Candidate) -> Result<bool, CmdError> {
         .map_err(|error| CmdError::click(format!("cannot read {}: {error}", path.display())))
 }
 
+/// `<root>/<owner>/<name>/<id>.rounds/`, beside the candidate's record: the
+/// review rounds recorded over it, one document each, written by `stado
+/// change review` and never by the pass, so a round can be recorded while a
+/// pass carries the candidate.
+fn rounds_path(candidate: &Candidate) -> Result<PathBuf, CmdError> {
+    Ok(root()?
+        .join(&candidate.repository)
+        .join(format!("{}.rounds", candidate.id)))
+}
+
+/// Keep `round` beside `candidate`; its path. A reviewer session that is
+/// not a plain id (letters, digits, `.`, `_`, `-`, not starting with `.`)
+/// is refused, so no round is written outside `<id>.rounds/`.
+pub fn save_round(candidate: &Candidate, round: &Round) -> Result<PathBuf, CmdError> {
+    let session = &round.reviewer_session;
+    if session.is_empty()
+        || session.starts_with('.')
+        || !session
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(CmdError::refused(format!(
+            "reviewer session {session:?} is not a session id (letters, digits, '.', '_' and \
+             '-', not starting with '.'), so no round is kept under it"
+        )));
+    }
+    let directory = rounds_path(candidate)?;
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        CmdError::click(format!("cannot create {}: {error}", directory.display()))
+    })?;
+    let path = directory.join(format!(
+        "{}-{session}.json",
+        round.at.format("%Y%m%dT%H%M%S%6f"),
+    ));
+    document::write(&path, round, "review round").map_err(CmdError::click)?;
+    Ok(path)
+}
+
+/// Every round recorded over `candidate`, oldest first.
+pub fn rounds(candidate: &Candidate) -> Result<Vec<Round>, CmdError> {
+    let mut rounds = Vec::new();
+    for path in entries(&rounds_path(candidate)?)? {
+        if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+            rounds.push(
+                document::read(&path, "review round")
+                    .map_err(CmdError::click)?
+                    .ok_or_else(|| CmdError::missing(format!("{} is gone", path.display())))?,
+            );
+        }
+    }
+    Ok(rounds)
+}
+
 /// Write `candidate` whole, stamping when.
 pub fn save(candidate: &mut Candidate) -> Result<(), CmdError> {
     candidate.updated_at = Utc::now();

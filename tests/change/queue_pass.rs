@@ -135,6 +135,41 @@ impl Journey {
         )
     }
 
+    /// `stado args` run as agent session `session` names it to Stado: the
+    /// harness's transcript, opening with that session's record, named by
+    /// `PI_SESSION_FILE`, as OMP names it in every command it runs.
+    fn run_in_session(&mut self, session: &str, args: &[&str]) -> (bool, String, String) {
+        let transcript = self.root.join(format!("{session}.jsonl"));
+        fs::write(
+            &transcript,
+            format!(
+                "{}\n",
+                json!({"type": "session", "version": 3, "id": session})
+            ),
+        )
+        .unwrap();
+        let output = self
+            .stado()
+            .env("PI_SESSION_FILE", &transcript)
+            .args(args)
+            .output()
+            .unwrap();
+        let mut recorded = vec!["stado"];
+        recorded.extend(args);
+        self.record(&recorded, &output);
+        self.report["commands"]
+            .as_array_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()["session"] = json!(session);
+        self.save();
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    }
+
     fn candidate(&self, id: &str) -> Value {
         let path = self
             .root
@@ -166,9 +201,9 @@ fn commit(journey: &mut Journey, file: &str, text: &str, message: &str) -> Strin
     journey.git(&["rev-parse", "HEAD"])
 }
 
-#[test]
-fn a_candidate_whose_pass_was_killed_is_named_and_resumed_by_a_pass_with_no_checkout() {
-    let mut journey = Journey::start();
+/// A bare `origin` holding `main` with the product's manifest declaring
+/// `quality`, and a checkout of it; `main`'s commit.
+fn repository(journey: &mut Journey, quality: Value) -> String {
     let remote = journey.remote.to_string_lossy().into_owned();
     journey.git(&[
         "init",
@@ -190,17 +225,25 @@ fn a_candidate_whose_pass_was_killed_is_named_and_resumed_by_a_pass_with_no_chec
         "product": PRODUCT,
         "releases": false,
         "reason": "A fixture of the submit queue's journey; it publishes no release.",
+        "quality": quality,
     }))
     .unwrap();
     commit(
-        &mut journey,
+        journey,
         ".wisent-release.json",
         &manifest,
         "declare the product",
     );
-    commit(&mut journey, "notes.txt", "one\n", "the base");
+    commit(journey, "notes.txt", "one\n", "the base");
     journey.git(&["push", "--quiet", "origin", "HEAD:refs/heads/main"]);
-    let base = journey.git(&["rev-parse", "HEAD"]);
+    journey.git(&["rev-parse", "HEAD"])
+}
+
+#[test]
+fn a_candidate_whose_pass_was_killed_is_named_and_resumed_by_a_pass_with_no_checkout() {
+    let mut journey = Journey::start();
+    let remote = journey.remote.to_string_lossy().into_owned();
+    let base = repository(&mut journey, json!([]));
     let candidate = commit(&mut journey, "notes.txt", "candidate\n", "the candidate");
 
     let checkout = journey.checkout.to_string_lossy().into_owned();
@@ -340,6 +383,219 @@ fn a_candidate_whose_pass_was_killed_is_named_and_resumed_by_a_pass_with_no_chec
         "{stdout}"
     );
 
+    journey.report["outcome"] = json!("passed");
+    journey.save();
+}
+
+/// A high-risk candidate on a machine without Tama waits for a review round
+/// recorded with `stado change review` by the session the command runs in.
+/// A command no session runs, the author's own session and a findings file
+/// that is no JSON array are refused; a round over a tree a moved `main`
+/// replaced decides nothing; one reviewer's later empty round does not
+/// clear another's findings; and once every reviewer's newest round over
+/// the tree the pass lands found nothing, it lands on the bare `origin`.
+#[test]
+fn a_round_recorded_with_change_review_decides_the_review_before_landing() {
+    let mut journey = Journey::start();
+    // A format gate the export runs, and no compiling gate, which makes
+    // every change of the product high risk: reviewed before it lands.
+    let base = repository(
+        &mut journey,
+        json!([{"name": "style", "kind": "format", "argv": ["true"]}]),
+    );
+    let checkout = journey.checkout.to_string_lossy().into_owned();
+    let reviewed = commit(&mut journey, "notes.txt", "two\n", "a reviewed change");
+    let (submitted, stdout, stderr) = journey.run_in_session(
+        "author-session",
+        &[
+            "change", "submit", &checkout, "--commit", &reviewed, "--defect", DEFECT, "--json",
+        ],
+    );
+    assert!(submitted, "submit: {stdout}{stderr}");
+    let id = serde_json::from_str::<Value>(&stdout).unwrap()["candidates"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(journey.candidate(&id)["session"], json!("author-session"));
+    let none = journey.root.join("none.json");
+    fs::write(&none, "[]").unwrap();
+    let found = journey.root.join("found.json");
+    fs::write(
+        &found,
+        r#"["notes.txt says two where the change means three"]"#,
+    )
+    .unwrap();
+    let none_path = none.to_string_lossy().into_owned();
+    let found_path = found.to_string_lossy().into_owned();
+    let review = |findings: &str| -> Vec<String> {
+        let argv: [&str; 7] = [
+            "change",
+            "review",
+            id.as_str(),
+            "--findings",
+            findings,
+            "--improvements",
+            none_path.as_str(),
+        ];
+        argv.map(str::to_string).to_vec()
+    };
+    fn words(args: &[String]) -> Vec<&str> {
+        args.iter().map(String::as_str).collect()
+    }
+
+    // An early round over the candidate's own commit, before main moves.
+    let (recorded, stdout, stderr) =
+        journey.run_in_session("reviewer-early", &words(&review(&none_path)));
+    assert!(recorded, "{stdout}{stderr}");
+    // Main moves: the pass writes the candidate again on the new tip, a
+    // tree the early reviewer never read.
+    journey.git(&["checkout", "--quiet", "--detach", &base]);
+    let moved = commit(&mut journey, "other.txt", "moved\n", "main moves");
+    journey.git(&[
+        "push",
+        "--quiet",
+        "origin",
+        &format!("{moved}:refs/heads/main"),
+    ]);
+    journey.git(&["checkout", "--quiet", "main"]);
+
+    // No round over the rebased tree and no Tama: the pass stops at review.
+    let (ran, stdout, stderr) = journey.run(&["change", "run", &checkout]);
+    assert!(
+        !ran,
+        "a pass with no round over its tree exits non-zero: {stdout}{stderr}"
+    );
+    let held = journey.candidate(&id);
+    assert_eq!(held["state"], json!("queued"), "{held}");
+    assert_eq!(held["waits_on"], json!("review-round"), "{held}");
+    let rebased = held["rebased"]["commit"].as_str().unwrap().to_string();
+    let tree = held["rebased"]["tree"].as_str().unwrap().to_string();
+    assert_ne!(
+        rebased, reviewed,
+        "the pass wrote the candidate again on the moved main"
+    );
+    assert!(
+        held["refusal"].as_str().unwrap().contains(&format!(
+            "no review round over commit {rebased} (tree {tree}) of candidate {id} is recorded \
+             by a session that is not its author (author-session), and Tama, whose harsh review \
+             would run one, is not installed here"
+        )),
+        "{held}"
+    );
+    let (_, stdout, _) = journey.run(&["change", "list", &checkout]);
+    assert!(
+        stdout.contains(&format!(
+            "waits on: a review round over commit {rebased} by a session that is not its author \
+             (author-session); unblock: a reviewer reads `git -C {checkout} show {rebased}` and, \
+             from its own session's shell, records `stado change review {id} --findings FILE \
+             --improvements FILE`"
+        )),
+        "{stdout}"
+    );
+
+    // A command no session runs records nothing.
+    let (recorded, _, stderr) = journey.run(&words(&review(&none_path)));
+    assert!(!recorded);
+    assert!(
+        stderr.contains("no agent session runs this command"),
+        "{stderr}"
+    );
+    // The author cannot review its own candidate.
+    let (recorded, _, stderr) =
+        journey.run_in_session("author-session", &words(&review(&none_path)));
+    assert!(!recorded);
+    assert!(
+        stderr.contains(&format!(
+            "session author-session submitted candidate {id}, so it cannot review it: a round \
+             counts only from a reviewer that is not the author"
+        )),
+        "{stderr}"
+    );
+    // A findings file that is no JSON array is refused naming the file.
+    let (recorded, _, stderr) = journey.run_in_session("reviewer-one", &words(&review(&checkout)));
+    assert!(!recorded);
+    assert!(
+        stderr.contains(&format!("--findings {checkout} cannot be read")),
+        "{stderr}"
+    );
+
+    // One reviewer finds something; a second's later empty round does not
+    // clear it.
+    let (recorded, stdout, stderr) =
+        journey.run_in_session("reviewer-one", &words(&review(&found_path)));
+    assert!(recorded, "{stderr}");
+    assert!(
+        stdout.contains(&format!("over commit {rebased} (tree {tree})")),
+        "the round is over the tree the pass lands: {stdout}"
+    );
+    let (recorded, _, stderr) = journey.run_in_session("reviewer-two", &words(&review(&none_path)));
+    assert!(recorded, "{stderr}");
+    let (ran, stdout, stderr) = journey.run(&["change", "run", &checkout]);
+    assert!(ran, "a refusal is a verdict: {stdout}{stderr}");
+    let refused = journey.candidate(&id);
+    assert_eq!(refused["state"], json!("refused"), "{refused}");
+    assert!(
+        refused["refusal"]
+            .as_str()
+            .unwrap()
+            .contains("session reviewer-one at"),
+        "{refused}"
+    );
+    assert!(
+        refused["refusal"]
+            .as_str()
+            .unwrap()
+            .contains("notes.txt says two where the change means three"),
+        "{refused}"
+    );
+
+    // The repaired change: every reviewer's newest round found nothing.
+    let repaired = commit(&mut journey, "notes.txt", "three\n", "the repaired change");
+    let (submitted, stdout, stderr) = journey.run_in_session(
+        "author-session",
+        &[
+            "change", "submit", &checkout, "--commit", &repaired, "--defect", DEFECT, "--json",
+        ],
+    );
+    assert!(submitted, "submit: {stdout}{stderr}");
+    let id = serde_json::from_str::<Value>(&stdout).unwrap()["candidates"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (ran, _, _) = journey.run(&["change", "run", &checkout]);
+    assert!(!ran, "no round over the repaired tree yet");
+    for reviewer in ["reviewer-one", "reviewer-two"] {
+        let (recorded, _, stderr) = journey.run_in_session(
+            reviewer,
+            &[
+                "change",
+                "review",
+                &id,
+                "--findings",
+                &none_path,
+                "--improvements",
+                &none_path,
+            ],
+        );
+        assert!(recorded, "{stderr}");
+    }
+    let (ran, stdout, stderr) = journey.run(&["change", "run"]);
+    assert!(ran, "the reviewed candidate lands: {stdout}{stderr}");
+    let landed = journey.candidate(&id);
+    assert_eq!(landed["state"], json!("landed"), "{landed}");
+    let review = landed["reviews"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(review["verdict"], json!("admitted"), "{landed}");
+    let remote = journey.remote.to_string_lossy().into_owned();
+    let main = journey.git(&["--git-dir", &remote, "rev-parse", "refs/heads/main"]);
+    assert_eq!(landed["landed"]["commit"], json!(main), "{landed}");
+    let shown = journey.git(&["--git-dir", &remote, "show", "refs/heads/main:notes.txt"]);
+    assert_eq!(shown, "three", "origin's main holds the reviewed change");
+    journey.report["landed"] = json!({"candidate": id, "commit": repaired, "main": main});
     journey.report["outcome"] = json!("passed");
     journey.save();
 }

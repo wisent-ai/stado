@@ -1,15 +1,20 @@
 //! The reviewer half of the risk classifier.
 //!
-//! A review is Tama's harsh review run (`tama reviews harsh run`) over a
-//! tree staged in an index of its own in the checkout's Git directory,
-//! scoped to the candidate's first defect: a reviewer session that is not
-//! the author attacks every changed line and stages its repairs in that
-//! index. It admits the tree, requests changes, or repairs it; its repairs
-//! (of the tree, the message, or both) are kept as a commit, so they are
-//! submitted like any other change. A reviewer that ended with no round
-//! covering what it left gives no admission either. A high-risk candidate
-//! is reviewed before it lands; a low-risk one after, and the repairs of
-//! that retroactive review are queued as its follow-up.
+//! A review is first the newest round recorded over the candidate's commit
+//! with `stado change review` by a session that is not its author: no
+//! finding admits it, a finding requests changes. With no such round, it is
+//! Tama's harsh review run (`tama reviews harsh run`), one adapter of the
+//! review, over a tree staged in an index of its own in the checkout's Git
+//! directory, scoped to the candidate's first defect: a reviewer session
+//! that is not the author attacks every changed line and stages its repairs
+//! in that index. It admits the tree, requests changes, or repairs it; its
+//! repairs (of the tree, the message, or both) are kept as a commit, so
+//! they are submitted like any other change. A reviewer that ended with no
+//! round covering what it left gives no admission either. A machine
+//! without Tama runs no review itself: the candidate waits for a recorded
+//! round. A high-risk candidate is reviewed before it lands; a low-risk one
+//! after, and the repairs of that retroactive review are queued as its
+//! follow-up.
 
 use std::path::{Path, PathBuf};
 
@@ -81,11 +86,28 @@ pub async fn review(
     commit: &str,
     tree: &str,
 ) -> Result<(Review, Option<Repair>), CmdError> {
+    if let Some(decided) = recorded(candidate, when, tree)? {
+        return Ok((decided, None));
+    }
     let Some(defect) = candidate.defects.first() else {
         let why = "the candidate names no defect, and a harsh review is scoped to one; submit it \
                    with --defect";
         return Ok((not_run(when, tree, why.to_string()), None));
     };
+    // Tama's harsh review is one adapter of the review: a machine without
+    // Tama waits for a round recorded with `stado change review`.
+    if let Err(missing) = installed_program(TAMA_CLI) {
+        return Err(CmdError::refused(format!(
+            "no review round over commit {commit} (tree {tree}) of candidate {id} is recorded by \
+             a session that is not its author ({author}), and Tama, whose harsh review would run \
+             one, is not installed here ({missing}); a reviewer reads `git -C {checkout} show \
+             {commit}` and, from its own session's shell, records `stado change review {id} \
+             --findings FILE --improvements FILE`, and the next pass reads it",
+            id = candidate.id,
+            author = candidate.session.as_deref().unwrap_or("operator"),
+            checkout = candidate.checkout.display(),
+        )));
+    }
     let checkout = &candidate.checkout;
     let area = PathBuf::from(git(checkout, &["rev-parse", "--absolute-git-dir"]).await?)
         .join("stado-change");
@@ -132,6 +154,83 @@ pub async fn review(
         },
         repaired,
     ))
+}
+
+/// The review the rounds recorded with `stado change review` over `tree`
+/// give, `when` it runs: each reviewer's newest round over that tree
+/// counts, so a reviewer clears only its own findings and never another's;
+/// any finding among them requests changes naming it, and rounds that all
+/// found nothing admit the tree. None when no round over `tree` was
+/// recorded: a round over another tree (the candidate written again on a
+/// `main` that moved, or submitted again) decides nothing, since its
+/// reviewer never read this one. A round by the author is never kept, and
+/// one by the author's session is left out here as well.
+fn recorded(candidate: &Candidate, when: &str, tree: &str) -> Result<Option<Review>, CmdError> {
+    let author = candidate.session.as_deref().unwrap_or("operator");
+    let mut newest: std::collections::BTreeMap<String, crate::cli::change::record::Round> =
+        std::collections::BTreeMap::new();
+    for round in crate::cli::change::record::rounds(candidate)? {
+        if round.tree != tree || round.reviewer_session == author {
+            continue;
+        }
+        let later = newest
+            .get(&round.reviewer_session)
+            .is_none_or(|kept| round.at > kept.at);
+        if later {
+            newest.insert(round.reviewer_session.clone(), round);
+        }
+    }
+    if newest.is_empty() {
+        return Ok(None);
+    }
+    let said = |round: &crate::cli::change::record::Round| {
+        round
+            .findings
+            .iter()
+            .map(|finding| match finding {
+                serde_json::Value::String(text) => text.clone(),
+                other => other.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let finding: Vec<String> = newest
+        .values()
+        .filter(|round| !round.findings.is_empty())
+        .map(|round| {
+            format!(
+                "session {} at {} found {} finding(s): {}",
+                round.reviewer_session,
+                round.at,
+                round.findings.len(),
+                said(round)
+            )
+        })
+        .collect();
+    let (verdict, answer) = if finding.is_empty() {
+        (
+            ADMITTED,
+            format!(
+                "the rounds over tree {tree} by {} found nothing",
+                newest
+                    .values()
+                    .map(|round| format!("session {} at {}", round.reviewer_session, round.at))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+    } else {
+        (
+            "changes-requested",
+            format!("the rounds over tree {tree}: {}", finding.join("; ")),
+        )
+    };
+    Ok(Some(Review {
+        when: when.to_string(),
+        verdict: verdict.to_string(),
+        tree: tree.to_string(),
+        answer,
+    }))
 }
 
 /// The reviewer's tree and message committed on `commit`. A repaired tree

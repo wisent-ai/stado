@@ -101,6 +101,26 @@ pub struct Pass {
     pub started_at: DateTime<Utc>,
 }
 
+/// A review round the agent session running `stado change review`, not the
+/// candidate's author, recorded over the commit the next pass would land:
+/// what it found and what the change suggests would further improve the
+/// codebase. It decides only a review of the same tree: each reviewer's
+/// newest round over that tree counts, any finding among them refuses the
+/// candidate naming it, and only rounds that all found nothing admit it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Round {
+    /// The commit the reviewer read: the candidate written again on `main`
+    /// by the last pass, or its own commit before any pass.
+    pub commit: String,
+    /// That commit's tree, which is what the round admits.
+    pub tree: String,
+    pub reviewer_session: String,
+    pub at: DateTime<Utc>,
+    /// Each finding as the reviewer wrote it; none admits the tree.
+    pub findings: Vec<serde_json::Value>,
+    pub improvements: Vec<serde_json::Value>,
+}
+
 /// What a harsh review before landing left of a candidate, queued as a
 /// candidate of its own at the tail of the queue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
