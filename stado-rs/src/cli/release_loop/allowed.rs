@@ -182,8 +182,14 @@ pub(crate) enum Unanswered {
 /// The agent session this process runs under, as Tama's register of agent
 /// sessions answers it (`tama sessions self --json`): none when no recorded
 /// session holds this process or any of its ancestors (a command the operator
-/// runs himself), and none on a machine with no Tama installed, which records
-/// no session at all.
+/// runs himself). On a machine with no Tama installed, the session the
+/// harness running this process names ([`harness_session`]): OMP sets
+/// [`SESSION_FILE`] to the transcript of the session a command runs in,
+/// subagents included, and that transcript opens with the session's id. A
+/// consent the operator gave a session reached no push or submit it made
+/// while Tama was uninstalled, because no session was named at all. None
+/// when neither names one, so a run under no agent session (the operator's
+/// own, the resident queue pass) is still asked as no session's.
 pub(crate) async fn calling_session() -> Result<Option<String>, String> {
     let words = ["sessions", "self", "--json"];
     match installed_json(TAMA_CLI, &words).await {
@@ -195,10 +201,53 @@ pub(crate) async fn calling_session() -> Result<Option<String>, String> {
                 words.join(" ")
             )),
         },
-        Err(Unanswered::Absent(_)) => Ok(None),
+        Err(Unanswered::Absent(_)) => harness_session(std::env::var_os(SESSION_FILE)),
         Err(Unanswered::Unread(cause)) => Err(cause),
     }
 }
+
+/// The variable OMP sets, in every command it runs, to the transcript of the
+/// session that runs it.
+pub(crate) const SESSION_FILE: &str = "PI_SESSION_FILE";
+
+/// The session whose transcript `named` is: the `id` of its first
+/// `"type": "session"` record. None when nothing is named; a file that is
+/// named but cannot be read, or names no session, is refused saying which
+/// and why, since a push that cannot tell whose work it is must not be
+/// asked as nobody's.
+pub(crate) fn harness_session(named: Option<std::ffi::OsString>) -> Result<Option<String>, String> {
+    let Some(named) = named.filter(|named| !named.is_empty()) else {
+        return Ok(None);
+    };
+    let path = std::path::PathBuf::from(named);
+    let file = std::fs::File::open(&path).map_err(|error| {
+        format!(
+            "{SESSION_FILE} names {}, which cannot be opened ({error}); the harness that set it \
+             may have moved the transcript, or the variable was inherited from a session that \
+             ended: run from the session's own shell, or unset {SESSION_FILE} for a run that is \
+             no session's",
+            path.display()
+        )
+    })?;
+    let header = std::io::BufRead::lines(std::io::BufReader::new(file))
+        .take(HEADER_LINES)
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        .find(|record| record["type"] == "session");
+    match header.as_ref().and_then(|record| record["id"].as_str()) {
+        Some(id) if !id.trim().is_empty() => Ok(Some(id.trim().to_string())),
+        _ => Err(format!(
+            "{SESSION_FILE} names {}, whose first {HEADER_LINES} lines hold no session record with an \
+             id, so it is not a session transcript OMP writes: unset {SESSION_FILE}, or point it at \
+             the session's transcript",
+            path.display()
+        )),
+    }
+}
+
+/// How many records a transcript's session header may follow (OMP writes a
+/// title record before it).
+const HEADER_LINES: usize = 8;
 
 /// What `oko <words>` printed as JSON, whatever it exited with (Oko prints a
 /// refused verdict and exits non-zero), or why it printed none.

@@ -251,6 +251,10 @@ name = "change-queue-pass"
 path = "../tests/change/queue_pass.rs"
 
 [[test]]
+name = "change-session-without-tama"
+path = "../tests/change/session_without_tama.rs"
+
+[[test]]
 name = "host-configuration-journey"
 path = "../tests/host_health/configuration.rs"
 
