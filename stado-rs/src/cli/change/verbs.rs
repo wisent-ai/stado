@@ -109,8 +109,9 @@ pub async fn submit(path: &str, commit: &str, defects: &[String]) -> Result<Cand
         )));
     }
     // A change too big to review whole is split, and a high-risk one names
-    // its defect, before it takes a place.
-    super::run::admit(&checkout, &commit, &tip, defects).await?;
+    // its defect, before it takes a place; one stacked on a waiting
+    // candidate is measured over that candidate.
+    super::run::admit(&checkout, &repository, &commit, &tip, defects).await?;
     // Its gates are the submitting session's work, so Oko is later asked
     // about that session, whichever process runs the queue.
     let session = crate::cli::release_loop::allowed::calling_session()

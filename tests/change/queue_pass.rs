@@ -599,3 +599,89 @@ fn a_round_recorded_with_change_review_decides_the_review_before_landing() {
     journey.report["outcome"] = json!("passed");
     journey.save();
 }
+
+/// The size cap measures a candidate's own commits: past its merge base
+/// with `main`, or, stacked on a candidate still waiting, past that
+/// candidate. The product's catalog lets one change change 400 lines.
+#[test]
+fn a_stacked_candidate_is_measured_over_the_candidate_below_it() {
+    let mut journey = Journey::start();
+    let base = repository(&mut journey, json!([]));
+    let checkout = journey.checkout.to_string_lossy().into_owned();
+    let lines = |count: usize, tag: &str| -> String {
+        (0..count).map(|line| format!("{tag} {line}\n")).collect()
+    };
+    let submit = |journey: &mut Journey, commit: &str| {
+        journey.run(&[
+            "change", "submit", &checkout, "--commit", commit, "--defect", DEFECT, "--json",
+        ])
+    };
+
+    // 300 lines over main: within the cap, queued.
+    let below = commit(
+        &mut journey,
+        "below.txt",
+        &lines(300, "below"),
+        "the change below",
+    );
+    let (submitted, stdout, stderr) = submit(&mut journey, &below);
+    assert!(submitted, "submit: {stdout}{stderr}");
+
+    // 150 more on top: 450 over main, 150 over the candidate below it.
+    let above = commit(
+        &mut journey,
+        "above.txt",
+        &lines(150, "above"),
+        "the change above",
+    );
+    let (submitted, stdout, stderr) = submit(&mut journey, &above);
+    assert!(
+        submitted,
+        "a stacked candidate is measured over the one below it: {stdout}{stderr}"
+    );
+    let above_id = serde_json::from_str::<Value>(&stdout).unwrap()["candidates"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The same 450 lines in one commit straight on main are refused.
+    journey.git(&["checkout", "--quiet", "--detach", &base]);
+    fs::write(journey.checkout.join("above.txt"), lines(150, "above")).unwrap();
+    journey.git(&["add", "above.txt"]);
+    let whole = commit(
+        &mut journey,
+        "below.txt",
+        &lines(300, "below"),
+        "one big change",
+    );
+    let (submitted, _, stderr) = submit(&mut journey, &whole);
+    assert!(!submitted, "450 lines over main exceed the cap");
+    assert!(
+        stderr.contains(&format!(
+            "{whole} changes 450 lines in 2 files past its merge base with main ({base}), more \
+             than the 400 one change of {PRODUCT} may"
+        )),
+        "{stderr}"
+    );
+
+    // Stacked on a waiting candidate, the stacked part alone counts: 450
+    // lines over the nearest candidate below are refused naming it.
+    journey.git(&["checkout", "--quiet", "--detach", &above]);
+    let big = commit(
+        &mut journey,
+        "big.txt",
+        &lines(450, "big"),
+        "a big stacked change",
+    );
+    let (submitted, _, stderr) = submit(&mut journey, &big);
+    assert!(!submitted);
+    assert!(
+        stderr.contains(&format!(
+            "{big} changes 450 lines in 1 files past candidate {above_id} it is stacked on \
+             ({above})"
+        )),
+        "the nearest waiting candidate is the base: {stderr}"
+    );
+    journey.report["outcome"] = json!("passed");
+    journey.save();
+}

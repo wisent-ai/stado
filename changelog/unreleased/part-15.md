@@ -71,3 +71,9 @@ The version bump gathers them into the release's own file and removes this one.
   capacity publications cannot be read, this host runs the gates of its own platform and the
   registry's hosts of the other platforms run theirs unjudged, each said with the store's error, so
   a repair of the fleet store can land through the queue.
+- **A candidate stacked on a waiting candidate is measured over it:** `stado change submit`
+  measured a commit's size from its merge base with `main`, so a change stacked on a queued one was
+  refused for the lines below it, which that candidate had already been measured for. A commit
+  that holds a queued or running candidate's commit `main` does not is now measured past the
+  nearest such candidate, and the refusal names it: `<commit> changes <n> lines in <m> files past
+  candidate <id> it is stacked on (<its commit>), more than …`.
