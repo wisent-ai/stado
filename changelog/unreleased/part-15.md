@@ -106,6 +106,15 @@ The version bump gathers them into the release's own file and removes this one.
   stderr, and keeps what the channels answered in `~/.stado/failing-units.json`. A page no channel
   took is tried again on the next pass. The unit's beacon `detail` says `operator page: …; Oko
   defect: …`.
+- **`stado change prioritize ID --reason TEXT`:** the queue took candidates strictly oldest first,
+  so the change that keeps its own gate hosts able to run gates waited behind every candidate
+  submitted before it. A queued candidate moved ahead goes before every candidate not moved ahead,
+  after those moved ahead before it; its reason, the agent session that moved it (`the operator`
+  when none) and when are kept beside it in `<id>.priority`, which a pass writing the record cannot
+  undo, and shown by `stado change list` and `status` (`moved ahead by session <id> at <time>:
+  <reason>`, `priority` in `--json`). An empty reason, a candidate at a verdict, and one stacked on
+  a waiting candidate that was not moved ahead (whose commits it would land as its own) are
+  refused, each naming the fix.
 
 ### Changed
 

@@ -3,14 +3,17 @@
 //! (`STADO_CHANGE_QUEUE`, else `~/.stado/change-queue`), at
 //! `<owner>/<name>/<id>.json`. The id begins with the submission time, so
 //! the names of one repository sort oldest first, which is the queue's
-//! order. A repository's pass holds `<owner>/<name>.lock` for its whole run,
-//! so one repository's candidates are rebased, checked and landed one at a
-//! time; the kernel releases that lock when the pass's process ends however
-//! it ends, so a running candidate whose repository's lock is free is one a
-//! pass that is gone left behind, and the next pass resumes it. `stado
-//! change cancel` asks for a candidate's withdrawal with a file of its own,
-//! `<owner>/<name>/<id>.cancel`, which the pass reads before each step: a
-//! running candidate's record has one writer, its pass.
+//! order, save that a candidate `stado change prioritize` moved ahead goes
+//! before every other, in the order they were moved ahead; why is kept
+//! beside it, `<owner>/<name>/<id>.priority`, and read into its `priority`
+//! whenever it is read. A repository's pass holds `<owner>/<name>.lock` for
+//! its whole run, so one repository's candidates are rebased, checked and
+//! landed one at a time; the kernel releases that lock when the pass's
+//! process ends however it ends, so a running candidate whose repository's
+//! lock is free is one a pass that is gone left behind, and the next pass
+//! resumes it. `stado change cancel` asks for a candidate's withdrawal with
+//! a file of its own, `<owner>/<name>/<id>.cancel`, which the pass reads
+//! before each step: a running candidate's record has one writer, its pass.
 
 mod model;
 
@@ -58,6 +61,25 @@ pub fn cancel_requested(candidate: &Candidate) -> Result<bool, CmdError> {
     let path = cancel_path(candidate)?;
     path.try_exists()
         .map_err(|error| CmdError::click(format!("cannot read {}: {error}", path.display())))
+}
+
+/// `<root>/<owner>/<name>/<id>.priority`, beside the candidate's record.
+fn priority_path(candidate: &Candidate) -> Result<PathBuf, CmdError> {
+    Ok(root()?
+        .join(&candidate.repository)
+        .join(format!("{}.priority", candidate.id)))
+}
+
+/// Move `candidate` ahead of the queue's order for `priority`'s reason. Its
+/// own file, never the record, so a pass writing the record meanwhile does
+/// not write over it.
+pub fn save_priority(candidate: &Candidate, priority: &Priority) -> Result<(), CmdError> {
+    document::write(
+        &priority_path(candidate)?,
+        priority,
+        "submit queue priority",
+    )
+    .map_err(CmdError::click)
 }
 
 /// `<root>/<owner>/<name>/<id>.rounds/`, beside the candidate's record: the
@@ -126,13 +148,17 @@ pub fn save(candidate: &mut Candidate) -> Result<(), CmdError> {
 }
 
 fn read(path: &Path) -> Result<Candidate, CmdError> {
-    document::read(path, WHAT)
+    let mut candidate: Candidate = document::read(path, WHAT)
         .map_err(CmdError::click)?
-        .ok_or_else(|| CmdError::missing(format!("{} is gone", path.display())))
+        .ok_or_else(|| CmdError::missing(format!("{} is gone", path.display())))?;
+    candidate.priority = document::read(&priority_path(&candidate)?, "submit queue priority")
+        .map_err(CmdError::click)?;
+    Ok(candidate)
 }
 
-/// Every candidate of `repository`, oldest first; every repository's when
-/// none is named.
+/// Every candidate of `repository` in the queue's order: those moved ahead
+/// first, in the order they were moved, then the rest oldest first; every
+/// repository's when none is named.
 pub fn list(repository: Option<&str>) -> Result<Vec<Candidate>, CmdError> {
     let root = root()?;
     let mut directories = Vec::new();
@@ -154,7 +180,17 @@ pub fn list(repository: Option<&str>) -> Result<Vec<Candidate>, CmdError> {
             }
         }
     }
-    candidates.sort_by(|left, right| left.id.cmp(&right.id));
+    candidates.sort_by(|left, right| {
+        let ahead = |candidate: &Candidate| {
+            candidate
+                .priority
+                .as_ref()
+                .map_or((1, None), |priority| (0, Some(priority.at)))
+        };
+        ahead(left)
+            .cmp(&ahead(right))
+            .then_with(|| left.id.cmp(&right.id))
+    });
     Ok(candidates)
 }
 

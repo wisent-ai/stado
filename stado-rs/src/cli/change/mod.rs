@@ -2,15 +2,16 @@
 //!
 //! A candidate change is a commit an agent made on any `main` of a
 //! repository. `submit` records it; `run` takes the repository's queued
-//! candidates oldest first, one at a time, writes each again on the remote
-//! `main`, runs the product's declared gates on the result across the
-//! fleet's hosts, classifies its risk, has it reviewed before landing when
-//! high and after when low, pushes it to `main` as a fast-forward and
-//! records each defect it repairs. `status`, `list` and `cancel` read and
-//! withdraw candidates. [`record`] keeps the queue, [`git`] does every Git
-//! step without the checkout's working tree or index, [`run`] is the pass,
-//! [`push`] judges a push to `main` the queue did not make, [`verbs`] the
-//! rest.
+//! candidates oldest first, those `prioritize` moved ahead before the rest,
+//! one at a time, writes each again on the remote `main`, runs the
+//! product's declared gates on the result across the fleet's hosts,
+//! classifies its risk, has it reviewed before landing when high and after
+//! when low, pushes it to `main` as a fast-forward and records each defect
+//! it repairs. `status`, `list`, `cancel` and `prioritize` read, withdraw
+//! and reorder candidates. [`record`] keeps the queue, [`git`] does every
+//! Git step without the checkout's working tree or index, [`run`] is the
+//! pass, [`push`] judges a push to `main` the queue did not make, [`verbs`]
+//! the rest.
 
 pub mod git;
 pub(crate) mod push;
@@ -50,7 +51,8 @@ pub(crate) enum ChangeCommands {
     /// each from the checkout its candidate was submitted from (the resident
     /// pass the installation declares as a host routine): carry every
     /// queued candidate, and every running one whose pass is gone (its
-    /// repository's pass lock is free), oldest first, to landed, refused or
+    /// repository's pass lock is free), in the queue's order (those `stado
+    /// change prioritize` moved ahead, then oldest first), to landed, refused or
     /// repaired (its review before landing repaired it, or recorded no round
     /// over what its reviewer left: what the review left is queued at the
     /// tail). Exits 0 when every candidate reached a verdict; a candidate
@@ -84,7 +86,8 @@ pub(crate) enum ChangeCommands {
         json: bool,
     },
     /// List the candidates of the checkout's repository, or of every
-    /// repository without one, oldest first.
+    /// repository without one, in the queue's order: those moved ahead with
+    /// `stado change prioritize` first, then oldest first.
     List {
         /// A repository's checkout on this machine; every repository
         /// without it.
@@ -102,6 +105,21 @@ pub(crate) enum ChangeCommands {
     Cancel {
         /// The candidate's id, whole or a unique prefix.
         id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move a queued candidate ahead of every candidate not moved ahead
+    /// (after those moved ahead before it), so the next pass takes it
+    /// first; the reason, the session that moved it and when are kept
+    /// beside it and shown by `status` and `list`. A candidate stacked on
+    /// another that still waits and was not moved ahead is refused: move
+    /// the one below first.
+    Prioritize {
+        /// The candidate's id, whole or a unique prefix.
+        id: String,
+        /// Why it goes before the candidates submitted before it.
+        #[arg(long)]
+        reason: String,
         #[arg(long)]
         json: bool,
     },
@@ -202,6 +220,12 @@ pub(crate) async fn dispatch(command: ChangeCommands) -> Result<(), CmdError> {
         }
         ChangeCommands::Cancel { id, json } => {
             let candidate = verbs::cancel(&id).map_err(|error| error.machine_readable(json))?;
+            answer(&[candidate], json)
+        }
+        ChangeCommands::Prioritize { id, reason, json } => {
+            let candidate = verbs::prioritize(&id, &reason)
+                .await
+                .map_err(|error| error.machine_readable(json))?;
             answer(&[candidate], json)
         }
         ChangeCommands::Review {

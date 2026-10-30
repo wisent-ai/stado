@@ -1,7 +1,8 @@
 //! The verbs that read and change the queue without running it: `submit`
 //! records a candidate, `status` and `list` read candidates, `cancel`
-//! withdraws one, `review` records a review round over one. Each answers in
-//! text, or as JSON with `--json`, from the same record.
+//! withdraws one, `prioritize` moves one ahead of the queue's order,
+//! `review` records a review round over one. Each answers in text, or as
+//! JSON with `--json`, from the same record.
 
 use std::path::{Path, PathBuf};
 
@@ -9,7 +10,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::cli::change::git;
-use crate::cli::change::record::{self, Candidate, Round, State, WaitsOn};
+use crate::cli::change::record::{self, Candidate, Priority, Round, State, WaitsOn};
 use crate::cli::CmdError;
 
 /// The absolute top of the Git work tree holding the directory `path` names.
@@ -87,6 +88,7 @@ pub fn enqueue(
         repairs: None,
         integrated: Vec::new(),
         unrecorded: Vec::new(),
+        priority: None,
     };
     record::save(&mut candidate)?;
     Ok(candidate)
@@ -145,6 +147,71 @@ pub fn cancel(id: &str) -> Result<Candidate, CmdError> {
         candidate.state = State::Cancelled;
         record::save(&mut candidate)?;
     }
+    Ok(candidate)
+}
+
+/// `stado change prioritize ID --reason TEXT`: move a waiting candidate
+/// ahead of every candidate not moved ahead, after those moved ahead
+/// before it, so a change the queue itself depends on (the one that keeps
+/// its gate hosts able to run gates, say) does not wait behind the whole
+/// queue. The reason and the agent session that moved it are kept beside
+/// it and shown by `status` and `list`. A candidate stacked on another that
+/// still waits and was not moved ahead is refused: it would land the commits
+/// below it unreviewed as its own, so the one below is moved ahead first.
+pub async fn prioritize(id: &str, reason: &str) -> Result<Candidate, CmdError> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(CmdError::usage(
+            "--reason is empty; say why this candidate goes before the ones submitted before \
+             it, so whoever reads the queue sees why its order changed"
+                .to_string(),
+        ));
+    }
+    let mut candidate = record::find(id)?;
+    if !matches!(candidate.state, State::Queued | State::Running) {
+        return Err(CmdError::refused(format!(
+            "candidate {} is {}, so no pass takes it again and its place in the queue decides \
+             nothing; prioritize a queued candidate (`stado change list --state queued`)",
+            candidate.id,
+            candidate.state.word()
+        )));
+    }
+    let tip = git::fetch_main(&candidate.checkout).await?;
+    let stacked = super::run::stacked_on(
+        &candidate.checkout,
+        &candidate.repository,
+        &candidate.commit,
+        &tip,
+    )
+    .await?;
+    if let Some((below, below_commit)) = stacked {
+        let below = record::find(&below)?;
+        if below.priority.is_none() {
+            return Err(CmdError::refused(format!(
+                "candidate {} is stacked on candidate {} ({below_commit}), which still waits and \
+                 was not moved ahead, so ahead of it the pass would land that candidate's commits \
+                 as this one's; move it ahead first (`stado change prioritize {} --reason …`), \
+                 then this one",
+                candidate.id, below.id, below.id
+            )));
+        }
+    }
+    let by = crate::cli::release_loop::allowed::calling_session()
+        .await
+        .map_err(|cause| {
+            CmdError::click(format!(
+                "the agent session moving candidate {} ahead could not be read ({cause}), so who \
+                 changed the queue's order is not known",
+                candidate.id
+            ))
+        })?;
+    let priority = Priority {
+        reason: reason.to_string(),
+        by,
+        at: Utc::now(),
+    };
+    record::save_priority(&candidate, &priority)?;
+    candidate.priority = Some(priority);
     Ok(candidate)
 }
 
@@ -267,8 +334,9 @@ pub async fn list(path: Option<&str>, state: Option<&str>) -> Result<Vec<Candida
         .collect())
 }
 
-/// One line of a candidate: its id, state, commit, where it got to and,
-/// while it has no verdict, what it waits on.
+/// One line of a candidate: its id, state, commit, where it got to, why it
+/// was moved ahead when it was and, while it has no verdict, what it waits
+/// on.
 pub fn line(candidate: &Candidate) -> String {
     let landed = candidate
         .landed
@@ -283,14 +351,29 @@ pub fn line(candidate: &Candidate) -> String {
         .as_deref()
         .and_then(|refusal| refusal.lines().next())
         .map_or(String::new(), |first| format!(": {first}"));
+    let ahead = priority(candidate).map_or(String::new(), |ahead| format!("\n  {ahead}"));
     let waits = waits(candidate).map_or(String::new(), |waits| format!("\n  {waits}"));
     format!(
-        "{} {} {} {}{risk}{landed}{refusal}{waits}",
+        "{} {} {} {}{risk}{landed}{refusal}{ahead}{waits}",
         candidate.id,
         candidate.state.word(),
         candidate.repository,
         candidate.commit
     )
+}
+
+/// Why `candidate` was moved ahead of the queue's order, by whom and when.
+fn priority(candidate: &Candidate) -> Option<String> {
+    let priority = candidate.priority.as_ref()?;
+    let by = match &priority.by {
+        Some(session) => format!("session {session}"),
+        None => "the operator".to_string(),
+    };
+    Some(format!(
+        "moved ahead by {by} at {}: {}",
+        priority.at.to_rfc3339(),
+        priority.reason
+    ))
 }
 
 /// What `candidate` waits on and the command that unblocks it, while it

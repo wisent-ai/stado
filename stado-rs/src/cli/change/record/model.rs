@@ -134,6 +134,18 @@ pub struct Repairs {
     pub queued_as: String,
 }
 
+/// Why a candidate was moved ahead of the queue's order, and by whom: kept
+/// beside it in `<id>.priority`, written by `stado change prioritize` and
+/// never by a pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Priority {
+    pub reason: String,
+    /// The agent session that moved it; none for the operator's own.
+    #[serde(default)]
+    pub by: Option<String>,
+    pub at: DateTime<Utc>,
+}
+
 /// The candidate's own commits written again on the remote tip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rebased {
@@ -262,4 +274,9 @@ pub struct Candidate {
     /// own words; the candidate's state stands either way.
     #[serde(default)]
     pub unrecorded: Vec<String>,
+    /// Set when `stado change prioritize` moved it ahead: why, by whom and
+    /// when. Its `<id>.priority` file decides: each read of the candidate
+    /// takes it from there, so a pass writing the record cannot undo it.
+    #[serde(default)]
+    pub priority: Option<Priority>,
 }

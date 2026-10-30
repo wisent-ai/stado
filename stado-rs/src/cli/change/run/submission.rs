@@ -70,7 +70,7 @@ pub async fn admit(
 /// stacked on, by id and commit: of those whose commit `commit` holds and
 /// `main` (`tip`) does not, the nearest, the one no other such candidate's
 /// commit sits above. None for a commit stacked on no waiting candidate.
-async fn stacked_on(
+pub(in crate::cli::change) async fn stacked_on(
     checkout: &Path,
     repository: &str,
     commit: &str,

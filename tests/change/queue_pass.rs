@@ -685,3 +685,151 @@ fn a_stacked_candidate_is_measured_over_the_candidate_below_it() {
     journey.report["outcome"] = json!("passed");
     journey.save();
 }
+
+/// `stado change prioritize` moves a candidate ahead of the ones submitted
+/// before it: the pass carries it first and it lands while they still wait,
+/// and `list` and `status` say who moved it, when and why. An empty
+/// reason, a candidate at a verdict and one stacked on a waiting candidate
+/// that was not moved ahead are refused, each naming the fix.
+#[test]
+fn a_prioritized_candidate_is_carried_before_the_older_ones() {
+    let mut journey = Journey::start();
+    // A format gate and no compiling gate: every change is high risk, so
+    // each one waits for a review round, which only the moved one has.
+    let base = repository(
+        &mut journey,
+        json!([{"name": "style", "kind": "format", "argv": ["true"]}]),
+    );
+    let checkout = journey.checkout.to_string_lossy().into_owned();
+    let submit = |journey: &mut Journey, commit: &str| -> String {
+        let (submitted, stdout, stderr) = journey.run(&[
+            "change", "submit", &checkout, "--commit", commit, "--defect", DEFECT, "--json",
+        ]);
+        assert!(submitted, "submit: {stdout}{stderr}");
+        serde_json::from_str::<Value>(&stdout).unwrap()["candidates"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let older = commit(&mut journey, "older.txt", "older\n", "the older change");
+    let older_id = submit(&mut journey, &older);
+    // Stacked on the older candidate, which still waits.
+    let stacked = commit(&mut journey, "stacked.txt", "stacked\n", "a stacked change");
+    let stacked_id = submit(&mut journey, &stacked);
+    journey.git(&["checkout", "--quiet", "--detach", &base]);
+    let fix = commit(&mut journey, "fix.txt", "fix\n", "the fix the queue needs");
+    let fix_id = submit(&mut journey, &fix);
+    let reason = "it keeps the gate hosts under the disk-full rule";
+
+    let (moved, _, stderr) = journey.run_in_session(
+        "queue-keeper",
+        &["change", "prioritize", &fix_id, "--reason", "  "],
+    );
+    assert!(!moved);
+    assert!(
+        stderr.contains(
+            "--reason is empty; say why this candidate goes before the ones submitted before it"
+        ),
+        "{stderr}"
+    );
+    let (moved, _, stderr) = journey.run_in_session(
+        "queue-keeper",
+        &["change", "prioritize", &stacked_id, "--reason", reason],
+    );
+    assert!(!moved);
+    assert!(
+        stderr.contains(&format!(
+            "candidate {stacked_id} is stacked on candidate {older_id} ({older}), which still \
+             waits and was not moved ahead, so ahead of it the pass would land that candidate's \
+             commits as this one's; move it ahead first (`stado change prioritize {older_id} \
+             --reason …`), then this one"
+        )),
+        "{stderr}"
+    );
+
+    let (moved, stdout, stderr) = journey.run_in_session(
+        "queue-keeper",
+        &["change", "prioritize", &fix_id, "--reason", reason],
+    );
+    assert!(moved, "{stdout}{stderr}");
+    let (listed, stdout, stderr) = journey.run(&["change", "list", &checkout]);
+    assert!(listed, "{stderr}");
+    let order: Vec<&str> = stdout
+        .lines()
+        .filter(|line| !line.starts_with(' '))
+        .filter_map(|line| line.split(' ').next())
+        .collect();
+    assert_eq!(
+        order,
+        [fix_id.as_str(), older_id.as_str(), stacked_id.as_str()],
+        "the moved candidate is listed first: {stdout}"
+    );
+    assert!(
+        stdout.contains("\n  moved ahead by session queue-keeper at "),
+        "{stdout}"
+    );
+    assert!(stdout.contains(&format!(": {reason}\n")), "{stdout}");
+    let (_, stdout, _) = journey.run(&["change", "status", &fix_id, "--json"]);
+    let status: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(status["priority"]["reason"], json!(reason), "{status}");
+    assert_eq!(status["priority"]["by"], json!("queue-keeper"), "{status}");
+
+    // Only the moved candidate has a round: the pass lands it first, then
+    // stops at the older ones' reviews.
+    let none = journey.root.join("none.json");
+    fs::write(&none, "[]").unwrap();
+    let none = none.to_string_lossy().into_owned();
+    let (recorded, _, stderr) = journey.run_in_session(
+        "reviewer",
+        &[
+            "change",
+            "review",
+            &fix_id,
+            "--findings",
+            &none,
+            "--improvements",
+            &none,
+        ],
+    );
+    assert!(recorded, "{stderr}");
+    let (ran, stdout, stderr) = journey.run(&["change", "run", &checkout]);
+    assert!(
+        !ran,
+        "the older candidates have no round, so the pass ends non-zero: {stdout}{stderr}"
+    );
+    let carried: Vec<&str> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("stado change run: "))
+        .filter(|line| line.contains(") of change-queue-test/product"))
+        .filter_map(|line| line.split(' ').next())
+        .collect();
+    assert_eq!(
+        carried.first(),
+        Some(&fix_id.as_str()),
+        "the pass carries the moved candidate first: {stderr}"
+    );
+    let landed = journey.candidate(&fix_id);
+    assert_eq!(landed["state"], json!("landed"), "{landed}");
+    let remote = journey.remote.to_string_lossy().into_owned();
+    let main = journey.git(&["--git-dir", &remote, "rev-parse", "refs/heads/main"]);
+    assert_eq!(landed["landed"]["commit"], json!(main), "{landed}");
+    let older_now = journey.candidate(&older_id);
+    assert_eq!(older_now["state"], json!("queued"), "{older_now}");
+    assert_eq!(older_now["waits_on"], json!("review-round"), "{older_now}");
+
+    // A candidate at a verdict has no place in the queue to move.
+    let (moved, _, stderr) = journey.run_in_session(
+        "queue-keeper",
+        &["change", "prioritize", &fix_id, "--reason", reason],
+    );
+    assert!(!moved);
+    assert!(
+        stderr.contains(&format!(
+            "candidate {fix_id} is landed, so no pass takes it again and its place in the queue \
+             decides nothing"
+        )),
+        "{stderr}"
+    );
+    journey.report["outcome"] = json!("passed");
+    journey.save();
+}

@@ -49,7 +49,7 @@ use crate::cli::CmdError;
 use rebase::Rewritten;
 use verdict::{cancelled, follow_up, refuse, requeue};
 
-pub(super) use submission::admit;
+pub(super) use submission::{admit, stacked_on};
 
 /// Run the queue of the repository whose checkout is `checkout`.
 pub async fn run(
