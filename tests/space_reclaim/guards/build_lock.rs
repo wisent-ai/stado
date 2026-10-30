@@ -12,20 +12,36 @@ use super::native::Native;
 #[test]
 fn a_cache_a_running_build_holds_is_kept_and_a_free_one_reclaimed() {
     let native = Native::new("build-lock");
-    let building = [native.home.join("checkout-building/target")];
+    // One running build per lock file a Cargo release holds in its profile
+    // directory: a target directory's `.cargo-lock` and `.cargo-artifact-lock`,
+    // and the `.cargo-build-lock` of a build-dir under Cargo's home, which
+    // Cargo tags with CACHEDIR.TAG like a target directory.
+    let held_by = [".cargo-lock", ".cargo-artifact-lock", ".cargo-build-lock"];
+    let building: Vec<_> = held_by
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            native
+                .home
+                .join(format!("checkout-building-{index}/target"))
+        })
+        .collect();
     let idle = [native.home.join("checkout-idle/target")];
     for cache in building.iter().chain(idle.iter()) {
         native.cache(cache);
         fs::create_dir_all(cache.join("debug")).unwrap();
-        fs::write(cache.join("debug/.cargo-lock"), b"").unwrap();
+        for name in held_by {
+            fs::write(cache.join("debug").join(name), b"").unwrap();
+        }
     }
     let locks: Vec<File> = building
         .iter()
-        .map(|cache| {
+        .zip(held_by)
+        .map(|(cache, name)| {
             let lock = File::options()
                 .read(true)
                 .write(true)
-                .open(cache.join("debug/.cargo-lock"))
+                .open(cache.join("debug").join(name))
                 .unwrap();
             // SAFETY: a descriptor this test owns; the lock is released when
             // `locks` is dropped at the end of the test.
@@ -34,7 +50,7 @@ fn a_cache_a_running_build_holds_is_kept_and_a_free_one_reclaimed() {
             };
             assert!(
                 !locked.is_negative(),
-                "the test could not hold the build lock"
+                "the test could not hold the build lock {name}"
             );
             lock
         })

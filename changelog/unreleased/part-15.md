@@ -53,6 +53,11 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Changed
 
+- **A running `cargo` build keeps its build directory.** The janitor's guard locked only
+  `.cargo-lock`, but a Cargo build-dir laid out apart from the artifacts is held through
+  `.cargo-build-lock` (and a target through `.cargo-artifact-lock`), so a pass took directories
+  running builds were compiling into. The guard now locks all three and keeps a directory any of
+  them is held in (`held_by_build`).
 - **Enrollment refuses a request's form before reading anything:** a name that is not a lowercase
   target identifier, an `--ssh` destination ssh would read as an option, and a `--kind` nobody
   declares are refused with exit 2; `approve` refuses a fleet nobody declared before writing.
