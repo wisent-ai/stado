@@ -2547,3 +2547,57 @@ products:
   approved_by: operator
   approved_at: 2026-10-24T07:57:08Z
   approval_note: The operator ordered a new repository named zrodlo holding all model pretraining, as Ster holds posttraining.
+- id: prawo
+  name: Prawo
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/prawo
+  description: 'Prawo keeps a legal matter as a case file: original documents, facts each tied to its source, a timeline, contradictions and missing evidence, and the law in force on the relevant date, so a person or their lawyer sees what is established, what is only claimed and what would change the case.'
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/prawo/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/prawo
+  installations: []
+  approved_by: operator
+  approved_at: 2026-10-30T04:46:55Z
+  approval_note: 'Operator, ordering the product: ''okej i teraz dodajmy jeszcze dwa projekty. jeden o nazwie prawo. drugi o nazwie zdrowie. kolejny o nazwie para do matchowania ludzi pod dating.'''
+- id: zdrowie
+  name: Zdrowie
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/zdrowie
+  description: Zdrowie keeps a person's health history from many sources with dates, units and provenance, shows disagreements between sources instead of silently correcting them, and prepares each consultation from that history; family and carers get only the scope the person grants, revocable at any time.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/zdrowie/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/zdrowie
+  installations: []
+  approved_by: operator
+  approved_at: 2026-10-30T04:46:55Z
+  approval_note: 'Operator, ordering the product: ''okej i teraz dodajmy jeszcze dwa projekty. jeden o nazwie prawo. drugi o nazwie zdrowie. kolejny o nazwie para do matchowania ludzi pod dating.'''
+- id: para
+  name: Para
+  status: preview
+  visibility: private
+  family: standalone
+  owner_repository: wisent-ai/para
+  description: 'Para introduces adults to each other only when both are interested: declared intentions and boundaries come first, matching is mutual, an introduction needs both to say yes, and a refusal, block or account deletion holds on every contact path.'
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/para/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/para
+  installations: []
+  approved_by: operator
+  approved_at: 2026-10-30T04:46:56Z
+  approval_note: 'Operator, ordering the product: ''okej i teraz dodajmy jeszcze dwa projekty. jeden o nazwie prawo. drugi o nazwie zdrowie. kolejny o nazwie para do matchowania ludzi pod dating.'''
