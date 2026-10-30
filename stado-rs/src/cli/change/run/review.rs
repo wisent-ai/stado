@@ -185,7 +185,11 @@ pub async fn review(
 /// `main` that moved, or submitted again) decides nothing, since its
 /// reviewer never read this one. A round by the author is never kept, and
 /// one by the author's session is left out here as well.
-fn recorded(candidate: &Candidate, when: &str, tree: &str) -> Result<Option<Review>, CmdError> {
+pub(in crate::cli::change) fn recorded(
+    candidate: &Candidate,
+    when: &str,
+    tree: &str,
+) -> Result<Option<Review>, CmdError> {
     let author = candidate.session.as_deref().unwrap_or("operator");
     let mut newest: std::collections::BTreeMap<String, crate::cli::change::record::Round> =
         std::collections::BTreeMap::new();

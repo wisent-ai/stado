@@ -833,3 +833,135 @@ fn a_prioritized_candidate_is_carried_before_the_older_ones() {
     journey.report["outcome"] = json!("passed");
     journey.save();
 }
+
+/// A round recorded while a pass carries the candidates behind the one it
+/// held for review is read before that pass ends: the held candidate is
+/// taken again and lands in the same pass. And `stado change status` judges
+/// the rounds recorded over the tree the next pass lands, instead of
+/// repeating what the last pass waited on.
+///
+/// The product's format gate is a shell script the export runs: when it
+/// runs for the second candidate (whose tree holds `second.txt`), it
+/// records a no-findings round over the first one from a reviewer's own
+/// session, as a reviewer working beside the pass would.
+#[test]
+fn a_round_recorded_during_a_pass_lands_the_held_candidate_in_that_pass() {
+    let mut journey = Journey::start();
+    let none = journey.root.join("none.json");
+    fs::write(&none, "[]").unwrap();
+    let reviewer = journey.root.join("reviewer.jsonl");
+    fs::write(
+        &reviewer,
+        format!(
+            "{}\n",
+            json!({"type": "session", "version": 3, "id": "reviewer-beside"})
+        ),
+    )
+    .unwrap();
+    let first_id_file = journey.root.join("first-id");
+    let script = "if [ -f second.txt ] && [ -f \"$ROUND_FOR\" ]; then \
+                  PI_SESSION_FILE=\"$REVIEWER\" \"$STADO\" change review \"$(cat \"$ROUND_FOR\")\" \
+                  --findings \"$NONE\" --improvements \"$NONE\" && rm \"$ROUND_FOR\"; fi";
+    let base = repository(
+        &mut journey,
+        json!([{"name": "style", "kind": "format", "argv": ["sh", "-c", script]}]),
+    );
+    let checkout = journey.checkout.to_string_lossy().into_owned();
+    let submit = |journey: &mut Journey, commit: &str| -> String {
+        let (submitted, stdout, stderr) = journey.run_in_session(
+            "author-session",
+            &[
+                "change", "submit", &checkout, "--commit", commit, "--defect", DEFECT, "--json",
+            ],
+        );
+        assert!(submitted, "submit: {stdout}{stderr}");
+        serde_json::from_str::<Value>(&stdout).unwrap()["candidates"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let first = commit(&mut journey, "first.txt", "first\n", "the first change");
+    let first_id = submit(&mut journey, &first);
+    journey.git(&["checkout", "--quiet", "--detach", &base]);
+    let second = commit(&mut journey, "second.txt", "second\n", "the second change");
+    let second_id = submit(&mut journey, &second);
+    fs::write(&first_id_file, &first_id).unwrap();
+
+    let args = ["change", "run", checkout.as_str()];
+    let output = journey
+        .stado()
+        .env("STADO", env!("CARGO_BIN_EXE_stado"))
+        .env("REVIEWER", &reviewer)
+        .env("ROUND_FOR", &first_id_file)
+        .env("NONE", &none)
+        .args(args)
+        .output()
+        .unwrap();
+    let mut recorded = vec!["stado"];
+    recorded.extend(args);
+    journey.record(&recorded, &output);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        !first_id_file.exists(),
+        "the second candidate's gate recorded the first one's round: {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "{first_id} has a review round over the tree it lands, recorded after this pass held \
+             it; this pass takes it again"
+        )),
+        "{stderr}"
+    );
+    let landed = journey.candidate(&first_id);
+    assert_eq!(landed["state"], json!("landed"), "{landed}");
+    let remote = journey.remote.to_string_lossy().into_owned();
+    let shown = journey.git(&["--git-dir", &remote, "show", "refs/heads/main:first.txt"]);
+    assert_eq!(shown, "first", "origin's main holds the first change");
+
+    // The second waits for its own round, and says so.
+    let held = journey.candidate(&second_id);
+    assert_eq!(held["waits_on"], json!("review-round"), "{held}");
+    let rebased = held["rebased"]["commit"].as_str().unwrap().to_string();
+    let tree = held["rebased"]["tree"].as_str().unwrap().to_string();
+    let (_, stdout, _) = journey.run(&["change", "status", &second_id]);
+    assert!(
+        stdout.contains(&format!(
+            "waits on: a review round over commit {rebased} by a session that is not its author \
+             (author-session)"
+        )),
+        "{stdout}"
+    );
+    // A round with a finding over the tree the next pass lands: status
+    // judges it, it does not repeat the pass's wait.
+    let found = journey.root.join("found.json");
+    fs::write(&found, r#"["second.txt names nothing the change needs"]"#).unwrap();
+    let found = found.to_string_lossy().into_owned();
+    let none = none.to_string_lossy().into_owned();
+    let (reviewed, _, stderr) = journey.run_in_session(
+        "reviewer-later",
+        &[
+            "change",
+            "review",
+            &second_id,
+            "--findings",
+            &found,
+            "--improvements",
+            &none,
+        ],
+    );
+    assert!(reviewed, "{stderr}");
+    let (_, stdout, _) = journey.run(&["change", "status", &second_id]);
+    assert!(
+        stdout.contains(&format!(
+            "waits on: the next pass of the queue, which refuses it: the rounds over tree {tree}: \
+             session reviewer-later at "
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("second.txt names nothing the change needs"),
+        "{stdout}"
+    );
+    journey.report["outcome"] = json!("passed");
+    journey.save();
+}

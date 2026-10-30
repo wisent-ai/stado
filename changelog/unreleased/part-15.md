@@ -184,3 +184,14 @@ The version bump gathers them into the release's own file and removes this one.
   that holds a queued or running candidate's commit `main` does not is now measured past the
   nearest such candidate, and the refusal names it: `<commit> changes <n> lines in <m> files past
   candidate <id> it is stacked on (<its commit>), more than …`.
+- **A round recorded during a pass lands its candidate in that pass:** a pass that held a
+  candidate for its review round went on to the candidates behind it and ended, so a round a
+  reviewer recorded meanwhile waited for the next pass. Before it ends, a pass now reads the rounds
+  again over each candidate it held for review and takes again those that have one (`<id> has a
+  review round over the tree it lands, recorded after this pass held it; this pass takes it
+  again`).
+- **`stado change status` judges the recorded rounds:** a candidate held for its review repeated
+  the last pass's `waits on: a review round …` after a round was recorded. It now reads the rounds
+  over the tree the next pass lands: `waits on: the next pass of the queue, which lands it: …` when
+  they found nothing, `… which refuses it: <each finding> …` when one found something, and the
+  review command only while none is recorded.

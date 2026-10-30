@@ -49,6 +49,7 @@ use crate::cli::CmdError;
 use rebase::Rewritten;
 use verdict::{cancelled, follow_up, refuse, requeue};
 
+pub(super) use review::{recorded as recorded_review, ADMITTED};
 pub(super) use submission::{admit, stacked_on};
 
 /// Run the queue of the repository whose checkout is `checkout`.
@@ -160,11 +161,28 @@ async fn pass(
     // Under the lock no other pass runs, so a running candidate is one a
     // pass that was stopped (killed, its machine restarted) left behind:
     // taken again, or it would stay running with no pass to end it.
-    while let Some(mut candidate) = record::list(Some(repository))?
-        .into_iter()
-        .filter(|candidate| !held.iter().any(|(id, _)| *id == candidate.id))
-        .find(|candidate| matches!(candidate.state, State::Queued | State::Running))
-    {
+    loop {
+        let Some(mut candidate) = record::list(Some(repository))?
+            .into_iter()
+            .filter(|candidate| !held.iter().any(|(id, _)| *id == candidate.id))
+            .find(|candidate| matches!(candidate.state, State::Queued | State::Running))
+        else {
+            // A reviewer may record its round while this pass carries the
+            // candidates behind the one held for it: that candidate is taken
+            // again now, not left for the next pass.
+            let reviewed = reviewed_since_held(repository, &held)?;
+            if reviewed.is_empty() {
+                break;
+            }
+            for id in &reviewed {
+                eprintln!(
+                    "stado change run: {id} has a review round over the tree it lands, recorded \
+                     after this pass held it; this pass takes it again"
+                );
+            }
+            held.retain(|(id, _)| !reviewed.contains(id));
+            continue;
+        };
         if candidate.state == State::Running {
             eprintln!(
                 "stado change run: {} was left running by a pass that is gone; this pass resumes \
@@ -233,6 +251,27 @@ async fn pass(
         )));
     }
     Ok(carried)
+}
+
+/// The candidates of `held` this pass held for a review round that now has
+/// a round recorded over the tree it lands.
+fn reviewed_since_held(
+    repository: &str,
+    held: &[(String, String)],
+) -> Result<Vec<String>, CmdError> {
+    let mut reviewed = Vec::new();
+    for candidate in record::list(Some(repository))? {
+        let waiting = held.iter().any(|(id, _)| *id == candidate.id)
+            && candidate.state == State::Queued
+            && candidate.waits_on == Some(WaitsOn::ReviewRound);
+        let Some(rebased) = candidate.rebased.as_ref().filter(|_| waiting) else {
+            continue;
+        };
+        if review::recorded(&candidate, "before-land", &rebased.tree)?.is_some() {
+            reviewed.push(candidate.id.clone());
+        }
+    }
+    Ok(reviewed)
 }
 
 /// Carry `candidate` to a verdict; `Err` when none could be reached, with

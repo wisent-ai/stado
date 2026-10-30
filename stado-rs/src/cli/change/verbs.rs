@@ -432,21 +432,49 @@ pub fn waits(candidate: &Candidate) -> Option<String> {
                  refusal names each host's verdict); unblock: `{run} --host HOST`, or bring a \
                  host of that platform back to publishing capacity"
             ),
-            Some(WaitsOn::ReviewRound) => format!(
-                "waits on: a review round over commit {commit} by a session that is not its \
-                 author ({author}); unblock: a reviewer reads `git -C {checkout} show {commit}` \
-                 and, from its own session's shell, records `stado change review {id} --findings \
-                 FILE --improvements FILE`, then `{run}`",
-                commit = candidate
-                    .rebased
-                    .as_ref()
-                    .map_or(candidate.commit.as_str(), |rebased| rebased.commit.as_str()),
-                author = candidate.session.as_deref().unwrap_or("operator"),
-                id = candidate.id,
-            ),
+            Some(WaitsOn::ReviewRound) => review_wait(candidate, &run),
         },
     };
     Some(said)
+}
+
+/// What a candidate a pass held for its review waits on now, judged from
+/// the rounds recorded over the tree the next pass lands, not echoed from
+/// that pass: a round recorded since then is said with its verdict.
+fn review_wait(candidate: &Candidate, run: &str) -> String {
+    let checkout = candidate.checkout.display();
+    let (commit, tree) = match &candidate.rebased {
+        Some(rebased) => (rebased.commit.as_str(), Some(rebased.tree.as_str())),
+        None => (candidate.commit.as_str(), None),
+    };
+    let author = candidate.session.as_deref().unwrap_or("operator");
+    let unrecorded = format!(
+        "waits on: a review round over commit {commit} by a session that is not its author \
+         ({author}); unblock: a reviewer reads `git -C {checkout} show {commit}` and, from its \
+         own session's shell, records `stado change review {id} --findings FILE --improvements \
+         FILE`, then `{run}`",
+        id = candidate.id,
+    );
+    let Some(tree) = tree else {
+        return unrecorded;
+    };
+    match super::run::recorded_review(candidate, "before-land", tree) {
+        Ok(None) => unrecorded,
+        Ok(Some(review)) if review.verdict == super::run::ADMITTED => format!(
+            "waits on: the next pass of the queue, which lands it: {}; unblock: `{run}`, or the \
+             resident pass",
+            review.answer
+        ),
+        Ok(Some(review)) => format!(
+            "waits on: the next pass of the queue, which refuses it: {}; the author repairs \
+             what the rounds found and submits the repair",
+            review.answer
+        ),
+        Err(error) => format!(
+            "waits on: a review round, and the rounds recorded over tree {tree} cannot be read \
+             ({error}); repair the queue's directory, then `{run}`"
+        ),
+    }
 }
 
 /// Everything one candidate holds, as `status` prints it.
