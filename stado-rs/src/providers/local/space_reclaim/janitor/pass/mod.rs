@@ -72,7 +72,11 @@ pub(crate) async fn run_with_lock(
             None
         }
     };
-    if !preview {
+    // Below the rule a pass runs only for the room the next build takes,
+    // and only the second tier below runs: the rule alone gives leave to
+    // take agent output and service logs.
+    let tier_one = preview || report.pressure_active == Some(true);
+    if !preview && tier_one {
         empty_service_logs(home, log_fn);
     }
     let weles_recordings_dir = target
@@ -86,9 +90,30 @@ pub(crate) async fn run_with_lock(
         weles_recordings_dir: weles_recordings_dir.as_deref(),
         asked: &asked,
     };
-    if let Err(exc) = run_cleaners(home, &inputs, &mut report).await {
-        report.add_error("runtime", &exc);
+    if tier_one {
+        if let Err(exc) = run_cleaners(home, &inputs, &mut report).await {
+            report.add_error("runtime", &exc);
+        }
     }
+    // The second tier: when the agent output every cleaner above took left
+    // the volume at the rule, or without the room under it a build of this
+    // host takes, the package managers' download caches, largest first,
+    // until it has that room. The room is the largest Cargo build directory
+    // this pass measured or the removal record names. Each tree it takes is
+    // recorded by itself.
+    // The record's read failure, if any, was reported when the pass began.
+    let (margin, _) = crate::providers::local::space_reclaim::margin::Margin::read(
+        state_dir,
+        report.largest_cargo_build.as_ref(),
+    );
+    crate::providers::local::space_reclaim::package_caches::scan_package_caches(
+        home,
+        persist,
+        !preview,
+        deletable,
+        &margin,
+        &mut report,
+    );
     // What the cleaners took, in the janitor's removal record; a preview
     // took nothing.
     if let Some(state_dir) = persist {

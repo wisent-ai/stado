@@ -81,6 +81,31 @@ The version bump gathers them into the release's own file and removes this one.
   either table cannot be read it takes none (`process_table_unread`). `ModuleCache.noindex`,
   archives and device support are never touched. Each removal is in `reclaimed.jsonl`, and `space
   candidates` ranks each project directory as automatic agent output.
+- **The janitor's second tier: package managers' download caches (`package_caches`).** When the
+  agent output a pass took leaves the volume at the 80% rule, or without room under it for the
+  next build, the pass takes Cargo's git `checkouts/` (never `db/` or the registry), npm, Bun,
+  SwiftPM, pip, uv, Homebrew and VS Code's update staging, largest first, and stops once the
+  volume has that room (`room_for_the_next_build`). A cache a running process holds (a file
+  open, a working directory, its path in arguments; Cargo's package-cache lock for its
+  checkouts) stays (`held_by_process`), and Cargo's checkouts stay while any `cargo` or `rustc`
+  runs (`build_running`). A cache is moved aside in one rename right after its holders are read,
+  so a tool starting during the removal makes a new one. Each removal is in `reclaimed.jsonl`;
+  `space candidates` ranks them as automatic caches. Products' own application caches and the
+  owner's files stay proposals.
+- **A pass leaves room under the rule for the next build (`margin`).** A pass that stopped just
+  under 80% left the host under a GiB, and the first build put it back over and closed its gates.
+  The room is measured, not declared: the largest Cargo build directory the pass measured under
+  Cargo's home, or that `reclaimed.jsonl` says a pass took in the last 7 days. A host under the
+  rule but short of that room runs a pass too, which takes only the package managers' caches:
+  agent output (an idle agent's build directory and its incremental state) goes only at the rule.
+  Each report carries `margin` (bytes, the directory it was measured on, and where that
+  measurement came from).
+- **A crash-looping declared unit pages the operator.** The first health pass that reads a unit
+  failing (no process, a nonzero last exit, the supervisor's run count) sends one page through the
+  registry's `operator_contact` channels with the unit, the verdict and the last line it wrote to
+  stderr, and keeps what the channels answered in `~/.stado/failing-units.json`. A page no channel
+  took is tried again on the next pass. The unit's beacon `detail` says `operator page: …; Oko
+  defect: …`.
 
 ### Changed
 
@@ -89,6 +114,13 @@ The version bump gathers them into the release's own file and removes this one.
   `.cargo-build-lock` (and a target through `.cargo-artifact-lock`), so a pass took directories
   running builds were compiling into. The guard now locks all three and keeps a directory any of
   them is held in (`held_by_build`).
+- **The Xcode and package-cache cleaners read what holds a tree right before taking it,** under
+  the cleanup lock, so a build started after the pass began is seen; a directory entry that cannot
+  be read is reported, not skipped silently.
+- **The crash-loop defect hand-off to Oko states how a caller meets it (`--blocks-nothing`),** which
+  Oko had refused on every pass since it began requiring it. A host without Oko says `Oko not
+  installed` once per loop instead of failing every pass, and the operator's page goes out either
+  way.
 - **Enrollment refuses a request's form before reading anything:** a name that is not a lowercase
   target identifier, an `--ssh` destination ssh would read as an option, and a `--kind` nobody
   declares are refused with exit 2; `approve` refuses a fleet nobody declared before writing.

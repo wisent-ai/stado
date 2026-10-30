@@ -14,8 +14,8 @@ use crate::providers::local::space_reclaim::janitor::STATE_VERSION;
 use crate::providers::local::space_reclaim::rule::{self, VolumeReading};
 use crate::providers::local::space_reclaim::{
     agent_logs, backup_twins, build_caches, chromium_clones, compiler_cache, delivered_releases,
-    job_outputs, local_snapshots, object_evidence, queue_workdirs, registered_scratch,
-    release_store, xcode_derived_data,
+    job_outputs, local_snapshots, margin, object_evidence, package_caches, queue_workdirs,
+    registered_scratch, release_store, xcode_derived_data,
 };
 use crate::targets;
 
@@ -57,6 +57,9 @@ impl CleanupReport {
             compiler_cache: CleanerReport::default(),
             registered_scratch: CleanerReport::default(),
             xcode_derived_data: CleanerReport::default(),
+            package_caches: CleanerReport::default(),
+            largest_cargo_build: None,
+            margin: None,
             lock_busy: false,
             workload_holds: Vec::new(),
             active_job_count,
@@ -205,6 +208,7 @@ impl CleanupReport {
                 compiler_cache::CLEANER: cleaner(&self.compiler_cache),
                 registered_scratch::CLEANER: cleaner(&self.registered_scratch),
                 xcode_derived_data::CLEANER: cleaner(&self.xcode_derived_data),
+                package_caches::CLEANER: cleaner(&self.package_caches),
             })
         } else {
             Value::Null
@@ -236,6 +240,9 @@ impl CleanupReport {
             "used_percent_before": self.used_percent_before,
             "used_percent_after": self.used_percent_after,
             "pressure_active": self.pressure_active,
+            // The room the pass left under the rule for the next build, and
+            // the build directory it was measured on.
+            "margin": self.margin.as_ref().map(margin::Margin::to_json),
             "cleaners": cleaners,
             "local_snapshot_volume": self.local_snapshot_volume,
             "lock_busy": self.lock_busy,

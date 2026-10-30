@@ -19,6 +19,27 @@ mod acting;
 
 use acting::{answering_entry, roles_and_strays, Strays};
 
+/// The last non-empty line of the file at `path`, read from its end so a
+/// log that grew for weeks costs one bounded read. `None` when the file
+/// cannot be read or holds no line.
+fn last_line(path: &str) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    /// Bytes read from the end: more than one log line, never the whole log.
+    const TAIL: u64 = 8 * 1024;
+    let mut file = std::fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(length.saturating_sub(TAIL)))
+        .ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
 /// Read one declared identity's state the way an operator would read it, and
 /// keep the reason when the answer is not a state.
 fn unit_entry(state: &LabelState) -> Value {
@@ -172,7 +193,21 @@ async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
         .await
         {
             Ok(state) => {
-                verdicts.insert(unit.to_string(), (service.name.clone(), state.failing()));
+                let failing = state.failing();
+                // The line a failing unit last wrote to its stderr file,
+                // read on this host, which is the one the unit runs on.
+                let last_error = failing
+                    .as_ref()
+                    .and(state.stderr_path.as_deref())
+                    .and_then(last_line);
+                verdicts.insert(
+                    unit.to_string(),
+                    crate::cli::integrations::runtime::stops::units::UnitVerdict {
+                        service: service.name.clone(),
+                        failing,
+                        last_error,
+                    },
+                );
                 let mut entry = unit_entry(&state);
                 if let Value::Object(fields) = &mut entry {
                     super::runner_listener::apply(
@@ -204,23 +239,27 @@ async fn collect_document(strays: Strays) -> Result<Value, CmdError> {
         units.insert(unit.to_string(), entry);
     }
     crate::deploy::service_answering::retain_declared(&questions);
-    // A unit read failing is a crash loop Oko is told of once (`runtime::
-    // stops::units`). What Oko answered joins the unit's `detail`, which
-    // `stado service list` and Stado Desktop's Managed services show, and a
-    // loop register that cannot be read or kept is said in the beacon.
+    // A unit read failing is a crash loop the operator is paged about and
+    // Oko is told of, once each (`runtime::stops::units`). What both
+    // answered joins the unit's `detail`, which `stado service list` and
+    // Stado Desktop's Managed services show, and a loop register that cannot
+    // be read or kept is said in the beacon.
     let declared = units.keys().cloned().collect();
-    let unrecorded =
-        match crate::cli::integrations::runtime::stops::units::observe(&declared, &verdicts) {
-            Ok(reports) => {
-                for (label, report) in reports {
-                    if let Some(Value::Object(fields)) = units.get_mut(&label) {
-                        super::runner_listener::add_detail(fields, format!("Oko defect: {report}"));
-                    }
+    let unrecorded = match crate::cli::integrations::runtime::stops::units::observe(
+        &declared, &verdicts,
+    )
+    .await
+    {
+        Ok(reports) => {
+            for (label, report) in reports {
+                if let Some(Value::Object(fields)) = units.get_mut(&label) {
+                    super::runner_listener::add_detail(fields, report);
                 }
-                Value::Null
             }
-            Err(error) => Value::String(error),
-        };
+            Value::Null
+        }
+        Err(error) => Value::String(error),
+    };
 
     let mut document = json!({
         "host": super::beacon_slug(&hostname),

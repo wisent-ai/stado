@@ -20,10 +20,12 @@ fn file(path: &Path, bytes: usize) {
 }
 
 /// A Cargo build directory as `build.build-dir` lays one out under Cargo's
-/// home, untagged, with the build lock of its profile directory.
+/// home, untagged, with both build locks a Cargo release may hold in its
+/// profile directory.
 fn cargo_build_dir(path: &Path) {
     file(&path.join("debug/deps/libexample.rlib"), 64 * 1024);
     fs::write(path.join("debug/.cargo-lock"), b"").unwrap();
+    fs::write(path.join("debug/.cargo-build-lock"), b"").unwrap();
 }
 
 /// The row naming `path`, if the ranking lists it.
@@ -81,7 +83,8 @@ fn candidates_rank_agent_output_first_and_the_pass_takes_only_agent_output() {
         (&held_build, "agent_output", "automatic"),
         (&tagged, "agent_output", "automatic"),
         (&home.join(".cargo/registry"), "cache", "proposal"),
-        (&home.join(".npm/_cacache"), "cache", "proposal"),
+        // A package manager's download cache is the janitor's second tier.
+        (&home.join(".npm/_cacache"), "cache", "automatic"),
         (&game, "user_data", "proposal"),
     ] {
         let found = row(&before, path)
@@ -104,11 +107,12 @@ fn candidates_rank_agent_output_first_and_the_pass_takes_only_agent_output() {
     );
 
     // A build running in one Cargo build directory holds its lock, as
-    // `cargo build` does.
+    // `cargo build` does with a build-dir under Cargo's home: the
+    // `.cargo-build-lock`, never `.cargo-lock`.
     let lock = File::options()
         .read(true)
         .write(true)
-        .open(held_build.join("debug/.cargo-lock"))
+        .open(held_build.join("debug/.cargo-build-lock"))
         .unwrap();
     // SAFETY: a descriptor this test owns, released when `lock` drops.
     let locked =
@@ -136,7 +140,10 @@ fn candidates_rank_agent_output_first_and_the_pass_takes_only_agent_output() {
         "a Cargo build directory a running build holds was taken: {report}"
     );
     assert!(!tagged.exists(), "a tagged build tree was kept: {report}");
-    for kept in [&registry, &npm, &game, &user_data] {
+    // Cargo's registry and the owner's files are never the janitor's; the
+    // npm cache is its second tier, taken only if agent output was not
+    // enough (tests/space_reclaim/package_caches.rs).
+    for kept in [&registry, &game, &user_data] {
         assert!(kept.is_file(), "{} was deleted: {report}", kept.display());
     }
     drop(lock);

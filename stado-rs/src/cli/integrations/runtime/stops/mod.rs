@@ -85,15 +85,41 @@ struct Defect<'a> {
     impact: &'a str,
     evidence: &'a str,
     repair: &'a str,
+    /// Why no command a session runs meets the defect: Oko records a defect
+    /// only with how a caller meets it, and a unit the init system restarts
+    /// is met by no command, only by what reaches the service.
+    blocks_nothing: &'a str,
+}
+
+/// Why a defect was not recorded with Oko.
+pub(super) enum Unrecorded {
+    /// Oko is not installed on this host: a recorder that is not there, not
+    /// a failure of each pass.
+    OkoAbsent(String),
+    /// Oko ran and refused, or could not be run.
+    Refused(String),
+}
+
+impl Unrecorded {
+    pub(super) fn sentence(&self) -> &str {
+        match self {
+            Self::OkoAbsent(sentence) | Self::Refused(sentence) => sentence,
+        }
+    }
 }
 
 /// Record `defect` against Stado through `oko defects record`, run from the
 /// path a Stado install places Oko at (`OKO_CLI`), since the unit that runs
 /// `stado serve` carries no login `PATH`. `Ok` with what Oko printed when it
-/// recorded the defect, `Err` with why it did not.
-fn record_defect(defect: &Defect<'_>) -> Result<String, String> {
+/// recorded the defect, `Err` with why it did not; an Oko not installed is
+/// told apart from one that refused.
+fn record_defect(defect: &Defect<'_>) -> Result<String, Unrecorded> {
     let oko = crate::deploy::host_exec::installed_program(crate::deploy::host_exec::OKO_CLI)
-        .map_err(|missing| format!("oko defects record could not run: {missing}"))?;
+        .map_err(|missing| {
+            Unrecorded::OkoAbsent(format!(
+                "Oko not installed on this host, so the defect is not recorded there: {missing}"
+            ))
+        })?;
     let mut command = std::process::Command::new(&oko);
     command.args([
         "defects",
@@ -112,21 +138,29 @@ fn record_defect(defect: &Defect<'_>) -> Result<String, String> {
         defect.evidence,
         "--repair",
         defect.repair,
+        "--blocks-nothing",
+        defect.blocks_nothing,
     ]);
     match crate::wait::output(&mut command) {
         Ok(output) if output.status.success() => Ok(format!(
             "recorded: {}",
             String::from_utf8_lossy(&output.stdout).trim()
         )),
-        Ok(output) => Err(format!(
+        Ok(output) => Err(Unrecorded::Refused(format!(
             "oko defects record ended {}: {}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
-        )),
-        Err(error) => Err(format!(
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(Unrecorded::OkoAbsent(format!(
+                "Oko not installed on this host ({} is absent), so the defect is not recorded there",
+                oko.display()
+            )))
+        }
+        Err(error) => Err(Unrecorded::Refused(format!(
             "oko defects record could not run {}: {error}",
             oko.display()
-        )),
+        ))),
     }
 }
 
@@ -161,7 +195,9 @@ fn raise(stops: &[&Stop], latest: &Stop) -> Result<String, String> {
         impact: "every service this stado serve hosts on the host (resolver adapters, the object API, the queue worker) is down while its init system restarts it, and nothing else reports it",
         evidence: &evidence.join("\n"),
         repair: "repair the fault in this release, or the configuration it refuses, so that stado serve starts; deliver the repair to the host",
+        blocks_nothing: "no command meets it: the init system restarts stado serve, and what fails is every request that reaches the services it hosts",
     })
+    .map_err(|unrecorded| unrecorded.sentence().to_string())
 }
 
 /// Keep this stop, and raise the defect when this build already stopped

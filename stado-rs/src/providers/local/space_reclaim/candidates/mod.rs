@@ -241,12 +241,15 @@ const AREAS: &[Area] = &[
 ];
 
 /// Cargo's downloaded inputs, under Cargo's home rather than a fixed path.
+/// `git/checkouts` is the package-cache tier's (Cargo checks each out again
+/// from `git/db`); the registry and `git/db` are proposals.
 const CARGO_INPUTS: &[(&str, &str)] = &[
     ("registry", "Cargo package registry"),
-    ("git", "Cargo git dependencies"),
+    ("git/db", "Cargo git dependencies (fetched repositories)"),
+    ("git/checkouts", "Cargo git dependencies (checkouts)"),
 ];
 
-/// Why the janitor keeps Cargo's inputs.
+/// Why the janitor keeps Cargo's fetched inputs.
 const CARGO_INPUT_NOTE: &str = "Cargo's downloaded inputs: the janitor keeps them, since a build \
      running while they are deleted fails; `cargo cache --autoclean` or deleting them between \
      builds takes them";
@@ -377,7 +380,26 @@ impl Walker<'_> {
         }
     }
 
-    fn push(&mut self, row: Candidate) {
+    fn push(&mut self, mut row: Candidate) {
+        // A package manager's download cache is the janitor's second tier:
+        // taken automatically, but only when agent output alone leaves the
+        // volume at the rule.
+        let home = self.inputs.home;
+        if row.cleaner.is_none()
+            && super::package_caches::CACHES
+                .iter()
+                .any(|cache| super::package_caches::cache_path(home, cache) == row.path)
+        {
+            let (cleaner, note) = self.automatic(
+                &row.path,
+                Some(super::package_caches::CLEANER),
+                "a package manager's download cache; the janitor takes it, largest first, only \
+                 when the agent output it took left the volume at the rule, and never while a \
+                 running process holds it",
+            );
+            row.cleaner = cleaner;
+            row.note = note;
+        }
         if row.bytes >= self.inputs.min_bytes {
             self.candidates.push(row);
         } else {
@@ -542,6 +564,9 @@ impl Walker<'_> {
         }
         let build = cargo_build_root(home);
         if let Some(cargo) = build.parent() {
+            // `git` is listed by its two parts below; its other files (a
+            // lock, a cache index) are not the user's.
+            self.excluded.push(cargo.join("git"));
             for (name, producer) in CARGO_INPUTS {
                 let path = cargo.join(name);
                 self.excluded.push(path.clone());

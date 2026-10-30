@@ -116,6 +116,11 @@ pub const CLEANERS: &[Cleaner] = &[
         sweeps: "trees a job, an agent or a Stado verb registered with `stado space scratch register`, once the session that owns each has ended",
     },
     Cleaner {
+        name: super::package_caches::CLEANER,
+        root: "",
+        sweeps: "the package managers' download caches (Cargo git checkouts, npm, Bun, SwiftPM, pip, uv, Homebrew), largest first, only while agent output alone left the volume at the rule and only until it is under it; a cache a running process holds stays",
+    },
+    Cleaner {
         name: super::release_store::CLEANER,
         root: super::release_store::RELEASES_ROOT,
         sweeps: "published release versions no host declares and this host has not installed",

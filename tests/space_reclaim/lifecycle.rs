@@ -12,6 +12,7 @@ mod derived_data;
 #[path = "guards/failed_release.rs"]
 mod failed_release;
 mod native;
+mod package_caches;
 #[path = "guards/product_hold.rs"]
 mod product_hold;
 mod retirement;

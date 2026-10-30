@@ -21,9 +21,9 @@
 //! removal record.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::candidates::ledger;
+use super::holders::Holders;
 use super::janitor::pass::lock::file::LockState;
 use super::janitor::pass::lock::ownership::{acquire_lock_state, retired_locks_active};
 use super::janitor::policy::ownership;
@@ -36,9 +36,6 @@ pub const CLEANER: &str = "xcode_derived_data";
 
 /// Home-relative directory Xcode keeps its per-project build output in.
 pub const ROOT: &str = "Library/Developer/Xcode/DerivedData";
-
-/// The open-file tables, in the places the operating systems put them.
-const LSOF: &[&str] = &["/usr/sbin/lsof", "/usr/bin/lsof"];
 
 /// The length of the hash Xcode appends to a project's directory name.
 const HASH_LETTERS: usize = 28;
@@ -53,58 +50,11 @@ pub(in crate::providers::local::space_reclaim) fn project_directory(name: &str) 
     })
 }
 
-/// One command's standard output, or why it could not be read, on stderr.
-fn read(program: &str, args: &[&str]) -> Option<String> {
-    match crate::wait::output(Command::new(program).args(args)) {
-        // `lsof` exits 1 when one of the processes it lists vanished while
-        // it read; what it printed for the rest is still the table.
-        Ok(output) if output.status.success() || !output.stdout.is_empty() => {
-            Some(String::from_utf8_lossy(&output.stdout).into_owned())
-        }
-        Ok(output) => {
-            eprintln!(
-                "xcode derived data: {program} answered {} ({}); no project directory is \
-                 removed this pass",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-            None
-        }
-        Err(error) => {
-            eprintln!(
-                "xcode derived data: {program} could not be run ({error}); no project directory \
-                 is removed this pass"
-            );
-            None
-        }
-    }
-}
-
-/// Every path a live process has open or works in, and every live process's
-/// arguments, each read once for the pass; `None` when either cannot be
-/// read.
-fn holders() -> Option<(Vec<String>, String)> {
-    let lsof = LSOF
-        .iter()
-        .find(|program| Path::new(program).is_file())
-        .or_else(|| {
-            eprintln!(
-                "xcode derived data: no lsof at {}; no project directory is removed this pass",
-                LSOF.join(" or ")
-            );
-            None
-        })?;
-    let open = read(lsof, &["-n", "-P", "-w", "-F", "n"])?
-        .lines()
-        .filter_map(|line| line.strip_prefix('n'))
-        .map(str::to_string)
-        .collect();
-    Some((open, read("/bin/ps", &["-Ao", "args="])?))
-}
-
 /// One pass over the project directories: each measured, and in an enforcing
-/// pass removed unless a build tool runs, a live process names it, or it lies
-/// outside the tree this host lets the janitor delete in.
+/// pass removed unless a live process holds it or it lies outside the tree
+/// this host lets the janitor delete in. What holds a directory is read
+/// again for each one after the cleanup lock is taken, so a build started
+/// while an earlier directory was measured or removed is seen.
 pub(in crate::providers::local::space_reclaim) fn scan_xcode_derived_data(
     home: &Path,
     enforcing: bool,
@@ -134,7 +84,20 @@ pub(in crate::providers::local::space_reclaim) fn scan_xcode_derived_data(
         }
     };
     let mut projects: Vec<PathBuf> = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                report.add_error(
+                    CLEANER,
+                    &JanitorError::os(&format!(
+                        "an entry of Xcode's build directory {} cannot be read: {error}",
+                        root.display()
+                    )),
+                );
+                continue;
+            }
+        };
         let is_directory = entry
             .file_type()
             .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink());
@@ -144,20 +107,12 @@ pub(in crate::providers::local::space_reclaim) fn scan_xcode_derived_data(
     }
     projects.sort();
     met.listed(projects.len());
-    let table = if enforcing { holders() } else { None };
     for path in projects {
-        let size = u64::try_from(dir_size(&path)).unwrap_or_default();
+        // `dir_size` sums lengths, so it is never negative.
+        let bytes = dir_size(&path);
+        let size = bytes.unsigned_abs();
         met.eligible(size);
         if !enforcing {
-            continue;
-        }
-        let Some((open, argv)) = &table else {
-            met.kept("process_table_unread", size);
-            continue;
-        };
-        let held = open.iter().any(|name| Path::new(name).starts_with(&path));
-        if held || argv.contains(path.to_string_lossy().as_ref()) {
-            met.kept("held_by_process", size);
             continue;
         }
         if !ownership::may_delete(deletable, &path) {
@@ -190,10 +145,19 @@ pub(in crate::providers::local::space_reclaim) fn scan_xcode_derived_data(
                 continue;
             }
         }
+        // Read under the lock, for this directory alone: a build that
+        // started after the pass began is seen before anything is removed.
+        let Some(holders) = Holders::read(CLEANER) else {
+            met.kept("process_table_unread", size);
+            continue;
+        };
+        if holders.hold(&path) {
+            met.kept("held_by_process", size);
+            continue;
+        }
         match remove_tree(&path) {
             Ok(()) => {
                 met.removed(Some(size));
-                let bytes = i64::try_from(size).unwrap_or(i64::MAX);
                 if let Err(error) =
                     ledger::record_tree(lock_dir, CLEANER, writer, &path, bytes, bytes)
                 {

@@ -99,6 +99,15 @@ pub struct CleanupReport {
     pub registered_scratch: CleanerReport,
     /// Xcode's per-project build directories under DerivedData.
     pub xcode_derived_data: CleanerReport,
+    /// The package managers' download caches, taken only when agent output
+    /// left the volume at the rule.
+    pub package_caches: CleanerReport,
+    /// The largest Cargo build directory this pass measured under Cargo's
+    /// home, held or not: the size of a build this host makes.
+    pub largest_cargo_build: Option<(std::path::PathBuf, i64)>,
+    /// The room under the rule the second tier left for the next build;
+    /// `None` until it ran.
+    pub margin: Option<crate::providers::local::space_reclaim::margin::Margin>,
     pub lock_busy: bool,
     /// Private operator evidence captured when shared holders prevent a pass.
     /// The public beacon deliberately omits process and operation identities.

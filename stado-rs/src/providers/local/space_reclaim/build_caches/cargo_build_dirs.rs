@@ -140,6 +140,15 @@ pub(in crate::providers::local::space_reclaim) fn scan_cargo_build_dirs(
                     }
                 };
                 report.cargo_builds.expected_bytes += bytes;
+                // The size of a build this host makes: the room a pass
+                // leaves under the rule for the next one (`margin`).
+                if report
+                    .largest_cargo_build
+                    .as_ref()
+                    .is_none_or(|(_, largest)| bytes > *largest)
+                {
+                    report.largest_cargo_build = Some((path.clone(), bytes));
+                }
                 if !enforcing {
                     continue;
                 }

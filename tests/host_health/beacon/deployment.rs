@@ -168,7 +168,12 @@ impl Deployment {
                 let line = line.unwrap();
                 writeln!(file, "{line}").unwrap();
                 file.flush().unwrap();
-                let _ = sender.send(line);
+                // The space-reclaim role runs on the same cadence and prints
+                // each pass's report as one JSON object; the health role
+                // prints the bare host slug of each stored beacon.
+                if !line.starts_with('{') {
+                    let _ = sender.send(line);
+                }
             }
         }));
         let stderr = child.stderr.take().unwrap();

@@ -3,6 +3,7 @@
 //! every fixture item is used by the binary that compiles it. Run one with
 //! `cargo test --test host-health -- <module>::`.
 mod beacon;
+mod crash_loop;
 mod declared_roles;
 mod deployment;
 #[path = "../../host_gates/disk.rs"]
