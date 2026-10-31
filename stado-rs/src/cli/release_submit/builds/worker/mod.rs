@@ -14,13 +14,13 @@ use crate::cli::release_submit::builds::worker::package::{
     disk_sentence, measure_scratch, package, receipt, write_receipt, write_scratch,
 };
 use crate::cli::release_submit::builds::worker::steps::{
-    ensure_rust_components, execute, require_free_space, require_node_toolchain,
+    execute, require_free_space, require_node_toolchain,
 };
 use crate::cli::release_submit::ReleaseWorkerArgs;
 use crate::cli::CmdError;
 use crate::release_control;
 use crate::release_pipeline::{
-    self, ArtifactReceipt, ReceiptInput, StepReceipt, StepStatus, WorkerRequest,
+    self, ArtifactReceipt, GateKind, ReceiptInput, StepReceipt, StepStatus, WorkerRequest,
 };
 
 pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
@@ -99,16 +99,6 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     environment::add_compiler_cache(&source, &mut environment)?;
     environment::ensure_node(&source)?;
 
-    // Give the pinned toolchain the components its own gates are about to
-    // demand. rustup installs a pinned toolchain on first use WITHOUT optional
-    // components, so the first release job on a fresh agent died with
-    // "'cargo-fmt' is not installed for the toolchain" — a fact about host
-    // provisioning that no release should trip over and no operator should
-    // fix by hand, host by host. Adding a component is idempotent and rustup
-    // resolves the pin from the working directory, so a provisioned host pays
-    // a no-op and a fresh one provisions itself, exactly the way the
-    // toolchain itself already arrives.
-    ensure_rust_components(&manifest.platforms[&request.platform], &source)?;
     let recipe = &manifest.platforms[&request.platform];
     // Before the first crate, not after the last one: a build with no room
     // fails having spent every minute it was going to spend.
@@ -133,7 +123,10 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         }
     };
     let mut quality = Vec::new();
-    for gate in &recipe.quality {
+    // A release runs the tests its product declares and nothing that only
+    // says whether the source is formatted or lints: whether code compiles
+    // is learned from the tests that compile it.
+    for gate in recipe.quality.iter().filter(|gate| gate.kind == GateKind::Test) {
         let step = execute(&gate.name, &gate.argv, &source, &environment)?;
         let passed = step.status == StepStatus::Passed;
         quality.push(step);

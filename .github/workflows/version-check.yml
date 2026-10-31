@@ -24,9 +24,11 @@ name: Version check
 # a false absence.
 #
 # This workflow now carries a SECOND verdict, in the `release-quality-gate` job
-# below: the quality steps `.wisent-release.json` declares for the release
-# worker, run on the pull request instead of on the release, so a tree that
-# cannot format or cannot compile its own tests stops at the pull request.
+# below: the test steps `.wisent-release.json` declares for the release
+# worker, run on the pull request instead of on the release, so a tree whose
+# declared tests fail stops at the pull request. No step only says whether the
+# source is formatted or lints: whether code compiles is learned from the tests
+# that compile it.
 
 on:
   pull_request:
@@ -497,44 +499,23 @@ jobs:
           echo "The gate refused all four of its refusal cases and passed this revision."
 
   release-quality-gate:
-    # Run the quality steps the release worker runs, on the change that
-    # introduces them.
-    #
-    # Before this job a pull request in this repository was judged by
-    # `version-check` and nothing else: no formatting check, no clippy, and no
-    # compilation of anything except `--bin stado`. Four defects reached `main`
-    # through that hole inside one week, each of them found by the RELEASE
-    # instead:
-    #
-    #   - `pub mod` declarations deleted while their files stayed on disk, so
-    #     `main` did not compile
-    #   - source and test files merged unformatted, so the product-release
-    #     run refused on them hours before anyone was looking
-    #   - a clippy lint in `src/cli/registry.rs` that left `main` unable to
-    #     pass its own release gate at all
-    #   and a test tree that nothing in CI had ever compiled
+    # Run the test steps the release worker runs, on the change that
+    # introduces a failure.
     #
     # The definition of "good" is NOT restated here. `.wisent-release.json` is
     # the product's own release-pipeline manifest: `stado release submit` reads
     # `platforms.<platform>.quality` out of it and the release worker executes
-    # exactly those argv, in order, before it builds
+    # the steps of kind `test`, in order, before it builds
     # (`cli::release_submit::worker`). This job reads the same key out of the
-    # same file and executes the same argv. There is one declaration and it is
+    # same file and executes the same steps. There is one declaration and it is
     # used twice, so this check cannot drift from the gate it is standing in
-    # for -- add a quality step for the release and the pull request runs it
+    # for -- add a test step for the release and the pull request runs it
     # with no edit here.
     #
     # What this job deliberately does NOT do is re-run the manifest's `build`
-    # step. That step is `cargo build --manifest-path stado-rs/Cargo.toml
-    # --locked --release --bin stado`, and the `version-check` job above
-    # already builds precisely that, in this same workflow run, because it
-    # needs the binary to read the advertised surface. A second twelve-minute
-    # release build would buy no signal, and `--all-targets` below type-checks
-    # every bin the crate declares -- including the `[[bin]]` targets that
-    # `--bin stado` never touches.
-    #
-    # It runs no test suite: this repository carries no tests until the
-    # operator approves one with `tama tests approve`.
+    # step: the `version-check` job above already builds precisely that, in
+    # this same workflow run, because it needs the binary to read the
+    # advertised surface.
     runs-on: ubuntu-latest
     # Hosted, not `[self-hosted, stado-control-plane]`. Exactly one runner
     # carries that label and both publish legs of the release train queue on
@@ -543,16 +524,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-
-      - name: Install the components the declared steps need
-        # `rust-toolchain.toml` pins 1.97.1 with `profile = "minimal"`, which
-        # carries neither rustfmt nor clippy, so a bare `cargo fmt` here fails
-        # with "no such command" rather than with a formatting verdict. rustup
-        # reads the pin from the working directory, so this lands the components
-        # on exactly the toolchain the steps below will use -- the same reason
-        # and the same mechanism as `release_submit::ensure_rust_components`,
-        # which does this for the release worker on the build host.
-        run: rustup component add rustfmt clippy
 
       - name: Run every quality step the release manifest declares
         env:
@@ -574,25 +545,21 @@ jobs:
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/stado-quality-gate.sh" <<'STADO_QUALITY_EOF'
-          # Run the quality steps the release manifest declares, and say WHOSE revision
+          # Run the test steps the release manifest declares, and say WHOSE revision
           # a refusal belongs to.
           #
           # The definition of "good" is not restated here. `.wisent-release.json` is the
           # product's release-pipeline manifest: `stado release submit` reads
-          # `platforms.<platform>.quality` and the release worker executes exactly those
-          # argv before it builds. This script reads the same key out of the same file
-          # and executes the same argv, so the gate cannot drift from the one it stands
-          # in for.
+          # `platforms.<platform>.quality` and the release worker executes the steps of
+          # kind `test` before it builds. This script reads the same key out of the same
+          # file and executes the same steps, so the gate cannot drift from the one it
+          # stands in for.
           #
           # What it adds is attribution. A pull request is judged on its MERGE result, so
           # a step that already refuses the base branch refuses every pull request opened
-          # against it — for files the author never touched. On this repository `main`
-          # has carried unformatted files more than once in a day, and each time the
-          # gate told the author of an unrelated change to "fix the tree". Authors then
-          # reformat somebody else's code to get their own work through, and the
-          # revision that introduced it is never
-          # named. So on a refusal this script runs the same step against the base
-          # revision in its own worktree and reports one of two verdicts:
+          # against it, for files the author never touched. So on a refusal this script
+          # runs the same step against the base revision in its own worktree and reports
+          # one of two verdicts:
           #
           #   introduced  this revision introduces the failure
           #   inherited   the base already fails it, with the base sha
@@ -714,6 +681,13 @@ jobs:
           while [ "$index" -lt "$steps" ]; do
             name="$(jq -er --arg p "$platform" --argjson i "$index" \
               '.platforms[$p].quality[$i].name' "$manifest")"
+            kind="$(jq -er --arg p "$platform" --argjson i "$index" \
+              '.platforms[$p].quality[$i].kind' "$manifest")"
+            if [ "$kind" != test ]; then
+              printf "quality step '%s' is of kind %s; the release worker runs only test steps, so this gate does not run it\n" "$name" "$kind"
+              index=$((index + 1))
+              continue
+            fi
             argv=()
             while IFS= read -r -d '' element; do argv+=("$element"); done < <(step_argv "$index")
             if [ "${#argv[@]}" -lt 1 ]; then

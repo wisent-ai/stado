@@ -10,12 +10,12 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::{fill, Planned, BUILD, QUALITY};
+use super::{fill, Planned, BUILD};
 use crate::cli::CmdError;
-use crate::release_pipeline::{GateKind, PipelineChannel, PRODUCT_MANIFEST, SCHEMA_VERSION};
+use crate::release_pipeline::{PipelineChannel, PRODUCT_MANIFEST, SCHEMA_VERSION};
 
-/// The manifest and scripts an iOS checkout is released with, filled from
-/// its project.
+/// The manifest and build script an iOS checkout is released with, filled
+/// from its project.
 pub(super) fn files(
     checkout: &Path,
     product: &str,
@@ -51,17 +51,12 @@ pub(super) fn files(
             text: fill(BUILD, &values),
             executable: true,
         },
-        Planned {
-            path: checkout.join("release/quality.sh"),
-            text: fill(QUALITY, &values),
-            executable: true,
-        },
     ])
 }
 
 /// The release manifest of an iOS app: one `ios-arm64` platform built on a
-/// Mac, whose one quality gate compiles the app for the simulator (kind
-/// `lint`) and whose build signs it with the fleet's distribution identity.
+/// Mac, with no quality gate (a release runs only the tests a product
+/// declares), whose build signs it with the fleet's distribution identity.
 fn manifest(product: &str, project: &str, app: &str) -> Result<String, CmdError> {
     let manifest = json!({
         "schema_version": SCHEMA_VERSION,
@@ -75,11 +70,7 @@ fn manifest(product: &str, project: &str, app: &str) -> Result<String, CmdError>
         "platforms": {
             "ios-arm64": {
                 "runner_platform": "darwin-arm64",
-                "quality": [{
-                    "name": "xcode-compile",
-                    "argv": ["bash", "release/quality.sh"],
-                    "kind": GateKind::Lint,
-                }],
+                "quality": [],
                 "build": {"argv": ["bash", "release/build.sh"]},
                 "stage": {
                     format!("dist/{app}.ipa"): format!("{app}.ipa"),

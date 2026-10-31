@@ -188,7 +188,7 @@ async fn record(
 ) -> Vec<String> {
     let (product, repository) = (step.product, step.repository);
     let evidence = format!(
-        "Every refusal of the run, each gate run to its end:\n{}",
+        "Every refusal of the run:\n{}",
         refused.refusals.join("\n")
     );
     let found = format!("{repository}@{}", refused.revision);
@@ -272,7 +272,7 @@ async fn refused_again(
     unrecorded: &mut Vec<String>,
 ) {
     let text = format!(
-        "{doing} still refused at {}, every gate run to its end:\n{}",
+        "{doing} still refused at {}:\n{}",
         refused.revision,
         refused.refusals.join("\n")
     );

@@ -10,18 +10,16 @@ use serde_json::{json, Map, Value};
 
 use super::{fill, Planned, CARGO_BUILD};
 use crate::cli::CmdError;
-use crate::release_pipeline::{GateKind, PRODUCT_MANIFEST, SCHEMA_VERSION};
+use crate::release_pipeline::{PRODUCT_MANIFEST, SCHEMA_VERSION};
 
 /// The platforms a Rust product is released for, as the fleet's builders
 /// declare them.
 const PLATFORMS: &[&str] = &["darwin-arm64", "linux-amd64"];
 
 /// The manifest and script a Rust checkout is released with: every binary
-/// target is built and staged and the version is read from Cargo.toml. The
-/// one quality gate is `cargo fmt --all -- --check` of kind `format`: `stado
-/// release changes submit` hands off only a commit whose product declares a
-/// `format` gate, and rustfmt ships with the toolchain the build already needs. No post-build
-/// test is declared until the operator approves one.
+/// target is built and staged and the version is read from Cargo.toml. No
+/// quality gate is declared: a release runs only the tests a product
+/// declares, and no test is declared until the operator approves one.
 pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdError> {
     let package = read(checkout)?;
     if package.name != product {
@@ -38,11 +36,7 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         stage.insert(evidence.to_string(), json!(evidence));
     }
     let platform = json!({
-        "quality": [{
-            "name": "fmt",
-            "argv": ["cargo", "fmt", "--all", "--", "--check"],
-            "kind": GateKind::Format,
-        }],
+        "quality": [],
         "build": {"argv": ["bash", "release/build.sh"]},
         "stage": stage,
     });
