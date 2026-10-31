@@ -30,10 +30,14 @@ use crate::providers::local::space_reclaim::rule::read_fleet_volume;
 /// `deletable` is the one tree it may delete in, `None` for all of the host
 /// ([`deletable_root`](super::policy::ownership::deletable_root)).
 ///
-/// Below the rule's threshold an enforcing pass deletes nothing and reports
-/// `healthy_noop`. At or above it, every cleaner runs with nothing held back.
-/// A preview runs every cleaner whatever the volume reads, counting what a
-/// pass at the threshold would remove and removing none of it.
+/// Every pass runs the cleaners of what nothing uses any more — finished
+/// jobs' work trees and outputs, proven replica twins, release versions
+/// nothing names, run evidence, delivered copies, harness logs, browser
+/// clones — whatever the volume reads. At or above the rule's threshold the
+/// caches a later build reuses (model blobs, the compiler cache) and the
+/// service logs are taken too, with nothing held back. A preview runs every
+/// cleaner whatever the volume reads, counting what a pass at the threshold
+/// would remove and removing none of it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_with_lock(
     home: &Path,
@@ -72,9 +76,8 @@ pub(crate) async fn run_with_lock(
             None
         }
     };
-    // Below the rule a pass runs only for the room the next build takes,
-    // and only the second tier below runs: the rule alone gives leave to
-    // take agent output and service logs.
+    // Below the rule a pass takes no cache a later build reuses, and leaves
+    // the service logs: the rule alone gives leave to take them.
     let tier_one = preview || report.pressure_active == Some(true);
     if !preview && tier_one {
         empty_service_logs(home, log_fn);
@@ -89,11 +92,10 @@ pub(crate) async fn run_with_lock(
         declared_release_versions: declared_release_versions.as_ref(),
         weles_recordings_dir: weles_recordings_dir.as_deref(),
         asked: &asked,
+        caches: tier_one,
     };
-    if tier_one {
-        if let Err(exc) = run_cleaners(home, &inputs, &mut report).await {
-            report.add_error("runtime", &exc);
-        }
+    if let Err(exc) = run_cleaners(home, &inputs, &mut report).await {
+        report.add_error("runtime", &exc);
     }
     // The second tier: when the agent output every cleaner above took left
     // the volume at the rule, or without the room under it a build of this

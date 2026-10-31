@@ -29,7 +29,7 @@ use crate::providers::local::space_reclaim::janitor::policy::{
     fetch_canonical_registry, resolve_target,
 };
 use crate::providers::local::space_reclaim::janitor::state::error::JanitorError;
-use crate::providers::local::space_reclaim::janitor::state::report::build::{epoch_now, utc_now};
+use crate::providers::local::space_reclaim::janitor::state::report::build::epoch_now;
 use crate::providers::local::space_reclaim::janitor::state::report::CleanupReport;
 use crate::providers::local::space_reclaim::margin::Margin;
 use crate::providers::local::space_reclaim::rule::read_fleet_volume;
@@ -84,22 +84,21 @@ pub(crate) async fn cleanup_once(
     if let Some(cause) = unread {
         report.add_error("margin", &JanitorError::os(&cause));
     }
-    let short_of_margin = report
-        .reading_before()
-        .is_some_and(|reading| reading.headroom_bytes() < margin.bytes);
-    // Below the threshold, with the room the next build needs, there is
-    // nothing to do: no registry read, no lock, no cleaner, and no service
-    // log is touched. A turn this janitor asked running workloads for when
-    // the volume was full is withdrawn: no pass below the threshold takes
-    // it, so a standing request would refuse every claim for as long as the
-    // agent that wrote it lives.
-    if !preview && report.pressure_active != Some(true) && !short_of_margin {
+    // A pass runs whatever the volume reads: what nothing uses any more — a
+    // finished job's outputs and work tree, scratch whose session ended,
+    // replica twins proven duplicate, release versions nothing names, run
+    // evidence, delivered copies, harness logs, browser clones — is taken on
+    // every pass, not first at the rule. Only what a later build reuses
+    // (build caches, package downloads, model blobs, the compiler cache)
+    // waits for the rule or for the room the next build needs. A turn this
+    // janitor asked running workloads for when the volume was full is
+    // withdrawn below it: no pass below the threshold takes it, so a
+    // standing request would refuse every claim for as long as the agent
+    // that wrote it lives.
+    if !preview && report.pressure_active != Some(true) {
         holds::clear_turn(&state_dir);
-        report.margin = Some(margin);
-        report.outcome = "healthy_noop".to_string();
-        report.last_success_at = Some(utc_now());
-        return finish(report, started, Some(&home), persist, attempted_at, log_fn);
     }
+    report.margin = Some(margin);
     // The registry says which release versions the fleet runs and where this
     // host's Weles worker records, and the queue says which job work trees
     // and outputs on disk are live or retired. Both are read before the
@@ -113,10 +112,26 @@ pub(crate) async fn cleanup_once(
     let asked = asked::ask(&home, &mut report).await;
     // What this pass may delete follows the ownership this host's entry
     // declares: on a shared host, only Stado's own tree.
-    let target = registry
-        .as_ref()
-        .ok()
-        .and_then(|data| resolve_target(data, &report.hostname).ok());
+    // Without this host's entry the pass may delete only in Stado's own
+    // tree ([`deletable_root`]); why the entry is missing is said.
+    let target = match &registry {
+        Ok(data) => match resolve_target(data, &report.hostname) {
+            Ok(target) => Some(target),
+            Err(exc) => {
+                report.add_error("ownership", &exc);
+                None
+            }
+        },
+        Err(exc) => {
+            report.add_error(
+                "ownership",
+                &JanitorError::os(&format!(
+                    "this host's entry was not read, so only Stado's own tree is deletable: {exc}"
+                )),
+            );
+            None
+        }
+    };
     let deletable = deletable_root(target.as_ref(), &home, &mut report);
     // The consent-gated folders the walk may open: only those this host's
     // entry declares for this program. A host whose entry cannot be read
@@ -139,13 +154,22 @@ pub(crate) async fn cleanup_once(
     // own lock instead, and takes the exclusive lock for each cache it
     // removes; a cache a workload holds stays for a later pass.
     report.scanned = true;
-    // Below the rule a pass runs only because the volume lacks the room
-    // the next build takes: it takes no agent output, which the rule alone
-    // gives leave to take (an idle agent's build directory keeps its
-    // incremental state), and only the second tier runs, under the
-    // exclusive lock. Cargo's build directories are still measured, since
-    // the largest of them is that room.
+    // Below the rule a pass takes no build cache: an idle agent's build
+    // directory keeps its incremental state, which the next build reuses.
+    // Cargo's build directories are still measured, since the largest of
+    // them is the room the next build takes.
     let tier_one = preview || report.pressure_active == Some(true);
+    // What jobs, agents and Stado verbs registered as theirs to lose, once
+    // the session that owns each tree has ended: nothing uses it, so every
+    // pass takes it. It is the fleet's by its creator's registration, so a
+    // shared host takes it too.
+    crate::providers::local::space_reclaim::registered_scratch::scan_registered_scratch(
+        &home,
+        &state_dir,
+        !preview,
+        writer.as_str(),
+        &mut report,
+    );
     // Cargo's per-workspace build directories under its home: the build-dir
     // the walk below declares for checkouts it cannot read. Each is taken
     // whole under the exclusive lock for that one directory, like a tagged
@@ -160,16 +184,6 @@ pub(crate) async fn cleanup_once(
         &mut report,
     );
     if tier_one {
-        // What jobs, agents and Stado verbs registered as theirs to lose,
-        // once the session that owns each tree has ended. It is the fleet's
-        // by its creator's registration, so a shared host takes it too.
-        crate::providers::local::space_reclaim::registered_scratch::scan_registered_scratch(
-            &home,
-            &state_dir,
-            !preview,
-            writer.as_str(),
-            &mut report,
-        );
         // Xcode's per-project build directories, each taken whole unless a
         // running process holds it.
         crate::providers::local::space_reclaim::xcode_derived_data::scan_xcode_derived_data(

@@ -32,6 +32,15 @@ The version bump gathers them into the release's own file and removes this one.
   releasing it when idle; no power setting is changed. The power source refuses no work: a host on
   battery accepts it, so an unplugged laptop still builds and installs. `stado host gates` adds a
   `presence` section and line: whether the host answered, when it last published, and its power.
+- **The janitor takes what nothing uses on every pass, not first at the disk-full rule:** below
+  the rule a pass returned `healthy_noop` without running a cleaner, so a finished job's outputs
+  and work tree, ended sessions' registered scratch, proven replica twins, release versions nothing
+  names, run evidence and delivered copies piled up until the volume was full and the host refused
+  all work. Every pass now runs those cleaners; only what a later build or run reuses (model blobs,
+  the compiler cache, build caches, package downloads, harness logs, local snapshots) and the
+  service logs wait for the rule or for the room the next build takes. A pass that begins and ends
+  under the rule still reports `healthy_noop`; one that brings the volume under it reports
+  `reclaimed_below_threshold`. A host entry the pass cannot resolve is now said in the report.
 - **`stado fleet attach NAME`, run by `stado bootstrap --target NAME` (and `fleet enroll
   --bootstrap`), attaches a machine that runs its own standalone Stado to the fleet store:** it
   authorizes the machine's resolver key on the directory authority, declares the machine's resolver

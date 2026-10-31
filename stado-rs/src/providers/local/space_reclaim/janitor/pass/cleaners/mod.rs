@@ -41,6 +41,11 @@ pub(crate) struct PassInputs<'a> {
     /// The queue's answers about the job work trees and outputs on disk,
     /// asked before the exclusive lock.
     pub asked: &'a asked::Asked,
+    /// Whether the caches a later build or run reuses — model blobs, the
+    /// compiler cache, Time Machine's local snapshots — are taken too: at or
+    /// above the rule's threshold, or in a preview. What nothing uses is
+    /// taken on every pass regardless.
+    pub caches: bool,
 }
 
 /// Run every cleaner, in order.
@@ -62,7 +67,13 @@ pub(crate) async fn run_cleaners(
     // Past every early return: from here the cleaner table is a measurement
     // this pass actually made, so the report may carry one.
     report.scanned = true;
-    hf::run_hf(home, foreign, report.active_job_count, report)?;
+    // Model blobs a later run fetches again: taken only under pressure.
+    hf::run_hf(
+        home,
+        foreign && inputs.caches,
+        report.active_job_count,
+        report,
+    )?;
     let weles_owned = inputs
         .weles_recordings_dir
         .is_some_and(|dir| ownership::may_delete(inputs.deletable, &home.join(dir)));
@@ -84,11 +95,13 @@ pub(crate) async fn run_cleaners(
     // The copies release delivery stages for attestation; the installed and
     // newest version of each product stay.
     delivered_releases::scan_delivered_releases(home, enforcing, report);
-    // The compiler cache's store; kept while a job runs, since a build reads
-    // and writes it.
-    compiler_cache::scan_compiler_cache(home, foreign, report);
-    agent_logs::scan_agent_logs(home, foreign, report);
-    local_snapshots::delete_all(home, foreign, report);
+    // The compiler cache's store, which the next build reuses, the harness
+    // logs running agents still append to, and the local snapshots pinning
+    // blocks: taken only under pressure. A cache stays while a job runs,
+    // since a build reads and writes it.
+    compiler_cache::scan_compiler_cache(home, foreign && inputs.caches, report);
+    agent_logs::scan_agent_logs(home, foreign && inputs.caches, report);
+    local_snapshots::delete_all(home, foreign && inputs.caches, report);
     if kept {
         let mut weles_kept = (!weles_owned).then_some(&mut report.weles);
         for cleaner in [

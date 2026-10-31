@@ -34,7 +34,10 @@ fn deleted_items(report: &CleanupReport) -> i64 {
 /// taken after them.
 ///
 /// - `report_only`: a preview; nothing was removed.
-/// - `reclaimed_below_threshold`: the volume is under the rule's threshold.
+/// - `healthy_noop`: the pass began under the rule's threshold and ends under
+///   it; it took only what nothing uses.
+/// - `reclaimed_below_threshold`: the pass began at the threshold and its
+///   deletions brought the volume under it.
 /// - `blocked_running_jobs`: still full, and the HuggingFace cache was left
 ///   alone because jobs were running.
 /// - `partial_error`: still full, and a cleaner failed.
@@ -46,6 +49,8 @@ pub(crate) fn select_outcome(enforcing: bool, report: &mut CleanupReport, after:
     report.used_percent_after = Some(after.used_percent());
     report.outcome = if !enforcing {
         "report_only"
+    } else if !after.full() && report.pressure_active != Some(true) {
+        "healthy_noop"
     } else if !after.full() {
         "reclaimed_below_threshold"
     } else if report.active_job_count > 0 {
