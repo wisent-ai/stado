@@ -16,10 +16,27 @@
 pub(super) mod retained;
 
 use crate::common::runs::{self, Run};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::{fs, path::Path};
+
+/// Installs record no quality failures any more; the records an earlier
+/// Stado kept in the build area `area` are read by nothing, so the next
+/// install of the checkout removes them.
+pub(super) fn shed_retired(area: &Path, id: &str) -> Result<()> {
+    let retired = area.join("install-failures");
+    match fs::remove_dir_all(&retired) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "{id}: the retired install-failure records {} cannot be removed",
+                retired.display()
+            )
+        }),
+    }
+}
 
 /// The product, platform, revision and catalog recipe an install builds: a
 /// different recipe is a different install even at one revision.

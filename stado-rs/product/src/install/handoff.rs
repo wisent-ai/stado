@@ -31,30 +31,13 @@ pub(crate) fn finishing(action: &str, positional: &[String]) -> Option<String> {
     positional.first().filter(|_| action == FINISH).cloned()
 }
 /// The refusal of `stado product finish` for a revision no install retained
-/// under the key this binary computes: it names the record it looked for and
-/// every record that does hold a build of the revision, under another key,
-/// so a finishing binary that keys the build otherwise than the one that
-/// built it is named rather than told to build again.
-pub(crate) fn nothing_retained(
-    id: &str,
-    revision: &str,
-    looked: &Path,
-    others: &[String],
-) -> anyhow::Error {
-    if others.is_empty() {
-        return anyhow!(
-            "{id}: no build of {revision} is retained here (no record at {}), so `stado product \
-             {FINISH}` has nothing to finish; `stado product update {id} --source-commit \
-             {revision}` builds it",
-            looked.display()
-        );
-    }
+/// a live build of in the checkout's build area `area`, under any key.
+pub(crate) fn nothing_retained(id: &str, revision: &str, area: &Path) -> anyhow::Error {
     anyhow!(
-        "{id}: this binary looked for the retained build of {revision} at {}, but the build is \
-         recorded under another key: {}; the binary that built it keys a build otherwise than \
-         this one, from the product, platform, revision or catalog recipe it was given",
-        looked.display(),
-        others.join(", ")
+        "{id}: no build of {revision} is retained here (no record of it with its tree under {}), \
+         so `stado product {FINISH}` has nothing to finish; `stado product update {id} \
+         --source-commit {revision}` builds it",
+        area.join("install-built").display()
     )
 }
 

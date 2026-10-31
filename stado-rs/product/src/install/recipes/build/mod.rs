@@ -26,22 +26,7 @@ pub fn release(
 ) -> Result<Prepared> {
     let id = text(product, "id")?;
     let area = crate::common::runs::checkout_area(&runtime.home, root)?;
-    // Installs record no quality failures any more; the records an earlier
-    // Stado kept in the build area are read by nothing, so the next install
-    // of the checkout removes them.
-    let retired = area.join("install-failures");
-    match fs::remove_dir_all(&retired) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "{id}: the retired install-failure records {} cannot be removed",
-                    retired.display()
-                )
-            })
-        }
-    }
+    evidence::shed_retired(&area, id)?;
     let run = evidence::directory(&runtime.home, root)?;
     let evidence = run.path.clone();
     let recorded = source::snapshot(root, &evidence, &area.join("source-index"))?;
@@ -96,13 +81,18 @@ pub fn release(
     // An earlier install of this key that failed after its build step kept
     // the build (`evidence::retained`): this install holds that run and
     // resumes at signing instead of exporting, checking and building again.
-    let resumed = evidence::retained::find(&area, &key)?;
-    if finishing && resumed.is_none() {
-        fs::remove_dir_all(&evidence)?;
-        let looked = evidence::retained::record_path(&area, &key);
-        let others = evidence::retained::of_revision(&area, &revision)?;
-        return Err(handoff::nothing_retained(id, &revision, &looked, &others));
-    }
+    // A finish takes over the build of its revision the handing-off binary
+    // just kept, under whatever key that binary gave it.
+    let resumed = if finishing {
+        let kept = evidence::retained::newest_of_revision(&area, id, &revision)?;
+        if kept.is_none() {
+            fs::remove_dir_all(&evidence)?;
+            return Err(handoff::nothing_retained(id, &revision, &area));
+        }
+        kept
+    } else {
+        evidence::retained::find(&area, &key)?
+    };
     let (_run, evidence) = match &resumed {
         Some(kept) => {
             fs::remove_dir_all(&evidence)?;
