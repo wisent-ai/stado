@@ -132,13 +132,7 @@ pub fn release(
     let committed = committed.canonicalize()?;
     let root = committed.as_path();
     let document = manifest::load(root, text(recipe, "manifest")?)?;
-    // A product may publish its releases under another name than its catalog
-    // id (Weles releases as `weles-worker`); the installation says which, so
-    // the manifest is still checked against exactly one expected name.
-    let released_as = recipe
-        .get("release_product")
-        .and_then(Value::as_str)
-        .unwrap_or(id);
+    let released_as = manifest::released_as(recipe, id);
     if document["product"] != released_as {
         bail!(
             "release manifest product {} does not match {released_as}, the release product the catalog installation of {id} declares",

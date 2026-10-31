@@ -21,6 +21,18 @@ pub fn load(root: &Path, name: &str) -> Result<Value> {
         .with_context(|| format!("reading release manifest {}", path.display()))
 }
 
+/// The product name the release manifest of installation `recipe` of catalog
+/// product `id` must declare. A product may publish its releases under
+/// another name than its catalog id (Weles releases as `weles-worker`); the
+/// installation's `release_product` says which, so every reader checks the
+/// manifest against exactly one expected name.
+pub fn released_as<'a>(recipe: &'a Value, id: &'a str) -> &'a str {
+    recipe
+        .get("release_product")
+        .and_then(Value::as_str)
+        .unwrap_or(id)
+}
+
 /// Reads the version a release manifest's `version_source` declares, with the
 /// same three kinds the release pipeline accepts (`json`, `regex`, `text`), so
 /// every product the fleet can release can also be installed from source.

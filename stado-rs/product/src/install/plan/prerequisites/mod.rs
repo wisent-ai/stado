@@ -149,9 +149,12 @@ pub fn requirements(
     };
     let root = checkout(runtime, product, surface)?;
     let own = manifest(&root, revision, path)?;
-    if own.product != id {
+    let recipe = crate::install::recipe(product, surface)?;
+    let released_as = crate::install::recipes::build::manifest::released_as(recipe, id);
+    if own.product != released_as {
         bail!(
-            "release manifest {path} at {revision} declares {} instead of {id}",
+            "release manifest {path} at {revision} declares {} instead of {released_as}, the \
+             release product the catalog installation of {id} {surface} declares",
             own.product
         );
     }
