@@ -5,10 +5,12 @@ use super::*;
 /// `service serving`: the declared unit against the process on its port.
 ///
 /// The ports come from the unit's own env file by the same derivation
-/// `env check` uses, plus any `--port` the operator names. Registry
-/// knowledge — whether the label that owns a foreign pid is itself declared —
-/// is resolved here rather than on the host, because the registry is this
-/// side's document and a host must never be asked to judge its own
+/// `env check` uses, plus any `--port` the operator names. A unit the service
+/// directory gives no endpoint and no `--port` names is judged by its launchd
+/// process instead (a unit serving a Unix socket has no port to read).
+/// Registry knowledge — whether the label that owns a foreign pid is itself
+/// declared — is resolved here rather than on the host, because the registry
+/// is this side's document and a host must never be asked to judge its own
 /// declaration.
 pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError> {
     let ServingOptions {
@@ -68,14 +70,6 @@ pub(crate) async fn serving(options: ServingOptions<'_>) -> Result<(), CmdError>
             if let Some(port) = declared_port {
                 wanted.push(port);
             }
-        }
-        if wanted.is_empty() {
-            return Err(CmdError::click(format!(
-                "the service directory declares no endpoint for {name:?} or its unit {:?} on \
-                 {host}, so which port it must serve is unknown; name it with --port <n>",
-                declared.unit_id()
-            ))
-            .stating(crate::primitives::failure::FailureCode::Config));
         }
 
         let report = service_serving::read_serving(

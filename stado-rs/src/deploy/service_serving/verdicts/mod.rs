@@ -65,12 +65,19 @@ pub fn port_verdicts(report: &ServingReport) -> Vec<PortVerdict> {
 /// `serving` requires every declared port to be held by this unit's own
 /// process. Anything unreadable is `unknown` rather than either of the other
 /// two, and a port held by another job is `not_serving` — the case that used
-/// to read as `runs`.
+/// to read as `runs`. A unit that declares no port (one that serves a Unix
+/// socket, or works without a listener) serves when launchd holds it loaded
+/// with a live process, and is `not_serving` otherwise: there is no port to
+/// read, and the socket table plays no part.
 pub fn verdict(report: &ServingReport, ports: &[PortVerdict]) -> &'static str {
-    if report.listeners_state != LISTENERS_READ {
-        return SERVING_UNKNOWN;
-    }
     if ports.is_empty() {
+        return if report.loaded == LOADED && !report.launchd_pid.is_empty() {
+            SERVING_YES
+        } else {
+            SERVING_NO
+        };
+    }
+    if report.listeners_state != LISTENERS_READ {
         return SERVING_UNKNOWN;
     }
     if ports
@@ -92,8 +99,12 @@ pub fn failure(host: &str, report: &ServingReport, ports: &[PortVerdict]) -> Opt
         SERVING_UNKNOWN if report.listeners_state != LISTENERS_READ => Some(format!(
             "{host}: the socket table could not be read, so no declared port below was judged"
         )),
-        SERVING_UNKNOWN if ports.is_empty() => Some(format!(
-            "{host}: {} declares no loopback port, so whether it serves cannot be decided here",
+        SERVING_NO if ports.is_empty() => Some(format!(
+            "{host}: {} declares no port, and launchd holds no running process for it (loaded \
+             {}, pid {}); `stado service logs {} --host {host}` says why it is not running",
+            report.unit,
+            report.loaded,
+            if report.launchd_pid.is_empty() { "none" } else { &report.launchd_pid },
             report.unit
         )),
         SERVING_UNKNOWN => Some(format!(

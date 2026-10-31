@@ -76,9 +76,11 @@ pub const PORT_OWNER_UNKNOWN: &str = "owner_unknown";
 /// The socket table could not be read, so the port was not judged.
 pub const PORT_UNKNOWN: &str = "unknown";
 
-/// Every declared port is held by this unit's own process.
+/// Every declared port is held by this unit's own process, or, for a unit
+/// that declares no port, launchd holds it with a live process.
 pub const SERVING_YES: &str = "serving";
-/// At least one declared port is dead or held by another job.
+/// At least one declared port is dead or held by another job, or a unit
+/// that declares no port has no running process.
 pub const SERVING_NO: &str = "not_serving";
 /// The question could not be answered.
 pub const SERVING_UNKNOWN: &str = "unknown";
@@ -87,3 +89,5 @@ pub const SERVING_UNKNOWN: &str = "unknown";
 pub const LISTENERS_READ: &str = "read";
 /// Neither reader answered.
 pub const LISTENERS_FAILED: &str = "failed";
+/// The `loaded` value the host's script writes when launchd knows the label.
+pub const LOADED: &str = "yes";
