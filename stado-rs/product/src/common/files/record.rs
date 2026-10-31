@@ -26,10 +26,14 @@ pub(super) fn product(path: &Path) -> Result<&str> {
 pub(crate) fn read(path: &Path, expected: Option<&str>) -> Result<Option<Recorded>> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("reading lock record {}", path.display()))?;
-    if text.trim().is_empty() {
+    // A writer before the holder record was written whole put a shorter
+    // record at the file's end over a longer one and left zero bytes in front
+    // of it; those bytes are no part of any record.
+    let record = text.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+    if record.is_empty() {
         return Ok(None);
     }
-    let value: Value = serde_json::from_str(text.trim())
+    let value: Value = serde_json::from_str(record)
         .with_context(|| format!("{} records invalid JSON", path.display()))?;
     let command = value["command"]
         .as_str()
