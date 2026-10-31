@@ -122,13 +122,38 @@ async fn look(watch: &mut Option<tokio::time::Interval>) {
     }
 }
 
+/// Look at `program` every `watch` until a release is installed over it.
+async fn replaced(
+    program: &Path,
+    started_as: (u64, SystemTime),
+    watch: &mut Option<tokio::time::Interval>,
+) -> Result<(), CmdError> {
+    loop {
+        look(watch).await;
+        if program_identity(program)? != started_as {
+            return Ok(());
+        }
+    }
+}
+
+/// The release installed over `program` is delivered: the service ends
+/// successfully so its init system starts it; it is not a stop of this one.
+fn delivered(program: &Path) -> Result<(), CmdError> {
+    eprintln!(
+        "[stado serve product-sync] a new release is installed over {}, the program this \
+         process runs; the service ends so its init system starts the installed release",
+        program.display()
+    );
+    Ok(())
+}
+
 /// Run product sync every `period`, and look at the program this process
-/// runs every `watch` (the health interval this service declares): a release
-/// installed over it by anyone, a `stado product install` or `finish` run by
-/// hand among them, ends the service within one look, so the init system
-/// starts the installed release. A process left running on a program file
-/// that was replaced keeps the old code, and on macOS loses the local
-/// network its replaced code identity was allowed.
+/// runs every `watch` (the health interval this service declares), between
+/// passes and while one runs: a release installed over it by anyone, a
+/// `stado product install` or `finish` run by hand among them, ends the
+/// service within one look, a pass still running included (its sync process
+/// ends with it), so the init system starts the installed release. A process
+/// left running on a replaced program keeps serving the old code.
 pub(super) async fn product_sync(
     period: Duration,
     watch: Option<Duration>,
@@ -155,28 +180,30 @@ pub(super) async fn product_sync(
     })?;
     let path = pass_search_path(&home)?;
     loop {
-        let pass = match STOPPED.load(Ordering::SeqCst) {
-            true => true,
-            false => tokio::select! {
-                _ = schedule.tick() => true,
-                _ = WAKE.notified() => true,
-                _ = look(&mut watch) => false,
-            },
-        };
-        if pass {
+        if !STOPPED.load(Ordering::SeqCst) {
+            tokio::select! {
+                _ = schedule.tick() => {}
+                _ = WAKE.notified() => {}
+                seen = replaced(&program, started_as, &mut watch) => {
+                    seen?;
+                    return delivered(&program);
+                }
+            }
+        }
+        let passes = async {
             for surface in &surfaces {
                 sync_pass(&program, &workspace, surface, &path).await;
             }
+        };
+        tokio::select! {
+            _ = passes => {}
+            seen = replaced(&program, started_as, &mut watch) => {
+                seen?;
+                return delivered(&program);
+            }
         }
         if program_identity(&program)? != started_as {
-            // Delivered: the service ends successfully so its init system
-            // starts the installed release; it is not a stop of this one.
-            eprintln!(
-                "[stado serve product-sync] a new release is installed over {}, the program this \
-                 process runs; the service ends so its init system starts the installed release",
-                program.display()
-            );
-            return Ok(());
+            return delivered(&program);
         }
         if STOPPED.load(Ordering::SeqCst) {
             return Err(CmdError::click(format!(
