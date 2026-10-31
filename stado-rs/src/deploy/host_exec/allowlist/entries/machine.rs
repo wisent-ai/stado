@@ -27,6 +27,14 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
               nothing",
     },
     ApprovedCommand {
+        argv: &[STADO_CLI, "space", "candidates", "--json"],
+        why: "ranks what holds the host's disk, agent output first and then caches, and \
+              lists what its janitor removed, from that host's own files: a workstation \
+              cannot measure another host's trees, and a host over its disk-full rule is \
+              cleaned by knowing what fills it. The fixed verb reads only; it deletes, \
+              moves and signals nothing and accepts no path",
+    },
+    ApprovedCommand {
         argv: &[
             STADO_CLI, "release", "active", "binary", "skarbiec", "--json",
         ],
