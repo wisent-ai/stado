@@ -30,12 +30,22 @@ async fn run_recovery(
         0 => true,
         NOTHING_TO_RECOVER => false,
         _ => {
+            // The payload says on stdout what it found and set out to
+            // recover, and Skarbiec's own repair names on either stream the
+            // daemon or lock it could not act on; a failure keeps all of it.
+            // The failure detail is stderr, or stdout when stderr is empty;
+            // stdout is added only when the detail is not already it.
+            let found: Vec<&str> = ran.stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+            let found = match found.is_empty() || ran.stderr.trim().is_empty() {
+                true => String::new(),
+                false => format!("; it printed: {}", found.join(" | ")),
+            };
             return Err(CmdError::click(format!(
-                "{}: Skarbiec {what} recovery failed: {}",
+                "{}: Skarbiec {what} recovery failed, {}{found}",
                 resolved.name,
-                crate::deploy::host_channel::last_error_line(&ran, "remote command failed")
+                crate::deploy::host_channel::whole_failure(&ran)
             ))
-            .stating(crate::primitives::failure::FailureCode::InfraDown))
+            .stating(crate::primitives::failure::FailureCode::InfraDown));
         }
     };
     Ok(json!({
