@@ -27,11 +27,10 @@ The version bump gathers them into the release's own file and removes this one.
   reads a Mac's privacy prompts and refusals:** the last hour of tccd's retained log, which names
   the process that asked for Documents, local network or Full Disk Access, so a prompt Stado raised
   on a shared Mac is seen without asking its owner.
-- **A Mac claims no work on battery and stays awake while it runs work:** a shared laptop that ran
-  fleet work on battery drained it, slept and dropped every job and route through it. The agent now
-  publishes `power_source` and `battery_percent`, claims nothing with `admission_reason:
-  on_battery_power` while the host draws from its battery, and holds `caffeinate -s` (mains only)
-  while it runs work, releasing it when idle; no power setting is changed. `stado host gates` adds a
+- **A Mac takes work on battery as on mains, and stays awake while it runs work:** the agent
+  publishes `power_source` and `battery_percent` and holds `caffeinate -i -s` while it runs work,
+  releasing it when idle; no power setting is changed. The power source refuses no work: a host on
+  battery accepts it, so an unplugged laptop still builds and installs. `stado host gates` adds a
   `presence` section and line: whether the host answered, when it last published, and its power.
 - **`stado fleet attach NAME`, run by `stado bootstrap --target NAME` (and `fleet enroll
   --bootstrap`), attaches a machine that runs its own standalone Stado to the fleet store:** it

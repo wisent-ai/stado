@@ -4,8 +4,9 @@
 //! every job it runs and every route through it. Changing its power settings
 //! (`pmset`) would change the owner's machine for good; instead the agent
 //! holds a power assertion while it has work and releases it when idle:
-//! `caffeinate -s -w <agent pid>`, which prevents system sleep only while
-//! the Mac is on mains power and ends by itself when the agent exits.
+//! `caffeinate -i -s -w <agent pid>`: `-i` prevents idle sleep on battery and
+//! mains alike, `-s` system sleep on mains, and it ends by itself when the
+//! agent exits.
 
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -38,7 +39,7 @@ pub(crate) fn hold_while(working: bool, log_fn: &mut dyn FnMut(&str)) {
         (true, None) => {
             let pid = std::process::id().to_string();
             match Command::new(CAFFEINATE)
-                .args(["-s", "-w", &pid])
+                .args(["-i", "-s", "-w", &pid])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -46,8 +47,8 @@ pub(crate) fn hold_while(working: bool, log_fn: &mut dyn FnMut(&str)) {
             {
                 Ok(child) => {
                     log_fn(&format!(
-                        "power assertion held while work runs (caffeinate -s, pid {}): the Mac \
-                         does not sleep on mains power",
+                        "power assertion held while work runs (caffeinate -i -s, pid {}): the \
+                         Mac does not sleep while work runs, on battery or mains",
                         child.id()
                     ));
                     *held = Some(child);
