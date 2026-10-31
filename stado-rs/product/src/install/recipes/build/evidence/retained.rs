@@ -1,6 +1,6 @@
-//! A build that passed its quality gates and its build step is kept, per
-//! product, platform, revision and catalog recipe (the
-//! [`super::failures::key`]), until an installation of it succeeds.
+//! A build that passed its build step is kept, per product, platform,
+//! revision and catalog recipe (the [`super::key`]), until an installation of
+//! it succeeds.
 //!
 //! Signing, staging, placement and activation come after the build, and each
 //! can fail for a reason outside the tree: a vault that cannot be reached, a
@@ -21,13 +21,13 @@ use std::{
 use crate::common::atomic_json;
 
 /// Where a checkout's retained builds are recorded: its build area under
-/// Stado's home, beside the quality failures.
+/// Stado's home.
 fn record_path(area: &Path, key: &str) -> PathBuf {
     area.join("install-built").join(format!("{key}.json"))
 }
 
-/// Record that `evidence` holds a build of `revision` whose quality gates and
-/// build step passed.
+/// Record that `evidence` holds a build of `revision` whose build step
+/// passed.
 pub(in crate::install::recipes::build) fn keep(
     area: &Path,
     key: &str,

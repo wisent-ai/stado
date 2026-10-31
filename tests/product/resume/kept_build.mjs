@@ -13,8 +13,12 @@ import { fileURLToPath } from 'node:url';
 // It installs `STADO_PRODUCT_TEST_PRODUCT` (a catalogued product with a
 // stado-release service recipe) from STADO_PRODUCT_TEST_COMMIT, default the
 // checkout's origin/main, signing with an empty keychain the journey creates
-// (`WISENT_CODESIGN_KEYCHAIN`), so the source is resolved, the quality gates
-// and the build pass, and signing refuses: the install fails after its build.
+// (`WISENT_CODESIGN_KEYCHAIN`), so the source is resolved, the build passes
+// and signing refuses: the install fails after its build. An install runs no
+// quality gate: the steps the kept run records (`build-steps.json`) are its
+// one build step, and no format, lint or check step of the manifest; the
+// install-failure records an earlier Stado kept in the build area are
+// removed by the install, since nothing reads them.
 // Expected: the first install leaves its run whole and kept (`.kept`, the
 // export's build output, `install-built/<key>.json`); the second install of
 // the same commit says it resumed from that run and fails at signing again
@@ -99,18 +103,27 @@ try {
   success(run('security', ['create-keychain', '-p', 'journey', keychain]));
   const environment = { HOME: home, WISENT_CODESIGN_KEYCHAIN: keychain };
   const install = ['product', '--workspace', workspace, 'install', product, '--surface', 'service', '--source-commit', commit];
+  // A record an earlier Stado kept when a quality gate refused: the checkout
+  // lies outside the isolated home, so its area is under `outside-home`.
+  const retired = join(home, '.stado', 'products', 'builds', 'outside-home', realpathSync(source), 'install-failures');
+  mkdirSync(retired, { recursive: true });
+  writeFileSync(join(retired, 'earlier.json'), '{"refused": true}\n');
 
   // The first install builds, fails at signing, and keeps its build.
   const first = refusal(run(binary, install, environment), 'An install signing with an empty keychain must fail');
   assert.doesNotMatch(first, /resumed at signing/, 'The first install of a commit has nothing to resume from');
   const runs = areas(home, 'install');
+  assert.ok(!existsSync(retired), `The install left the retired install-failure records at ${retired}`);
   const kept = only(runs.filter(run => existsSync(join(run, '.kept'))), `a kept run among ${JSON.stringify(runs)} after: ${first}`);
   assert.ok(statSync(join(kept, 'source', '.wisent-output')).isDirectory(), 'The kept run lost its build output');
   assert.ok(existsSync(join(kept, 'CACHEDIR.TAG')), 'The kept run is not tagged as a cache');
+  const steps = JSON.parse(readFileSync(join(kept, 'build-steps.json'), 'utf8'));
+  assert.equal(steps.length, 1,
+    `An install must run its build step alone, and it ran: ${JSON.stringify(steps.map(step => step.argv))}`);
   const record = JSON.parse(readFileSync(only(areas(home, 'install-built'), 'a kept-build record'), 'utf8'));
   assert.equal(realpathSync(record.evidence), realpathSync(kept), 'The record names another run than the kept one');
   assert.equal(record.revision, commit);
-  report.cases.push({ case: 'kept', run: kept, record, refusal: first });
+  report.cases.push({ case: 'kept', run: kept, record, steps: steps.map(step => step.argv), refusal: first });
 
   // The second install resumes after the kept build and fails at signing
   // again, without exporting or building anew.
@@ -128,7 +141,7 @@ try {
   failure = error;
 } finally {
   report.finished_at = new Date().toISOString();
-  report.scope = 'A darwin source install that fails at signing keeps its build and the next install of the same commit resumes after it, in an isolated home; not a successful installation, product sync or a GUI';
+  report.scope = 'A darwin source install that runs its build step alone, fails at signing, keeps its build, and the next install of the same commit resumes after it, in an isolated home; not a successful installation, product sync or a GUI';
   writeFileSync(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   console.log(`${report.result}: ${join(output, 'report.json')}`);
 }

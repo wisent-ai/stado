@@ -25,12 +25,25 @@ pub fn release(
     source_commit: Option<&str>,
 ) -> Result<Prepared> {
     let id = text(product, "id")?;
+    let area = crate::common::runs::checkout_area(&runtime.home, root)?;
+    // Installs record no quality failures any more; the records an earlier
+    // Stado kept in the build area are read by nothing, so the next install
+    // of the checkout removes them.
+    let retired = area.join("install-failures");
+    match fs::remove_dir_all(&retired) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "{id}: the retired install-failure records {} cannot be removed",
+                    retired.display()
+                )
+            })
+        }
+    }
     let run = evidence::directory(&runtime.home, root)?;
     let evidence = run.path.clone();
-    let area = crate::common::runs::checkout_area(&runtime.home, root)?;
-    // The checkout itself, before `root` names the exported tree: a
-    // revision's attestation is kept against its repository.
-    let checkout = root.to_path_buf();
     let recorded = source::snapshot(root, &evidence, &area.join("source-index"))?;
     // The pinned commit (canonical: on origin/main or this checkout's main),
     // else the head. `product finish` names a retained build, keyed below.
@@ -49,11 +62,7 @@ pub fn release(
             .trim_end_matches("-dirty")
             .to_owned(),
     };
-    let key = evidence::failures::key(id, &platform()?, &revision, recipe);
-    if let Err(refusal) = evidence::failures::refuse_recorded(&area, &key) {
-        fs::remove_dir_all(&evidence)?;
-        return Err(refusal);
-    }
+    let key = evidence::key(id, &platform()?, &revision, recipe);
     // A revision whose build stopped `stado serve` on every start here is
     // held, so product sync does not put back the crash loop a restore of
     // the previous release just ended.
@@ -100,9 +109,9 @@ pub fn release(
         }
         None => (run, evidence),
     };
-    // Quality, build and signing run in the committed tree, as the release
-    // worker's git archive does: an uncommitted edit another session is
-    // making in this checkout neither enters the install nor fails it.
+    // Build and signing run in the committed tree, as the release worker's
+    // git archive does: an uncommitted edit another session is making in
+    // this checkout neither enters the install nor fails it.
     let committed = evidence.join("source");
     let build = evidence::Build::start(&evidence);
     let archive_sha256 = match &resumed {
@@ -184,22 +193,6 @@ pub fn release(
         eprintln!("{id}: building source revision {revision}; the requested installation requires its canonical recipe");
         environment.extend(inputs::materialise(runtime, &document, spec, &inputs)?);
         environment.extend(manifest::secrets(&[&document, spec])?);
-        if let Some(quality) = spec.get("quality") {
-            let install = (id, revision.as_str(), evidence.as_path());
-            let refusals = evidence.join("dependency-refusals.jsonl");
-            environment.insert(
-                evidence::failures::DEPENDENCY_REFUSALS.to_owned(),
-                refusals.to_string_lossy().into_owned(),
-            );
-            let attestation = || attested(runtime, &checkout, &revision);
-            let dependencies = evidence::failures::Dependencies {
-                refusals: &refusals,
-                attestation: &attestation,
-            };
-            evidence::failures::gate(&area, &key, install, quality, dependencies, |check| {
-                step(check, root, &environment)
-            })?;
-        }
         step(&spec["build"], root, &environment)
             .map_err(|failure| crate::cargo_lock::explain(failure, root, id, &revision))
             .with_context(|| format!("{id} build failed; evidence: {}", evidence.display()))?;
@@ -310,50 +303,4 @@ pub fn release(
         cache: None,
         resumed_from: resumed,
     })
-}
-
-/// Whether `revision` of `checkout` carries an attestation that stands, read
-/// word for word by Tama (`tama attestation check --commit`), as the quality
-/// check reads it when no model judges a command tree: the stand-in for what a
-/// product the gate depends on could not give. Tama is read where Stado
-/// installs it; a machine without Tama has no attestation to stand on.
-fn attested(
-    runtime: &crate::common::Runtime,
-    checkout: &Path,
-    revision: &str,
-) -> std::result::Result<(), String> {
-    let tama = runtime.home.join(".stado").join("bin").join("tama");
-    if !tama.is_file() {
-        return Err(format!(
-            "Tama is not installed at {}, so the attestation of {revision} cannot be read",
-            tama.display()
-        ));
-    }
-    let shown = format!(
-        "{} attestation check --commit {revision} --repository {} --json",
-        tama.display(),
-        checkout.display()
-    );
-    let output = stado_wait::output(
-        std::process::Command::new(&tama)
-            .args(["attestation", "check", "--commit", revision, "--repository"])
-            .arg(checkout)
-            .arg("--json")
-            .stdin(std::process::Stdio::null()),
-    )
-    .map_err(|error| format!("`{shown}` did not run: {error}"))?;
-    let answer: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
-        format!(
-            "`{shown}` exited {} without a JSON answer ({error}): {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-    })?;
-    if output.status.success() && answer["stands"].as_bool() == Some(true) {
-        return Ok(());
-    }
-    Err(format!(
-        "the attestation of {revision} does not stand (`{shown}` exited {}): missing {}, findings {}",
-        output.status, answer["missing"], answer["findings"]
-    ))
 }

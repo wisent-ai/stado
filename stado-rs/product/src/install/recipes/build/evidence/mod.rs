@@ -3,19 +3,35 @@
 //! Each install writes `<checkout area>/install/<run>`
 //! ([`runs::checkout_area`], under Stado's home, never in the checkout)
 //! holding a committed-source export and that export's whole build output,
-//! which for a large product is over a gigabyte. A build whose quality gates
-//! or build step fail drops them; a build that passed both is retained
-//! ([`retained`]) until an installation of it succeeds, which sheds it
-//! (`Prepared::scratch`). The run keeps its files — logs, receipt and its
-//! measured size, which the next build's free-space check reads
-//! ([`runs::fresh_build`]).
+//! which for a large product is over a gigabyte. A build whose build step
+//! fails drops them; a build that passed is retained ([`retained`]) until an
+//! installation of it succeeds, which sheds it (`Prepared::scratch`). The run
+//! keeps its files — logs, receipt and its measured size, which the next
+//! build's free-space check reads ([`runs::fresh_build`]).
+//!
+//! An install builds; it formats, lints and checks nothing. Whether the code
+//! compiles is learned from its tests and from reading it, and a revision
+//! that does not build fails its build step naming the evidence.
 
-pub(super) mod failures;
 pub(super) mod retained;
 
 use crate::common::runs::{self, Run};
 use anyhow::Result;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::path::Path;
+
+/// The product, platform, revision and catalog recipe an install builds: a
+/// different recipe is a different install even at one revision.
+pub(super) fn key(id: &str, platform: &str, revision: &str, recipe: &Value) -> String {
+    let recipe = recipe.to_string();
+    let mut digest = Sha256::new();
+    for part in [id, platform, revision, recipe.as_str()] {
+        digest.update(part.as_bytes());
+        digest.update([0]);
+    }
+    hex::encode(digest.finalize())
+}
 
 /// A new install run under the build area of the checkout `root`, held in
 /// use until the returned value is dropped, and refused when the volume
