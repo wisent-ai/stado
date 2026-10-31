@@ -99,7 +99,9 @@ pub fn release(
     let resumed = evidence::retained::find(&area, &key)?;
     if finishing && resumed.is_none() {
         fs::remove_dir_all(&evidence)?;
-        return Err(handoff::nothing_retained(id, &revision));
+        let looked = evidence::retained::record_path(&area, &key);
+        let others = evidence::retained::of_revision(&area, &revision)?;
+        return Err(handoff::nothing_retained(id, &revision, &looked, &others));
     }
     let (_run, evidence) = match &resumed {
         Some(kept) => {

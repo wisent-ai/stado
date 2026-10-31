@@ -22,8 +22,35 @@ use crate::common::atomic_json;
 
 /// Where a checkout's retained builds are recorded: its build area under
 /// Stado's home.
-fn record_path(area: &Path, key: &str) -> PathBuf {
+pub(in crate::install::recipes::build) fn record_path(area: &Path, key: &str) -> PathBuf {
     area.join("install-built").join(format!("{key}.json"))
+}
+
+/// Every record in `area` that names a retained build of `revision`, under
+/// whatever key: what a finish that found none under its own key reports, so
+/// a key the finishing binary computes otherwise is named, not hidden. A
+/// record that cannot be read is named with its cause.
+pub(in crate::install::recipes::build) fn of_revision(area: &Path, revision: &str) -> Result<Vec<String>> {
+    let records = area.join("install-built");
+    let entries = match fs::read_dir(&records) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("listing {}", records.display()))
+        }
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let path = entry.with_context(|| format!("listing {}", records.display()))?.path();
+        let body = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        let record: Value = serde_json::from_slice(&body)
+            .with_context(|| format!("parsing the retained-build record {}", path.display()))?;
+        if record["revision"] == revision {
+            found.push(path.display().to_string());
+        }
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// Record that `evidence` holds a build of `revision` whose build step
