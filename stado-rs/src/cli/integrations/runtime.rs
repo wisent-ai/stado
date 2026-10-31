@@ -73,8 +73,9 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<Served, CmdError> {
     // one, so no other role's start or stop may end it.
     if let Some(interval) = args.product_sync_interval_seconds {
         let surfaces = std::mem::take(&mut args.product_sync_surface);
+        let watch = args.health_interval_seconds.map(|seconds| Duration::from_secs(seconds.get()));
         supervisor.spawn_delivery("product-sync", move || {
-            delivery::product_sync(Duration::from_secs(interval.get()), surfaces)
+            delivery::product_sync(Duration::from_secs(interval.get()), watch, surfaces)
         })?;
     }
     let started = start_roles(&mut supervisor, args, serve_api, mutates_worker_environment).await;

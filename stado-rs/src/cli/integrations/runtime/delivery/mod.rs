@@ -111,7 +111,29 @@ async fn sync_pass(program: &Path, workspace: &Path, surface: &str, path: &std::
     }
 }
 
-pub(super) async fn product_sync(period: Duration, surfaces: Vec<String>) -> Result<(), CmdError> {
+/// Wait for the next look at the program file: every `watch` tick, or never
+/// when this process declares no health interval.
+async fn look(watch: &mut Option<tokio::time::Interval>) {
+    match watch {
+        Some(watch) => {
+            watch.tick().await;
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// Run product sync every `period`, and look at the program this process
+/// runs every `watch` (the health interval this service declares): a release
+/// installed over it by anyone, a `stado product install` or `finish` run by
+/// hand among them, ends the service within one look, so the init system
+/// starts the installed release. A process left running on a program file
+/// that was replaced keeps the old code, and on macOS loses the local
+/// network its replaced code identity was allowed.
+pub(super) async fn product_sync(
+    period: Duration,
+    watch: Option<Duration>,
+    surfaces: Vec<String>,
+) -> Result<(), CmdError> {
     let program = std::env::current_exe().map_err(|error| {
         CmdError::unreachable(format!(
             "product sync cannot name the program this process runs: {error}"
@@ -120,6 +142,11 @@ pub(super) async fn product_sync(period: Duration, surfaces: Vec<String>) -> Res
     let started_as = program_identity(&program)?;
     let mut schedule = tokio::time::interval(period);
     schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut watch = watch.map(|every| {
+        let mut watch = tokio::time::interval(every);
+        watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        watch
+    });
     let workspace = product_sync_workspace();
     let home = crate::config_file::home().map_err(|cause| {
         CmdError::declaration(format!(
@@ -128,20 +155,24 @@ pub(super) async fn product_sync(period: Duration, surfaces: Vec<String>) -> Res
     })?;
     let path = pass_search_path(&home)?;
     loop {
-        if !STOPPED.load(Ordering::SeqCst) {
-            tokio::select! {
-                _ = schedule.tick() => {}
-                _ = WAKE.notified() => {}
+        let pass = match STOPPED.load(Ordering::SeqCst) {
+            true => true,
+            false => tokio::select! {
+                _ = schedule.tick() => true,
+                _ = WAKE.notified() => true,
+                _ = look(&mut watch) => false,
+            },
+        };
+        if pass {
+            for surface in &surfaces {
+                sync_pass(&program, &workspace, surface, &path).await;
             }
-        }
-        for surface in &surfaces {
-            sync_pass(&program, &workspace, surface, &path).await;
         }
         if program_identity(&program)? != started_as {
             // Delivered: the service ends successfully so its init system
             // starts the installed release; it is not a stop of this one.
             eprintln!(
-                "[stado serve product-sync] installed a new release over {}, the program this \
+                "[stado serve product-sync] a new release is installed over {}, the program this \
                  process runs; the service ends so its init system starts the installed release",
                 program.display()
             );
