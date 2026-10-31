@@ -7,6 +7,15 @@ The version bump gathers them into the release's own file and removes this one.
 
 ### Fixed
 
+- **No check formats or lints a tree:** `stado quality check --pre-push`, `stado release changes
+  submit` and the delivery queue's gate step check the committed source alone (lock resolution,
+  module declarations and reach) and run no gate; a push to `main` no longer runs `lint` gates on
+  fleet hosts and asks Oko no admission, and `--host` on `--pre-push` is gone with it. The full
+  `stado quality check`, release submission and `stado change run` run only `test` gates; a
+  `format` gate runs only under `stado quality format`, which writes. Whether code compiles is
+  learned from reading it and from the tests that compile it. A refused web gate is named as a
+  web gate whatever its kind, and the source-only delivery check that ran beside the format
+  gates is gone with them.
 - **`stado product install` and `update` build without formatting, linting or checking first:** a
   source install ran every quality gate its platform declares (`cargo fmt --check`, `cargo clippy`,
   `stado errors check`) before the build step, recompiling a revision the push had already checked

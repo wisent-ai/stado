@@ -1,10 +1,10 @@
-//! The full `stado quality check` runs every gate a product installation
-//! declares, each kind — `format`, `lint` and `test`. The pre-push selection
-//! runs format-kind gates only, which a web product may use for typecheck.
+//! The full `stado quality check` runs the `test` gates a product declares
+//! and no `format` or `lint` gate; the pre-push check, the change hand-off
+//! and the delivery queue run no gate and check the committed source alone.
 //!
 //! One isolated deployment per case: a local store, committed Rust source
-//! and the real `stado` executable. The declared gates run rustfmt, compile
-//! test code and execute its assertion; an absent gate kind is refused.
+//! and the real `stado` executable. The declared test gate compiles the test
+//! code and executes its assertion; an absent gate kind is refused.
 //! The checkout commits with the identity of the account running the test,
 //! and its manifest takes its schema version from Stado's own manifest.
 #[path = "gate_kind/journey.rs"]

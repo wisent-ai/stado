@@ -44,9 +44,7 @@ use std::path::Path;
 use std::process::Command;
 
 pub use self::check::{check, command_tree};
-pub(crate) use self::check::{
-    check_bundle, check_revision, check_revision_for, check_source, place,
-};
+pub(crate) use self::check::{check_bundle, check_revision, check_revision_for, place};
 pub use self::hooks::{hooks, Verb as HooksVerb};
 pub(crate) use units::check as units;
 

@@ -73,14 +73,13 @@ fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
 /// report goes to stderr and stdout carries one document: the revisions
 /// checked, or the failure envelope whose `details` name the refused gate's
 /// findings. `purposes` are the open defects the check serves, named to
-/// Oko's admission before a compile or test gate runs. `pre_push`, when
-/// given, reads Git's pre-push updates and names the hosts the lint gates of
-/// a push to `main` run on (none: the placement chooses them).
+/// Oko's admission before a test gate runs or the CLI is built. `pre_push`
+/// reads Git's pre-push updates and checks each pushed commit's source.
 pub async fn check(
     root: Option<&str>,
     if_declared: bool,
     revision: Option<&str>,
-    pre_push: Option<&[String]>,
+    pre_push: bool,
     purposes: &[String],
     json: bool,
 ) -> Result<(), CmdError> {
@@ -106,7 +105,7 @@ async fn checked(
     root: Option<&str>,
     if_declared: bool,
     revision: Option<&str>,
-    pre_push: Option<&[String]>,
+    pre_push: bool,
     purposes: &[&str],
     report: Report,
 ) -> Result<BTreeSet<String>, CmdError> {
@@ -117,8 +116,8 @@ async fn checked(
                 .stating(crate::cli::entry::error::io_failure_code(error.kind()))
         })?,
     };
-    if let Some(hosts) = pre_push {
-        return pushed(&checkout, if_declared, (hosts, purposes), report).await;
+    if pre_push {
+        return pushed(&checkout, if_declared, purposes, report).await;
     }
     let revision = match revision {
         Some(revision) => resolve(&checkout, revision)?,
@@ -141,16 +140,15 @@ async fn checked(
     Ok(BTreeSet::from([revision]))
 }
 
-/// The pre-push check: every distinct pushed commit gets the source and lock
-/// checks and the `format` gates here, which compile nothing (a web format
-/// gate can itself run the product's typecheck and lint scripts). A commit
-/// pushed to `main` also gets its `lint` gates on the fleet, unless the
-/// submit queue recorded it as its own landing, whose pass ran every gate on
-/// it; such a commit is not checked again and is not among those answered.
+/// The pre-push check: every distinct pushed commit gets the source checks
+/// (its locks, module declarations and reach) and no gate: nothing at push
+/// formats, lints or compiles. A commit pushed to `main` that the submit
+/// queue recorded as its own landing was checked by the queue's pass; it is
+/// not checked again and is not among those answered.
 async fn pushed(
     checkout: &Path,
     if_declared: bool,
-    (hosts, purposes): (&[String], &[&str]),
+    purposes: &[&str],
     report: Report,
 ) -> Result<BTreeSet<String>, CmdError> {
     let updates = pushed_revisions(checkout, report)?;
@@ -163,32 +161,25 @@ async fn pushed(
             if let Some(candidate) = crate::cli::change::push::landing(checkout, revision).await? {
                 report.say(&format!(
                     "stado quality check: {revision} is the submit queue's landing of candidate \
-                     {candidate}, whose pass ran every declared gate on it; nothing to check"
+                     {candidate}, whose pass checked it; nothing to check"
                 ));
                 continue;
             }
         }
         report.say(&format!(
-            "stado quality check: checking committed revision {revision} of {}",
+            "stado quality check: checking the committed source of {revision} of {}",
             checkout.display()
         ));
-        let within =
-            |error: CmdError| error.within(format!("quality of committed revision {revision}"));
         export_check(
             checkout,
             revision,
             report,
-            Selection::Formatting,
+            Selection::Source,
             if_declared,
             purposes,
         )
         .await
-        .map_err(within)?;
-        if *main {
-            crate::cli::change::push::lint(checkout, revision, report, (hosts, purposes))
-                .await
-                .map_err(within)?;
-        }
+        .map_err(|error| error.within(format!("quality of committed revision {revision}")))?;
         checked.insert(revision.clone());
     }
     Ok(checked)

@@ -97,12 +97,12 @@ fn a_newer_revisions_check_cancels_the_older_one_and_runs_alone() {
     // worker's one-second polls; the second's passes at once.
     let held = commit(
         &checkout,
-        json!({"name": "hold", "kind": "format", "argv": ["perl", "-e", "select(undef, undef, undef, 600)"]}),
+        json!({"name": "hold", "kind": "test", "argv": ["perl", "-e", "select(undef, undef, undef, 600)"]}),
         "a gate that holds the check",
     );
     let quick = commit(
         &checkout,
-        json!({"name": "pass", "kind": "format", "argv": ["true"]}),
+        json!({"name": "pass", "kind": "test", "argv": ["true"]}),
         "a gate that passes",
     );
     let root = checkout.to_string_lossy().into_owned();

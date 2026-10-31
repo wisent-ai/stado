@@ -107,7 +107,9 @@ impl Fixture {
         self.success(
             self.git()
                 .arg("add")
-                .arg("source.rs")
+                .arg("src/lib.rs")
+                .arg("Cargo.toml")
+                .arg("Cargo.lock")
                 .arg("VERSION")
                 .arg(".wisent-release.json"),
         );

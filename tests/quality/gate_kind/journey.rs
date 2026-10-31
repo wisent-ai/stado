@@ -1,5 +1,6 @@
-//! Exercise format, lint and test gate selection with a real Rust source,
-//! compiler and executable assertion through `stado quality check`.
+//! Exercise gate selection with a real Rust source, compiler and executable
+//! assertion through `stado quality check`: only `test` gates run, and the
+//! compile is part of the test that needs it.
 
 use super::{Deployment, MANIFEST};
 use serde_json::json;
@@ -8,8 +9,14 @@ use std::{fs, path::Path};
 #[path = "handoff.rs"]
 mod handoff;
 
+/// The test gate that compiles the source's tests and runs them: the
+/// compile is part of the test, as every test gate's is.
+fn compiled_test() -> serde_json::Value {
+    json!({"name": "journey", "kind": "test", "argv": ["sh", "-c", "rustc --test src/lib.rs -o checks && ./checks"]})
+}
+
 #[test]
-fn the_check_runs_every_gate_the_installation_runs() {
+fn the_check_runs_only_test_gates() {
     let mut deployment = Deployment::start();
     let initialised = deployment.run(&["config", "init"]);
     assert!(
@@ -18,17 +25,40 @@ fn the_check_runs_every_gate_the_installation_runs() {
         String::from_utf8_lossy(&initialised.stderr)
     );
 
-    // Formatted committed source reaches the compiler, which names the
-    // missing symbol rather than a formatting failure.
-    let lint_fails = deployment.checkout(
-        "lint-fails",
-        "pub fn answer() -> bool {\n    missing_answer\n}\n\n#[test]\nfn answers_true() {\n    assert!(answer());\n}\n",
+    // A format gate and a lint gate that would refuse are declared beside
+    // the test: neither runs, so the passing test passes the check.
+    let passing = deployment.checkout(
+        "passing",
+        "pub fn answer() -> bool {\n    true\n}\n\n#[test]\nfn answers_true() {\n    assert!(answer());\n}\n",
         json!([
-            {"name": "style", "kind": "format", "argv": ["rustfmt", "--check", "src/lib.rs"]},
-            {"name": "compile-tests", "kind": "lint", "argv": ["rustc", "--test", "src/lib.rs", "-o", "checks"]}
+            {"name": "style", "kind": "format", "argv": ["sh", "-c", "exit 4"]},
+            {"name": "verdict", "kind": "lint", "argv": ["sh", "-c", "exit 3"]},
+            compiled_test()
         ]),
     );
-    let refused = deployment.run(&["quality", "check", "--root", &lint_fails]);
+    let passed = deployment.run(&["quality", "check", "--root", &passing]);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&passed.stdout),
+        String::from_utf8_lossy(&passed.stderr)
+    );
+    assert!(
+        passed.status.success(),
+        "a format or lint gate ran, or the passing test was refused: {said}"
+    );
+    assert!(
+        said.contains("test result: ok"),
+        "the test gate's own assertion was not observed: {said}"
+    );
+
+    // Source the compiler refuses fails the test that compiles it, and the
+    // refusal names that test and the compiler's own words.
+    let not_compiling = deployment.checkout(
+        "not-compiling",
+        "pub fn answer() -> bool {\n    missing_answer\n}\n\n#[test]\nfn answers_true() {\n    assert!(answer());\n}\n",
+        json!([compiled_test()]),
+    );
+    let refused = deployment.run(&["quality", "check", "--root", &not_compiling]);
     let said = format!(
         "{}{}",
         String::from_utf8_lossy(&refused.stdout),
@@ -39,50 +69,15 @@ fn the_check_runs_every_gate_the_installation_runs() {
         "the check passed source whose compiler refuses: {said}"
     );
     assert!(
-        said.contains("stado quality check: rustfmt --check src/lib.rs")
-            && said.contains("stado quality check: rustc --test src/lib.rs -o checks"),
-        "the check did not run format before the compiler: {said}"
-    );
-    assert!(
-        said.contains("gate \"compile-tests\" (lint)") && said.contains("missing_answer"),
-        "the compiler refusal was hidden or sent to the formatter: {said}"
+        said.contains("gate \"journey\" (test)") && said.contains("missing_answer"),
+        "the compiler refusal was hidden or not named as the test's: {said}"
     );
 
-    // A passing compiler gate emits an actual test binary. The test gate
-    // executes its assertion, not a command that merely exits zero.
-    let lint_and_test = deployment.checkout(
-        "lint-and-test",
-        "pub fn answer() -> bool {\n    true\n}\n\n#[test]\nfn answers_true() {\n    assert!(answer());\n}\n",
-        json!([
-            {"name": "compile-tests", "kind": "lint", "argv": ["rustc", "--test", "src/lib.rs", "-o", "checks"]},
-            {"name": "journey", "kind": "test", "argv": ["./checks"]}
-        ]),
-    );
-    let passed = deployment.run(&["quality", "check", "--root", &lint_and_test]);
-    let said = format!(
-        "{}{}",
-        String::from_utf8_lossy(&passed.stdout),
-        String::from_utf8_lossy(&passed.stderr)
-    );
-    assert!(
-        passed.status.success(),
-        "a commit whose compiled test passes was refused: {said}"
-    );
-    assert!(
-        said.contains("stado quality check: rustc --test src/lib.rs -o checks")
-            && said.contains("stado quality check: ./checks")
-            && said.contains("test result: ok"),
-        "the compiler and executable assertion were not observed: {said}"
-    );
-
-    // Compiling the test executable is not a passing behavioral test.
+    // A compiled test whose assertion fails is refused.
     let failing_test = deployment.checkout(
         "failing-test",
         "pub fn answer() -> bool {\n    false\n}\n\n#[test]\nfn answers_true() {\n    assert!(answer());\n}\n",
-        json!([
-            {"name": "compile-tests", "kind": "lint", "argv": ["rustc", "--test", "src/lib.rs", "-o", "checks"]},
-            {"name": "journey", "kind": "test", "argv": ["./checks"]}
-        ]),
+        json!([compiled_test()]),
     );
     let refused = deployment.run(&["quality", "check", "--root", &failing_test]);
     let said = format!(
@@ -95,10 +90,8 @@ fn the_check_runs_every_gate_the_installation_runs() {
         "a failing executable test passed: {said}"
     );
     assert!(
-        said.contains("stado quality check: ./checks")
-            && said.contains("gate \"journey\" (test)")
-            && said.contains("answers_true"),
-        "the test failure was hidden or attributed to the compiler: {said}"
+        said.contains("gate \"journey\" (test)") && said.contains("answers_true"),
+        "the test failure was hidden: {said}"
     );
 
     // A present but incomplete declaration is not an absent product.

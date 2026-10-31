@@ -40,7 +40,6 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                 if_declared,
                 revision,
                 pre_push,
-                hosts,
                 purposes,
                 json,
                 place,
@@ -72,7 +71,7 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                         root.as_deref(),
                         if_declared,
                         revision.as_deref(),
-                        pre_push.then_some(hosts.as_slice()),
+                        pre_push,
                         &purposes,
                         json,
                     )

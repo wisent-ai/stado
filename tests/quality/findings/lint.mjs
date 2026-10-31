@@ -5,23 +5,22 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fro
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Real qualification of a refused lint gate's findings. One isolated
-// workspace under this repository's `.build`, holding one canonical checkout
-// of a one-binary Cargo product whose `.wisent-release.json` declares a
-// `format` gate (`cargo fmt --check`) and a `lint` gate (`cargo clippy -- -D
-// warnings`), and whose committed source is formatted but carries a clippy
-// lint (a needless `return`):
+// Real qualification of a lint's findings. One isolated workspace under this
+// repository's `.build`, holding one canonical checkout of a one-binary Cargo
+// product whose `.wisent-release.json` declares a `format` gate (`cargo fmt
+// --check`) and a `lint` gate (`cargo clippy -- -D warnings`), and whose
+// committed source is formatted but carries a clippy lint (a needless
+// `return`):
 //
-// - `stado quality check --revision <commit> --json` refuses the commit and
-//   its failure envelope's `details.findings` name src/main.rs:<line> and
-//   the clippy lint; the plain check names the same in its refusal;
+// - `stado quality check --revision <commit> --json` runs neither gate: it
+//   passes the commit and names no clippy finding, since no check formats or
+//   lints a tree;
 // - `stado product cargo --revision <commit> --json clippy`, an operation the
-//   product's declared gate runs, is admitted and its record's `findings`
-//   name the same file:line and lint, so the finding is read on the exact
-//   revision without running every gate;
-// - `stado product cargo fmt` is refused as a format gate, naming the
-//   command that reads it, and an operation no gate declares is refused
-//   naming the admitted ones.
+//   product's declared gate names, is admitted and its record's `findings`
+//   name src/main.rs:<line> and the clippy lint on the exact revision;
+// - `stado product cargo fmt` is refused as a format gate no check runs,
+//   naming `stado quality format`, and an operation no gate declares is
+//   refused naming the admitted ones.
 //
 // Required: STADO_BIN, the Stado under test (a path, or a name on PATH).
 // Cargo, clippy and the declared compiler cache are this account's own.
@@ -95,24 +94,14 @@ try {
   const commit = git(['rev-parse', 'HEAD']);
   report.fixture_commit = commit;
 
-  // The quality check: refused, the envelope naming the finding as data.
+  // The quality check runs no lint gate, so the lint does not refuse it.
   const checked = run(binary, ['quality', 'check', '--root', checkout, '--revision', commit, '--json']);
-  assert.ok(!succeeded(checked), 'A commit carrying a clippy lint passed its lint gate');
-  const envelope = JSON.parse(checked.stdout);
-  report.quality_envelope = envelope;
-  assert.equal(envelope.status, 'error', 'The refusal is not the JSON failure envelope');
-  assert.ok(Array.isArray(envelope.details?.findings) && envelope.details.findings.some(named),
-    `The envelope's details do not name src/main.rs:<line> and the needless-return lint: ${checked.stdout}`);
-  assert.match(envelope.message, /gate "clippy" \(lint\)/, 'The refusal does not name the lint gate');
-  assert.match(envelope.message, /src\/main\.rs:\d+:\d+ \[clippy::needless[-_]return\]/,
-    'The refusal sentence does not name the finding');
+  report.quality_answer = checked.stdout;
+  assert.ok(succeeded(checked), `The check refused the commit, so it ran a lint or format gate: ${checked.stderr}`);
+  assert.doesNotMatch(`${checked.stdout}${checked.stderr}`, /clippy::needless[-_]return/,
+    'The check reported a clippy finding, so it ran the lint gate');
 
-  const plain = run(binary, ['quality', 'check', '--root', checkout, '--revision', commit]);
-  assert.ok(!succeeded(plain), 'The plain check passed the lint');
-  assert.match(plain.stderr, /src\/main\.rs:\d+:\d+ \[clippy::needless[-_]return\]/,
-    'The plain refusal does not name the finding');
-
-  // The same lint read through product cargo on the same revision.
+  // The lint read through product cargo on the same revision.
   const cargo = ['product', 'cargo', '--manifest-path', join(checkout, 'Cargo.toml'), '--revision', commit];
   const linted = run(binary, [...cargo, '--json', 'clippy', '--', '--', '-D', 'warnings']);
   assert.ok(!succeeded(linted), 'product cargo clippy passed a commit carrying a clippy lint');
@@ -125,8 +114,8 @@ try {
 
   const formatted = run(binary, [...cargo, 'fmt']);
   assert.ok(!succeeded(formatted), 'product cargo ran a format gate');
-  assert.match(formatted.stderr, /is a format gate of .*stado quality check --revision/s,
-    'The format refusal does not name the command that reads it');
+  assert.match(formatted.stderr, /is a format gate of .*no check runs it.*stado quality\s+format/s,
+    'The format refusal does not name the formatter route');
 
   const undeclared = run(binary, [...cargo, 'udeps']);
   assert.ok(!succeeded(undeclared), 'product cargo ran an operation no gate declares');

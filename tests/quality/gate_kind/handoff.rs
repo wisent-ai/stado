@@ -1,12 +1,14 @@
-//! `stado release changes submit` records source and builds nothing: it runs
-//! the format-kind gates on the handed-off commit and writes the ticket,
-//! leaving every lint and test gate to the batch build that takes the change.
+//! `stado release changes submit` records source and builds nothing: it
+//! checks the handed-off commit's source (its locks, module declarations and
+//! reach), runs no gate and writes the ticket, leaving the tests to the batch
+//! build that takes the change.
 //!
-//! The product's lint gate compiles source that cannot compile, so a hand-off
-//! that ran it would be refused; the hand-off is accepted and its ticket is
-//! listed. A commit whose source the format gate refuses is not handed off
-//! and no ticket names it. The checkout is pushed to an origin of its own,
-//! since a hand-off names a commit on origin's main.
+//! The product declares a format gate and a lint gate that compiles source
+//! that cannot compile; a hand-off that ran either would be refused. A
+//! commit that cannot compile and a commit that is not formatted are both
+//! handed off and their tickets listed, and neither gate's program ran. The
+//! checkout is pushed to an origin of its own, since a hand-off names a
+//! commit on origin's main.
 
 use super::super::{git_output, Deployment};
 use serde_json::{json, Value};
@@ -100,11 +102,11 @@ fn a_hand_off_records_source_without_running_the_gates_that_build() {
     );
     assert!(
         handed.status.success(),
-        "a formatted commit was not handed off: {said}"
+        "a commit was refused at hand-off: {said}"
     );
     assert!(
-        !said.contains("rustc"),
-        "the hand-off ran the lint gate that builds: {said}"
+        !said.contains("rustc") && !said.contains("rustfmt"),
+        "the hand-off ran a format or lint gate: {said}"
     );
     let ticket: Value =
         serde_json::from_slice(&handed.stdout).expect("the hand-off answers its ticket");
@@ -114,36 +116,44 @@ fn a_hand_off_records_source_without_running_the_gates_that_build() {
         "the ticket was not kept: {said}"
     );
 
-    let (unformatted, refused_commit) = pushed(
+    let (unformatted, unformatted_commit) = pushed(
         &mut deployment,
         "unformatted",
         "pub fn answer()->bool{true}\n",
     );
-    let refused = deployment.run(&[
+    let handed = deployment.run(&[
         "release",
         "changes",
         "submit",
         "--source",
         &unformatted,
         "--commit",
-        &refused_commit,
+        &unformatted_commit,
         "--task",
         WORK,
         "--session",
         SESSION,
         "--json",
     ]);
-    let said = String::from_utf8_lossy(&refused.stderr).into_owned();
-    assert!(
-        !refused.status.success(),
-        "an unformatted commit was handed off: {said}"
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&handed.stdout),
+        String::from_utf8_lossy(&handed.stderr)
     );
     assert!(
-        said.contains("is not handed off") && said.contains("style"),
-        "{said}"
+        handed.status.success(),
+        "an unformatted commit was refused at hand-off: {said}"
     );
     assert!(
-        tickets(&mut deployment, &refused_commit).is_empty(),
-        "a refused hand-off left a ticket: {said}"
+        !said.contains("rustfmt"),
+        "the hand-off ran the format gate: {said}"
+    );
+    let ticket: Value =
+        serde_json::from_slice(&handed.stdout).expect("the hand-off answers its ticket");
+    assert!(
+        tickets(&mut deployment, &unformatted_commit)
+            .iter()
+            .any(|row| row["id"] == ticket["id"]),
+        "the unformatted commit's ticket was not kept: {said}"
     );
 }

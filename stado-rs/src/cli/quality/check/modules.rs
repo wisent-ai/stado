@@ -101,30 +101,3 @@ pub(super) fn check(tree: &Path, checkout: &Path, revision: &str) -> Result<(), 
     }
     Err(CmdError::refused(refusals.join(". ")))
 }
-
-/// The locks and the module declarations of `revision` of `checkout`, over
-/// its committed tree exported beside the checkout's other quality runs, for
-/// a product that declares no format gate: everything `stado quality check`
-/// reads without running a gate, so without compiling.
-pub(crate) async fn check_source(
-    checkout: &Path,
-    revision: &str,
-    report: super::Report,
-) -> Result<(), CmdError> {
-    let runs = stado_product::common::runs::checkout_area(
-        &crate::config_file::expand_tilde("~"),
-        checkout,
-    )
-    .map_err(|error| CmdError::click(format!("{error:#}")))?
-    .join("quality");
-    let run_area = runs.join(format!("{}-{revision}-source", std::process::id()));
-    let tree = run_area.join("source");
-    stado_product::export_committed_source(checkout, revision, &tree)
-        .map_err(|error| CmdError::unreachable(format!("cannot export {revision}: {error:#}")))?;
-    let verdict = super::lockfile::check(&tree, checkout, revision, report)
-        .and_then(|()| check(&tree, checkout, revision));
-    std::fs::remove_dir_all(&run_area).map_err(|error| {
-        CmdError::click(format!("cannot remove {}: {error}", run_area.display()))
-    })?;
-    verdict
-}

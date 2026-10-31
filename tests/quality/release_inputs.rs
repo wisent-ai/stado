@@ -25,16 +25,16 @@ const INPUT: &str = "archive";
 const CONTENT: &[u8] = b"quality release input\n";
 const MANIFEST: &str = ".wisent-release.json";
 
-/// A format gate that reads the source alone.
+/// A test gate that reads the source alone.
 fn source_gate() -> Value {
-    json!({"name": "fmt", "kind": "format", "argv": ["cat", "VERSION"]})
+    json!({"name": "fmt", "kind": "test", "argv": ["cat", "VERSION"]})
 }
 
-/// A format gate that prints the staged archive, declaring it reads `input`.
+/// A test gate that prints the staged archive, declaring it reads `input`.
 fn reading_gate(input: &str) -> Value {
     json!({
         "name": "read-archive",
-        "kind": "format",
+        "kind": "test",
         "argv": ["sh", "-c", "cat \"$WISENT_INPUT_ARCHIVE_DIR\""],
         "inputs": [input]
     })

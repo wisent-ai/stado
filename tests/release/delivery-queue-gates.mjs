@@ -2,13 +2,15 @@
 // built Stado and the built Oko. A workspace of its own under
 // .build/release-delivery-queue-gates holds one product checkout whose
 // release manifest takes Stado's own platform recipes and replaces their
-// quality gates with one format gate that refuses (`sh -c 'exit 3'`); Oko's
-// defect register and the queue's register are files of this run.
+// quality gates with one format gate that refuses (`sh -c 'exit 3'`), and
+// whose crate declares a module the commit does not hold; Oko's defect
+// register and the queue's register are files of this run.
 //
 // 1. A defect whose recorded repair is the checkout's commit makes the
-//    commit owe a release; `stado release newest --plan` runs the format
-//    gate before queueing, and the gate refuses: the register keeps the
-//    commit failed at step `gates` with the gate's refusal, nothing is
+//    commit owe a release; `stado release newest --plan` checks the
+//    commit's source before queueing and runs no gate: the missing module
+//    refuses it, the refusing format gate never runs, the register keeps
+//    the commit failed at step `gates` with the source's refusal, nothing is
 //    built, and the defect carries the note naming the commit and step.
 // 2. The commit is not taken again: a second `--plan` leaves the entry as it
 //    was, and the gated `stado release newest` does not submit it.
@@ -81,6 +83,10 @@ try {
     version_source: { kind: 'text', path: 'VERSION' },
     platforms, promotion: { channels: ['candidate'], reconcile: false }, deliveries: [],
   }, null, '  '));
+  mkdirSync(join(checkout, 'src'), { recursive: true });
+  writeFileSync(join(checkout, 'Cargo.toml'), `[package]\nname = "gates-fixture"\nversion = "0.1.0"\nedition = "2021"\n`);
+  writeFileSync(join(checkout, 'Cargo.lock'), `version = 3\n\n[[package]]\nname = "gates-fixture"\nversion = "0.1.0"\n`);
+  writeFileSync(join(checkout, 'src', 'lib.rs'), 'mod missing;\n\npub fn measured() -> bool {\n    true\n}\n');
   git(['add', '.']);
   git(['commit', '-q', '-m', 'fixture']);
   const commit = git(['rev-parse', 'HEAD']);
@@ -96,7 +102,7 @@ try {
   const [refused] = plan().queue;
   assert.equal(refused.state, 'failed');
   assert.equal(refused.step, 'gates');
-  assert.ok(refused.error.includes('refusing-format'), refused.error);
+  assert.ok(refused.error.includes('missing') && !refused.error.includes('refusing-format'), refused.error);
   assert.deepEqual(refused.carried, [id]);
   assert.equal(git(['rev-parse', 'HEAD']), commit, 'the gate step committed');
   const sentence = `stado release loop: ${product} at ${commit} did not reach a release; the gates step refused: ${refused.error}`;

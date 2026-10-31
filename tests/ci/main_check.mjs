@@ -3,7 +3,8 @@
 // register are files of this run under .build/ci-main-check, so the
 // operator's are never read or written. The product is a Rust crate this
 // journey commits into its own git checkout there, whose release manifest
-// declares one lint gate: `cargo check --offline` over the committed tree.
+// declares one test gate, `cargo test --offline` over the committed tree,
+// whose compile is part of the test.
 //
 // 1. A commit that compiles: one pass of `stado ci run` records it green, and
 //    `stado ci delivery --json` names it the step's last green commit.
@@ -94,7 +95,7 @@ try {
     version_source: { kind: 'regex', path: 'Cargo.toml', pattern: '(?m)^version\\s*=\\s*"(?P<version>[^"]+)"\\s*$' },
     platforms: { [platform]: {
       runner_platform: platform,
-      quality: [{ name: 'compiles', kind: 'lint', argv: ['cargo', 'check', '--offline', '--quiet'] }],
+      quality: [{ name: 'tests', kind: 'test', argv: ['cargo', 'test', '--offline', '--quiet'] }],
       build: { argv: ['cargo', 'build', '--offline'] },
       stage: {},
     } },

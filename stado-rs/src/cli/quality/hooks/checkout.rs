@@ -41,11 +41,10 @@ pub(super) fn script() -> String {
          # Written by `stado quality hooks install`; `stado quality hooks status` reads it\n\
          # and `stado quality hooks remove` takes it out, putting back the hook it chained.\n\
          # Git's ref updates go to `stado quality check --pre-push`, which checks each\n\
-         # pushed commit's own tree and refuses the push when a declared gate refuses it;\n\
-         # a push to main also runs the commit's lint gates on the fleet, unless the\n\
-         # submit queue recorded that commit as its own landing. The pre-push hook this\n\
-         # checkout had before, kept beside this one as {CHAINED}, then reads the\n\
-         # same updates.\n\
+         # pushed commit's committed source (its locks, module declarations and reach)\n\
+         # and refuses the push when it does not hold; no gate formats, lints or\n\
+         # compiles at push. The pre-push hook this checkout had before, kept beside\n\
+         # this one as {CHAINED}, then reads the same updates.\n\
          set -eu\n\
          updates=$(cat)\n\
          send() {{\n  if [ -n \"$updates\" ]; then printf '%s\\n' \"$updates\"; fi\n}}\n\

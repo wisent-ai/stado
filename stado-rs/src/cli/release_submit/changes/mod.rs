@@ -84,15 +84,15 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
             let change = source::prepare(source, commit, task, session)?;
             // The hand-off records source; it builds nothing and spends no
             // build budget. What the recorded source shows without a build
-            // is checked here, so an unformatted commit is named to the
-            // session that pushed it while it can still repair it. The batch
-            // build that takes the change runs every gate the product's
-            // installation runs, and that build qualifies it.
+            // (its locks, module declarations and reach) is checked here, so a
+            // broken declaration is named to the session that pushed it while
+            // it can still repair it. The batch build that takes the change
+            // runs the product's tests, and that build qualifies it.
             crate::cli::quality::check_revision(
                 source,
                 &change.source_commit,
                 crate::cli::quality::Report::Stderr,
-                crate::cli::quality::Selection::Formatting,
+                crate::cli::quality::Selection::Source,
             )
             .await
             .map_err(|refusal| {

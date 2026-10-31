@@ -12,7 +12,6 @@ mod placed;
 pub(crate) use placed::{check_bundle, place};
 mod reach;
 mod secrets;
-pub(crate) use modules::check_source;
 use std::path::Path;
 
 use super::{
@@ -271,10 +270,14 @@ async fn check_tree(
                 declared.product,
                 checkout.display()
             ));
-            match gate.kind {
-                GateKind::Format if declared.web_version.is_some() => refused.also(
+            // A web gate runs the product's own package scripts, so its
+            // refusal sends the reader to that output whatever its kind.
+            if declared.web_version.is_some() {
+                return refused.also(
                     "web gate: inspect the failed command and output; `stado quality format` does not write web source",
-                ),
+                );
+            }
+            match gate.kind {
                 GateKind::Format => refused.also("`stado quality format` writes what it reads"),
                 GateKind::Lint | GateKind::Test => refused.also(format!(
                     "a {} gate's refusal is repaired in the source it names; `stado quality format` \

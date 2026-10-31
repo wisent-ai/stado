@@ -99,8 +99,7 @@ pub(crate) fn admit(tree: &Path, operation: &str, own: &[String]) -> Result<()> 
     }
     if declared.formatting.contains(operation) {
         bail!(
-            "`cargo {operation}` is a format gate of {}: it compiles nothing, so `stado quality \
-             check --revision <commit>` reads it on a committed revision and `stado quality \
+            "`cargo {operation}` is a format gate of {}: no check runs it, and `stado quality \
              format` writes what it reads",
             tree.join(MANIFEST).display()
         );

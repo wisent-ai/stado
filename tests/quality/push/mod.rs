@@ -1,5 +1,7 @@
 //! Real Git pushes to an isolated bare remote through the real Stado checker.
-//! The gate is rustfmt, not a canned executable or a simulated quality verdict.
+//! A push runs no gate: the product declares a format and a lint gate that
+//! refuse every tree, and only the committed source decides, a module the
+//! crate declares and the commit does not hold refusing the push.
 mod fixture;
 use fixture::Fixture;
 use serde_json::{json, Value};
@@ -49,6 +51,8 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
             .expect("read Stado release declaration"),
     )
     .expect("parse release declaration");
+    // The declared format and lint gates refuse every tree: a push runs
+    // neither, so only the committed source decides.
     let mut platforms = serde_json::Map::new();
     for platform in own["platforms"]
         .as_object()
@@ -59,8 +63,10 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
             platform.clone(),
             json!({
                 "runner_platform": platform,
-                "quality": [{"name": "rust-source", "kind": "format",
-                    "argv": ["rustfmt", "--edition", "2021", "--check", "source.rs"]}],
+                "quality": [
+                    {"name": "style", "kind": "format", "argv": ["sh", "-c", "exit 4"]},
+                    {"name": "verdict", "kind": "lint", "argv": ["sh", "-c", "exit 3"]}
+                ],
                 "build": {"argv": ["cat", "VERSION"]}, "stage": {"VERSION": "VERSION"}
             }),
         );
@@ -72,30 +78,42 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
     }))
     .expect("encode real fixture declaration");
     let manifest_path = fixture.checkout.join(".wisent-release.json");
-    let source_path = fixture.checkout.join("source.rs");
-    fs::write(&manifest_path, &manifest).expect("declare formatter gate");
+    let sources = fixture.checkout.join("src");
+    fs::create_dir_all(&sources).expect("create the crate's source directory");
+    let source_path = sources.join("lib.rs");
+    fs::write(&manifest_path, &manifest).expect("declare refusing gates");
     fs::write(fixture.checkout.join("VERSION"), env!("CARGO_PKG_VERSION"))
         .expect("write declared version");
-    fs::write(&source_path, "pub fn measured() -> bool { true }\n")
-        .expect("write real Rust source");
-    fixture.success(
-        Command::new("rustfmt")
-            .arg("--edition")
-            .arg("2021")
-            .arg(&source_path),
-    );
-    let formatted = fs::read(&source_path).expect("read formatter output");
+    fs::write(
+        fixture.checkout.join("Cargo.toml"),
+        "[package]\nname = \"quality-push-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write the crate manifest");
+    fs::write(
+        fixture.checkout.join("Cargo.lock"),
+        "version = 3\n\n[[package]]\nname = \"quality-push-fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write the crate lock");
+    // Unformatted, which the refusing format gate would not let through.
+    let declared = "pub fn measured()->bool{true}\n";
+    fs::write(&source_path, declared).expect("write real Rust source");
     let good = fixture.commit();
-    fs::write(&source_path, "pub fn measured()->bool{true}\n").expect("write unformatted source");
+    // A module the crate declares and the commit does not hold: compiled,
+    // it fails everywhere, and the source check reads it without compiling.
+    fs::write(&source_path, format!("mod missing;\n{declared}"))
+        .expect("declare a missing module");
     let bad = fixture.commit();
     assert_ne!(good, bad, "the two committed trees must differ");
-    // HEAD now fails its real formatter, while the uncommitted source rescues it
-    // and the uncommitted manifest disables releases. Neither may affect a push.
-    fs::write(&source_path, &formatted).expect("leave another writer's repaired source");
+    // HEAD now declares a module it does not hold, while the uncommitted
+    // module file rescues it and the uncommitted manifest disables releases.
+    // Neither may affect a push.
+    let rescue = sources.join("missing.rs");
+    fs::write(&rescue, "").expect("leave another writer's uncommitted module");
     fs::write(&manifest_path, serde_json::to_vec(&json!({
         "schema_version": own["schema_version"], "product": "quality-push-fixture", "releases": false
     })).expect("encode uncommitted declaration")).expect("leave unrelated dirty declaration");
     let dirty_manifest = fs::read(&manifest_path).expect("snapshot dirty declaration");
+    let dirty_source = fs::read(&source_path).expect("snapshot the working source");
     let hooks = fixture.root.join("hooks");
     fs::create_dir(&hooks).expect("isolated hooks");
     fs::copy(
@@ -150,8 +168,8 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
         String::from_utf8_lossy(&refused.stderr)
     );
     assert!(
-        transcript.contains(&bad),
-        "refusal did not identify its committed source: {transcript}"
+        transcript.contains(&bad) && transcript.contains("missing"),
+        "refusal did not identify its committed source and the missing module: {transcript}"
     );
     assert_eq!(
         fixture.published(),
@@ -244,7 +262,7 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
         fixture
             .git()
             .arg("rev-parse")
-            .arg(format!("{good}:source.rs")),
+            .arg(format!("{good}:src/lib.rs")),
     );
     let blob = String::from_utf8(blob.stdout).expect("source blob identity");
     let invalid = fixture.run(
@@ -270,8 +288,9 @@ fn a_push_checks_its_commits_not_head_or_working_tree() {
     );
     assert_eq!(
         fs::read(&source_path).expect("read working source"),
-        formatted
+        dirty_source
     );
+    assert!(rescue.is_file(), "the push removed the uncommitted module");
     assert_eq!(
         fs::read(&manifest_path).expect("read working declaration"),
         dirty_manifest

@@ -17,8 +17,8 @@ use chrono::Utc;
 use super::super::register::{self, Entry, State, Step};
 use super::carried::{carried, note_failure, open_repairs, record_released, repository_of, Repair};
 use super::owed::{owed, Owed};
-use super::version::{commit_next, declares_format_gate};
-use crate::cli::quality::{check_revision, check_source, Report, Selection};
+use super::version::commit_next;
+use crate::cli::quality::{check_revision, Report, Selection};
 use crate::cli::release_newest::Planned;
 use crate::cli::release_submit::{submit, ReleaseSubmitArgs, SubmitChannel};
 use crate::cli::CmdError;
@@ -145,24 +145,18 @@ async fn deliver(
         };
         return failed(current, CmdError::click(error)).await.map(Some);
     };
-    // The format gates, the lock check and the module declarations read the
-    // committed tree and compile nothing, so they run as soon as a commit
-    // carries a repair, not behind the build gate. A commit kept queued has
-    // passed them.
+    // The lock check, the module declarations and the reach read the
+    // committed tree, run no gate and compile nothing, so they run as soon as
+    // a commit carries a repair, not behind the build gate. A commit kept
+    // queued has passed them.
     let checked = kept
         .as_ref()
         .is_some_and(|kept| kept.state == State::Queued);
     if !published && !checked {
         current.step = Step::Gates;
-        let gated = match declares_format_gate(checkout, product) {
-            Ok(gated) => gated,
-            Err(error) => return failed(current, error).await.map(Some),
-        };
-        let source = match gated {
-            true => check_revision(checkout, &commit, Report::Stderr, Selection::Formatting).await,
-            false => check_source(checkout, &commit, Report::Stderr).await,
-        };
-        if let Err(error) = source {
+        if let Err(error) =
+            check_revision(checkout, &commit, Report::Stderr, Selection::Source).await
+        {
             return failed(current, error).await.map(Some);
         }
     }

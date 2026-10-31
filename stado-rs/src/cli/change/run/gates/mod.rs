@@ -1,17 +1,16 @@
 //! The candidate's declared gates, as the release manifest of its rebased
-//! commit declares them: the locks, the module declarations and every
-//! `format` gate checked here, compiling nothing (`stado quality check`'s
-//! formatting selection), then every `lint` and `test` gate of every
-//! declared platform as fleet host shards ([`shard`]: a Cargo gate as `stado
-//! host cargo` runs it, any other as declared) on the hosts of that platform
-//! ([`pool`]), each host running one shard at a time and the hosts at
-//! once. A shard the action cache ([`cache`]) holds a pass for
-//! is answered without running. A host that cannot run its shard (it is
+//! commit declares them: the locks, the module declarations and the reach
+//! checked here, with no gate and no compile (`stado quality check`'s source
+//! selection), then every `test` gate of every declared platform as fleet
+//! host shards ([`shard`]: a Cargo gate as `stado host cargo` runs it, any
+//! other as declared) on the hosts of that platform ([`pool`]), each host
+//! running one shard at a time and the hosts at once. No `format` or `lint`
+//! gate runs: whether code compiles is learned from reading it and from the
+//! tests that compile it. A shard the action cache ([`cache`]) holds a pass
+//! for is answered without running. A host that cannot run its shard (it is
 //! unreachable, its disk is full) leaves the shard to the platform's other
 //! hosts; a platform left with no host ends the pass unchecked, never with
-//! a verdict on the candidate. A direct push to `main` runs the same
-//! compiling shards, its `lint` gates only ([`PUSHED`]), through
-//! [`compiling`] (`crate::cli::change::push`).
+//! a verdict on the candidate.
 
 mod cache;
 mod pool;
@@ -36,6 +35,10 @@ use crate::release_pipeline::{
 /// How much of a shard's report its record keeps: the end, where Cargo and
 /// test harnesses put the verdict.
 const REPORT_LINES: usize = 60;
+
+/// The kind the queue's record names the local source check by: it runs no
+/// declared gate, so it is none of the manifest's gate kinds.
+const SOURCE_KIND: &str = "source";
 
 /// What the manifest of a commit declares the queue runs.
 pub struct Plan {
@@ -64,15 +67,10 @@ impl Plan {
     }
 }
 
-/// The compiling gate kinds a queued candidate runs on the fleet: every
-/// `lint` and `test` gate, since what it lands is what the release builds.
-pub const QUEUED: &[GateKind] = &[GateKind::Lint, GateKind::Test];
-
-/// The compiling gate kinds a push to `main` the queue did not make runs on
-/// the fleet (`stado quality check --pre-push`): the `lint` gates, which
-/// compile the pushed tree without running it. Its `test` gates stay the
-/// queue's and the release's, as a push waits for its gates.
-pub const PUSHED: &[GateKind] = &[GateKind::Lint];
+/// The gate kinds a queued candidate runs on the fleet: every `test` gate,
+/// since what it lands is what the release builds and its tests are what
+/// compile it.
+pub const QUEUED: &[GateKind] = &[GateKind::Test];
 
 /// The plan of `commit`, its compiling gates of the `kinds` named; a
 /// declaration the queue cannot run is the candidate's refusal (`Err` of
@@ -192,7 +190,7 @@ pub async fn run(
 ) -> Result<Outcome, CmdError> {
     let purposes = admission.purposes;
     let mut shards = Vec::new();
-    let gate = "locks, modules and format gates";
+    let gate = "locks, modules and reach";
     let argv: Vec<String> = ["stado", "quality", "check", "--pre-push"]
         .map(String::from)
         .into();
@@ -205,7 +203,7 @@ pub async fn run(
                 checkout,
                 commit,
                 Report::Stderr,
-                Selection::Formatting,
+                Selection::Source,
                 purposes,
             )
             .await;
@@ -217,13 +215,13 @@ pub async fn run(
                     if error.failure
                         == Some(crate::primitives::failure::FailureCode::InfraDown) =>
                 {
-                    return Err(error.within("the format check did not run"));
+                    return Err(error.within("the source check did not run"));
                 }
                 Err(error) => (1, error.to_string()),
             };
             let shard = Shard {
                 gate: gate.to_string(),
-                kind: GateKind::Format.to_string(),
+                kind: SOURCE_KIND.to_string(),
                 platform: "any".to_string(),
                 argv,
                 host: "this host".to_string(),
@@ -236,10 +234,10 @@ pub async fn run(
             shard
         }
     };
-    let format_refused = local.exit_code != 0;
+    let source_refused = local.exit_code != 0;
     let report = local.report.clone();
     shards.push(local);
-    if format_refused {
+    if source_refused {
         return Ok(Outcome {
             shards,
             refusal: Some(report),

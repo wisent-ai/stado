@@ -145,12 +145,13 @@ pub(crate) enum QualityCommands {
     },
     /// Check that each committed Cargo.lock resolves its manifest (cargo
     /// fetch through the git program, then cargo metadata --locked --offline,
-    /// no compile), then run every declared quality gate the product
-    /// installation runs — each kind, `format`, `lint` and `test` — exactly as
-    /// the release build runs it, writing nothing, so a commit that passes is
-    /// not refused by its installation. On the web platform the gate is
-    /// `stado web quality`, run over the exported tree with the release
-    /// worker's WISENT_* contract.
+    /// no compile), its module declarations and its reach, then build the
+    /// product's CLI as its installation builds it and run its declared
+    /// `test` gates exactly as the release build runs them, writing nothing.
+    /// No `format` or `lint` gate runs: whether code compiles is learned from
+    /// reading it and from its tests. On the web platform the gate is `stado
+    /// web quality`, run over the exported tree with the release worker's
+    /// WISENT_* contract.
     Check {
         /// The checkout to check; the working directory by default.
         #[arg(long)]
@@ -164,23 +165,17 @@ pub(crate) enum QualityCommands {
         /// origin/main. The declaration is read from the same export.
         #[arg(long, conflicts_with = "pre_push")]
         revision: Option<String>,
-        /// Read Git pre-push ref updates from stdin and check every distinct
-        /// pushed commit. Deletions have no source tree to check. A commit
-        /// pushed to main also has its lint gates run on fleet hosts as the
-        /// submit queue runs them, unless the queue recorded that commit as
-        /// its own landing.
+        /// Read Git pre-push ref updates from stdin and check the committed
+        /// source of every distinct pushed commit: its locks, module
+        /// declarations and reach, with no gate and no build. Deletions have
+        /// no source tree to check, and a commit the submit queue recorded as
+        /// its own landing was checked by the queue's pass.
         #[arg(long, conflicts_with = "revision")]
         pre_push: bool,
-        /// With --pre-push: run the lint gates of a push to main on these
-        /// registry hosts, by name; repeat for several. Without it the hosts
-        /// are chosen from their capacity publications, as `stado change
-        /// run` chooses them.
-        #[arg(long = "host", requires = "pre_push")]
-        hosts: Vec<String>,
         /// An open defect this check serves, named to Oko's admission
-        /// (`oko admit compile|test|build --purpose`) before a lint or test
-        /// gate runs or the CLI is built; repeat for several. A consent the
-        /// operator limited to a purpose admits only work naming it.
+        /// (`oko admit test|build --purpose`) before a test gate runs or the
+        /// CLI is built; repeat for several. A consent the operator limited
+        /// to a purpose admits only work naming it.
         #[arg(long = "purpose")]
         purposes: Vec<String>,
         /// Answer in JSON: the progress lines and each gate's own report go

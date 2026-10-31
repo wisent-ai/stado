@@ -1,10 +1,11 @@
 //! Which of a product's declared quality gates `stado quality` runs, chosen
-//! by each gate's declared kind. An installation runs every kind; pre-push
-//! selects the gates declared as `format`, and a push that updates `main`
-//! also has its `lint` gates run on the fleet as the submit queue runs them
-//! (`crate::cli::change::push`). A web product can declare
-//! `stado web quality` with that kind; it installs locked dependencies and
-//! runs declared typecheck and lint scripts, but writes no formatter output.
+//! by each gate's declared kind. No check runs a gate that only says whether
+//! the code is formatted or lints: whether code compiles is learned from
+//! reading it and from the tests that compile it. A push, the change
+//! hand-off and the delivery queue check the committed source alone (its
+//! locks, module declarations and reach); the full check and a release
+//! submission run the `test` gates. `stado quality format` runs the `format`
+//! gates to write the formatter's output, never to judge a tree.
 
 use std::path::PathBuf;
 
@@ -18,13 +19,16 @@ const MANIFEST: &str = ".wisent-release.json";
 /// Which declared gates a check runs.
 #[derive(Clone, Copy)]
 pub(crate) enum Selection {
-    /// The gates declared as `format`; a web gate may run more than a
-    /// formatter and cannot be rewritten by `stado quality format`. Pre-push
-    /// and the change hand-off (`stado release changes submit`), which
-    /// records source and builds nothing, use this selection.
+    /// The gates declared as `format`, which `stado quality format` runs to
+    /// write the formatter's output.
     Formatting,
-    /// Every gate a product installation runs before it builds. The full
-    /// `stado quality check` and release submission use this selection.
+    /// No gate and no build: the committed source's locks, module
+    /// declarations and reach. Pre-push, the change hand-off (`stado release
+    /// changes submit`) and the delivery queue use this selection.
+    Source,
+    /// The `test` gates, with the product's CLI built as its installation
+    /// builds it. The full `stado quality check` and release submission use
+    /// this selection.
     Installation,
     /// No gate: the product's CLI built as its installation builds it, and
     /// its command tree read and judged (`stado quality tree`).
@@ -36,17 +40,15 @@ impl Selection {
     fn runs(self, kind: GateKind) -> bool {
         match self {
             Self::Formatting => kind == GateKind::Format,
-            Self::Installation => match kind {
-                GateKind::Format | GateKind::Lint | GateKind::Test => true,
-            },
-            Self::CommandTree => false,
+            Self::Installation => kind == GateKind::Test,
+            Self::Source | Self::CommandTree => false,
         }
     }
 
     /// Whether a check under this selection builds the product, so reads
-    /// the release worker's contract: every selection but the formatting one.
+    /// the release worker's contract.
     fn builds(self) -> bool {
-        !matches!(self, Self::Formatting)
+        matches!(self, Self::Installation | Self::CommandTree)
     }
 }
 
@@ -160,30 +162,24 @@ pub(super) fn declared_gates(
         .filter(|gate| selection.runs(gate.kind))
         .cloned()
         .collect();
-    // A command-tree reading runs no gate, so a product declaring none
-    // still has its CLI built and read.
-    if gates.is_empty() && !matches!(selection, Selection::CommandTree) {
+    // Only formatting has nothing to do without its gate; every other
+    // selection checks the source, and builds and reads the CLI, with no
+    // gate selected.
+    if gates.is_empty() && matches!(selection, Selection::Formatting) {
         let declared: Vec<String> = recipe
             .quality
             .iter()
             .map(|gate| format!("{} ({})", gate.name, gate.kind))
             .collect();
-        return Ok(Declaration::Undeclared(match selection {
-            Selection::Formatting => format!(
-                "{} declares no gate of kind {} for platform {platform}: its quality gates are \
-                 [{}]; declare \"kind\": \"{}\" on the gate in platforms.{platform}.quality \
-                 that checks formatting (a web product's `stado web quality` gate is that gate)",
-                manifest_path.display(),
-                GateKind::Format,
-                declared.join(", "),
-                GateKind::Format,
-            ),
-            Selection::Installation | Selection::CommandTree => format!(
-                "{} declares no quality gate for platform {platform}, so an installation runs \
-                 none before it builds",
-                manifest_path.display()
-            ),
-        }));
+        return Ok(Declaration::Undeclared(format!(
+            "{} declares no gate of kind {} for platform {platform}: its quality gates are [{}]; \
+             declare \"kind\": \"{}\" on the gate in platforms.{platform}.quality that formats \
+             (a web product's `stado web quality` gate is that gate)",
+            manifest_path.display(),
+            GateKind::Format,
+            declared.join(", "),
+            GateKind::Format,
+        )));
     }
     // A web platform's gates are `stado web quality`, and every gate an
     // installation runs reads the release worker's contract, which carries
@@ -215,8 +211,9 @@ pub(super) fn declared_gates(
 
 /// The gates a product that publishes no release declares in its top-level
 /// `quality` list. They read the same source on every host, so they are not
-/// per platform; there is no build, stage or release input. Only the
-/// formatting check runs them: an installation builds the release a
+/// per platform; there is no build, stage or release input. Only `stado
+/// quality format` runs them, and the source check at push reads such a
+/// product's source with none: an installation builds the release a
 /// non-releasing product does not have.
 fn non_release_gates(
     root: PathBuf,
@@ -227,7 +224,7 @@ fn non_release_gates(
     if selection.builds() {
         return Ok(Declaration::Undeclared(format!(
             "{} declares releases:false, so no installation builds it and it has no CLI command \
-             tree to read; its declared quality gates run in the formatting check at push",
+             tree to read; its source is checked at push",
             manifest_path.display()
         )));
     }
@@ -236,10 +233,10 @@ fn non_release_gates(
         .into_iter()
         .filter(|gate| selection.runs(gate.kind))
         .collect();
-    if gates.is_empty() {
+    if gates.is_empty() && matches!(selection, Selection::Formatting) {
         return Ok(Declaration::Undeclared(format!(
             "{} declares releases:false and no gate of kind {} in its top-level \"quality\" \
-             list; declare the gate that checks formatting there",
+             list; declare the gate that formats there",
             manifest_path.display(),
             GateKind::Format,
         )));

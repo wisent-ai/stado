@@ -6,9 +6,10 @@
 //! checkout in the workspace, and every session working in it pushes from
 //! there, so one hook in that checkout gates every push made from it. The
 //! hook ([`checkout`]) hands Git's ref updates to `stado quality check
-//! --pre-push`: a push to `main` that does not pass the commit's declared
-//! `format` and `lint` gates is refused before it reaches `main`, and the
-//! submit queue's own push passes on the landing its record names.
+//! --pre-push`: a push whose committed source does not hold (its locks,
+//! module declarations and reach) is refused before it reaches `main`; no
+//! gate formats, lints or compiles at push, and the submit queue's own push
+//! passes on the landing its record names.
 //! `install` writes or repairs the hook and is idempotent, `status` reads
 //! where each checkout stands, `remove` takes the hook out and puts back the
 //! one it chained.
