@@ -211,14 +211,18 @@ fn compiled_catalog(message: String) -> DeployError {
     DeployError(message).stating(crate::primitives::failure::FailureCode::Config)
 }
 
-/// [`predecessors_on_with`], reading the host's units first.
+/// [`predecessors_on_with`], reading the host's units first. A predecessor
+/// is told by its label, domain and programs, which the image read answers;
+/// the full read (environment keys, script reads, process ages of every
+/// label) took minutes on a Mac with many labels, and the host Stado's API
+/// start waited on it before it listened.
 pub async fn predecessors_on(
     target: &ComputeTarget,
     entry: &CatalogService,
     running: Option<&ManagedService>,
     runner: &Runner,
 ) -> Result<Predecessors, DeployError> {
-    let loaded = loaded_units(target, runner).await?;
+    let loaded = loaded_image_units(target, runner).await?;
     predecessors_on_with(target, entry, running, &loaded, runner).await
 }
 

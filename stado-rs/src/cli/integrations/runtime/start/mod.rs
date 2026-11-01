@@ -3,6 +3,20 @@
 //! release proxy and agent, and every resident role after them.
 
 use super::*;
+use std::future::Future;
+
+/// One awaited step of this start, registered as a wait while it runs, so a
+/// start that has not come up (its API not listening, no `stado serve:
+/// target=` line) is named by `stado waits` and the service log at the step
+/// it is still on, with how long that step took before.
+async fn step<T>(
+    name: &str,
+    work: impl Future<Output = Result<T, CmdError>>,
+) -> Result<T, CmdError> {
+    let what = format!("stado serve start: {name}");
+    let place = format!("pid {}", std::process::id());
+    crate::wait::until(crate::wait::Kind::Process, what, place, work).await
+}
 
 /// Every role after delivery, in their order. An error ends the start, and
 /// the caller keeps delivering ([`supervisor::Supervisor::deliver_after`]).
@@ -15,18 +29,21 @@ pub(super) async fn start_roles(
     // Start an API before resolving host identity unless a worker first needs
     // to apply its environment. An API-only host needs no registry bootstrap.
     if serve_api && !mutates_worker_environment {
-        let api = api::PreparedApi::prepare(api::ApiShape {
-            bind: args.bind.take(),
-            port: args.port,
-            storage: args.api_storage.take(),
-            enrollment_only: args.enrollment_only,
-            inherited_listener: args.inherited_listener,
-        })
+        let api = step(
+            "API storage and listener",
+            api::PreparedApi::prepare(api::ApiShape {
+                bind: args.bind.take(),
+                port: args.port,
+                storage: args.api_storage.take(),
+                enrollment_only: args.enrollment_only,
+                inherited_listener: args.inherited_listener,
+            }),
+        )
         .await?;
         supervisor.spawn("api", move || api.run())?;
     }
     let target = supervisor
-        .during_startup(identity::resolve(&mut args))
+        .during_startup(step("host identity", identity::resolve(&mut args)))
         .await?;
     if args.resolver {
         let resolver_target = identity::required_name(&target)?;
@@ -35,7 +52,7 @@ pub(super) async fn start_roles(
         })?;
     }
 
-    let bundled_coordinator = supervisor.during_startup(async {
+    let bundled_coordinator = supervisor.during_startup(step("control plane", async {
         match (args.control_plane, args.control_plane_interval_seconds) {
             (Some(mode), Some(interval)) => {
                 let store = crate::queue::JobStorage::new().await.map_err(CmdError::from)?;
@@ -46,7 +63,7 @@ pub(super) async fn start_roles(
             (None, None) => Ok(None),
             _ => Err(CmdError::usage("serve --control-plane and --control-plane-interval-seconds must be supplied together")),
         }
-    }).await?;
+    })).await?;
     let reverse_forward = match (
         args.forward_destination,
         args.forward_remote_port,
@@ -64,13 +81,16 @@ pub(super) async fn start_roles(
     };
     let api = if serve_api && mutates_worker_environment {
         Some(
-            api::PreparedApi::prepare(api::ApiShape {
-                bind: args.bind.take(),
-                port: args.port,
-                storage: args.api_storage.take(),
-                enrollment_only: args.enrollment_only,
-                inherited_listener: args.inherited_listener,
-            })
+            step(
+                "API storage and listener",
+                api::PreparedApi::prepare(api::ApiShape {
+                    bind: args.bind.take(),
+                    port: args.port,
+                    storage: args.api_storage.take(),
+                    enrollment_only: args.enrollment_only,
+                    inherited_listener: args.inherited_listener,
+                }),
+            )
             .await?,
         )
     } else {
@@ -93,7 +113,7 @@ pub(super) async fn start_roles(
     // The roles below read the store; when it is behind this process's own
     // resolver they start once it serves.
     supervisor
-        .during_startup(own_route::await_own_resolver(args.resolver))
+        .during_startup(step("this process's resolver serving", own_route::await_own_resolver(args.resolver)))
         .await?;
     if let Some(interval) = args.release_interval_seconds {
         let release_target = identity::required_name(&target)?;
