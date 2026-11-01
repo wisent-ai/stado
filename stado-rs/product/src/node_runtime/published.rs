@@ -15,27 +15,37 @@ use stado_wait as wait;
 use crate::common::files::{present, remove_tree};
 use crate::common::{capture, sha256, unpack};
 
-/// `program` when it is installed and answers `version` to `--version`;
-/// `None` when it is absent or answers another release, which an install
-/// replaces. A program that is there and cannot be examined or run is the
-/// error naming it.
-pub fn answering(program: PathBuf, version: &str) -> Result<Option<PathBuf>> {
+/// `program` when it is installed and answers `version` to `asked` (most
+/// programs to `--version`; Supabase Auth to `version`); `None` when it is
+/// absent or answers another release, which an install replaces. A program
+/// that is there and cannot be examined or run is the error naming it.
+pub fn answering(program: PathBuf, asked: &[&str], version: &str) -> Result<Option<PathBuf>> {
     if !present(&program)? {
         return Ok(None);
     }
-    let output = wait::output(Command::new(&program).arg("--version"))
-        .with_context(|| format!("running {} --version", program.display()))?;
+    let output = wait::output(Command::new(&program).args(asked))
+        .with_context(|| format!("running {} {}", program.display(), asked.join(" ")))?;
     let answered = String::from_utf8_lossy(&output.stdout);
     Ok((output.status.success() && answered.trim() == version).then_some(program))
 }
 
-/// One archive of a release and the checksum list published beside it.
+/// Where the archive's expected sha256 comes from.
+pub enum Expected {
+    /// The list of `<sha256>  <file name>` lines the release publishes
+    /// beside the archive (Node.js, the Supabase CLI).
+    Listed(String),
+    /// The digest a Stado declaration pins, for a publisher that puts no
+    /// list beside its archives (Supabase Auth): the release record's digest,
+    /// written into the declaration when the release is adopted.
+    Pinned(String),
+}
+
+/// One archive of a release and where its expected sha256 comes from.
 pub struct Published {
     /// The archive's file name, as the checksum list names it.
     pub archive_name: String,
     pub archive_url: String,
-    /// The list of `<sha256>  <file name>` lines the release publishes.
-    pub sums_url: String,
+    pub expected: Expected,
     /// The directory inside the archive that holds the release, or `None`
     /// when the archive holds its files at its root.
     pub tree: Option<String>,
@@ -69,21 +79,25 @@ fn fetch(url: &str, destination: &Path) -> Result<()> {
 fn unpack_verified(published: &Published, staging: &Path) -> Result<PathBuf> {
     let name = &published.archive_name;
     let archive = staging.join(name);
-    let sums = staging.join("published-checksums.txt");
     fetch(&published.archive_url, &archive)?;
-    fetch(&published.sums_url, &sums)?;
-    let listed =
-        std::fs::read_to_string(&sums).with_context(|| format!("reading {}", sums.display()))?;
-    let expected = listed
-        .lines()
-        .find_map(|line| line.strip_suffix(&format!("  {name}")))
-        .with_context(|| format!("{} lists no {name}", published.sums_url))?;
+    let (expected, said) = match &published.expected {
+        Expected::Listed(sums_url) => {
+            let sums = staging.join("published-checksums.txt");
+            fetch(sums_url, &sums)?;
+            let listed = std::fs::read_to_string(&sums)
+                .with_context(|| format!("reading {}", sums.display()))?;
+            let expected = listed
+                .lines()
+                .find_map(|line| line.strip_suffix(&format!("  {name}")))
+                .with_context(|| format!("{sums_url} lists no {name}"))?
+                .to_string();
+            (expected, format!("{sums_url} lists"))
+        }
+        Expected::Pinned(digest) => (digest.clone(), "the declaration pins".to_string()),
+    };
     let actual = sha256(&archive)?;
     if actual != expected {
-        bail!(
-            "{name} has sha256 {actual}; {} lists {expected}",
-            published.sums_url
-        );
+        bail!("{name} has sha256 {actual}; {said} {expected}");
     }
     let unpacked = staging.join("unpacked");
     unpack(&archive, &unpacked).with_context(|| format!("unpacking {name}"))?;

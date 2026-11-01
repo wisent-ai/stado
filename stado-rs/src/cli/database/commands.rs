@@ -149,6 +149,13 @@ pub(crate) enum DatabaseCommands {
         #[command(subcommand)]
         command: super::rest::RestCommands,
     },
+    /// Serve the hosted provider's sign-in (Supabase Auth, `/auth/v1`) beside
+    /// a fleet Postgres database, over the accounts its `auth` schema holds,
+    /// with the settings of the project they came from.
+    Auth {
+        #[command(subcommand)]
+        command: super::auth::AuthCommands,
+    },
     /// What a provider bills for the databases it hosts, read from its API:
     /// per project add-ons, prices, the month's total and gateway traffic.
     Cost {

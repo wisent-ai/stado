@@ -203,6 +203,80 @@ final class DatabaseCopyStore: ObservableObject {
         }
     }
 
+    /// `stado database auth place NAME --port PORT --ready-within SECONDS
+    /// [--from-project REF] [--reconfigure] --json`; blank fields are passed
+    /// blank and the CLI refuses them by name; a blank project is left out,
+    /// so the CLI reads the one the item or its kept previous item records.
+    nonisolated static func authPlaceArguments(
+        name: String, port: String, readyWithin: String, fromProject: String, reconfigure: Bool
+    ) -> [String] {
+        var arguments = [
+            "database", "auth", "place", name,
+            "--port", port.trimmingCharacters(in: .whitespaces),
+            "--ready-within", readyWithin.trimmingCharacters(in: .whitespaces),
+        ]
+        let project = fromProject.trimmingCharacters(in: .whitespaces)
+        if !project.isEmpty {
+            arguments += ["--from-project", project]
+        }
+        if reconfigure {
+            arguments.append("--reconfigure")
+        }
+        arguments.append("--json")
+        return arguments
+    }
+
+    func placeAuth(name: String, port: String, readyWithin: String, fromProject: String, reconfigure: Bool) async -> Bool {
+        guard !isRunning else { return false }
+        isRunning = true
+        defer { isRunning = false }
+        do {
+            let placed = try await cli.json(
+                AuthReport.self,
+                arguments: Self.authPlaceArguments(
+                    name: name, port: port, readyWithin: readyWithin, fromProject: fromProject, reconfigure: reconfigure),
+                confirmsMutation: true
+            )
+            report = [placed.reused
+                ? "\(name): sign-in is already placed as \(placed.unit); auth_url \(placed.authURL)"
+                : "\(name): \(placed.unit) answers; auth_url \(placed.authURL) on \(placed.item)"]
+            problem = nil
+            return true
+        } catch {
+            problem = error.localizedDescription
+            return false
+        }
+    }
+
+    private struct AuthReport: Codable {
+        let reused: Bool
+        let unit: String
+        let authURL: String
+        let item: String
+
+        enum CodingKeys: String, CodingKey {
+            case reused, unit, item
+            case authURL = "auth_url"
+        }
+    }
+
+    /// `stado database auth retire NAME --json`; the same report as the REST
+    /// API's retire.
+    func retireAuth(name: String) async {
+        guard !isRunning else { return }
+        isRunning = true
+        defer { isRunning = false }
+        do {
+            let retired = try await cli.json(
+                RestRetired.self, arguments: ["database", "auth", "retire", name, "--json"], confirmsMutation: true
+            )
+            report = ["\(name): \(retired.unit) \(retired.unitStatus) on \(retired.host); fields off \(retired.item): \(retired.fieldsRemoved.joined(separator: ", ")); the accounts stay"]
+            problem = nil
+        } catch {
+            problem = error.localizedDescription
+        }
+    }
+
     /// One row of `stado database backup --json`: a kept backup, or the
     /// cause it was not taken.
     private struct BackupRow: Codable {

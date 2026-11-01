@@ -18,13 +18,14 @@ pub(super) const ANON: &str = "anon";
 const AUTHENTICATED: &str = "authenticated";
 pub(super) const SERVICE: &str = "service_role";
 
-fn literal(text: &str) -> String {
+/// `text` as a Postgres string literal.
+pub(in crate::cli::database) fn literal(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
 /// A password or secret: two random UUIDs' hex, as fleet Postgres passwords
 /// are made.
-pub(super) fn generated() -> String {
+pub(in crate::cli::database) fn generated() -> String {
     format!(
         "{}{}",
         uuid::Uuid::new_v4().simple(),

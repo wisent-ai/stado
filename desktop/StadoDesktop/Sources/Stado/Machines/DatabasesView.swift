@@ -24,6 +24,7 @@ struct DatabasesView: View {
     @State private var moving: DatabaseMoveTarget?
     @StateObject private var copies = DatabaseCopyStore()
     @State private var serving: DatabaseRestTarget?
+    @State private var signing: DatabaseAuthTarget?
     @StateObject private var bill = DatabaseBillStore()
 
     var body: some View {
@@ -96,7 +97,7 @@ struct DatabasesView: View {
         .sheet(item: $pendingDestruction) { row in
             destructionDialog(row)
         }
-        .databaseCopySheets(store: copies, moving: $moving, serving: $serving)
+        .databaseCopySheets(store: copies, moving: $moving, serving: $serving, signing: $signing)
     }
 
     private func removalDialog(_ row: DatabaseRow) -> WisentDecisionDialog {
@@ -211,7 +212,8 @@ struct DatabasesView: View {
                         Button("Adopt from Supabase") {
                             Task { await store.adopt(name: row.database) }
                         }
-                        DatabaseCopyMenuItems(database: row.database, store: copies, moving: $moving, serving: $serving)
+                        DatabaseCopyMenuItems(
+                            database: row.database, store: copies, moving: $moving, serving: $serving, signing: $signing)
                         Divider()
                         Button("Remove…", role: .destructive) {
                             pendingRemoval = row

@@ -73,6 +73,7 @@ fn root(home: &Path) -> PathBuf {
 fn installed(home: &Path, declaration: &Declaration) -> Result<Option<PathBuf>> {
     published::answering(
         root(home).join(&declaration.version).join("bin/node"),
+        &["--version"],
         &declaration.version,
     )
 }
@@ -86,7 +87,7 @@ fn install(home: &Path, declaration: &Declaration) -> Result<()> {
     published::install(
         &published::Published {
             archive_url: format!("{base}/{archive_name}"),
-            sums_url: format!("{base}/SHASUMS256.txt"),
+            expected: published::Expected::Listed(format!("{base}/SHASUMS256.txt")),
             tree: Some(format!("node-{version}-{platform}")),
             archive_name,
         },

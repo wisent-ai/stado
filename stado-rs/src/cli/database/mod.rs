@@ -15,6 +15,7 @@ use crate::targets::RegistryStore;
 use super::resolver::read_local_document;
 use super::CmdError;
 
+mod auth;
 mod client;
 mod commands;
 mod dump;
@@ -156,6 +157,10 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
         DatabaseCommands::Rest { command } => match command {
             rest::RestCommands::Place(args) => rest::place(args).await,
             rest::RestCommands::Retire(args) => rest::retire::retire(args).await,
+        },
+        DatabaseCommands::Auth { command } => match command {
+            auth::AuthCommands::Place(args) => auth::place(args).await,
+            auth::AuthCommands::Retire(args) => auth::retire::retire(args).await,
         },
         DatabaseCommands::Cost { provider, json } => match provider {
             DatabaseProvider::Supabase => supabase::cost::cost(json).await,

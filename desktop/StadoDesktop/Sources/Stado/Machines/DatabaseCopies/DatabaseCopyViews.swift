@@ -15,12 +15,21 @@ struct DatabaseRestTarget: Identifiable {
     var id: String { database }
 }
 
-/// A row menu's **Back up**, **Move to fleet…**, **Serve REST API…** and **Retire REST API**.
+/// The database a **Serve sign-in…** form is open on.
+struct DatabaseAuthTarget: Identifiable {
+    let database: String
+
+    var id: String { database }
+}
+
+/// A row menu's **Back up**, **Move to fleet…**, **Serve REST API…**,
+/// **Retire REST API**, **Serve sign-in…** and **Retire sign-in**.
 struct DatabaseCopyMenuItems: View {
     let database: String
     @ObservedObject var store: DatabaseCopyStore
     @Binding var moving: DatabaseMoveTarget?
     @Binding var serving: DatabaseRestTarget?
+    @Binding var signing: DatabaseAuthTarget?
 
     var body: some View {
         Button("Back up") {
@@ -37,6 +46,14 @@ struct DatabaseCopyMenuItems: View {
         .disabled(store.isRunning)
         Button("Retire REST API") {
             Task { await store.retireRest(name: database) }
+        }
+        .disabled(store.isRunning)
+        Button("Serve sign-in…") {
+            signing = DatabaseAuthTarget(database: database)
+        }
+        .disabled(store.isRunning)
+        Button("Retire sign-in") {
+            Task { await store.retireAuth(name: database) }
         }
         .disabled(store.isRunning)
     }
@@ -80,16 +97,20 @@ struct DatabaseCopyPanel: View {
 }
 
 extension View {
-    /// The **Move to fleet…** and **Serve REST API…** forms, each open on
-    /// the database its target names.
+    /// The **Move to fleet…**, **Serve REST API…** and **Serve sign-in…**
+    /// forms, each open on the database its target names.
     func databaseCopySheets(
-        store: DatabaseCopyStore, moving: Binding<DatabaseMoveTarget?>, serving: Binding<DatabaseRestTarget?>
+        store: DatabaseCopyStore, moving: Binding<DatabaseMoveTarget?>, serving: Binding<DatabaseRestTarget?>,
+        signing: Binding<DatabaseAuthTarget?>
     ) -> some View {
         sheet(item: moving) { target in
             DatabaseMigrateForm(database: target.database, store: store)
         }
         .sheet(item: serving) { target in
             DatabaseRestForm(database: target.database, store: store)
+        }
+        .sheet(item: signing) { target in
+            DatabaseAuthForm(database: target.database, store: store)
         }
     }
 }

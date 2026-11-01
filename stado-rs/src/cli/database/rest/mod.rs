@@ -20,7 +20,7 @@
 
 mod jwt;
 pub(super) mod retire;
-mod roles;
+pub(super) mod roles;
 
 use serde_json::{json, Value};
 

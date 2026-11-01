@@ -59,7 +59,7 @@ fn root(home: &Path) -> PathBuf {
 /// The declared release's binary when it is installed and answers with its
 /// version ([`published::answering`]).
 fn installed(home: &Path, declaration: &Declaration) -> Result<Option<PathBuf>> {
-    published::answering(binary(home, declaration), &declaration.version)
+    published::answering(binary(home, declaration), &["--version"], &declaration.version)
 }
 
 /// The declared Supabase CLI on this host, installed first when it is absent
@@ -82,7 +82,7 @@ pub(super) fn ensure() -> Result<PathBuf> {
     published::install(
         &published::Published {
             archive_url: format!("{base}/{archive_name}"),
-            sums_url: format!("{base}/checksums.txt"),
+            expected: published::Expected::Listed(format!("{base}/checksums.txt")),
             tree: None,
             archive_name,
         },

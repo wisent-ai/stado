@@ -123,6 +123,25 @@ async fn token() -> Result<String, CmdError> {
         })
 }
 
+/// The auth configuration the hosted project `reference` runs its Auth
+/// server with (`GET /v1/projects/{ref}/config/auth`: site URL, allowed
+/// redirects, providers and their secrets, mail, token lifetimes), so a
+/// fleet Auth server serves its accounts as the project did. A call that
+/// fails is refused with Supabase's answer; an answer that is not an object
+/// is refused as one.
+pub(in crate::cli::database) async fn auth_config(reference: &str) -> Result<Value, CmdError> {
+    let token = token().await?;
+    let path = format!("/projects/{reference}/config/auth");
+    let config = call(reqwest::Method::GET, &path, &token, None).await?;
+    if !config.is_object() {
+        return Err(CmdError::click(format!(
+            "Supabase GET {path} answered something that is not a configuration object: {config}"
+        ))
+        .stating(crate::primitives::failure::FailureCode::InfraDown));
+    }
+    Ok(config)
+}
+
 /// The project's primary pooler, or none when the project reports none yet
 /// (a project Supabase is still provisioning); a call that fails, or an
 /// answer that is not a list, is refused with its cause.

@@ -1,0 +1,20 @@
+{
+  "schema": "stado.supabase-auth.v1",
+  "version": "v2.197.0",
+  "distribution": "https://github.com/supabase/auth/releases/download",
+  "archives": {
+    "darwin-arm64": {
+      "name": "auth-v2.197.0-darwin-arm64.tar.gz",
+      "sha256": "3fb7998e7061e2c14f3f9555b1d94d447358c965395728e0d81eac82e0e5868b"
+    },
+    "linux-arm64": {
+      "name": "auth-v2.197.0-arm64.tar.gz",
+      "sha256": "b129d0b32520a975a4f0576eb1b7836b82043997d2d021676ff24cec54eb5381"
+    },
+    "linux-amd64": {
+      "name": "auth-v2.197.0-x86.tar.gz",
+      "sha256": "9daff5d1939c3142a1586e435e6e2a7a2f71534ec40ff1b196b59b83ad5678f3"
+    }
+  },
+  "source": "The Supabase Auth (GoTrue) server, MIT, that a hosted Supabase project runs behind /auth/v1. A fleet database whose accounts lived in a Supabase project's auth schema is served by this same server beside it (`stado database auth place`), so its users, sessions and tokens keep working. The release is the newest published at https://github.com/supabase/auth/releases when adopted; each archive's sha256 is the digest GitHub's release record states for it (`gh release view <tag> --repo supabase/auth --json assets`), since the publisher puts no checksum list beside its archives. A newer release is adopted by changing it here."
+}

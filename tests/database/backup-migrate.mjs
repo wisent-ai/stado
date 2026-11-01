@@ -14,16 +14,21 @@ import { fileURLToPath } from 'node:url';
 // backup with `--keep` and checks which backups stay, moves the database onto
 // a fleet Postgres on this host, counts again there, reads the items, serves
 // the REST API beside it (reads a table through it, reuses the placement,
-// rotates the keys and checks the old one is refused, retires it), checks
-// the refusals, and destroys the fleet copy. Required:
-// STADO_DATABASE_TEST_HOME, STADO_DATABASE_TEST_CONFIG,
+// rotates the keys and checks the old one is refused), serves sign-in beside
+// it (a user signs in, the token opens the REST API, the refresh token is
+// taken, a wrong password is refused, the placement is reused and retired),
+// retires the API, checks the refusals, and destroys the fleet copy.
+// Required: STADO_DATABASE_TEST_HOME, STADO_DATABASE_TEST_CONFIG,
 // STADO_DATABASE_TEST_KEYRING, STADO_DATABASE_TEST_NAME (the declared external
 // source), STADO_DATABASE_TEST_PORT (the port the fleet copy listens on),
 // STADO_DATABASE_TEST_KEEP (the retention the second backup states),
 // STADO_DATABASE_TEST_REST_PORT and STADO_DATABASE_TEST_KEY_DAYS (the port the
 // fleet REST API listens on and its key lifetime; `postgrest` on this host),
-// STADO_BIN and SKARBIEC_BIN (the builds under test). No production defaults.
-// A failed journey writes its report and then throws.
+// STADO_DATABASE_TEST_AUTH_PORT, STADO_DATABASE_TEST_AUTH_READY_SECONDS and
+// STADO_DATABASE_TEST_AUTH_PROJECT (the sign-in server's port, the seconds it
+// is given to answer, and a dedicated test Supabase project whose sign-in
+// settings it takes), STADO_BIN and SKARBIEC_BIN (the builds under test). No
+// production defaults. A failed journey writes its report and then throws.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const build = realpathSync(join(root, '.build'));
 function fixturePath(variable) {
@@ -169,11 +174,70 @@ try {
   const withNew = await fetch(`${served.rest_url}/${table}?select=*`, { headers: { apikey: rotatedKey, Authorization: `Bearer ${rotatedKey}` } });
   assert.ok(withNew.ok, `the rotated key must answer, got ${withNew.status}`);
   report.rest.rotated = { rotated, oldKeyStatus: withOld.status, newKeyStatus: withNew.status };
+  // Sign-in beside the fleet copy, with the settings of a dedicated test
+  // Supabase project: the server answers /health, a user created through
+  // its admin API signs in with a password, the token it issues opens the
+  // REST API signed with the same secret, its refresh token is taken, a
+  // wrong password is refused, a second placement is reused, and once the
+  // REST API's secret is gone the placement is refused.
+  const authPort = required('STADO_DATABASE_TEST_AUTH_PORT');
+  const authReady = required('STADO_DATABASE_TEST_AUTH_READY_SECONDS');
+  const authProject = required('STADO_DATABASE_TEST_AUTH_PROJECT');
+  const placeAuth = () => run(stado, ['database', 'auth', 'place', name, '--port', authPort,
+    '--ready-within', authReady, '--from-project', authProject, '--json']);
+  const signIn = JSON.parse(success(placeAuth()));
+  assert.equal(signIn.reused, false);
+  assert.equal(signIn.unit, `${name}-auth`);
+  assert.equal(field(item, 'auth_url'), signIn.auth_url, 'the item carries the sign-in address');
+  const health = await fetch(`${signIn.auth_url}/health`);
+  assert.ok(health.ok, `the sign-in server answered ${health.status} for /health`);
+  const anon = field(item, 'anon_key');
+  const email = `journey-${Date.now()}@stado.invalid`;
+  const password = createHash('sha256').update(email).digest('hex');
+  const created = await fetch(`${signIn.auth_url}/admin/users`, {
+    method: 'POST',
+    headers: { apikey: rotatedKey, Authorization: `Bearer ${rotatedKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, email_confirm: true }),
+  });
+  assert.ok(created.ok, `the admin API refused the journey's user: ${created.status} ${await created.text()}`);
+  const token = await fetch(`${signIn.auth_url}/token?grant_type=password`, {
+    method: 'POST',
+    headers: { apikey: anon, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  assert.ok(token.ok, `the journey's user could not sign in: ${token.status} ${await token.clone().text()}`);
+  const session = await token.json();
+  assert.ok(session.access_token && session.refresh_token, 'a sign-in answers an access and a refresh token');
+  const asUser = await fetch(`${served.rest_url}/${table}?select=*&limit=1`, {
+    headers: { apikey: anon, Authorization: `Bearer ${session.access_token}` },
+  });
+  assert.notEqual(asUser.status, 401, 'the REST API takes a token the sign-in server issued');
+  const refreshed = await fetch(`${signIn.auth_url}/token?grant_type=refresh_token`, {
+    method: 'POST',
+    headers: { apikey: anon, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: session.refresh_token }),
+  });
+  assert.ok(refreshed.ok, `a refresh token was refused: ${refreshed.status}`);
+  const wrong = await fetch(`${signIn.auth_url}/token?grant_type=password`, {
+    method: 'POST',
+    headers: { apikey: anon, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: `${password}-wrong` }),
+  });
+  assert.ok(!wrong.ok, `a wrong password must be refused, got ${wrong.status}`);
+  const signInAgain = JSON.parse(success(placeAuth()));
+  assert.equal(signInAgain.reused, true, 'a placed sign-in server is reused, not placed twice');
+  const authRetired = JSON.parse(success(run(stado, ['database', 'auth', 'retire', name, '--json'])));
+  assert.equal(authRetired.unit_status, 'removed');
+  assert.ok(authRetired.fields_removed.includes('auth_url'), 'retire takes auth_url off the item');
+  refused(run(stado, ['database', 'auth', 'retire', name, '--json']), 'has no sign-in server to retire');
+  report.auth = { signIn, health: health.status, signedIn: token.status, asUser: asUser.status,
+    refreshed: refreshed.status, wrongPassword: wrong.status, retired: authRetired };
   const retired = JSON.parse(success(run(stado, ['database', 'rest', 'retire', name, '--json'])));
   assert.equal(retired.unit_status, 'removed');
   assert.ok(retired.fields_removed.includes('anon_key'), 'retire takes the keys off the item');
   refused(run(stado, ['database', 'rest', 'retire', name, '--json']), 'has no REST API to retire');
   report.rest.retired = retired;
+  refused(placeAuth(), 'holds no jwt_secret');
   const destroyed = JSON.parse(success(run(stado, ['database', 'destroy', name, '--json'])));
   assert.equal(destroyed.provider, 'fleet');
   report.destroyed = destroyed;

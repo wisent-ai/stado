@@ -75,11 +75,12 @@ pub(in crate::cli::database) async fn destroy(
         && crate::config::DatabaseEngine::parse(&engine)
             == Some(crate::config::DatabaseEngine::Postgres)
     {
-        // The REST API placed beside the database (`<name>-rest`) serves
-        // nothing once the database is gone, so it goes first; then the
-        // database's own unit.
+        // The sign-in server (`<name>-auth`) and the REST API (`<name>-rest`)
+        // placed beside the database serve nothing once it is gone, so they
+        // go first; then the database's own unit.
         let target = crate::cli::canonical_host(&host).await?;
         for unit in [
+            format!("{name}{}", crate::cli::database::auth::UNIT_SUFFIX),
             format!("{name}{}", crate::cli::database::rest::UNIT_SUFFIX),
             format!("{name}-database"),
         ] {

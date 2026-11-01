@@ -31,6 +31,7 @@ pub mod serve_stops;
 mod signing;
 mod source;
 mod state;
+pub mod supabase_auth;
 mod surface;
 pub mod swift_cache;
 pub mod word;
