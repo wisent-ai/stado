@@ -42,6 +42,11 @@ pub enum Choice {
     InstalledRevision,
     /// The committed head of the catalog's checkout.
     CommittedHead,
+    /// The checkout's `origin/main`, which its committed head is behind: a
+    /// checkout nobody brought up to date still holds a catalog the
+    /// published one has replaced, and an install that read it disagreed
+    /// with every receipt written from the published one.
+    PublishedMain,
     /// No catalog checkout: the catalog compiled into this binary.
     Embedded,
 }
@@ -107,6 +112,10 @@ pub fn for_installation(
         &["rev-parse", "--verify", &format!("{wanted}^{{commit}}")],
     )
     .with_context(|| format!("{wanted} names no commit in {}", root.display()))?;
+    let (commit, chosen) = match chosen {
+        Choice::CommittedHead => published_if_ahead(root, commit)?,
+        other => (commit, other),
+    };
     if git(root, &["ls-tree", "--name-only", &commit, "--", &relative])?.is_empty() {
         return Err(Uncommitted {
             catalog: file.clone(),
@@ -129,6 +138,25 @@ pub fn for_installation(
             chosen,
         },
     ))
+}
+
+/// The catalog commit of a checkout whose committed head is `head`: its
+/// `origin/main` when that carries `head` and more, since the checkout is
+/// behind what is published; `head` itself when they are the same, when the
+/// checkout has commits origin does not carry yet, or when it has no
+/// `origin/main` to compare with.
+fn published_if_ahead(root: &Path, head: String) -> Result<(String, Choice)> {
+    let Ok(published) = git(root, &["rev-parse", "--verify", "origin/main^{commit}"]) else {
+        return Ok((head, Choice::CommittedHead));
+    };
+    if published == head {
+        return Ok((head, Choice::CommittedHead));
+    }
+    let behind = git(root, &["merge-base", "--is-ancestor", &head, &published]).is_ok();
+    Ok(match behind {
+        true => (published, Choice::PublishedMain),
+        false => (head, Choice::CommittedHead),
+    })
 }
 
 /// A catalog an installation was given that its checkout's commit does not
