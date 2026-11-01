@@ -5,6 +5,7 @@
 mod admitted;
 mod command;
 mod commands;
+mod instance;
 mod modules;
 pub use command::{check, command_tree};
 mod paths;

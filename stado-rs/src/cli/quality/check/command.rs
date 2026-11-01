@@ -127,6 +127,7 @@ async fn checked(
         "stado quality check: checking committed revision {revision} of {}",
         checkout.display()
     ));
+    super::instance::refuse_declared(&checkout, &revision).await?;
     export_check(
         &checkout,
         &revision,
@@ -170,6 +171,7 @@ async fn pushed(
             "stado quality check: checking the committed source of {revision} of {}",
             checkout.display()
         ));
+        super::instance::refuse_declared(checkout, revision).await?;
         export_check(
             checkout,
             revision,

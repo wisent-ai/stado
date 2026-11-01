@@ -363,6 +363,10 @@ name = "quality-absent-manifest"
 path = "../tests/quality/absent_manifest.rs"
 
 [[test]]
+name = "quality-instance-values"
+path = "../tests/quality/instance_values.rs"
+
+[[test]]
 name = "quality-gate-kind"
 path = "../tests/quality/gate_kind.rs"
 
