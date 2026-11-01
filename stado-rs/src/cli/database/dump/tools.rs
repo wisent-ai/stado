@@ -119,12 +119,20 @@ impl Connection {
     ) -> Result<Self, CmdError> {
         let refused =
             |what: String| CmdError::click(format!("{item} {what}")).stating(FailureCode::Config);
+        // A Supabase item is written without session_url when no database
+        // password stands on it (`supabase::project_fields`): adopting it with
+        // a password writes one.
         let text = fields
             .get("session_url")
             .and_then(Value::as_str)
             .filter(|url| !url.is_empty())
             .ok_or_else(|| {
-                refused("holds no session_url, so no Postgres session can be opened on it".into())
+                refused(
+                    "holds no session_url, so no Postgres session can be opened on it; a Supabase item gets one \
+                     with its database password: stado database adopt <name> --rotate-password, or \
+                     --password-file <file> with the current one"
+                        .into(),
+                )
             })?;
         let mut url = url::Url::parse(text)
             .map_err(|error| refused(format!("session_url is not a URL: {error}")))?;

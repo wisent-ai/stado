@@ -123,10 +123,15 @@ async fn adopt_one(
     let mut merged = existing.clone();
     merged.extend(project_fields(project, token, password.as_deref()).await?);
     let drifted = merged != existing;
-    let status = match (drifted, check) {
-        (false, _) => "up to date",
-        (true, true) => "would write",
-        (true, false) => {
+    // An item no password stands on carries no session_url, so no backup,
+    // migration or consumer can open the database: it matches its project
+    // and is still unusable, which is never "up to date".
+    let unusable = password.is_none();
+    let status = match (drifted, check, unusable) {
+        (false, _, false) => "up to date",
+        (false, _, true) => "no database password",
+        (true, true, _) => "would write",
+        (true, false, _) => {
             context.entry("engine").or_insert(json!("postgres"));
             context.insert("provider".into(), json!(DatabaseProvider::Supabase));
             context.entry("product").or_insert(json!(name));
@@ -149,7 +154,7 @@ async fn adopt_one(
             "written"
         }
     };
-    let row = json!({
+    let mut row = json!({
         "database": name,
         "item": item,
         "project_ref": reference,
@@ -157,7 +162,14 @@ async fn adopt_one(
         "fields": merged.len(),
         "password_on_item": password.is_some(),
     });
-    Ok((row, drifted))
+    if unusable {
+        row["repair"] = json!(format!(
+            "{item} holds no database password, so it has no session_url and nothing can open {name}: \
+             run stado database adopt {name} --rotate-password (Supabase sets a new one; a client using \
+             the old password loses its connection) or --password-file <file> with the current one"
+        ));
+    }
+    Ok((row, drifted || unusable))
 }
 
 pub(in crate::cli::database) async fn adopt(
@@ -249,11 +261,14 @@ pub(in crate::cli::database) async fn adopt(
                 "{item}: {status} ({} fields)",
                 crate::cli::reporting::field(&row["fields"])
             );
+            if let Some(repair) = row["repair"].as_str() {
+                println!("  {repair}");
+            }
         }
     }
     if check && !drifted_items.is_empty() {
         return Err(CmdError::refused(format!(
-            "{} differ from their Supabase projects",
+            "{} differ from their Supabase projects or hold no database password",
             drifted_items.join(", ")
         )));
     }
