@@ -10,7 +10,7 @@ use anyhow::{bail, Result};
 
 /// The GitHub organization Wisent's repositories live in, which the markdown policy
 /// reads unless `--org` names another.
-pub(crate) const WISENT_ORGANIZATION: &str = "wisent-ai";
+const WISENT_ORGANIZATION: &str = "wisent-ai";
 
 pub fn run(operation: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
     let arguments = Arguments::from_matches(arguments);
