@@ -1,0 +1,120 @@
+name: Submit product release
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: wisent-ai repository name, public or private
+        required: true
+        type: string
+      revision:
+        description: Exact 40-character source commit
+        required: true
+        type: string
+      version:
+        description: Version declared by the source manifest
+        required: true
+        type: string
+      channel:
+        description: Release channel
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - candidate
+
+jobs:
+  submit:
+    runs-on: [self-hosted, stado-control-plane]
+    concurrency:
+      group: product-release-${{ inputs.repository }}-${{ inputs.channel }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate immutable release identity
+        shell: bash
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+          REVISION: ${{ inputs.revision }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          case "$REPOSITORY" in ''|*[!A-Za-z0-9._-]*) exit 2;; esac
+          case "$REVISION" in *[!0-9a-f]*|'') exit 2;; esac
+          test "${#REVISION}" = 40
+          case "$VERSION" in ''|*[!0-9A-Za-z.+-]*) exit 2;; esac
+      # Cross-repository checkout needs PRODUCT_SOURCE_TOKEN with source read
+      # access; this repository's GITHUB_TOKEN cannot read private siblings.
+      # Neither credential persists in the checkout. Release steps authenticate
+      # independently as the product's publisher.
+      - uses: actions/checkout@v4
+        with:
+          repository: wisent-ai/${{ inputs.repository }}
+          ref: ${{ inputs.revision }}
+          path: product-source
+          token: ${{ secrets.PRODUCT_SOURCE_TOKEN || secrets.GITHUB_TOKEN }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Stado release client
+        working-directory: stado-rs
+        run: cargo build --locked --release --bin stado
+      - name: Ensure the declared object service
+        shell: bash
+        run: |
+          set -euo pipefail
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          # The object service is the host Stado process, placed on the
+          # always-on mac and reached from this runner through the resolver.
+          # Which registry row runs it comes out of the catalog: the unit the
+          # `stado` product declares. That row names its own host, and
+          # ensuring the product there starts the process under its own unit,
+          # which retires any unit that served the API under another label
+          # before it binds when both serve the same store.
+          catalog="$RUNNER_TEMP/service-catalog.json"
+          "$stado_bin" product catalog --output "$catalog"
+          host="$(
+            "$stado_bin" service list --json |
+              jq -er --slurpfile catalog "$catalog" '
+                ($catalog[0].services[] | select(.name == "stado")) as $stado
+                | [ .[] | select(.label == $stado.unit) | .host ]
+                | unique
+                | if length == 1 then .[0] else
+                    error("expected the host Stado process on exactly one host, got \(length)")
+                  end
+              '
+          )"
+          test -n "$host"
+          "$stado_bin" service ensure stado \
+            --host "$host" \
+            --as-daemon \
+            --reason "product release submission requires the canonical object store"
+          # Source objects route through the product's declared publisher.
+          # Probe within that namespace; authoritative absence proves the
+          # lookup succeeded without requiring a sentinel object to exist.
+          state="$("$stado_bin" storage stat \
+            stado://sources/stado/__release_preflight__ --json | jq -r '.state // ""')"
+          case "$state" in
+            present|absent) ;;
+            *)
+              echo "::error::$unit on $host returned no storage state after ensure: ${state:-none}"
+              false ;;
+          esac
+      - name: Submit exact product revision
+        shell: bash
+        env:
+          STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+          EXPECTED_REVISION: ${{ inputs.revision }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          # The selected checkout must match the requested immutable revision.
+          test "$(git -C product-source rev-parse HEAD)" = "$EXPECTED_REVISION"
+          # The manifest selects the version source; release submit checks it.
+          stado-rs/target/release/stado release submit \
+            --source "$GITHUB_WORKSPACE/product-source" \
+            --version "$EXPECTED_VERSION" \
+            --channel "$CHANNEL"
