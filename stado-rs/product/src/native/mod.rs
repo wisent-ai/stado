@@ -3,7 +3,7 @@ mod protocol;
 mod server;
 pub use server::serve_editor;
 mod source;
-mod workspace;
+pub(crate) mod workspace;
 use crate::common::{atomic_json, capture, checked, emit, lock, now, Runtime};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};

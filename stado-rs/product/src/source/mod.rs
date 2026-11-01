@@ -1,4 +1,5 @@
 mod canonical;
+use canonical::canonical_branch;
 pub use canonical::NotCanonical;
 mod index;
 pub(crate) use index::WorkspaceIndex;
@@ -57,8 +58,9 @@ pub fn validate(root: &Path, expected: Option<&str>) -> Result<PathBuf> {
     if Path::new(&git(&root, &["rev-parse", "--show-toplevel"])?).canonicalize()? != root {
         bail!("{} is nested below another checkout", root.display());
     }
-    if git(&root, &["branch", "--show-current"])? != "main" {
-        bail!("{} is not on main; no branch was switched", root.display());
+    let branch = canonical_branch(&root)?;
+    if git(&root, &["branch", "--show-current"])? != branch {
+        bail!("{} is not on {branch}; no branch was switched", root.display());
     }
     if let Some(expected) = expected {
         let origin = origin(&root)?;
@@ -120,13 +122,9 @@ pub fn required_checkout(runtime: &Runtime, repository: &str) -> Result<PathBuf>
 }
 
 /// Create the canonical checkout of `repository` where the workspace keeps it,
-/// `<workspace>/<name>` on `main`, by cloning its GitHub origin.
-///
-/// An installation names the product whose source it builds. A host that
-/// never held that source (a fleet host a service is installed on, or a fresh
-/// machine) otherwise refuses with the checkout missing, and nothing else in
-/// Stado would ever create it. A directory already at that path that is not
-/// the checkout is left alone and refused.
+/// `<workspace>/<name>` on its origin's default branch, by cloning its GitHub
+/// origin, so a host that never held a source an installation builds gets it;
+/// a directory already at that path is left alone and refused.
 fn create_checkout(runtime: &Runtime, repository: &str) -> Result<PathBuf> {
     let repository = repository.to_ascii_lowercase();
     let name = Path::new(&repository)
@@ -150,7 +148,7 @@ fn create_checkout(runtime: &Runtime, repository: &str) -> Result<PathBuf> {
     let origin = format!("https://github.com/{repository}.git");
     let output = capture(
         Command::new("git")
-            .args(["clone", "--quiet", "--branch", "main", &origin])
+            .args(["clone", "--quiet", &origin])
             .arg(&path)
             .env("GIT_TERMINAL_PROMPT", "0"),
     )?;

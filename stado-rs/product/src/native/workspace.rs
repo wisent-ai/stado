@@ -97,6 +97,24 @@ impl Graph<'_> {
     }
 }
 
+/// The variable an installation's build sets, to `installation`, for a
+/// Stado it runs (`stado product swift build` in a desktop build script): that
+/// Stado creates the canonical checkout of a package dependency the
+/// workspace lacks, as the installation creates its own source's.
+pub const CREATES_CHECKOUTS: &str = "STADO_CREATES_CHECKOUTS";
+
+/// Whether this Stado runs inside an installation's build that creates
+/// missing checkouts; a value other than `installation` is refused by name.
+fn creates_checkouts() -> Result<bool> {
+    match std::env::var(CREATES_CHECKOUTS) {
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Ok(value) if value == "installation" => Ok(true),
+        other => anyhow::bail!(
+            "{CREATES_CHECKOUTS} is {other:?}; only an installation's build sets it, to `installation`"
+        ),
+    }
+}
+
 pub fn prepare(
     runtime: &Runtime,
     root: &PackageSource,
@@ -109,8 +127,10 @@ pub fn prepare(
     fs::create_dir_all(parent)?;
     let manifests = parent.join(format!("manifests-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&manifests)?;
+    let mut sourcing = runtime.clone();
+    sourcing.create_checkouts = runtime.create_checkouts || creates_checkouts()?;
     let mut graph = Graph {
-        runtime,
+        runtime: &sourcing,
         scratch: &manifests,
         packages: BTreeMap::new(),
         mirrors: BTreeMap::new(),

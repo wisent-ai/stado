@@ -122,6 +122,9 @@ pub fn desktop(
             // it, it read the default workspace and refused the checkout the
             // installation was building as not canonical.
             .env("WISENT_WORKSPACE", &runtime.workspace)
+            // ... and creates a package dependency's checkout the workspace
+            // lacks, as this installation creates its own source's.
+            .envs(runtime.create_checkouts.then_some((crate::native::workspace::CREATES_CHECKOUTS, "installation")))
             .envs(manifest::secrets(&[&document])?),
     );
     if let Err(error) = built {
